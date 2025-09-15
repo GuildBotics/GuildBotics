@@ -1,5 +1,7 @@
 <h1>GuildBotics</h1>
 
+[English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
+
 AIエージェントとのやり取りをタスクボードを通じて行うためのツールです。
 
 ---
@@ -402,4 +404,4 @@ default: gemini-cli.yml
 # 9. Contributing
 Pull Request (PR) を歓迎します。新しい機能の追加、バグ修正、ドキュメントの改善など、どんな貢献でも大歓迎です。
 
-コーディングスタイル、テスト、ドキュメント、セキュリティガイドラインについては `CONTRIBUTING.md` をご参照ください。
+コーディングスタイル、テスト、ドキュメント、セキュリティガイドラインについては [CONTRIBUTING.ja.md](https://github.com/GuildBotics/GuildBotics/blob/main/CONTRIBUTING.ja.md) をご参照ください。

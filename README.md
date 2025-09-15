@@ -1,5 +1,7 @@
 <h1>GuildBotics</h1>
 
+[English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
+
 A tool to collaborate with AI agents via a task board.
 
 ---
@@ -398,4 +400,4 @@ Set the following environment variables to obtain debug information:
 # 9. Contributing
 We welcome Pull Requests (PRs). We welcome any contributions, such as adding new features, bug fixes, documentation improvements, etc.
 
-Please read `CONTRIBUTING.md` for coding style, testing, documentation, and security guidelines before opening a PR.
+Please read [CONTRIBUTING.md](https://github.com/GuildBotics/GuildBotics/blob/main/CONTRIBUTING.md) for coding style, testing, documentation, and security guidelines before opening a PR.
