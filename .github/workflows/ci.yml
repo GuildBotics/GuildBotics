@@ -1,0 +1,26 @@
+name: CI
+
+on: push
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      UV_LOCKED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --extra test
+
+      - name: Run tests
+        run: uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
