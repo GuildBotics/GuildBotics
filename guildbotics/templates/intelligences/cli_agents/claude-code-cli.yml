@@ -1,0 +1,16 @@
+env:
+script: |
+  res=$(mktemp)
+  log=$(mktemp)
+  # Run Anthropic Claude CLI non-interactively. Reads prompt from PROMPT_FILE.
+  # Prefer explicit model and non-streaming when available; fallback to basic usage.
+  if command -v claude >/dev/null 2>&1; then
+    claude --model "claude-3-5-sonnet-latest" --no-stream < "$PROMPT_FILE" > "$res" 2> "$log" \
+      || claude < "$PROMPT_FILE" > "$res" 2> "$log"
+  else
+    echo "Claude CLI not found in PATH." >> "$log"
+    exit 127
+  fi
+  cat "$log" >&2
+  cat "$res"
+  rm -f "$res" "$log"
