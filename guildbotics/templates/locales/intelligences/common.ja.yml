@@ -1,0 +1,2 @@
+ja:
+  ImprovementSuggestion_description: "## 分類\n%{perspective}\n\n## ねらい\n%{rationale}\n\n## 実装方法\n%{implementation}\n"

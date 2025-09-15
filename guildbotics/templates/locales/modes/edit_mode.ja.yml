@@ -1,0 +1,15 @@
+ja:
+  evaluation_and_root_cause: "%{evaluation}\n---\n## 根本原因分析\n%{root_cause}"
+  evaluation_topic: "今回のプルリクエストに関する評価および根本原因分析を受け取り、確認いたしました。これに基づき、いくつかの改善案を考えてみました。ご確認ください。"
+  evaluation_context_location: 振り返りレビュー
+  pull_request_context_location: プルリクエストレビュー
+  default_question: "ご確認いただきたい質問があります。ご確認をお願いします。"
+  default_message: "ご指摘いただいた点を修正しました。"
+  ticket_comment_context_location: チケットコメント
+  pull_request_text: "PRの説明:\n%{title}\n\n%{description}\n\nPRレビューコメント:\n%{review_comments}"
+  pull_request_inline_comment_thread: "\n\nインラインコメントスレッド %{thread_number}:\n%{thread_text}"
+  pull_request_merge_outcome: "\n\n--- \n\nマージ結果: %{merge_outcome}"
+  pull_request_performance_evaluation: "## プルリクエストパフォーマンス評価\n### 評価スコア\n%{score} 点\n\n### 理由\n%{reason}\n\n### 背景\n - レビューコメント数: %{review_comment_count}\n - レビューサイクル数: %{review_cycle_count}\n - 修正依頼数: %{request_changes_count}\n - レビュー感情スコア: %{review_sentiment_score}\n\n%{context}\n"
+  analyze_pr_root_cause: "# プルリクエスト評価結果\n%{evaluation}\n---\n# 元のPRレビューコメント\n%{pr_text}\n"
+  default_pr_template: "## 概要\nこのPRでの変更点の簡単な説明。\n\n## チケット\n- URL: [チケットへのリンク](<ticket_url>)\n"
+  use_case_description: "Gitリポジトリ内のコードやドキュメントの作成・更新に使用します。Gitやコードホスティングサービスと連携し、プルリクエストやコード変更を管理します。"

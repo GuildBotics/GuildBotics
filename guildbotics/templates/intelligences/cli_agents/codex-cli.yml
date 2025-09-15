@@ -1,0 +1,10 @@
+env:
+script: |
+  res=$(mktemp)
+  log=$(mktemp)
+  DEBUG=true codex exec \
+    --full-auto --output-last-message "$res" \
+    < "$PROMPT_FILE" >"$log" 2>&1
+  cat "$log" >&2
+  cat "$res"
+  rm -f "$res" "$log"

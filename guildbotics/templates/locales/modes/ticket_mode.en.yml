@@ -1,0 +1,4 @@
+en:
+  agent_response_message: "I believe the following work is needed: %{task_labels}\nLet me know your feedback."
+  agent_response_context_location: "Ticket Comment"
+  use_case_description: "This mode is used for managing tasks in a ticket management system, including creating and updating tickets based on identified tasks."

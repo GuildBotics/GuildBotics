@@ -1,0 +1,9 @@
+ja:
+  context_type: チャットルーム
+  message_type: 会話
+  subject_type: プルリクエスト
+  summary_label: "PRの説明:"
+  feedback_label: "PRレビューコメント:"
+  outcome_label: "マージ結果:"
+  positive_outcome_value: merged
+  negative_outcome_value: closed

@@ -1,0 +1,39 @@
+{
+    "cSpell.words": [
+        "agno",
+        "analyze",
+        "aread",
+        "arun",
+        "autouse",
+        "Botics",
+        "classvars",
+        "demojize",
+        "dotenv",
+        "emojize",
+        "guildbotics",
+        "homeserver",
+        "MECE",
+        "pgvolume",
+        "reviewee"
+    ],
+    "editor.codeActionsOnSave": {
+        "source.unusedImports": "explicit",
+        "source.organizeImports": "explicit"
+    },
+    "editor.formatOnSave": true,
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnPaste": true
+    },
+    "python.testing.pytestArgs": [
+        "tests",
+        "--cov=guildbotics",
+        "--cov-report",
+        "xml"
+    ],
+    "coverage-gutters.showGutterCoverage": true,
+    "coverage-gutters.showRulerCoverage": true,
+    "coverage-gutters.showLineCoverage": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+}

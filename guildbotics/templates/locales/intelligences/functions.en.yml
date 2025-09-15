@@ -1,0 +1,9 @@
+en:
+  context_type: chat room
+  message_type: conversation
+  subject_type: pull request
+  summary_label: "PR Description:"
+  feedback_label: "PR Review Comments:"
+  outcome_label: "PR Merge Outcome:"
+  positive_outcome_value: merged
+  negative_outcome_value: closed

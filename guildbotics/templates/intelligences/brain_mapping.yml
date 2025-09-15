@@ -1,0 +1,12 @@
+default:
+  class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain
+  args:
+    model: default
+file_editor:
+  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain
+  args:
+    cli_agent: default
+task_planner:
+  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain
+  args:
+    cli_agent: default

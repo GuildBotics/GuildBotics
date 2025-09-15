@@ -1,0 +1,7 @@
+ja:
+  ticket: "チケット: %{url}"
+  no_message_channels: 社内コミュニケーション用のメッセージチャンネルが見つかりません。
+  title_and_description: "# %{title}\n\n## 説明\n%{description}"
+  comments: "\n\n## コメント\n%{comments}"
+  comment_notify: "タスクにコメントを追加しました。ご確認ください。"
+  completed_notify: "タスクが完了しました。ご確認ください。"

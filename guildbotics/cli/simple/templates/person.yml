@@ -1,0 +1,17 @@
+person_id: {person_id}
+name: {person_name}
+is_active: {is_active}
+person_type: {person_type}
+account_info:
+  github_username: {github_username}
+  git_user: {person_name}
+  git_email: {git_email}
+
+profile:
+  professional:
+  personal:
+  programmer:
+{roles}
+
+speaking_style: "{speaking_style}"
+relationships: "{relationships}"

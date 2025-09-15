@@ -1,0 +1,15 @@
+en:
+  evaluation_and_root_cause: "%{evaluation}\n---\n## Root Cause Analysis\n%{root_cause}"
+  evaluation_topic: "I underwent an evaluation and root cause analysis assessment. Based on this, I have created several improvement proposals for your review."
+  evaluation_context_location: Retrospective Review
+  pull_request_context_location: Pull Request Review
+  default_question: "I have some questions I'd like you to clarify; could you please review them?"
+  default_message: "I have addressed the issues pointed out."
+  ticket_comment_context_location: Ticket comments
+  pull_request_text: "PR Description:\n%{title}\n\n%{description}\n\nPR Review Comments:\n%{review_comments}"
+  pull_request_inline_comment_thread: "\n\nInline Comment Thread %{thread_number}:\n%{thread_text}"
+  pull_request_merge_outcome: "\n\n--- \n\nPR Merge Outcome: %{merge_outcome}"
+  pull_request_performance_evaluation: "## Pull Request Performance Evaluation\n### Evaluation Score\n%{score} points.\n\n### Reason\n%{reason}\n\n### Context\n - Review Comment Count: %{review_comment_count}\n - Review Cycle Count: %{review_cycle_count}\n - Request Changes Count: %{request_changes_count}\n - Review Sentiment Score: %{review_sentiment_score}\n\n%{context}\n"
+  analyze_pr_root_cause: "# The ArtifactProcessEvaluation result\n%{evaluation}\n---\n# The original PR review comments\n%{pr_text}\n"
+  default_pr_template: "## Description\nBrief description of the changes in this PR.\n\n## Ticket\n- URL: [Link to Ticket](<ticket_url>)\n"
+  use_case_description: "This mode is used to create and update code or documents in a Git repository. It integrates with Git and code hosting services to manage pull requests and code changes."

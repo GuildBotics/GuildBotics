@@ -1,0 +1,4 @@
+ja:
+  agent_response_message: "私は以下の作業が必要だと考えました。ご意見をお聞かせ願えますでしょうか。 %{task_labels}\n"
+  agent_response_context_location: "チケットコメント"
+  use_case_description: "チケット管理システムでタスクを管理するために使用します。特定されたタスクに基づき、チケットの作成や更新を行います。"

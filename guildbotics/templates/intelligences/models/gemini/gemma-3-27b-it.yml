@@ -1,0 +1,8 @@
+model_class: agno.models.google.Gemini
+parameters:
+  id: gemma-3-27b-it
+rate_limit:
+  max_requests_per_minute: 30
+  max_requests_per_day: 14400
+  max_token_count: 131072
+is_restricted_model: true

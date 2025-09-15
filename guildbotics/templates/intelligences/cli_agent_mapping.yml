@@ -1,0 +1,3 @@
+default: gemini-cli.yml
+gemini: gemini-cli.yml
+codex: codex-cli.yml

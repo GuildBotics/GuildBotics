@@ -1,0 +1,9 @@
+model_class: agno.models.google.Gemini
+parameters:
+  id: gemini-2.5-flash
+  #generation_config:
+  #  thinking_config:
+  #    thinking_budget: 1
+rate_limit:
+  max_requests_per_minute: 10
+  max_requests_per_day: 250

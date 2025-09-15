@@ -1,0 +1,3 @@
+en:
+  ImprovementSuggestion_description: "## Perspective\n%{perspective}\n\n## Rationale\n%{rationale}\n\n## Implementation\n%{implementation}\n"
+  
