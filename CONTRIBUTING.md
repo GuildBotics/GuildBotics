@@ -8,12 +8,10 @@
 - `.env`, `.env.example`: Local configuration.
 
 ## Build, Test, and Development Commands
-- Create venv: `python -m venv venv && source venv/bin/activate`
-- Run app: `python main.py` (respects `LOG_LEVEL` and `.env`).
-- Run tests: `python -m pytest -q`
-- Coverage (XML): `python -m pytest --cov=guildbotics --cov-report=xml` (writes `coverage.xml`).
+- Sync dependencies: `uv sync --extra test`
+- Run tests and create coverage report: `uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml` (output: `coverage.xml`).
 
-Note: This repo provides a pinned dependency file `requirements.txt`. Install required libraries via `pip install -r requirements.txt` in your venv.
+Note: This repository provides a fixed dependency file `pyproject.toml`. Use `uv sync` to install the required libraries.
 
 ## Coding Style & Naming Conventions
 - Python 3.11+; 4-space indent; prefer full type hints.

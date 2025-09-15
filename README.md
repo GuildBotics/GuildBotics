@@ -63,9 +63,7 @@ A tool to collaborate with AI agents via a task board.
 
 # 2. Environment
 - OS: Linux (verified on Ubuntu 24.04) / macOS (verified on Sequoia)
-- Runtime:
-  - Recommended: use `uv` (it automatically fetches/manages Python)
-  - If using `pipx`/`pip` instead, use Python 3.12+
+- Runtime: use `uv` (it automatically fetches/manages Python)
 
 # 3. Supported Services / Software
 The current version supports the following:

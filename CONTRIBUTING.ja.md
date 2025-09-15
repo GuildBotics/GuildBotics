@@ -8,12 +8,10 @@
 - `.env`, `.env.example`: ローカル設定。
 
 ## Build, Test, and Development Commands
-- venvの作成: `python -m venv venv && source venv/bin/activate`
-- アプリの実行: `python main.py` (`LOG_LEVEL` と `.env` を尊重)。
-- テストの実行: `python -m pytest -q`
-- カバレッジ (XML): `python -m pytest --cov=guildbotics --cov-report=xml` (`coverage.xml` を書き込み)。
+- 依存関係の同期: `uv sync --extra test`
+- テスト実行とカバレッジレポート作成: `uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml`  (生成物: `coverage.xml`)。
 
-注: このリポジトリは固定された依存ファイル `requirements.txt` を提供します。venvで必要なライブラリを `pip install -r requirements.txt` でインストールしてください。
+注: このリポジトリは固定された依存ファイル `pyproject.toml` を提供します。uv を使用して必要なライブラリを `uv sync` でインストールしてください。
 
 ## Coding Style & Naming Conventions
 - Python 3.11+；4スペースインデント；完全な型ヒントを優先。
