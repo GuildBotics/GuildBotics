@@ -272,6 +272,16 @@ Start with:
 guildbotics run
 ```
 
+To stop the running scheduler:
+
+```bash
+guildbotics stop [--timeout <seconds>] [--force]
+```
+
+- Sends SIGTERM and waits up to `--timeout` seconds (default: 30).
+- If it does not exit within the timeout and `--force` is specified, sends SIGKILL.
+- If no scheduler is running, it reports the state and cleans up a stale pidfile if present.
+
 ## 6.2. How to Instruct the AI Agent
 
 To request a task from the AI agent, operate the GitHub Projects ticket as follows:
