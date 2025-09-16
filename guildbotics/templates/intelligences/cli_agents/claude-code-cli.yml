@@ -2,15 +2,57 @@ env:
 script: |
   res=$(mktemp)
   log=$(mktemp)
-  # Run Anthropic Claude CLI non-interactively. Reads prompt from PROMPT_FILE.
-  # Prefer explicit model and non-streaming when available; fallback to basic usage.
-  if command -v claude >/dev/null 2>&1; then
-    claude --model "claude-3-5-sonnet-latest" --no-stream < "$PROMPT_FILE" > "$res" 2> "$log" \
-      || claude < "$PROMPT_FILE" > "$res" 2> "$log"
-  else
-    echo "Claude CLI not found in PATH." >> "$log"
-    exit 127
-  fi
+  json=$(mktemp)
+  
+  # Non-interactive execution via Anthropic Messages API (official SDK/API).
+  # Rationale: The official @anthropic-ai/claude-code CLI is an interactive TUI.
+  # Its published package does not expose a documented headless stdin/stdout mode.
+  # To satisfy GuildBotics' non-interactive constraint using first-party sources,
+  # we call the official Anthropic Messages endpoint and print the assistant text.
+  
+  : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}"
+  MODEL_DEFAULT="claude-sonnet-4-20250514"
+  TOKENS_DEFAULT=1024
+  MODEL="${ANTHROPIC_MODEL:-$MODEL_DEFAULT}"
+  MAX_TOKENS="${ANTHROPIC_MAX_TOKENS:-$TOKENS_DEFAULT}"
+  
+  payload=$(python3 - "$PROMPT_FILE" "$MODEL" "$MAX_TOKENS" 2>>"$log" << 'PY'
+import json, os, sys, pathlib
+pf, model, max_tokens = sys.argv[1], sys.argv[2], int(sys.argv[3])
+prompt = pathlib.Path(pf).read_text(encoding='utf-8')
+body = {
+    "model": model,
+    "max_tokens": max_tokens,
+    "messages": [{"role": "user", "content": prompt}],
+}
+print(json.dumps(body, ensure_ascii=False))
+PY
+  )
+  
+  # Call Anthropic Messages API; capture full JSON for logging & post-processing.
+  http_status=$(curl -sS -w "%{http_code}" -o "$json" \
+    -X POST "https://api.anthropic.com/v1/messages" \
+    -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+    -H "content-type: application/json" \
+    -H "anthropic-version: 2023-06-01" \
+    -d "$payload" 2>>"$log")
+  echo "HTTP_STATUS=$http_status" >>"$log"
+  
+  # Extract plain text from the first text block in message.content.
+  python3 - "$json" "$res" 2>>"$log" << 'PY'
+import json, sys, pathlib
+jf, out = sys.argv[1], sys.argv[2]
+data = json.loads(pathlib.Path(jf).read_text(encoding='utf-8') or '{}')
+text_parts = []
+for block in (data.get('content') or []):
+    if isinstance(block, dict) and block.get('type') == 'text':
+        text_parts.append(block.get('text') or '')
+with open(out, 'w', encoding='utf-8') as f:
+    f.write(''.join(text_parts))
+PY
+  
+  # Emit logs to stderr, then the assistant text to stdout.
+  cat "$json" >>"$log"
   cat "$log" >&2
   cat "$res"
-  rm -f "$res" "$log"
+  rm -f "$res" "$log" "$json"
