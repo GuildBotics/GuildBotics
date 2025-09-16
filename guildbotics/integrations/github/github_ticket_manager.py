@@ -869,7 +869,7 @@ class GitHubTicketManager(TicketManager):
                                 id
                                 name
                                 dataType
-                                options{ name description color }
+                                options{ id name description color }
                             }
                         }
                         pageInfo{ endCursor hasNextPage }
@@ -890,12 +890,15 @@ class GitHubTicketManager(TicketManager):
 
             for field in fields["nodes"]:
                 if field and field["name"] in self._custom_field_definitions:
-                    field_info = {
+                    field_info: dict[str, Any] = {
                         "id": field["id"],
                         "name": field["name"],
                         "dataType": field["dataType"],
-                        "options": field["options"],
                     }
+                    # Normalize SINGLE_SELECT options to a mapping: name -> optionId
+                    if field.get("dataType") == "SINGLE_SELECT":
+                        opts = field.get("options", []) or []
+                        field_info["options"] = {o["name"]: o["id"] for o in opts if o}
                     all_fields[field["name"]] = field_info
 
             if not fields["pageInfo"]["hasNextPage"]:
@@ -976,11 +979,13 @@ class GitHubTicketManager(TicketManager):
         Also, for existing SINGLE_SELECT fields, ensure options are up to date.
         """
         existing_fields = await self._get_custom_fields()
+        created_any = False
 
         for field_name, field_config in self._custom_field_definitions.items():
             if field_name not in existing_fields:
-                field_info = await self._create_custom_field(field_name, field_config)
-                self.custom_fields[field_name] = field_info
+                # Create field then refresh cache to get option IDs
+                await self._create_custom_field(field_name, field_config)
+                created_any = True
             else:
                 # For existing fields, check and update options if necessary
                 if (
@@ -988,8 +993,8 @@ class GitHubTicketManager(TicketManager):
                     and "options" in field_config
                 ):
                     desired_options = field_config["options"]
-                    current_options = existing_fields[field_name].get("options", [])
-                    current_option_names = [o["name"] for o in current_options]
+                    current_options = existing_fields[field_name].get("options", {})
+                    current_option_names = list(current_options.keys())
                     missing_options = {}
                     for opt in desired_options:
                         if opt["name"] not in current_option_names:
@@ -1002,6 +1007,12 @@ class GitHubTicketManager(TicketManager):
                             options=Labels(missing_options),
                         )
                         self.logger.warning(message)
+
+        # If any fields were created, refresh the local cache to include option IDs
+        if created_any:
+            # Clear cache and re-fetch
+            self.custom_fields = {}
+            await self._get_custom_fields()
 
     async def _get_field_value_for_task(self, task: Task, field_name: str) -> Any:
         """
