@@ -14,6 +14,7 @@ import errno
 from guildbotics.cli.setup_tool import SetupTool
 from guildbotics.drivers import TaskScheduler
 from guildbotics.utils.import_utils import instantiate_class
+from guildbotics.utils.fileio import get_storage_path
 
 
 def get_setup_tool() -> SetupTool:
@@ -42,7 +43,8 @@ def _load_env_from_cwd() -> None:
 
 
 def _pid_file_path() -> Path:
-    return Path.cwd() / ".guildbotics" / "run" / "scheduler.pid"
+    # Store PID under user's home storage path to avoid CWD dependency
+    return get_storage_path() / "run" / "scheduler.pid"
 
 
 def _pid_is_running(pid: int) -> bool:
