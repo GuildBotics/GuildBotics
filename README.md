@@ -45,6 +45,8 @@ A tool to collaborate with AI agents via a task board.
   - [7.5. Modifying the CLI Agent Script](#75-modifying-the-cli-agent-script)
   - [7.6. Per-Agent CLI Agent Settings](#76-per-agent-cli-agent-settings)
 - [8. Troubleshooting](#8-troubleshooting)
+  - [8.1. Error Logs](#81-error-logs)
+  - [8.2. Obtaining Debug Information](#82-obtaining-debug-information)
 - [9. Contributing](#9-contributing)
 
 ---
@@ -272,6 +274,8 @@ Start with:
 guildbotics run
 ```
 
+This starts the task scheduler, allowing AI agents to execute tasks.
+
 To stop the running scheduler:
 
 ```bash
@@ -398,6 +402,10 @@ By default, all AI agents share the same CLI agent, but if `team/members/<person
 
 
 # 8. Troubleshooting
+## 8.1. Error Logs
+If an unexpected error occurs during task execution, a comment saying "An error occurred while executing the task. Please check the error log for details." is added to the ticket. The error log at `~/.guildbotics/data/error.log` contains details of the error.
+
+## 8.2. Obtaining Debug Information
 Set the following environment variables to obtain debug information:
 
 - `AGNO_DEBUG`: Extra debug output for the `agno` engine (`true`/`false`).
