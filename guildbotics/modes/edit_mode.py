@@ -38,7 +38,9 @@ class EditMode(ModeBase):
         inputs = messages_to_simple_dicts(messages)
 
         if self.context.task.status == Task.RETROSPECTIVE:
-            pull_request_url = self.find_pr_url_from_task_comments(self.context.task)
+            pull_request_url = self.find_pr_url_from_task_comments(
+                self.context.task, True
+            )
             pr = await self.code_hosting_service.get_pull_request(pull_request_url)
             pr_text = self.pr_to_text(pr)
             evaluation = await evaluate_interaction_performance(self.context, pr_text)
@@ -80,10 +82,12 @@ class EditMode(ModeBase):
 
         git_tool = await self.checkout()
 
-        is_reviewing = self.context.task.status == Task.IN_REVIEW
+        pull_request_url = self.find_pr_url_from_task_comments(self.context.task, False)
+        is_reviewing = self.context.task.status == Task.IN_REVIEW and bool(
+            pull_request_url
+        )
         if is_reviewing:
             context_location = t("modes.edit_mode.pull_request_context_location")
-            pull_request_url = self.find_pr_url_from_task_comments(self.context.task)
             comments = await self.code_hosting_service.get_pull_request_comments(
                 pull_request_url
             )
@@ -270,14 +274,18 @@ class EditMode(ModeBase):
 
         return default_template_text
 
-    def find_pr_url_from_task_comments(self, task: Task) -> str:
+    def find_pr_url_from_task_comments(self, task: Task, strict: bool) -> str:
         """Find the pull request URL from task comments.
+
         Args:
             task (Task): The task containing comments.
+            strict (bool): If True, applies stricter matching criteria when searching for the pull request URL;
+                if False, uses a more lenient search.
+
         Returns:
             str: The pull request URL if found, otherwise an empty string.
         """
-        return task.find_output_title_and_url_from_comments()[1]
+        return task.find_output_title_and_url_from_comments(strict)[1]
 
     @classmethod
     def get_dependent_services(cls) -> list[Service]:

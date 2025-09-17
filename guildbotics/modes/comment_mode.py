@@ -26,7 +26,7 @@ class CommentMode(ModeBase):
 
         git_tool = await self.checkout()
         message = await reply_as(self.context, messages, git_tool.repo_path)
-        return AgentResponse(status=AgentResponse.DONE, message=message)
+        return AgentResponse(status=AgentResponse.ASKING, message=message)
 
     @classmethod
     def get_dependent_services(cls) -> list[Service]:
