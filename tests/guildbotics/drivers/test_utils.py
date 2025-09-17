@@ -108,8 +108,8 @@ async def test_run_workflow_success_logs_and_returns_true(monkeypatch):
 
     ctx = FakeContext()
     task = Task(title="Title", description="Desc", workflow="any")
-    ok, msg = await run_workflow(ctx, task, task_type="scheduled")
-    assert ok is True and msg == ""
+    ok = await run_workflow(ctx, task, task_type="scheduled")
+    assert ok is True
     # Validate logs contain start and finish messages
     start_logs = [m for m in ctx.logger.infos if "Running scheduled task 'Title'" in m]
     finish_logs = [
@@ -128,9 +128,8 @@ async def test_run_workflow_exception_logs_and_returns_false(monkeypatch):
 
     ctx = FakeContext()
     task = Task(title="Failing", description="Desc", workflow="any")
-    ok, msg = await run_workflow(ctx, task, task_type="scheduled")
+    ok = await run_workflow(ctx, task, task_type="scheduled")
     assert ok is False
-    assert "Traceback" in msg and "RuntimeError: boom" in msg
     # Validate error summary and traceback were logged
     error_summary = [
         e for e in ctx.logger.errors if "Error running workflow for task 'Failing'" in e

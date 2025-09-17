@@ -1,11 +1,11 @@
 import asyncio
 import datetime
 import threading
-from time import sleep
 
 from guildbotics.drivers.utils import run_workflow
 from guildbotics.entities import Person, ScheduledTask
 from guildbotics.runtime import Context
+from guildbotics.utils.i18n_tool import t
 
 
 class TaskScheduler:
@@ -93,13 +93,11 @@ class TaskScheduler:
                 break
             task = loop.run_until_complete(ticket_manager.get_task_to_work_on())
             if task and not self._stop_event.is_set():
-                ok, message = loop.run_until_complete(
-                    run_workflow(context, task, "ticket")
-                )
+                ok = loop.run_until_complete(run_workflow(context, task, "ticket"))
                 if not ok and not self._stop_event.is_set():
                     loop.run_until_complete(
                         ticket_manager.add_comment_to_ticket(
-                            task, f"Error:\n\n{message}"
+                            task, t("drivers.task_scheduler.task_error")
                         )
                     )
                 self._sleep_interruptible(1)

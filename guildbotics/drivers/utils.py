@@ -3,6 +3,7 @@ import traceback
 
 from guildbotics.entities import Task
 from guildbotics.runtime import Context
+from guildbotics.utils.fileio import get_storage_path
 from guildbotics.utils.import_utils import instantiate_class
 from guildbotics.workflows import WorkflowBase
 
@@ -31,7 +32,7 @@ async def run_workflow(
     context: Context,
     task: Task,
     task_type: str,
-) -> tuple[bool, str]:
+) -> bool:
     """Run a workflow either in‐process or in a separate virtual environment.
 
     By default, the workflow executes in the current Python process.  To isolate
@@ -45,7 +46,6 @@ async def run_workflow(
 
     Returns:
         True if the workflow ran without error, False otherwise.
-        An error message if an exception occurred, otherwise an empty string.
     """
     try:
         start_time = datetime.datetime.now()
@@ -64,7 +64,7 @@ async def run_workflow(
             f"Finished running {task_type} task '{task.title}' for person "
             f"'{person.person_id}' in {duration:.2f}s"
         )
-        return True, ""
+        return True
     except Exception as e:
         context.logger.error(
             f"Error running workflow for task '{task.title}' for person "
@@ -72,4 +72,14 @@ async def run_workflow(
         )
         error_message = traceback.format_exc()
         context.logger.error(error_message)
-        return False, error_message
+        write_error_log(error_message)
+        return False
+
+
+def write_error_log(message: str) -> None:
+    """Write an error message to the log file."""
+    log_file_path = get_storage_path() / "error.log"
+    log_file_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(log_file_path, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {message}\n")
