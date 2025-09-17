@@ -786,6 +786,16 @@ class GitHubTicketManager(TicketManager):
         client = await self.login()
         assert task.id, "Task ID must be set before commenting"
         issue_number = await self._get_issue_number(task.id)
+        # Fetch issue to determine the author for mention
+        issue_resp = await client.get(
+            f"{self._get_issue_path(task.repository)}/{issue_number}"
+        )
+        issue_data = issue_resp.json()
+        author_login = (issue_data.get("user") or {}).get("login")
+
+        # Prepend mention to the issue author unless we are the author
+        if author_login and author_login != self.username:
+            comment = f"@{author_login}\n\n{comment}"
         if is_proxy_agent(self.person):
             comment = f"{comment}\n\n{get_proxy_agent_signature(self.person)}"
         await client.post(
