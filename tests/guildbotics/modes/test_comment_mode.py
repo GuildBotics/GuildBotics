@@ -78,6 +78,6 @@ async def test_run_returns_asking_and_uses_reply_as(monkeypatch, fake_context):
 
     res = await mode.run(messages)
 
-    assert res.status == AgentResponse.DONE
+    assert res.status == AgentResponse.ASKING
     assert isinstance(res.message, str) and res.message.strip() != ""
     assert res.message == "mocked reply"
