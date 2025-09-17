@@ -72,14 +72,18 @@ async def run_workflow(
         )
         error_message = traceback.format_exc()
         context.logger.error(error_message)
-        write_error_log(error_message)
+        write_error_log(context, error_message)
         return False
 
 
-def write_error_log(message: str) -> None:
+def write_error_log(context: Context, message: str) -> None:
     """Write an error message to the log file."""
-    log_file_path = get_storage_path() / "error.log"
-    log_file_path.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(log_file_path, "a", encoding="utf-8") as f:
-        f.write(f"[{timestamp}] {message}\n")
+    try:
+        log_file_path = get_storage_path() / "error.log"
+        log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_file_path, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+    except Exception:
+        context.logger.error("Failed to write to error log file.")
+        context.logger.error(traceback.format_exc())
