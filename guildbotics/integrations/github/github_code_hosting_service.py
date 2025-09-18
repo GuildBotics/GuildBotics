@@ -133,6 +133,7 @@ class GitHubCodeHostingService(CodeHostingService):
 
         review_comments = [
             ReviewComment(
+                comment_id=c.get("id"),
                 body=c["body"],
                 author=self.get_author_name(c["user"]["login"], c["body"]),
                 created_at=c["created_at"],
@@ -142,6 +143,7 @@ class GitHubCodeHostingService(CodeHostingService):
         ]
         review_comments.extend(
             ReviewComment(
+                comment_id=c.get("id"),
                 body=c["body"],
                 author=self.get_author_name(c["user"]["login"], c["body"]),
                 created_at=c["submitted_at"],
@@ -286,6 +288,21 @@ class GitHubCodeHostingService(CodeHostingService):
                 f"/repos/{self.owner}/{self.repo}/issues/{pr_number}/comments",
                 json={"body": reply},
             )
+
+    async def add_reaction_to_issue_comment(
+        self, html_url: str, comment_id: int, reaction: str
+    ) -> None:
+        """Add a reaction to an issue comment on a PR."""
+        # Reactions API uses this endpoint for issue comments (PR top-level comments)
+        client = await self.get_client()
+        # GitHub Reactions API requires a specific Accept header; AsyncClient already sets defaults,
+        # but we can pass headers here explicitly to be safe.
+        headers = {"Accept": "application/vnd.github+json"}
+        await client.post(
+            f"/repos/{self.owner}/{self.repo}/issues/comments/{comment_id}/reactions",
+            json={"content": reaction},
+            headers=headers,
+        )
 
     async def get_repository_url(self) -> str:
         """Get the repository URL for the current code hosting service."""
