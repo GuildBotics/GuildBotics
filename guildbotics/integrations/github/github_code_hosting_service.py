@@ -206,7 +206,6 @@ class GitHubCodeHostingService(CodeHostingService):
         """
         author = data["user"]["login"]
         is_reviewee = author == reviewee
-        # Check if reviewee has reacted
         return InlineComment(
             path=data["path"],
             line=data.get("line", 0) or 0,

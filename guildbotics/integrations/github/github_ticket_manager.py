@@ -571,15 +571,6 @@ class GitHubTicketManager(TicketManager):
             return False  # Not a PR URL
 
         comments = await hosting_service.get_pull_request_comments(url)
-
-        # If we already reacted to the PR, skip this task regardless of last comment
-        try:
-            if await self._has_reacted_to_pull_request(task):
-                continue
-        except Exception:
-            # If reaction check fails, do not block processing
-            pass
-
         return not comments.is_replied
 
     async def _get_pr_number_from_task(self, task: Task) -> tuple[str | None, str]:
@@ -601,25 +592,6 @@ class GitHubTicketManager(TicketManager):
 
         pr_number = hosting_service.get_pr_number_from_url(url)
         return pr_number, repo
-
-    async def _has_reacted_to_pull_request(self, task: Task) -> bool:
-        """Check if the authenticated user already reacted to the PR for this task."""
-        pr_number, repo = await self._get_pr_number_from_task(task)
-        if not pr_number:
-            return False
-
-        client = await self.login()
-        # Use reactions API; request the squirrel-girl media type for reactions
-        resp = await client.get(
-            f"/repos/{self.owner}/{repo}/issues/{pr_number}/reactions",
-            headers={"Accept": "application/vnd.github.squirrel-girl+json"},
-        )
-        reactions = resp.json()
-        for r in reactions:
-            user = r.get("user", {})
-            if user.get("login") == self.username:
-                return True
-        return False
 
     async def react_to_pull_request(self, task: Task, reaction: str) -> None:
         """Add a reaction to the pull request associated with the task."""
