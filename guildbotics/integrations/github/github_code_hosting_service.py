@@ -183,9 +183,7 @@ class GitHubCodeHostingService(CodeHostingService):
 
     def is_checked(self, reactions: list[Reaction] | None) -> bool:
         """Check if the reviewee has reacted to the comment."""
-        return any(
-            self.username in reaction.usernames for reaction in (reactions or [])
-        )
+        return any(self.username == reaction.username for reaction in (reactions or []))
 
     def from_dict(
         self, data: dict, reviewee: str, reactions: list[Reaction] | None = None
@@ -230,16 +228,18 @@ class GitHubCodeHostingService(CodeHostingService):
         return self._group_reactions(items)
 
     def _group_reactions(self, items: list[dict]) -> list[Reaction]:
-        """Group reaction payloads by content, aggregating usernames."""
-        by_content: dict[str, set[str]] = {}
+        """Group reaction payloads by username, aggregating contents."""
+        by_user: dict[str, set[str]] = {}
         for it in items:
             content = str(it.get("content", ""))
             user = it.get("user", {})
             login = str(user.get("login", ""))
             if not content or not login:
                 continue
-            by_content.setdefault(content, set()).add(login)
-        return [Reaction(content=k, usernames=sorted(v)) for k, v in by_content.items()]
+            by_user.setdefault(login, set()).add(content)
+        return [
+            Reaction(username=u, contents=sorted(list(cs))) for u, cs in by_user.items()
+        ]
 
     def get_line_content(self, data: dict) -> str:
         """Extract the content of a specific line from a GitHub diff hunk.

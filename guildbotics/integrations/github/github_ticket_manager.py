@@ -604,7 +604,7 @@ class GitHubTicketManager(TicketManager):
         await client.post(
             f"/repos/{self.owner}/{repo}/issues/{pr_number}/reactions",
             json={"content": reaction},
-            headers={"Accept": "application/vnd.github.squirrel-girl+json"},
+            headers={"Accept": "application/vnd.github.v3+json"},
         )
 
     async def get_ticket(self, column_name: str, all_items: list[dict]) -> Task | None:

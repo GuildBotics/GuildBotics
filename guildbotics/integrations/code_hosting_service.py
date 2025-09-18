@@ -5,10 +5,10 @@ from pydantic import BaseModel, Field
 
 
 class Reaction(BaseModel):
-    """A set of usernames reacting with the same content (e.g., "+1", "heart")."""
+    """Reactions grouped by username: a list of reaction emojis or similar content that a user added to a comment."""
 
-    content: str
-    usernames: list[str] = Field(default_factory=list)
+    username: str
+    contents: list[str] = Field(default_factory=list)
 
 
 from guildbotics.entities.message import Message
