@@ -495,6 +495,31 @@ async def identify_message_type(context: Context, input: str) -> str:
     return response.label
 
 
+async def identify_pr_comment_action(context: Context, input: str) -> str:
+    """Identify whether a PR comment requests edits or just acknowledgment.
+
+    Returns one of:
+      - "edit": The comment requires code/document changes.
+      - "ack": No edits needed (e.g., thanks, LGTM, bot command).
+    """
+    available_actions = {
+        "edit": "Requires file edits or fixes",
+        "ack": "No edits required (thanks, LGTM, bot command)",
+    }
+    session_state = {
+        "item_type": "review action",
+        "candidates": str(Labels(available_actions)),
+    }
+    response: DecisionResponse = await get_content(
+        context,
+        "functions/identify_item",
+        message=input,
+        session_state=session_state,
+        add_state_in_messages=True,
+    )
+    return response.label
+
+
 async def analyze_log(context: Context, log_output: str) -> AgentResponse:
     """
     Analyze the log output and return an AgentResponse.
