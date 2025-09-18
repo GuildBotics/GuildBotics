@@ -84,6 +84,10 @@ class DummyTicketManager(TicketManager):
         """No-op update ticket."""
         return None
 
+    async def react_to_pull_request(self, task: Task, reaction: str) -> None:  # noqa: D401
+        """No-op react to pull request."""
+        return None
+
 
 class DummyIntegrationFactory(IntegrationFactory):
     """IntegrationFactory stub capturing calls and returning DummyTicketManager."""

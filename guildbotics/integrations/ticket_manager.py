@@ -94,3 +94,17 @@ class TicketManager(ABC):
             task (Task): The task representing the ticket to update.
         """
         pass
+
+    @abstractmethod
+    async def react_to_pull_request(self, task: Task, reaction: str) -> None:
+        """
+        Add a reaction to a pull request related to the given task.
+
+        Implementations should react to the PR referenced from the task's comments
+        (e.g., via `Task.find_output_title_and_url_from_comments(strict=False)`).
+
+        Args:
+            task (Task): The task associated with the pull request.
+            reaction (str): The reaction content (e.g. "+1", "heart", "eyes", "rocket").
+        """
+        pass

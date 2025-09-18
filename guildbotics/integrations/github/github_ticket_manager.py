@@ -573,6 +573,59 @@ class GitHubTicketManager(TicketManager):
         comments = await hosting_service.get_pull_request_comments(url)
         return not comments.is_replied
 
+    async def _get_pr_number_from_task(self, task: Task) -> tuple[str | None, str]:
+        """Extract PR number from task comments and resolve repository name.
+
+        Returns a tuple of (pr_number or None, repository).
+        """
+        # Determine repository to use (task-specific or default)
+        repo = task.repository or self.default_repo
+
+        # Try to find PR URL from comments
+        title, url = task.find_output_title_and_url_from_comments(strict=False)
+        if not url:
+            return None, repo
+
+        hosting_service = GitHubCodeHostingService(self.person, self.team, repo)
+        if not url.startswith(hosting_service.repo_base_url):
+            return None, repo
+
+        pr_number = hosting_service.get_pr_number_from_url(url)
+        return pr_number, repo
+
+    async def _has_reacted_to_pull_request(self, task: Task) -> bool:
+        """Check if the authenticated user already reacted to the PR for this task."""
+        pr_number, repo = await self._get_pr_number_from_task(task)
+        if not pr_number:
+            return False
+
+        client = await self.login()
+        # Use reactions API; request the squirrel-girl media type for reactions
+        resp = await client.get(
+            f"/repos/{self.owner}/{repo}/issues/{pr_number}/reactions",
+            headers={"Accept": "application/vnd.github.squirrel-girl+json"},
+        )
+        reactions = resp.json()
+        for r in reactions:
+            user = r.get("user", {})
+            if user.get("login") == self.username:
+                return True
+        return False
+
+    async def react_to_pull_request(self, task: Task, reaction: str) -> None:
+        """Add a reaction to the pull request associated with the task."""
+        pr_number, repo = await self._get_pr_number_from_task(task)
+        if not pr_number:
+            # No PR associated; nothing to do
+            return
+
+        client = await self.login()
+        await client.post(
+            f"/repos/{self.owner}/{repo}/issues/{pr_number}/reactions",
+            json={"content": reaction},
+            headers={"Accept": "application/vnd.github.squirrel-girl+json"},
+        )
+
     async def get_ticket(self, column_name: str, all_items: list[dict]) -> Task | None:
         """
         Retrieve a ticket from a specific column by name, fetching all pages of items.
@@ -685,6 +738,14 @@ class GitHubTicketManager(TicketManager):
                 # sort comments by creation timestamp ascending
                 comments.sort(key=lambda m: m.timestamp)
                 task.comments = comments
+
+                # If we already reacted to the PR, skip this task regardless of last comment
+                try:
+                    if await self._has_reacted_to_pull_request(task):
+                        continue
+                except Exception:
+                    # If reaction check fails, do not block processing
+                    pass
                 # If the last comment was made by the person, we skip this task.
                 author_type = comments[-1].author_type
                 if (
