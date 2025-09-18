@@ -8,6 +8,7 @@ from guildbotics.integrations.code_hosting_service import (
     CodeHostingService,
     InlineComment,
     PullRequest,
+    Reaction,
     ReviewComment,
     ReviewComments,
     get_author,
@@ -121,25 +122,29 @@ class GitHubCodeHostingService(CodeHostingService):
         client = await self.get_client()
 
         # Fetch issue comments
+        review_comments: list[ReviewComment] = []
         issue_comments_resp = await client.get(
             f"/repos/{self.owner}/{self.repo}/issues/{pr_number}/comments"
         )
         _issue_comments: list[dict] = issue_comments_resp.json()
+        for c in _issue_comments:
+            reactions = await self._get_comment_reactions(
+                client, "issues", int(c["id"])
+            )
+            review_comments.append(
+                ReviewComment(
+                    body=c["body"],
+                    author=self.get_author_name(c["user"]["login"], c["body"]),
+                    created_at=c["created_at"],
+                    is_reviewee=c["user"]["login"] == self.username,
+                    is_checked=self.is_checked(reactions),
+                )
+            )
 
         reviews_resp = await client.get(
             f"/repos/{self.owner}/{self.repo}/pulls/{pr_number}/reviews"
         )
         _review_comments: list[dict] = reviews_resp.json()
-
-        review_comments = [
-            ReviewComment(
-                body=c["body"],
-                author=self.get_author_name(c["user"]["login"], c["body"]),
-                created_at=c["created_at"],
-                is_reviewee=c["user"]["login"] == self.username,
-            )
-            for c in _issue_comments
-        ]
         review_comments.extend(
             ReviewComment(
                 body=c["body"],
@@ -156,9 +161,14 @@ class GitHubCodeHostingService(CodeHostingService):
             f"/repos/{self.owner}/{self.repo}/pulls/{pr_number}/comments"
         )
         _inline_comments: list[dict] = review_comments_resp.json()
-        inline_comments = [
-            self.from_dict(comment, self.username) for comment in _inline_comments
-        ]
+        inline_comments: list[InlineComment] = []
+        for comment in _inline_comments:
+            reactions = await self._get_comment_reactions(
+                client, "pulls", int(comment["id"])
+            )
+            inline_comments.append(
+                self.from_dict(comment, self.username, reactions=reactions)
+            )
 
         return ReviewComments(
             review_comments=review_comments,
@@ -171,7 +181,15 @@ class GitHubCodeHostingService(CodeHostingService):
         author_type = get_author_type(self.person, username, comment_body)
         return get_author(person_name, author_type == Message.ASSISTANT)
 
-    def from_dict(self, data: dict, reviewee: str) -> InlineComment:
+    def is_checked(self, reactions: list[Reaction] | None) -> bool:
+        """Check if the reviewee has reacted to the comment."""
+        return any(
+            self.username in reaction.usernames for reaction in (reactions or [])
+        )
+
+    def from_dict(
+        self, data: dict, reviewee: str, reactions: list[Reaction] | None = None
+    ) -> InlineComment:
         """Create an InlineComment instance from a GitHub API response dict.
 
         Args:
@@ -188,7 +206,7 @@ class GitHubCodeHostingService(CodeHostingService):
         """
         author = data["user"]["login"]
         is_reviewee = author == reviewee
-
+        # Check if reviewee has reacted
         return InlineComment(
             path=data["path"],
             line=data.get("line", 0) or 0,
@@ -198,7 +216,31 @@ class GitHubCodeHostingService(CodeHostingService):
             created_at=data["created_at"],
             is_reviewee=is_reviewee,
             line_content=self.get_line_content(data),
+            is_checked=self.is_checked(reactions),
         )
+
+    async def _get_comment_reactions(
+        self, client: AsyncClient, comment_type: str, comment_id: int
+    ) -> list[Reaction]:
+        """Fetch reactions for an issue comment and group by content with usernames."""
+        resp = await client.get(
+            f"/repos/{self.owner}/{self.repo}/{comment_type}/comments/{comment_id}/reactions",
+            headers={"Accept": "application/vnd.github.v3+json"},
+        )
+        items: list[dict] = resp.json()
+        return self._group_reactions(items)
+
+    def _group_reactions(self, items: list[dict]) -> list[Reaction]:
+        """Group reaction payloads by content, aggregating usernames."""
+        by_content: dict[str, set[str]] = {}
+        for it in items:
+            content = str(it.get("content", ""))
+            user = it.get("user", {})
+            login = str(user.get("login", ""))
+            if not content or not login:
+                continue
+            by_content.setdefault(content, set()).add(login)
+        return [Reaction(content=k, usernames=sorted(v)) for k, v in by_content.items()]
 
     def get_line_content(self, data: dict) -> str:
         """Extract the content of a specific line from a GitHub diff hunk.

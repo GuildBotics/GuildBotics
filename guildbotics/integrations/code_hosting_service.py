@@ -1,7 +1,15 @@
 import time
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class Reaction(BaseModel):
+    """A set of usernames reacting with the same content (e.g., "+1", "heart")."""
+
+    content: str
+    usernames: list[str] = Field(default_factory=list)
+
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Team
@@ -23,6 +31,7 @@ class InlineComment(BaseModel):
     created_at: str
     is_reviewee: bool = False
     line_content: str | None = None
+    is_checked: bool = False
 
     def __lt__(self, other: "InlineComment") -> bool:
         """Compare two inline comments by path, then line, then creation time."""
@@ -46,7 +55,11 @@ class InlineCommentThread(BaseModel):
 
     def is_replied(self) -> bool:
         """Check if the last comment in the thread is a reply from the reviewee."""
-        return len(self.comments) == 0 or self.comments[-1].is_reviewee
+        return (
+            len(self.comments) == 0
+            or self.comments[-1].is_reviewee
+            or self.comments[-1].is_checked
+        )
 
     def to_dict(self) -> dict:
         """Convert the inline comment thread to a dictionary format."""
@@ -77,6 +90,7 @@ class InlineCommentThread(BaseModel):
                 author=get_author("reviewee", True),
                 created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 is_reviewee=True,
+                is_checked=True,
             )
         )
 
@@ -88,6 +102,7 @@ class ReviewComment(BaseModel):
     author: str
     created_at: str
     is_reviewee: bool = False
+    is_checked: bool = False
 
     def __lt__(self, other: "ReviewComment") -> bool:
         """Compare two comments by creation time."""
@@ -154,7 +169,9 @@ class ReviewComments:
             ]
 
         review_comments_replied = (
-            len(review_comments) == 0 or review_comments[-1].is_reviewee
+            len(review_comments) == 0
+            or review_comments[-1].is_reviewee
+            or review_comments[-1].is_checked
         )
         self.is_replied = (
             len(self.inline_comment_threads) == 0 and review_comments_replied

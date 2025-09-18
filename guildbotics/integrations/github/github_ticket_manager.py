@@ -571,6 +571,15 @@ class GitHubTicketManager(TicketManager):
             return False  # Not a PR URL
 
         comments = await hosting_service.get_pull_request_comments(url)
+
+        # If we already reacted to the PR, skip this task regardless of last comment
+        try:
+            if await self._has_reacted_to_pull_request(task):
+                continue
+        except Exception:
+            # If reaction check fails, do not block processing
+            pass
+
         return not comments.is_replied
 
     async def _get_pr_number_from_task(self, task: Task) -> tuple[str | None, str]:
@@ -738,14 +747,6 @@ class GitHubTicketManager(TicketManager):
                 # sort comments by creation timestamp ascending
                 comments.sort(key=lambda m: m.timestamp)
                 task.comments = comments
-
-                # If we already reacted to the PR, skip this task regardless of last comment
-                try:
-                    if await self._has_reacted_to_pull_request(task):
-                        continue
-                except Exception:
-                    # If reaction check fails, do not block processing
-                    pass
                 # If the last comment was made by the person, we skip this task.
                 author_type = comments[-1].author_type
                 if (
