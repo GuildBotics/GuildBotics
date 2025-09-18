@@ -3,16 +3,15 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, Field
 
+from guildbotics.entities.message import Message
+from guildbotics.entities.team import Person, Team
+
 
 class Reaction(BaseModel):
     """Reactions grouped by username: a list of reaction emojis or similar content that a user added to a comment."""
 
     username: str
     contents: list[str] = Field(default_factory=list)
-
-
-from guildbotics.entities.message import Message
-from guildbotics.entities.team import Person, Team
 
 
 def get_author(author: str, is_reviewee: bool) -> str:

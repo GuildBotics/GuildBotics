@@ -221,10 +221,9 @@ class GitHubCodeHostingService(CodeHostingService):
     async def _get_comment_reactions(
         self, client: AsyncClient, comment_type: str, comment_id: int
     ) -> list[Reaction]:
-        """Fetch reactions for an issue comment and group by content with usernames."""
+        """Fetch reactions for an issue or pull request comment and group by content with usernames."""
         resp = await client.get(
-            f"/repos/{self.owner}/{self.repo}/{comment_type}/comments/{comment_id}/reactions",
-            headers={"Accept": "application/vnd.github.v3+json"},
+            f"/repos/{self.owner}/{self.repo}/{comment_type}/comments/{comment_id}/reactions"
         )
         items: list[dict] = resp.json()
         return self._group_reactions(items)
