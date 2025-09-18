@@ -1,4 +1,5 @@
 from pathlib import Path
+import httpx
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
@@ -129,12 +130,14 @@ class EditMode(ModeBase):
                         if last_reviewer_comment and last_reviewer_comment.comment_id:
                             await self.code_hosting_service.add_reaction_to_issue_comment(
                                 pull_request_url,
-                                int(last_reviewer_comment.comment_id),
-                                "eyes",
+                                last_reviewer_comment.comment_id,
+                                "+1",
                             )
-                    except Exception:
+                    except (ValueError, TypeError, httpx.HTTPError) as e:
                         # Non-fatal: if reaction fails, continue without raising.
-                        pass
+                        self.context.logger.warning(
+                            f"Failed to add reaction to comment {getattr(last_reviewer_comment, 'comment_id', None)}: {e}"
+                        )
                     # Do not set a reply message to avoid posting a redundant comment.
                     message = ""
                 else:
