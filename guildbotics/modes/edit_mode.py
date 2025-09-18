@@ -1,4 +1,5 @@
 from pathlib import Path
+import httpx
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
@@ -10,6 +11,7 @@ from guildbotics.intelligences.functions import (
     edit_files,
     evaluate_interaction_performance,
     messages_to_simple_dicts,
+    identify_pr_comment_action,
     propose_process_improvements,
     talk_as,
     write_commit_message,
@@ -109,13 +111,45 @@ class EditMode(ModeBase):
 
             message = t("modes.edit_mode.default_message")
             if len(comments.inline_comment_threads) == 0:
-                # If there are no inline comments, we can just run the coding agent script
-                response = await edit_files(self.context, inputs, git_tool.repo_path)
-                if response.message:
-                    message = response.message
-                is_asking = response.status == AgentResponse.ASKING
-                if is_asking and not response.message:
-                    message = t("modes.edit_mode.default_question")
+                # If there are no inline comments, first decide if edits are needed.
+                last_reviewer_comment = None
+                for rc in reversed(comments.review_comments):
+                    if not rc.is_reviewee:
+                        last_reviewer_comment = rc
+                        break
+
+                action = "edit"
+                if last_reviewer_comment and last_reviewer_comment.body:
+                    action = await identify_pr_comment_action(
+                        self.context, last_reviewer_comment.body
+                    )
+
+                if action == "ack":
+                    # No edits needed; acknowledge by adding a reaction and skip editing.
+                    try:
+                        if last_reviewer_comment and last_reviewer_comment.comment_id:
+                            await self.code_hosting_service.add_reaction_to_issue_comment(
+                                pull_request_url,
+                                last_reviewer_comment.comment_id,
+                                "+1",
+                            )
+                    except (ValueError, TypeError, httpx.HTTPError) as e:
+                        # Non-fatal: if reaction fails, continue without raising.
+                        self.context.logger.warning(
+                            f"Failed to add reaction to comment {getattr(last_reviewer_comment, 'comment_id', None)}: {e}"
+                        )
+                    # Do not set a reply message to avoid posting a redundant comment.
+                    message = ""
+                else:
+                    # Run the coding agent script to perform edits
+                    response = await edit_files(
+                        self.context, inputs, git_tool.repo_path
+                    )
+                    if response.message:
+                        message = response.message
+                    is_asking = response.status == AgentResponse.ASKING
+                    if is_asking and not response.message:
+                        message = t("modes.edit_mode.default_question")
             else:
                 for thread in comments.inline_comment_threads:
                     review_comment = inputs.copy()
@@ -149,9 +183,10 @@ class EditMode(ModeBase):
                         )
                     )
 
-            comments.reply = await talk_as(
-                self.context, message, context_location, conversation_history
-            )
+            if message:
+                comments.reply = await talk_as(
+                    self.context, message, context_location, conversation_history
+                )
         else:
             # Run the coding agent script to generate code changes
             response = await edit_files(self.context, inputs, git_tool.repo_path)

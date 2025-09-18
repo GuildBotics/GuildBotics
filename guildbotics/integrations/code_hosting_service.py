@@ -98,6 +98,7 @@ class InlineCommentThread(BaseModel):
 class ReviewComment(BaseModel):
     """Model for review comments in a pull request."""
 
+    comment_id: int | None = None
     body: str
     author: str
     created_at: str
@@ -272,6 +273,20 @@ class CodeHostingService(ABC):
         Args:
             html_url (str): The URL of the pull request.
             comments (ReviewComments): The comments to respond to.
+        """
+        pass
+
+    @abstractmethod
+    async def add_reaction_to_issue_comment(
+        self, html_url: str, comment_id: int, reaction: str
+    ) -> None:
+        """
+        Add a reaction to a non-inline (issue) comment on a pull request.
+
+        Args:
+            html_url (str): The URL of the pull request.
+            comment_id (int): The comment ID to react to.
+            reaction (str): The reaction content (e.g., "+1", "eyes").
         """
         pass
 
