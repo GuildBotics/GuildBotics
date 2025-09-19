@@ -126,18 +126,11 @@ class EditMode(ModeBase):
 
                 if action == "ack":
                     # No edits needed; acknowledge by adding a reaction and skip editing.
-                    try:
-                        if last_reviewer_comment and last_reviewer_comment.comment_id:
-                            await self.code_hosting_service.add_reaction_to_issue_comment(
-                                pull_request_url,
-                                last_reviewer_comment.comment_id,
-                                "+1",
-                            )
-                    except (ValueError, TypeError, httpx.HTTPError) as e:
-                        # Non-fatal: if reaction fails, continue without raising.
-                        self.context.logger.warning(
-                            f"Failed to add reaction to comment {getattr(last_reviewer_comment, 'comment_id', None)}: {e}"
-                        )
+                    await self._acknowledge_comment(
+                        pull_request_url,
+                        getattr(last_reviewer_comment, "comment_id", None),
+                        is_inline=False,
+                    )
                     # Do not set a reply message to avoid posting a redundant comment.
                     message = ""
                 else:
@@ -167,6 +160,28 @@ class EditMode(ModeBase):
                                 timestamp="",
                             )
                         )
+
+                    # Determine action based on the latest reviewer comment in the thread
+                    latest_reviewer = None
+                    for c in reversed(thread.comments):
+                        if not c.is_reviewee:
+                            latest_reviewer = c
+                            break
+
+                    action = "edit"
+                    if latest_reviewer and latest_reviewer.body:
+                        action = await identify_pr_comment_action(
+                            self.context, latest_reviewer.body
+                        )
+
+                    if action == "ack":
+                        # Acknowledge by reacting to the inline comment; skip editing
+                        await self._acknowledge_comment(
+                            pull_request_url,
+                            getattr(latest_reviewer, "comment_id", None),
+                            is_inline=True,
+                        )
+                        continue
 
                     response = await edit_files(
                         self.context, review_comment, git_tool.repo_path
@@ -339,3 +354,28 @@ class EditMode(ModeBase):
             str: A brief description of the mode's use case.
         """
         return t("modes.edit_mode.use_case_description")
+
+    async def _acknowledge_comment(
+        self, pull_request_url: str, comment_id: int | None, is_inline: bool
+    ) -> None:
+        """Add a thumbs-up reaction to a comment if possible.
+
+        For PR-wide issue comments, uses `add_reaction_to_issue_comment`.
+        For inline review comments, uses `add_reaction_to_inline_comment`.
+        Swallows non-fatal exceptions and logs a warning.
+        """
+        if not comment_id:
+            return
+        try:
+            if is_inline:
+                await self.code_hosting_service.add_reaction_to_inline_comment(
+                    pull_request_url, comment_id, "+1"
+                )
+            else:
+                await self.code_hosting_service.add_reaction_to_issue_comment(
+                    pull_request_url, comment_id, "+1"
+                )
+        except (ValueError, TypeError, httpx.HTTPError) as e:
+            self.context.logger.warning(
+                f"Failed to add reaction to {'inline' if is_inline else 'issue'} comment {comment_id}: {e}"
+            )
