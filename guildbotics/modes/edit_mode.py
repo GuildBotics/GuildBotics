@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import httpx
 
 from guildbotics.entities.message import Message
@@ -10,8 +11,8 @@ from guildbotics.intelligences.functions import (
     analyze_root_cause,
     edit_files,
     evaluate_interaction_performance,
-    messages_to_simple_dicts,
     identify_pr_comment_action,
+    messages_to_simple_dicts,
     propose_process_improvements,
     talk_as,
     write_commit_message,
@@ -118,27 +119,18 @@ class EditMode(ModeBase):
                         last_reviewer_comment = rc
                         break
 
-                action = "edit"
-                if last_reviewer_comment and last_reviewer_comment.body:
-                    action = await identify_pr_comment_action(
-                        self.context, last_reviewer_comment.body
-                    )
+                acknowledged = await self._acknowledge_comment(
+                    pull_request_url,
+                    (
+                        getattr(last_reviewer_comment, "comment_id", None)
+                        if last_reviewer_comment
+                        else None
+                    ),
+                    last_reviewer_comment.body if last_reviewer_comment else None,
+                )
 
-                if action == "ack":
-                    # No edits needed; acknowledge by adding a reaction and skip editing.
-                    try:
-                        if last_reviewer_comment and last_reviewer_comment.comment_id:
-                            await self.code_hosting_service.add_reaction_to_issue_comment(
-                                pull_request_url,
-                                last_reviewer_comment.comment_id,
-                                "+1",
-                            )
-                    except (ValueError, TypeError, httpx.HTTPError) as e:
-                        # Non-fatal: if reaction fails, continue without raising.
-                        self.context.logger.warning(
-                            f"Failed to add reaction to comment {getattr(last_reviewer_comment, 'comment_id', None)}: {e}"
-                        )
-                    # Do not set a reply message to avoid posting a redundant comment.
+                if acknowledged:
+                    # No edits needed; acknowledged by reaction. Avoid redundant reply.
                     message = ""
                 else:
                     # Run the coding agent script to perform edits
@@ -151,6 +143,7 @@ class EditMode(ModeBase):
                     if is_asking and not response.message:
                         message = t("modes.edit_mode.default_question")
             else:
+                changed = False
                 for thread in comments.inline_comment_threads:
                     review_comment = inputs.copy()
                     review_comment.append(thread.to_dict())
@@ -167,12 +160,29 @@ class EditMode(ModeBase):
                                 timestamp="",
                             )
                         )
+                    # Check only the last comment in the thread
+                    last_comment = thread.comments[-1] if thread.comments else None
+
+                    # If the last comment is by the reviewee (ourselves), skip this thread
+                    if not last_comment or last_comment.is_reviewee:
+                        continue
+
+                    # Decide action and, if ACK, react and skip editing
+                    if await self._acknowledge_comment(
+                        pull_request_url,
+                        getattr(last_comment, "comment_id", None),
+                        last_comment.body,
+                        is_inline=True,
+                    ):
+                        continue
 
                     response = await edit_files(
                         self.context, review_comment, git_tool.repo_path
                     )
                     if response.status == AgentResponse.ASKING:
                         is_asking = True
+                    else:
+                        changed = True
 
                     thread.add_reply(
                         await talk_as(
@@ -183,7 +193,7 @@ class EditMode(ModeBase):
                         )
                     )
 
-            if message:
+            if changed and message:
                 comments.reply = await talk_as(
                     self.context, message, context_location, conversation_history
                 )
@@ -339,3 +349,44 @@ class EditMode(ModeBase):
             str: A brief description of the mode's use case.
         """
         return t("modes.edit_mode.use_case_description")
+
+    async def _acknowledge_comment(
+        self,
+        pull_request_url: str,
+        comment_id: int | None,
+        comment_body: str | None,
+        *,
+        is_inline: bool = False,
+    ) -> bool:
+        """Decide action for a PR comment and acknowledge if appropriate.
+
+        - Runs `identify_pr_comment_action` on `comment_body` when provided.
+        - If the action is `ack`, adds a thumbs-up reaction to the target comment
+          using the appropriate API (inline vs issue) and returns True.
+        - Otherwise, returns False without side effects.
+
+        Exceptions from reaction API are swallowed with a warning log.
+
+        Returns:
+            bool: True if acknowledged (reaction added or attempted), False otherwise.
+        """
+        action = "edit"
+        if comment_body:
+            action = await identify_pr_comment_action(self.context, comment_body)
+
+        if action != "ack":
+            return False
+
+        if not comment_id:
+            # No concrete comment to react to, treat as not acknowledged in effect
+            return True
+
+        try:
+            await self.code_hosting_service.add_reaction_to_comment(
+                pull_request_url, comment_id, "+1", is_inline=is_inline
+            )
+        except (ValueError, TypeError, httpx.HTTPError) as e:
+            self.context.logger.warning(
+                f"Failed to add reaction to comment {comment_id}: {e}"
+            )
+        return True

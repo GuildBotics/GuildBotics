@@ -329,20 +329,17 @@ class GitHubCodeHostingService(CodeHostingService):
                 json={"body": reply},
             )
 
-    async def add_reaction_to_issue_comment(
-        self, html_url: str, comment_id: int, reaction: str
+    async def add_reaction_to_comment(
+        self, html_url: str, comment_id: int, reaction: str, is_inline: bool
     ) -> None:
-        """Add a reaction to an issue comment on a PR."""
-        # Reactions API uses this endpoint for issue comments (PR top-level comments)
+        """Add a reaction to a PR comment (inline or top-level)."""
         client = await self.get_client()
-        # GitHub Reactions API requires a specific Accept header; AsyncClient already sets defaults,
-        # but we can pass headers here explicitly to be safe.
         headers = {"Accept": "application/vnd.github+json"}
-        await client.post(
-            f"/repos/{self.owner}/{self.repo}/issues/comments/{comment_id}/reactions",
-            json={"content": reaction},
-            headers=headers,
-        )
+        if is_inline:
+            endpoint = f"/repos/{self.owner}/{self.repo}/pulls/comments/{comment_id}/reactions"
+        else:
+            endpoint = f"/repos/{self.owner}/{self.repo}/issues/comments/{comment_id}/reactions"
+        await client.post(endpoint, json={"content": reaction}, headers=headers)
 
     async def get_repository_url(self) -> str:
         """Get the repository URL for the current code hosting service."""
