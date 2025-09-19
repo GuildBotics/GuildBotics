@@ -160,25 +160,25 @@ class EditMode(ModeBase):
                                 timestamp="",
                             )
                         )
+                    # Check only the last comment in the thread
+                    last_comment = thread.comments[-1] if thread.comments else None
 
-                    # Determine action based on the latest reviewer comment in the thread
-                    latest_reviewer = None
-                    for c in reversed(thread.comments):
-                        if not c.is_reviewee:
-                            latest_reviewer = c
-                            break
+                    # If the last comment is by the reviewee (ourselves), skip this thread
+                    if not last_comment or last_comment.is_reviewee:
+                        continue
 
+                    # Otherwise, decide action based on the last comment (reviewer)
                     action = "edit"
-                    if latest_reviewer and latest_reviewer.body:
+                    if last_comment.body:
                         action = await identify_pr_comment_action(
-                            self.context, latest_reviewer.body
+                            self.context, last_comment.body
                         )
 
                     if action == "ack":
-                        # Acknowledge by reacting to the inline comment; skip editing
+                        # Acknowledge by reacting to the last inline comment; skip editing
                         await self._acknowledge_comment(
                             pull_request_url,
-                            getattr(latest_reviewer, "comment_id", None),
+                            getattr(last_comment, "comment_id", None),
                             is_inline=True,
                         )
                         continue
