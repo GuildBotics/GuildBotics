@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import httpx
 
 from guildbotics.entities.message import Message
@@ -10,8 +11,8 @@ from guildbotics.intelligences.functions import (
     analyze_root_cause,
     edit_files,
     evaluate_interaction_performance,
-    messages_to_simple_dicts,
     identify_pr_comment_action,
+    messages_to_simple_dicts,
     propose_process_improvements,
     talk_as,
     write_commit_message,
@@ -120,9 +121,11 @@ class EditMode(ModeBase):
 
                 acknowledged = await self._acknowledge_comment(
                     pull_request_url,
-                    getattr(last_reviewer_comment, "comment_id", None)
-                    if last_reviewer_comment
-                    else None,
+                    (
+                        getattr(last_reviewer_comment, "comment_id", None)
+                        if last_reviewer_comment
+                        else None
+                    ),
                     last_reviewer_comment.body if last_reviewer_comment else None,
                 )
 
@@ -140,6 +143,7 @@ class EditMode(ModeBase):
                     if is_asking and not response.message:
                         message = t("modes.edit_mode.default_question")
             else:
+                changed = False
                 for thread in comments.inline_comment_threads:
                     review_comment = inputs.copy()
                     review_comment.append(thread.to_dict())
@@ -177,6 +181,8 @@ class EditMode(ModeBase):
                     )
                     if response.status == AgentResponse.ASKING:
                         is_asking = True
+                    else:
+                        changed = True
 
                     thread.add_reply(
                         await talk_as(
@@ -187,7 +193,7 @@ class EditMode(ModeBase):
                         )
                     )
 
-            if message:
+            if changed and message:
                 comments.reply = await talk_as(
                     self.context, message, context_location, conversation_history
                 )
