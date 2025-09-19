@@ -118,20 +118,16 @@ class EditMode(ModeBase):
                         last_reviewer_comment = rc
                         break
 
-                action = "edit"
-                if last_reviewer_comment and last_reviewer_comment.body:
-                    action = await identify_pr_comment_action(
-                        self.context, last_reviewer_comment.body
-                    )
+                acknowledged = await self._acknowledge_comment(
+                    pull_request_url,
+                    getattr(last_reviewer_comment, "comment_id", None)
+                    if last_reviewer_comment
+                    else None,
+                    last_reviewer_comment.body if last_reviewer_comment else None,
+                )
 
-                if action == "ack":
-                    # No edits needed; acknowledge by adding a reaction and skip editing.
-                    await self._acknowledge_comment(
-                        pull_request_url,
-                        getattr(last_reviewer_comment, "comment_id", None),
-                        is_inline=False,
-                    )
-                    # Do not set a reply message to avoid posting a redundant comment.
+                if acknowledged:
+                    # No edits needed; acknowledged by reaction. Avoid redundant reply.
                     message = ""
                 else:
                     # Run the coding agent script to perform edits
@@ -167,20 +163,12 @@ class EditMode(ModeBase):
                     if not last_comment or last_comment.is_reviewee:
                         continue
 
-                    # Otherwise, decide action based on the last comment (reviewer)
-                    action = "edit"
-                    if last_comment.body:
-                        action = await identify_pr_comment_action(
-                            self.context, last_comment.body
-                        )
-
-                    if action == "ack":
-                        # Acknowledge by reacting to the last inline comment; skip editing
-                        await self._acknowledge_comment(
-                            pull_request_url,
-                            getattr(last_comment, "comment_id", None),
-                            is_inline=True,
-                        )
+                    # Decide action and, if ACK, react and skip editing
+                    if await self._acknowledge_comment(
+                        pull_request_url,
+                        getattr(last_comment, "comment_id", None),
+                        last_comment.body,
+                    ):
                         continue
 
                     response = await edit_files(
@@ -356,15 +344,34 @@ class EditMode(ModeBase):
         return t("modes.edit_mode.use_case_description")
 
     async def _acknowledge_comment(
-        self, pull_request_url: str, comment_id: int | None, is_inline: bool
-    ) -> None:
-        """Add a thumbs-up reaction to a comment if possible.
+        self,
+        pull_request_url: str,
+        comment_id: int | None,
+        comment_body: str | None,
+    ) -> bool:
+        """Decide action for a PR comment and acknowledge if appropriate.
 
-        Uses `add_reaction_to_issue_comment` for both PR-wide and inline comments.
-        Swallows non-fatal exceptions and logs a warning.
+        - Runs `identify_pr_comment_action` on `comment_body` when provided.
+        - If the action is `ack`, adds a thumbs-up reaction via
+          `add_reaction_to_issue_comment` and returns True.
+        - Otherwise, returns False without side effects.
+
+        Exceptions from reaction API are swallowed with a warning log.
+
+        Returns:
+            bool: True if acknowledged (reaction added or attempted), False otherwise.
         """
+        action = "edit"
+        if comment_body:
+            action = await identify_pr_comment_action(self.context, comment_body)
+
+        if action != "ack":
+            return False
+
         if not comment_id:
-            return
+            # No concrete comment to react to, treat as not acknowledged in effect
+            return True
+
         try:
             await self.code_hosting_service.add_reaction_to_issue_comment(
                 pull_request_url, comment_id, "+1"
@@ -373,3 +380,4 @@ class EditMode(ModeBase):
             self.context.logger.warning(
                 f"Failed to add reaction to comment {comment_id}: {e}"
             )
+        return True
