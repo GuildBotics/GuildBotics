@@ -289,8 +289,6 @@ class CodeHostingService(ABC):
         """
         pass
 
-    # Inline comment reactions are handled via add_reaction_to_issue_comment
-
     @abstractmethod
     async def get_repository_url(self) -> str:
         """
