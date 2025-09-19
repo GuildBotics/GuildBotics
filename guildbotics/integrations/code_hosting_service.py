@@ -276,30 +276,17 @@ class CodeHostingService(ABC):
         pass
 
     @abstractmethod
-    async def add_reaction_to_issue_comment(
-        self, html_url: str, comment_id: int, reaction: str
+    async def add_reaction_to_comment(
+        self, html_url: str, comment_id: int, reaction: str, *, is_inline: bool
     ) -> None:
         """
-        Add a reaction to a non-inline (issue) comment on a pull request.
+        Add a reaction to a pull request comment.
 
         Args:
             html_url (str): The URL of the pull request.
             comment_id (int): The comment ID to react to.
             reaction (str): The reaction content (e.g., "+1", "eyes").
-        """
-        pass
-
-    @abstractmethod
-    async def add_reaction_to_inline_comment(
-        self, html_url: str, comment_id: int, reaction: str
-    ) -> None:
-        """
-        Add a reaction to an inline review comment on a pull request.
-
-        Args:
-            html_url (str): The URL of the pull request.
-            comment_id (int): The inline review comment ID to react to.
-            reaction (str): The reaction content (e.g., "+1", "eyes").
+            is_inline (bool): True for inline review comments, False for top-level issue comments.
         """
         pass
 

@@ -376,14 +376,9 @@ class EditMode(ModeBase):
             return True
 
         try:
-            if is_inline:
-                await self.code_hosting_service.add_reaction_to_inline_comment(
-                    pull_request_url, comment_id, "+1"
-                )
-            else:
-                await self.code_hosting_service.add_reaction_to_issue_comment(
-                    pull_request_url, comment_id, "+1"
-                )
+            await self.code_hosting_service.add_reaction_to_comment(
+                pull_request_url, comment_id, "+1", is_inline=is_inline
+            )
         except (ValueError, TypeError, httpx.HTTPError) as e:
             self.context.logger.warning(
                 f"Failed to add reaction to comment {comment_id}: {e}"
