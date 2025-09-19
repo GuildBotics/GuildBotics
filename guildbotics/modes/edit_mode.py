@@ -168,6 +168,7 @@ class EditMode(ModeBase):
                         pull_request_url,
                         getattr(last_comment, "comment_id", None),
                         last_comment.body,
+                        is_inline=True,
                     ):
                         continue
 
@@ -348,12 +349,14 @@ class EditMode(ModeBase):
         pull_request_url: str,
         comment_id: int | None,
         comment_body: str | None,
+        *,
+        is_inline: bool = False,
     ) -> bool:
         """Decide action for a PR comment and acknowledge if appropriate.
 
         - Runs `identify_pr_comment_action` on `comment_body` when provided.
-        - If the action is `ack`, adds a thumbs-up reaction via
-          `add_reaction_to_issue_comment` and returns True.
+        - If the action is `ack`, adds a thumbs-up reaction to the target comment
+          using the appropriate API (inline vs issue) and returns True.
         - Otherwise, returns False without side effects.
 
         Exceptions from reaction API are swallowed with a warning log.
@@ -373,9 +376,14 @@ class EditMode(ModeBase):
             return True
 
         try:
-            await self.code_hosting_service.add_reaction_to_issue_comment(
-                pull_request_url, comment_id, "+1"
-            )
+            if is_inline:
+                await self.code_hosting_service.add_reaction_to_inline_comment(
+                    pull_request_url, comment_id, "+1"
+                )
+            else:
+                await self.code_hosting_service.add_reaction_to_issue_comment(
+                    pull_request_url, comment_id, "+1"
+                )
         except (ValueError, TypeError, httpx.HTTPError) as e:
             self.context.logger.warning(
                 f"Failed to add reaction to comment {comment_id}: {e}"

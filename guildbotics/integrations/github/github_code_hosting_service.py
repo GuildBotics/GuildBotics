@@ -344,6 +344,18 @@ class GitHubCodeHostingService(CodeHostingService):
             headers=headers,
         )
 
+    async def add_reaction_to_inline_comment(
+        self, html_url: str, comment_id: int, reaction: str
+    ) -> None:
+        """Add a reaction to an inline review comment on a PR."""
+        client = await self.get_client()
+        headers = {"Accept": "application/vnd.github+json"}
+        await client.post(
+            f"/repos/{self.owner}/{self.repo}/pulls/comments/{comment_id}/reactions",
+            json={"content": reaction},
+            headers=headers,
+        )
+
     async def get_repository_url(self) -> str:
         """Get the repository URL for the current code hosting service."""
         return f"{self.repo_base_url}/{self.owner}/{self.repo}.git"
