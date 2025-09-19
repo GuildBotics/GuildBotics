@@ -277,7 +277,7 @@ class CodeHostingService(ABC):
 
     @abstractmethod
     async def add_reaction_to_comment(
-        self, html_url: str, comment_id: int, reaction: str, *, is_inline: bool
+        self, html_url: str, comment_id: int, reaction: str, is_inline: bool
     ) -> None:
         """
         Add a reaction to a pull request comment.
