@@ -360,22 +360,16 @@ class EditMode(ModeBase):
     ) -> None:
         """Add a thumbs-up reaction to a comment if possible.
 
-        For PR-wide issue comments, uses `add_reaction_to_issue_comment`.
-        For inline review comments, uses `add_reaction_to_inline_comment`.
+        Uses `add_reaction_to_issue_comment` for both PR-wide and inline comments.
         Swallows non-fatal exceptions and logs a warning.
         """
         if not comment_id:
             return
         try:
-            if is_inline:
-                await self.code_hosting_service.add_reaction_to_inline_comment(
-                    pull_request_url, comment_id, "+1"
-                )
-            else:
-                await self.code_hosting_service.add_reaction_to_issue_comment(
-                    pull_request_url, comment_id, "+1"
-                )
+            await self.code_hosting_service.add_reaction_to_issue_comment(
+                pull_request_url, comment_id, "+1"
+            )
         except (ValueError, TypeError, httpx.HTTPError) as e:
             self.context.logger.warning(
-                f"Failed to add reaction to {'inline' if is_inline else 'issue'} comment {comment_id}: {e}"
+                f"Failed to add reaction to comment {comment_id}: {e}"
             )
