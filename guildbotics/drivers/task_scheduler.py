@@ -9,13 +9,16 @@ from guildbotics.utils.i18n_tool import t
 
 
 class TaskScheduler:
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, *, consecutive_error_limit: int = 3):
         """
         Initialize the TaskScheduler with a list of jobs.
         Args:
             context (WorkflowContext): The workflow context.
         """
         self.context = context
+        # Stop the scheduling loop for a worker when this many errors occur consecutively.
+        # A non-positive value is treated as 1 to avoid infinite loops on error.
+        self.consecutive_error_limit = max(1, int(consecutive_error_limit))
         self.scheduled_tasks_list = {
             p: p.get_scheduled_tasks() for p in context.team.members
         }
@@ -70,6 +73,7 @@ class TaskScheduler:
         context = self.context.clone_for(person)
         ticket_manager = context.get_ticket_manager()
 
+        consecutive_errors = 0
         while not self._stop_event.is_set():
             start_time = datetime.datetime.now()
             self.context.logger.debug(
@@ -81,9 +85,23 @@ class TaskScheduler:
                 if self._stop_event.is_set():
                     break
                 if scheduled_task.should_run(start_time):
-                    loop.run_until_complete(
+                    ok = loop.run_until_complete(
                         run_workflow(context, scheduled_task.task, "scheduled")
                     )
+                    if not ok:
+                        consecutive_errors += 1
+                        self.context.logger.warning(
+                            f"Workflow error occurred (scheduled). "
+                            f"consecutive_errors={consecutive_errors}/"
+                            f"{self.consecutive_error_limit}"
+                        )
+                        if consecutive_errors >= self.consecutive_error_limit:
+                            self.context.logger.error(
+                                "Maximum consecutive errors reached. Stopping this worker loop."
+                            )
+                            return
+                    else:
+                        consecutive_errors = 0
                 if self._stop_event.is_set():
                     break
                 self._sleep_interruptible(1)
@@ -100,6 +118,19 @@ class TaskScheduler:
                             task, t("drivers.task_scheduler.task_error")
                         )
                     )
+                    consecutive_errors += 1
+                    self.context.logger.warning(
+                        f"Workflow error occurred (ticket). "
+                        f"consecutive_errors={consecutive_errors}/"
+                        f"{self.consecutive_error_limit}"
+                    )
+                    if consecutive_errors >= self.consecutive_error_limit:
+                        self.context.logger.error(
+                            "Maximum consecutive errors reached. Stopping this worker loop."
+                        )
+                        return
+                else:
+                    consecutive_errors = 0
                 self._sleep_interruptible(1)
 
             # Sleep until the next minute
