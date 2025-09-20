@@ -111,6 +111,8 @@ class EditMode(ModeBase):
                 )
 
             message = t("modes.edit_mode.default_message")
+            # Track whether any changes were made during review handling
+            changed = False
             if len(comments.inline_comment_threads) == 0:
                 # If there are no inline comments, first decide if edits are needed.
                 last_reviewer_comment = None
@@ -140,10 +142,12 @@ class EditMode(ModeBase):
                     if response.message:
                         message = response.message
                     is_asking = response.status == AgentResponse.ASKING
+                    # Mark as changed only when not asking for more info
+                    if not is_asking:
+                        changed = True
                     if is_asking and not response.message:
                         message = t("modes.edit_mode.default_question")
             else:
-                changed = False
                 for thread in comments.inline_comment_threads:
                     review_comment = inputs.copy()
                     review_comment.append(thread.to_dict())
