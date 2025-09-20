@@ -286,6 +286,14 @@ guildbotics stop [--timeout <seconds>] [--force]
 - If it does not exit within the timeout and `--force` is specified, sends SIGKILL.
 - If no scheduler is running, it reports the state and cleans up a stale pidfile if present.
 
+For an immediate force stop:
+
+```bash
+guildbotics kill
+```
+
+This is equivalent to `guildbotics stop --force --timeout 0`.
+
 ## 6.2. How to Instruct the AI Agent
 
 To request a task from the AI agent, operate the GitHub Projects ticket as follows:

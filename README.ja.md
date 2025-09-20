@@ -287,6 +287,14 @@ guildbotics stop [--timeout <seconds>] [--force]
 - タイムアウトまでに終了しない場合、`--force` を指定すると SIGKILL を送信します。
 - スケジューラが動作していない場合はその旨を表示し、古い pid ファイルがあればクリーンアップします。
 
+すぐに強制停止したい場合は以下を使用できます。
+
+```bash
+guildbotics kill
+```
+
+これは `guildbotics stop --force --timeout 0` と同等です。
+
 ## 6.2. AIエージェントへの作業指示の出し方
 
 AIエージェントにタスクを依頼するには、GitHub Projects 上のチケットを以下のように操作します。
