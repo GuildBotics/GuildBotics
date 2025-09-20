@@ -218,3 +218,13 @@ def stop(timeout: int, force: bool) -> None:
         click.echo(
             "Timeout reached and process still running. Use --force to SIGKILL."
         )
+
+
+@main.command()
+@click.pass_context
+def kill(ctx: click.Context) -> None:  # noqa: A001 - command name intentionally 'kill'
+    """Immediately force kill the running scheduler.
+
+    Equivalent to: `guildbotics stop --force --timeout 0`.
+    """
+    ctx.invoke(stop, timeout=0, force=True)
