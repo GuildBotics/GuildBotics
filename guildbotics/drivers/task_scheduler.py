@@ -9,13 +9,16 @@ from guildbotics.utils.i18n_tool import t
 
 
 class TaskScheduler:
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, *, consecutive_error_limit: int = 3):
         """
         Initialize the TaskScheduler with a list of jobs.
         Args:
             context (WorkflowContext): The workflow context.
         """
         self.context = context
+        # Stop the scheduling loop for a worker when this many errors occur consecutively.
+        # A non-positive value is treated as 1 to avoid infinite loops on error.
+        self.consecutive_error_limit = max(1, int(consecutive_error_limit))
         self.scheduled_tasks_list = {
             p: p.get_scheduled_tasks() for p in context.team.members
         }
@@ -70,6 +73,7 @@ class TaskScheduler:
         context = self.context.clone_for(person)
         ticket_manager = context.get_ticket_manager()
 
+        consecutive_errors = 0
         while not self._stop_event.is_set():
             start_time = datetime.datetime.now()
             self.context.logger.debug(
@@ -81,9 +85,14 @@ class TaskScheduler:
                 if self._stop_event.is_set():
                     break
                 if scheduled_task.should_run(start_time):
-                    loop.run_until_complete(
+                    ok = loop.run_until_complete(
                         run_workflow(context, scheduled_task.task, "scheduled")
                     )
+                    consecutive_errors, should_stop = self._update_consecutive_errors(
+                        ok, source="scheduled", consecutive_errors=consecutive_errors
+                    )
+                    if should_stop:
+                        return
                 if self._stop_event.is_set():
                     break
                 self._sleep_interruptible(1)
@@ -99,6 +108,15 @@ class TaskScheduler:
                         ticket_manager.add_comment_to_ticket(
                             task, t("drivers.task_scheduler.task_error")
                         )
+                    )
+                    consecutive_errors, should_stop = self._update_consecutive_errors(
+                        ok, source="ticket", consecutive_errors=consecutive_errors
+                    )
+                    if should_stop:
+                        return
+                else:
+                    consecutive_errors, _ = self._update_consecutive_errors(
+                        ok, source="ticket", consecutive_errors=consecutive_errors
                     )
                 self._sleep_interruptible(1)
 
@@ -118,3 +136,31 @@ class TaskScheduler:
         """Sleep in small steps so the stop event can interrupt waits."""
         # Use wait to allow immediate wake-up on shutdown.
         self._stop_event.wait(timeout=seconds)
+
+    def _update_consecutive_errors(
+        self, ok: bool, *, source: str, consecutive_errors: int
+    ):
+        """Update error counter and decide whether to stop the worker loop.
+
+        Args:
+            ok: Result of a workflow execution.
+            source: A short label for logging (e.g., "scheduled", "ticket").
+            consecutive_errors: Current consecutive error count.
+
+        Returns:
+            A tuple of (new_consecutive_errors, should_stop).
+        """
+        if not ok:
+            consecutive_errors += 1
+            self.context.logger.warning(
+                f"Workflow error occurred ({source}). "
+                f"consecutive_errors={consecutive_errors}/{self.consecutive_error_limit}"
+            )
+            if consecutive_errors >= self.consecutive_error_limit:
+                self.context.logger.error(
+                    "Maximum consecutive errors reached. Stopping this worker loop."
+                )
+                return consecutive_errors, True
+            return consecutive_errors, False
+        # Reset on success
+        return 0, False

@@ -90,7 +90,14 @@ def main() -> None:
 
 
 @main.command()
-def run() -> None:
+@click.option(
+    "--max-consecutive-errors",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Stop a worker after this many consecutive workflow errors.",
+)
+def run(max_consecutive_errors: int) -> None:
     """Run the GuildBotics application."""
     _load_env_from_cwd()
     pid_path = _pid_file_path()
@@ -108,7 +115,10 @@ def run() -> None:
 
     _write_pidfile(pid_path, os.getpid())
 
-    scheduler = TaskScheduler(get_setup_tool().get_context())
+    scheduler = TaskScheduler(
+        get_setup_tool().get_context(),
+        consecutive_error_limit=max_consecutive_errors,
+    )
 
     def _handle_signal(signum, frame):  # type: ignore[no-untyped-def]
         click.echo(f"Received signal {signum}. Shutting down...")
