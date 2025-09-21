@@ -231,7 +231,7 @@ class CodeHostingService(ABC):
 
     @abstractmethod
     async def create_pull_request(
-        self, branch_name: str, title: str, description: str
+        self, branch_name: str, title: str, description: str, ticket_url: str
     ) -> str:
         """
         Create a pull request in the code hosting service.
@@ -240,6 +240,7 @@ class CodeHostingService(ABC):
             branch_name (str): The name of the branch to merge.
             title (str): The title of the pull request.
             description (str): The description of the pull request.
+            ticket_url (str): The URL of the associated ticket or task.
 
         Returns:
             str: The URL of the created pull request.

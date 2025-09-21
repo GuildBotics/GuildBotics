@@ -55,8 +55,21 @@ class GitHubCodeHostingService(CodeHostingService):
         self.client = await create_github_client(self.person, self.base_url)
         return self.client
 
+    def to_issue_number(self, ticket_url: str) -> int | None:
+        """Extract the issue or ticket number from a URL.
+
+        Args:
+            ticket_url (str): The URL of the issue or ticket.
+        Returns:
+            int | None: The extracted issue number, or None if not found.
+        """
+        match = re.search(r"/issues/(\d+)", ticket_url)
+        if match:
+            return int(match.group(1))
+        return None
+
     async def create_pull_request(
-        self, branch_name: str, title: str, description: str
+        self, branch_name: str, title: str, description: str, ticket_url: str
     ) -> str:
         """Create a pull request in GitHub.
 
@@ -64,6 +77,7 @@ class GitHubCodeHostingService(CodeHostingService):
             branch_name (str): The name of the source branch to merge.
             title (str): The title of the pull request.
             description (str): The description (body) of the pull request.
+            ticket_url (str): The URL of the associated ticket or task.
 
         Returns:
             str: The URL of the created pull request.
@@ -84,6 +98,10 @@ class GitHubCodeHostingService(CodeHostingService):
         if existing_prs:
             # Return the URL of the first existing pull request
             return existing_prs[0].get("html_url", "")
+
+        issue_number = self.to_issue_number(ticket_url)
+        if issue_number:
+            description = f"{description}\n\nCloses #{issue_number}"
 
         # Create a new pull request
         payload: dict = {
@@ -336,7 +354,9 @@ class GitHubCodeHostingService(CodeHostingService):
         client = await self.get_client()
         headers = {"Accept": "application/vnd.github+json"}
         if is_inline:
-            endpoint = f"/repos/{self.owner}/{self.repo}/pulls/comments/{comment_id}/reactions"
+            endpoint = (
+                f"/repos/{self.owner}/{self.repo}/pulls/comments/{comment_id}/reactions"
+            )
         else:
             endpoint = f"/repos/{self.owner}/{self.repo}/issues/comments/{comment_id}/reactions"
         await client.post(endpoint, json={"content": reaction}, headers=headers)
