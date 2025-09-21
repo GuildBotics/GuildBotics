@@ -796,12 +796,9 @@ class GitHubTicketManager(TicketManager):
         author_login = (issue_data.get("user") or {}).get("login")
 
         # Prepend mention to the issue author unless we are the author.
-        # Also, avoid adding if the body already contains any @mention or
-        # already mentions the issue author. This prevents duplicated mentions.
+        # Avoid adding only when the body already mentions the issue author
+        # (case-insensitive) to prevent duplicates.
         if author_login and author_login != self.username:
-            any_mention_re = r"(^|[^A-Za-z0-9_])@[A-Za-z0-9][A-Za-z0-9-]*"
-            has_any_mention = bool(re.search(any_mention_re, comment))
-
             # Explicitly check if the issue author is already mentioned.
             # GitHub usernames are case-insensitive, so we use re.IGNORECASE.
             author_mention_re = (
@@ -811,7 +808,7 @@ class GitHubTicketManager(TicketManager):
                 re.search(author_mention_re, comment, flags=re.IGNORECASE)
             )
 
-            if not (has_any_mention or has_author_mention):
+            if not has_author_mention:
                 comment = f"@{author_login}\n\n{comment}"
         if is_proxy_agent(self.person):
             comment = f"{comment}\n\n{get_proxy_agent_signature(self.person)}"
