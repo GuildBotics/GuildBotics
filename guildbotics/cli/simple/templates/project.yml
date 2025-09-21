@@ -17,3 +17,4 @@ services:
   code_hosting_service: 
     name: GitHub
     owner: {owner}
+    repo_base_url: {repo_base_url}
