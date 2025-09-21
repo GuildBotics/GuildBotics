@@ -567,7 +567,8 @@ class GitHubTicketManager(TicketManager):
         hosting_service = GitHubCodeHostingService(
             self.person, self.team, task.repository
         )
-        if not url.startswith(hosting_service.repo_base_url):
+        # Check PR URL against GitHub web base, independent of clone scheme
+        if not url.startswith("https://github.com/"):
             return False  # Not a PR URL
 
         comments = await hosting_service.get_pull_request_comments(url)

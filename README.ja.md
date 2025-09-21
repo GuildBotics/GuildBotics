@@ -83,7 +83,9 @@ AIエージェントとのやり取りをタスクボードを通じて行うた
 
 # 4. 事前準備
 ## 4.1. Git環境
-- GCM (Git Credential Manager) をインストールし、利用対象のリポジトリにHTTPS経由でアクセスできるように設定してください。
+- リポジトリへの Git アクセス方式を設定してください:
+  - HTTPS: GCM (Git Credential Manager) をインストールし、サインイン
+  - または SSH: SSH 鍵を設定し、`known_hosts` を登録
 
 ## 4.2. GitHub プロジェクトの作成
 GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステータス）をあらかじめ追加しておきます。
@@ -170,6 +172,8 @@ guildbotics init
   - Gemini API または OpenAI API を選択
 - CLI エージェントの選択
   - Gemini CLI または OpenAI Codex CLI を選択
+- リポジトリアクセス方法の選択
+  - Git 操作用に HTTPS か SSH を選択
 - GitHub プロジェクトおよびリポジトリ URL の入力
   - GitHub Projects の URL とリポジトリの URL を入力
 
@@ -372,6 +376,8 @@ Person ごとのシークレットは `${PERSON_ID_UPPER}_${KEY_UPPER}` とし�
   - `services.ticket_manager.owner`: GitHub のユーザー/組織名
   - `services.ticket_manager.project_id`: GitHub Projects (v2) のプロジェクトID
   - `services.ticket_manager.url`: 上記プロジェクトのURL
+  - `services.code_hosting_service.repo_base_url`: クローン時に利用するベースURL
+    - 例: `https://github.com` (HTTPS) または `ssh://git@github.com` (SSH)
 
 ## 7.3. メンバー設定（`team/members/<person_id>/person.yml`）
 - `team/members/<person_id>/person.yml`:

@@ -59,6 +59,8 @@ class ProjectConfig(BaseModel):
     owner: str = Field(default="")
     project_id: str = Field(default="")
     repository_name: str = Field(default="")
+    repo_access_label: str = Field(default="")
+    repo_base_url: str = Field(default="https://github.com")
 
 
 class PersonConfig(BaseModel):
@@ -196,7 +198,17 @@ class SimpleSetupTool(SetupTool):
             validate=lambda text: self.parse_github_repository_url(text, config),
         ).ask()
 
-        # Step 7. Configuration Summary
+        # Step 7. Repository Access Method (HTTPS / SSH)
+        access_map = {
+            t("cli.repo_access_https"): "https://github.com",
+            t("cli.repo_access_ssh"): "ssh://git@github.com",
+        }
+        config.repo_access_label = questionary.select(
+            t("cli.repo_access_prompt"), choices=list(access_map.keys())
+        ).ask()
+        config.repo_base_url = access_map[config.repo_access_label]
+
+        # Step 8. Configuration Summary
         click.echo(f"\n{t('cli.config_content')} :")
         click.echo(f"  {t('cli.config_lang')} : {config.language_label}")
         click.echo(f"  {t('cli.config_target_directory')} : {config.config_dir_label}")
@@ -218,12 +230,15 @@ class SimpleSetupTool(SetupTool):
         click.echo(
             f"  {t('cli.config_github_repository_url')} : {config.github_repository_url}\n"
         )
+        click.echo(
+            f"  {t('cli.config_repo_access')} : {config.repo_access_label}"
+        )
 
         if not questionary.confirm(t("cli.config_confirm"), default=True).ask():
             click.echo(t("cli.config_cancel"))
             return
 
-        # Step 8. Configuration File Creation
+        # Step 9. Configuration File Creation
         project_config_template = (TEMPLATE_PATH / "project.yml").read_text()
         project_config = project_config_template.format(
             language=config.language,
@@ -231,6 +246,7 @@ class SimpleSetupTool(SetupTool):
             owner=config.owner,
             project_id=config.project_id,
             project_url=config.github_project_url,
+            repo_base_url=config.repo_base_url,
         )
 
         project_config_file = config.config_dir / "team/project.yml"

@@ -83,7 +83,9 @@ The current version supports the following:
 
 # 4. Prerequisites
 ## 4.1. Git Environment
-- Install GCM (Git Credential Manager) and configure HTTPS access to the target repository.
+- Configure Git access for repositories:
+  - HTTPS: Install GCM (Git Credential Manager) and sign in
+  - or SSH: Set up SSH keys and `known_hosts`
 
 ## 4.2. Create a GitHub Project
 Create a GitHub Projects (v2) project and add the following columns (statuses) in advance:
@@ -169,6 +171,8 @@ guildbotics init
   - Choose Gemini API or OpenAI API
 - Select a CLI agent
   - Choose Gemini CLI or OpenAI Codex CLI
+- Select repository access method
+  - Choose HTTPS or SSH for Git operations
 - Enter the GitHub Project and repository URLs
   - Enter the GitHub Projects URL and the repository URL
 
@@ -371,6 +375,8 @@ Per-person secrets are referenced as `${PERSON_ID_UPPER}_${KEY_UPPER}` (example:
   - `services.ticket_manager.owner`: GitHub user/organization name
   - `services.ticket_manager.project_id`: GitHub Projects (v2) Project number
   - `services.ticket_manager.url`: URL of the above project
+  - `services.code_hosting_service.repo_base_url`: Base URL used for cloning
+    - Example: `https://github.com` (HTTPS) or `ssh://git@github.com` (SSH)
 
 ## 7.3. Member Settings (`team/members/<person_id>/person.yml`)
 - `team/members/<person_id>/person.yml`:
