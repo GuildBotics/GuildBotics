@@ -8,6 +8,30 @@ from guildbotics.runtime import Context
 from guildbotics.utils.i18n_tool import t
 
 
+def _build_task_error_message(context, loop) -> str:
+    """Build a character-consistent error message with safe fallback.
+
+    Attempts to generate a message via `talk_as` to preserve persona tone.
+    If anything fails (import, runtime error, empty result), falls back to the
+    default translated message.
+    """
+    error_text = t("drivers.task_scheduler.task_error")
+    try:
+        from guildbotics.intelligences.functions import talk_as
+
+        talked_text = loop.run_until_complete(
+            talk_as(
+                context,
+                error_text,
+                t("modes.ticket_mode.agent_response_context_location"),
+                [],
+            )
+        )
+        return talked_text or error_text
+    except Exception:
+        return error_text
+
+
 class TaskScheduler:
     def __init__(self, context: Context, *, consecutive_error_limit: int = 3):
         """
@@ -104,24 +128,8 @@ class TaskScheduler:
             if task and not self._stop_event.is_set():
                 ok = loop.run_until_complete(run_workflow(context, task, "ticket"))
                 if not ok and not self._stop_event.is_set():
-                    # Compose error message with character-consistent tone via talk_as.
-                    # Fallback to the default translated message on any failure.
-                    error_text = t("drivers.task_scheduler.task_error")
-                    try:
-                        from guildbotics.intelligences.functions import talk_as
-
-                        talked_text = loop.run_until_complete(
-                            talk_as(
-                                context,
-                                error_text,
-                                # Reuse a generic ticket comment context label
-                                t("modes.ticket_mode.agent_response_context_location"),
-                                [],
-                            )
-                        )
-                        message = talked_text or error_text
-                    except Exception:
-                        message = error_text
+                    # Build message using persona tone with safe fallback.
+                    message = _build_task_error_message(context, loop)
 
                     loop.run_until_complete(
                         ticket_manager.add_comment_to_ticket(task, message)
