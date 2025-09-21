@@ -1,4 +1,5 @@
 from logging import Logger
+import re
 from typing import Any, ClassVar, cast
 
 from httpx import AsyncClient
@@ -794,9 +795,15 @@ class GitHubTicketManager(TicketManager):
         issue_data = issue_resp.json()
         author_login = (issue_data.get("user") or {}).get("login")
 
-        # Prepend mention to the issue author unless we are the author
+        # Prepend mention to the issue author unless we are the author,
+        # and only if the comment body does not already include any mention.
+        # This avoids duplicate mentions such as "@user" being added twice.
         if author_login and author_login != self.username:
-            comment = f"@{author_login}\n\n{comment}"
+            has_any_mention = bool(
+                re.search(r"(^|[^A-Za-z0-9_])@[A-Za-z0-9][A-Za-z0-9-]*", comment)
+            )
+            if not has_any_mention:
+                comment = f"@{author_login}\n\n{comment}"
         if is_proxy_agent(self.person):
             comment = f"{comment}\n\n{get_proxy_agent_signature(self.person)}"
         await client.post(
