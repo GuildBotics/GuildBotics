@@ -260,6 +260,7 @@ class EditMode(ModeBase):
                     branch_name=self.branch_name,
                     title=self.context.task.title,
                     description=pr_description,
+                    ticket_url=ticket_url,
                 )
 
                 return await self.get_done_response(

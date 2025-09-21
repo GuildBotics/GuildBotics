@@ -11,5 +11,5 @@ en:
   pull_request_merge_outcome: "\n\n--- \n\nPR Merge Outcome: %{merge_outcome}"
   pull_request_performance_evaluation: "## Pull Request Performance Evaluation\n### Evaluation Score\n%{score} points.\n\n### Reason\n%{reason}\n\n### Context\n - Review Comment Count: %{review_comment_count}\n - Review Cycle Count: %{review_cycle_count}\n - Request Changes Count: %{request_changes_count}\n - Review Sentiment Score: %{review_sentiment_score}\n\n%{context}\n"
   analyze_pr_root_cause: "# The ArtifactProcessEvaluation result\n%{evaluation}\n---\n# The original PR review comments\n%{pr_text}\n"
-  default_pr_template: "## Description\nBrief description of the changes in this PR.\n\n## Ticket\n- URL: [Link to Ticket](<ticket_url>)\n"
+  default_pr_template: "## Description\nBrief description of the changes in this PR.\n\n"
   use_case_description: "This mode is used to create and update code or documents in a Git repository. It integrates with Git and code hosting services to manage pull requests and code changes."
