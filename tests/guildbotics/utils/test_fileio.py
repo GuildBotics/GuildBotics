@@ -1,12 +1,33 @@
 from pathlib import Path
 
+import pytest
+
 from guildbotics.utils.fileio import (
     _clean_data,
     find_package_subdir,
     get_config_path,
+    load_markdown_with_frontmatter,
     load_yaml_file,
     save_yaml_file,
 )
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_load_markdown_with_frontmatter_handles_newlines(tmp_path, newline):
+    """Front matter parses correctly when files use LF or CRLF newlines."""
+    content = (
+        "---\n"
+        "brain: cli\n"
+        "---\n"
+        "Body text\n"
+    ).replace("\n", newline)
+
+    path = tmp_path / "prompt.md"
+    path.write_text(content, encoding="utf-8")
+
+    metadata = load_markdown_with_frontmatter(path)
+    assert metadata["brain"] == "cli"
+    assert metadata["description"] == "Body text"
 
 
 def test_find_package_subdir_templates_exists():

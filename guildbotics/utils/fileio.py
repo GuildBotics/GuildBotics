@@ -110,18 +110,25 @@ def load_markdown_with_frontmatter(file: Path) -> dict:
     with file.open("r", encoding="utf-8") as f:
         content = f.read()
 
-    # Split front matter and body
-    if content.startswith("---\n"):
-        parts = content.split("---\n", 2)
-        if len(parts) >= 3:
-            front_matter = parts[1]
-            body = parts[2]
-        else:
-            front_matter = ""
-            body = content
-    else:
-        front_matter = ""
-        body = content
+    # Split front matter and body, tolerating different newline styles
+    front_matter = ""
+    body = content
+
+    if content.startswith("---"):
+        lines = content.splitlines(keepends=True)
+        if lines and lines[0].strip("\r\n") == "---":
+            front_lines = []
+            closing_index = None
+
+            for idx, line in enumerate(lines[1:], start=1):
+                if line.strip("\r\n") == "---":
+                    closing_index = idx
+                    break
+                front_lines.append(line)
+
+            if closing_index is not None:
+                front_matter = "".join(front_lines)
+                body = "".join(lines[closing_index + 1 :])
 
     # Parse front matter as YAML
     metadata = yaml.safe_load(front_matter) if front_matter.strip() else {}
