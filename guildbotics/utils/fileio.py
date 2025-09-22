@@ -96,6 +96,53 @@ def get_person_config_path(
     return get_config_path(path_str, language_code)
 
 
+def load_markdown_with_frontmatter(file: Path) -> dict:
+    """
+    Load a Markdown file with YAML front matter and return as dict.
+    Front matter keys are parsed as key-value pairs, and the body is stored under 'description'.
+
+    Args:
+        file (Path): Path to the Markdown file.
+
+    Returns:
+        dict: Parsed front matter with 'description' key for the body.
+    """
+    with file.open("r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Split front matter and body, tolerating different newline styles
+    front_matter = ""
+    body = content
+
+    if content.startswith("---"):
+        lines = content.splitlines(keepends=True)
+        if lines and lines[0].strip("\r\n") == "---":
+            front_lines = []
+            closing_index = None
+
+            for idx, line in enumerate(lines[1:], start=1):
+                if line.strip("\r\n") == "---":
+                    closing_index = idx
+                    break
+                front_lines.append(line)
+
+            if closing_index is not None:
+                front_matter = "".join(front_lines)
+                body = "".join(lines[closing_index + 1 :])
+
+    # Parse front matter as YAML
+    metadata = yaml.safe_load(front_matter) if front_matter.strip() else {}
+
+    # Ensure metadata is a dict
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    # Add body as description
+    metadata["description"] = body.strip()
+
+    return metadata
+
+
 def load_yaml_file(file: Path) -> dict | list[dict]:
     with file.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)

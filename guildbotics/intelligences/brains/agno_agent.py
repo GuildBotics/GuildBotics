@@ -67,7 +67,6 @@ class AgnoAgentDefaultBrain(Brain):
         name: str,
         logger: Logger,
         description: str = "",
-        instructions: str = "",
         response_class: Type[BaseModel] | None = None,
         model: str = "default",
     ):
@@ -76,7 +75,6 @@ class AgnoAgentDefaultBrain(Brain):
             name=name,
             logger=logger,
             description=description,
-            instructions=instructions,
             response_class=response_class,
         )
         model_mapping = get_model_mapping(person_id)
@@ -90,12 +88,10 @@ class AgnoAgentDefaultBrain(Brain):
 
         if self.model_config.is_restricted_model:
             description = kwargs.pop("description", self.description)
-            instructions = kwargs.pop("instructions", self.instructions)
             response_class = kwargs.pop("response_model", self.response_class)
-            message = to_plain_text(description, instructions, message, response_class)
+            message = to_plain_text(description, message, response_class)
         else:
             kwargs["description"] = kwargs.get("description", self.description)
-            kwargs["instructions"] = kwargs.get("instructions", self.instructions)
             if not "response_model" in kwargs and self.response_class:
                 kwargs["response_model"] = self.response_class
 
