@@ -68,7 +68,6 @@ class PromptInfo:
         self,
         response_class: Type[BaseModel],
         description: str,
-        instructions: str,
     ):
         """
         Initialize the prompt information.
@@ -76,14 +75,12 @@ class PromptInfo:
         Args:
             response_class (Type[BaseModel]): The class of the response.
             description (str): A description of the prompt.
-            instructions (str): Instructions for the prompt.
         """
         self.response_class = response_class
         self.description = description
-        self.instructions = instructions
 
     def to_prompt(self, user_input: str, session_state: dict) -> str:
-        """Generate a prompt payload in Markdown combining description, instructions,
+        """Generate a prompt payload in Markdown combining description,
         response schema, and user input.
 
         Args:
@@ -99,11 +96,7 @@ class PromptInfo:
         for key, value in session_state.items():
             description = description.replace("{" + key + "}", str(value))
 
-        instructions = self.instructions
-        for key, value in session_state.items():
-            instructions = instructions.replace("{" + key + "}", str(value))
-
-        return to_plain_text(description, instructions, user_input, self.response_class)
+        return to_plain_text(description, user_input, self.response_class)
 
 
 class CliAgentBrain(Brain):
@@ -117,7 +110,6 @@ class CliAgentBrain(Brain):
         name: str,
         logger: Logger,
         description: str = "",
-        instructions: str = "",
         response_class: Type[BaseModel] | None = None,
         cli_agent: str = "default",
     ):
@@ -126,7 +118,6 @@ class CliAgentBrain(Brain):
             name=name,
             logger=logger,
             description=description,
-            instructions=instructions,
             response_class=response_class,
         )
 
@@ -137,7 +128,6 @@ class CliAgentBrain(Brain):
         self.prompt_info = PromptInfo(
             response_class=response_class,
             description=description,
-            instructions=instructions,
         )
 
         cli_agent_mapping = get_cli_agent_mapping(person_id)

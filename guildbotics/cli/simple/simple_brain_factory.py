@@ -6,7 +6,11 @@ from pydantic import BaseModel, Field
 
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.runtime import BrainFactory
-from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
+from guildbotics.utils.fileio import (
+    get_person_config_path,
+    load_markdown_with_frontmatter,
+    load_yaml_file,
+)
 from guildbotics.utils.import_utils import load_class
 
 
@@ -52,14 +56,14 @@ class SimpleBrainFactory(BrainFactory):
         Returns:
             Intelligence: An instance of the requested intelligence.
         """
-        if name.endswith(".yml"):
+        if name.endswith(".md"):
             path = Path(name)
         else:
             path = get_person_config_path(
-                person_id, f"intelligences/{name}.yml", language_code
+                person_id, f"intelligences/{name}.md", language_code
             )
 
-        config = cast(dict, load_yaml_file(path))
+        config = cast(dict, load_markdown_with_frontmatter(path))
 
         response_class = None
         response_class_name = config.get("response_class", None)
@@ -67,7 +71,6 @@ class SimpleBrainFactory(BrainFactory):
             response_class = cast(Type[BaseModel], load_class(response_class_name))
 
         description = config.get("description", "")
-        instructions = config.get("instructions", "")
 
         brain_mapping = get_brain_mapping(person_id)
         brain_config = brain_mapping[config.get("brain", "default")]
@@ -76,7 +79,6 @@ class SimpleBrainFactory(BrainFactory):
             name,
             logger,
             description,
-            instructions,
             response_class,
             **brain_config.args,
         )

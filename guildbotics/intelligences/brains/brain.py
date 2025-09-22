@@ -13,7 +13,6 @@ class Brain(ABC):
         name: str,
         logger: Logger,
         description: str = "",
-        instructions: str = "",
         response_class: Type[BaseModel] | None = None,
     ):
         """
@@ -23,14 +22,12 @@ class Brain(ABC):
             name (str): Name of the intelligence.
             logger (Logger): Logger instance for logging.
             description (str): Description of the intelligence.
-            instructions (str): Instructions for using the intelligence.
             response_class (Type[BaseModel] | None): Class for the response model.
         """
         self.person_id = person_id
         self.name = name
         self.logger = logger
         self.description = description
-        self.instructions = instructions
         self.response_class = response_class
 
     @abstractmethod

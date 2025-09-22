@@ -15,17 +15,13 @@ def to_header(title: str) -> str:
 
 def to_plain_text(
     description: str | None,
-    instructions: str | None,
     user_input: str | None,
     response_class: Type[BaseModel] | None = None,
 ) -> str:
     plain_text = ""
 
     if description:
-        plain_text += f"<Description>\n{description}</Description>\n\n"
-
-    if instructions:
-        plain_text += f"<Instructions>\n{instructions}</Instructions>\n\n"
+        plain_text += f"{description}\n\n"
 
     if response_class:
         schema_dict = response_class.model_json_schema()
