@@ -137,8 +137,8 @@ def load_markdown_with_frontmatter(file: Path) -> dict:
     if not isinstance(metadata, dict):
         metadata = {}
 
-    # Add body as description
-    metadata["description"] = body.strip()
+    # Add body
+    metadata["body"] = body.strip()
 
     return metadata
 

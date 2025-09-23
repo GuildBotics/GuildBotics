@@ -9,7 +9,11 @@ from typing import Type, cast
 from pydantic import BaseModel
 
 from guildbotics.intelligences.brains.brain import Brain
-from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
+from guildbotics.intelligences.brains.util import (
+    replace_placeholders,
+    to_plain_text,
+    to_response_class,
+)
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.log_utils import get_log_output_dir
@@ -79,22 +83,24 @@ class PromptInfo:
         self.response_class = response_class
         self.description = description
 
-    def to_prompt(self, user_input: str, session_state: dict) -> str:
+    def to_prompt(
+        self, user_input: str, session_state: dict, template_engine: str
+    ) -> str:
         """Generate a prompt payload in Markdown combining description,
         response schema, and user input.
 
         Args:
             user_input (str): The user's input instructions.
+            session_state (dict): The current session state for placeholder replacement.
+            template_engine (str): The template engine to use for placeholder replacement.
 
         Returns:
             str: A Markdown-formatted prompt ready to send to the CLI agent.
         """
         # Create JSON schema for the response model
-        schema_dict = self.response_class.model_json_schema()
-
-        description = self.description
-        for key, value in session_state.items():
-            description = description.replace("{" + key + "}", str(value))
+        description = replace_placeholders(
+            self.description, session_state, template_engine
+        )
 
         return to_plain_text(description, user_input, self.response_class)
 
@@ -110,6 +116,7 @@ class CliAgentBrain(Brain):
         name: str,
         logger: Logger,
         description: str = "",
+        template_engine: str = "default",
         response_class: Type[BaseModel] | None = None,
         cli_agent: str = "default",
     ):
@@ -118,6 +125,7 @@ class CliAgentBrain(Brain):
             name=name,
             logger=logger,
             description=description,
+            template_engine=template_engine,
             response_class=response_class,
         )
 
@@ -144,7 +152,9 @@ class CliAgentBrain(Brain):
             **kwargs: Arguments to pass to the agent.
         """
         self.executable_info.cwd = kwargs["cwd"]
-        input = self.prompt_info.to_prompt(message, kwargs["session_state"])
+        input = self.prompt_info.to_prompt(
+            message, kwargs["session_state"], self.template_engine
+        )
         self.logger.debug(
             f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
         )

@@ -70,7 +70,8 @@ class SimpleBrainFactory(BrainFactory):
         if response_class_name:
             response_class = cast(Type[BaseModel], load_class(response_class_name))
 
-        description = config.get("description", "")
+        description = config.get("body", "")
+        template_engine = config.get("template_engine", "default")
 
         brain_mapping = get_brain_mapping(person_id)
         brain_config = brain_mapping[config.get("brain", "default")]
@@ -79,6 +80,7 @@ class SimpleBrainFactory(BrainFactory):
             name,
             logger,
             description,
+            template_engine,
             response_class,
             **brain_config.args,
         )

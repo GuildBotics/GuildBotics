@@ -12,15 +12,19 @@ from guildbotics.intelligences.common import (
 
 
 class BrainStub(Brain):
+
     def __init__(
         self,
         person_id: str,
         name: str,
         logger: Logger,
         description: str = "",
+        template_engine: str = "default",
         response_class: Type[BaseModel] | None = None,
     ):
-        super().__init__(person_id, name, logger, description, response_class)
+        super().__init__(
+            person_id, name, logger, description, template_engine, response_class
+        )
         self.logger.info(f"BrainStub initialized: {self.name}")
 
     async def run(self, message: str, **kwargs):
