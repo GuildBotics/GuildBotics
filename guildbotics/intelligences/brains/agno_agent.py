@@ -8,7 +8,11 @@ from agno.utils import log
 from pydantic import BaseModel
 
 from guildbotics.intelligences.brains.brain import Brain
-from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
+from guildbotics.intelligences.brains.util import (
+    replace_placeholders,
+    to_plain_text,
+    to_response_class,
+)
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.import_utils import instantiate_class
 from guildbotics.utils.log_utils import get_file_handler
@@ -67,6 +71,7 @@ class AgnoAgentDefaultBrain(Brain):
         name: str,
         logger: Logger,
         description: str = "",
+        template_engine: str = "default",
         response_class: Type[BaseModel] | None = None,
         model: str = "default",
     ):
@@ -75,6 +80,7 @@ class AgnoAgentDefaultBrain(Brain):
             name=name,
             logger=logger,
             description=description,
+            template_engine=template_engine,
             response_class=response_class,
         )
         model_mapping = get_model_mapping(person_id)
@@ -86,12 +92,15 @@ class AgnoAgentDefaultBrain(Brain):
     async def run(self, message: str, **kwargs):
         kwargs["name"] = kwargs.get("name", self.name)
 
+        description = kwargs.pop("description", self.description)
+        description = replace_placeholders(
+            description, kwargs.get("session_state", {}), self.template_engine
+        )
         if self.model_config.is_restricted_model:
-            description = kwargs.pop("description", self.description)
             response_class = kwargs.pop("response_model", self.response_class)
             message = to_plain_text(description, message, response_class)
         else:
-            kwargs["description"] = kwargs.get("description", self.description)
+            kwargs["description"] = description
             if not "response_model" in kwargs and self.response_class:
                 kwargs["response_model"] = self.response_class
 

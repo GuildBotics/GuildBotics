@@ -15,19 +15,14 @@ from guildbotics.utils.fileio import (
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_load_markdown_with_frontmatter_handles_newlines(tmp_path, newline):
     """Front matter parses correctly when files use LF or CRLF newlines."""
-    content = (
-        "---\n"
-        "brain: cli\n"
-        "---\n"
-        "Body text\n"
-    ).replace("\n", newline)
+    content = ("---\n" "brain: cli\n" "---\n" "Body text\n").replace("\n", newline)
 
     path = tmp_path / "prompt.md"
     path.write_text(content, encoding="utf-8")
 
     metadata = load_markdown_with_frontmatter(path)
     assert metadata["brain"] == "cli"
-    assert metadata["description"] == "Body text"
+    assert metadata["body"] == "Body text"
 
 
 def test_find_package_subdir_templates_exists():
