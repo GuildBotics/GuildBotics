@@ -88,6 +88,7 @@ async def test_brain_stub_with_decision_response_list(mock_logger):
         person_id="test_person",
         name="test_brain",
         logger=mock_logger,
+        template_engine="default",
         response_class=DecisionResponseList,
     )
     message = "Test message for list"
@@ -105,6 +106,7 @@ async def test_brain_stub_with_issue_tree_response(mock_logger):
         person_id="test_person",
         name="test_brain",
         logger=mock_logger,
+        template_engine="default",
         response_class=IssueTreeResponse,
     )
     message = "Test message for issue tree"
@@ -123,6 +125,7 @@ async def test_brain_stub_with_next_tasks_response(mock_logger):
         person_id="test_person",
         name="test_brain",
         logger=mock_logger,
+        template_engine="default",
         response_class=NextTasksResponse,
     )
     message = "Test message for next tasks"
