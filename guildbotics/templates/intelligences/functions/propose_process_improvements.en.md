@@ -1,6 +1,7 @@
 ---
 name: propose_process_improvements
 response_class: guildbotics.intelligences.common.ImprovementRecommendations
+description: Propose concrete, immediately actionable process improvements from multiple perspectives.
 ---
 
 Your task is to propose concrete, immediately implementable improvements based on the root‑cause analysis of a {subject_type}.

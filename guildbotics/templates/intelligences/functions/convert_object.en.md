@@ -1,5 +1,6 @@
 ---
 name: convert_object
+description: Convert input text into an object matching the specified JSON schema.
 ---
 
 Converts a message to the specified object based on a JSON schema.

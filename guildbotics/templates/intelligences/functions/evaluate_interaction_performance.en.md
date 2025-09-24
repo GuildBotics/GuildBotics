@@ -1,6 +1,7 @@
 ---
 name: evaluate_interaction_performance
 response_class: guildbotics.intelligences.common.ArtifactProcessEvaluation
+description: Evaluate agent performance on a single {subject_type} and report metrics and an overall score.
 ---
 
 Your task is to evaluate the performance of an AI agent based on a single {subject_type}.

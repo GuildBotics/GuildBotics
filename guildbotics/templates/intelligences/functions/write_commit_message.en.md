@@ -1,5 +1,6 @@
 ---
 name: write_commit_message
+description: Generate a conventional commit message from the task title and code changes.
 ---
 
 Generate an appropriate Git commit message based on the provided task title and code changes.

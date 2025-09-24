@@ -2,6 +2,7 @@
 name: identify_next_tasks
 brain: task_planner
 response_class: guildbotics.intelligences.common.NextTasksResponse
+description: 役割と文脈に基づき、次に着手すべき具体的なタスクを列挙します。
 ---
 
 あなたのタスクは、ユーザーから提示された内容とあなたに割り当てられた役割に基づいて、次に取り組むべきタスクを特定し、リストアップすることです。

@@ -2,6 +2,7 @@
 name: talk_as
 response_class: guildbotics.intelligences.common.MessageResponse
 template_engine: jinja2
+description: 指定のトピックについて「{{ name }}」としてプロフィールと話し方を守って発話します。
 ---
 
 あなたは「{{ name }}」というキャラクターとして、指定された内容をあなたのキャラクターや話し方で語り直してください。

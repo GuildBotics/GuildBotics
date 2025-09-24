@@ -1,6 +1,7 @@
 ---
 name: evaluate_interaction_performance
 response_class: guildbotics.intelligences.common.ArtifactProcessEvaluation
+description: 単一の{subject_type}に基づき指標と総合スコアでエージェントのパフォーマンスを評価します。
 ---
 
 あなたのタスクは、単一の{subject_type}に基づいて成果物作成プロセスのパフォーマンスを評価することです。

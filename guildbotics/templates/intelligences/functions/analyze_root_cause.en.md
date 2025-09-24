@@ -1,6 +1,7 @@
 ---
 name: analyze_root_cause
 response_class: guildbotics.intelligences.common.RootCauseAnalysis
+description: Perform root-cause analysis of a {subject_type} using evaluation and feedback to identify problems and causes.
 ---
 
 Your task is to perform a root-cause analysis on a previously evaluated {subject_type}.

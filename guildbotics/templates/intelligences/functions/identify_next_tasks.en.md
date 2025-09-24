@@ -2,6 +2,7 @@
 name: identify_next_tasks
 brain: task_planner
 response_class: guildbotics.intelligences.common.NextTasksResponse
+description: Identify and list the next actionable tasks based on role and context.
 ---
 
 Your task is to identify and list the next tasks you should work on, based on the information provided by the user and your assigned role.

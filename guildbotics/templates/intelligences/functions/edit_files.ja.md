@@ -2,6 +2,7 @@
 name: edit_files
 brain: file_editor
 response_class: guildbotics.intelligences.common.AgentResponse
+description: 指示に従いファイルの読み書きや作成・編集を行うCLIエージェントです。
 ---
 
 あなたはオペレーティングシステム上のファイルを編集する責任を持つCLIエージェントです。

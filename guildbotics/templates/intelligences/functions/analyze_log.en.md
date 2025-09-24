@@ -1,5 +1,6 @@
 ---
 name: analyze_log
+description: Analyze error logs to identify root cause and recommend practical troubleshooting.
 ---
 
 Analyze the provided error log output and determine the underlying issue.
