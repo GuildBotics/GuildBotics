@@ -2,6 +2,7 @@
 name: edit_files
 brain: file_editor
 response_class: guildbotics.intelligences.common.AgentResponse
+description: Operate as a CLI file editor agent to read, create, and modify files per instructions.
 ---
 
 You are a CLI agent responsible for editing files on the operating system.

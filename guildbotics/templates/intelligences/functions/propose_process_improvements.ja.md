@@ -1,6 +1,7 @@
 ---
 name: propose_process_improvements
 response_class: guildbotics.intelligences.common.ImprovementRecommendations
+description: 複数の観点から具体的で即実行可能なプロセス改善策を提案します。
 ---
 
 あなたのタスクは、{subject_type} の根本原因分析に基づいて、具体的ですぐに実行可能な改善策を提案することです。

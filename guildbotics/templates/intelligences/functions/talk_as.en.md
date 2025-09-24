@@ -2,6 +2,7 @@
 name: talk_as
 response_class: guildbotics.intelligences.common.MessageResponse
 template_engine: jinja2
+description: Speak as the character "{{ name }}" about the given topic, honoring profile and style.
 ---
 
 You are to talk a message as the character "{{ name }}" about the specified topic or content.

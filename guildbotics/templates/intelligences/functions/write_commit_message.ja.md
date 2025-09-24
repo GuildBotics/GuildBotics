@@ -1,5 +1,6 @@
 ---
 name: write_commit_message
+description: タスクタイトルとコード変更からConventional Commitsに準拠したメッセージを生成します。
 ---
 
 提供されたタスクのタイトルとコードの変更に基づいて、適切なGitコミットメッセージを生成します。

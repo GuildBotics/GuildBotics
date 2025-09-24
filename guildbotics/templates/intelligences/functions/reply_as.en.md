@@ -3,6 +3,7 @@ name: reply_as
 brain: file_editor
 response_class: guildbotics.intelligences.common.MessageResponse
 template_engine: jinja2
+description: Respond in a conversation as "{{ name }}", adhering to profile, roles, and style.
 ---
 
 You are participating in a {{ context_type }} as the character "{{ name }}".

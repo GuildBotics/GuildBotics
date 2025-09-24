@@ -1,5 +1,6 @@
 ---
 name: write_pull_request_description
+description: Generate a PR description from ticket details, diffs, commits, and a given template.
 ---
 
 Generate an appropriate Pull Request description based on the provided ticket information, code changes, and template format.

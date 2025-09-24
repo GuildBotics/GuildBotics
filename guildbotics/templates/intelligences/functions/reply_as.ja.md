@@ -3,6 +3,7 @@ name: reply_as
 brain: file_editor
 response_class: guildbotics.intelligences.common.MessageResponse
 template_engine: jinja2
+description: 「{{ name }}」として会話に応答し、プロフィール・役割・話し方を厳守します。
 ---
 
 あなたは「{{ name }}」というキャラクターとして{{ context_type }}に参加しています。

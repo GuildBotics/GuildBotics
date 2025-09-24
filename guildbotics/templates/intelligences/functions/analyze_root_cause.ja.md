@@ -1,6 +1,7 @@
 ---
 name: analyze_root_cause
 response_class: guildbotics.intelligences.common.RootCauseAnalysis
+description: 評価結果とフィードバックから{subject_type}の根本原因分析を行い問題と原因を特定します。
 ---
 
 あなたのタスクは、以前に評価された{subject_type}の根本原因分析を実行することです。
