@@ -40,48 +40,9 @@ class EditMode(ModeBase):
     async def run(self, messages: list[Message]) -> AgentResponse:
         inputs = messages_to_simple_dicts(messages)
 
+        # Retrospective handling is a self-contained flow; delegate and return early
         if self.context.task.status == Task.RETROSPECTIVE:
-            pull_request_url = self.find_pr_url_from_task_comments(
-                self.context.task, True
-            )
-            pr = await self.code_hosting_service.get_pull_request(pull_request_url)
-            pr_text = self.pr_to_text(pr)
-            evaluation = await evaluate_interaction_performance(self.context, pr_text)
-            root_cause = await analyze_root_cause(self.context, pr_text, evaluation)
-            proposal = await propose_process_improvements(self.context, root_cause)
-            ticket_manager = self.context.get_ticket_manager()
-            tasks = []
-            suggestions = sorted(proposal.suggestions)
-            if len(suggestions) > 5:
-                suggestions = suggestions[:5]
-            for suggestion in suggestions:
-                tasks.append(suggestion.to_task())
-            await ticket_manager.create_tickets(tasks)
-
-            evaluation_and_root_cause = t(
-                "modes.edit_mode.evaluation_and_root_cause",
-                evaluation=evaluation,
-                root_cause=str(root_cause),
-            )
-            evaluation_messages = [
-                Message(
-                    content=evaluation_and_root_cause,
-                    author="Evaluation System",
-                    author_type=Message.USER,
-                    timestamp="",
-                ),
-            ]
-
-            result = await talk_as(
-                self.context,
-                t("modes.edit_mode.evaluation_topic"),
-                context_location=t("modes.edit_mode.evaluation_context_location"),
-                conversation_history=evaluation_messages,
-            )
-            return AgentResponse(
-                status=AgentResponse.ASKING,
-                message=evaluation_and_root_cause + "\n\n---\n\n" + result,
-            )
+            return await self._handle_retrospective(messages, inputs)
 
         git_tool = await self.checkout()
 
@@ -90,114 +51,17 @@ class EditMode(ModeBase):
             pull_request_url
         )
         if is_reviewing:
-            context_location = t("modes.edit_mode.pull_request_context_location")
-            comments = await self.code_hosting_service.get_pull_request_comments(
-                pull_request_url
+            (
+                comments,
+                changed,
+                is_asking,
+                message,
+                conversation_history,
+            ) = await self._handle_review_flow(
+                inputs, messages, pull_request_url, git_tool
             )
-
-            is_asking = False
-            inputs.extend(comments.to_simple_dicts())
-
-            conversation_history = []
-            conversation_history.extend(messages)
-            if comments.body:
-                conversation_history.append(
-                    Message(
-                        content=comments.body,
-                        author="user",
-                        author_type=Message.USER,
-                        timestamp="",
-                    )
-                )
-
-            message = t("modes.edit_mode.default_message")
-            # Track whether any changes were made during review handling
-            changed = False
-            if len(comments.inline_comment_threads) == 0:
-                # If there are no inline comments, first decide if edits are needed.
-                last_reviewer_comment = None
-                for rc in reversed(comments.review_comments):
-                    if not rc.is_reviewee:
-                        last_reviewer_comment = rc
-                        break
-
-                acknowledged = await self._acknowledge_comment(
-                    pull_request_url,
-                    (
-                        getattr(last_reviewer_comment, "comment_id", None)
-                        if last_reviewer_comment
-                        else None
-                    ),
-                    last_reviewer_comment.body if last_reviewer_comment else None,
-                )
-
-                if acknowledged:
-                    # No edits needed; acknowledged by reaction. Avoid redundant reply.
-                    message = ""
-                else:
-                    # Run the coding agent script to perform edits
-                    response = await edit_files(
-                        self.context, inputs, git_tool.repo_path
-                    )
-                    if response.message:
-                        message = response.message
-                    is_asking = response.status == AgentResponse.ASKING
-                    # Mark as changed only when not asking for more info
-                    if not is_asking:
-                        changed = True
-                    if is_asking and not response.message:
-                        message = t("modes.edit_mode.default_question")
-            else:
-                for thread in comments.inline_comment_threads:
-                    review_comment = inputs.copy()
-                    review_comment.append(thread.to_dict())
-                    for comment in thread.comments:
-                        conversation_history.append(
-                            Message(
-                                content=comment.body,
-                                author=comment.author,
-                                author_type=(
-                                    Message.ASSISTANT
-                                    if comment.is_reviewee
-                                    else Message.USER
-                                ),
-                                timestamp="",
-                            )
-                        )
-                    # Check only the last comment in the thread
-                    last_comment = thread.comments[-1] if thread.comments else None
-
-                    # If the last comment is by the reviewee (ourselves), skip this thread
-                    if not last_comment or last_comment.is_reviewee:
-                        continue
-
-                    # Decide action and, if ACK, react and skip editing
-                    if await self._acknowledge_comment(
-                        pull_request_url,
-                        getattr(last_comment, "comment_id", None),
-                        last_comment.body,
-                        is_inline=True,
-                    ):
-                        continue
-
-                    response = await edit_files(
-                        self.context, review_comment, git_tool.repo_path
-                    )
-                    if response.status == AgentResponse.ASKING:
-                        is_asking = True
-                    else:
-                        changed = True
-
-                    thread.add_reply(
-                        await talk_as(
-                            self.context,
-                            response.message,
-                            context_location,
-                            conversation_history,
-                        )
-                    )
-
             if changed and message:
+                context_location = t("modes.edit_mode.pull_request_context_location")
                 comments.reply = await talk_as(
                     self.context, message, context_location, conversation_history
                 )
@@ -274,6 +138,165 @@ class EditMode(ModeBase):
                 message=response.message,
                 skip_ticket_comment=False,
             )
+
+    async def _handle_retrospective(
+        self, messages: list[Message], inputs: list[dict]
+    ) -> AgentResponse:
+        pull_request_url = self.find_pr_url_from_task_comments(self.context.task, True)
+        pr = await self.code_hosting_service.get_pull_request(pull_request_url)
+        pr_text = self.pr_to_text(pr)
+        evaluation = await evaluate_interaction_performance(self.context, pr_text)
+        root_cause = await analyze_root_cause(self.context, pr_text, evaluation)
+        proposal = await propose_process_improvements(self.context, root_cause)
+        ticket_manager = self.context.get_ticket_manager()
+        tasks = []
+        suggestions = sorted(proposal.suggestions)
+        if len(suggestions) > 5:
+            suggestions = suggestions[:5]
+        for suggestion in suggestions:
+            tasks.append(suggestion.to_task())
+        await ticket_manager.create_tickets(tasks)
+
+        evaluation_and_root_cause = t(
+            "modes.edit_mode.evaluation_and_root_cause",
+            evaluation=evaluation,
+            root_cause=str(root_cause),
+        )
+        evaluation_messages = [
+            Message(
+                content=evaluation_and_root_cause,
+                author="Evaluation System",
+                author_type=Message.USER,
+                timestamp="",
+            ),
+        ]
+
+        result = await talk_as(
+            self.context,
+            t("modes.edit_mode.evaluation_topic"),
+            context_location=t("modes.edit_mode.evaluation_context_location"),
+            conversation_history=evaluation_messages,
+        )
+        return AgentResponse(
+            status=AgentResponse.ASKING,
+            message=evaluation_and_root_cause + "\n\n---\n\n" + result,
+        )
+
+    async def _handle_review_flow(
+        self,
+        inputs: list[dict],
+        messages: list[Message],
+        pull_request_url: str,
+        git_tool,
+    ) -> tuple[object, bool, bool, str, list[Message]]:
+        """Process review-time edits and acknowledgements.
+
+        Returns a tuple of (comments, changed, is_asking, overall_message, conversation_history).
+        """
+        context_location = t("modes.edit_mode.pull_request_context_location")
+        comments = await self.code_hosting_service.get_pull_request_comments(
+            pull_request_url
+        )
+
+        is_asking = False
+        inputs.extend(comments.to_simple_dicts())
+
+        conversation_history: list[Message] = []
+        conversation_history.extend(messages)
+        if comments.body:
+            conversation_history.append(
+                Message(
+                    content=comments.body,
+                    author="user",
+                    author_type=Message.USER,
+                    timestamp="",
+                )
+            )
+
+        message = t("modes.edit_mode.default_message")
+        changed = False
+
+        if len(comments.inline_comment_threads) == 0:
+            # If there are no inline comments, first decide if edits are needed.
+            last_reviewer_comment = None
+            for rc in reversed(comments.review_comments):
+                if not rc.is_reviewee:
+                    last_reviewer_comment = rc
+                    break
+
+            acknowledged = await self._acknowledge_comment(
+                pull_request_url,
+                (
+                    getattr(last_reviewer_comment, "comment_id", None)
+                    if last_reviewer_comment
+                    else None
+                ),
+                last_reviewer_comment.body if last_reviewer_comment else None,
+            )
+
+            if acknowledged:
+                # No edits needed; acknowledged by reaction. Avoid redundant reply.
+                message = ""
+            else:
+                # Run the coding agent script to perform edits
+                response = await edit_files(self.context, inputs, git_tool.repo_path)
+                if response.message:
+                    message = response.message
+                is_asking = response.status == AgentResponse.ASKING
+                # Mark as changed only when not asking for more info
+                if not is_asking:
+                    changed = True
+                if is_asking and not response.message:
+                    message = t("modes.edit_mode.default_question")
+        else:
+            for thread in comments.inline_comment_threads:
+                review_comment = inputs.copy()
+                review_comment.append(thread.to_dict())
+                for comment in thread.comments:
+                    conversation_history.append(
+                        Message(
+                            content=comment.body,
+                            author=comment.author,
+                            author_type=(
+                                Message.ASSISTANT if comment.is_reviewee else Message.USER
+                            ),
+                            timestamp="",
+                        )
+                    )
+                # Check only the last comment in the thread
+                last_comment = thread.comments[-1] if thread.comments else None
+
+                # If the last comment is by the reviewee (ourselves), skip this thread
+                if not last_comment or last_comment.is_reviewee:
+                    continue
+
+                # Decide action and, if ACK, react and skip editing
+                if await self._acknowledge_comment(
+                    pull_request_url,
+                    getattr(last_comment, "comment_id", None),
+                    last_comment.body,
+                    is_inline=True,
+                ):
+                    continue
+
+                response = await edit_files(
+                    self.context, review_comment, git_tool.repo_path
+                )
+                if response.status == AgentResponse.ASKING:
+                    is_asking = True
+                else:
+                    changed = True
+
+                thread.add_reply(
+                    await talk_as(
+                        self.context,
+                        response.message,
+                        context_location,
+                        conversation_history,
+                    )
+                )
+
+        return comments, changed, is_asking, message, conversation_history
 
     def pr_to_text(self, pr: PullRequest) -> str:
         message = t(
