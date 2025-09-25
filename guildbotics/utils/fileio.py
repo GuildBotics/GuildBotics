@@ -73,7 +73,9 @@ def get_config_path(path_str: str, language_code: str | None = None) -> Path:
         new_path = _get_config_path(p.with_stem(f"{p.stem}.{language_code}"))
         if new_path.exists():
             return new_path
-        return _get_config_path(p.with_stem(f"{p.stem}.en"))
+        new_path = _get_config_path(p.with_stem(f"{p.stem}.en"))
+        if new_path.exists():
+            return new_path
 
     return _get_config_path(Path(path_str))
 
@@ -141,6 +143,32 @@ def load_markdown_with_frontmatter(file: Path) -> dict:
     metadata["body"] = body.strip()
 
     return metadata
+
+
+def get_prompt_path(
+    name: str, language_code: str | None = None, person_id: str | None = None
+) -> Path:
+    """
+    Get the path to a custom prompt file, either for a specific person or a general prompt.
+
+    Args:
+        name (str): The relative path to the prompt file.
+        language_code (str | None): The language code for localization (optional).
+        person_id (str | None): The ID of the person (optional).
+
+    Returns:
+        Path: The path to the custom prompt file.
+    """
+    if person_id:
+        path = get_person_config_path(person_id, f"prompts/{name}.md", language_code)
+        if path.exists():
+            return path
+
+    path = get_config_path(f"prompts/{name}.md", language_code)
+    if path.exists():
+        return path
+
+    return get_person_config_path(person_id, f"intelligences/{name}.md", language_code)
 
 
 def load_yaml_file(file: Path) -> dict | list[dict]:

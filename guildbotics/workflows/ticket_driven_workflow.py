@@ -1,6 +1,11 @@
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
-from guildbotics.intelligences.functions import identify_mode, identify_role, to_text
+from guildbotics.intelligences.functions import (
+    identify_mode,
+    identify_role,
+    preprocess,
+    to_text,
+)
 from guildbotics.modes.mode_base import ModeBase
 from guildbotics.runtime import Context
 from guildbotics.utils.i18n_tool import t
@@ -77,6 +82,7 @@ class TicketDrivenWorkflow(WorkflowBase):
             await ticket_manager.update_ticket(self.context.task)
 
         # Run the mode logic
+        messages[-1].content = preprocess(self.context, messages[-1].content)
         response = await ModeBase.get_mode(self.context).run(messages)
 
         # If the response is asking for more information, return it.
