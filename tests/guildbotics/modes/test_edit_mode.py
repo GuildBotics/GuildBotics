@@ -529,3 +529,154 @@ async def test_acknowledge_comment_variants(monkeypatch, fake_context):
     )
     got = await mode._acknowledge_comment("https://example.com/pr/1", 99, "ok")
     assert got is True
+
+
+@pytest.mark.asyncio
+async def test_review_no_threads_edit_asking_empty_message_sets_default_question_called(
+    monkeypatch, fake_context
+):
+    # Set IN_REVIEW with PR URL and no inline threads
+    fake_context.task.status = Task.IN_REVIEW
+    set_task_pr_comment(fake_context, "https://example.com/pr/200")
+
+    comments = ReviewComments(review_comments=[], inline_comments=[])
+    ch = StubCodeHostingService()
+    ch.set_comments(comments)
+
+    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+
+    # Force edit path, and make edit_files ask without a message
+    async def fake_identify(*_):
+        return "edit"
+
+    async def fake_edit(context, inputs, cwd):
+        return AgentResponse(status=AgentResponse.ASKING, message="")
+
+    monkeypatch.setattr(
+        "guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify
+    )
+    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
+
+    # Track that default_question translation key is requested
+    called = {"default_question": 0}
+
+    def fake_t(key, **kw):
+        if key == "modes.edit_mode.default_question":
+            called["default_question"] += 1
+            return "DEFAULT_QUESTION"
+        return key
+
+    monkeypatch.setattr("guildbotics.modes.edit_mode.t", fake_t)
+    # Stable talk_as
+    monkeypatch.setattr(
+        "guildbotics.modes.edit_mode.talk_as", lambda *a, **k: "reply"
+    )
+
+    res = await mode.run([Message(content="hi", author="u", author_type=Message.USER)])
+    assert res.status == AgentResponse.DONE
+    # In review path with no changes => message falls back to PR URL
+    assert res.message == "https://example.com/pr/200"
+    # Ensure the default_question path executed
+    assert called["default_question"] == 1
+
+
+@pytest.mark.asyncio
+async def test_review_inline_threads_edit_done_sets_changed_and_overall_reply(
+    monkeypatch, fake_context
+):
+    fake_context.task.status = Task.IN_REVIEW
+    set_task_pr_comment(fake_context, "https://example.com/pr/201")
+
+    # One inline thread requiring edit and returning DONE
+    t1 = InlineCommentThread(
+        path="x.py",
+        line=10,
+        comments=[InlineComment(path="x.py", line=10, body="please fix", comment_id=5, author="rv", created_at="1", is_reviewee=False)],
+    )
+    rc = ReviewComments(review_comments=[], inline_comments=[])
+    rc.inline_comment_threads = [t1]
+
+    ch = StubCodeHostingService()
+    ch.set_comments(rc)
+    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+
+    async def fake_identify(*_):
+        return "edit"
+
+    async def fake_edit(context, inputs, cwd):
+        return AgentResponse(status=AgentResponse.DONE, message="thread ok")
+
+    # t() should return a stable default message to trigger overall reply path
+    def fake_t(key, **kw):
+        if key == "modes.edit_mode.default_message":
+            return "DEFAULT_MESSAGE"
+        return key
+
+    # talk_as should return different strings for thread vs overall
+    async def fake_talk_as(context, topic, context_location, conversation_history):
+        return "OVERALL_REPLY" if topic == "DEFAULT_MESSAGE" else "THREAD_REPLY"
+
+    monkeypatch.setattr("guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify)
+    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
+    monkeypatch.setattr("guildbotics.modes.edit_mode.t", fake_t)
+    monkeypatch.setattr("guildbotics.modes.edit_mode.talk_as", fake_talk_as)
+
+    res = await mode.run([Message(content="go", author="u", author_type=Message.USER)])
+    assert res.status == AgentResponse.DONE
+    # Since changed=True and message exists, overall reply is used (not PR URL)
+    assert res.message == "OVERALL_REPLY"
+    # Ensure thread-level reply was also produced
+    assert t1.reply == "THREAD_REPLY"
+
+
+@pytest.mark.asyncio
+async def test_nonreview_done_no_changes_returns_response_message(monkeypatch, fake_context):
+    # Non-review path (no PR URL)
+    fake_context.task.status = Task.IN_PROGRESS
+    fake_context.task.comments = []
+    ch = StubCodeHostingService()
+    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+
+    async def fake_edit(context, inputs, cwd):
+        return AgentResponse(status=AgentResponse.DONE, message="topic result")
+
+    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
+    monkeypatch.setattr("guildbotics.modes.edit_mode.t", lambda key, **kw: key)
+
+    res = await mode.run([Message(content="x", author="u", author_type=Message.USER)])
+    assert res.status == AgentResponse.DONE
+    assert res.message == "topic result"
+    # Ensure skip_ticket_comment is False in this case
+    assert getattr(res, "skip_ticket_comment", None) is False
+
+
+@pytest.mark.asyncio
+async def test_pr_to_text_appends_inline_comment_threads(monkeypatch, fake_context):
+    # Build a PR with inline comment threads
+    t1 = InlineCommentThread(
+        path="a.py",
+        line=1,
+        comments=[InlineComment(path="a.py", line=1, body="c1", comment_id=1, author="rv", created_at="1", is_reviewee=False)],
+    )
+    rc = ReviewComments(review_comments=[], inline_comments=[])
+    rc.inline_comment_threads = [t1]
+    pr = PullRequest(title="T", description="D", review_comments=rc, is_merged=False)
+
+    mode = EditMode(fake_context)
+
+    # Provide deterministic translations focusing on inline thread appends
+    def fake_t(key, **kw):
+        if key == "modes.edit_mode.pull_request_text":
+            return "PRTEXT|"
+        if key == "modes.edit_mode.pull_request_inline_comment_thread":
+            return f"THREAD|{kw['thread_number']}|{kw['thread_text']}|"
+        if key == "modes.edit_mode.pull_request_merge_outcome":
+            return f"MERGE|{kw['merge_outcome']}"
+        return key
+
+    monkeypatch.setattr("guildbotics.modes.edit_mode.t", fake_t)
+
+    text = mode.pr_to_text(pr)
+    # Should include inline thread section and merge outcome suffix
+    assert "THREAD|1|" in text
+    assert text.endswith("MERGE|closed")
