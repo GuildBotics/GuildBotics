@@ -8,15 +8,12 @@ from agno.utils import log
 from pydantic import BaseModel
 
 from guildbotics.intelligences.brains.brain import Brain
-from guildbotics.intelligences.brains.util import (
-    replace_placeholders,
-    to_plain_text,
-    to_response_class,
-)
+from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.import_utils import instantiate_class
 from guildbotics.utils.log_utils import get_file_handler
 from guildbotics.utils.rate_limiter import acquire
+from guildbotics.utils.text_utils import replace_placeholders
 
 
 class RateLimit(BaseModel):

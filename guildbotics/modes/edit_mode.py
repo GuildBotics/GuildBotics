@@ -5,7 +5,7 @@ import httpx
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Service
-from guildbotics.integrations.code_hosting_service import PullRequest
+from guildbotics.integrations.code_hosting_service import PullRequest, ReviewComments
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.functions import (
     analyze_root_cause,
@@ -13,6 +13,7 @@ from guildbotics.intelligences.functions import (
     evaluate_interaction_performance,
     identify_pr_comment_action,
     messages_to_simple_dicts,
+    preprocess,
     propose_process_improvements,
     talk_as,
     write_commit_message,
@@ -67,7 +68,7 @@ class EditMode(ModeBase):
                 )
         else:
             # Run the coding agent script to generate code changes
-            response = await edit_files(self.context, inputs, git_tool.repo_path)
+            response = await self.edit_files(self.context, inputs, git_tool.repo_path)
 
             # If the response is asking for more information, return it.
             if response.status == AgentResponse.ASKING:
@@ -188,7 +189,7 @@ class EditMode(ModeBase):
         messages: list[Message],
         pull_request_url: str,
         git_tool,
-    ) -> tuple[object, bool, bool, str, list[Message]]:
+    ) -> tuple[ReviewComments, bool, bool, str, list[Message]]:
         """Process review-time edits and acknowledgements.
 
         Returns a tuple of (comments, changed, is_asking, overall_message, conversation_history).
@@ -239,7 +240,9 @@ class EditMode(ModeBase):
                 message = ""
             else:
                 # Run the coding agent script to perform edits
-                response = await edit_files(self.context, inputs, git_tool.repo_path)
+                response = await self.edit_files(
+                    self.context, inputs, git_tool.repo_path
+                )
                 if response.message:
                     message = response.message
                 is_asking = response.status == AgentResponse.ASKING
@@ -258,7 +261,9 @@ class EditMode(ModeBase):
                             content=comment.body,
                             author=comment.author,
                             author_type=(
-                                Message.ASSISTANT if comment.is_reviewee else Message.USER
+                                Message.ASSISTANT
+                                if comment.is_reviewee
+                                else Message.USER
                             ),
                             timestamp="",
                         )
@@ -279,7 +284,7 @@ class EditMode(ModeBase):
                 ):
                     continue
 
-                response = await edit_files(
+                response = await self.edit_files(
                     self.context, review_comment, git_tool.repo_path
                 )
                 if response.status == AgentResponse.ASKING:
@@ -418,3 +423,24 @@ class EditMode(ModeBase):
                 f"Failed to add reaction to comment {comment_id}: {e}"
             )
         return True
+
+    async def edit_files(
+        self, context: Context, input: list[dict], cwd: Path
+    ) -> AgentResponse:
+        """
+        Edit files in the given directory based on the input instructions.
+
+        Args:
+            context (Context): The runtime context.
+            input (list[dict]): The input instructions for editing files.
+            cwd (Path): The current working directory where files are located.
+
+        Returns:
+            AgentResponse: The response from the agent after attempting to edit files.
+        """
+        for k, v in input[-1].items():
+            v = preprocess(context, v)
+            input[-1][k] = v
+            break
+
+        return await edit_files(context, input, cwd)
