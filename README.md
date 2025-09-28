@@ -43,7 +43,8 @@ A tool to collaborate with AI agents via a task board.
   - [7.3. Member Settings (`team/members/<person_id>/person.yml`)](#73-member-settings-teammembersperson_idpersonyml)
   - [7.4. Selecting a CLI Agent](#74-selecting-a-cli-agent)
   - [7.5. Modifying the CLI Agent Script](#75-modifying-the-cli-agent-script)
-  - [7.6. Per-Agent CLI Agent Settings](#76-per-agent-cli-agent-settings)
+- [7.6. Per-Agent CLI Agent Settings](#76-per-agent-cli-agent-settings)
+  - [7.7. Custom Command Prompts](#77-custom-command-prompts)
 - [8. Troubleshooting](#8-troubleshooting)
   - [8.1. Error Logs](#81-error-logs)
   - [8.2. Obtaining Debug Information](#82-obtaining-debug-information)
@@ -413,6 +414,45 @@ Customize the CLI agent invocation by editing the YAML files under `intelligence
 
 ## 7.6. Per-Agent CLI Agent Settings
 By default, all AI agents share the same CLI agent, but if `team/members/<person_id>/intelligences/cli_agent_mapping.yml` and/or `team/members/<person_id>/intelligences/cli_agents/*.yml` exist, they take precedence. This allows changing the CLI agent per member (AI agent).
+
+
+## 7.7. Custom Command Prompts
+You can embed and execute custom command prompts in ticket descriptions or comments by writing a line that starts with `//`.
+
+- Write in the ticket: `// <name> [args...]`
+  - Example: `// code-review target=src/app.py level=deep`
+  - A trailing colon after the name is allowed: `// code-review: target=...`
+- The system replaces that line with the body of a prompt file before the agent runs.
+
+Prompt file resolution order (first match wins):
+- Per-person: `.guildbotics/config/team/members/<person_id>/prompts/<name>.<lang>.md`, then `<name>.en.md`, then `<name>.md`
+- Project-wide: `.guildbotics/config/prompts/<name>.<lang>.md`, then `<name>.en.md`, then `<name>.md`
+- Fallback: `.guildbotics/config/intelligences/<name>.md`
+
+Prompt file format: Markdown with YAML front matter. The body is used as the expanded text.
+
+```markdown
+---
+template_engine: jinja2  # or "default"
+---
+# Review Plan for {{ target }}
+
+Priority: {{ level | default('normal') }}
+Steps:
+- Run static analysis on {{ target }}
+- Summarize hotspots and tests to add
+```
+
+Argument passing and templating:
+- Key-value args: `// review target="src/app.py" level=deep`
+- Quoted values are supported (spaces preserved).
+- Positional args are also supported:
+  - With `template_engine: jinja2`, use `{{ arg1 }}`, `{{ arg2 }}`, ...
+  - With `template_engine: default`, use placeholders like `{{1}}`, `{1}`, `${1}`, or `$1` (named keys also work: `{{target}}`, `{target}`, `${target}`, `$target`).
+
+-Usage tips:
+- If you add a comment, write the `// <name> ...` line in the newest (last) comment.
+- Create reusable prompts under `.guildbotics/config/prompts/` and override per agent under `.guildbotics/config/team/members/<person_id>/prompts/`.
 
 
 # 8. Troubleshooting

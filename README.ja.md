@@ -44,6 +44,7 @@ AIエージェントとのやり取りをタスクボードを通じて行うた
   - [7.4. CLI エージェントの選択](#74-cli-エージェントの選択)
   - [7.5. CLI エージェント呼び出しスクリプトの変更](#75-cli-エージェント呼び出しスクリプトの変更)
   - [7.6. AIエージェント毎のCLIエージェント設定](#76-aiエージェント毎のcliエージェント設定)
+  - [7.7. カスタムコマンド実行](#77-カスタムコマンド実行)
 - [8. トラブルシューティング](#8-トラブルシューティング)
   - [8.1. エラーログ](#81-エラーログ)
   - [8.2. デバッグ情報の取得](#82-デバッグ情報の取得)
@@ -417,6 +418,44 @@ default: gemini-cli.yml
 デフォルトでは、すべてのAIエージェントが同じCLIエージェントを利用しますが、`team/members/<person_id>/intelligences` ディレクトリの配下に `cli_agent_mapping.yml` や `cli_agents/*.yml` があれば、そちらのファイルが優先して利用されます。
 
 これにより、メンバー (AIエージェント) ごとに利用するCLIエージェントを変更することが可能です。
+
+
+## 7.7. カスタムコマンド実行
+チケットの本文やコメント内に、`//` で始まる1行を記述することで、カスタムコマンド（カスタムプロンプト）を実行できます。エージェント実行前に、その行は対応するプロンプトの本文に置換されます。
+
+- 記述例: `// <name> [args...]`
+  - 例: `// code-review target=src/app.py level=deep`
+  - コマンド名の末尾にコロンを付けても可: `// code-review: target=...`
+
+プロンプトファイルの探索順（最初に見つかったものを使用）:
+- メンバー単位: `.guildbotics/config/team/members/<person_id>/prompts/<name>.<lang>.md` → `<name>.en.md` → `<name>.md`
+- プロジェクト全体: `.guildbotics/config/prompts/<name>.<lang>.md` → `<name>.en.md` → `<name>.md`
+- フォールバック: `.guildbotics/config/intelligences/<name>.md`
+
+プロンプトファイル形式は「YAML フロントマター付き Markdown」です。本文が展開に利用されます。
+
+```markdown
+---
+template_engine: jinja2  # または "default"
+---
+# {{ target }} のレビュー計画
+
+優先度: {{ level | default('normal') }}
+手順:
+- {{ target }} に対して静的解析を実施
+- ホットスポットと追加すべきテストの要約
+```
+
+引数の渡し方とテンプレート:
+- キー指定: `// review target="src/app.py" level=deep`
+  - 引用付き値をサポート（空白を保持）
+- 位置引数も利用可能:
+  - `template_engine: jinja2` の場合: `{{ arg1 }}`, `{{ arg2 }}` ...
+  - `template_engine: default` の場合: `{{1}}`, `{1}`, `${1}`, `$1` など（名前付きキーも可: `{{target}}`, `{target}`, `${target}`, `$target`）
+
+利用のコツ:
+- コメントを書いた場合は一番新しい（一番最後の）コメントに `// <name> ...` を記述してください。
+- 再利用したいプロンプトは `.guildbotics/config/prompts/` に、メンバー別の上書きは `.guildbotics/config/team/members/<person_id>/prompts/` に配置します。
 
 
 # 8. トラブルシューティング
