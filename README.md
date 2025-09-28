@@ -450,8 +450,8 @@ Argument passing and templating:
   - With `template_engine: jinja2`, use `{{ arg1 }}`, `{{ arg2 }}`, ...
   - With `template_engine: default`, use placeholders like `{{1}}`, `{1}`, `${1}`, or `$1` (named keys also work: `{{target}}`, `{target}`, `${target}`, `$target`).
 
-Usage tips:
-- Place the `// <name> ...` line at the end of your ticket text to fully drive the agent with the expanded content.
+-Usage tips:
+- If you add a comment, write the `// <name> ...` line in the newest (last) comment.
 - Create reusable prompts under `.guildbotics/config/prompts/` and override per agent under `.guildbotics/config/team/members/<person_id>/prompts/`.
 
 
