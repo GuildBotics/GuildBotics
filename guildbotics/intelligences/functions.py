@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import shlex
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +22,9 @@ from guildbotics.intelligences.common import (
     RootCauseAnalysis,
 )
 from guildbotics.runtime import Context
+from guildbotics.utils.fileio import get_prompt_path, load_markdown_with_frontmatter
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.text_utils import get_body_from_prompt
 
 TBaseModel = TypeVar("TBaseModel", bound=BaseModel)
 
@@ -596,3 +599,37 @@ async def edit_files(context: Context, input: list[dict], cwd: Path) -> AgentRes
         log_output = log_buffer.getvalue()
 
     return await to_agent_response(context, response, log_output)
+
+
+def _preprocess_line(context: Context, line: str) -> str:
+    if not line.strip().startswith("//"):
+        return line
+
+    line = line.strip()
+    try:
+        words = shlex.split(line[2:].strip())
+    except ValueError:
+        words = line[2:].strip().split()
+
+    if not words:
+        return line
+
+    name = words[0]
+    if name.endswith(":"):
+        name = name[:-1]
+
+    path = get_prompt_path(
+        name, context.team.project.get_language_code(), context.person.person_id
+    )
+    if not path.exists():
+        return line
+
+    prompt = load_markdown_with_frontmatter(path)
+    return get_body_from_prompt(prompt, words[1:])
+
+
+def preprocess(context: Context, text: str) -> str:
+    lines = text.strip().splitlines()
+    for i, line in enumerate(lines):
+        lines[i] = _preprocess_line(context, line)
+    return "\n".join(lines)
