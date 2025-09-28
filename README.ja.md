@@ -454,7 +454,7 @@ template_engine: jinja2  # または "default"
   - `template_engine: default` の場合: `{{1}}`, `{1}`, `${1}`, `$1` など（名前付きキーも可: `{{target}}`, `{target}`, `${target}`, `$target`）
 
 利用のコツ:
-- チケット本文の末尾に `// <name> ...` を置くと、展開結果全体をエージェントの入力として活用しやすくなります。
+- コメントを書いた場合は一番新しい（一番最後の）コメントに `// <name> ...` を記述してください。
 - 再利用したいプロンプトは `.guildbotics/config/prompts/` に、メンバー別の上書きは `.guildbotics/config/team/members/<person_id>/prompts/` に配置します。
 
 
