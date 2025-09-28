@@ -1,20 +1,28 @@
 from __future__ import annotations
 
+import asyncio
+import errno
 import os
+import signal
+import sys
+import time
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-import signal
-import time
-import errno
 
 from guildbotics.cli.setup_tool import SetupTool
-from guildbotics.drivers import TaskScheduler
-from guildbotics.utils.import_utils import instantiate_class
+from guildbotics.drivers import (
+    CustomCommandError,
+    PersonNotFoundError,
+    PersonSelectionRequiredError,
+    TaskScheduler,
+    run_custom_command,
+)
 from guildbotics.utils.fileio import get_storage_path
+from guildbotics.utils.import_utils import instantiate_class
 
 
 def get_setup_tool() -> SetupTool:
@@ -139,6 +147,81 @@ def start(max_consecutive_errors: int) -> None:
         _remove_pidfile(pid_path)
 
 
+@click.option(
+    "--person",
+    "person_option",
+    help="Person ID or name to run the custom command as.",
+)
+@click.argument("custom_command", required=True)
+@click.argument("command_args", nargs=-1)
+def run(
+    person_option: str | None,
+    custom_command: str,
+    command_args: tuple[str, ...],
+) -> None:
+    """Run the GuildBotics application."""
+    _load_env_from_cwd()
+    stdin_text = sys.stdin.read()
+    asyncio.run(
+        _run_custom_command(
+            custom_command,
+            command_args,
+            person_option,
+            stdin_text,
+        )
+    )
+
+
+async def _run_custom_command(
+    command_spec: str,
+    command_args: tuple[str, ...],
+    person_option: str | None,
+    stdin_text: str,
+) -> None:
+    command_name, inline_person = _parse_command_spec(command_spec)
+    setup_tool = get_setup_tool()
+    context = setup_tool.get_context()
+    identifier = person_option or inline_person
+
+    try:
+        rendered = await run_custom_command(
+            context,
+            command_name=command_name,
+            command_args=command_args,
+            stdin_text=stdin_text,
+            person_identifier=identifier,
+        )
+    except PersonSelectionRequiredError as exc:
+        available = ", ".join(exc.available) if exc.available else "none"
+        raise click.ClickException(
+            "Specify a person using '--person' or '<command>@person>'."
+            f" Available: {available}"
+        ) from exc
+    except PersonNotFoundError as exc:
+        available = ", ".join(exc.available) if exc.available else "none"
+        raise click.ClickException(
+            f"Person '{exc.identifier}' not found. Available: {available}"
+        ) from exc
+    except CustomCommandError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise click.ClickException(str(exc)) from exc
+
+    if rendered:
+        click.echo(rendered)
+
+
+def _parse_command_spec(command_spec: str) -> tuple[str, str | None]:
+    parts = command_spec.split("@", 1)
+    name = parts[0].strip()
+    if not name:
+        raise click.ClickException("Command name cannot be empty.")
+    person = parts[1].strip() if len(parts) > 1 else None
+    if person == "":
+        person = None
+    return name, person
+
+
 @main.command()
 def add() -> None:
     """Add a new member to the GuildBotics project."""
@@ -225,9 +308,7 @@ def stop(timeout: int, force: bool) -> None:
         if not _pid_is_running(pid):
             _remove_pidfile(pid_path)
     else:
-        click.echo(
-            "Timeout reached and process still running. Use --force to SIGKILL."
-        )
+        click.echo("Timeout reached and process still running. Use --force to SIGKILL.")
 
 
 @main.command()
