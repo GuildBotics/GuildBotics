@@ -58,7 +58,7 @@ def get_body_from_prompt(prompt: dict, args: list[str]) -> str:
     jinja2 = template_engine == "jinja2"
 
     for i, arg in enumerate(args, 1):
-        kv = arg.split("=")
+        kv = arg.split("=", 1)
         if len(kv) > 1:
             placeholders[kv[0]] = kv[1]
         elif jinja2:
