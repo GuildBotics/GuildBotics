@@ -34,6 +34,7 @@ def replace_placeholders_by_default(text: str, placeholders: dict[str, str]) -> 
     text = _replace_placeholders(text, placeholders, "{{{{{}}}}}")
     text = _replace_placeholders(text, placeholders, "${{{}}}")
     text = _replace_placeholders(text, placeholders, "{{{}}}")
+    text = _replace_placeholders(text, placeholders, "${}")
     return text
 
 
@@ -53,16 +54,18 @@ def replace_placeholders(
 
 def get_body_from_prompt(prompt: dict, args: list[str]) -> str:
     placeholders = {}
+    template_engine = prompt.get("template_engine", "default")
+    jinja2 = template_engine == "jinja2"
 
     for i, arg in enumerate(args, 1):
         kv = arg.split("=")
         if len(kv) > 1:
             placeholders[kv[0]] = kv[1]
+        elif jinja2:
+            placeholders[f"arg{i}"] = str(arg)
         else:
             placeholders[f"{i}"] = str(arg)
 
     return replace_placeholders(
-        prompt.get("body", "").strip(),
-        placeholders,
-        prompt.get("template_engine", "default"),
+        prompt.get("body", "").strip(), placeholders, template_engine
     )
