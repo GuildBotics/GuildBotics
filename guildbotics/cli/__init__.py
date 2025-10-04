@@ -97,8 +97,8 @@ def main() -> None:
     show_default=True,
     help="Stop a worker after this many consecutive workflow errors.",
 )
-def run(max_consecutive_errors: int) -> None:
-    """Run the GuildBotics application."""
+def start(max_consecutive_errors: int) -> None:
+    """Start the GuildBotics scheduler."""
     _load_env_from_cwd()
     pid_path = _pid_file_path()
     # Prevent multiple instances

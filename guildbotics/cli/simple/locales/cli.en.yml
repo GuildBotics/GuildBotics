@@ -67,7 +67,7 @@ en:
   environment_variable_prompt: "Set the following environment variables:"
   input_person_id_prompt: "Enter the member ID (person_id):"
   confirm_add_custom_fields: "Add custom fields (Mode, Role, Agent) to the GitHub Project?"
-  message_add_custom_fields: "These custom fields will be automatically added when running the `guildbotics run` command."
+  message_add_custom_fields: "These custom fields will be automatically added when running the `guildbotics start` command."
 
   speaking_style_professional: "Professional"
   speaking_style_friendly: "Friendly"

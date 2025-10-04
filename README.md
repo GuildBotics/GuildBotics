@@ -276,7 +276,7 @@ The status mapping is saved to `.guildbotics/config/team/project.yml`.
 Start with:
 
 ```bash
-guildbotics run
+guildbotics start
 ```
 
 This starts the task scheduler, allowing AI agents to execute tasks.
