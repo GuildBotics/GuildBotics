@@ -277,7 +277,7 @@ GuildBoticsが扱うステータスは、以下の6つです。
 以下のコマンドで起動します。
 
 ```bash
-guildbotics run
+guildbotics start
 ```
 
 これにより、タスクスケジューラが起動し、AIエージェントがタスクを実行できるようになります。

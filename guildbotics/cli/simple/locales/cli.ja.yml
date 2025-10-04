@@ -67,7 +67,7 @@ ja:
   environment_variable_prompt: "以下の環境変数を設定してください:"
   input_person_id_prompt: "メンバーID (person_id) を入力してください:"
   confirm_add_custom_fields: "GitHub Project にカスタムフィールド (Mode, Role, Agent) を追加します"
-  message_add_custom_fields: "guildbotics run コマンド実行時にカスタムフィールドが自動追加されます"
+  message_add_custom_fields: "guildbotics start コマンド実行時にカスタムフィールドが自動追加されます"
 
   speaking_style_professional: "プロフェッショナル"
   speaking_style_friendly: "フレンドリー"

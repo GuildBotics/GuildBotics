@@ -1,4 +1,4 @@
-from guildbotics.cli import run
+from guildbotics.cli import start
 
 if __name__ == "__main__":
-    run()
+    start()
