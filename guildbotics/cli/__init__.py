@@ -148,6 +148,7 @@ def start(max_consecutive_errors: int) -> None:
         _remove_pidfile(pid_path)
 
 
+@main.command()
 @click.option(
     "--person",
     "person_option",
