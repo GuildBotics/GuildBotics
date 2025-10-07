@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 import time
+import traceback
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -152,22 +153,30 @@ def start(max_consecutive_errors: int) -> None:
     "person_option",
     help="Person ID or name to run the custom command as.",
 )
+@click.option(
+    "--cwd",
+    type=str,
+    default=None,
+    help="Specify the working directory for the custom command.",
+)
 @click.argument("custom_command", required=True)
 @click.argument("command_args", nargs=-1)
 def run(
     person_option: str | None,
+    cwd: str | None,
     custom_command: str,
     command_args: tuple[str, ...],
 ) -> None:
     """Run the GuildBotics application."""
     _load_env_from_cwd()
-    stdin_text = sys.stdin.read()
+    message = "" if sys.stdin.isatty() else sys.stdin.read()
     asyncio.run(
         _run_custom_command(
             custom_command,
             command_args,
             person_option,
-            stdin_text,
+            message,
+            Path(cwd) if cwd else None,
         )
     )
 
@@ -176,7 +185,8 @@ async def _run_custom_command(
     command_spec: str,
     command_args: tuple[str, ...],
     person_option: str | None,
-    stdin_text: str,
+    message: str,
+    cwd: Path | None = None,
 ) -> None:
     command_name, inline_person = _parse_command_spec(command_spec)
     setup_tool = get_setup_tool()
@@ -188,8 +198,9 @@ async def _run_custom_command(
             context,
             command_name=command_name,
             command_args=command_args,
-            stdin_text=stdin_text,
+            message=message,
             person_identifier=identifier,
+            cwd=cwd,
         )
     except PersonSelectionRequiredError as exc:
         available = ", ".join(exc.available) if exc.available else "none"
@@ -203,8 +214,10 @@ async def _run_custom_command(
             f"Person '{exc.identifier}' not found. Available: {available}"
         ) from exc
     except CustomCommandError as exc:
+        traceback.print_exc()
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:  # pragma: no cover - defensive guard
+        traceback.print_exc()
         raise click.ClickException(str(exc)) from exc
 
     if rendered:

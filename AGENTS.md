@@ -32,6 +32,10 @@ This document defines the operational rules, workflows, output contracts, and ve
 
 ## Verification Policy
 - Local Verification: Start from the smallest test closest to the change location and expand as needed.
+- Tests are executed with the following command:
+  ```bash
+  uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
+  ```
 - Coverage: In possible environments, confirm updates to `coverage.xml`.
 - Environment Constraints: Clearly indicate credential shortages or network unavailability as "🔶 Pending".
 

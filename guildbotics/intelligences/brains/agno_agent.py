@@ -108,6 +108,8 @@ class AgnoAgentDefaultBrain(Brain):
             self.model_config.model_class, expected_type=Model, **model_parameters
         )
         kwargs["model"] = model
+        if "cwd" in kwargs:
+            kwargs.pop("cwd")
 
         agent = Agent(**kwargs)
 

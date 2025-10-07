@@ -39,12 +39,9 @@ def test_messages_to_json_basic():
 
 
 @pytest.mark.asyncio
-async def test_get_text_and_get_content_variants(monkeypatch, fake_context, stub_brain):
+async def test_get_content_variants(monkeypatch, fake_context, stub_brain):
     # use fake_context and stub_brain instead of real LLM
     ctx = fake_context
-    # get_text -> str(content).strip()
-    stub_brain("x", "  hello  ")
-    assert await f.get_text(ctx, "x", message="m") == "hello"
 
     # get_content: response_class is falsy -> returns raw
     stub_brain("a", {"k": 1}, response_class=None)
@@ -72,10 +69,7 @@ async def test_get_text_and_get_content_variants(monkeypatch, fake_context, stub
 async def test_talk_as_and_reply_as_build_session_state(monkeypatch, fake_context):
     ctx = fake_context
 
-    async def fake_get_content(context, name, message, **kwargs):
-        # Ensure add_state_in_messages flag and session_state exist
-        assert kwargs.get("add_state_in_messages") is True
-        assert isinstance(kwargs.get("session_state"), dict)
+    async def fake_get_content(context, name, message, params=None, cwd=None):
         return MessageResponse(content=" result ", author="ai", author_type="Assistant")
 
     monkeypatch.setattr(f, "get_content", fake_get_content)
@@ -197,9 +191,9 @@ async def test_identify_tasks(monkeypatch, fake_context, stub_brain):
 
     captured = {"called": False, "session_state": None}
 
-    async def fake_get_content(context, name, message, **kwargs):
+    async def fake_get_content(context, name, message, params=None, cwd=None):
         captured["called"] = True
-        captured["session_state"] = kwargs.get("session_state")
+        captured["params"] = params
         captured["message"] = message
         return nxt
 
@@ -211,7 +205,7 @@ async def test_identify_tasks(monkeypatch, fake_context, stub_brain):
         ctx, role_id="dev", cwd=Path("."), messages=messages, available_modes=modes
     )
     assert out is nxt and captured["called"]
-    assert "available_modes" in captured["session_state"]
+    assert "available_modes" in captured["params"]
     assert (
         str(captured["message"]).replace(" ", "").replace("\n", "") == '[{"user":"d"}]'
     )

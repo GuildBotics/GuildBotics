@@ -67,7 +67,7 @@ class PromptInfo:
 
     def __init__(
         self,
-        response_class: Type[BaseModel],
+        response_class: Type[BaseModel] | None,
         description: str,
     ):
         """
@@ -126,10 +126,6 @@ class CliAgentBrain(Brain):
             response_class=response_class,
         )
 
-        assert (
-            response_class is not None
-        ), "CLI agents require a response class to be specified in the configuration."
-
         self.prompt_info = PromptInfo(
             response_class=response_class,
             description=description,
@@ -148,9 +144,10 @@ class CliAgentBrain(Brain):
             message (str): The message to pass to the agent.
             **kwargs: Arguments to pass to the agent.
         """
+        # self.executable_info.cwd = kwargs.get("cwd", ".")
         self.executable_info.cwd = kwargs["cwd"]
         input = self.prompt_info.to_prompt(
-            message, kwargs["session_state"], self.template_engine
+            message, kwargs.get("session_state", {}), self.template_engine
         )
         self.logger.debug(
             f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
