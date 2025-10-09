@@ -7,7 +7,7 @@ class SetupTool(ABC):
     """Abstract base class for setup tools."""
 
     @abstractmethod
-    def get_context(self) -> Context:
+    def get_context(self, message: str = "") -> Context:
         """Get the runtime context."""
         pass
 

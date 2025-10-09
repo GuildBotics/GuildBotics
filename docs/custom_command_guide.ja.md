@@ -3,7 +3,7 @@
 GuildBotics のカスタムコマンドは、エージェントに任意の処理手順を教えるための仕組みです。Markdown ファイルに記述したプロンプトでLLM呼び出しを行ったり、Python ファイルで本格的なワークフローを構築したり、シェルスクリプト (`.sh`) で外部ツールを操作したりできます。このガイドでは、初めての方でも理解しやすいよう、まずはシンプルな例から始めて少しずつ機能を掘り下げていきます。
 
 
-## 1. クイックスタート: 1分で作る最初のコマンド
+## 1. クイックスタート
 
 ### 1.1. プロンプトファイルを作成する
 まずは、LLM に翻訳を依頼するシンプルなコマンドを作ってみましょう。
@@ -50,10 +50,8 @@ Hello
 プロンプトファイルの変数展開方法としては、上記で説明した位置引数のほかに、名前付き引数や Jinja2 テンプレートエンジンを利用することもできます。
 これらの方法を使うと、より柔軟にプロンプトを記述できます。
 
-1. **名前付き引数**: `${arg_name}` の形式で、`params` に指定したキーワード引数に対応します。
-2. **Jinja2**: Jinja2 テンプレートエンジンを使用することで、より複雑な変数展開が可能になります。例えば、`{{ variable_name }}` の形式で変数を参照できます。
-
 ### 2.1. 名前付き引数の例
+`${arg_name}` の形式で、`params` に指定したキーワード引数に対応します。
 
 ```markdown
 以下のテキストを${source}から${target}に翻訳してください:
@@ -66,7 +64,7 @@ $ echo "Hello" | guildbotics run translate source=英語 target=日本語
 ```
 
 ### 2.2. Jinja2 の例
-jinja2 を使う場合は、プロンプトファイルの先頭に以下のようにYAMLフロントマターを追加し、`template_engine` を `jinja2` に設定します。
+Jinja2 テンプレートエンジンを使用することで、より複雑な変数展開が可能になります。例えば、`{{ variable_name }}` の形式で変数を参照できます。
 
 ```markdown
 ---
@@ -78,6 +76,9 @@ template_engine: jinja2
 以下のテキストを英訳してください:
 {% endif %}
 ```
+
+jinja2 を使う場合は、上記のようにYAMLフロントマターを追加し、`template_engine` を `jinja2` として設定します。
+
 
 **メモ:**
 YAMLフロントマターはMarkdownファイルの冒頭に記述する `---` で始まり `---` で終わるテキストです。
@@ -96,7 +97,7 @@ $ echo "こんにちは" | guildbotics run translate target=中国語
 
 ## 3. CLIエージェントの利用
 
-YAML フロントマターで `brain: cli` を指定すると、OpenAI Codex や Gemini CLI などといったCLIエージェントの呼び出しができます。CLIエージェントを用いると、ファイルの読み込みやシステムコマンドの実行など、より高度な操作が可能になります。
+YAML フロントマターで `brain: cli` を指定すると、OpenAI Codex や Gemini CLI などといったCLIエージェントの呼び出しができます。CLIエージェントを用いると、ファイルの読み込みやシステムコマンドの実行など、より高度な操作をAIに指示できます。
 
 例えば、`summarize.md` というファイルを作成し、次のように記述します。
 
@@ -241,28 +242,33 @@ Hello, world!
 
 Python コマンドでは、以下の3種類の引数を利用することができます。
 
-- context: `main` 関数の最初の引数として `context` を受け取ると、実行コンテキストにアクセスできます。主として別コマンドの呼び出しに使用します。
+- context: `main` 関数の最初の引数として `context` / `ctx` / `c` のいずれかを指定すると、実行コンテキストにアクセスできます。以下のような用途で利用できます:
+  - team や person の情報取得。
+  - 別コマンドの呼び出し。
+  - チケット管理サービスやコードホスティングサービスへのアクセス。
 - 位置引数: `main` 関数の位置引数として定義します。
 - キーワード引数: `main` 関数のキーワード引数として定義します。
 
 
 ```python
-def main(context, *args, **kwargs):
+from guildbotics.runtime.context import Context
+
+def main(context: Context, *args, **kwargs):
     for i, arg in enumerate(args):
         print(f"arg[{i}]: {arg}")
 
-    for key, value in kwargs.items():
-        print(f"{key}: {value}")
+    print(f"key1: {kwargs.get('key1')}")
+    print(f"key2: {kwargs.get('key2')}")
 ```
 
 呼び出し例:
 
 ```shell
-$ guildbotics run hello key1=value1 key2=value2
-arg[0]: key1=value1
-arg[1]: key2=value2
-key1: value1
-key2: value2
+$ guildbotics run hello aaa bbb key1=a key2=b
+arg[0]: aaa
+arg[1]: bbb
+key1: a
+key2: b
 ```
 
 ### 6.2. コマンドの呼び出し
@@ -270,9 +276,10 @@ context.invoke を利用すると、Python コマンドから別のコマンド�
 
 ```python
 from datetime import datetime
+from guildbotics.runtime.context import Context
 
 
-async def main(context):
+async def main(context: Context):
     current_time = f"現在の時刻は{datetime.now().strftime('%H:%M')}です"
 
     time_of_day = await context.invoke(

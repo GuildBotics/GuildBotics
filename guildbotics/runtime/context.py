@@ -1,4 +1,8 @@
+from copy import deepcopy
 from logging import Logger
+from typing import Any, Awaitable, Callable
+
+from pydantic import BaseModel
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
@@ -25,6 +29,7 @@ class Context:
         logger: Logger,
         person: Person,
         task: Task,
+        message: str,
     ):
         """
         Initialize the WorkflowContext with a team, loader factory, and integration factory.
@@ -33,6 +38,9 @@ class Context:
             integration_factory (IntegrationFactory): Factory for creating integrations.
             brain_factory (BrainFactory): Factory for creating brains.
             logger (Logger): Logger instance for logging messages.
+            person (Person): The current person in the context.
+            task (Task): The current task in the context.
+            message (str): The message or prompt associated with the context.
         """
         self.loader_factory = loader_factory
         self.integration_factory = integration_factory
@@ -44,6 +52,9 @@ class Context:
         self.task = task
         self.active_role = person.get_role(task.role)
         self.ticket_manager: TicketManager | None = None
+        self.pipe = message
+        self.shared_state: dict[str, Any] = {}
+        self._invoker: Callable[[str, Any], Awaitable[Any]] | None = None
 
     @classmethod
     def get_default(
@@ -51,6 +62,7 @@ class Context:
         loader_factory: LoaderFactory,
         integration_factory: IntegrationFactory,
         brain_factory: BrainFactory,
+        message: str,
     ) -> "Context":
         """
         Get the default context for the application.
@@ -68,6 +80,7 @@ class Context:
             get_logger(),
             Person(person_id="default_person", name="Default Person"),
             Task(title="Default Task", description="This is a default task."),
+            message,
         )
 
     def clone_for(self, person: Person) -> "Context":
@@ -85,6 +98,7 @@ class Context:
             get_logger(),
             person,
             self.task,
+            self.pipe,
         )
 
     def update_task(self, task: Task) -> None:
@@ -139,3 +153,28 @@ class Context:
         return self.integration_factory.create_code_hosting_service(
             self.person, self.team, repository
         )
+
+    def set_invoker(self, invoker: Callable[[str, Any], Awaitable[Any]]) -> None:
+        self._invoker = invoker
+
+    async def invoke(self, name: str, /, *args: Any, **kwargs: Any) -> Any:
+        if self._invoker is None:
+            raise RuntimeError("Invoker function is not set.")
+        return await self._invoker(name, *args, **kwargs)
+
+    def update(self, key: str, value: Any, text_value: str) -> None:
+        shared_value = self._normalize_for_shared_state(value)
+        self.shared_state[key] = shared_value
+        self.pipe = text_value
+
+    def _normalize_for_shared_state(self, value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return value.model_dump()
+        if isinstance(value, list):
+            if not value:
+                return []
+            if isinstance(value[0], BaseModel):
+                return [item.model_dump() for item in value]
+        if isinstance(value, dict):
+            return deepcopy(value)
+        return value

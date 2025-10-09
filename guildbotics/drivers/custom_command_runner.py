@@ -6,10 +6,9 @@ import inspect
 import os
 import shlex
 import tempfile
-from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Any, Sequence
 
 from pydantic import BaseModel
 
@@ -82,55 +81,21 @@ class InvocationOptions:
     output_key: str
 
 
-class RunnerContext:
-    """Runtime context shared across command executions."""
-
-    def __init__(
-        self,
-        base_context: Context,
-        message: str,
-        command_args: list[str],
-        invoker: Callable[[str, Any], Awaitable[Any]] | None = None,
-    ) -> None:
-        self.base_context = base_context
-        self.message = message
-        self.prompt_output = ""
-        self.shared_state: dict[str, Any] = {}
-        self.command_args = command_args
-        self._invoker = invoker
-
-    async def invoke(self, name: str, /, *args: Any, **kwargs: Any) -> Any:
-        if self._invoker is None:
-            raise CustomCommandError(
-                "Command invocation is not available in this context."
-            )
-        return await self._invoker(name, *args, **kwargs)
-
-    def set_prompt_output(self, value: str) -> None:
-        self.prompt_output = value
-
-    def set_stdin_text(self, value: str) -> None:
-        self.message = value
-
-
 class CustomCommandExecutor:
     """Coordinate the execution of main and sub commands."""
 
     def __init__(
         self,
-        base_context: Context,
+        context: Context,
         command_name: str,
         command_args: Sequence[str],
-        message: str,
         cwd: Path | None = None,
     ) -> None:
-        self._base_context = base_context
+        context.set_invoker(self._invoke)
+        self._context = context
         self._command_name = command_name
         self._command_args = list(command_args)
         self._command_params = get_placeholders_from_args(self._command_args)
-        self._runner_context = RunnerContext(
-            base_context, message, self._command_args, self._invoke
-        )
         self._registry: dict[str, CommandConfig] = {}
         self._call_stack: list[str] = []
         self._main_directory: Path | None = None
@@ -138,14 +103,14 @@ class CustomCommandExecutor:
         self._main_spec = self._prepare_main_spec()
 
     async def run(self) -> str:
-        await self._execute_with_children(self._main_spec)
-        return self._runner_context.prompt_output
+        outcome = await self._execute_with_children(self._main_spec)
+        return outcome.text_output if outcome else ""
 
     def _prepare_main_spec(self) -> CommandConfig:
-        path = _resolve_named_command(self._base_context, self._command_name)
+        path = _resolve_named_command(self._context, self._command_name)
         if not path.exists():
             raise CustomCommandError(
-                f"Prompt '{self._command_name}' not found for {self._base_context.person.person_id}."
+                f"Prompt '{self._command_name}' not found for {self._context.person.person_id}."
             )
         spec = CommandConfig(
             name=self._command_name,
@@ -208,7 +173,7 @@ class CustomCommandExecutor:
 
         if path_value:
             return _resolve_command_reference(
-                anchor.path.parent, str(path_value), self._base_context
+                anchor.path.parent, str(path_value), self._context
             )
 
         raise CustomCommandError("Command entry requires 'path', 'name' or 'script'.")
@@ -279,15 +244,15 @@ class CustomCommandExecutor:
 
         if "." in text:
             parts = text.split(".")
-            value: Any = self._runner_context.shared_state
+            value: Any = self._context.shared_state
             for part in parts:
                 if isinstance(value, dict) and part in value:
                     value = value[part]
                 else:
                     return text  # Placeholder not found, return original text
             return value
-        elif text in self._runner_context.shared_state:
-            return self._runner_context.shared_state[text]
+        elif text in self._context.shared_state:
+            return self._context.shared_state[text]
         else:
             return self._command_params.get(text, os.getenv(text, text))
 
@@ -325,7 +290,9 @@ class CustomCommandExecutor:
                     f"Unsupported command type '{spec.path.suffix}' for {spec.name}."
                 )
             if outcome is not None:
-                self._store_result(outcome, options.output_key)
+                self._context.update(
+                    options.output_key, outcome.result, outcome.text_output
+                )
             return outcome
         finally:
             self._call_stack.pop()
@@ -334,7 +301,7 @@ class CustomCommandExecutor:
         if spec.stdin_override is not None:
             message = spec.stdin_override
         else:
-            message = self._runner_context.message
+            message = self._context.pipe
 
         params = spec.params.copy()
         for key, value in params.items():
@@ -360,20 +327,18 @@ class CustomCommandExecutor:
         if not metadata.get("body"):
             return None
 
-        params = {**self._runner_context.shared_state, **options.params}
+        params = {**self._context.shared_state, **options.params}
         if str(metadata.get("brain", "")).lower() in ["none", "-", "null", "disabled"]:
             template_engine = metadata.get("template_engine", "default")
             result = replace_placeholders(metadata["body"], params, template_engine)
             return CommandOutcome(result=result, text_output=result)
 
         spec.metadata = metadata
-        message = (
-            options.message if preprocess(self._base_context, options.message) else ""
-        )
+        message = options.message if preprocess(self._context, options.message) else ""
 
         try:
             output = await get_content(
-                self._base_context, str(spec.path), message, params, self._cwd
+                self._context, str(spec.path), message, params, self._cwd
             )
         except Exception as exc:  # pragma: no cover - propagate as driver error
             raise CustomCommandError(
@@ -382,6 +347,28 @@ class CustomCommandExecutor:
 
         text_output = _stringify_output(output)
         return CommandOutcome(result=output, text_output=text_output)
+
+    def _is_positional(self, params: list[inspect.Parameter], index: int) -> bool:
+        if index >= len(params):
+            return False
+        return params[index].kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+
+    def _is_keyword(self, params: list[inspect.Parameter], key: str) -> bool:
+        for param in params:
+            if param.name == key and param.kind in (
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                return True
+        return False
+
+    def _is_var_positional(self, params: list[inspect.Parameter], index: int) -> bool:
+        if index >= len(params):
+            return False
+        return params[index].kind == inspect.Parameter.VAR_POSITIONAL
 
     async def _run_python_command(
         self, spec: CommandConfig, options: InvocationOptions
@@ -394,25 +381,39 @@ class CustomCommandExecutor:
             )
 
         sig = inspect.signature(entry)
-        params = sig.parameters
+        params = list(sig.parameters.values())
 
+        args = [arg for arg in options.args if "=" not in arg]
+        kwargs = options.params.copy()
         call_args: list[Any] = []
         call_kwargs = {}
 
-        if params:
-            call_args.append(self._runner_context)
+        index = 0
+        if self._is_positional(params, 0) and params[0].name in ["context", "ctx", "c"]:
+            call_args.append(self._context)
+            index += 1
 
-        has_var_positional = any(
-            p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values()
-        )
-        if has_var_positional:
-            call_args.extend(options.args or [])
+        for i, arg in enumerate(args):
+            if self._is_positional(params, index):
+                call_args.append(arg)
+                index += 1
+            else:
+                if self._is_var_positional(params, index):
+                    call_args.extend(args[i:])
+                    index += 1
+                break
 
-        has_var_keyword = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-        )
-        if has_var_keyword:
-            call_kwargs.update(options.params)
+        params = params[index:]
+        if len(params) > 0:
+            index = 0
+            for key in options.params.keys():
+                if self._is_keyword(params, key):
+                    call_kwargs[key] = kwargs.pop(key)
+                    index += 1
+
+            for index in range(index, len(params)):
+                if params[index].kind == inspect.Parameter.VAR_KEYWORD:
+                    call_kwargs.update(kwargs)
 
         func_result = entry(*call_args, **call_kwargs)
 
@@ -480,12 +481,6 @@ class CustomCommandExecutor:
                 except OSError:
                     pass
 
-    def _store_result(self, outcome: CommandOutcome, output_key: str) -> None:
-        shared_value = _normalize_for_shared_state(outcome.result)
-        self._runner_context.shared_state[output_key] = shared_value
-        self._runner_context.set_prompt_output(outcome.text_output)
-        self._runner_context.set_stdin_text(outcome.text_output)
-
     async def _invoke(self, name: str, *args: Any, **kwargs: Any) -> Any:
         spec = self._create_dynamic_spec(self._main_spec, name, *args, **kwargs)
         outcome = await self._execute_with_children(spec)
@@ -525,7 +520,7 @@ async def run_custom_command(
     """Execute a custom prompt command and return the rendered output."""
     person = _resolve_person(base_context.team.members, person_identifier)
     context = base_context.clone_for(person)
-    executor = CustomCommandExecutor(context, command_name, command_args, message, cwd)
+    executor = CustomCommandExecutor(context, command_name, command_args, cwd)
     return await executor.run()
 
 
@@ -579,19 +574,6 @@ def _stringify_output(output: Any) -> str:
             return to_text(output)
         return "\n".join(str(item) for item in output)
     return str(output)
-
-
-def _normalize_for_shared_state(value: Any) -> Any:
-    if isinstance(value, BaseModel):
-        return value.model_dump()
-    if isinstance(value, list):
-        if not value:
-            return []
-        if isinstance(value[0], BaseModel):
-            return [item.model_dump() for item in value]
-    if isinstance(value, dict):
-        return deepcopy(value)
-    return value
 
 
 def _default_name_from_path(path: Path) -> str:

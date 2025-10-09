@@ -191,7 +191,7 @@ async def _run_custom_command(
 ) -> None:
     command_name, inline_person = _parse_command_spec(command_spec)
     setup_tool = get_setup_tool()
-    context = setup_tool.get_context()
+    context = setup_tool.get_context(message)
     identifier = person_option or inline_person
 
     try:
