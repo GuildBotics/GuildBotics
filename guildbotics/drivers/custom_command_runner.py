@@ -13,7 +13,12 @@ from typing import Any, Sequence
 from pydantic import BaseModel
 
 from guildbotics.entities.team import Person
-from guildbotics.intelligences.functions import get_content, preprocess, to_text
+from guildbotics.intelligences.functions import (
+    get_content,
+    preprocess,
+    to_dict,
+    to_text,
+)
 from guildbotics.runtime.context import Context
 from guildbotics.utils.fileio import (
     get_person_config_path,
@@ -95,7 +100,6 @@ class CustomCommandExecutor:
         self._context = context
         self._command_name = command_name
         self._command_args = list(command_args)
-        self._command_params = get_placeholders_from_args(self._command_args)
         self._registry: dict[str, CommandConfig] = {}
         self._call_stack: list[str] = []
         self._main_directory: Path | None = None
@@ -106,17 +110,23 @@ class CustomCommandExecutor:
         outcome = await self._execute_with_children(self._main_spec)
         return outcome.text_output if outcome else ""
 
+    def _get_placeholders_from_args(
+        self, args: list[str], path: Path
+    ) -> dict[str, str]:
+        return get_placeholders_from_args(args, path.suffix != ".py")
+
     def _prepare_main_spec(self) -> CommandConfig:
         path = _resolve_named_command(self._context, self._command_name)
         if not path.exists():
             raise CustomCommandError(
                 f"Prompt '{self._command_name}' not found for {self._context.person.person_id}."
             )
+        command_params = self._get_placeholders_from_args(self._command_args, path)
         spec = CommandConfig(
             name=self._command_name,
             path=path,
             args=self._command_args,
-            params=self._command_params,
+            params=command_params,
             base_dir=path.parent,
             cwd=self._cwd,
         )
@@ -180,11 +190,7 @@ class CustomCommandExecutor:
 
     def _parse_command(self, entry: str) -> dict:
         words = shlex.split(entry)
-        return {
-            "path": words[0],
-            "args": words[1:],
-            "params": get_placeholders_from_args(words[1:]),
-        }
+        return {"path": words[0], "args": words[1:]}
 
     def _build_command_from_entry(
         self, entry: Any, anchor: CommandConfig
@@ -205,16 +211,11 @@ class CustomCommandExecutor:
         name = self._get_name(data, anchor)
         resolved_path = self._get_path(data, anchor)
 
-        raw_params = data.get("params", {})
-        params = {
-            **anchor.params,
-            **(raw_params if isinstance(raw_params, dict) else {}),
-        }
+        args = data.get("args", [])
 
-        if "args" in params:
-            args = params.pop("args", None)
-        else:
-            args = anchor.args.copy() if anchor.args else None
+        raw_params = data.get("params", {})
+        arg_params = self._get_placeholders_from_args(args, resolved_path)
+        params = {**anchor.params, **raw_params, **arg_params}
 
         stdin_override = params.pop("message", None)
         if stdin_override is not None:
@@ -254,7 +255,7 @@ class CustomCommandExecutor:
         elif text in self._context.shared_state:
             return self._context.shared_state[text]
         else:
-            return self._command_params.get(text, os.getenv(text, text))
+            return self._main_spec.params.get(text, os.getenv(text, text))
 
     async def _execute_with_children(
         self, spec: CommandConfig
@@ -308,7 +309,7 @@ class CustomCommandExecutor:
             if isinstance(value, str):
                 params[key] = self._replace_placeholders(value)
 
-        args = spec.args.copy() if spec.args else []
+        args = list(spec.args) if spec.args else []
         for index, arg in enumerate(args):
             if isinstance(arg, str):
                 args[index] = str(self._replace_placeholders(arg))
@@ -327,9 +328,11 @@ class CustomCommandExecutor:
         if not metadata.get("body"):
             return None
 
-        params = {**self._context.shared_state, **options.params}
+        params = options.params.copy()
         if str(metadata.get("brain", "")).lower() in ["none", "-", "null", "disabled"]:
             template_engine = metadata.get("template_engine", "default")
+            d = to_dict(self._context, {})
+            params = {**params, **d["session_state"]}
             result = replace_placeholders(metadata["body"], params, template_engine)
             return CommandOutcome(result=result, text_output=result)
 
@@ -513,7 +516,6 @@ async def run_custom_command(
     base_context: Context,
     command_name: str,
     command_args: Sequence[str],
-    message: str,
     person_identifier: str | None = None,
     cwd: Path | None = None,
 ) -> str:

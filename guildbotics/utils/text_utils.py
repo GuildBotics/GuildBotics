@@ -53,13 +53,15 @@ def replace_placeholders(
         return replace_placeholders_by_default(text, placeholders)
 
 
-def get_placeholders_from_args(args: list[str]) -> dict[str, str]:
+def get_placeholders_from_args(
+    args: list[str], add_index: bool = True
+) -> dict[str, str]:
     placeholders = {}
     for i, arg in enumerate(args, 1):
         kv = arg.split("=", 1)
         if len(kv) > 1:
             placeholders[kv[0]] = kv[1]
-        else:
+        elif add_index:
             placeholders[f"arg{i}"] = str(arg)
             placeholders[f"{i}"] = str(arg)
     return placeholders

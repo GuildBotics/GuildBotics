@@ -161,6 +161,7 @@ def test_get_ticket_manager_is_cached(monkeypatch):
         logger=logger,
         person=person,
         task=task,
+        message="Initial message",
     )
 
     tm1 = ctx.get_ticket_manager()
@@ -191,6 +192,7 @@ def test_clone_for_independence_person_role_and_cache():
         logger=logger,
         person=person1,
         task=task,
+        message="Initial message",
     )
 
     # Prime cache in original context to ensure clone has its own cache
@@ -205,6 +207,8 @@ def test_clone_for_independence_person_role_and_cache():
     assert ctx2.ticket_manager is None
     # Role is bound per person and task.role
     assert ctx2.active_role.id == "reviewer"
+    # Message is copied
+    assert ctx2.pipe == "Initial message"
 
 
 def test_update_task_re_resolves_active_role():
@@ -231,6 +235,7 @@ def test_update_task_re_resolves_active_role():
         logger=logger,
         person=person,
         task=task1,
+        message="Initial message",
     )
     assert ctx.active_role.id == "developer"
 
@@ -259,6 +264,7 @@ def test_get_brain_delegates_to_factory_with_language():
         logger=logger,
         person=person,
         task=task,
+        message="Initial message",
     )
 
     brain = ctx.get_brain("planner")

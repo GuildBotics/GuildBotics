@@ -1,4 +1,3 @@
-import logging
 import textwrap
 from pathlib import Path
 
@@ -15,6 +14,13 @@ from guildbotics.drivers.custom_command_runner import (
     run_custom_command,
 )
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.intelligences.functions import to_text
+from guildbotics.runtime.context import Context
+from tests.guildbotics.runtime.test_context import (
+    DummyBrainFactory,
+    DummyIntegrationFactory,
+    DummyLoaderFactory,
+)
 
 
 def test_parse_command_spec_with_person():
@@ -81,26 +87,6 @@ class RecordingBrain:
         return f"{self.name}:{message}"
 
 
-class StubContext:
-    def __init__(self, team: Team, person: Person, store: dict | None = None) -> None:
-        self.team = team
-        self.person = person
-        self._brain_store = store if store is not None else {}
-        self.brains = self._brain_store
-        self.logger = logging.getLogger("test")
-
-    def clone_for(self, person: Person) -> "StubContext":
-        return StubContext(self.team, person, self._brain_store)
-
-    def get_brain(self, name: str) -> RecordingBrain:
-        key = (self.person.person_id, name)
-        brain = self._brain_store.get(key)
-        if brain is None:
-            brain = RecordingBrain(name)
-            self._brain_store[key] = brain
-        return brain
-
-
 def _make_team(person: Person) -> Team:
     project = Project(name="demo")
     return Team(project=project, members=[person])
@@ -111,6 +97,17 @@ def _write(path: Path, content: str) -> None:
     path.write_text(textwrap.dedent(content).strip() + "\n", encoding="utf-8")
 
 
+def _get_context(message: str = "") -> Context:
+    person = Person(person_id="alice", name="Alice", is_active=True)
+    team = _make_team(person)
+    loader_factory = DummyLoaderFactory(team)
+    integration_factory = DummyIntegrationFactory()
+    brain_factory = DummyBrainFactory()
+    return Context.get_default(
+        loader_factory, integration_factory, brain_factory, message
+    ).clone_for(person)
+
+
 @pytest.mark.asyncio
 async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
@@ -118,22 +115,16 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
         tmp_path / "prompts/solo.md",
         """
         ---
-        brain: default
+        brain: none
+        template_engine: jinja2
         ---
-        Greetings {{1}}
+        Greetings {{ arg1 }}
+        {{ context.pipe }}
         """,
     )
 
-    person = Person(person_id="alice", name="Alice", is_active=True)
-    team = _make_team(person)
-    base_context = StubContext(team, person)
-
-    result = await run_custom_command(base_context, "solo", ["world"], "stdin text")
-
-    solo_path = str(tmp_path / "prompts/solo.md")
-    assert result == f"{solo_path}:Greetings world\n\nstdin text"
-    brain = base_context.brains[(person.person_id, solo_path)]
-    assert brain.calls == ["Greetings world\n\nstdin text"]
+    result = await run_custom_command(_get_context("stdin text"), "solo", ["world"])
+    assert result == f"Greetings world\nstdin text"
 
 
 @pytest.mark.asyncio
@@ -143,14 +134,12 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
         tmp_path / "prompts/pipeline.md",
         """
         ---
-        brain: default
+        brain: none
         commands:
-          - name: first_step
+          - name: first_payload
             path: first.md
-            output_key: first_payload
-          - name: python_step
+          - name: python_payload
             path: tools/python_step.py
-            output_key: python_payload
             params:
               foo: bar
         ---
@@ -169,35 +158,27 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
     _write(
         tmp_path / "prompts/tools/python_step.py",
         """
-        from guildbotics.drivers.custom_command_runner import RunnerContext
+        from guildbotics.runtime import Context
 
 
-        async def main(context: RunnerContext, foo: str):
-            return {"stdin": context.stdin_text, "foo": foo}
+        async def main(context: Context, foo: str):
+            return {"pipe": context.pipe, "foo": foo}
         """,
     )
 
-    person = Person(person_id="alice", name="Alice", is_active=True)
-    team = _make_team(person)
-    context = StubContext(team, person)
-
-    executor = CustomCommandExecutor(
-        context.clone_for(person), "pipeline", ["ARG"], "initial"
-    )
+    context = _get_context("initial")
+    executor = CustomCommandExecutor(context, "pipeline", ["ARG"])
     result = await executor.run()
 
-    runner = executor._runner_context
+    runner = executor._context
     pipeline_path = str(tmp_path / "prompts/pipeline.md")
-    assert runner.shared_state["pipeline"].startswith(
-        f"{pipeline_path}:Main start for ARG"
-    )
+    assert runner.shared_state["pipeline"].startswith("Main start for ARG")
     assert "first_payload" in runner.shared_state
     assert runner.shared_state["python_payload"] == {
-        "stdin": runner.shared_state["first_payload"],
+        "pipe": to_text(runner.shared_state["first_payload"]),
         "foo": "bar",
     }
-    assert runner.prompt_output == result
-    assert runner.message == result
+    assert runner.pipe == result
 
 
 @pytest.mark.asyncio
@@ -207,16 +188,15 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
         tmp_path / "prompts/shell_driver.md",
         """
         ---
-        brain: default
+        brain: none
         commands:
-          - name: echo_shell
+          - name: shell_output
             path: tools/echo.sh
-            output_key: shell_output
             params:
               foo: bar
-              args:
-                - alpha
-                - beta
+            args:
+            - alpha
+            - beta
         ---
         Shell body {{1}}
         """,
@@ -231,29 +211,23 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
 
         echo "args:$*"
         echo "stdin:$(cat)"
-        echo "FOO=${GUILDBOTICS_PARAM_FOO:-missing}"
+        echo "FOO=${foo:-missing}"
         """.strip()
         + "\n",
         encoding="utf-8",
     )
     script_path.chmod(0o755)
 
-    person = Person(person_id="alice", name="Alice", is_active=True)
-    team = _make_team(person)
-    context = StubContext(team, person)
-
-    executor = CustomCommandExecutor(
-        context.clone_for(person), "shell_driver", ["ARG"], "initial"
-    )
+    context = _get_context("initial")
+    executor = CustomCommandExecutor(context, "shell_driver", ["ARG"])
     result = await executor.run()
 
-    runner = executor._runner_context
+    runner = executor._context
     shell_output = runner.shared_state["shell_output"]
 
     assert "args:alpha beta" in shell_output
     assert "FOO=bar" in shell_output
-    assert "Shell body ARG" in shell_output
-    assert result == shell_output
+    assert "Shell body ARG" in result
 
 
 @pytest.mark.asyncio
@@ -262,14 +236,13 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
     _write(
         tmp_path / "prompts/driver.py",
         """
-        from guildbotics.drivers.custom_command_runner import RunnerContext
+        from guildbotics.runtime import Context
 
-
-        async def main(context: RunnerContext):
-            await context.invoke("invoked_md", args=["value"])
+        async def main(context: Context):
+            await context.invoke("invoked_md", "value")
             return {
                 "invoked": context.shared_state.get("invoked_md"),
-                "stdin": context.stdin_text,
+                "stdin": context.pipe,
             }
         """,
     )
@@ -277,21 +250,17 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
         tmp_path / "prompts/invoked_md.md",
         """
         ---
-        brain: default
+        brain: none
         ---
         Placeholder {{1}}
         """,
     )
 
-    person = Person(person_id="alice", name="Alice", is_active=True)
-    team = _make_team(person)
-    context = StubContext(team, person)
-
-    executor = CustomCommandExecutor(context.clone_for(person), "driver", [], "")
+    context = _get_context()
+    executor = CustomCommandExecutor(context, "driver", [])
     await executor.run()
 
-    shared = executor._runner_context.shared_state
-    invoked_path = str(tmp_path / "prompts/invoked_md.md")
-    assert shared["invoked_md"].startswith(f"{invoked_path}:Placeholder value")
+    shared = executor._context.shared_state
+    assert shared["invoked_md"].startswith("Placeholder value")
     assert shared["driver"]["invoked"] == shared["invoked_md"]
     assert shared["driver"]["stdin"] == shared["invoked_md"]

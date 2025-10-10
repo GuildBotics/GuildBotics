@@ -199,7 +199,6 @@ async def _run_custom_command(
             context,
             command_name=command_name,
             command_args=command_args,
-            message=message,
             person_identifier=identifier,
             cwd=cwd,
         )

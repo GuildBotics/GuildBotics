@@ -96,7 +96,7 @@ def to_dict(
     response_model: type[TBaseModel] | None = None,
 ) -> dict[str, Any]:
     kwargs: dict = {}
-    if params:
+    if params is not None:
         params["context"] = context
         now = datetime.now().astimezone()
         if not "now" in params:
