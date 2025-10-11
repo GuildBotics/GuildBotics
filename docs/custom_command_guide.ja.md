@@ -151,9 +151,11 @@ reason: 現在の時刻が23時36分であり、これは深夜の時間帯（�
 例えば、`get-time-of-day.md` というファイルを作成し、次のように記述します。
 
 ```markdown
+---
 commands:
   - script: echo "現在の時刻は`date`です"
   - command: functions/identify_item item_type=時間帯 candidates="早朝, 午前, 正午, 午後, 夕方, 夜, 深夜"
+---
 ```
 
 ```shell
@@ -203,7 +205,7 @@ template_engine: jinja2
 こんにちは。
 {% endif %}
 
-{{ current_time}}
+{{ current_time }}
 ```
 
 上記のコマンドを実行すると、以下のような結果を返します。
@@ -253,22 +255,43 @@ Python コマンドでは、以下の3種類の引数を利用することがで
 ```python
 from guildbotics.runtime.context import Context
 
-def main(context: Context, *args, **kwargs):
-    for i, arg in enumerate(args):
-        print(f"arg[{i}]: {arg}")
-
-    print(f"key1: {kwargs.get('key1')}")
-    print(f"key2: {kwargs.get('key2')}")
+def main(context: Context, arg1, arg2, key1=None, key2=None):
+    print(f"arg1: {arg1}")
+    print(f"arg2: {arg2}")
+    print(f"key1: {key1}")
+    print(f"key2: {key2}")
 ```
 
 呼び出し例:
 
 ```shell
-$ guildbotics run hello aaa bbb key1=a key2=b
-arg[0]: aaa
-arg[1]: bbb
-key1: a
-key2: b
+$ guildbotics run hello a b key1=c key2=d
+arg1: a
+arg2: b
+key1: c
+key2: d
+```
+
+
+```python
+from guildbotics.runtime.context import Context
+
+def main(context: Context, *args, **kwargs):
+    for i, arg in enumerate(args):
+        print(f"arg[{i}]: {arg}")
+
+    for k, v in kwargs.items():
+        print(f"kwarg[{k}]: {v}")
+```
+
+呼び出し例:
+
+```shell
+$ guildbotics run hello a b key1=c key2=d
+arg[0]: a
+arg[1]: b
+kwarg[key1]: c
+kwarg[key2]: d
 ```
 
 ### 6.2. コマンドの呼び出し

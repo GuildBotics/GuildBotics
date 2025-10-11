@@ -107,8 +107,8 @@ class CustomCommandExecutor:
         self._main_spec = self._prepare_main_spec()
 
     async def run(self) -> str:
-        outcome = await self._execute_with_children(self._main_spec)
-        return outcome.text_output if outcome else ""
+        await self._execute_with_children(self._main_spec)
+        return self._context.pipe
 
     def _get_placeholders_from_args(
         self, args: list[str], path: Path
@@ -328,7 +328,7 @@ class CustomCommandExecutor:
         if not metadata.get("body"):
             return None
 
-        params = options.params.copy()
+        params = {**self._context.shared_state, **options.params}
         if str(metadata.get("brain", "")).lower() in ["none", "-", "null", "disabled"]:
             template_engine = metadata.get("template_engine", "default")
             d = to_dict(self._context, {})
