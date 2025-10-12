@@ -58,7 +58,7 @@ class CommandConfig:
     name: str
     path: Path
     params: dict[str, Any] = field(default_factory=dict)
-    args: list[str] | None = None
+    args: list[Any] | None = None
     stdin_override: str | None = None
     base_dir: Path | None = None
     children: list["CommandConfig"] = field(default_factory=list)
@@ -80,7 +80,7 @@ class CommandOutcome:
 
 @dataclass
 class InvocationOptions:
-    args: list[str]
+    args: list[Any]
     message: str
     params: dict[str, Any]
     output_key: str
@@ -111,9 +111,10 @@ class CustomCommandExecutor:
         return self._context.pipe
 
     def _get_placeholders_from_args(
-        self, args: list[str], path: Path
+        self, args: Sequence[Any], path: Path
     ) -> dict[str, str]:
-        return get_placeholders_from_args(args, path.suffix != ".py")
+        normalized_args = [str(arg) for arg in args]
+        return get_placeholders_from_args(normalized_args, path.suffix != ".py")
 
     def _prepare_main_spec(self) -> CommandConfig:
         path = _resolve_named_command(self._context, self._command_name)
@@ -211,7 +212,13 @@ class CustomCommandExecutor:
         name = self._get_name(data, anchor)
         resolved_path = self._get_path(data, anchor)
 
-        args = data.get("args", [])
+        raw_args = data.get("args", [])
+        if raw_args is None:
+            args = []
+        elif isinstance(raw_args, (list, tuple)):
+            args = list(raw_args)
+        else:
+            args = [raw_args]
 
         raw_params = data.get("params", {})
         arg_params = self._get_placeholders_from_args(args, resolved_path)
@@ -386,7 +393,9 @@ class CustomCommandExecutor:
         sig = inspect.signature(entry)
         params = list(sig.parameters.values())
 
-        args = [arg for arg in options.args if "=" not in arg]
+        args = [
+            arg for arg in options.args if not (isinstance(arg, str) and "=" in arg)
+        ]
         kwargs = options.params.copy()
         call_args: list[Any] = []
         call_kwargs = {}
@@ -495,7 +504,7 @@ class CustomCommandExecutor:
     ) -> CommandConfig:
         data = {
             "name": name,
-            "args": args,
+            "args": list(args),
             "params": kwargs,
         }
         spec = self._build_command_from_entry(data, anchor)
@@ -635,7 +644,7 @@ def _resolve_command_reference(base_dir: Path, value: str, context: Context) -> 
     raise CustomCommandError(f"Command '{value}' could not be resolved.")
 
 
-def _load_python_module(path: Path):
+def _load_python_module(path: Path) -> Any:
     spec = importlib.util.spec_from_file_location(path.stem, path)
     if spec is None or spec.loader is None:
         raise CustomCommandError(f"Unable to load python command module from '{path}'.")

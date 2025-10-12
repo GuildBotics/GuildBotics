@@ -144,7 +144,6 @@ class CliAgentBrain(Brain):
             message (str): The message to pass to the agent.
             **kwargs: Arguments to pass to the agent.
         """
-        # self.executable_info.cwd = kwargs.get("cwd", ".")
         self.executable_info.cwd = kwargs["cwd"]
         input = self.prompt_info.to_prompt(
             message, kwargs.get("session_state", {}), self.template_engine
