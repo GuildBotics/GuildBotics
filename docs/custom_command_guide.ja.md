@@ -95,6 +95,29 @@ $ echo "こんにちは" | guildbotics run translate target=中国語
 你好
 ```
 
+### 2.3. context 変数の利用
+Jinja2 テンプレートエンジンを使用する場合、`context` 変数を利用して、実行コンテキストにアクセスできます。例えば、現在のメンバー情報を取得したり、チーム情報を参照したりできます。
+
+```markdown
+---
+brain: none
+template_engine: jinja2
+---
+
+言語コード: {{ context.language_code }}
+言語名: {{ context.language_name }}
+
+ID: {{ context.person.person_id }}
+名前: {{ context.person.name }}
+話し方: {{ context.person.speaking_style }}
+
+チームメンバー:
+{% for member in context.team.members %}
+- {{ member.person_id }}: {{ member.name }}
+{% endfor %}
+```
+
+
 ## 3. CLIエージェントの利用
 
 YAML フロントマターで `brain: cli` を指定すると、OpenAI Codex や Gemini CLI などといったCLIエージェントの呼び出しができます。CLIエージェントを用いると、ファイルの読み込みやシステムコマンドの実行など、より高度な操作をAIに指示できます。
@@ -220,8 +243,63 @@ template_engine: jinja2
 - `brain: none` を指定すると、LLM呼び出しが行われず、サブコマンドの出力のみが最終結果として返されます。
 - `template_engine: jinja2` を指定すると、Jinja2 テンプレートエンジンが有効になります。コマンドの出力結果にアクセスする際には Jinja2 テンプレートを利用することをおすすめします。
 
+## 6. シェルスクリプトの利用
+シェルスクリプトは、上記のように script キーを使って直接記述する方法の他に、外部のシェルスクリプトファイルとして記述してコマンドとして呼び出すことが可能です。
 
-## 6. Python コマンドの利用
+例えば、`current-time.sh` というファイルを作成し、次のように記述します。
+
+```bash
+#!/usr/bin/env bash
+
+echo "現在の時刻は`date +%T`です"
+```
+
+このファイルに実行権限を与えた上で、プロンプトファイル内では `script` キーの代わりに `command` キーを使って呼び出します。
+
+```markdown
+---
+commands:
+  - name: current_time
+    command: current-time
+  - name: time_of_day
+    command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
+brain: none
+template_engine: jinja2
+---
+{% if time_of_day.label == "朝" %}
+おはようございます。
+{% elif time_of_day.label == "夜" %}
+こんばんは。
+{% else %}
+こんにちは。
+{% endif %}
+
+{{ current_time }}
+```
+
+コマンド呼び出し時の引数は、以下のように扱えます。
+
+```bash
+#!/usr/bin/env bash
+
+echo "arg1: ${1}"
+echo "arg2: ${2}"
+echo "key1: ${key1}"
+echo "key2: ${key2}"
+```
+
+呼び出し例:
+
+```shell
+$ guildbotics run echo-args a b key1=c key2=d
+arg1: a
+arg2: b
+key1: c
+key2: d
+```
+
+
+## 7. Python コマンドの利用
 Python ファイルを使うと、API 呼び出しや複雑なロジックを組み込めます。
 
 例えば、以下のような内容で `hello.py` というファイルを作成します。
@@ -240,7 +318,7 @@ $ guildbotics run hello
 Hello, world!
 ```
 
-### 6.1. 引数の利用
+### 7.1. 引数の利用
 
 Python コマンドでは、以下の3種類の引数を利用することができます。
 
@@ -294,7 +372,7 @@ kwarg[key1]: c
 kwarg[key2]: d
 ```
 
-### 6.2. コマンドの呼び出し
+### 7.2. コマンドの呼び出し
 context.invoke を利用すると、Python コマンドから別のコマンドを呼び出せます。
 
 ```python

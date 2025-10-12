@@ -12,7 +12,7 @@ description: 指定された内容について指定されたキャラクター�
     {{ topic }}
     ```
 - あなたの役割：{{ context.active_role }}
-- あなたが会話で使用する言語：{{ context.team.project.get_language_name() }}
+- あなたが会話で使用する言語：{{ context.language_name }}
 - あなたの話し方：{{ context.person.speaking_style }}
 {% if context.person.relationships %}
 - 対話相手との関係：

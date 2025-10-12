@@ -56,6 +56,14 @@ class Context:
         self.shared_state: dict[str, Any] = {}
         self._invoker: Callable[[str, Any], Awaitable[Any]] | None = None
 
+    @property
+    def language_code(self) -> str:
+        return self.team.project.get_language_code()
+
+    @property
+    def language_name(self) -> str:
+        return self.team.project.get_language_name()
+
     @classmethod
     def get_default(
         cls,

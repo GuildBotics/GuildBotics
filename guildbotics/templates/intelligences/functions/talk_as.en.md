@@ -13,7 +13,7 @@ Consider the character's profile, speaking style, and roles when composing the m
     {{ topic }}
     ```
 - Your role: {{ context.active_role }}
-- Your language: {{ context.team.project.get_language_name() }}
+- Your language: {{ context.language_name }}
 - Your speaking style: {{ context.person.speaking_style }}
 {% if context.person.relationships %}
 - Your relationships with the audience or other relevant people:
