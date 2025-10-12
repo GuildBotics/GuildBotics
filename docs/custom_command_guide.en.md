@@ -39,28 +39,28 @@ Notes:
 
 ### 1.2. Invoke the command
 
-Run `echo "こんにちは" | guildbotics run translate 英語 日本語` and you’ll get output like:
+Run `echo "Hello" | guildbotics run translate English Japanese` and you’ll get output like:
 
 ```
-Hello
+こんにちは
 ```
 
 Note:
 Before the LLM call, the prompt file is expanded as follows:
 
 ```
-If the following text is in 英語, translate it to 日本語; if it is in 日本語, translate it to 英語:
+If the following text is in English, translate it to Japanese; if it is in Japanese, translate it to English:
 
-こんにちは
+Hello
 ```
 
-This leads the LLM to respond with "Hello".
+This leads the LLM to respond with "こんにちは".
 
 ### 1.3. Select a member
 
 If you have multiple members registered via `guildbotics add`, you must specify a member when running a command using the `<command>@<person_id>` form.
 
-Example: `guildbotics run translate@yuki 英語 日本語`
+Example: `guildbotics run translate@yuki English Japanese`
 
 
 ## 2. Variations of variable expansion
@@ -76,7 +76,7 @@ Please translate the following text from ${source} to ${target}:
 Invocation example:
 
 ```shell
-$ echo "Hello" | guildbotics run translate source=英語 target=日本語
+$ echo "Hello" | guildbotics run translate source=English target=Japanese
 ```
 
 ### 2.2. Jinja2 examples
@@ -105,7 +105,7 @@ Invocation examples:
 $ echo "こんにちは" | guildbotics run translate
 Hello
 
-$ echo "こんにちは" | guildbotics run translate target=中国語
+$ echo "Hello" | guildbotics run translate target=Chinese
 你好
 ```
 
@@ -148,8 +148,8 @@ Read the first section of ${file} and summarize it in one line using ${language}
 Invocation example:
 
 ```shell
-$ guildbotics run summarize file=README.md language=日本語 cwd=.
-GuildBoticsはAIエージェントとタスクボードで協働するアルファ版ツールであり、将来的な互換性崩壊や重大障害・損害の恐れがあるため利用者は隔離環境で自己責任の下検証すべきと警告している。
+$ guildbotics run summarize file=README.md language=English cwd=.
+GuildBotics is an alpha tool for collaborating with AI agents and a task board; users should test in isolated environments due to potential breaking changes and risks.
 ```
 
 For CLI agents, set the working directory for system commands via the `cwd` parameter.
@@ -161,24 +161,24 @@ You can use [built-in commands](../guildbotics/templates/intelligences/functions
 Invocation examples:
 
 ```shell
-$ guildbotics run functions/talk_as topic=システムでエラーが発生して解決方法調査中
+$ guildbotics run functions/talk_as topic="Investigating a production error and mitigation steps"
 author: Yuki Nakamura
 author_type: Assistant
-content: すみません、今システムの方でエラーが出てしまいまして…！現在、この解決策について、急ぎ調査を進めているところです。皆さんの業務に支障が出ないよう、責任を持って迅速に対応いたしますね！
+content: Sorry — we’re seeing an error in production. I’m actively investigating the root cause and mitigation options to minimize impact. I’ll share updates and a remediation plan shortly.
 ```
 
 ```shell
-$ echo "こんにちは！今日はいい天気ですね" | guildbotics run functions/identify_item item_type=会話タイプ candidates="質問 / 雑談 / 依頼"
+$ echo "Hi! It's a beautiful day." | guildbotics run functions/identify_item item_type="Conversation type" candidates="Question / Chit-chat / Request"
 confidence: 0.95
-label: 雑談
-reason: ユーザーは単に挨拶をしており、特定の質問や依頼をしていません。これは雑談の開始と判断されます。
+label: Chit-chat
+reason: The user is simply greeting and making small talk, not asking a specific question or making a request.
 ```
 
 ```shell
-$ echo "現在の時刻は`date`です" | guildbotics run functions/identify_item item_type=時間帯 candidates="早朝, 午前, 正午, 午後, 夕方, 夜, 深夜"
+$ echo "The current time is `date`." | guildbotics run functions/identify_item item_type="Time of day" candidates="Early morning, Morning, Noon, Afternoon, Evening, Night, Late night"
 confidence: 1.0
-label: 深夜
-reason: 現在の時刻が23時36分であり、これは深夜の時間帯（通常23時から翌3時頃）に該当するためです。
+label: Late night
+reason: The current time is 23:36, which falls in the late night period (typically 11pm–3am).
 ```
 
 ## 5. Using subcommands
@@ -189,16 +189,16 @@ For example, create `get-time-of-day.md` as follows:
 ```markdown
 ---
 commands:
-  - script: echo "現在の時刻は`date`です"
-  - command: functions/identify_item item_type=時間帯 candidates="早朝, 午前, 正午, 午後, 夕方, 夜, 深夜"
+  - script: echo "The current time is `date`."
+  - command: functions/identify_item item_type="Time of day" candidates="Early morning, Morning, Noon, Afternoon, Evening, Night, Late night"
 ---
 ```
 
 ```shell
 $ guildbotics run get-time-of-day
 confidence: 1.0
-label: 深夜
-reason: 現在の時刻が23時36分であり、これは深夜の時間帯（通常23時から翌3時頃）に該当するためです。
+label: Late night
+reason: The current time is 23:36, which falls in the late night period (typically 11pm–3am).
 ```
 
 List the commands to run in order under the `commands` array. Each command receives the previous command’s output as input.
@@ -214,9 +214,9 @@ You can set a `name` for each entry in `commands`:
 ---
 commands:
   - name: current_time
-    script: echo "現在の時刻は`date`です"
+    script: echo "The current time is `date`."
   - name: time_of_day
-    command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
+    command: functions/identify_item item_type="Time of day" candidates="Morning, Afternoon, Night"
 ---
 ```
 
@@ -226,15 +226,15 @@ When `name` is set, you can reference that command’s output by the given name.
 ---
 commands:
   - name: current_time
-    script: echo "現在の時刻は`date +%T`です"
+    script: echo "The current time is `date +%T`."
   - name: time_of_day
-    command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
+    command: functions/identify_item item_type="Time of day" candidates="Morning, Afternoon, Night"
 brain: none
 template_engine: jinja2
 ---
-{% if time_of_day.label == "朝" %}
+{% if time_of_day.label == "Morning" %}
 Good morning.
-{% elif time_of_day.label == "夜" %}
+{% elif time_of_day.label == "Night" %}
 Good evening.
 {% else %}
 Hello.
@@ -248,8 +248,7 @@ Running the above returns something like:
 ```text
 Good evening.
 
-
-現在の時刻は20:17:15です
+The current time is 20:17:15.
 ```
 
 - With `brain: none`, the LLM is not called; only subcommand outputs are used as the final result.
@@ -263,7 +262,7 @@ For example, create `current-time.sh`:
 ```bash
 #!/usr/bin/env bash
 
-echo "現在の時刻は`date +%T`です"
+echo "The current time is `date +%T`."
 ```
 
 After making the file executable, use the `command` key instead of `script` in your prompt file:
@@ -274,13 +273,13 @@ commands:
   - name: current_time
     command: current-time
   - name: time_of_day
-    command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
+    command: functions/identify_item item_type="Time of day" candidates="Morning, Afternoon, Night"
 brain: none
 template_engine: jinja2
 ---
-{% if time_of_day.label == "朝" %}
+{% if time_of_day.label == "Morning" %}
 Good morning.
-{% elif time_of_day.label == "夜" %}
+{% elif time_of_day.label == "Night" %}
 Good evening.
 {% else %}
 Hello.
@@ -391,19 +390,19 @@ from guildbotics.runtime.context import Context
 
 
 async def main(context: Context):
-    current_time = f"現在の時刻は{datetime.now().strftime('%H:%M')}です"
+    current_time = f"The current time is {datetime.now().strftime('%H:%M')}."
 
     time_of_day = await context.invoke(
         "functions/identify_item",
         message=current_time,
-        item_type="時間帯",
-        candidates="朝, 昼, 夜",
+        item_type="Time of day",
+        candidates="Morning, Afternoon, Night",
     )
 
     message = ""
-    if time_of_day.label == "朝":
+    if time_of_day.label == "Morning":
         message = "Good morning."
-    elif time_of_day.label == "夜":
+    elif time_of_day.label == "Night":
         message = "Good evening."
     else:
         message = "Hello."
@@ -412,4 +411,3 @@ async def main(context: Context):
 ```
 
 - Because `invoke` is asynchronous, call it with `await`. Therefore, define `main` as `async def`.
-
