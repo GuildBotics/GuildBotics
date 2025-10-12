@@ -99,9 +99,9 @@ def to_dict(
     if params is not None:
         params["context"] = context
         now = datetime.now().astimezone()
-        if not "now" in params:
+        if "now" not in params:
             params["now"] = now.strftime("%Y-%m-%d %H:%M")
-        if not "today" in params:
+        if "today" not in params:
             params["today"] = now.strftime("%Y-%m-%d")
         kwargs["session_state"] = params
         kwargs["add_state_in_messages"] = True

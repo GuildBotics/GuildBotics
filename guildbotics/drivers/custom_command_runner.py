@@ -485,7 +485,8 @@ class CustomCommandExecutor:
                     pass
 
     async def _invoke(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        spec = self._create_dynamic_spec(self._main_spec, name, *args, **kwargs)
+        anchor = self._current_spec()
+        spec = self._create_dynamic_spec(anchor, name, *args, **kwargs)
         outcome = await self._execute_with_children(spec)
         return outcome.result if outcome else None
 
@@ -501,15 +502,13 @@ class CustomCommandExecutor:
         self._register(spec)
         return spec
 
-    def _current_base_dir(self) -> Path:
+    def _current_spec(self) -> CommandConfig:
         if self._call_stack:
             current_name = self._call_stack[-1]
             current_spec = self._registry.get(current_name)
             if current_spec is not None:
-                return current_spec.path.parent
-        if self._main_directory is not None:
-            return self._main_directory
-        return Path.cwd()
+                return current_spec
+        return self._main_spec
 
 
 async def run_custom_command(
