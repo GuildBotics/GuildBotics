@@ -83,11 +83,12 @@ class PersonConfig(BaseModel):
 
 class SimpleSetupTool(SetupTool):
 
-    def get_context(self) -> Context:
+    def get_context(self, message: str = "") -> Context:
         return Context.get_default(
             SimpleLoaderFactory(),
             SimpleIntegrationFactory(),
             SimpleBrainFactory(),
+            message=message,
         )
 
     def init_project(self) -> None:
@@ -230,9 +231,7 @@ class SimpleSetupTool(SetupTool):
         click.echo(
             f"  {t('cli.config_github_repository_url')} : {config.github_repository_url}\n"
         )
-        click.echo(
-            f"  {t('cli.config_repo_access')} : {config.repo_access_label}"
-        )
+        click.echo(f"  {t('cli.config_repo_access')} : {config.repo_access_label}")
 
         if not questionary.confirm(t("cli.config_confirm"), default=True).ask():
             click.echo(t("cli.config_cancel"))

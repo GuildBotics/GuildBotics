@@ -89,8 +89,39 @@ def messages_to_simple_dicts(messages: list[Message]) -> list[dict]:
     return inputs
 
 
-async def _get_content(context: Context, name: str, message: str, **kwargs) -> Any:
+def to_dict(
+    context: Context,
+    params: dict | None = None,
+    cwd: Path | None = None,
+    response_model: type[TBaseModel] | None = None,
+) -> dict[str, Any]:
+    kwargs: dict = {}
+    if params is not None:
+        params["context"] = context
+        now = datetime.now().astimezone()
+        if "now" not in params:
+            params["now"] = now.strftime("%Y-%m-%d %H:%M")
+        if "today" not in params:
+            params["today"] = now.strftime("%Y-%m-%d")
+        kwargs["session_state"] = params
+        kwargs["add_state_in_messages"] = True
+    if cwd:
+        kwargs["cwd"] = cwd
+    if response_model:
+        kwargs["response_model"] = response_model
+    return kwargs
+
+
+async def _get_content(
+    context: Context,
+    name: str,
+    message: str,
+    params: dict | None = None,
+    cwd: Path | None = None,
+    response_model: type[TBaseModel] | None = None,
+) -> Any:
     brain = context.get_brain(name)
+    kwargs = to_dict(context, params, cwd, response_model)
     return await brain.run(message=message, **kwargs)
 
 
@@ -117,8 +148,15 @@ async def convert_object(
     )
 
 
-async def get_content(context: Context, name: str, message: str, **kwargs) -> Any:
+async def get_content(
+    context: Context,
+    name: str,
+    message: str,
+    params: dict | None = None,
+    cwd: Path | None = None,
+) -> Any:
     brain = context.get_brain(name)
+    kwargs = to_dict(context, params, cwd)
     output = await brain.run(message=message, **kwargs)
 
     if not brain.response_class:
@@ -128,11 +166,6 @@ async def get_content(context: Context, name: str, message: str, **kwargs) -> An
         return output
 
     return await convert_object(context, output, brain.response_class)
-
-
-async def get_text(context: Context, name: str, message: str, **kwargs) -> str:
-    content = await _get_content(context, name, message=message, **kwargs)
-    return str(content).strip() if content else ""
 
 
 async def talk_as(
@@ -150,23 +183,17 @@ async def talk_as(
     Returns:
         str: The generated response text.
     """
-    session_state = {
-        "topic": topic,
-        "name": context.person.name,
-        "role": str(context.active_role),
-        "relationships": context.person.relationships,
-        "speaking_style": context.person.speaking_style,
-        "now": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M"),
-        "context_location": context_location,
-        "language": context.team.project.get_language_name(),
-        "conversation_history": messages_to_json(conversation_history),
-    }
+    session_state = {"topic": topic}
+    if context_location:
+        session_state["context_location"] = context_location
+    if conversation_history:
+        session_state["conversation_history"] = messages_to_json(conversation_history)
+
     reply: MessageResponse = await get_content(
         context,
         "functions/talk_as",
         message="",
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
     )
     return reply.content.strip() if reply else ""
 
@@ -181,18 +208,12 @@ async def reply_as(
     session_state = {
         "context_type": context_type or t("intelligences.functions.context_type"),
         "message_type": message_type or t("intelligences.functions.message_type"),
-        "name": context.person.name,
-        "role": str(context.active_role),
-        "relationships": context.person.relationships,
-        "speaking_style": context.person.speaking_style,
-        "now": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M"),
     }
     reply: MessageResponse = await get_content(
         context,
         "functions/reply_as",
         message=messages_to_json(messages),
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
         cwd=cwd,
     )
     return reply.content.strip() if reply else ""
@@ -208,8 +229,7 @@ async def identify_role(context: Context, input: str) -> str:
         context,
         "functions/identify_item",
         message=input,
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
     )
     return response.label
 
@@ -221,8 +241,7 @@ async def identify_mode(context: Context, available_modes: Labels, input: str) -
         context,
         "functions/identify_item",
         message=input,
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
     )
     return response.label
 
@@ -234,8 +253,7 @@ async def write_commit_message(context: Context, task_title: str, changes: str) 
         context,
         "functions/write_commit_message",
         message="",
-        session_state=params,
-        add_state_in_messages=True,
+        params=params,
     )
 
 
@@ -283,8 +301,7 @@ async def evaluate_interaction_performance(
         context,
         "functions/evaluate_interaction_performance",
         message=interaction_text,
-        session_state=params,
-        add_state_in_messages=True,
+        params=params,
     )
 
     return t(
@@ -350,8 +367,7 @@ async def analyze_root_cause(
         context,
         "functions/analyze_root_cause",
         message=message,
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
     )
 
     return result
@@ -382,8 +398,7 @@ async def propose_process_improvements(
         context,
         "functions/propose_process_improvements",
         message=message,
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
     )
 
     return result
@@ -415,8 +430,7 @@ async def write_pull_request_description(
         context,
         "functions/write_pull_request_description",
         message="",
-        session_state=params,
-        add_state_in_messages=True,
+        params=params,
     )
 
 
@@ -453,8 +467,7 @@ async def identify_next_tasks(
         context,
         "functions/identify_next_tasks",
         message=conversation,
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
         cwd=cwd,
     )
 
@@ -473,8 +486,7 @@ async def identify_output_type(context: Context, input: str) -> str:
         context,
         "functions/identify_item",
         message=input,
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
     )
     return response.label
 
@@ -492,8 +504,7 @@ async def identify_message_type(context: Context, input: str) -> str:
         context,
         "functions/identify_item",
         message=input,
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
     )
     return response.label
 
@@ -517,8 +528,7 @@ async def identify_pr_comment_action(context: Context, input: str) -> str:
         context,
         "functions/identify_item",
         message=input,
-        session_state=session_state,
-        add_state_in_messages=True,
+        params=session_state,
     )
     return response.label
 
@@ -583,18 +593,14 @@ async def edit_files(context: Context, input: list[dict], cwd: Path) -> AgentRes
     """
     input_text = json.dumps(input, ensure_ascii=False, indent=2)
 
-    session_state = {
-        "role": context.active_role,
-    }
-
     log_output = ""
     with capture_logs(context) as log_buffer:
         response = await _get_content(
             context,
             "functions/edit_files",
             message=input_text,
+            params={},
             cwd=cwd,
-            session_state=session_state,
         )
         log_output = log_buffer.getvalue()
 

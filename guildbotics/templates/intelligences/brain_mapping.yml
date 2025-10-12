@@ -10,3 +10,11 @@ task_planner:
   class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain
   args:
     cli_agent: default
+agno:
+  class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain
+  args:
+    model: default
+cli:
+  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain
+  args:
+    cli_agent: default

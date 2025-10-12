@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 import jinja2
 
@@ -20,7 +21,7 @@ def get_json_str(raw_output: str) -> str:
 
 
 def _replace_placeholders(
-    text: str, placeholders: dict[str, str], placeholder: str
+    text: str, placeholders: dict[str, Any], placeholder: str
 ) -> str:
     for key, value in placeholders.items():
         var_name = placeholder.format(key)
@@ -30,7 +31,7 @@ def _replace_placeholders(
     return text
 
 
-def replace_placeholders_by_default(text: str, placeholders: dict[str, str]) -> str:
+def replace_placeholders_by_default(text: str, placeholders: dict[str, Any]) -> str:
     text = _replace_placeholders(text, placeholders, "{{{{{}}}}}")
     text = _replace_placeholders(text, placeholders, "${{{}}}")
     text = _replace_placeholders(text, placeholders, "{{{}}}")
@@ -38,13 +39,13 @@ def replace_placeholders_by_default(text: str, placeholders: dict[str, str]) -> 
     return text
 
 
-def replace_placeholders_by_jinja2(text: str, placeholders: dict[str, str]) -> str:
+def replace_placeholders_by_jinja2(text: str, placeholders: dict[str, Any]) -> str:
     template = jinja2.Template(text)
     return template.render(**placeholders)
 
 
 def replace_placeholders(
-    text: str, placeholders: dict[str, str], template_engine: str = "default"
+    text: str, placeholders: dict[str, Any], template_engine: str = "default"
 ) -> str:
     if template_engine == "jinja2":
         return replace_placeholders_by_jinja2(text, placeholders)
@@ -52,20 +53,23 @@ def replace_placeholders(
         return replace_placeholders_by_default(text, placeholders)
 
 
-def get_body_from_prompt(prompt: dict, args: list[str]) -> str:
+def get_placeholders_from_args(
+    args: list[str], add_index: bool = True
+) -> dict[str, str]:
     placeholders = {}
-    template_engine = prompt.get("template_engine", "default")
-    jinja2 = template_engine == "jinja2"
-
     for i, arg in enumerate(args, 1):
         kv = arg.split("=", 1)
         if len(kv) > 1:
             placeholders[kv[0]] = kv[1]
-        elif jinja2:
+        elif add_index:
             placeholders[f"arg{i}"] = str(arg)
-        else:
             placeholders[f"{i}"] = str(arg)
+    return placeholders
 
+
+def get_body_from_prompt(prompt: dict, args: list[str]) -> str:
+    template_engine = prompt.get("template_engine", "default")
+    placeholders = get_placeholders_from_args(args)
     return replace_placeholders(
         prompt.get("body", "").strip(), placeholders, template_engine
     )

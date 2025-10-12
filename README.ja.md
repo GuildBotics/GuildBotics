@@ -423,6 +423,8 @@ default: gemini-cli.yml
 ## 7.7. カスタムコマンド実行
 チケットの本文やコメント内に、`//` で始まる1行を記述することで、カスタムコマンド（カスタムプロンプト）を実行できます。エージェント実行前に、その行は対応するプロンプトの本文に置換されます。
 
+> より詳細な作成・運用方法は [docs/custom_command_guide.ja.md](docs/custom_command_guide.ja.md) を参照してください。
+
 - 記述例: `// <name> [args...]`
   - 例: `// code-review target=src/app.py level=deep`
   - コマンド名の末尾にコロンを付けても可: `// code-review: target=...`

@@ -6,7 +6,7 @@ description: Operate as a CLI file editor agent to read, create, and modify file
 ---
 
 You are a CLI agent responsible for editing files on the operating system.
-Your assigned role is {role}.
+Your assigned role is {context.active_role}.
 
 <instructions>
 ## 1. Decision Principles
