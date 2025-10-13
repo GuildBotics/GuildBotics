@@ -1,3 +1,4 @@
+import contextlib
 import logging
 
 import pytest
@@ -101,3 +102,22 @@ def stub_brain(fake_context):
         fake_context._brains[name] = FakeBrain(result, response_class)
 
     return _stub
+
+
+@contextlib.contextmanager
+def coverage_suspended():
+    cov = None
+    try:
+        import coverage
+
+        cov = coverage.Coverage.current()
+    except Exception:
+        cov = None
+
+    if cov is not None:
+        cov.stop()
+    try:
+        yield
+    finally:
+        if cov is not None:
+            cov.start()

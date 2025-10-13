@@ -420,9 +420,9 @@ By default, all AI agents share the same CLI agent, but if `team/members/<person
 > For detailed creation and operation, see docs/custom_command_guide.en.md
 You can embed and execute custom command prompts in ticket descriptions or comments by writing a line that starts with `//`.
 
-- Write in the ticket: `// <name> [args...]`
-  - Example: `// code-review target=src/app.py level=deep`
-  - A trailing colon after the name is allowed: `// code-review: target=...`
+- Write in the ticket: `//<name> [args...]`
+  - Example: `//code-review target=src/app.py level=deep`
+  - A trailing colon after the name is allowed: `//code-review: target=...`
 - The system replaces that line with the body of a prompt file before the agent runs.
 
 Prompt file resolution order (first match wins):
@@ -445,14 +445,14 @@ Steps:
 ```
 
 Argument passing and templating:
-- Key-value args: `// review target="src/app.py" level=deep`
+- Key-value args: `//review target="src/app.py" level=deep`
 - Quoted values are supported (spaces preserved).
 - Positional args are also supported:
   - With `template_engine: jinja2`, use `{{ arg1 }}`, `{{ arg2 }}`, ...
   - With `template_engine: default`, use placeholders like `{{1}}`, `{1}`, `${1}`, or `$1` (named keys also work: `{{target}}`, `{target}`, `${target}`, `$target`).
 
 -Usage tips:
-- If you add a comment, write the `// <name> ...` line in the newest (last) comment.
+- If you add a comment, write the `//<name> ...` line in the newest (last) comment.
 - Create reusable prompts under `.guildbotics/config/prompts/` and override per agent under `.guildbotics/config/team/members/<person_id>/prompts/`.
 
 

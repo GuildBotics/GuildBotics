@@ -131,6 +131,7 @@ Team members:
 {% endfor %}
 ```
 
+- With `brain: none`, the LLM is not called; only subcommand outputs are used as the final result.
 
 ## 3. Using the CLI agent
 

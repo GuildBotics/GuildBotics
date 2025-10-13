@@ -313,7 +313,7 @@ def test_preprocess_handles_quoted_arguments(monkeypatch, fake_context, tmp_path
 
     monkeypatch.setattr(f, "get_body_from_prompt", fake_get_body)
 
-    text = "// test-command key=\"value with spaces\" 'single quoted arg' plain"
+    text = "//test-command key=\"value with spaces\" 'single quoted arg' plain"
     out = f.preprocess(ctx, text)
 
     assert out == "processed"
