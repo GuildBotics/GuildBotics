@@ -417,6 +417,7 @@ By default, all AI agents share the same CLI agent, but if `team/members/<person
 
 
 ## 7.7. Custom Command Prompts
+> For detailed creation and operation, see docs/custom_command_guide.en.md
 You can embed and execute custom command prompts in ticket descriptions or comments by writing a line that starts with `//`.
 
 - Write in the ticket: `// <name> [args...]`
