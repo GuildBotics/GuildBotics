@@ -425,9 +425,9 @@ default: gemini-cli.yml
 
 > より詳細な作成・運用方法は [docs/custom_command_guide.ja.md](docs/custom_command_guide.ja.md) を参照してください。
 
-- 記述例: `// <name> [args...]`
-  - 例: `// code-review target=src/app.py level=deep`
-  - コマンド名の末尾にコロンを付けても可: `// code-review: target=...`
+- 記述例: `//<name> [args...]`
+  - 例: `//code-review target=src/app.py level=deep`
+  - コマンド名の末尾にコロンを付けても可: `//code-review: target=...`
 
 プロンプトファイルの探索順（最初に見つかったものを使用）:
 - メンバー単位: `.guildbotics/config/team/members/<person_id>/prompts/<name>.<lang>.md` → `<name>.en.md` → `<name>.md`
@@ -449,14 +449,14 @@ template_engine: jinja2  # または "default"
 ```
 
 引数の渡し方とテンプレート:
-- キー指定: `// review target="src/app.py" level=deep`
+- キー指定: `//review target="src/app.py" level=deep`
   - 引用付き値をサポート（空白を保持）
 - 位置引数も利用可能:
   - `template_engine: jinja2` の場合: `{{ arg1 }}`, `{{ arg2 }}` ...
   - `template_engine: default` の場合: `{{1}}`, `{1}`, `${1}`, `$1` など（名前付きキーも可: `{{target}}`, `{target}`, `${target}`, `$target`）
 
 利用のコツ:
-- コメントを書いた場合は一番新しい（一番最後の）コメントに `// <name> ...` を記述してください。
+- コメントを書いた場合は一番新しい（一番最後の）コメントに `//<name> ...` を記述してください。
 - 再利用したいプロンプトは `.guildbotics/config/prompts/` に、メンバー別の上書きは `.guildbotics/config/team/members/<person_id>/prompts/` に配置します。
 
 

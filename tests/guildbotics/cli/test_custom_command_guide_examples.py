@@ -3,9 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.drivers.custom_command_runner import CustomCommandExecutor, run_custom_command
+from guildbotics.drivers.custom_command_runner import (
+    CustomCommandExecutor,
+    run_custom_command,
+)
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
+from tests.conftest import coverage_suspended
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
@@ -26,7 +30,9 @@ def _make_context(message: str = "", members: list[Person] | None = None) -> Con
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
     # Use default, then clone to first active person for deterministic person binding
-    base = Context.get_default(loader_factory, integration_factory, brain_factory, message)
+    base = Context.get_default(
+        loader_factory, integration_factory, brain_factory, message
+    )
     for m in members:
         if m.is_active:
             return base.clone_for(m)
@@ -145,7 +151,8 @@ async def test_context_variables_in_jinja2(tmp_path, monkeypatch):
     ]
     ctx = _make_context("", members)
     ex = CustomCommandExecutor(ctx, "context-info", [])
-    out = await ex.run()
+    with coverage_suspended():
+        out = await ex.run()
     assert "言語コード: en" in out
     assert "言語名: English" in out
     assert "ID: alice" in out and "名前: Alice" in out
@@ -180,7 +187,9 @@ async def test_cli_agent_brain_cli_passes_cwd_and_params(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_builtin_command_in_pipeline_identify_item_args_passed(tmp_path, monkeypatch):
+async def test_builtin_command_in_pipeline_identify_item_args_passed(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
         tmp_path / "prompts/get-time-of-day.md",

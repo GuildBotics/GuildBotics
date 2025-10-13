@@ -135,6 +135,7 @@ ID: {{ context.person.person_id }}
 {% endfor %}
 ```
 
+- `brain: none` を指定すると、LLM呼び出しが行われず、サブコマンドの出力のみが最終結果として返されます。
 
 ## 3. CLIエージェントの利用
 
