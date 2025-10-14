@@ -1,6 +1,8 @@
 import importlib
 from typing import Any, Optional, Type, cast
 
+from pydantic import BaseModel
+
 
 def load_class(module_and_cls: str) -> Type[Any]:
     """
@@ -85,3 +87,60 @@ def instantiate_class(
             f"Expected instance of type {expected_type.__name__}, got {type(instance).__name__}"
         )
     return instance
+
+
+class ClassResolver:
+    def __init__(
+        self, schema: str | None, parent: Optional["ClassResolver"] = None
+    ) -> None:
+        self.schema = schema
+        self.model_classes: dict[str, Type[BaseModel]] = {}
+        self.parent = parent
+        if schema:
+            self.model_classes = self._build_pydantic_models_from_schema(schema)
+
+    def _build_pydantic_models_from_schema(
+        self, schema: str
+    ) -> dict[str, Type[BaseModel]]:
+        lines = []
+        for line in schema.splitlines():
+            stripped = line.lstrip()
+            if (
+                stripped.startswith("class ")
+                and stripped.endswith(":")
+                and not stripped.endswith("(BaseModel):")
+                and line == stripped
+            ):
+                name = stripped[len("class ") : -1].strip()
+                lines.append(f"class {name}(BaseModel):")
+            else:
+                lines.append(line)
+        patched = "\n".join(lines)
+
+        ns: dict[str, Any] = {"BaseModel": BaseModel}
+        exec(
+            "from typing import *\n" + patched,  # noqa: S102
+            ns,
+            ns,
+        )
+
+        models: dict[str, Type[BaseModel]] = {
+            k: v
+            for k, v in ns.items()
+            if isinstance(v, type) and issubclass(v, BaseModel) and v is not BaseModel
+        }
+
+        for m in models.values():
+            m.model_rebuild(_types_namespace=models)
+
+        return models
+
+    def get_model_class(self, name: str) -> Optional[Type[BaseModel]]:
+        model_class = self.model_classes.get(name, None)
+        if model_class is not None:
+            return model_class
+
+        if self.parent is not None:
+            return self.parent.get_model_class(name)
+
+        return cast(Type[BaseModel], load_class(name))

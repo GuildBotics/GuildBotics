@@ -5,6 +5,7 @@ import importlib.util
 import inspect
 import os
 import shlex
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,7 @@ from guildbotics.utils.fileio import (
     get_person_config_path,
     load_markdown_with_frontmatter,
 )
+from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.text_utils import (
     get_placeholders_from_args,
     replace_placeholders,
@@ -66,6 +68,8 @@ class CommandConfig:
     cwd: Path = Path.cwd()
     script: str | None = None
     command_index: int = 0
+    config: dict | None = None
+    class_resolver: ClassResolver | None = None
 
     @property
     def kind(self) -> str:
@@ -133,21 +137,29 @@ class CustomCommandExecutor:
         )
         self._register(spec)
         self._main_directory = path.parent
+        sys.path.append(str(path.parent))
         return spec
 
     def _register(self, spec: CommandConfig) -> None:
         spec.base_dir = spec.path.parent
         self._registry[spec.name] = spec
 
-    def _ensure_spec_loaded(self, spec: CommandConfig) -> None:
+    def _ensure_spec_loaded(
+        self, spec: CommandConfig, parent: CommandConfig | None = None
+    ) -> None:
         if spec.kind == ".md":
-            self._attach_markdown_metadata(spec)
+            self._attach_markdown_metadata(spec, parent)
 
-    def _attach_markdown_metadata(self, spec: CommandConfig) -> None:
+    def _attach_markdown_metadata(
+        self, spec: CommandConfig, parent: CommandConfig | None = None
+    ) -> None:
         if spec.metadata is not None:
             return
-        metadata = load_markdown_with_frontmatter(spec.path)
+        metadata, _ = self._load_markdown_metadata(spec)
         spec.metadata = metadata
+        spec.class_resolver = ClassResolver(
+            metadata.get("schema", ""), parent.class_resolver if parent else None
+        )
         spec.children = []
 
         raw_commands = metadata.get("commands")
@@ -179,6 +191,8 @@ class CustomCommandExecutor:
     def _get_path(self, data: dict, anchor: CommandConfig) -> Path:
         if "script" in data:
             return Path(f"<inline-script-{anchor.command_index}>.sh")
+        if "prompt" in data:
+            return Path(f"<inline-prompt-{anchor.command_index}>.md")
 
         path_value = data.get("path") or data.get("name")
 
@@ -238,6 +252,7 @@ class CustomCommandExecutor:
             cwd=anchor.cwd,
             script=str(data["script"]) if "script" in data else None,
             command_index=anchor.command_index,
+            config=data,
         )
 
         return command_spec
@@ -265,13 +280,13 @@ class CustomCommandExecutor:
             return self._main_spec.params.get(text, os.getenv(text, text))
 
     async def _execute_with_children(
-        self, spec: CommandConfig
+        self, spec: CommandConfig, parent: CommandConfig | None = None
     ) -> CommandOutcome | None:
-        self._ensure_spec_loaded(spec)
+        self._ensure_spec_loaded(spec, parent)
 
         # Execute child commands first
         for child in spec.children:
-            await self._execute_with_children(child)
+            await self._execute_with_children(child, spec)
 
         # Execute the main command
         outcome = await self._execute_spec(spec)
@@ -328,10 +343,24 @@ class CustomCommandExecutor:
             output_key=spec.name,
         )
 
+    def _load_markdown_metadata(self, spec: CommandConfig) -> tuple[dict, bool]:
+        config = spec.config if isinstance(spec.config, dict) else {}
+        prompt = config.get("prompt")
+        if spec.metadata is not None:
+            return spec.metadata, prompt is not None
+
+        if prompt:
+            metadata = config.copy()
+            metadata["body"] = str(prompt)
+            return metadata, True
+        else:
+            metadata = load_markdown_with_frontmatter(spec.path)
+            return metadata, False
+
     async def _run_markdown_command(
         self, spec: CommandConfig, options: InvocationOptions
     ) -> CommandOutcome | None:
-        metadata = spec.metadata or load_markdown_with_frontmatter(spec.path)
+        metadata, inline = self._load_markdown_metadata(spec)
         if not metadata.get("body"):
             return None
 
@@ -348,7 +377,13 @@ class CustomCommandExecutor:
 
         try:
             output = await get_content(
-                self._context, str(spec.path), message, params, self._cwd
+                self._context,
+                str(spec.path),
+                message,
+                params,
+                self._cwd,
+                metadata if inline else None,
+                spec.class_resolver,
             )
         except Exception as exc:  # pragma: no cover - propagate as driver error
             raise CustomCommandError(

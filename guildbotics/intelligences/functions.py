@@ -24,6 +24,7 @@ from guildbotics.intelligences.common import (
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import get_prompt_path, load_markdown_with_frontmatter
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.text_utils import get_body_from_prompt
 
 TBaseModel = TypeVar("TBaseModel", bound=BaseModel)
@@ -154,8 +155,10 @@ async def get_content(
     message: str,
     params: dict | None = None,
     cwd: Path | None = None,
+    config: dict | None = None,
+    class_resolver: ClassResolver | None = None,
 ) -> Any:
-    brain = context.get_brain(name)
+    brain = context.get_brain(name, config, class_resolver)
     kwargs = to_dict(context, params, cwd)
     output = await brain.run(message=message, **kwargs)
 
