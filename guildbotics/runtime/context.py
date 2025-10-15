@@ -13,6 +13,7 @@ from guildbotics.runtime.brain_factory import BrainFactory
 from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.loader_factory import LoaderFactory
 from guildbotics.utils.i18n_tool import set_language
+from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.log_utils import get_logger
 
 
@@ -118,11 +119,15 @@ class Context:
         self.task = task
         self.active_role = self.person.get_role(task.role)
 
-    def get_brain(self, name: str) -> Brain:
+    def get_brain(
+        self, name: str, config: dict | None, class_resolver: ClassResolver | None
+    ) -> Brain:
         """
         Get a brain instance by name.
         Args:
             name (str): Name of the brain to get.
+            config (dict | None): Optional configuration dictionary for the brain.
+            class_resolver (ClassResolver | None): Optional class resolver for custom classes.
         Returns:
             Brain: An instance of the requested brain.
         """
@@ -131,6 +136,8 @@ class Context:
             name,
             self.team.project.get_language_code(),
             self.logger,
+            config,
+            class_resolver,
         )
 
     def get_ticket_manager(self) -> TicketManager:

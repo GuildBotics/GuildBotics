@@ -21,6 +21,7 @@ from guildbotics.runtime.brain_factory import BrainFactory
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.loader_factory import LoaderFactory
+from guildbotics.utils.import_utils import ClassResolver
 
 # ---- Test doubles ---------------------------------------------------------------------------
 
@@ -122,7 +123,13 @@ class DummyBrainFactory(BrainFactory):
         self.calls: list[tuple[str, str, str, logging.Logger]] = []
 
     def create_brain(
-        self, person_id: str, name: str, language_code: str, logger: logging.Logger
+        self,
+        person_id: str,
+        name: str,
+        language_code: str,
+        logger: logging.Logger,
+        config: dict | None = None,
+        class_resolver: ClassResolver | None = None,
     ) -> Brain:  # noqa: D401
         """Record arguments and return a DummyBrain with the given name/logger."""
         self.calls.append((person_id, name, language_code, logger))
@@ -267,7 +274,7 @@ def test_get_brain_delegates_to_factory_with_language():
         message="Initial message",
     )
 
-    brain = ctx.get_brain("planner")
+    brain = ctx.get_brain("planner", None, None)
 
     # Returned instance is from factory
     assert isinstance(brain, DummyBrain)

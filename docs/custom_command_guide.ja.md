@@ -15,6 +15,7 @@ GuildBotics のカスタムコマンドは、エージェントに任意の処�
   - [4. 組み込みコマンドの利用](#4-組み込みコマンドの利用)
   - [5. サブコマンドの利用](#5-サブコマンドの利用)
     - [5.1. サブコマンドの名前付けと出力結果の参照](#51-サブコマンドの名前付けと出力結果の参照)
+    - [5.2. スキーマ定義](#52-スキーマ定義)
   - [6. シェルスクリプトの利用](#6-シェルスクリプトの利用)
   - [7. Python コマンドの利用](#7-python-コマンドの利用)
     - [7.1. 引数の利用](#71-引数の利用)
@@ -197,20 +198,20 @@ reason: 現在の時刻が23時36分であり、これは深夜の時間帯（�
 commands:
   - script: echo "現在の時刻は`date`です"
   - command: functions/identify_item item_type=時間帯 candidates="早朝, 午前, 正午, 午後, 夕方, 夜, 深夜"
+  - prompt: 現在の時間帯にふさわしい挨拶をしてください
 ---
 ```
 
 ```shell
 $ guildbotics run get-time-of-day
-confidence: 1.0
-label: 深夜
-reason: 現在の時刻が23時36分であり、これは深夜の時間帯（通常23時から翌3時頃）に該当するためです。
+こんばんは。夜分にようこそ。何かお手伝いできることはありますか？
 ```
 
 実行するコマンドを `commands` 配列に順番に指定します。各コマンドは前のコマンドの出力を受け取り、処理を続けます。
 
 - `script` にはシェルスクリプトを直接記述できます。
 - `command` は別のプロンプトファイルや組み込みコマンドを呼び出す方法です。
+- `prompt` にはLLM呼び出しを行うプロンプトを記述できます。
 
 ### 5.1. サブコマンドの名前付けと出力結果の参照
 
@@ -255,12 +256,65 @@ template_engine: jinja2
 ```text
 こんばんは。
 
-
 現在の時刻は20:17:15です
 ```
 
 - `brain: none` を指定すると、LLM呼び出しが行われず、サブコマンドの出力のみが最終結果として返されます。
 - `template_engine: jinja2` を指定すると、Jinja2 テンプレートエンジンが有効になります。コマンドの出力結果にアクセスする際には Jinja2 テンプレートを利用することをおすすめします。
+
+### 5.2. スキーマ定義
+
+LLM呼び出しを行う `prompt` コマンドに対しては、schemaで応答のスキーマを定義し、response_classで応答クラスを指定することができます。これにより、LLMの応答を構造化されたデータとして扱うことが可能になります。
+
+```markdown
+---
+schema: |
+    class Ranking:
+        package: str
+        detail: str
+        line_rate: float
+        reason: str
+
+    class Rankings:
+        items: list[Ranking]
+
+    class Task:
+        title: str
+        description: str
+        priority: int
+
+    class TaskList:
+        tasks: list[Task]
+commands:
+  - script: |
+      # pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
+      cat coverage.xml |grep line-rate
+  - prompt: |
+      この情報を解析して、テスト実装の対応優先度が高いパッケージのトップ3についてRankings形式のJSONとして出力してください。
+    response_class: Rankings
+  - name: task_list
+    prompt: |
+      この分析情報に基づいて、優先度が高い順に、TaskList形式のJSONで、すぐに着手可能なテスト実装タスク定義を最大5つまで提案してください。
+    response_class: TaskList
+template_engine: jinja2
+brain: none
+---
+{% for task in task_list.tasks %}
+- [ ] {{ task.title }} (priority: {{ task.priority }})
+{% endfor %}
+```
+
+呼び出し例:
+
+```shell
+$ guildbotics run coverage
+- [ ] utils/fileio.py の単体テストを追加 (priority: 1)
+- [ ] utils/git_tool.py の動作とエラー処理のテストを追加 (priority: 2)
+- [ ] drivers/custom_command_runner.py と drivers/task_scheduler.py の統合的単体テストを追加 (priority: 3)
+- [ ] utils/import_utils.py のインポート処理とエッジケースのテストを追加 (priority: 4)
+- [ ] intelligences/functions.py のビジネスロジックと外部呼び出しのモックテストを追加 (priority: 5)
+```
+
 
 ## 6. シェルスクリプトの利用
 シェルスクリプトは、上記のように script キーを使って直接記述する方法の他に、外部のシェルスクリプトファイルとして記述してコマンドとして呼び出すことが可能です。

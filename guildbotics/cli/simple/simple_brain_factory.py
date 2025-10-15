@@ -11,7 +11,7 @@ from guildbotics.utils.fileio import (
     load_markdown_with_frontmatter,
     load_yaml_file,
 )
-from guildbotics.utils.import_utils import load_class
+from guildbotics.utils.import_utils import ClassResolver, load_class
 
 
 class BrainConfig(BaseModel):
@@ -47,28 +47,29 @@ def get_brain_mapping(person_id: str) -> dict[str, BrainConfig]:
 class SimpleBrainFactory(BrainFactory):
 
     def create_brain(
-        self, person_id: str, name: str, language_code: str, logger: Logger
+        self,
+        person_id: str,
+        name: str,
+        language_code: str,
+        logger: Logger,
+        config: dict | None = None,
+        class_resolver: ClassResolver | None = None,
     ) -> Brain:
-        """
-        Create an intelligence instance by name.
-        Args:
-            name (str): Name of the intelligence to create.
-        Returns:
-            Intelligence: An instance of the requested intelligence.
-        """
-        if name.endswith(".md"):
-            path = Path(name)
-        else:
-            path = get_person_config_path(
-                person_id, f"intelligences/{name}.md", language_code
-            )
+        if not config:
+            if name.endswith(".md"):
+                path = Path(name)
+            else:
+                path = get_person_config_path(
+                    person_id, f"intelligences/{name}.md", language_code
+                )
 
-        config = cast(dict, load_markdown_with_frontmatter(path))
+            config = cast(dict, load_markdown_with_frontmatter(path))
 
+        class_resolver = ClassResolver(config.get("schema", ""), class_resolver)
         response_class = None
         response_class_name = config.get("response_class", None)
         if response_class_name:
-            response_class = cast(Type[BaseModel], load_class(response_class_name))
+            response_class = class_resolver.get_model_class(response_class_name)
 
         description = config.get("body", "")
         template_engine = config.get("template_engine", "default")

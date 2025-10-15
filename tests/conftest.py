@@ -5,6 +5,7 @@ import pytest
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
+from guildbotics.utils.import_utils import ClassResolver
 
 
 class FakeProject:
@@ -58,7 +59,9 @@ class FakeContext:
         # Registry for fake brains
         self._brains: dict[str, FakeBrain] = {}
 
-    def get_brain(self, name: str):
+    def get_brain(
+        self, name: str, config: dict | None, class_resolver: ClassResolver | None
+    ):
         return self._brains[name]
 
     def get_code_hosting_service(self, repository: str | None = None):
