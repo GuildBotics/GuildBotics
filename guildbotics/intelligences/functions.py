@@ -121,7 +121,7 @@ async def _get_content(
     cwd: Path | None = None,
     response_model: type[TBaseModel] | None = None,
 ) -> Any:
-    brain = context.get_brain(name)
+    brain = context.get_brain(name, None, None)
     kwargs = to_dict(context, params, cwd, response_model)
     return await brain.run(message=message, **kwargs)
 

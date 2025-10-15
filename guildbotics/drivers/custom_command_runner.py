@@ -5,7 +5,6 @@ import importlib.util
 import inspect
 import os
 import shlex
-import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -137,7 +136,6 @@ class CustomCommandExecutor:
         )
         self._register(spec)
         self._main_directory = path.parent
-        sys.path.append(str(path.parent))
         return spec
 
     def _register(self, spec: CommandConfig) -> None:
