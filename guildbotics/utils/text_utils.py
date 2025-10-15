@@ -40,7 +40,8 @@ def replace_placeholders_by_default(text: str, placeholders: dict[str, Any]) -> 
 
 
 def replace_placeholders_by_jinja2(text: str, placeholders: dict[str, Any]) -> str:
-    template = jinja2.Template(text)
+    env = jinja2.Environment(trim_blocks=True, lstrip_blocks=True)
+    template = env.from_string(text)
     return template.render(**placeholders)
 
 

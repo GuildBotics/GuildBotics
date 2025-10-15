@@ -15,6 +15,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
   - [4. Using built-in commands](#4-using-built-in-commands)
   - [5. Using subcommands](#5-using-subcommands)
     - [5.1. Naming subcommands and referencing outputs](#51-naming-subcommands-and-referencing-outputs)
+    - [5.2. Schema definition](#52-schema-definition)
   - [6. Using shell scripts](#6-using-shell-scripts)
   - [7. Using Python commands](#7-using-python-commands)
     - [7.1. Using arguments](#71-using-arguments)
@@ -192,20 +193,20 @@ For example, create `get-time-of-day.md` as follows:
 commands:
   - script: echo "The current time is `date`."
   - command: functions/identify_item item_type="Time of day" candidates="Early morning, Morning, Noon, Afternoon, Evening, Night, Late night"
+  - prompt: Please provide a suitable greeting for the current time of day.
 ---
 ```
 
 ```shell
 $ guildbotics run get-time-of-day
-confidence: 1.0
-label: Late night
-reason: The current time is 23:36, which falls in the late night period (typically 11pm–3am).
+Good evening.
 ```
 
 List the commands to run in order under the `commands` array. Each command receives the previous command’s output as input.
 
 - `script`: write a shell script inline
 - `command`: invoke another prompt file or a built-in command
+- `prompt`: call an LLM with a prompt written in Markdown
 
 ### 5.1. Naming subcommands and referencing outputs
 
@@ -254,6 +255,59 @@ The current time is 20:17:15.
 
 - With `brain: none`, the LLM is not called; only subcommand outputs are used as the final result.
 - With `template_engine: jinja2`, the Jinja2 template engine is enabled. It is recommended when referencing command outputs.
+
+### 5.2. Schema definition
+For `prompt` commands that call an LLM, you can define the response schema with `schema` and specify the response class with `response_class`. This allows you to handle the LLM response as structured data.
+
+```markdown
+---
+schema: |
+    class Ranking:
+        package: str
+        detail: str
+        line_rate: float
+        reason: str
+
+    class Rankings:
+        items: list[Ranking]
+
+    class Task:
+        title: str
+        description: str
+        priority: int
+
+    class TaskList:
+        tasks: list[Task]
+commands:
+  - script: |
+      # pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
+      cat coverage.xml |grep line-rate
+  - prompt: |
+      This information is analyzed to output the top 3 packages with the highest priority for test implementation in JSON format as Rankings.
+    response_class: Rankings
+  - name: task_list
+    prompt: |
+      Based on this analysis, please propose up to 5 immediately actionable test implementation tasks in JSON format as TaskList, sorted by priority.
+    response_class: TaskList
+template_engine: jinja2
+brain: none
+---
+{% for task in task_list.tasks %}
+- [ ] {{ task.title }} (priority: {{ task.priority }})
+{% endfor %}
+```
+
+Invocation example:
+
+```shell
+$ guildbotics run coverage
+- [ ] Add unit tests for utils/fileio.py (priority: 1)
+- [ ] Add tests for utils/git_tool.py's operations and error handling (priority: 2)
+- [ ] Add integrated unit tests for drivers/custom_command_runner.py and drivers/task_scheduler.py (priority: 3)
+- [ ] Add tests for utils/import_utils.py's import processing and edge cases (priority: 4)
+- [ ] Add business logic and external call mock tests for intelligences/functions.py (priority: 5)
+```
+
 
 ## 6. Using shell scripts
 In addition to writing inline under the `script` key as above, you can also implement an external shell script and invoke it as a command.
