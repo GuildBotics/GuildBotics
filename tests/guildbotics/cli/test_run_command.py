@@ -2,7 +2,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
 
 from guildbotics.cli import _parse_command_spec
 from guildbotics.drivers.custom_command_runner import (
@@ -10,7 +9,6 @@ from guildbotics.drivers.custom_command_runner import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
     _resolve_person,
-    _stringify_output,
     run_custom_command,
 )
 from guildbotics.entities.team import Person, Project, Team
@@ -63,17 +61,6 @@ def test_resolve_person_raises_when_unknown():
     members = [Person(person_id="yuki", name="Yuki", is_active=True)]
     with pytest.raises(PersonNotFoundError):
         _resolve_person(members, "akira")
-
-
-class _SampleModel(BaseModel):
-    value: str
-
-
-def test_stringify_output_handles_model_and_primitives():
-    model_output = _SampleModel(value="ok")
-    assert "value: ok" in _stringify_output(model_output)
-    assert _stringify_output({"a": 1}) == "a: 1"
-    assert _stringify_output(["foo", "bar"]) == "foo\nbar"
 
 
 class RecordingBrain:
