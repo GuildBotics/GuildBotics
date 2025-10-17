@@ -287,7 +287,7 @@ schema: |
         tasks: list[Task]
 commands:
   - script: |
-      # pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
+      pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
       cat coverage.xml |grep line-rate
   - prompt: |
       この情報を解析して、テスト実装の対応優先度が高いパッケージのトップ3についてRankings形式のJSONとして出力してください。

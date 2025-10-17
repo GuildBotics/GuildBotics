@@ -280,7 +280,7 @@ schema: |
         tasks: list[Task]
 commands:
   - script: |
-      # pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
+      pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
       cat coverage.xml |grep line-rate
   - prompt: |
       This information is analyzed to output the top 3 packages with the highest priority for test implementation in JSON format as Rankings.
