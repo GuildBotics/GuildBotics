@@ -5,6 +5,14 @@ from guildbotics.drivers.commands.models import CommandOutcome
 
 
 class PrintCommand(MarkdownCommand):
+    """
+    A Markdown command that prints output using the 'print' shortcut.
+
+    This command is shortcut-only and sets the template engine to 'jinja2' and disables the 'brain' feature.
+    It differs from the base MarkdownCommand by customizing the config for template rendering and disabling
+    any AI/brain processing.
+    """
+
     extension = ".md"
     shortcut = "print"
     shortcut_only = True
