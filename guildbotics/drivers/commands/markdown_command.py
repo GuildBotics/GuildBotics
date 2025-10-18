@@ -4,7 +4,7 @@ from typing import Any
 
 from guildbotics.drivers.commands.command_base import CommandBase
 from guildbotics.drivers.commands.errors import CustomCommandError
-from guildbotics.drivers.commands.models import CommandOutcome, CommandSpec
+from guildbotics.drivers.commands.models import CommandOutcome
 from guildbotics.drivers.commands.utils import stringify_output
 from guildbotics.intelligences.functions import get_content, preprocess, to_dict
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
@@ -16,7 +16,7 @@ class MarkdownCommand(CommandBase):
     shortcut = "prompt"
 
     async def run(self) -> CommandOutcome | None:
-        metadata, inline = load_markdown_metadata(self.spec)
+        metadata, inline = self._load_markdown_metadata()
         if not metadata.get("body"):
             return None
 
@@ -58,21 +58,22 @@ class MarkdownCommand(CommandBase):
         brain = str(metadata.get("brain", "")).lower()
         return brain in {"none", "-", "null", "disabled"}
 
+    def _load_markdown_metadata(self) -> tuple[dict[str, Any], bool]:
+        prompt = self.spec.get_config_value(self.shortcut)
+        if self.spec.metadata is not None:
+            return self.spec.metadata, bool(prompt)
 
-def load_markdown_metadata(
-    spec: CommandSpec,
-) -> tuple[dict[str, Any], bool]:
-    prompt = spec.get_config_value("prompt")
-    if spec.metadata is not None:
-        return spec.metadata, bool(prompt)
+        if prompt is not None:
+            config = self.spec.config if isinstance(self.spec.config, dict) else {}
+            metadata = config.copy()
+            metadata["body"] = str(prompt)
+            self.spec.metadata = metadata
+            return metadata, True
 
-    if prompt is not None:
-        config = spec.config if isinstance(spec.config, dict) else {}
-        metadata = config.copy()
-        metadata["body"] = str(prompt)
-        spec.metadata = metadata
-        return metadata, True
-
-    metadata = load_markdown_with_frontmatter(spec.path)
-    spec.metadata = metadata
-    return metadata, False
+        if self.spec.path is None:
+            raise CustomCommandError(
+                f"Markdown command '{self.spec.name}' is missing a path or {self.shortcut}."
+            )
+        metadata = load_markdown_with_frontmatter(self.spec.path)
+        self.spec.metadata = metadata
+        return metadata, False

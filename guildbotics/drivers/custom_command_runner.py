@@ -10,14 +10,13 @@ from guildbotics.drivers.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
-from guildbotics.drivers.commands.markdown_command import load_markdown_metadata
 from guildbotics.drivers.commands.models import CommandOutcome, CommandSpec
 from guildbotics.drivers.commands.registry import find_command_class
 from guildbotics.drivers.commands.spec_factory import CommandSpecFactory
 from guildbotics.entities.team import Person
 from guildbotics.runtime.context import Context
+from guildbotics.utils.fileio import load_markdown_with_frontmatter
 from guildbotics.utils.import_utils import ClassResolver
-from guildbotics.utils.text_utils import get_placeholders_from_args
 
 
 class CustomCommandExecutor:
@@ -46,23 +45,13 @@ class CustomCommandExecutor:
 
     def _prepare_main_spec(self) -> CommandSpec:
         path = resolve_named_command(self._context, self._command_name)
-        normalized_args = [str(arg) for arg in self._command_args]
-        command_params = get_placeholders_from_args(
-            normalized_args, path.suffix != ".py"
-        )
-        spec = CommandSpec(
-            name=self._command_name,
-            path=path,
-            args=self._command_args,
-            params=command_params,
-            base_dir=path.parent,
-            cwd=self._cwd,
+        spec = self._spec_factory.prepare_main_spec(
+            path, self._command_name, self._command_args, self._cwd
         )
         self._register(spec)
         return spec
 
     def _register(self, spec: CommandSpec) -> None:
-        spec.base_dir = spec.path.parent
         self._registry[spec.name] = spec
 
     def _ensure_spec_loaded(
@@ -74,9 +63,9 @@ class CustomCommandExecutor:
     def _attach_markdown_metadata(
         self, spec: CommandSpec, parent: CommandSpec | None = None
     ) -> None:
-        if spec.metadata is not None:
+        if spec.metadata is not None or spec.path is None:
             return
-        metadata, _ = load_markdown_metadata(spec)
+        metadata = load_markdown_with_frontmatter(spec.path)
         spec.metadata = metadata
         spec.class_resolver = ClassResolver(
             metadata.get("schema", ""), parent.class_resolver if parent else None
@@ -137,7 +126,7 @@ class CustomCommandExecutor:
         command_cls = find_command_class(spec.kind)
         if command_cls is None:
             raise CustomCommandError(
-                f"Unsupported command type '{spec.path.suffix}' for {spec.name}."
+                f"Unsupported command type '{spec.kind}' for {spec.name}."
             )
         return command_cls(self._context, spec, self._cwd)
 

@@ -12,24 +12,21 @@ class CommandSpec:
     """Normalized representation of a command or error handler definition."""
 
     name: str
-    path: Path
+    base_dir: Path
+    kind: str
+    path: Path | None = None
     params: dict[str, Any] = field(default_factory=dict)
     args: list[Any] | None = None
     stdin_override: str | None = None
-    base_dir: Path | None = None
     children: list["CommandSpec"] = field(default_factory=list)
     metadata: dict[str, Any] | None = None
     cwd: Path = Path.cwd()
     command_index: int = 0
-    config: dict | None = None
+    config: dict[str, Any] = field(default_factory=dict)
     class_resolver: ClassResolver | None = None
 
-    @property
-    def kind(self) -> str:
-        return self.path.suffix.lower()
-
     def get_config_value(self, key: str, default: Any = None) -> Any:
-        if self.config and key in self.config:
+        if key in self.config:
             return self.config[key]
         return default
 

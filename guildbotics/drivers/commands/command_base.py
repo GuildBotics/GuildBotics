@@ -54,16 +54,9 @@ class CommandBase(ABC):
         """Execute the command and return its outcome."""
 
     @classmethod
-    def resolve_inline_spec(
-        cls, anchor: CommandSpec, data: dict[str, Any]
-    ) -> Path | None:
-        """Return a synthetic command path/script for inline definitions."""
-        shortcut_key = cls.get_command_shortcut()
-        if shortcut_key not in data:
-            return None
-        return Path(
-            f"<inline-{shortcut_key}-{anchor.command_index}>{cls.get_extension()}"
-        )
+    def is_inline_command(cls, anchor: CommandSpec, data: dict[str, Any]) -> bool:
+        """Determine if the given data represents an inline command of this type."""
+        return cls.get_command_shortcut() in data
 
     def _build_invocation_options(self, spec: CommandSpec) -> InvocationOptions:
         if spec.stdin_override is not None:
