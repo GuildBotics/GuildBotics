@@ -10,8 +10,8 @@ from guildbotics.drivers.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.drivers.commands.markdown_command import MarkdownCommand
 from guildbotics.drivers.commands.models import CommandOutcome, CommandSpec
-from guildbotics.drivers.commands.registry import find_command_class
 from guildbotics.drivers.commands.spec_factory import CommandSpecFactory
 from guildbotics.entities.team import Person
 from guildbotics.runtime.context import Context
@@ -57,22 +57,21 @@ class CustomCommandExecutor:
     def _ensure_spec_loaded(
         self, spec: CommandSpec, parent: CommandSpec | None = None
     ) -> None:
-        if spec.kind == ".md":
+        if spec.command_class == MarkdownCommand:
             self._attach_markdown_metadata(spec, parent)
 
     def _attach_markdown_metadata(
         self, spec: CommandSpec, parent: CommandSpec | None = None
     ) -> None:
-        if spec.metadata is not None or spec.path is None:
+        if spec.path is None:
             return
-        metadata = load_markdown_with_frontmatter(spec.path)
-        spec.metadata = metadata
+        config = load_markdown_with_frontmatter(spec.path)
         spec.class_resolver = ClassResolver(
-            metadata.get("schema", ""), parent.class_resolver if parent else None
+            config.get("schema", ""), parent.class_resolver if parent else None
         )
         spec.children = []
 
-        raw_commands = metadata.get("commands")
+        raw_commands = config.get("commands")
         if raw_commands is None:
             entries: list[Any] = []
         elif isinstance(raw_commands, Sequence) and not isinstance(
@@ -123,12 +122,7 @@ class CustomCommandExecutor:
             self._call_stack.pop()
 
     def _build_command(self, spec: CommandSpec) -> CommandBase:
-        command_cls = find_command_class(spec.kind)
-        if command_cls is None:
-            raise CustomCommandError(
-                f"Unsupported command type '{spec.kind}' for {spec.name}."
-            )
-        return command_cls(self._context, spec, self._cwd)
+        return spec.command_class(self._context, spec, self._cwd)
 
     async def _invoke(self, name: str, *args: Any, **kwargs: Any) -> Any:
         anchor = self._current_spec()

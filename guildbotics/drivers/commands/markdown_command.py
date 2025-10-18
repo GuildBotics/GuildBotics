@@ -16,15 +16,15 @@ class MarkdownCommand(CommandBase):
     shortcut = "prompt"
 
     async def run(self) -> CommandOutcome | None:
-        metadata, inline = self._load_markdown_metadata()
-        if not metadata.get("body"):
+        config, inline = self._load_markdown_metadata()
+        if not config.get("body"):
             return None
 
         params = {**self.context.shared_state, **self.options.params}
-        if self._is_brain_disabled(metadata):
-            template_engine = metadata.get("template_engine", "default")
+        if self._is_brain_disabled(config):
+            template_engine = config.get("template_engine", "default")
             params = self._inject_session_state(params)
-            result = replace_placeholders(metadata["body"], params, template_engine)
+            result = replace_placeholders(config["body"], params, template_engine)
             return CommandOutcome(result=result, text_output=result)
 
         message = self.options.message
@@ -38,7 +38,7 @@ class MarkdownCommand(CommandBase):
                 message,
                 params,
                 self.cwd,
-                metadata if inline else None,
+                config if inline else None,
                 self.spec.class_resolver,
             )
         except Exception as exc:  # pragma: no cover - propagate as driver error
@@ -54,26 +54,20 @@ class MarkdownCommand(CommandBase):
         session_state = session_data.get("session_state", {})
         return {**params, **session_state}
 
-    def _is_brain_disabled(self, metadata: dict[str, Any]) -> bool:
-        brain = str(metadata.get("brain", "")).lower()
+    def _is_brain_disabled(self, config: dict[str, Any]) -> bool:
+        brain = str(config.get("brain", "")).lower()
         return brain in {"none", "-", "null", "disabled"}
 
     def _load_markdown_metadata(self) -> tuple[dict[str, Any], bool]:
         prompt = self.spec.get_config_value(self.shortcut)
-        if self.spec.metadata is not None:
-            return self.spec.metadata, bool(prompt)
-
         if prompt is not None:
-            config = self.spec.config if isinstance(self.spec.config, dict) else {}
-            metadata = config.copy()
-            metadata["body"] = str(prompt)
-            self.spec.metadata = metadata
-            return metadata, True
+            config = self.spec.config.copy()
+            config["body"] = str(prompt)
+            return config, True
 
         if self.spec.path is None:
             raise CustomCommandError(
                 f"Markdown command '{self.spec.name}' is missing a path or {self.shortcut}."
             )
-        metadata = load_markdown_with_frontmatter(self.spec.path)
-        self.spec.metadata = metadata
-        return metadata, False
+        config = load_markdown_with_frontmatter(self.spec.path)
+        return config, False

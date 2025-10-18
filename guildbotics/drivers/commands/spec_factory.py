@@ -4,10 +4,11 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from guildbotics.drivers.commands.command_base import CommandBase
 from guildbotics.drivers.commands.discovery import resolve_command_reference
 from guildbotics.drivers.commands.errors import CustomCommandError
 from guildbotics.drivers.commands.models import CommandSpec
-from guildbotics.drivers.commands.registry import get_command_types
+from guildbotics.drivers.commands.registry import find_command_class, get_command_types
 from guildbotics.runtime.context import Context
 from guildbotics.utils.text_utils import get_placeholders_from_args
 
@@ -30,7 +31,7 @@ class CommandSpecFactory:
         spec = CommandSpec(
             name=command_name,
             base_dir=path.parent,
-            kind=kind,
+            command_class=find_command_class(kind),
             path=path,
             args=command_args,
             params=command_params,
@@ -44,9 +45,13 @@ class CommandSpecFactory:
 
         name = self._resolve_name(data, anchor)
         path = None
-        inline_command, kind = self._is_inline_command(data, anchor)
-        if not inline_command:
+        inline_command = self._is_inline_command(data, anchor)
+        if inline_command:
+            kind = inline_command.get_extension()
+            command_class = inline_command
+        else:
             path, kind = self._resolve_path(data, anchor)
+            command_class = find_command_class(kind)
         args = self._normalize_args(data.get("args"))
         params = self._merge_params(anchor, args, data.get("params"), kind)
 
@@ -57,7 +62,7 @@ class CommandSpecFactory:
         spec = CommandSpec(
             name=name,
             base_dir=path.parent if path else anchor.base_dir,
-            kind=kind,
+            command_class=command_class,
             path=path,
             params=params,
             args=args,
@@ -113,12 +118,12 @@ class CommandSpecFactory:
 
     def _is_inline_command(
         self, data: dict[str, Any], anchor: CommandSpec
-    ) -> tuple[bool, str]:
+    ) -> type[CommandBase] | None:
         for command_cls in get_command_types():
-            inline_command = command_cls.is_inline_command(anchor, data)
+            inline_command = command_cls.is_inline_command(data)
             if inline_command:
-                return True, command_cls.get_extension()
-        return False, ""
+                return command_cls
+        return None
 
     def _normalize_args(self, raw_args: Any) -> list[Any]:
         if raw_args is None:

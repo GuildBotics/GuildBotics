@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from guildbotics.utils.import_utils import ClassResolver
+
+if TYPE_CHECKING:
+    from guildbotics.drivers.commands.command_base import CommandBase
 
 
 @dataclass
@@ -13,13 +16,12 @@ class CommandSpec:
 
     name: str
     base_dir: Path
-    kind: str
+    command_class: type[CommandBase]
     path: Path | None = None
     params: dict[str, Any] = field(default_factory=dict)
     args: list[Any] | None = None
     stdin_override: str | None = None
     children: list["CommandSpec"] = field(default_factory=list)
-    metadata: dict[str, Any] | None = None
     cwd: Path = Path.cwd()
     command_index: int = 0
     config: dict[str, Any] = field(default_factory=dict)

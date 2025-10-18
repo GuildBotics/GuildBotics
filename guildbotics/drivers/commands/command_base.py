@@ -18,6 +18,7 @@ class CommandBase(ABC):
 
     extension: ClassVar[str]
     shortcut: ClassVar[str]
+    shortcut_only: ClassVar[bool] = False
 
     def __init__(self, context: Context, spec: CommandSpec, cwd: Path) -> None:
         self._context = context
@@ -49,14 +50,18 @@ class CommandBase(ABC):
     def get_command_shortcut(cls) -> str:
         return cls.shortcut
 
+    @classmethod
+    def is_shortcut_only(cls) -> bool:
+        return cls.shortcut_only
+
+    @classmethod
+    def is_inline_command(cls, data: dict[str, Any]) -> bool:
+        """Determine if the given data represents an inline command of this type."""
+        return cls.get_command_shortcut() in data
+
     @abstractmethod
     async def run(self) -> CommandOutcome | None:
         """Execute the command and return its outcome."""
-
-    @classmethod
-    def is_inline_command(cls, anchor: CommandSpec, data: dict[str, Any]) -> bool:
-        """Determine if the given data represents an inline command of this type."""
-        return cls.get_command_shortcut() in data
 
     def _build_invocation_options(self, spec: CommandSpec) -> InvocationOptions:
         if spec.stdin_override is not None:
