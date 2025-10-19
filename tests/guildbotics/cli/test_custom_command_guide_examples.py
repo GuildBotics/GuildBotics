@@ -530,3 +530,70 @@ async def test_member_selection_with_person_identifier(tmp_path, monkeypatch):
     base_ctx = _make_context("", members)
     out = await run_custom_command(base_ctx, "whoami", [], person_identifier="yuki")
     assert "ID: yuki" in out
+
+
+@pytest.mark.asyncio
+async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
+    """docs 5.2: schema + response_class in subcommands runs and stores named result.
+
+    We simulate coverage output instead of running pytest to keep tests fast and deterministic.
+    The inline `prompt` steps carry `response_class` values, and although our DummyBrain does
+    not perform structured parsing, command execution and shared state updates should succeed.
+    """
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+
+    _write(
+        tmp_path / "prompts/coverage.md",
+        """
+        ---
+        schema: |
+            class Ranking:
+                package: str
+                detail: str
+                line_rate: float
+                reason: str
+
+            class Rankings:
+                items: list[Ranking]
+
+            class Task:
+                title: str
+                description: str
+                priority: int
+
+            class TaskList:
+                tasks: list[Task]
+        commands:
+          - script: |
+              cat > coverage.xml <<'XML'
+              <coverage line-rate="0.76"></coverage>
+              XML
+              cat coverage.xml |grep line-rate
+          - prompt: |
+              この情報を解析して、テスト実装の対応優先度が高いパッケージのトップ3についてRankings形式のJSONとして出力してください。
+            response_class: Rankings
+          - name: task_list
+            prompt: |
+              この分析情報に基づいて、優先度が高い順に、TaskList形式のJSONで、すぐに着手可能なテスト実装タスク定義を最大5つまで提案してください。
+            response_class: TaskList
+        template_engine: jinja2
+        brain: none
+        ---
+        {% for task in task_list.tasks %}
+        - [ ] {{ task.title }} (priority: {{ task.priority }})
+        {% endfor %}
+        """,
+    )
+
+    ctx = _make_context("")
+    ex = CustomCommandExecutor(ctx, "coverage", [])
+    out = await ex.run()
+
+    # The pipeline should complete without errors. The final template may render nothing
+    # because DummyBrain does not produce structured objects, but shared state must be set.
+    assert isinstance(out, str)
+    shared = ex._context.shared_state
+    # Auto-generated name for the second command (the first inline prompt)
+    assert any(k.startswith("coverage__") for k in shared.keys())
+    # Named result from the third command should exist
+    assert "task_list" in shared and isinstance(shared["task_list"], dict)
