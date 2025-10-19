@@ -18,7 +18,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
     - [5.2. Schema definition](#52-schema-definition)
     - [5.3. Print command](#53-print-command)
     - [5.4. to\_html command](#54-to_html-command)
-- [5.5. to\_pdf command](#55-to_pdf-command)
+    - [5.5. to\_pdf command](#55-to_pdf-command)
   - [6. Using shell scripts](#6-using-shell-scripts)
   - [7. Using Python commands](#7-using-python-commands)
     - [7.1. Using arguments](#71-using-arguments)
@@ -387,7 +387,7 @@ commands:
 - `output`: Specify the path to save the generated HTML file. If omitted, the generated HTML string is returned as the command result.
 - `css`: Specify the path of the CSS file to apply to the generated HTML.
 
-# 5.5. to_pdf command
+### 5.5. to_pdf command
 `to_pdf` is a command for converting Markdown or HTML to PDF.
 
 
