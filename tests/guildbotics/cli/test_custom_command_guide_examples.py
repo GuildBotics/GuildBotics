@@ -586,12 +586,45 @@ async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
     )
 
     ctx = _make_context("")
+    # Stub brain to return a deterministic TaskList-like dict for the named
+    # prompt command `task_list`, so the final Jinja template expands values.
+    class _StubBrain:
+        def __init__(self, name: str, config: dict | None):
+            self.name = name
+            self._config = config or {}
+            self.response_class = None
+
+        async def run(self, message: str, **kwargs):
+            # Return tasks only for the command named `task_list` in the config
+            if self._config.get("name") == "task_list":
+                return {
+                    "tasks": [
+                        {"title": "Implement coverage-driven tests", "description": "Add tests for low coverage areas", "priority": 1},
+                        {"title": "Refactor flaky tests", "description": "Stabilize intermittently failing tests", "priority": 2},
+                    ]
+                }
+            # Default echo for other prompts
+            return {"message": message, **kwargs}
+
+    class _StubBrainFactory:
+        def create_brain(
+            self,
+            person_id: str,
+            name: str,
+            language_code: str,
+            logger,
+            config: dict | None = None,
+            class_resolver=None,
+        ):
+            return _StubBrain(name, config)
+
+    ctx.brain_factory = _StubBrainFactory()  # type: ignore[assignment]
     ex = CustomCommandExecutor(ctx, "coverage", [])
     out = await ex.run()
 
-    # The pipeline should complete without errors. The final template may render nothing
-    # because DummyBrain does not produce structured objects, but shared state must be set.
-    assert isinstance(out, str)
+    # Verify template expanded schema-defined variables into the final output.
+    assert "- [ ] Implement coverage-driven tests (priority: 1)" in out
+    assert "- [ ] Refactor flaky tests (priority: 2)" in out
     shared = ex._context.shared_state
     # Auto-generated name for the second command (the first inline prompt)
     assert any(k.startswith("coverage__") for k in shared.keys())
