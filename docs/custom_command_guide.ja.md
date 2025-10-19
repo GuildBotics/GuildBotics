@@ -16,6 +16,7 @@ GuildBotics のカスタムコマンドは、エージェントに任意の処�
   - [5. サブコマンドの利用](#5-サブコマンドの利用)
     - [5.1. サブコマンドの名前付けと出力結果の参照](#51-サブコマンドの名前付けと出力結果の参照)
     - [5.2. スキーマ定義](#52-スキーマ定義)
+    - [5.3. print コマンド](#53-print-コマンド)
   - [6. シェルスクリプトの利用](#6-シェルスクリプトの利用)
   - [7. Python コマンドの利用](#7-python-コマンドの利用)
     - [7.1. 引数の利用](#71-引数の利用)
@@ -212,6 +213,9 @@ $ guildbotics run get-time-of-day
 - `script` にはシェルスクリプトを直接記述できます。
 - `command` は別のプロンプトファイルや組み込みコマンドを呼び出す方法です。
 - `prompt` にはLLM呼び出しを行うプロンプトを記述できます。
+- `print` は LLM を呼び出さず、その場に書いたテンプレート（Jinja2）で文字列を生成してそのまま出力します。
+
+補足: この章では、`script`/`prompt`/`print` の値に処理内容をその場で直接記述する方法と、`command` で外部の `.md` や `.sh` などを参照して呼び出す方法の両方を扱います。
 
 ### 5.1. サブコマンドの名前付けと出力結果の参照
 
@@ -313,6 +317,53 @@ $ guildbotics run coverage
 - [ ] drivers/custom_command_runner.py と drivers/task_scheduler.py の統合的単体テストを追加 (priority: 3)
 - [ ] utils/import_utils.py のインポート処理とエッジケースのテストを追加 (priority: 4)
 - [ ] intelligences/functions.py のビジネスロジックと外部呼び出しのモックテストを追加 (priority: 5)
+```
+
+### 5.3. print コマンド
+
+`print` は、LLM を呼び出さずにテキストを生成・整形するためのコマンドです。`commands` 配列の `print` キーの値として、その場に直接記述します。
+
+```markdown
+---
+commands:
+  - print: こんにちは。
+---
+```
+
+呼び出し例:
+
+```shell
+$ guildbotics run greet
+こんにちは。
+```
+
+print コマンドでは Jinja2 テンプレートエンジンが有効になっているため、変数展開や条件分岐も利用可能です。
+
+```markdown
+---
+commands:
+  - name: current_time
+    script: echo "現在の時刻は`date +%T`です"
+  - name: time_of_day
+    command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
+  - print: |
+      {% if time_of_day.label == "朝" %}
+      おはようございます。
+      {% elif time_of_day.label == "夜" %}
+      こんばんは。
+      {% else %}
+      こんにちは。
+      {% endif %}
+
+      {{ current_time }}
+```
+
+上記のコマンドを実行すると、以下のような結果を返します。
+
+```text
+こんばんは。
+
+現在の時刻は20:17:15です
 ```
 
 

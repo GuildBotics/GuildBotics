@@ -16,7 +16,7 @@ _COMMAND_TYPES: tuple[type[CommandBase], ...] = (
 _COMMAND_REGISTRY: dict[str, type[CommandBase]] = {
     command_type.get_extension().lower(): command_type
     for command_type in _COMMAND_TYPES
-    if command_type.is_shortcut_only() is False
+    if command_type.is_inline_only() is False
 }
 
 

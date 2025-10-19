@@ -17,8 +17,8 @@ class CommandBase(ABC):
     """Base interface for custom command executors."""
 
     extension: ClassVar[str]
-    shortcut: ClassVar[str]
-    shortcut_only: ClassVar[bool] = False
+    inline_key: ClassVar[str]
+    inline_only: ClassVar[bool] = False
 
     def __init__(self, context: Context, spec: CommandSpec, cwd: Path) -> None:
         self._context = context
@@ -47,17 +47,17 @@ class CommandBase(ABC):
         return cls.extension
 
     @classmethod
-    def get_command_shortcut(cls) -> str:
-        return cls.shortcut
+    def get_inline_key(cls) -> str:
+        return cls.inline_key
 
     @classmethod
-    def is_shortcut_only(cls) -> bool:
-        return cls.shortcut_only
+    def is_inline_only(cls) -> bool:
+        return cls.inline_only
 
     @classmethod
     def is_inline_command(cls, data: dict[str, Any]) -> bool:
         """Determine if the given data represents an inline command of this type."""
-        return cls.get_command_shortcut() in data
+        return cls.get_inline_key() in data
 
     @abstractmethod
     async def run(self) -> CommandOutcome | None:

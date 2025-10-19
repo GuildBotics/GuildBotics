@@ -13,7 +13,7 @@ from guildbotics.drivers.commands.utils import stringify_output
 
 class ShellScriptCommand(CommandBase):
     extension = ".sh"
-    shortcut = "script"
+    inline_key = "script"
 
     async def run(self) -> CommandOutcome:
         env = os.environ.copy()
@@ -30,9 +30,14 @@ class ShellScriptCommand(CommandBase):
             tmp_file.close()
             executable_path = Path(tmp_file.name)
 
+        if executable_path is None:
+            raise CustomCommandError(
+                f"Shell command '{self.spec.name}' is missing a script or executable path."
+            )
+
         args = (
             [str(executable_path)]
-            if os.access(executable_path, os.X_OK)
+            if os.access(str(executable_path), os.X_OK)
             else ["bash", str(executable_path)]
         )
         args.extend(str(item) for item in self.options.args)

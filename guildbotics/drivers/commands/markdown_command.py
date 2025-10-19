@@ -13,7 +13,7 @@ from guildbotics.utils.text_utils import replace_placeholders
 
 class MarkdownCommand(CommandBase):
     extension = ".md"
-    shortcut = "prompt"
+    inline_key = "prompt"
 
     async def run(self) -> CommandOutcome | None:
         config, inline = self._load_markdown_metadata()
@@ -59,7 +59,7 @@ class MarkdownCommand(CommandBase):
         return brain in {"none", "-", "null", "disabled"}
 
     def _load_markdown_metadata(self) -> tuple[dict[str, Any], bool]:
-        prompt = self.spec.get_config_value(self.shortcut)
+        prompt = self.spec.get_config_value(self.inline_key)
         if prompt is not None:
             config = self.spec.config.copy()
             config["body"] = str(prompt)
@@ -67,7 +67,7 @@ class MarkdownCommand(CommandBase):
 
         if self.spec.path is None:
             raise CustomCommandError(
-                f"Markdown command '{self.spec.name}' is missing a path or {self.shortcut}."
+                f"Markdown command '{self.spec.name}' is missing a path or {self.inline_key}."
             )
         config = load_markdown_with_frontmatter(self.spec.path)
         return config, False

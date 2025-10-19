@@ -16,6 +16,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
   - [5. Using subcommands](#5-using-subcommands)
     - [5.1. Naming subcommands and referencing outputs](#51-naming-subcommands-and-referencing-outputs)
     - [5.2. Schema definition](#52-schema-definition)
+    - [5.3. Print command](#53-print-command)
   - [6. Using shell scripts](#6-using-shell-scripts)
   - [7. Using Python commands](#7-using-python-commands)
     - [7.1. Using arguments](#71-using-arguments)
@@ -306,6 +307,52 @@ $ guildbotics run coverage
 - [ ] Add integrated unit tests for drivers/custom_command_runner.py and drivers/task_scheduler.py (priority: 3)
 - [ ] Add tests for utils/import_utils.py's import processing and edge cases (priority: 4)
 - [ ] Add business logic and external call mock tests for intelligences/functions.py (priority: 5)
+```
+
+### 5.3. Print command
+
+`print` is a command for generating and formatting text without calling the LLM. It is described directly in place as the value of the `print` key in the `commands` array.
+
+```markdown
+---
+commands:
+  - print: Hello.
+---
+```
+Invocation example:
+
+```shell
+$ guildbotics run greet
+Hello.
+```
+
+In the print command, the Jinja2 template engine is enabled, so you can also use variable expansion and conditional branching.
+
+```markdown
+---
+commands:
+  - name: current_time
+    script: echo "The current time is `date +%T`."
+  - name: time_of_day
+    command: functions/identify_item item_type="Time of day" candidates="Morning, Afternoon, Night"
+  - print: |
+      {% if time_of_day.label == "Morning" %}
+      Good morning.
+      {% elif time_of_day.label == "Night" %}
+      Good evening.
+      {% else %}
+      Hello.
+      {% endif %}
+
+      {{ current_time }}
+---
+```
+Running the above returns something like:
+
+```text
+Good evening.
+
+The current time is 20:17:15.
 ```
 
 
