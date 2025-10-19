@@ -401,3 +401,232 @@ async def main(context: Context):
     out = await ex.run()
     assert "こんにちは。" in out
     assert "現在の時刻は" in out
+
+
+@pytest.mark.asyncio
+async def test_print_command_basic(tmp_path, monkeypatch):
+    """docs 5.3: `print` outputs literal text without LLM."""
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    _write(
+        tmp_path / "prompts/greet.md",
+        """
+        ---
+        commands:
+          - print: こんにちは。
+        ---
+        """,
+    )
+
+    ctx = _make_context("")
+    ex = CustomCommandExecutor(ctx, "greet", [])
+    out = await ex.run()
+    assert "こんにちは。" in out
+
+
+@pytest.mark.asyncio
+async def test_print_command_with_pipeline_and_jinja(tmp_path, monkeypatch):
+    """docs 5.3: `print` supports Jinja and previous outputs."""
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    _write(
+        tmp_path / "prompts/greet-time-print.md",
+        """
+        ---
+        commands:
+          - name: current_time
+            script: echo "現在の時刻は`date +%T`です"
+          - name: time_of_day
+            command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
+          - print: |
+              {% if time_of_day.label == "朝" %}
+              おはようございます。
+              {% elif time_of_day.label == "夜" %}
+              こんばんは。
+              {% else %}
+              こんにちは。
+              {% endif %}
+
+              {{ current_time }}
+        ---
+        """,
+    )
+
+    ctx = _make_context("")
+    ex = CustomCommandExecutor(ctx, "greet-time-print", [])
+    out = await ex.run()
+    # With DummyBrain, label is absent; falls to else branch
+    assert "こんにちは。" in out
+    assert "現在の時刻は" in out
+
+
+@pytest.mark.asyncio
+async def test_external_shell_script_called_by_command_name(tmp_path, monkeypatch):
+    """docs 6: reference external script via `command: <name>`."""
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+
+    # Create external script `current-time.sh`
+    script_path = tmp_path / "prompts/current-time.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text(
+        """
+        #!/usr/bin/env bash
+        echo "現在の時刻は`date +%T`です"
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    script_path.chmod(0o755)
+
+    # Compose prompt that calls the external script by logical name
+    _write(
+        tmp_path / "prompts/greet-ext.md",
+        """
+        ---
+        commands:
+          - name: current_time
+            command: current-time
+          - name: time_of_day
+            command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
+        brain: none
+        template_engine: jinja2
+        ---
+        {% if time_of_day.label == "朝" %}
+        おはようございます。
+        {% elif time_of_day.label == "夜" %}
+        こんばんは。
+        {% else %}
+        こんにちは。
+        {% endif %}
+
+        {{ current_time }}
+        """,
+    )
+
+    ctx = _make_context("")
+    ex = CustomCommandExecutor(ctx, "greet-ext", [])
+    out = await ex.run()
+    assert "こんにちは。" in out
+    assert "現在の時刻は" in out
+
+
+@pytest.mark.asyncio
+async def test_member_selection_with_person_identifier(tmp_path, monkeypatch):
+    """docs 1.3: select member by identifier during run."""
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    _write(
+        tmp_path / "prompts/whoami.md",
+        """
+        ---
+        brain: none
+        template_engine: jinja2
+        ---
+        ID: {{ context.person.person_id }}
+        """,
+    )
+
+    members = [
+        Person(person_id="alice", name="Alice", is_active=True),
+        Person(person_id="yuki", name="Yuki", is_active=True),
+    ]
+    base_ctx = _make_context("", members)
+    out = await run_custom_command(base_ctx, "whoami", [], person_identifier="yuki")
+    assert "ID: yuki" in out
+
+
+@pytest.mark.asyncio
+async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
+    """docs 5.2: schema + response_class in subcommands runs and stores named result.
+
+    We simulate coverage output instead of running pytest to keep tests fast and deterministic.
+    The inline `prompt` steps carry `response_class` values, and although our DummyBrain does
+    not perform structured parsing, command execution and shared state updates should succeed.
+    """
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+
+    _write(
+        tmp_path / "prompts/coverage.md",
+        """
+        ---
+        schema: |
+            class Ranking:
+                package: str
+                detail: str
+                line_rate: float
+                reason: str
+
+            class Rankings:
+                items: list[Ranking]
+
+            class Task:
+                title: str
+                description: str
+                priority: int
+
+            class TaskList:
+                tasks: list[Task]
+        commands:
+          - script: |
+              cat > coverage.xml <<'XML'
+              <coverage line-rate="0.76"></coverage>
+              XML
+              cat coverage.xml |grep line-rate
+          - prompt: |
+              この情報を解析して、テスト実装の対応優先度が高いパッケージのトップ3についてRankings形式のJSONとして出力してください。
+            response_class: Rankings
+          - name: task_list
+            prompt: |
+              この分析情報に基づいて、優先度が高い順に、TaskList形式のJSONで、すぐに着手可能なテスト実装タスク定義を最大5つまで提案してください。
+            response_class: TaskList
+        template_engine: jinja2
+        brain: none
+        ---
+        {% for task in task_list.tasks %}
+        - [ ] {{ task.title }} (priority: {{ task.priority }})
+        {% endfor %}
+        """,
+    )
+
+    ctx = _make_context("")
+    # Stub brain to return a deterministic TaskList-like dict for the named
+    # prompt command `task_list`, so the final Jinja template expands values.
+    class _StubBrain:
+        def __init__(self, name: str, config: dict | None):
+            self.name = name
+            self._config = config or {}
+            self.response_class = None
+
+        async def run(self, message: str, **kwargs):
+            # Return tasks only for the command named `task_list` in the config
+            if self._config.get("name") == "task_list":
+                return {
+                    "tasks": [
+                        {"title": "Implement coverage-driven tests", "description": "Add tests for low coverage areas", "priority": 1},
+                        {"title": "Refactor flaky tests", "description": "Stabilize intermittently failing tests", "priority": 2},
+                    ]
+                }
+            # Default echo for other prompts
+            return {"message": message, **kwargs}
+
+    class _StubBrainFactory:
+        def create_brain(
+            self,
+            person_id: str,
+            name: str,
+            language_code: str,
+            logger,
+            config: dict | None = None,
+            class_resolver=None,
+        ):
+            return _StubBrain(name, config)
+
+    ctx.brain_factory = _StubBrainFactory()  # type: ignore[assignment]
+    ex = CustomCommandExecutor(ctx, "coverage", [])
+    out = await ex.run()
+
+    # Verify template expanded schema-defined variables into the final output.
+    assert "- [ ] Implement coverage-driven tests (priority: 1)" in out
+    assert "- [ ] Refactor flaky tests (priority: 2)" in out
+    shared = ex._context.shared_state
+    # Auto-generated name for the second command (the first inline prompt)
+    assert any(k.startswith("coverage__") for k in shared.keys())
+    # Named result from the third command should exist
+    assert "task_list" in shared and isinstance(shared["task_list"], dict)
