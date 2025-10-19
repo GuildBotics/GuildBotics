@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar
@@ -18,7 +19,6 @@ class CommandBase(ABC):
 
     extension: ClassVar[str]
     inline_key: ClassVar[str]
-    inline_only: ClassVar[bool] = False
 
     def __init__(self, context: Context, spec: CommandSpec, cwd: Path) -> None:
         self._context = context
@@ -52,7 +52,7 @@ class CommandBase(ABC):
 
     @classmethod
     def is_inline_only(cls) -> bool:
-        return cls.inline_only
+        return cls.extension == ""
 
     @classmethod
     def is_inline_command(cls, data: dict[str, Any]) -> bool:
@@ -107,3 +107,16 @@ class CommandBase(ABC):
             return self._context.shared_state[text]
         else:
             return self._spec.params.get(text, os.getenv(text, text))
+
+    def parse_inline_args(self, value: str) -> tuple[list[str], dict[str, Any]]:
+        """Parse inline arguments from a string and return as args list and params dict."""
+        words = shlex.split(value)
+        args = []
+        params = {}
+        for word in words:
+            if "=" in word:
+                key, val = word.split("=", 1)
+                params[key] = val
+            else:
+                args.append(word)
+        return args, params

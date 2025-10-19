@@ -17,6 +17,8 @@ GuildBotics のカスタムコマンドは、エージェントに任意の処�
     - [5.1. サブコマンドの名前付けと出力結果の参照](#51-サブコマンドの名前付けと出力結果の参照)
     - [5.2. スキーマ定義](#52-スキーマ定義)
     - [5.3. print コマンド](#53-print-コマンド)
+    - [5.4. to\_html コマンド](#54-to_html-コマンド)
+    - [5.5. to\_pdf コマンド](#55-to_pdf-コマンド)
   - [6. シェルスクリプトの利用](#6-シェルスクリプトの利用)
   - [7. Python コマンドの利用](#7-python-コマンドの利用)
     - [7.1. 引数の利用](#71-引数の利用)
@@ -367,6 +369,54 @@ commands:
 現在の時刻は20:17:15です
 ```
 
+### 5.4. to_html コマンド
+
+`to_html` は Markdown テキストを HTML に変換するためのコマンドです。
+
+以下の定義例では、直前のコマンド出力 (`cat README.ja.md`) を HTML に変換し、`tmp/summary.html` に保存します。
+
+```markdown
+---
+commands:
+  - script: cat README.ja.md
+  - to_html: tmp/summary.html
+---
+```
+
+以下のように明示的にパラメータを指定することも可能です。
+
+```markdown
+---
+commands:
+  - to_html:
+      input: reports/summary.md
+      css: assets/summary.css
+      output: tmp/summary.html
+---
+```
+- `input` パラメータに指定されたパスのファイルを読み込んで変換対象とします。未指定の場合は直前のコマンド出力を変換します。
+- `output` で変換後の HTML を保存するパスを指定できます。
+- `css` で任意の CSS ファイルを指定できます。
+- スタイルはデフォルトで `guildbotics/assets/css/github-markdown.css` が適用されます。
+
+### 5.5. to_pdf コマンド
+
+`to_pdf` は Markdown または HTML を PDF に変換するためのコマンドです。
+`input` を指定すればファイルの内容を読み込み、未指定の場合は直前のコマンド出力（`message`）を変換します。内容が HTML かどうかは自動判定され、Markdown の場合は内部で HTML に変換したうえで PDF を生成します。スタイルはデフォルトで `guildbotics/assets/css/github-markdown-light.css` が読み込まれ、`css` パラメータで任意の CSS を指定できます。`output` を指定すると PDF をそのパスに保存し、未指定の場合は生成された PDF の Base64 文字列が結果として出力されます。
+
+```markdown
+---
+commands:
+  - to_pdf:
+      input: reports/summary.md
+      css: assets/summary-print.css
+      output: tmp/summary.pdf
+---
+```
+
+上記例では、`summary.md` の内容を読み込んで PDF に変換し、`assets/summary-print.css` を適用したうえで `tmp/summary.pdf` に保存します。生成された PDF はコマンド結果にも保持されるため、後続のサブコマンドで活用することも可能です。
+
+
 
 ## 6. シェルスクリプトの利用
 シェルスクリプトは、上記のように script キーを使って直接記述する方法の他に、外部のシェルスクリプトファイルとして記述してコマンドとして呼び出すことが可能です。
@@ -527,5 +577,3 @@ async def main(context: Context):
 ```
 
 - invoke は非同期関数なので、`await` を付けて呼び出します。そのため、`main` 関数も `async def` として定義する必要があります。
-
-

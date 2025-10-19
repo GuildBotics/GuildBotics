@@ -13,9 +13,8 @@ class PrintCommand(MarkdownCommand):
     any AI/brain processing.
     """
 
-    extension = ".md"
+    extension = ""
     inline_key = "print"
-    inline_only = True
 
     async def run(self) -> CommandOutcome | None:
         self.spec.config["template_engine"] = "jinja2"
