@@ -8,7 +8,10 @@ dynamic = ["version"]
 description = "A tool to collaborate with AI agents via a task board"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.12"
-license = { file = "LICENSE" }
+license-files = [
+  "LICENSE",
+  "third_party_licenses/**",
+]
 authors = [
   { name = "Ototadana" },
 ]
@@ -71,10 +74,6 @@ redis = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["guildbotics"]
-include = [
-  "guildbotics/assets/**",
-  "third_party_licenses/**",
-]
 
 [tool.hatch.version]
 source = "vcs"
