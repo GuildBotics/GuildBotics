@@ -397,12 +397,10 @@ commands:
 - `input` パラメータに指定されたパスのファイルを読み込んで変換対象とします。未指定の場合は直前のコマンド出力を変換します。
 - `output` で変換後の HTML を保存するパスを指定できます。
 - `css` で任意の CSS ファイルを指定できます。
-- スタイルはデフォルトで `guildbotics/assets/css/github-markdown.css` が適用されます。
 
 ### 5.5. to_pdf コマンド
 
 `to_pdf` は Markdown または HTML を PDF に変換するためのコマンドです。
-`input` を指定すればファイルの内容を読み込み、未指定の場合は直前のコマンド出力（`message`）を変換します。内容が HTML かどうかは自動判定され、Markdown の場合は内部で HTML に変換したうえで PDF を生成します。スタイルはデフォルトで `guildbotics/assets/css/github-markdown-light.css` が読み込まれ、`css` パラメータで任意の CSS を指定できます。`output` を指定すると PDF をそのパスに保存し、未指定の場合は生成された PDF の Base64 文字列が結果として出力されます。
 
 ```markdown
 ---
@@ -414,8 +412,9 @@ commands:
 ---
 ```
 
-上記例では、`summary.md` の内容を読み込んで PDF に変換し、`assets/summary-print.css` を適用したうえで `tmp/summary.pdf` に保存します。生成された PDF はコマンド結果にも保持されるため、後続のサブコマンドで活用することも可能です。
-
+- `input` パラメータに指定されたパスのファイルを読み込んで変換対象とします。未指定の場合は直前のコマンド出力を変換します。
+- `output` で変換後の PDF を保存するパスを指定できます。
+- `css` で任意の CSS ファイルを指定できます。
 
 
 ## 6. シェルスクリプトの利用
