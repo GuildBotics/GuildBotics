@@ -6,16 +6,16 @@ from guildbotics.drivers.commands.models import CommandOutcome
 
 class PrintCommand(MarkdownCommand):
     """
-    A Markdown command that prints output using the 'print' shortcut.
+    A Markdown command that prints output using the 'print' inline key.
 
-    This command is shortcut-only and sets the template engine to 'jinja2' and disables the 'brain' feature.
+    This command is inline-only and sets the template engine to 'jinja2' and disables the 'brain' feature.
     It differs from the base MarkdownCommand by customizing the config for template rendering and disabling
     any AI/brain processing.
     """
 
     extension = ".md"
-    shortcut = "print"
-    shortcut_only = True
+    inline_key = "print"
+    inline_only = True
 
     async def run(self) -> CommandOutcome | None:
         self.spec.config["template_engine"] = "jinja2"
