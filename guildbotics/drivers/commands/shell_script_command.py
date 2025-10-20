@@ -6,13 +6,13 @@ import tempfile
 from pathlib import Path
 
 from guildbotics.drivers.commands.command_base import CommandBase
-from guildbotics.drivers.commands.errors import CustomCommandError
+from guildbotics.drivers.commands.errors import CommandError
 from guildbotics.drivers.commands.models import CommandOutcome
 from guildbotics.drivers.commands.utils import stringify_output
 
 
 class ShellScriptCommand(CommandBase):
-    extension = ".sh"
+    extensions = [".sh"]
     inline_key = "script"
 
     async def run(self) -> CommandOutcome:
@@ -31,7 +31,7 @@ class ShellScriptCommand(CommandBase):
             executable_path = Path(tmp_file.name)
 
         if executable_path is None:
-            raise CustomCommandError(
+            raise CommandError(
                 f"Shell command '{self.spec.name}' is missing a script or executable path."
             )
 
@@ -60,13 +60,13 @@ class ShellScriptCommand(CommandBase):
                 message = f"Shell command '{self.spec.name}' failed with exit code {process.returncode}."
                 if error_text:
                     message = f"{message} {error_text}"
-                raise CustomCommandError(message)
+                raise CommandError(message)
 
             text_output = stdout_data.decode("utf-8", errors="replace")
             return CommandOutcome(result=text_output, text_output=text_output)
 
         except FileNotFoundError as exc:  # pragma: no cover - defensive guard
-            raise CustomCommandError(
+            raise CommandError(
                 f"Shell command '{executable_path}' could not be executed."
             ) from exc
         finally:

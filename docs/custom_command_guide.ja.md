@@ -215,9 +215,20 @@ $ guildbotics run get-time-of-day
 - `script` にはシェルスクリプトを直接記述できます。
 - `command` は別のプロンプトファイルや組み込みコマンドを呼び出す方法です。
 - `prompt` にはLLM呼び出しを行うプロンプトを記述できます。
-- `print` は LLM を呼び出さず、その場に書いたテンプレート（Jinja2）で文字列を生成してそのまま出力します。
 
-補足: この章では、`script`/`prompt`/`print` の値に処理内容をその場で直接記述する方法と、`command` で外部の `.md` や `.sh` などを参照して呼び出す方法の両方を扱います。
+上記のようにフロントマターの記述のみでMarkdown本文が必要ない場合は、以下のようにYAMLファイルとして保存しても問題ありません。
+
+ファイル名例: `get-time-of-day.yml`
+
+```yaml
+commands:
+  - script: echo "現在の時刻は`date`です"
+  - command: functions/identify_item item_type=時間帯 candidates="早朝, 午前, 正午, 午後, 夕方, 夜, 深夜"
+  - prompt: 現在の時間帯にふさわしい挨拶をしてください
+```
+
+`---` で囲まれたYAMLフロントマター部分のみを抜き出して `.yml` ファイルとして保存したものも、`.md` ファイルと同様にコマンドとして利用できます。
+
 
 ### 5.1. サブコマンドの名前付けと出力結果の参照
 
@@ -316,7 +327,7 @@ brain: none
 $ guildbotics run coverage
 - [ ] utils/fileio.py の単体テストを追加 (priority: 1)
 - [ ] utils/git_tool.py の動作とエラー処理のテストを追加 (priority: 2)
-- [ ] drivers/custom_command_runner.py と drivers/task_scheduler.py の統合的単体テストを追加 (priority: 3)
+- [ ] drivers/command_runner.py と drivers/task_scheduler.py の統合的単体テストを追加 (priority: 3)
 - [ ] utils/import_utils.py のインポート処理とエッジケースのテストを追加 (priority: 4)
 - [ ] intelligences/functions.py のビジネスロジックと外部呼び出しのモックテストを追加 (priority: 5)
 ```
@@ -325,11 +336,9 @@ $ guildbotics run coverage
 
 `print` は、LLM を呼び出さずにテキストを生成・整形するためのコマンドです。`commands` 配列の `print` キーの値として、その場に直接記述します。
 
-```markdown
----
+```yaml
 commands:
   - print: こんにちは。
----
 ```
 
 呼び出し例:
@@ -341,8 +350,7 @@ $ guildbotics run greet
 
 print コマンドでは Jinja2 テンプレートエンジンが有効になっているため、変数展開や条件分岐も利用可能です。
 
-```markdown
----
+```yaml
 commands:
   - name: current_time
     script: echo "現在の時刻は`date +%T`です"
@@ -358,7 +366,6 @@ commands:
       {% endif %}
 
       {{ current_time }}
----
 ```
 
 上記のコマンドを実行すると、以下のような結果を返します。
@@ -375,25 +382,22 @@ commands:
 
 以下の定義例では、直前のコマンド出力 (`cat README.ja.md`) を HTML に変換し、`tmp/summary.html` に保存します。
 
-```markdown
----
+```yaml
 commands:
   - script: cat README.ja.md
   - to_html: tmp/summary.html
----
 ```
 
 以下のように明示的にパラメータを指定することも可能です。
 
-```markdown
----
+```yaml
 commands:
   - to_html:
       input: reports/summary.md
       css: assets/summary.css
       output: tmp/summary.html
----
 ```
+
 - `input` パラメータに指定されたパスのファイルを読み込んで変換対象とします。未指定の場合は直前のコマンド出力を変換します。
 - `output` で変換後の HTML を保存するパスを指定できます。
 - `css` で任意の CSS ファイルを指定できます。
@@ -402,14 +406,12 @@ commands:
 
 `to_pdf` は Markdown または HTML を PDF に変換するためのコマンドです。
 
-```markdown
----
+```yaml
 commands:
   - to_pdf:
       input: reports/summary.md
       css: assets/summary-print.css
       output: tmp/summary.pdf
----
 ```
 
 - `input` パラメータに指定されたパスのファイルを読み込んで変換対象とします。未指定の場合は直前のコマンド出力を変換します。

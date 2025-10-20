@@ -1,15 +1,15 @@
-from guildbotics.drivers.custom_command_runner import (
-    CustomCommandError,
+from guildbotics.drivers.command_runner import (
+    CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
-    run_custom_command,
+    run_command,
 )
 from guildbotics.drivers.task_scheduler import TaskScheduler
 
 __all__ = [
     "TaskScheduler",
-    "run_custom_command",
-    "CustomCommandError",
+    "run_command",
+    "CommandError",
     "PersonSelectionRequiredError",
     "PersonNotFoundError",
 ]

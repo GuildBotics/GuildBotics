@@ -16,11 +16,11 @@ from dotenv import load_dotenv
 
 from guildbotics.cli.setup_tool import SetupTool
 from guildbotics.drivers import (
-    CustomCommandError,
+    CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
     TaskScheduler,
-    run_custom_command,
+    run_command,
 )
 from guildbotics.utils.fileio import get_storage_path
 from guildbotics.utils.import_utils import instantiate_class
@@ -195,7 +195,7 @@ async def _run_custom_command(
     identifier = person_option or inline_person
 
     try:
-        rendered = await run_custom_command(
+        rendered = await run_command(
             context,
             command_name=command_name,
             command_args=command_args,
@@ -213,7 +213,7 @@ async def _run_custom_command(
         raise click.ClickException(
             f"Person '{exc.identifier}' not found. Available: {available}"
         ) from exc
-    except CustomCommandError as exc:
+    except CommandError as exc:
         traceback.print_exc()
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:  # pragma: no cover - defensive guard

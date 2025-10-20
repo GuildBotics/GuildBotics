@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 from markdown_it import MarkdownIt
 
 from guildbotics.drivers.commands.command_base import CommandBase
-from guildbotics.drivers.commands.errors import CustomCommandError
+from guildbotics.drivers.commands.errors import CommandError
 
 
 class DocumentConversionCommand(CommandBase):
@@ -31,7 +31,7 @@ class DocumentConversionCommand(CommandBase):
             if "output" not in config and args:
                 config["output"] = args[0]
         else:
-            raise CustomCommandError(
+            raise CommandError(
                 f"Inline '{self.inline_key}' configuration must be a string or mapping."
             )
         return config
@@ -45,7 +45,7 @@ class DocumentConversionCommand(CommandBase):
             try:
                 return input_path.read_text(encoding="utf-8")
             except OSError as exc:  # pragma: no cover - defensive guard
-                raise CustomCommandError(
+                raise CommandError(
                     f"Unable to read input file '{input_path}': {exc}"
                 ) from exc
 
@@ -61,9 +61,7 @@ class DocumentConversionCommand(CommandBase):
         try:
             return css_path.read_text(encoding="utf-8")
         except OSError as exc:  # pragma: no cover - defensive guard
-            raise CustomCommandError(
-                f"Unable to read CSS file '{css_path}': {exc}"
-            ) from exc
+            raise CommandError(f"Unable to read CSS file '{css_path}': {exc}") from exc
 
     def _render_markdown(self, markdown_source: str) -> str:
         return self._MARKDOWN_RENDERER.render(markdown_source)
@@ -135,4 +133,4 @@ class DocumentConversionCommand(CommandBase):
             if path.exists():
                 return path
 
-        raise CustomCommandError(f"{description} '{raw_path}' could not be found.")
+        raise CommandError(f"{description} '{raw_path}' could not be found.")

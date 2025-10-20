@@ -211,6 +211,20 @@ List the commands to run in order under the `commands` array. Each command recei
 - `command`: invoke another prompt file or a built-in command
 - `prompt`: call an LLM with a prompt written in Markdown
 
+If you only need the front matter description and no Markdown body, as shown above, you can save it as a YAML file.
+
+Example filename: `get-time-of-day.yml`
+
+```yaml
+commands:
+  - script: echo "The current time is `date`."
+  - command: functions/identify_item item_type="Time of day" candidates="Early morning, Morning, Noon, Afternoon, Evening, Night, Late night"
+  - prompt: Please provide a suitable greeting for the current time of day.
+```
+
+You can also extract only the YAML front matter enclosed in `---` and save it as a `.yml` file, which can be used as a command just like `.md` files.
+
+
 ### 5.1. Naming subcommands and referencing outputs
 
 You can set a `name` for each entry in `commands`:
@@ -306,7 +320,7 @@ Invocation example:
 $ guildbotics run coverage
 - [ ] Add unit tests for utils/fileio.py (priority: 1)
 - [ ] Add tests for utils/git_tool.py's operations and error handling (priority: 2)
-- [ ] Add integrated unit tests for drivers/custom_command_runner.py and drivers/task_scheduler.py (priority: 3)
+- [ ] Add integrated unit tests for drivers/command_runner.py and drivers/task_scheduler.py (priority: 3)
 - [ ] Add tests for utils/import_utils.py's import processing and edge cases (priority: 4)
 - [ ] Add business logic and external call mock tests for intelligences/functions.py (priority: 5)
 ```
@@ -316,10 +330,8 @@ $ guildbotics run coverage
 `print` is a command for generating and formatting text without calling the LLM. It is described directly in place as the value of the `print` key in the `commands` array.
 
 ```markdown
----
 commands:
   - print: Hello.
----
 ```
 Invocation example:
 
@@ -330,8 +342,7 @@ Hello.
 
 In the print command, the Jinja2 template engine is enabled, so you can also use variable expansion and conditional branching.
 
-```markdown
----
+```yaml
 commands:
   - name: current_time
     script: echo "The current time is `date +%T`."
@@ -347,8 +358,8 @@ commands:
       {% endif %}
 
       {{ current_time }}
----
 ```
+
 Running the above returns something like:
 
 ```text
@@ -363,24 +374,20 @@ The current time is 20:17:15.
 
 In the following definition example, the output of the previous command (`cat README.ja.md`) is converted to HTML and saved to `tmp/summary.html`.
 
-```markdown
----
+```yaml
 commands:
   - script: cat README.ja.md
   - to_html: tmp/summary.html
----
 ```
 
 You can also explicitly specify parameters as follows.
 
-```markdown
----
+```yaml
 commands:
   - to_html:
       input: reports/summary.md
       css: assets/summary.css
       output: tmp/summary.html
----
 ```
 
 - `input`: Specify the path of the input Markdown file. If omitted, the output of the previous command is used as input.
@@ -391,15 +398,14 @@ commands:
 `to_pdf` is a command for converting Markdown or HTML to PDF.
 
 
-```markdown
----
+```yaml
 commands:
   - to_pdf:
       input: reports/summary.md
       css: assets/summary-print.css
       output: tmp/summary.pdf
----
 ```
+
 - `input`: Specify the path of the input file to convert. If omitted, the output of the previous command is used as input.
 - `output`: Specify the path to save the generated PDF file. If omitted, the generated PDF is returned as a Base64 string.
 - `css`: Specify the path of the CSS file to apply to the generated PDF.
