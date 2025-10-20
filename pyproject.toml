@@ -8,7 +8,10 @@ dynamic = ["version"]
 description = "A tool to collaborate with AI agents via a task board"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.12"
-license = { file = "LICENSE" }
+license-files = [
+  "LICENSE",
+  "third_party_licenses/**",
+]
 authors = [
   { name = "Ototadana" },
 ]
@@ -42,6 +45,8 @@ dependencies = [
   "google-genai>=1.29,<2.0",
   "openai>=1.106,<2.0",
   "jinja2>=3.1.6",
+  "markdown-it-py>=4.0.0",
+  "weasyprint>=66.0",
 ]
 
 [project.urls]

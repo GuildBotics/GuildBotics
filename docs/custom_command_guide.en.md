@@ -17,6 +17,8 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
     - [5.1. Naming subcommands and referencing outputs](#51-naming-subcommands-and-referencing-outputs)
     - [5.2. Schema definition](#52-schema-definition)
     - [5.3. Print command](#53-print-command)
+    - [5.4. to\_html command](#54-to_html-command)
+    - [5.5. to\_pdf command](#55-to_pdf-command)
   - [6. Using shell scripts](#6-using-shell-scripts)
   - [7. Using Python commands](#7-using-python-commands)
     - [7.1. Using arguments](#71-using-arguments)
@@ -354,6 +356,53 @@ Good evening.
 
 The current time is 20:17:15.
 ```
+
+### 5.4. to_html command
+
+`to_html` is a command for converting Markdown text to HTML.
+
+In the following definition example, the output of the previous command (`cat README.ja.md`) is converted to HTML and saved to `tmp/summary.html`.
+
+```markdown
+---
+commands:
+  - script: cat README.ja.md
+  - to_html: tmp/summary.html
+---
+```
+
+You can also explicitly specify parameters as follows.
+
+```markdown
+---
+commands:
+  - to_html:
+      input: reports/summary.md
+      css: assets/summary.css
+      output: tmp/summary.html
+---
+```
+
+- `input`: Specify the path of the input Markdown file. If omitted, the output of the previous command is used as input.
+- `output`: Specify the path to save the generated HTML file. If omitted, the generated HTML string is returned as the command result.
+- `css`: Specify the path of the CSS file to apply to the generated HTML.
+
+### 5.5. to_pdf command
+`to_pdf` is a command for converting Markdown or HTML to PDF.
+
+
+```markdown
+---
+commands:
+  - to_pdf:
+      input: reports/summary.md
+      css: assets/summary-print.css
+      output: tmp/summary.pdf
+---
+```
+- `input`: Specify the path of the input file to convert. If omitted, the output of the previous command is used as input.
+- `output`: Specify the path to save the generated PDF file. If omitted, the generated PDF is returned as a Base64 string.
+- `css`: Specify the path of the CSS file to apply to the generated PDF.
 
 
 ## 6. Using shell scripts

@@ -6,12 +6,16 @@ from guildbotics.drivers.commands.markdown_command import MarkdownCommand
 from guildbotics.drivers.commands.print_command import PrintCommand
 from guildbotics.drivers.commands.python_command import PythonCommand
 from guildbotics.drivers.commands.shell_script_command import ShellScriptCommand
+from guildbotics.drivers.commands.to_html_command import ToHtmlCommand
+from guildbotics.drivers.commands.to_pdf_command import ToPdfCommand
 
 _COMMAND_TYPES: tuple[type[CommandBase], ...] = (
     MarkdownCommand,
     PythonCommand,
     ShellScriptCommand,
     PrintCommand,
+    ToHtmlCommand,
+    ToPdfCommand,
 )
 _COMMAND_REGISTRY: dict[str, type[CommandBase]] = {
     command_type.get_extension().lower(): command_type

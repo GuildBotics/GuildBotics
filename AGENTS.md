@@ -36,6 +36,7 @@ This document defines the operational rules, workflows, output contracts, and ve
   ```bash
   uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
   ```
+  In some environments, the above command may result in an error. In that case, try `python -m pytest tests/ --cov=guildbotics --cov-report=xml` without using `uv run`.
 - Coverage: In possible environments, confirm updates to `coverage.xml`.
 - Environment Constraints: Clearly indicate credential shortages or network unavailability as "🔶 Pending".
 

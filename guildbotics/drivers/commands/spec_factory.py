@@ -40,20 +40,20 @@ class CommandSpecFactory:
         return spec
 
     def build_from_entry(self, anchor: CommandSpec, entry: Any) -> CommandSpec:
-        data = self._normalize_entry(entry)
+        config = self._normalize_entry(entry)
         anchor.command_index += 1
 
-        name = self._resolve_name(data, anchor)
+        name = self._resolve_name(config, anchor)
         path = None
-        inline_command = self._is_inline_command(data, anchor)
+        inline_command = self._is_inline_command(config, anchor)
         if inline_command:
-            kind = inline_command.get_extension()
+            kind = ""
             command_class = inline_command
         else:
-            path, kind = self._resolve_path(data, anchor)
+            path, kind = self._resolve_path(config, anchor)
             command_class = find_command_class(kind)
-        args = self._normalize_args(data.get("args"))
-        params = self._merge_params(anchor, args, data.get("params"), kind)
+        args = self._normalize_args(config.get("args"))
+        params = self._merge_params(anchor, args, config.get("params"), kind)
 
         stdin_override = params.pop("message", None)
         if stdin_override is not None:
@@ -69,7 +69,7 @@ class CommandSpecFactory:
             stdin_override=stdin_override,
             cwd=anchor.cwd,
             command_index=anchor.command_index,
-            config=data,
+            config=config,
             class_resolver=anchor.class_resolver,
         )
         return spec
