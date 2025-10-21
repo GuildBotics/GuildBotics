@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from guildbotics.drivers.commands.errors import CustomCommandError
+from guildbotics.drivers.commands.errors import CommandError
 from guildbotics.drivers.commands.registry import get_command_extensions
 from guildbotics.runtime.context import Context
 from guildbotics.utils.fileio import get_person_config_path
@@ -17,7 +17,9 @@ def resolve_named_command(context: Context, identifier: str) -> Path:
     if identifier_path.suffix:
         suffixes = [identifier]
     else:
-        suffixes = [f"{identifier}{extension}" for extension in get_command_extensions()]
+        suffixes = [
+            f"{identifier}{extension}" for extension in get_command_extensions()
+        ]
 
     for suffix_identifier in suffixes:
         prompts_path = get_person_config_path(
@@ -32,7 +34,7 @@ def resolve_named_command(context: Context, identifier: str) -> Path:
         if intelligence_path.exists():
             return intelligence_path
 
-    raise CustomCommandError(f"Unable to locate command '{identifier}'.")
+    raise CommandError(f"Unable to locate command '{identifier}'.")
 
 
 def resolve_command_reference(base_dir: Path, value: str, context: Context) -> Path:
@@ -40,7 +42,7 @@ def resolve_command_reference(base_dir: Path, value: str, context: Context) -> P
     candidate_path = Path(value)
     if candidate_path.is_absolute():
         if not candidate_path.exists():
-            raise CustomCommandError(f"Command file '{candidate_path}' not found.")
+            raise CommandError(f"Command file '{candidate_path}' not found.")
         return candidate_path
 
     anchored = (base_dir / candidate_path).resolve()
@@ -60,4 +62,4 @@ def resolve_command_reference(base_dir: Path, value: str, context: Context) -> P
     if resolved.exists():
         return resolved
 
-    raise CustomCommandError(f"Command '{value}' could not be resolved.")
+    raise CommandError(f"Command '{value}' could not be resolved.")

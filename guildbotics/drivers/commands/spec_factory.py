@@ -6,7 +6,7 @@ from typing import Any
 
 from guildbotics.drivers.commands.command_base import CommandBase
 from guildbotics.drivers.commands.discovery import resolve_command_reference
-from guildbotics.drivers.commands.errors import CustomCommandError
+from guildbotics.drivers.commands.errors import CommandError
 from guildbotics.drivers.commands.models import CommandSpec
 from guildbotics.drivers.commands.registry import find_command_class, get_command_types
 from guildbotics.runtime.context import Context
@@ -83,12 +83,12 @@ class CommandSpecFactory:
                 command = self._parse_command(str(normalized.pop("command")))
                 normalized = {**command, **normalized}
             return normalized
-        raise CustomCommandError("Command entry must be a mapping or string.")
+        raise CommandError("Command entry must be a mapping or string.")
 
     def _parse_command(self, entry: str) -> dict[str, Any]:
         words = shlex.split(entry)
         if not words:
-            raise CustomCommandError("Command entry string cannot be empty.")
+            raise CommandError("Command entry string cannot be empty.")
         return {"path": words[0], "args": words[1:]}
 
     def _resolve_name(self, data: dict[str, Any], anchor: CommandSpec) -> str:
@@ -107,9 +107,7 @@ class CommandSpecFactory:
     ) -> tuple[Path, str]:
         path_value = data.get("path") or data.get("name")
         if not path_value:
-            raise CustomCommandError(
-                "Command entry requires 'path', 'name' or 'script'."
-            )
+            raise CommandError("Command entry requires 'path', 'name' or 'script'.")
 
         resolved = resolve_command_reference(
             anchor.base_dir, str(path_value), self._context
@@ -146,9 +144,7 @@ class CommandSpecFactory:
             if isinstance(raw_params, dict):
                 params.update(raw_params)
             else:
-                raise CustomCommandError(
-                    "Command params must be provided as a mapping."
-                )
+                raise CommandError("Command params must be provided as a mapping.")
 
         arg_params = self._get_placeholders_from_args(args, kind)
         params.update(arg_params)

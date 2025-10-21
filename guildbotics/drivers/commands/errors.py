@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Sequence
 
 
-class CustomCommandError(RuntimeError):
+class CommandError(RuntimeError):
     """Base error raised when a custom command cannot be executed."""
 
 
-class PersonSelectionRequiredError(CustomCommandError):
+class PersonSelectionRequiredError(CommandError):
     """Raised when no person could be inferred for a command."""
 
     def __init__(self, available: Sequence[str]):
@@ -15,7 +15,7 @@ class PersonSelectionRequiredError(CustomCommandError):
         self.available = list(available)
 
 
-class PersonNotFoundError(CustomCommandError):
+class PersonNotFoundError(CommandError):
     """Raised when the requested person is not part of the team."""
 
     def __init__(self, identifier: str, available: Sequence[str]):

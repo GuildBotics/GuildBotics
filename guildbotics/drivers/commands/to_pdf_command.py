@@ -14,7 +14,7 @@ from guildbotics.drivers.commands.models import CommandOutcome
 class ToPdfCommand(DocumentConversionCommand):
     """Inline command that converts Markdown or HTML input into a PDF document."""
 
-    extension = ""
+    extensions = []
     inline_key = "to_pdf"
     _DEFAULT_CSS_PATH = (
         Path(__file__).resolve().parent.parent.parent

@@ -13,7 +13,7 @@ class PrintCommand(MarkdownCommand):
     any AI/brain processing.
     """
 
-    extension = ""
+    extensions = []
     inline_key = "print"
 
     async def run(self) -> CommandOutcome | None:

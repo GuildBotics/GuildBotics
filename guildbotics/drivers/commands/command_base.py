@@ -17,7 +17,7 @@ from guildbotics.runtime.context import Context
 class CommandBase(ABC):
     """Base interface for custom command executors."""
 
-    extension: ClassVar[str]
+    extensions: ClassVar[list[str]]
     inline_key: ClassVar[str]
 
     def __init__(self, context: Context, spec: CommandSpec, cwd: Path) -> None:
@@ -43,8 +43,8 @@ class CommandBase(ABC):
         return self._cwd
 
     @classmethod
-    def get_extension(cls) -> str:
-        return cls.extension
+    def get_extensions(cls) -> list[str]:
+        return cls.extensions
 
     @classmethod
     def get_inline_key(cls) -> str:
@@ -52,7 +52,7 @@ class CommandBase(ABC):
 
     @classmethod
     def is_inline_only(cls) -> bool:
-        return cls.extension == ""
+        return len(cls.extensions) == 0
 
     @classmethod
     def is_inline_command(cls, data: dict[str, Any]) -> bool:

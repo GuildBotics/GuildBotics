@@ -11,7 +11,7 @@ from guildbotics.drivers.commands.models import CommandOutcome
 class ToHtmlCommand(DocumentConversionCommand):
     """Inline command that converts Markdown input into styled HTML output."""
 
-    extension = ""
+    extensions = []
     inline_key = "to_html"
     _DEFAULT_CSS_PATH = (
         Path(__file__).resolve().parent.parent.parent

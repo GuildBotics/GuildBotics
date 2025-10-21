@@ -6,24 +6,24 @@ from pathlib import Path
 from typing import Any
 
 from guildbotics.drivers.commands.command_base import CommandBase
-from guildbotics.drivers.commands.errors import CustomCommandError
+from guildbotics.drivers.commands.errors import CommandError
 from guildbotics.drivers.commands.models import CommandOutcome
 from guildbotics.drivers.commands.utils import stringify_output
 
 
 class PythonCommand(CommandBase):
-    extension = ".py"
+    extensions = [".py"]
     inline_key = "python"
 
     async def run(self) -> CommandOutcome:
         if self.spec.path is None:
-            raise CustomCommandError(
+            raise CommandError(
                 f"Python command '{self.spec.name}' is missing a file path."
             )
         module = _load_python_module(self.spec.path)
         entry = getattr(module, "main", None)
         if entry is None or not callable(entry):
-            raise CustomCommandError(
+            raise CommandError(
                 f"Python command '{self.spec.path}' must define a callable 'main'."
             )
 
@@ -77,7 +77,7 @@ class PythonCommand(CommandBase):
 def _load_python_module(path: Path) -> Any:
     spec = importlib.util.spec_from_file_location(path.stem, path)
     if spec is None or spec.loader is None:
-        raise CustomCommandError(f"Unable to load python command module from '{path}'.")
+        raise CommandError(f"Unable to load python command module from '{path}'.")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

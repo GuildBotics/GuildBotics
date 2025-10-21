@@ -1,25 +1,26 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 from guildbotics.drivers.commands.command_base import CommandBase
 from guildbotics.drivers.commands.discovery import resolve_named_command
 from guildbotics.drivers.commands.errors import (
-    CustomCommandError,
+    CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
 from guildbotics.drivers.commands.markdown_command import MarkdownCommand
 from guildbotics.drivers.commands.models import CommandOutcome, CommandSpec
 from guildbotics.drivers.commands.spec_factory import CommandSpecFactory
+from guildbotics.drivers.commands.yaml_command import YamlCommand
 from guildbotics.entities.team import Person
 from guildbotics.runtime.context import Context
-from guildbotics.utils.fileio import load_markdown_with_frontmatter
+from guildbotics.utils.fileio import load_markdown_with_frontmatter, load_yaml_file
 from guildbotics.utils.import_utils import ClassResolver
 
 
-class CustomCommandExecutor:
+class CommandRunner:
     """Coordinate the execution of main and sub commands."""
 
     def __init__(
@@ -57,7 +58,7 @@ class CustomCommandExecutor:
     def _ensure_spec_loaded(
         self, spec: CommandSpec, parent: CommandSpec | None = None
     ) -> None:
-        if spec.command_class == MarkdownCommand:
+        if spec.command_class == MarkdownCommand or spec.command_class == YamlCommand:
             self._attach_markdown_metadata(spec, parent)
 
     def _attach_markdown_metadata(
@@ -65,7 +66,11 @@ class CustomCommandExecutor:
     ) -> None:
         if spec.path is None:
             return
-        config = load_markdown_with_frontmatter(spec.path)
+        if spec.command_class == MarkdownCommand:
+            config = load_markdown_with_frontmatter(spec.path)
+        else:
+            config = cast(dict, load_yaml_file(spec.path))
+
         spec.class_resolver = ClassResolver(
             config.get("schema", ""), parent.class_resolver if parent else None
         )
@@ -106,7 +111,7 @@ class CustomCommandExecutor:
         name = spec.name
         if name in self._call_stack:
             cycle = " -> ".join(self._call_stack + [name])
-            raise CustomCommandError(f"Cyclic command invocation detected: {cycle}")
+            raise CommandError(f"Cyclic command invocation detected: {cycle}")
 
         self._call_stack.append(name)
 
@@ -151,17 +156,17 @@ class CustomCommandExecutor:
         return self._main_spec
 
 
-async def run_custom_command(
+async def run_command(
     base_context: Context,
     command_name: str,
     command_args: Sequence[str],
     person_identifier: str | None = None,
     cwd: Path | None = None,
 ) -> str:
-    """Execute a custom prompt command and return the rendered output."""
+    """Execute a command within the given context."""
     person = _resolve_person(base_context.team.members, person_identifier)
     context = base_context.clone_for(person)
-    executor = CustomCommandExecutor(context, command_name, command_args, cwd)
+    executor = CommandRunner(context, command_name, command_args, cwd)
     return await executor.run()
 
 

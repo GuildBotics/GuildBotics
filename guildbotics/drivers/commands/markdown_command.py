@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from guildbotics.drivers.commands.command_base import CommandBase
-from guildbotics.drivers.commands.errors import CustomCommandError
+from guildbotics.drivers.commands.errors import CommandError
 from guildbotics.drivers.commands.models import CommandOutcome
 from guildbotics.drivers.commands.utils import stringify_output
 from guildbotics.intelligences.functions import get_content, preprocess, to_dict
@@ -12,7 +12,7 @@ from guildbotics.utils.text_utils import replace_placeholders
 
 
 class MarkdownCommand(CommandBase):
-    extension = ".md"
+    extensions = [".md"]
     inline_key = "prompt"
 
     async def run(self) -> CommandOutcome | None:
@@ -42,7 +42,7 @@ class MarkdownCommand(CommandBase):
                 self.spec.class_resolver,
             )
         except Exception as exc:  # pragma: no cover - propagate as driver error
-            raise CustomCommandError(
+            raise CommandError(
                 f"Custom command '{self.spec.name}' execution failed: {exc}"
             ) from exc
 
@@ -66,7 +66,7 @@ class MarkdownCommand(CommandBase):
             return config, True
 
         if self.spec.path is None:
-            raise CustomCommandError(
+            raise CommandError(
                 f"Markdown command '{self.spec.name}' is missing a path or {self.inline_key}."
             )
         config = load_markdown_with_frontmatter(self.spec.path)

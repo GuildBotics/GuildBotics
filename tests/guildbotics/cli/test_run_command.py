@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 
 from guildbotics.cli import _parse_command_spec
-from guildbotics.drivers.custom_command_runner import (
-    CustomCommandExecutor,
+from guildbotics.drivers.command_runner import (
+    CommandRunner,
     PersonNotFoundError,
     PersonSelectionRequiredError,
     _resolve_person,
-    run_custom_command,
+    run_command,
 )
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.intelligences.functions import to_text
@@ -110,7 +110,7 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
         """,
     )
 
-    result = await run_custom_command(_get_context("stdin text"), "solo", ["world"])
+    result = await run_command(_get_context("stdin text"), "solo", ["world"])
     assert result == f"Greetings world\nstdin text"
 
 
@@ -154,7 +154,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
     )
 
     context = _get_context("initial")
-    executor = CustomCommandExecutor(context, "pipeline", ["ARG"])
+    executor = CommandRunner(context, "pipeline", ["ARG"])
     result = await executor.run()
 
     runner = executor._context
@@ -206,7 +206,7 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
     script_path.chmod(0o755)
 
     context = _get_context("initial")
-    executor = CustomCommandExecutor(context, "shell_driver", ["ARG"])
+    executor = CommandRunner(context, "shell_driver", ["ARG"])
     result = await executor.run()
 
     runner = executor._context
@@ -244,7 +244,7 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
     )
 
     context = _get_context()
-    executor = CustomCommandExecutor(context, "driver", [])
+    executor = CommandRunner(context, "driver", [])
     await executor.run()
 
     shared = executor._context.shared_state
