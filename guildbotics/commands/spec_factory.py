@@ -4,15 +4,15 @@ import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
-from guildbotics.drivers.commands.discovery import resolve_command_reference
-from guildbotics.drivers.commands.errors import CommandError
-from guildbotics.drivers.commands.models import CommandSpec
-from guildbotics.drivers.commands.registry import find_command_class, get_command_types
+from guildbotics.commands.discovery import resolve_command_reference
+from guildbotics.commands.errors import CommandError
+from guildbotics.commands.models import CommandSpec
+from guildbotics.commands.registry import find_command_class, get_command_types
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.text_utils import get_placeholders_from_args
 
 if TYPE_CHECKING:
-    from guildbotics.drivers.commands.command_base import CommandBase
+    from guildbotics.commands.command_base import CommandBase
     from guildbotics.runtime.context import Context
 
 

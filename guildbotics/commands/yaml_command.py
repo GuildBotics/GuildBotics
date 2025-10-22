@@ -1,8 +1,8 @@
 from typing import cast
 
-from guildbotics.drivers.commands.command_base import CommandBase
-from guildbotics.drivers.commands.models import CommandOutcome, CommandSpec
-from guildbotics.drivers.commands.spec_factory import CommandSpecFactory
+from guildbotics.commands.command_base import CommandBase
+from guildbotics.commands.models import CommandOutcome, CommandSpec
+from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.import_utils import ClassResolver
 

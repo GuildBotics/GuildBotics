@@ -3,14 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Sequence
 
-from guildbotics.drivers.commands.discovery import resolve_named_command
-from guildbotics.drivers.commands.errors import (
+from guildbotics.commands.discovery import resolve_named_command
+from guildbotics.commands.errors import (
     CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
-from guildbotics.drivers.commands.models import CommandOutcome, CommandSpec
-from guildbotics.drivers.commands.spec_factory import CommandSpecFactory
+from guildbotics.commands.models import CommandOutcome, CommandSpec
+from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.entities.team import Person
 from guildbotics.runtime.context import Context
 

@@ -7,13 +7,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
-    from guildbotics.drivers.commands.spec_factory import CommandSpecFactory
+    from guildbotics.commands.spec_factory import CommandSpecFactory
 
-from guildbotics.drivers.commands.models import (
-    CommandOutcome,
-    CommandSpec,
-    InvocationOptions,
-)
+from guildbotics.commands.models import CommandOutcome, CommandSpec, InvocationOptions
 from guildbotics.runtime.context import Context
 from guildbotics.utils.import_utils import ClassResolver
 

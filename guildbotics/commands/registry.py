@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from guildbotics.drivers.commands.command_base import CommandBase
+    from guildbotics.commands.command_base import CommandBase
 
 # Lazy caches populated on first access
 _COMMAND_TYPES: tuple[type["CommandBase"], ...] | None = None
@@ -21,13 +21,13 @@ def _ensure_registry() -> None:
         return
 
     # Import concrete command classes lazily to avoid circular imports
-    from guildbotics.drivers.commands.markdown_command import MarkdownCommand
-    from guildbotics.drivers.commands.print_command import PrintCommand
-    from guildbotics.drivers.commands.python_command import PythonCommand
-    from guildbotics.drivers.commands.shell_script_command import ShellScriptCommand
-    from guildbotics.drivers.commands.to_html_command import ToHtmlCommand
-    from guildbotics.drivers.commands.to_pdf_command import ToPdfCommand
-    from guildbotics.drivers.commands.yaml_command import YamlCommand
+    from guildbotics.commands.markdown_command import MarkdownCommand
+    from guildbotics.commands.print_command import PrintCommand
+    from guildbotics.commands.python_command import PythonCommand
+    from guildbotics.commands.shell_script_command import ShellScriptCommand
+    from guildbotics.commands.to_html_command import ToHtmlCommand
+    from guildbotics.commands.to_pdf_command import ToPdfCommand
+    from guildbotics.commands.yaml_command import YamlCommand
 
     _COMMAND_TYPES = (
         MarkdownCommand,
@@ -63,7 +63,7 @@ def get_command_extensions() -> tuple[str, ...]:
 
 def find_command_class(extension: str) -> type["CommandBase"]:
     """Return the registered command class for the given file extension."""
-    from guildbotics.drivers.commands.errors import CommandError
+    from guildbotics.commands.errors import CommandError
 
     _ensure_registry()
     extension = extension.lower()

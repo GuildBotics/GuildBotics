@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from guildbotics.drivers.commands.errors import CommandError
-from guildbotics.drivers.commands.registry import get_command_extensions
+from guildbotics.commands.errors import CommandError
+from guildbotics.commands.registry import get_command_extensions
 from guildbotics.runtime.context import Context
 from guildbotics.utils.fileio import get_person_config_path
 
