@@ -4,7 +4,10 @@ import os
 import shlex
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from guildbotics.drivers.commands.spec_factory import CommandSpecFactory
 
 from guildbotics.drivers.commands.models import (
     CommandOutcome,
@@ -12,6 +15,7 @@ from guildbotics.drivers.commands.models import (
     InvocationOptions,
 )
 from guildbotics.runtime.context import Context
+from guildbotics.utils.import_utils import ClassResolver
 
 
 class CommandBase(ABC):
@@ -41,6 +45,16 @@ class CommandBase(ABC):
     @property
     def cwd(self) -> Path:
         return self._cwd
+
+    @classmethod
+    def populate_spec(
+        cls,
+        spec: CommandSpec,
+        spec_factory: CommandSpecFactory,
+        class_resolver: ClassResolver | None,
+    ) -> None:
+        """Populate the given CommandSpec with metadata from its file."""
+        pass
 
     @classmethod
     def get_extensions(cls) -> list[str]:

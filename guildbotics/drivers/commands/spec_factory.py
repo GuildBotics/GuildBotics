@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Sequence
 
-from guildbotics.drivers.commands.command_base import CommandBase
 from guildbotics.drivers.commands.discovery import resolve_command_reference
 from guildbotics.drivers.commands.errors import CommandError
 from guildbotics.drivers.commands.models import CommandSpec
 from guildbotics.drivers.commands.registry import find_command_class, get_command_types
-from guildbotics.runtime.context import Context
+from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.text_utils import get_placeholders_from_args
+
+if TYPE_CHECKING:
+    from guildbotics.drivers.commands.command_base import CommandBase
+    from guildbotics.runtime.context import Context
 
 
 class CommandSpecFactory:
@@ -159,3 +162,29 @@ class CommandSpecFactory:
         if path.name.startswith(".") and path.stem:
             return path.stem
         return path.stem or path.name
+
+    def populate_spec(
+        self,
+        spec: CommandSpec,
+        config: dict,
+        class_resolver: ClassResolver | None,
+    ) -> None:
+        if spec.path is None:
+            return
+
+        spec.class_resolver = ClassResolver(config.get("schema", ""), class_resolver)
+        spec.children = []
+
+        raw_commands = config.get("commands")
+        if raw_commands is None:
+            entries: list[Any] = []
+        elif isinstance(raw_commands, Sequence) and not isinstance(
+            raw_commands, (str, bytes)
+        ):
+            entries = list(raw_commands)
+        else:
+            entries = [str(raw_commands)]
+
+        for entry in entries:
+            child = self.build_from_entry(spec, entry)
+            spec.children.append(child)
