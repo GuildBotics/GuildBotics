@@ -4,16 +4,31 @@ from typing import Any
 
 from guildbotics.drivers.commands.command_base import CommandBase
 from guildbotics.drivers.commands.errors import CommandError
-from guildbotics.drivers.commands.models import CommandOutcome
+from guildbotics.drivers.commands.models import CommandOutcome, CommandSpec
+from guildbotics.drivers.commands.spec_factory import CommandSpecFactory
 from guildbotics.drivers.commands.utils import stringify_output
 from guildbotics.intelligences.functions import get_content, preprocess, to_dict
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
+from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.text_utils import replace_placeholders
 
 
 class MarkdownCommand(CommandBase):
     extensions = [".md"]
     inline_key = "prompt"
+
+    @classmethod
+    def populate_spec(
+        cls,
+        spec: CommandSpec,
+        spec_factory: CommandSpecFactory,
+        class_resolver: ClassResolver | None,
+    ) -> None:
+        if spec.path is None:
+            return
+
+        config = load_markdown_with_frontmatter(spec.path)
+        spec_factory.populate_spec(spec, config, class_resolver)
 
     async def run(self) -> CommandOutcome | None:
         config, inline = self._load_markdown_metadata()
