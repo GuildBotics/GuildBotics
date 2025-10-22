@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.drivers.commands.models import CommandSpec
-from guildbotics.drivers.commands.to_pdf_command import ToPdfCommand
+from guildbotics.commands.models import CommandSpec
+from guildbotics.commands.to_pdf_command import ToPdfCommand
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from tests.guildbotics.runtime.test_context import (
@@ -22,11 +22,15 @@ def _make_context(message: str = "") -> Context:
     loader_factory = DummyLoaderFactory(team)
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
-    base = Context.get_default(loader_factory, integration_factory, brain_factory, message)
+    base = Context.get_default(
+        loader_factory, integration_factory, brain_factory, message
+    )
     return base.clone_for(members[0])
 
 
-def _make_spec(tmp_path: Path, params: dict | None = None, config: dict | None = None) -> CommandSpec:
+def _make_spec(
+    tmp_path: Path, params: dict | None = None, config: dict | None = None
+) -> CommandSpec:
     return CommandSpec(
         name="inline_to_pdf",
         base_dir=tmp_path,

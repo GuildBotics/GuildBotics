@@ -5,10 +5,8 @@ from pathlib import Path
 
 from weasyprint import HTML  # type: ignore
 
-from guildbotics.drivers.commands.document_conversion_command import (
-    DocumentConversionCommand,
-)
-from guildbotics.drivers.commands.models import CommandOutcome
+from guildbotics.commands.document_conversion_command import DocumentConversionCommand
+from guildbotics.commands.models import CommandOutcome
 
 
 class ToPdfCommand(DocumentConversionCommand):
@@ -17,7 +15,7 @@ class ToPdfCommand(DocumentConversionCommand):
     extensions = []
     inline_key = "to_pdf"
     _DEFAULT_CSS_PATH = (
-        Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent
         / "assets"
         / "css"
         / "github-markdown-light.css"

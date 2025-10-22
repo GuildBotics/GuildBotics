@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.drivers.commands.models import CommandSpec
-from guildbotics.drivers.commands.to_html_command import ToHtmlCommand
+from guildbotics.commands.models import CommandSpec
+from guildbotics.commands.to_html_command import ToHtmlCommand
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from tests.guildbotics.runtime.test_context import (

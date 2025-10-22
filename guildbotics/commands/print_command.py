@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from guildbotics.drivers.commands.markdown_command import MarkdownCommand
-from guildbotics.drivers.commands.models import CommandOutcome
+from guildbotics.commands.markdown_command import MarkdownCommand
+from guildbotics.commands.models import CommandOutcome
 
 
 class PrintCommand(MarkdownCommand):

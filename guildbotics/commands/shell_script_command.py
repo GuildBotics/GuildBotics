@@ -5,10 +5,10 @@ import os
 import tempfile
 from pathlib import Path
 
-from guildbotics.drivers.commands.command_base import CommandBase
-from guildbotics.drivers.commands.errors import CommandError
-from guildbotics.drivers.commands.models import CommandOutcome
-from guildbotics.drivers.commands.utils import stringify_output
+from guildbotics.commands.command_base import CommandBase
+from guildbotics.commands.errors import CommandError
+from guildbotics.commands.models import CommandOutcome
+from guildbotics.commands.utils import stringify_output
 
 
 class ShellScriptCommand(CommandBase):

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from guildbotics.drivers.commands.document_conversion_command import (
-    DocumentConversionCommand,
-)
-from guildbotics.drivers.commands.models import CommandOutcome
+from guildbotics.commands.document_conversion_command import DocumentConversionCommand
+from guildbotics.commands.models import CommandOutcome
 
 
 class ToHtmlCommand(DocumentConversionCommand):
@@ -14,7 +12,7 @@ class ToHtmlCommand(DocumentConversionCommand):
     extensions = []
     inline_key = "to_html"
     _DEFAULT_CSS_PATH = (
-        Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent
         / "assets"
         / "css"
         / "github-markdown.css"

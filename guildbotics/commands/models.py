@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from guildbotics.utils.import_utils import ClassResolver
 
 if TYPE_CHECKING:
-    from guildbotics.drivers.commands.command_base import CommandBase
+    from guildbotics.commands.command_base import CommandBase
 
 
 @dataclass

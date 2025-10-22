@@ -5,8 +5,8 @@ from typing import Any, ClassVar
 
 from markdown_it import MarkdownIt
 
-from guildbotics.drivers.commands.command_base import CommandBase
-from guildbotics.drivers.commands.errors import CommandError
+from guildbotics.commands.command_base import CommandBase
+from guildbotics.commands.errors import CommandError
 
 
 class DocumentConversionCommand(CommandBase):

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from guildbotics.drivers.commands.utils import stringify_output
+from guildbotics.commands.utils import stringify_output
 
 
 class _SampleModel(BaseModel):
