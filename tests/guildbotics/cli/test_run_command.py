@@ -99,7 +99,7 @@ def _get_context(message: str = "") -> Context:
 async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/solo.md",
+        tmp_path / "commands/solo.md",
         """
         ---
         brain: none
@@ -118,7 +118,7 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
 async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/pipeline.md",
+        tmp_path / "commands/pipeline.md",
         """
         ---
         brain: none
@@ -134,7 +134,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
         """,
     )
     _write(
-        tmp_path / "prompts/first.md",
+        tmp_path / "commands/first.md",
         """
         ---
         brain: default
@@ -143,7 +143,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
         """,
     )
     _write(
-        tmp_path / "prompts/tools/python_step.py",
+        tmp_path / "commands/tools/python_step.py",
         """
         from guildbotics.runtime import Context
 
@@ -158,7 +158,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
     result = await executor.run()
 
     runner = executor._context
-    pipeline_path = str(tmp_path / "prompts/pipeline.md")
+    pipeline_path = str(tmp_path / "commands/pipeline.md")
     assert runner.shared_state["pipeline"].startswith("Main start for ARG")
     assert "first_payload" in runner.shared_state
     assert runner.shared_state["python_payload"] == {
@@ -172,7 +172,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
 async def test_executor_runs_shell_command(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/shell_driver.md",
+        tmp_path / "commands/shell_driver.md",
         """
         ---
         brain: none
@@ -189,7 +189,7 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
         """,
     )
 
-    script_path = tmp_path / "prompts/tools/echo.sh"
+    script_path = tmp_path / "commands/tools/echo.sh"
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(
         """
@@ -221,7 +221,7 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
 async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/driver.py",
+        tmp_path / "commands/driver.py",
         """
         from guildbotics.runtime import Context
 
@@ -234,7 +234,7 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
         """,
     )
     _write(
-        tmp_path / "prompts/invoked_md.md",
+        tmp_path / "commands/invoked_md.md",
         """
         ---
         brain: none

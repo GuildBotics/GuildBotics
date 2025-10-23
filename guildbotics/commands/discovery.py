@@ -23,16 +23,10 @@ def resolve_named_command(context: Context, identifier: str) -> Path:
 
     for suffix_identifier in suffixes:
         prompts_path = get_person_config_path(
-            person_id, f"prompts/{suffix_identifier}", language_code
+            person_id, f"commands/{suffix_identifier}", language_code
         )
         if prompts_path.exists():
             return prompts_path
-
-        intelligence_path = get_person_config_path(
-            person_id, f"intelligences/{suffix_identifier}", language_code
-        )
-        if intelligence_path.exists():
-            return intelligence_path
 
     raise CommandError(f"Unable to locate command '{identifier}'.")
 

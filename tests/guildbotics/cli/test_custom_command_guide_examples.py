@@ -40,7 +40,7 @@ def _make_context(message: str = "", members: list[Person] | None = None) -> Con
 async def test_quickstart_positional_args_with_pipe(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/translate.md",
+        tmp_path / "commands/translate.md",
         """
         ---
         brain: none
@@ -61,7 +61,7 @@ async def test_quickstart_positional_args_with_pipe(tmp_path, monkeypatch):
 def test_named_args_placeholders(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/translate.md",
+        tmp_path / "commands/translate.md",
         """
         以下のテキストを${source}から${target}に翻訳してください:
         """,
@@ -73,7 +73,7 @@ def test_named_args_placeholders(tmp_path, monkeypatch):
     # We only assert the parameter expansion occurs at prompt-level for `none` brains.
     # To keep deterministic, write another prompt using none brain.
     _write(
-        tmp_path / "prompts/translate2.md",
+        tmp_path / "commands/translate2.md",
         """
         ---
         brain: none
@@ -95,7 +95,7 @@ def test_named_args_placeholders(tmp_path, monkeypatch):
 async def test_jinja2_conditional_rendering(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/cond.md",
+        tmp_path / "commands/cond.md",
         """
         ---
         brain: none
@@ -123,7 +123,7 @@ async def test_jinja2_conditional_rendering(tmp_path, monkeypatch):
 async def test_context_variables_in_jinja2(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/context-info.md",
+        tmp_path / "commands/context-info.md",
         """
         ---
         brain: none
@@ -160,7 +160,7 @@ async def test_context_variables_in_jinja2(tmp_path, monkeypatch):
 async def test_cli_agent_brain_cli_passes_cwd_and_params(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/summarize.md",
+        tmp_path / "commands/summarize.md",
         """
         ---
         brain: cli
@@ -189,7 +189,7 @@ async def test_builtin_command_in_pipeline_identify_item_args_passed(
 ):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/get-time-of-day.yml",
+        tmp_path / "commands/get-time-of-day.yml",
         """
         commands:
           - name: current_time
@@ -213,7 +213,7 @@ async def test_builtin_command_in_pipeline_identify_item_args_passed(
 async def test_subcommand_naming_and_reference_with_jinja2(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/greet-time.md",
+        tmp_path / "commands/greet-time.md",
         """
         ---
         commands:
@@ -249,7 +249,7 @@ async def test_external_shell_script_arguments_and_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     # Reference script by logical name without extension
     _write(
-        tmp_path / "prompts/echo-args.md",
+        tmp_path / "commands/echo-args.md",
         """
         ---
         brain: none
@@ -266,7 +266,7 @@ async def test_external_shell_script_arguments_and_env(tmp_path, monkeypatch):
         ${echo_args}
         """,
     )
-    script_path = tmp_path / "prompts/tools/echo-args.sh"
+    script_path = tmp_path / "commands/tools/echo-args.sh"
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(
         """
@@ -294,7 +294,7 @@ async def test_external_shell_script_arguments_and_env(tmp_path, monkeypatch):
 async def test_python_command_hello_world(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/hello.py",
+        tmp_path / "commands/hello.py",
         """
         def main():
             return "Hello, world!"
@@ -311,7 +311,7 @@ async def test_python_command_hello_world(tmp_path, monkeypatch):
 async def test_python_command_with_args_and_kwargs(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/hello.py",
+        tmp_path / "commands/hello.py",
         """
 from guildbotics.runtime import Context
 
@@ -338,7 +338,7 @@ def main(context: Context, arg1, arg2, key1=None, key2=None):
 async def test_python_command_varargs_and_kwargs(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/hello.py",
+        tmp_path / "commands/hello.py",
         """
 from guildbotics.runtime import Context
 
@@ -365,7 +365,7 @@ def main(context: Context, *args, **kwargs):
 async def test_python_command_invokes_other_command(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/hello.py",
+        tmp_path / "commands/hello.py",
         """
 from datetime import datetime
 from guildbotics.runtime import Context
@@ -403,7 +403,7 @@ async def test_print_command_basic(tmp_path, monkeypatch):
     """docs 5.3: `print` outputs literal text without LLM."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/greet.yaml",
+        tmp_path / "commands/greet.yaml",
         """
         commands:
           - print: こんにちは。
@@ -421,7 +421,7 @@ async def test_print_command_with_pipeline_and_jinja(tmp_path, monkeypatch):
     """docs 5.3: `print` supports Jinja and previous outputs."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/greet-time-print.yml",
+        tmp_path / "commands/greet-time-print.yml",
         """
         commands:
           - name: current_time
@@ -455,7 +455,7 @@ async def test_external_shell_script_called_by_command_name(tmp_path, monkeypatc
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
 
     # Create external script `current-time.sh`
-    script_path = tmp_path / "prompts/current-time.sh"
+    script_path = tmp_path / "commands/current-time.sh"
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(
         """
@@ -469,7 +469,7 @@ async def test_external_shell_script_called_by_command_name(tmp_path, monkeypatc
 
     # Compose prompt that calls the external script by logical name
     _write(
-        tmp_path / "prompts/greet-ext.md",
+        tmp_path / "commands/greet-ext.md",
         """
         ---
         commands:
@@ -504,7 +504,7 @@ async def test_member_selection_with_person_identifier(tmp_path, monkeypatch):
     """docs 1.3: select member by identifier during run."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
-        tmp_path / "prompts/whoami.md",
+        tmp_path / "commands/whoami.md",
         """
         ---
         brain: none
@@ -534,7 +534,7 @@ async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
 
     _write(
-        tmp_path / "prompts/coverage.md",
+        tmp_path / "commands/coverage.md",
         """
         ---
         schema: |

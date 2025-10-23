@@ -60,7 +60,7 @@ class SimpleBrainFactory(BrainFactory):
                 path = Path(name)
             else:
                 path = get_person_config_path(
-                    person_id, f"intelligences/{name}.md", language_code
+                    person_id, f"commands/{name}.md", language_code
                 )
 
             config = cast(dict, load_markdown_with_frontmatter(path))

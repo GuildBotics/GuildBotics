@@ -30,7 +30,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
 ### 1.1. Create a prompt file
 Let’s start with a simple command that asks an LLM to translate text.
 
-Create a prompt file named `translate.md` under your prompt configuration folder (default: `~/.guildbotics/config/prompts`) with the following content:
+Create a prompt file named `translate.md` under your prompt configuration folder (default: `~/.guildbotics/config/commands`) with the following content:
 
 ```markdown
 If the following text is in ${1}, translate it to ${2}; if it is in ${2}, translate it to ${1}:
