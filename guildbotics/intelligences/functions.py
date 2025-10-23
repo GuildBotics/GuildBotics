@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, TypeVar
 
-import yaml
+import yaml  # type: ignore
 from pydantic import BaseModel
 
 from guildbotics.entities.message import Message
