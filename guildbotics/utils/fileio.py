@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore
 
 CONFIG_PATH = ".guildbotics/config"
 
@@ -145,30 +145,19 @@ def load_markdown_with_frontmatter(file: Path) -> dict:
     return metadata
 
 
-def get_prompt_path(
-    name: str, language_code: str | None = None, person_id: str | None = None
-) -> Path:
+def get_prompt_path(name: str, language_code: str, person_id: str) -> Path:
     """
     Get the path to a custom prompt file, either for a specific person or a general prompt.
 
     Args:
         name (str): The relative path to the prompt file.
-        language_code (str | None): The language code for localization (optional).
-        person_id (str | None): The ID of the person (optional).
+        language_code (str | None): The language code for localization.
+        person_id (str | None): The ID of the person.
 
     Returns:
         Path: The path to the custom prompt file.
     """
-    if person_id:
-        path = get_person_config_path(person_id, f"prompts/{name}.md", language_code)
-        if path.exists():
-            return path
-
-    path = get_config_path(f"prompts/{name}.md", language_code)
-    if path.exists():
-        return path
-
-    return get_person_config_path(person_id, f"intelligences/{name}.md", language_code)
+    return get_person_config_path(person_id, f"commands/{name}.md", language_code)
 
 
 def load_yaml_file(file: Path) -> dict | list[dict]:
