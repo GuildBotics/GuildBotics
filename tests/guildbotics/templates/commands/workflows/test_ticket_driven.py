@@ -2,8 +2,7 @@ import pytest
 
 from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse, Labels
-from guildbotics.workflows.ticket_driven_workflow import TicketDrivenWorkflow
-from guildbotics.modes.mode_base import ModeBase
+from guildbotics.templates.commands.workflows import ticket_driven_workflow
 
 
 class StubTicketManager:
@@ -54,11 +53,11 @@ async def test_run_transitions_ready_to_in_progress_and_handles_asking(monkeypat
         return "comment"
 
     monkeypatch.setattr(
-        "guildbotics.workflows.ticket_driven_workflow.identify_role",
+        "guildbotics.templates.commands.workflows.ticket_driven_workflow.identify_role",
         fake_identify_role,
     )
     monkeypatch.setattr(
-        "guildbotics.workflows.ticket_driven_workflow.identify_mode",
+        "guildbotics.templates.commands.workflows.ticket_driven_workflow.identify_mode",
         fake_identify_mode,
     )
     # Avoid touching real team/services resolution
@@ -76,10 +75,8 @@ async def test_run_transitions_ready_to_in_progress_and_handles_asking(monkeypat
         "guildbotics.modes.mode_base.ModeBase.get_mode", lambda context: FakeMode()
     )
 
-    wf = TicketDrivenWorkflow(ctx)
-
     # Act
-    await wf.run()
+    await ticket_driven_workflow.main(ctx)
 
     # Assert READY -> IN_PROGRESS transition executed and persisted
     assert len(tm.moved) == 1 and tm.moved[0][1] == Task.IN_PROGRESS
@@ -118,10 +115,8 @@ async def test_run_completes_and_moves_in_progress_to_in_review(monkeypatch):
         "guildbotics.modes.mode_base.ModeBase.get_mode", lambda context: FakeModeDone()
     )
 
-    wf = TicketDrivenWorkflow(ctx)
-
     # Act
-    await wf.run()
+    await ticket_driven_workflow.main(ctx)
 
     # Assert comment added and status progressed to IN_REVIEW
     assert len(tm.commented) == 1 and tm.commented[0][1] == "done msg"

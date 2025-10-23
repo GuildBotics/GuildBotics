@@ -49,7 +49,8 @@ class Task(BaseModel):
         default_factory=list, description="Comments associated with the task."
     )
     workflow: str = Field(
-        default="ticket_driven", description="The workflow associated with the task."
+        default="workflows/ticket_driven_workflow",
+        description="The workflow associated with the task.",
     )
     mode: str | None = Field(
         default=None,
