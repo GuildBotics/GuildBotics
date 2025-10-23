@@ -1,31 +1,10 @@
 import datetime
 import traceback
 
+from guildbotics.drivers.command_runner import CommandRunner
 from guildbotics.entities import Task
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import get_storage_path
-from guildbotics.utils.import_utils import instantiate_class
-from guildbotics.workflows import WorkflowBase
-
-
-def _to_workflow(context: Context, task: Task) -> WorkflowBase:
-    """
-    Convert a Task to a Workflow.
-    """
-
-    module_and_cls = task.workflow
-
-    if "." not in module_and_cls:
-        pascal_case_name = "".join(
-            part.capitalize() for part in task.workflow.split("_")
-        )
-        module_and_cls = (
-            f"guildbotics.workflows.{task.workflow}_workflow.{pascal_case_name}Workflow"
-        )
-
-    return instantiate_class(
-        module_and_cls, expected_type=WorkflowBase, context=context
-    )
 
 
 async def run_workflow(
@@ -55,7 +34,7 @@ async def run_workflow(
             f"Running {task_type} task '{task.title}' for person '{person.person_id}'..."
         )
 
-        workflow = _to_workflow(context, task)
+        workflow = CommandRunner(context, task.workflow, [])
         await workflow.run()
 
         end_time = datetime.datetime.now()

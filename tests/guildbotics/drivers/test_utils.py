@@ -1,12 +1,11 @@
 import asyncio
 from types import SimpleNamespace
-from typing import Any, List, Tuple
+from typing import List
 
 import pytest
 
-from guildbotics.drivers.utils import _to_workflow, run_workflow
+from guildbotics.drivers.utils import run_workflow
 from guildbotics.entities import Task
-from guildbotics.workflows import WorkflowBase
 
 
 class StubLogger:
@@ -35,76 +34,19 @@ class FakeContext:
         self.task = task
 
 
-class SuccessWorkflow(WorkflowBase):
-    """Workflow that records execution without raising errors."""
-
-    def __init__(self, context: Any):
-        super().__init__(context)
-        self.ran = False
-
-    async def run(self) -> None:
-        # Simulate async work
-        await asyncio.sleep(0)
-        self.ran = True
-
-
-class ErrorWorkflow(WorkflowBase):
-    """Workflow that raises an exception during run()."""
-
-    def __init__(self, context: Any):  # pragma: no cover - trivial
-        super().__init__(context)
-
-    async def run(self) -> None:
-        await asyncio.sleep(0)
-        raise RuntimeError("boom")
-
-
-def test__to_workflow_converts_snake_to_pascal_and_module_path(monkeypatch):
-    calls: List[Tuple[str, Any]] = []
-
-    def fake_instantiate(module_and_cls: str, expected_type=None, **kwargs):
-        calls.append((module_and_cls, kwargs))
-        return "SENTINEL"
-
-    monkeypatch.setattr("guildbotics.drivers.utils.instantiate_class", fake_instantiate)
-
-    task = Task(title="t", description="d", workflow="ticket_driven")
-    result = _to_workflow(context=object(), task=task)
-
-    assert result == "SENTINEL"
-    assert calls, "instantiate_class was not called"
-    called_path, kwargs = calls[0]
-    assert (
-        called_path
-        == "guildbotics.workflows.ticket_driven_workflow.TicketDrivenWorkflow"
-    )
-    # Ensure context is passed through
-    assert "context" in kwargs
-
-
-def test__to_workflow_accepts_fully_qualified_name(monkeypatch):
-    calls: List[str] = []
-
-    def fake_instantiate(module_and_cls: str, expected_type=None, **kwargs):
-        calls.append(module_and_cls)
-        return "OK"
-
-    monkeypatch.setattr("guildbotics.drivers.utils.instantiate_class", fake_instantiate)
-
-    fqcn = "some.pkg.Module.ClassName"
-    task = Task(title="t", description="d", workflow=fqcn)
-    result = _to_workflow(context=object(), task=task)
-    assert result == "OK"
-    assert calls == [fqcn]
-
-
 @pytest.mark.asyncio
 async def test_run_workflow_success_logs_and_returns_true(monkeypatch):
-    def fake_instantiate(module_and_cls: str, expected_type=None, **kwargs):
-        # Emulate instantiate_class by returning a proper WorkflowBase subclass instance
-        return SuccessWorkflow(context=kwargs.get("context"))
+    class FakeCommandRunner:
+        def __init__(self, context, workflow, args):
+            self.context = context
+            self.workflow = workflow
+            self.args = args
 
-    monkeypatch.setattr("guildbotics.drivers.utils.instantiate_class", fake_instantiate)
+        async def run(self):
+            # Simulate successful workflow execution
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr("guildbotics.drivers.utils.CommandRunner", FakeCommandRunner)
 
     ctx = FakeContext()
     task = Task(title="Title", description="Desc", workflow="any")
@@ -121,10 +63,19 @@ async def test_run_workflow_success_logs_and_returns_true(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_workflow_exception_logs_and_returns_false(monkeypatch):
-    def fake_instantiate(module_and_cls: str, expected_type=None, **kwargs):
-        return ErrorWorkflow(context=kwargs.get("context"))
+    class FakeCommandRunnerError:
+        def __init__(self, context, workflow, args):
+            self.context = context
+            self.workflow = workflow
+            self.args = args
 
-    monkeypatch.setattr("guildbotics.drivers.utils.instantiate_class", fake_instantiate)
+        async def run(self):
+            await asyncio.sleep(0)
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.utils.CommandRunner", FakeCommandRunnerError
+    )
 
     ctx = FakeContext()
     task = Task(title="Failing", description="Desc", workflow="any")
