@@ -8,10 +8,14 @@ from guildbotics.templates.commands.workflows import ticket_driven_workflow
 class StubTicketManager:
     """Simple async stub for ticket manager to record calls."""
 
-    def __init__(self):
+    def __init__(self, task=None):
+        self.task = task
         self.moved = []  # list of (task, status)
         self.updated = []  # list of task
         self.commented = []  # list of (task, message)
+
+    async def get_task_to_work_on(self):
+        return self.task
 
     async def move_ticket(self, task: Task, status: str):
         self.moved.append((task, status))
@@ -42,7 +46,7 @@ class StubContext:
 async def test_run_transitions_ready_to_in_progress_and_handles_asking(monkeypatch):
     # Arrange a task starting in READY with no role/mode
     task = Task(id="1", title="T", description="D", status=Task.READY)
-    tm = StubTicketManager()
+    tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
 
     # Mock role/mode identification
@@ -103,7 +107,7 @@ async def test_run_completes_and_moves_in_progress_to_in_review(monkeypatch):
         mode="comment",
         status=Task.IN_PROGRESS,
     )
-    tm = StubTicketManager()
+    tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
 
     # Mode.run returns DONE -> should comment and move to IN_REVIEW

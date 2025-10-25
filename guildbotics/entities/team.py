@@ -6,7 +6,7 @@ import langcodes
 from langcodes import Language
 from pydantic import BaseModel, Field, PrivateAttr
 
-from guildbotics.entities.task import ScheduledTask, Task
+from guildbotics.entities.task import ScheduledCommand
 
 
 class Service(Enum):
@@ -169,19 +169,18 @@ class Project(BaseModel):
         return lang.display_name(lang.language or "en")
 
 
-class TaskSchedule(BaseModel):
+class CommandSchedule(BaseModel):
     """
-    A class representing a routine task, including the task details and schedules.
+    A class representing a command schedule.
 
     Attributes:
-        id (Optional[int]): The unique identifier for the routine task.
-        task (Task): The task details.
-        schedules (List[str]): Cron schedule expressions for the routine task.
+        command (str): The command to run.
+        schedules (list[str]): Cron schedule expressions for the command.
     """
 
-    task: Task = Field(..., description="The task details.")
+    command: str = Field(..., description="The command to run.")
     schedules: list[str] = Field(
-        ..., description="Cron schedule expressions for the routine task."
+        ..., description="Cron schedule expressions for the command."
     )
 
 
@@ -288,7 +287,7 @@ class Person(BaseModel):
         default_factory=dict,
         description="A dictionary containing the profile information for the person.",
     )
-    task_schedules: list[TaskSchedule] = Field(
+    task_schedules: list[CommandSchedule] = Field(
         default_factory=list, description="A list of routine tasks for the person."
     )
     relationships: str = Field(
@@ -300,6 +299,9 @@ class Person(BaseModel):
     )
     message_channels: list[MessageChannel] = Field(
         default_factory=list, description="A list of message channels the person uses."
+    )
+    routine_commands: list[str] = Field(
+        default_factory=list, description="A list of routine commands for the person."
     )
 
     def __str__(self):
@@ -315,22 +317,22 @@ class Person(BaseModel):
         """Return hash based on person_id."""
         return hash(self.person_id)
 
-    def get_scheduled_tasks(self) -> list[ScheduledTask]:
+    def get_scheduled_commands(self) -> list[ScheduledCommand]:
         """
         Get the scheduled tasks for the person.
 
         Returns:
             list[ScheduledTask]: A list of scheduled tasks for the person.
         """
-        scheduled_tasks: list[ScheduledTask] = []
+        scheduled_commands: list[ScheduledCommand] = []
         for task_schedule in self.task_schedules:
-            scheduled_tasks.extend(
+            scheduled_commands.extend(
                 [
-                    ScheduledTask(task=task_schedule.task, schedule=s)
+                    ScheduledCommand(command=task_schedule.command, schedule=s)
                     for s in task_schedule.schedules
                 ]
             )
-        return scheduled_tasks
+        return scheduled_commands
 
     def get_role(self, role_id: str | None) -> Role:
         """

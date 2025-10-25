@@ -752,3 +752,6 @@ class SimpleSetupTool(SetupTool):
             f"{GITHUB_URL}{config.owner}/{config.repository_name}"
         )
         return True
+
+    def get_default_routines(self) -> list[str]:
+        return ["workflows/ticket_driven_workflow"]

@@ -25,3 +25,8 @@ class SetupTool(ABC):
     def verify_environment(self) -> None:
         """Verify the project environment."""
         pass
+
+    @abstractmethod
+    def get_default_routines(self) -> list[str]:
+        """Get the default routine commands for the project."""
+        pass

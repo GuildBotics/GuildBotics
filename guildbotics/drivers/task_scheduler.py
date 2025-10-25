@@ -2,49 +2,33 @@ import asyncio
 import datetime
 import threading
 
-from guildbotics.drivers.utils import run_workflow
-from guildbotics.entities import Person, ScheduledTask
+from guildbotics.drivers.utils import run_command
+from guildbotics.entities import Person, ScheduledCommand
 from guildbotics.runtime import Context
-from guildbotics.utils.i18n_tool import t
-
-
-def _build_task_error_message(context, loop) -> str:
-    """Build a character-consistent error message with safe fallback.
-
-    Attempts to generate a message via `talk_as` to preserve persona tone.
-    If anything fails (import, runtime error, empty result), falls back to the
-    default translated message.
-    """
-    error_text = t("drivers.task_scheduler.task_error")
-    try:
-        from guildbotics.intelligences.functions import talk_as
-
-        talked_text = loop.run_until_complete(
-            talk_as(
-                context,
-                error_text,
-                t("modes.ticket_mode.agent_response_context_location"),
-                [],
-            )
-        )
-        return talked_text or error_text
-    except Exception:
-        return error_text
 
 
 class TaskScheduler:
-    def __init__(self, context: Context, *, consecutive_error_limit: int = 3):
+    def __init__(
+        self,
+        context: Context,
+        default_routine_commands: list[str],
+        consecutive_error_limit: int = 3,
+    ):
         """
         Initialize the TaskScheduler with a list of jobs.
         Args:
-            context (WorkflowContext): The workflow context.
+            context (Context): The context for the task scheduler.
+            default_routine_commands (list[str]): List of default routine commands to run.
+            consecutive_error_limit (int): Maximum number of consecutive errors allowed
+                before stopping the worker loop.
         """
         self.context = context
+        self.default_routine_commands = default_routine_commands
         # Stop the scheduling loop for a worker when this many errors occur consecutively.
         # A non-positive value is treated as 1 to avoid infinite loops on error.
         self.consecutive_error_limit = max(1, int(consecutive_error_limit))
         self.scheduled_tasks_list = {
-            p: p.get_scheduled_tasks() for p in context.team.members
+            p: p.get_scheduled_commands() for p in context.team.members
         }
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -84,7 +68,7 @@ class TaskScheduler:
                 t.join()
 
     def _process_tasks_list(
-        self, person: Person, scheduled_tasks: list[ScheduledTask]
+        self, person: Person, scheduled_tasks: list[ScheduledCommand]
     ) -> None:
         """Run the scheduling loop for a single person's tasks.
 
@@ -95,14 +79,17 @@ class TaskScheduler:
         asyncio.set_event_loop(loop)
 
         context = self.context.clone_for(person)
-        ticket_manager = context.get_ticket_manager()
 
+        routine_commands = (
+            person.routine_commands
+            if person.routine_commands
+            else self.default_routine_commands
+        )
+        routine_command_index = 0
         consecutive_errors = 0
         while not self._stop_event.is_set():
             start_time = datetime.datetime.now()
-            self.context.logger.debug(
-                f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}."
-            )
+            context.logger.debug(f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}.")
 
             # Run scheduled tasks
             for scheduled_task in scheduled_tasks:
@@ -110,7 +97,7 @@ class TaskScheduler:
                     break
                 if scheduled_task.should_run(start_time):
                     ok = loop.run_until_complete(
-                        run_workflow(context, scheduled_task.task, "scheduled")
+                        run_command(context, scheduled_task.command, "scheduled")
                     )
                     consecutive_errors, should_stop = self._update_consecutive_errors(
                         ok, source="scheduled", consecutive_errors=consecutive_errors
@@ -124,24 +111,28 @@ class TaskScheduler:
             # Check for tasks to work on
             if self._stop_event.is_set():
                 break
-            task = loop.run_until_complete(ticket_manager.get_task_to_work_on())
-            if task and not self._stop_event.is_set():
-                ok = loop.run_until_complete(run_workflow(context, task, "ticket"))
-                if not ok and not self._stop_event.is_set():
-                    # Build message using persona tone with safe fallback.
-                    message = _build_task_error_message(context, loop)
 
-                    loop.run_until_complete(
-                        ticket_manager.add_comment_to_ticket(task, message)
-                    )
+            if len(routine_commands) == 0:
+                routine_command = ""
+            else:
+                if routine_command_index >= len(routine_commands):
+                    routine_command_index = 0
+                routine_command = routine_commands[routine_command_index]
+                routine_command_index += 1
+
+            if routine_command and not self._stop_event.is_set():
+                ok = loop.run_until_complete(
+                    run_command(context, routine_command, "routine")
+                )
+                if not ok and not self._stop_event.is_set():
                     consecutive_errors, should_stop = self._update_consecutive_errors(
-                        ok, source="ticket", consecutive_errors=consecutive_errors
+                        ok, source="routine", consecutive_errors=consecutive_errors
                     )
                     if should_stop:
                         return
                 else:
                     consecutive_errors, _ = self._update_consecutive_errors(
-                        ok, source="ticket", consecutive_errors=consecutive_errors
+                        ok, source="routine", consecutive_errors=consecutive_errors
                     )
                 self._sleep_interruptible(1)
 
@@ -168,8 +159,8 @@ class TaskScheduler:
         """Update error counter and decide whether to stop the worker loop.
 
         Args:
-            ok: Result of a workflow execution.
-            source: A short label for logging (e.g., "scheduled", "ticket").
+            ok: Result of a command execution.
+            source: A short label for logging (e.g., "scheduled", "routine").
             consecutive_errors: Current consecutive error count.
 
         Returns:
@@ -178,7 +169,7 @@ class TaskScheduler:
         if not ok:
             consecutive_errors += 1
             self.context.logger.warning(
-                f"Workflow error occurred ({source}). "
+                f"Command error occurred ({source}). "
                 f"consecutive_errors={consecutive_errors}/{self.consecutive_error_limit}"
             )
             if consecutive_errors >= self.consecutive_error_limit:
