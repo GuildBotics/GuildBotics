@@ -4,12 +4,12 @@ import pytest
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import (
+    CommandSchedule,
     Person,
     Project,
     Repository,
     Role,
     Service,
-    TaskSchedule,
     Team,
 )
 
@@ -106,18 +106,17 @@ def make_task(title: str = "t") -> Task:
 
 
 def test_person_get_scheduled_tasks_expands_all_schedules():
-    task = make_task("demo")
     schedules = ["0 9 ? ? ?", "15 10 ? ? ?"]
     person = Person(
         person_id="u1",
         name="Alice",
-        task_schedules=[TaskSchedule(task=task, schedules=schedules)],
+        task_schedules=[CommandSchedule(command="demo", schedules=schedules)],
     )
 
-    scheduled = person.get_scheduled_tasks()
+    scheduled = person.get_scheduled_commands()
 
     assert len(scheduled) == 2
-    assert all(s.task.title == "demo" for s in scheduled)
+    assert all(s.command == "demo" for s in scheduled)
     assert sorted(s.schedule for s in scheduled) == sorted(schedules)
 
 

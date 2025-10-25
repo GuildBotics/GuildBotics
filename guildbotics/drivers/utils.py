@@ -1,52 +1,42 @@
 import datetime
+import shlex
 import traceback
 
 from guildbotics.drivers.command_runner import CommandRunner
-from guildbotics.entities import Task
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import get_storage_path
 
 
-async def run_workflow(
-    context: Context,
-    task: Task,
-    task_type: str,
-) -> bool:
-    """Run a workflow either in‐process or in a separate virtual environment.
-
-    By default, the workflow executes in the current Python process.  To isolate
-    dependencies you can set `task.use_subprocess=True` and optionally supply
-    `task.venv_path`.
-
+async def run_command(context: Context, command: str, task_type: str) -> bool:
+    """
+    Run a command within the given context and log its execution.
     Args:
-        context: The workflow execution context.
-        task: The Task to execute. Its `use_subprocess` and `venv_path` fields control subprocess behavior.
-        task_type: A label for logging (e.g., "scheduled" or "todo list").
-
+        context (Context): The execution context.
+        command (str): The command to run.
+        task_type (str): The type of task being executed (for logging purposes).
     Returns:
-        True if the workflow ran without error, False otherwise.
+        bool: True if the command ran successfully, False otherwise.
     """
     try:
         start_time = datetime.datetime.now()
-        context.update_task(task)
         person = context.person
         context.logger.info(
-            f"Running {task_type} task '{task.title}' for person '{person.person_id}'..."
+            f"Running {task_type} command '{command}' for person '{person.person_id}'..."
         )
 
-        workflow = CommandRunner(context, task.workflow, [])
-        await workflow.run()
+        words = shlex.split(command)
+        await CommandRunner(context, words[0], words[1:]).run()
 
         end_time = datetime.datetime.now()
         duration = (end_time - start_time).total_seconds()
         context.logger.info(
-            f"Finished running {task_type} task '{task.title}' for person "
+            f"Finished running {task_type} command '{command}' for person "
             f"'{person.person_id}' in {duration:.2f}s"
         )
         return True
     except Exception as e:
         context.logger.error(
-            f"Error running workflow for task '{task.title}' for person "
+            f"Error running {task_type} command '{command}' for person "
             f"'{person.person_id}': {e}"
         )
         error_message = traceback.format_exc()

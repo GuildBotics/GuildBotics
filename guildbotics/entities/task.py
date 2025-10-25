@@ -48,10 +48,6 @@ class Task(BaseModel):
     comments: list[Message] = Field(
         default_factory=list, description="Comments associated with the task."
     )
-    workflow: str = Field(
-        default="workflows/ticket_driven_workflow",
-        description="The workflow associated with the task.",
-    )
     mode: str | None = Field(
         default=None,
         description='The mode of the task deliverable creation process. For example, "edit" mode is used for creating git commits and pull requests.',
@@ -141,20 +137,18 @@ _DEFAULT_RANGES = [
 ]
 
 
-class ScheduledTask(BaseModel):
+class ScheduledCommand(BaseModel):
     """
     A class representing a scheduled task.
 
     Attributes:
-        task (Task): The task information associated with the scheduled task.
+        command (str): The command to be executed.
         schedule (str): The schedule for the scheduled task in cron format.
     """
 
-    task: Task = Field(
-        ..., description="The task information associated with the scheduled task."
-    )
+    command: str = Field(..., description="The command to be executed.")
     schedule: str = Field(
-        ..., description="The schedule for the scheduled task in cron format."
+        ..., description="The schedule for the scheduled command in cron format."
     )
 
     def __init__(self, **data):
@@ -237,9 +231,9 @@ class ScheduledTask(BaseModel):
         return False
 
     def __str__(self):
-        # Return string with task, schedule, next_run and execution status
+        # Return string with command, schedule, next_run and execution status
         return (
-            f"ScheduledTask(task={self.task}, "
+            f"ScheduledCommand(command={self.command}, "
             f"schedule={self.schedule}, "
             f"next_run={self._next_random}, "
             f"executed={self._executed})"

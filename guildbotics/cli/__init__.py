@@ -106,7 +106,10 @@ def main() -> None:
     show_default=True,
     help="Stop a worker after this many consecutive workflow errors.",
 )
-def start(max_consecutive_errors: int) -> None:
+@click.argument("default_routine_commands", nargs=-1)
+def start(
+    max_consecutive_errors: int, default_routine_commands: tuple[str, ...]
+) -> None:
     """Start the GuildBotics scheduler."""
     _load_env_from_cwd()
     pid_path = _pid_file_path()
@@ -124,8 +127,15 @@ def start(max_consecutive_errors: int) -> None:
 
     _write_pidfile(pid_path, os.getpid())
 
+    setup_tool = get_setup_tool()
+
+    routine_commands = list(default_routine_commands)
+    if not routine_commands:
+        routine_commands = setup_tool.get_default_routines()
+
     scheduler = TaskScheduler(
-        get_setup_tool().get_context(),
+        setup_tool.get_context(),
+        routine_commands,
         consecutive_error_limit=max_consecutive_errors,
     )
 

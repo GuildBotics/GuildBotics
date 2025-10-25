@@ -1,12 +1,12 @@
 from guildbotics.entities.message import FileInfo, Message, Reaction
-from guildbotics.entities.task import ScheduledTask, Task
+from guildbotics.entities.task import ScheduledCommand, Task
 from guildbotics.entities.team import (
+    CommandSchedule,
     MessageChannel,
     Person,
     Project,
     Role,
     Service,
-    TaskSchedule,
     Team,
 )
 
@@ -19,8 +19,8 @@ __all__ = [
     "Role",
     "Reaction",
     "Service",
-    "ScheduledTask",
+    "ScheduledCommand",
     "Task",
-    "TaskSchedule",
+    "CommandSchedule",
     "Team",
 ]

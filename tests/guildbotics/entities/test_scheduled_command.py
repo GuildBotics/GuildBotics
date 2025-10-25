@@ -7,22 +7,16 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
 import datetime
 import random
 
-from guildbotics.entities import ScheduledTask, Task
+from guildbotics.entities import ScheduledCommand
 
 # Fixed random seed for tests
 random.seed(42)
 
 
-def make_scheduled_task(schedule: str):
-    # build Task and pass it into ScheduledTask
-    return ScheduledTask(
-        task=Task(
-            id="1",
-            title="test",
-            description="desc",
-            workflow="wf",
-            role="r",
-        ),
+def make_scheduled_command(schedule: str):
+    # build a ScheduledCommand with given schedule string
+    return ScheduledCommand(
+        command="test",
         schedule=schedule,
     )
 
@@ -32,7 +26,7 @@ def test_should_run_simple_random(monkeypatch):
     now = datetime.datetime(2025, 5, 17, 12, 0)
     fixed_next = now + datetime.timedelta(minutes=5)
     monkeypatch.setattr(
-        ScheduledTask, "_sample_random", lambda self, boundary, parts: fixed_next
+        ScheduledCommand, "_sample_random", lambda self, boundary, parts: fixed_next
     )
     # Mock croniter boundary to always return 'now'
     monkeypatch.setattr(
@@ -40,7 +34,7 @@ def test_should_run_simple_random(monkeypatch):
         lambda schedule, start: type("C", (), {"get_next": lambda self, t: now})(),
     )
 
-    job = make_scheduled_task("? ? * * *")
+    job = make_scheduled_command("? ? * * *")
     # next_random is fixed value (now + 5min)
     assert job._next_random == fixed_next
 
@@ -66,9 +60,9 @@ def test_should_run_range(monkeypatch):
     )
     # Fix _sample_random to return boundary
     monkeypatch.setattr(
-        ScheduledTask, "_sample_random", lambda self, boundary, parts: fixed_next
+        ScheduledCommand, "_sample_random", lambda self, boundary, parts: fixed_next
     )
-    job = make_scheduled_task("?(10-20) ?(3-5) * * *")
+    job = make_scheduled_command("?(10-20) ?(3-5) * * *")
     # next_random is in the future, so should not run now
     assert not job.should_run(now)
     # Should run after next_random
@@ -83,7 +77,7 @@ def test_should_run_boundary(monkeypatch):
         "guildbotics.entities.task.croniter",
         lambda schedule, start: type("C", (), {"get_next": lambda self, t: now})(),
     )
-    job = make_scheduled_task("0 0 * * *")
+    job = make_scheduled_command("0 0 * * *")
     # next_random is 0:00
     assert job._next_random.hour == 0 and job._next_random.minute == 0
     # Should run at 0:00
@@ -103,7 +97,7 @@ def test_should_run_month_day_clamp(monkeypatch):
         )(),
     )
     # Specify day-of-month as random range, fix month to February
-    job = make_scheduled_task("31 23 * ?(2-2) *")
+    job = make_scheduled_command("31 23 * ?(2-2) *")
     # sample_random should change month field to 2 and clamp day to last day of February (28)
     assert job._next_random.month == 2
     assert job._next_random.day == 28
@@ -111,7 +105,7 @@ def test_should_run_month_day_clamp(monkeypatch):
 
 def test_should_run_weekday():
     # ? ? * * 0 → random time on Sunday
-    job = make_scheduled_task("? ? * * 0")
+    job = make_scheduled_command("? ? * * 0")
     # next_random is Sunday
     assert job._next_random.weekday() == 6
     # Should run at that time
@@ -123,10 +117,10 @@ def test_invalid_schedule():
     import pytest
 
     with pytest.raises(ValueError):
-        make_scheduled_task("* * * *")
+        make_scheduled_command("* * * *")
     # 6 fields should also raise error
     with pytest.raises(ValueError):
-        make_scheduled_task("* * * * * *")
+        make_scheduled_command("* * * * * *")
 
 
 def test_day_of_month_clamp_direct(monkeypatch):
@@ -144,7 +138,7 @@ def test_day_of_month_clamp_direct(monkeypatch):
     # Fix random.randint to always return 31
     monkeypatch.setattr(cj_module.random, "randint", lambda a, b: 31)
     # Specify day-of-month field as ?(31-31)
-    job = make_scheduled_task("* * ?(31-31) * *")
+    job = make_scheduled_command("* * ?(31-31) * *")
     # Should be clamped to last day of February (28)
     last_day = calendar.monthrange(boundary.year, boundary.month)[1]
     assert job._next_random.month == boundary.month
@@ -163,7 +157,7 @@ def test_sample_random_weekday_range(monkeypatch):
     )
     # Fix random.randint to always return 4 (range 2-4)
     monkeypatch.setattr(cj_module.random, "randint", lambda a, b: 4)
-    job = make_scheduled_task("* * * * ?(2-4)")
+    job = make_scheduled_command("* * * * ?(2-4)")
     # cron_cur = (weekday+1)%7 = (0+1)%7 = 1 → diff=(1-4)%7=4 → result=boundary-4days
     expected = boundary - datetime.timedelta(days=4)
     assert job._next_random == expected
@@ -189,9 +183,9 @@ def test_should_run_reset_cycle(monkeypatch):
     )
     # Fix sample_random to return boundary
     monkeypatch.setattr(
-        ScheduledTask, "_sample_random", lambda self, boundary, parts: boundary
+        ScheduledCommand, "_sample_random", lambda self, boundary, parts: boundary
     )
-    job = make_scheduled_task("0 0 * * *")
+    job = make_scheduled_command("0 0 * * *")
     # Should run at first boundary (= now)
     assert job.should_run(now)
     # Should not run again at the same time (executed=True triggers update & False)
@@ -214,14 +208,8 @@ def test_sample_random_default_range(monkeypatch):
     seq = iter([15, 3])
     monkeypatch.setattr(cj_module.random, "randint", lambda a, b: next(seq))
 
-    job = ScheduledTask(
-        task=Task(
-            id="1",
-            title="test",
-            description="desc",
-            workflow="wf",
-            role="r",
-        ),
+    job = ScheduledCommand(
+        command="test",
         schedule="? ? * * *",
     )
     # Next run time should be boundary with minute=15, hour=3
@@ -242,14 +230,14 @@ def test_str_representation(monkeypatch):
     )
     # Fix sample_random to return next_rand
     monkeypatch.setattr(
-        cj_module.ScheduledTask,
+        cj_module.ScheduledCommand,
         "_sample_random",
         lambda self, boundary, parts: next_rand,
     )
-    job = make_scheduled_task("15 10 * * 2")
-    # build expected string based on new ScheduledTask.__str__()
+    job = make_scheduled_command("15 10 * * 2")
+    # build expected string based on new ScheduledCommand.__str__()
     expected = (
-        f"ScheduledTask(task={job.task}, "
+        f"ScheduledCommand(command={job.command}, "
         f"schedule={job.schedule}, "
         f"next_run={next_rand}, "
         f"executed=False)"
