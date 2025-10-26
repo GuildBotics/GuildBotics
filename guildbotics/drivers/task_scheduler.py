@@ -112,13 +112,12 @@ class TaskScheduler:
             if self._stop_event.is_set():
                 break
 
-            if len(routine_commands) == 0:
-                routine_command = ""
-            else:
-                if routine_command_index >= len(routine_commands):
-                    routine_command_index = 0
-                routine_command = routine_commands[routine_command_index]
-                routine_command_index += 1
+            routine_command = (
+                routine_commands[routine_command_index % len(routine_commands)]
+                if routine_commands
+                else ""
+            )
+            routine_command_index += 1
 
             if routine_command and not self._stop_event.is_set():
                 ok = loop.run_until_complete(

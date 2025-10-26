@@ -319,10 +319,10 @@ class Person(BaseModel):
 
     def get_scheduled_commands(self) -> list[ScheduledCommand]:
         """
-        Get the scheduled tasks for the person.
+        Get a list of scheduled commands for the person.
 
         Returns:
-            list[ScheduledTask]: A list of scheduled tasks for the person.
+            list[ScheduledCommand]: A list of scheduled commands.
         """
         scheduled_commands: list[ScheduledCommand] = []
         for task_schedule in self.task_schedules:

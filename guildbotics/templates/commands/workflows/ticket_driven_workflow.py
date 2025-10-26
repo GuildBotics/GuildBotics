@@ -111,7 +111,7 @@ async def main(context: Context):
     context.update_task(task)
     try:
         await _main(context, ticket_manager)
-    except Exception as e:
+    except Exception:
         message = await _build_task_error_message(context)
         await ticket_manager.add_comment_to_ticket(task, message)
-        raise e
+        raise
