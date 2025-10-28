@@ -19,7 +19,7 @@ class CustomCommandMode(ModeBase):
             self.context.pipe = "\n".join(lines[1:]).strip()
 
         response = await self.context.invoke(
-            command_name, command_args, messages=messages
+            command_name, *command_args, messages=messages
         )
         if isinstance(response, AgentResponse):
             return response
@@ -52,4 +52,6 @@ class CustomCommandMode(ModeBase):
 
     @staticmethod
     def is_custom_command(messages: list[Message]) -> bool:
+        if not messages:
+            return False
         return CustomCommandMode.get_last_message(messages).startswith("//")
