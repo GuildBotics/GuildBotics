@@ -7,7 +7,7 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.commands.utils import stringify_output
-from guildbotics.intelligences.functions import get_content, preprocess, to_dict
+from guildbotics.intelligences.functions import get_content, to_dict
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.text_utils import replace_placeholders
@@ -42,15 +42,11 @@ class MarkdownCommand(CommandBase):
             result = replace_placeholders(config["body"], params, template_engine)
             return CommandOutcome(result=result, text_output=result)
 
-        message = self.options.message
-        if not preprocess(self.context, message):
-            message = ""
-
         try:
             output = await get_content(
                 self.context,
                 str(self.spec.path),
-                message,
+                self.options.message,
                 params,
                 self.cwd,
                 config if inline else None,

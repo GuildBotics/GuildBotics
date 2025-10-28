@@ -145,21 +145,6 @@ def load_markdown_with_frontmatter(file: Path) -> dict:
     return metadata
 
 
-def get_prompt_path(name: str, language_code: str, person_id: str) -> Path:
-    """
-    Get the path to a custom prompt file, either for a specific person or a general prompt.
-
-    Args:
-        name (str): The relative path to the prompt file.
-        language_code (str | None): The language code for localization.
-        person_id (str | None): The ID of the person.
-
-    Returns:
-        Path: The path to the custom prompt file.
-    """
-    return get_person_config_path(person_id, f"commands/{name}.md", language_code)
-
-
 def load_yaml_file(file: Path) -> dict | list[dict]:
     with file.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)

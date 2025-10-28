@@ -1,12 +1,8 @@
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.integrations.ticket_manager import TicketManager
-from guildbotics.intelligences.functions import (
-    identify_mode,
-    identify_role,
-    preprocess,
-    to_text,
-)
+from guildbotics.intelligences.functions import identify_mode, identify_role, to_text
+from guildbotics.modes.custom_command_mode import CustomCommandMode
 from guildbotics.modes.mode_base import ModeBase
 from guildbotics.runtime import Context
 from guildbotics.utils.i18n_tool import t
@@ -84,14 +80,15 @@ async def _main(context: Context, ticket_manager: TicketManager):
         context.update_task(context.task)
         await ticket_manager.update_ticket(context.task)
 
-    if not context.task.mode:
-        available_modes = ModeBase.get_available_modes(context.team)
-        context.task.mode = await identify_mode(context, available_modes, input)
-        await ticket_manager.update_ticket(context.task)
+    if CustomCommandMode.is_custom_command(messages):
+        response = await CustomCommandMode(context).run(messages)
+    else:
+        if not context.task.mode:
+            available_modes = ModeBase.get_available_modes(context.team)
+            context.task.mode = await identify_mode(context, available_modes, input)
+            await ticket_manager.update_ticket(context.task)
 
-    # Run the mode logic
-    messages[-1].content = preprocess(context, messages[-1].content)
-    response = await ModeBase.get_mode(context).run(messages)
+        response = await ModeBase.get_mode(context).run(messages)
 
     # If the response is asking for more information, return it.
     if not response.skip_ticket_comment:
