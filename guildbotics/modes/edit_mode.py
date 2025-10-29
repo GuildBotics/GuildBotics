@@ -13,7 +13,6 @@ from guildbotics.intelligences.functions import (
     evaluate_interaction_performance,
     identify_pr_comment_action,
     messages_to_simple_dicts,
-    preprocess,
     propose_process_improvements,
     talk_as,
     write_commit_message,
@@ -43,7 +42,7 @@ class EditMode(ModeBase):
 
         # Retrospective handling is a self-contained flow; delegate and return early
         if self.context.task.status == Task.RETROSPECTIVE:
-            return await self._handle_retrospective(messages, inputs)
+            return await self._handle_retrospective()
 
         git_tool = await self.checkout()
 
@@ -68,7 +67,7 @@ class EditMode(ModeBase):
                 )
         else:
             # Run the coding agent script to generate code changes
-            response = await self.edit_files(self.context, inputs, git_tool.repo_path)
+            response = await edit_files(self.context, inputs, git_tool.repo_path)
 
             # If the response is asking for more information, return it.
             if response.status == AgentResponse.ASKING:
@@ -140,9 +139,7 @@ class EditMode(ModeBase):
                 skip_ticket_comment=False,
             )
 
-    async def _handle_retrospective(
-        self, messages: list[Message], inputs: list[dict]
-    ) -> AgentResponse:
+    async def _handle_retrospective(self) -> AgentResponse:
         pull_request_url = self.find_pr_url_from_task_comments(self.context.task, True)
         pr = await self.code_hosting_service.get_pull_request(pull_request_url)
         pr_text = self.pr_to_text(pr)
@@ -240,9 +237,7 @@ class EditMode(ModeBase):
                 message = ""
             else:
                 # Run the coding agent script to perform edits
-                response = await self.edit_files(
-                    self.context, inputs, git_tool.repo_path
-                )
+                response = await edit_files(self.context, inputs, git_tool.repo_path)
                 if response.message:
                     message = response.message
                 is_asking = response.status == AgentResponse.ASKING
@@ -284,7 +279,7 @@ class EditMode(ModeBase):
                 ):
                     continue
 
-                response = await self.edit_files(
+                response = await edit_files(
                     self.context, review_comment, git_tool.repo_path
                 )
                 if response.status == AgentResponse.ASKING:
@@ -423,24 +418,3 @@ class EditMode(ModeBase):
                 f"Failed to add reaction to comment {comment_id}: {e}"
             )
         return True
-
-    async def edit_files(
-        self, context: Context, input: list[dict], cwd: Path
-    ) -> AgentResponse:
-        """
-        Edit files in the given directory based on the input instructions.
-
-        Args:
-            context (Context): The runtime context.
-            input (list[dict]): The input instructions for editing files.
-            cwd (Path): The current working directory where files are located.
-
-        Returns:
-            AgentResponse: The response from the agent after attempting to edit files.
-        """
-        for k, v in input[-1].items():
-            v = preprocess(context, v)
-            input[-1][k] = v
-            break
-
-        return await edit_files(context, input, cwd)

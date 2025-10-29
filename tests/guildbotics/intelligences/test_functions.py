@@ -295,35 +295,6 @@ async def test_edit_files_happy_path(monkeypatch, tmp_path, fake_context):
     assert res.status == AgentResponse.DONE and res.message == "ok"
 
 
-def test_preprocess_handles_quoted_arguments(monkeypatch, fake_context, tmp_path):
-    ctx = fake_context
-    prompt_path = tmp_path / "prompt.md"
-    prompt_path.write_text("")
-
-    monkeypatch.setattr(f, "get_prompt_path", lambda name, lang, person_id: prompt_path)
-    monkeypatch.setattr(
-        f, "load_markdown_with_frontmatter", lambda path: {"body": "body"}
-    )
-
-    captured = {}
-
-    def fake_get_body(prompt, args):
-        captured["args"] = args
-        return "processed"
-
-    monkeypatch.setattr(f, "get_body_from_prompt", fake_get_body)
-
-    text = "//test-command key=\"value with spaces\" 'single quoted arg' plain"
-    out = f.preprocess(ctx, text)
-
-    assert out == "processed"
-    assert captured["args"] == [
-        "key=value with spaces",
-        "single quoted arg",
-        "plain",
-    ]
-
-
 def make_msg(content: str, author_type: str = Message.USER) -> Message:
     """Helper to build a Message with minimal fields."""
     return Message(

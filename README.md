@@ -43,7 +43,7 @@ A tool to collaborate with AI agents via a task board.
   - [7.3. Member Settings (`team/members/<person_id>/person.yml`)](#73-member-settings-teammembersperson_idpersonyml)
   - [7.4. Selecting a CLI Agent](#74-selecting-a-cli-agent)
   - [7.5. Modifying the CLI Agent Script](#75-modifying-the-cli-agent-script)
-- [7.6. Per-Agent CLI Agent Settings](#76-per-agent-cli-agent-settings)
+  - [7.6. Per-Agent CLI Agent Settings](#76-per-agent-cli-agent-settings)
   - [7.7. Custom Command Prompts](#77-custom-command-prompts)
 - [8. Troubleshooting](#8-troubleshooting)
   - [8.1. Error Logs](#81-error-logs)
@@ -276,8 +276,10 @@ The status mapping is saved to `.guildbotics/config/team/project.yml`.
 Start with:
 
 ```bash
-guildbotics start
+guildbotics start [default_routine_commands...]
 ```
+
+- `default_routine_commands` is a list of commands to execute routinely. If not specified, `workflows/ticket_driven_workflow` is used as the default.
 
 This starts the task scheduler, allowing AI agents to execute tasks.
 
@@ -391,6 +393,8 @@ Per-person secrets are referenced as `${PERSON_ID_UPPER}_${KEY_UPPER}` (example:
   - `profile`: Per-role profile settings. Use role IDs as keys (e.g., professional, programmer, product_owner) and optionally provide `summary`/`description`. Even an empty map (e.g., `product_owner:`) enables that role and merges with predefined roles (e.g., `roles/default.*.yml`).
   - `speaking_style`: Description of speaking style
   - `relationships`: Description of relationships with other members
+  - `routine_commands`: Optional list of command IDs that run as routine commands for the member. When provided, these override the defaults passed to `guildbotics start`.
+  - `task_schedules`: Scheduled command definitions. Each item requires a `command` (command ID) and `schedules` (list of cron expressions) to control periodic execution.
 
 
 ## 7.4. Selecting a CLI Agent
@@ -417,43 +421,9 @@ By default, all AI agents share the same CLI agent, but if `team/members/<person
 
 
 ## 7.7. Custom Command Prompts
-> For detailed creation and operation, see docs/custom_command_guide.en.md
-You can embed and execute custom command prompts in ticket descriptions or comments by writing a line that starts with `//`.
+You can execute arbitrary custom commands (custom prompts) by writing a line starting with `//` in the first line of the ticket body or comments.
 
-- Write in the ticket: `//<name> [args...]`
-  - Example: `//code-review target=src/app.py level=deep`
-  - A trailing colon after the name is allowed: `//code-review: target=...`
-- The system replaces that line with the body of a prompt file before the agent runs.
-
-Prompt file resolution order (first match wins):
-- Per-person: `.guildbotics/config/team/members/<person_id>/prompts/<name>.<lang>.md`, then `<name>.en.md`, then `<name>.md`
-- Project-wide: `.guildbotics/config/prompts/<name>.<lang>.md`, then `<name>.en.md`, then `<name>.md`
-- Fallback: `.guildbotics/config/intelligences/<name>.md`
-
-Prompt file format: Markdown with YAML front matter. The body is used as the expanded text.
-
-```markdown
----
-template_engine: jinja2  # or "default"
----
-# Review Plan for {{ target }}
-
-Priority: {{ level | default('normal') }}
-Steps:
-- Run static analysis on {{ target }}
-- Summarize hotspots and tests to add
-```
-
-Argument passing and templating:
-- Key-value args: `//review target="src/app.py" level=deep`
-- Quoted values are supported (spaces preserved).
-- Positional args are also supported:
-  - With `template_engine: jinja2`, use `{{ arg1 }}`, `{{ arg2 }}`, ...
-  - With `template_engine: default`, use placeholders like `{{1}}`, `{1}`, `${1}`, or `$1` (named keys also work: `{{target}}`, `{target}`, `${target}`, `$target`).
-
--Usage tips:
-- If you add a comment, write the `//<name> ...` line in the newest (last) comment.
-- Create reusable prompts under `.guildbotics/config/prompts/` and override per agent under `.guildbotics/config/team/members/<person_id>/prompts/`.
+For detailed creation and operation, see [docs/custom_command_guide.en.md](docs/custom_command_guide.en.md).
 
 
 # 8. Troubleshooting
