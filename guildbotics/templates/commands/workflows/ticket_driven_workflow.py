@@ -1,10 +1,12 @@
+import shlex
+
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.integrations.ticket_manager import TicketManager
+from guildbotics.intelligences.common import AgentResponse, Labels
 from guildbotics.intelligences.functions import identify_mode, identify_role, to_text
-from guildbotics.modes.custom_command_mode import CustomCommandMode
-from guildbotics.modes.mode_base import ModeBase
 from guildbotics.runtime import Context
+from guildbotics.templates.commands.workflows.modes.util import checkout
 from guildbotics.utils.i18n_tool import t
 
 
@@ -80,15 +82,25 @@ async def _main(context: Context, ticket_manager: TicketManager):
         context.update_task(context.task)
         await ticket_manager.update_ticket(context.task)
 
-    if CustomCommandMode.is_custom_command(messages):
-        response = await CustomCommandMode(context).run(messages)
+    git_tool = await checkout(context)
+    code_hosting_service = context.get_code_hosting_service(context.task.repository)
+    params = {
+        "messages": messages,
+        "git_tool": git_tool,
+        "code_hosting_service": code_hosting_service,
+        "ticket_manager": ticket_manager,
+    }
+
+    if _is_custom_command(messages):
+        response = await _invoke_custom_command(context, params)
     else:
         if not context.task.mode:
-            available_modes = ModeBase.get_available_modes(context.team)
+            available_modes = Labels(Task.get_available_modes())
             context.task.mode = await identify_mode(context, available_modes, input)
             await ticket_manager.update_ticket(context.task)
 
-        response = await ModeBase.get_mode(context).run(messages)
+        command_name = _mode_to_command_name(context.task.mode)
+        response = await context.invoke(command_name, **params)
 
     # If the response is asking for more information, return it.
     if not response.skip_ticket_comment:
@@ -98,6 +110,47 @@ async def _main(context: Context, ticket_manager: TicketManager):
 
     # If the task is in progress, move it to "In Review".
     await _move_task_to_in_review_if_in_progress(context, ticket_manager)
+
+
+async def _invoke_custom_command(context: Context, params: dict) -> AgentResponse:
+    content = _get_last_message(params["messages"])
+    lines = content.splitlines()
+    command_name, command_args = _preprocess_line(lines[0])
+    if len(lines) > 1:
+        context.pipe = "\n".join(lines[1:]).strip()
+
+    response = await context.invoke(command_name, *command_args, **params)
+    if isinstance(response, AgentResponse):
+        return response
+
+    message = str(response) if response is not None else ""
+    return AgentResponse(status=AgentResponse.DONE, message=message)
+
+
+def _preprocess_line(line: str) -> tuple[str, list[str]]:
+    try:
+        words = shlex.split(line[2:].strip())
+    except ValueError:
+        words = line[2:].strip().split()
+
+    return words[0], words[1:]
+
+
+def _get_last_message(messages: list[Message]) -> str:
+    return messages[-1].content.strip()
+
+
+def _is_custom_command(messages: list[Message]) -> bool:
+    if not messages:
+        return False
+    return _get_last_message(messages).startswith("//")
+
+
+def _mode_to_command_name(mode: str | None) -> str:
+    if not mode:
+        mode = "comment"
+
+    return f"workflows/modes/{mode}_mode"
 
 
 async def main(context: Context):

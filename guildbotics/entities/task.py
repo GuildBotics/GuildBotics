@@ -8,6 +8,7 @@ from croniter import croniter  # type: ignore[import]
 from pydantic import BaseModel, Field
 
 from guildbotics.entities.message import Message
+from guildbotics.utils.i18n_tool import t
 
 
 class Task(BaseModel):
@@ -126,6 +127,14 @@ class Task(BaseModel):
                 "No page title and URL found in task comments. Please ensure the task has been processed correctly."
             )
         return "", ""
+
+    @staticmethod
+    def get_available_modes() -> dict[str, str]:
+        return {
+            "comment": t("modes.comment_mode.use_case_description"),
+            "edit": t("modes.edit_mode.use_case_description"),
+            "ticket": t("modes.ticket_mode.use_case_description"),
+        }
 
 
 _DEFAULT_RANGES = [

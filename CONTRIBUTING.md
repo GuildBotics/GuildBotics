@@ -1,7 +1,7 @@
 # Contributing Guidelines
 
 ## Project Structure & Module Organization
-- `guildbotics/`: Core package. Key modules include `drivers/` (schedulers), `workflows/` (task orchestration), `modes/` (behavior per task type), `intelligences/` (brains), `integrations/`, `loader/`, `runtime/`, `entities/`, `utils/`, and `templates/`.
+- `guildbotics/`: Core package. Key modules include `drivers/` (schedulers), `workflows/` (task orchestration), `intelligences/` (brains), `integrations/`, `loader/`, `runtime/`, `entities/`, `utils/`, and `templates/`.
 - `tests/`: Pytest suite. Unit tests mirror package paths under `tests/guildbotics/`; integration tests live in `tests/it/` with sample configs in `tests/it/config/`.
 - `docs/`: Architecture and design (`docs/ARCHITECTURE.*.md`).
 - `main.py`: Entry point for running the scheduler.
@@ -67,7 +67,6 @@ Note: This repository provides a fixed dependency file `pyproject.toml`. Use `uv
 
 ## Security & Configuration Tips
 - Never commit secrets.
-- Review `docs/ARCHITECTURE.en.md` for how drivers, workflows, and modes interact; some runtime data may store under `~/.guildbotics/data/`.
 - Validate external input where applicable; fail fast with clear errors.
 - Use least-privilege credentials; rotate secrets upon suspicion or exposure.
 

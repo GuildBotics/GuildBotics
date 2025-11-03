@@ -19,7 +19,8 @@ from guildbotics.intelligences.common import (
     RootCauseAnalysis,
     RootCauseItem,
 )
-from guildbotics.modes.edit_mode import EditMode
+from guildbotics.templates.commands.workflows.modes import edit_mode
+from tests.conftest import FakeContext
 
 
 class StubGitTool:
@@ -82,7 +83,9 @@ class StubCodeHostingService:
         assert self._comments is not None
         return self._comments
 
-    async def respond_to_comments(self, html_url: str, comments: ReviewComments) -> None:
+    async def respond_to_comments(
+        self, html_url: str, comments: ReviewComments
+    ) -> None:
         self.respond_calls.append((html_url, comments))
 
     async def add_reaction_to_comment(
@@ -101,25 +104,16 @@ class StubCodeHostingService:
         return f"https://example.com/pr/999"
 
 
-def stub_mode_env(monkeypatch, fake_context, code_hosting: StubCodeHostingService, *, diff: str = ""):
-    """Common stubbing for GitTool, workspace path, and code hosting service."""
-    # mode_base GitTool and workspace path
-    monkeypatch.setattr("guildbotics.modes.mode_base.GitTool", StubGitTool)
-    monkeypatch.setattr(
-        "guildbotics.modes.mode_base.get_workspace_path",
-        lambda person_id: Path("/tmp/fake_workspace"),
-    )
+def stub_mode_env(
+    monkeypatch, fake_context, code_hosting: StubCodeHostingService, *, diff: str = ""
+):
+    """Common stubbing for GitTool and code hosting service.
 
-    # inject our StubCodeHostingService
-    def get_code_hosting_service(repository: str | None = None):
-        return code_hosting
-
-    fake_context.get_code_hosting_service = get_code_hosting_service  # type: ignore[attr-defined]
-
-    # Create an EditMode and set its internal git_tool diff
-    mode = EditMode(fake_context)
-    # Precreate a stub git tool and attach it so get_git_tool/checkout return it
-    stub = StubGitTool(
+    Returns:
+        tuple: (git_tool, code_hosting_service)
+    """
+    # Create a stub git tool
+    git_tool = StubGitTool(
         workspace=Path("/tmp/fake_workspace"),
         repo_url="https://example.com/org/repo.git",
         logger=fake_context.logger,
@@ -127,12 +121,9 @@ def stub_mode_env(monkeypatch, fake_context, code_hosting: StubCodeHostingServic
         user_email=fake_context.person.account_info.get("git_email", "u@example.com"),
         default_branch="main",
     )
-    stub.set_diff(diff)
-    mode.git_tool = stub  # type: ignore[attr-defined]
+    git_tool.set_diff(diff)
 
-    # Ensure checkout returns our stub without side effects
-    monkeypatch.setattr(EditMode, "checkout", lambda self: mode.get_git_tool())
-    return mode
+    return git_tool, code_hosting
 
 
 def set_task_pr_comment(fake_context: "FakeContext", url: str):
@@ -161,23 +152,35 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
         PullRequest(title="T", description="D", review_comments=rc, is_merged=True)
     )
 
-    mode = stub_mode_env(monkeypatch, fake_context, ch)
+    git_tool, code_hosting = stub_mode_env(monkeypatch, fake_context, ch)
 
     # Stub intelligences functions used in retrospective path
     async def fake_eval(context, pr_text):
         return "EVAL"
+
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.evaluate_interaction_performance",
+        "guildbotics.templates.commands.workflows.modes.edit_mode.evaluate_interaction_performance",
         fake_eval,
     )
 
     rca = RootCauseAnalysis(
-        items=[RootCauseItem(perspective="P", problem="p", root_cause="r", severity=0.9, severity_reason="sr")]
+        items=[
+            RootCauseItem(
+                perspective="P",
+                problem="p",
+                root_cause="r",
+                severity=0.9,
+                severity_reason="sr",
+            )
+        ]
     )
+
     async def fake_rca(context, pr_text, evaluation):
         return rca
+
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.analyze_root_cause", fake_rca
+        "guildbotics.templates.commands.workflows.modes.edit_mode.analyze_root_cause",
+        fake_rca,
     )
 
     # Prepare 7 suggestions to test trimming to 5
@@ -193,10 +196,13 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
         for i in range(7)
     ]
     recs = ImprovementRecommendations(suggestions=suggestions)
+
     async def fake_recs(context, r):
         return recs
+
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.propose_process_improvements", fake_recs
+        "guildbotics.templates.commands.workflows.modes.edit_mode.propose_process_improvements",
+        fake_recs,
     )
 
     # Ticket manager mock to capture created tasks
@@ -209,15 +215,22 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
     fake_context.get_ticket_manager = lambda: StubTicketManager()  # type: ignore[attr-defined]
 
     # Make i18n stable and talk_as deterministic
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", lambda key, **kw: key)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        lambda key, **kw: key,
+    )
+
     async def fake_talk_eval(context, topic, context_location, conversation_history):
         return "DISCUSS"
+
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.talk_as", fake_talk_eval
+        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as",
+        fake_talk_eval,
     )
 
     # Act
-    res = await mode.run(messages=[Message(content="start", author="u", author_type=Message.USER)])
+    messages = [Message(content="start", author="u", author_type=Message.USER)]
+    res = await edit_mode.main(fake_context, messages, git_tool, code_hosting)
 
     # Assert: asking with combined message and only 5 tickets created
     assert res.status == AgentResponse.ASKING
@@ -226,7 +239,9 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
 
 
 @pytest.mark.asyncio
-async def test_review_no_threads_acknowledged_sets_no_message_and_responds(monkeypatch, fake_context):
+async def test_review_no_threads_acknowledged_sets_no_message_and_responds(
+    monkeypatch, fake_context
+):
     # Task set to in review and has PR URL
     fake_context.task.status = Task.IN_REVIEW
     set_task_pr_comment(fake_context, "https://example.com/pr/100")
@@ -234,14 +249,20 @@ async def test_review_no_threads_acknowledged_sets_no_message_and_responds(monke
     # Prepare comments: only review comments, last by reviewer
     comments = ReviewComments(
         review_comments=[
-            ReviewComment(body="Looks good", author="Bob", created_at="2024-01-01T00:00:00Z", is_reviewee=False, comment_id=10)
+            ReviewComment(
+                body="Looks good",
+                author="Bob",
+                created_at="2024-01-01T00:00:00Z",
+                is_reviewee=False,
+                comment_id=10,
+            )
         ],
         inline_comments=[],
     )
     ch = StubCodeHostingService()
     ch.set_comments(comments)
 
-    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+    git_tool, code_hosting = stub_mode_env(monkeypatch, fake_context, ch, diff="")
 
     # identify_pr_comment_action returns 'ack' so it should react and skip edits
     async def fake_identify(_, body):
@@ -249,21 +270,29 @@ async def test_review_no_threads_acknowledged_sets_no_message_and_responds(monke
         return "ack"
 
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify
+        "guildbotics.templates.commands.workflows.modes.edit_mode.identify_pr_comment_action",
+        fake_identify,
     )
     # edit_files should not be called, but provide a stub to fail if invoked
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.edit_files", lambda *a, **k: (_ for _ in ()).throw(AssertionError("edit_files should not run"))
+        "guildbotics.templates.commands.workflows.modes.edit_mode.edit_files",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("edit_files should not run")
+        ),
     )
 
     # Stable translations and talk_as
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", lambda key, **kw: key)
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.talk_as", lambda *a, **k: "reply"
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        lambda key, **kw: key,
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as",
+        lambda *a, **k: "reply",
     )
 
     msgs = [Message(content="hi", author="bot", author_type=Message.ASSISTANT)]
-    res = await mode.run(msgs)
+    res = await edit_mode.main(fake_context, msgs, git_tool, code_hosting)
 
     # Should respond to comments; message falls back to PR URL since no reply and no commit
     assert res.status == AgentResponse.DONE
@@ -274,7 +303,9 @@ async def test_review_no_threads_acknowledged_sets_no_message_and_responds(monke
 
 
 @pytest.mark.asyncio
-async def test_review_no_threads_edits_and_replies_with_commit_sha(monkeypatch, fake_context):
+async def test_review_no_threads_edits_and_replies_with_commit_sha(
+    monkeypatch, fake_context
+):
     fake_context.task.status = Task.IN_REVIEW
     set_task_pr_comment(fake_context, "https://example.com/pr/101")
 
@@ -282,7 +313,9 @@ async def test_review_no_threads_edits_and_replies_with_commit_sha(monkeypatch, 
     ch = StubCodeHostingService()
     ch.set_comments(comments)
 
-    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="some diff")
+    git_tool, code_hosting = stub_mode_env(
+        monkeypatch, fake_context, ch, diff="some diff"
+    )
 
     # identify -> edit path
     async def fake_identify(_, body):
@@ -293,8 +326,13 @@ async def test_review_no_threads_edits_and_replies_with_commit_sha(monkeypatch, 
         assert cwd == Path("/tmp/fake_repo")
         return AgentResponse(status=AgentResponse.DONE, message="done edits")
 
-    monkeypatch.setattr("guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.identify_pr_comment_action",
+        fake_identify,
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.edit_files", fake_edit
+    )
 
     # write_commit_message will be used because diff is present
     called = {"commit": 0, "talk": 0}
@@ -308,11 +346,21 @@ async def test_review_no_threads_edits_and_replies_with_commit_sha(monkeypatch, 
         called["talk"] += 1
         return "reply body"
 
-    monkeypatch.setattr("guildbotics.modes.edit_mode.write_commit_message", fake_write_commit)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.talk_as", fake_talk_as)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", lambda key, **kw: key)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.write_commit_message",
+        fake_write_commit,
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as", fake_talk_as
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        lambda key, **kw: key,
+    )
 
-    res = await mode.run([Message(content="start", author="u", author_type=Message.USER)])
+    messages = [Message(content="start", author="u", author_type=Message.USER)]
+    res = await edit_mode.main(fake_context, messages, git_tool, code_hosting)
+
     assert res.status == AgentResponse.DONE
     # reply message should include commit sha added after reply body
     assert "deadbeef" in res.message
@@ -329,24 +377,54 @@ async def test_review_inline_threads_mixed_ack_and_asking(monkeypatch, fake_cont
     t1 = InlineCommentThread(
         path="a.py",
         line=1,
-        comments=[InlineComment(path="a.py", line=1, body="my last", comment_id=1, author="me", created_at="1", is_reviewee=True)],
+        comments=[
+            InlineComment(
+                path="a.py",
+                line=1,
+                body="my last",
+                comment_id=1,
+                author="me",
+                created_at="1",
+                is_reviewee=True,
+            )
+        ],
     )
     t2 = InlineCommentThread(
         path="b.py",
         line=2,
-        comments=[InlineComment(path="b.py", line=2, body="LGTM", comment_id=2, author="rv", created_at="1", is_reviewee=False)],
+        comments=[
+            InlineComment(
+                path="b.py",
+                line=2,
+                body="LGTM",
+                comment_id=2,
+                author="rv",
+                created_at="1",
+                is_reviewee=False,
+            )
+        ],
     )
     t3 = InlineCommentThread(
         path="c.py",
         line=3,
-        comments=[InlineComment(path="c.py", line=3, body="fix it", comment_id=3, author="rv", created_at="1", is_reviewee=False)],
+        comments=[
+            InlineComment(
+                path="c.py",
+                line=3,
+                body="fix it",
+                comment_id=3,
+                author="rv",
+                created_at="1",
+                is_reviewee=False,
+            )
+        ],
     )
     rc = ReviewComments(review_comments=[], inline_comments=[])
     rc.inline_comment_threads = [t1, t2, t3]
 
     ch = StubCodeHostingService()
     ch.set_comments(rc)
-    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+    git_tool, code_hosting = stub_mode_env(monkeypatch, fake_context, ch, diff="")
 
     async def fake_identify(_, body):
         return "ack" if body == "LGTM" else "edit"
@@ -358,12 +436,24 @@ async def test_review_inline_threads_mixed_ack_and_asking(monkeypatch, fake_cont
     async def fake_talk_as(context, topic, context_location, conversation_history):
         return "thread reply"
 
-    monkeypatch.setattr("guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.talk_as", fake_talk_as)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", lambda key, **kw: key)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.identify_pr_comment_action",
+        fake_identify,
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.edit_files", fake_edit
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as", fake_talk_as
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        lambda key, **kw: key,
+    )
 
-    res = await mode.run([Message(content="msg", author="u", author_type=Message.USER)])
+    messages = [Message(content="msg", author="u", author_type=Message.USER)]
+    res = await edit_mode.main(fake_context, messages, git_tool, code_hosting)
+
     assert res.status == AgentResponse.DONE
     # Should have added one inline reaction (for t2)
     assert any(call[3] is True and call[1] == 2 for call in ch.reaction_calls)
@@ -377,7 +467,7 @@ async def test_review_inline_threads_mixed_ack_and_asking(monkeypatch, fake_cont
 async def test_nonreview_asking_returns_translated_question(monkeypatch, fake_context):
     fake_context.task.status = Task.IN_PROGRESS
     ch = StubCodeHostingService()
-    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+    git_tool, code_hosting = stub_mode_env(monkeypatch, fake_context, ch, diff="")
 
     # No PR URL in comments to force non-review path
     fake_context.task.comments = []
@@ -390,17 +480,28 @@ async def test_nonreview_asking_returns_translated_question(monkeypatch, fake_co
         assert context_location == "modes.edit_mode.ticket_comment_context_location"
         return "translated question"
 
-    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.talk_as", fake_talk_as)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", lambda key, **kw: key)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.edit_files", fake_edit
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as", fake_talk_as
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        lambda key, **kw: key,
+    )
 
-    res = await mode.run([Message(content="need", author="u", author_type=Message.USER)])
+    messages = [Message(content="need", author="u", author_type=Message.USER)]
+    res = await edit_mode.main(fake_context, messages, git_tool, code_hosting)
+
     assert res.status == AgentResponse.ASKING
     assert res.message == "translated question"
 
 
 @pytest.mark.asyncio
-async def test_nonreview_commit_creates_pr_with_template(monkeypatch, fake_context, tmp_path):
+async def test_nonreview_commit_creates_pr_with_template(
+    monkeypatch, fake_context, tmp_path
+):
     fake_context.task.status = Task.IN_PROGRESS
     ch = StubCodeHostingService()
 
@@ -409,19 +510,19 @@ async def test_nonreview_commit_creates_pr_with_template(monkeypatch, fake_conte
     tpl_dir.mkdir(parents=True)
     (tpl_dir / "pull_request_template.md").write_text("TEMPLATE", encoding="utf-8")
 
-    # Patch workspace path to our tmp
-    monkeypatch.setattr(
-        "guildbotics.modes.mode_base.get_workspace_path", lambda pid: tmp_path
+    # Create git_tool with the tmp_path as repo_path
+    git_tool = StubGitTool(
+        workspace=tmp_path,
+        repo_url="https://example.com/org/repo.git",
+        logger=fake_context.logger,
+        user_name=fake_context.person.account_info.get("git_user", "User"),
+        user_email=fake_context.person.account_info.get("git_email", "u@example.com"),
+        default_branch="main",
     )
-    # GitTool stub with non-empty diff => commit and push
-    monkeypatch.setattr("guildbotics.modes.mode_base.GitTool", StubGitTool)
-
-    def get_code_hosting_service(repository=None):
-        return ch
-
-    fake_context.get_code_hosting_service = get_code_hosting_service  # type: ignore[attr-defined]
-
-    mode = EditMode(fake_context)
+    git_tool.repo_path = tmp_path  # Set repo_path to tmp_path for template reading
+    git_tool.set_diff(
+        "diff"
+    )  # Ensure there is a diff to trigger commit and PR creation
 
     async def fake_edit(context, inputs, cwd):
         # Ensure inputs come from messages_to_simple_dicts
@@ -431,7 +532,9 @@ async def test_nonreview_commit_creates_pr_with_template(monkeypatch, fake_conte
     async def fake_write_commit(context, task_title, changes):
         return "commit message"
 
-    async def fake_write_pr_desc(context, changes, commit_message, ticket_url, pr_template):
+    async def fake_write_pr_desc(
+        context, changes, commit_message, ticket_url, pr_template
+    ):
         assert pr_template == "TEMPLATE"
         return "PR DESC"
 
@@ -443,24 +546,34 @@ async def test_nonreview_commit_creates_pr_with_template(monkeypatch, fake_conte
     fake_context.get_ticket_manager = lambda: StubTicketManager()  # type: ignore[attr-defined]
 
     # Patch functions
-    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.write_commit_message", fake_write_commit)
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.write_pull_request_description", fake_write_pr_desc
+        "guildbotics.templates.commands.workflows.modes.edit_mode.edit_files", fake_edit
     )
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", lambda key, **kw: key)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.write_commit_message",
+        fake_write_commit,
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.write_pull_request_description",
+        fake_write_pr_desc,
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        lambda key, **kw: key,
+    )
+
     # talk_as: used by get_done_response
     async def fake_talk_done(*a, **k):
         return "assistant summary"
+
     monkeypatch.setattr(
-        "guildbotics.modes.mode_base.talk_as", fake_talk_done
+        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as",
+        fake_talk_done,
     )
 
-    # Ensure there is a diff to trigger commit and PR creation
-    gt = await mode.get_git_tool()
-    gt.set_diff("diff")  # type: ignore[attr-defined]
+    messages = [Message(content="go", author="u", author_type=Message.USER)]
+    res = await edit_mode.main(fake_context, messages, git_tool, ch)
 
-    res = await mode.run([Message(content="go", author="u", author_type=Message.USER)])
     assert res.status == AgentResponse.DONE
     assert "Output:" in res.message
     assert ch.created_pr is not None
@@ -469,50 +582,55 @@ async def test_nonreview_commit_creates_pr_with_template(monkeypatch, fake_conte
 
 
 @pytest.mark.asyncio
-async def test_read_pull_request_template_default_when_missing(monkeypatch, fake_context, tmp_path):
+async def test_read_pull_request_template_default_when_missing(
+    monkeypatch, fake_context, tmp_path
+):
     # No template files exist in workspace => should return default translation
-    monkeypatch.setattr(
-        "guildbotics.modes.mode_base.get_workspace_path", lambda pid: tmp_path
-    )
-    mode = EditMode(fake_context)
     # Translate function returns identifiable default
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.t",
-        lambda key, **kw: "DEFAULT" if key == "modes.edit_mode.default_pr_template" else key,
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        lambda key, **kw: (
+            "DEFAULT" if key == "modes.edit_mode.default_pr_template" else key
+        ),
     )
-    assert mode.read_pull_request_template() == "DEFAULT"
+    result = edit_mode.read_pull_request_template(fake_context, tmp_path)
+    assert result == "DEFAULT"
 
 
 @pytest.mark.asyncio
 async def test_acknowledge_comment_variants(monkeypatch, fake_context):
     ch = StubCodeHostingService()
 
-    def get_code_hosting_service(repository=None):
-        return ch
-
-    fake_context.get_code_hosting_service = get_code_hosting_service  # type: ignore[attr-defined]
-    mode = EditMode(fake_context)
-
     # action != ack => False
     async def fake_identify_edit(*_):
         return "edit"
+
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify_edit
+        "guildbotics.templates.commands.workflows.modes.edit_mode.identify_pr_comment_action",
+        fake_identify_edit,
     )
-    got = await mode._acknowledge_comment("https://example.com/pr/1", 1, "please fix")
+    got = await edit_mode._acknowledge_comment(
+        fake_context, ch, "https://example.com/pr/1", 1, "please fix"
+    )
     assert got is False
 
     # ack with no comment_id => True but no reaction
     async def fake_identify_ack(*_):
         return "ack"
+
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify_ack
+        "guildbotics.templates.commands.workflows.modes.edit_mode.identify_pr_comment_action",
+        fake_identify_ack,
     )
-    got = await mode._acknowledge_comment("https://example.com/pr/1", None, "thanks")
+    got = await edit_mode._acknowledge_comment(
+        fake_context, ch, "https://example.com/pr/1", None, "thanks"
+    )
     assert got is True and len(ch.reaction_calls) == 0
 
     # ack with comment_id => reaction attempted
-    got = await mode._acknowledge_comment("https://example.com/pr/1", 42, "thanks")
+    got = await edit_mode._acknowledge_comment(
+        fake_context, ch, "https://example.com/pr/1", 42, "thanks"
+    )
     assert got is True and ch.reaction_calls[-1] == (
         "https://example.com/pr/1",
         42,
@@ -524,10 +642,10 @@ async def test_acknowledge_comment_variants(monkeypatch, fake_context):
     async def bad_add_reaction(*a, **k):
         raise httpx.HTTPError("network")
 
-    monkeypatch.setattr(
-        ch, "add_reaction_to_comment", bad_add_reaction
+    monkeypatch.setattr(ch, "add_reaction_to_comment", bad_add_reaction)
+    got = await edit_mode._acknowledge_comment(
+        fake_context, ch, "https://example.com/pr/1", 99, "ok"
     )
-    got = await mode._acknowledge_comment("https://example.com/pr/1", 99, "ok")
     assert got is True
 
 
@@ -543,7 +661,7 @@ async def test_review_no_threads_edit_asking_empty_message_sets_default_question
     ch = StubCodeHostingService()
     ch.set_comments(comments)
 
-    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+    git_tool, code_hosting = stub_mode_env(monkeypatch, fake_context, ch, diff="")
 
     # Force edit path, and make edit_files ask without a message
     async def fake_identify(*_):
@@ -553,9 +671,12 @@ async def test_review_no_threads_edit_asking_empty_message_sets_default_question
         return AgentResponse(status=AgentResponse.ASKING, message="")
 
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify
+        "guildbotics.templates.commands.workflows.modes.edit_mode.identify_pr_comment_action",
+        fake_identify,
     )
-    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.edit_files", fake_edit
+    )
 
     # Track that default_question translation key is requested
     called = {"default_question": 0}
@@ -566,13 +687,18 @@ async def test_review_no_threads_edit_asking_empty_message_sets_default_question
             return "DEFAULT_QUESTION"
         return key
 
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", fake_t)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t", fake_t
+    )
     # Stable talk_as
     monkeypatch.setattr(
-        "guildbotics.modes.edit_mode.talk_as", lambda *a, **k: "reply"
+        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as",
+        lambda *a, **k: "reply",
     )
 
-    res = await mode.run([Message(content="hi", author="u", author_type=Message.USER)])
+    messages = [Message(content="hi", author="u", author_type=Message.USER)]
+    res = await edit_mode.main(fake_context, messages, git_tool, code_hosting)
+
     assert res.status == AgentResponse.DONE
     # In review path with no changes => message falls back to PR URL
     assert res.message == "https://example.com/pr/200"
@@ -591,14 +717,24 @@ async def test_review_inline_threads_edit_done_sets_changed_and_overall_reply(
     t1 = InlineCommentThread(
         path="x.py",
         line=10,
-        comments=[InlineComment(path="x.py", line=10, body="please fix", comment_id=5, author="rv", created_at="1", is_reviewee=False)],
+        comments=[
+            InlineComment(
+                path="x.py",
+                line=10,
+                body="please fix",
+                comment_id=5,
+                author="rv",
+                created_at="1",
+                is_reviewee=False,
+            )
+        ],
     )
     rc = ReviewComments(review_comments=[], inline_comments=[])
     rc.inline_comment_threads = [t1]
 
     ch = StubCodeHostingService()
     ch.set_comments(rc)
-    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+    git_tool, code_hosting = stub_mode_env(monkeypatch, fake_context, ch, diff="")
 
     async def fake_identify(*_):
         return "edit"
@@ -616,12 +752,23 @@ async def test_review_inline_threads_edit_done_sets_changed_and_overall_reply(
     async def fake_talk_as(context, topic, context_location, conversation_history):
         return "OVERALL_REPLY" if topic == "DEFAULT_MESSAGE" else "THREAD_REPLY"
 
-    monkeypatch.setattr("guildbotics.modes.edit_mode.identify_pr_comment_action", fake_identify)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", fake_t)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.talk_as", fake_talk_as)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.identify_pr_comment_action",
+        fake_identify,
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.edit_files", fake_edit
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t", fake_t
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as", fake_talk_as
+    )
 
-    res = await mode.run([Message(content="go", author="u", author_type=Message.USER)])
+    messages = [Message(content="go", author="u", author_type=Message.USER)]
+    res = await edit_mode.main(fake_context, messages, git_tool, code_hosting)
+
     assert res.status == AgentResponse.DONE
     # Since changed=True and message exists, overall reply is used (not PR URL)
     assert res.message == "OVERALL_REPLY"
@@ -630,20 +777,29 @@ async def test_review_inline_threads_edit_done_sets_changed_and_overall_reply(
 
 
 @pytest.mark.asyncio
-async def test_nonreview_done_no_changes_returns_response_message(monkeypatch, fake_context):
+async def test_nonreview_done_no_changes_returns_response_message(
+    monkeypatch, fake_context
+):
     # Non-review path (no PR URL)
     fake_context.task.status = Task.IN_PROGRESS
     fake_context.task.comments = []
     ch = StubCodeHostingService()
-    mode = stub_mode_env(monkeypatch, fake_context, ch, diff="")
+    git_tool, code_hosting = stub_mode_env(monkeypatch, fake_context, ch, diff="")
 
     async def fake_edit(context, inputs, cwd):
         return AgentResponse(status=AgentResponse.DONE, message="topic result")
 
-    monkeypatch.setattr("guildbotics.modes.edit_mode.edit_files", fake_edit)
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", lambda key, **kw: key)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.edit_files", fake_edit
+    )
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        lambda key, **kw: key,
+    )
 
-    res = await mode.run([Message(content="x", author="u", author_type=Message.USER)])
+    messages = [Message(content="x", author="u", author_type=Message.USER)]
+    res = await edit_mode.main(fake_context, messages, git_tool, code_hosting)
+
     assert res.status == AgentResponse.DONE
     assert res.message == "topic result"
     # Ensure skip_ticket_comment is False in this case
@@ -656,13 +812,21 @@ async def test_pr_to_text_appends_inline_comment_threads(monkeypatch, fake_conte
     t1 = InlineCommentThread(
         path="a.py",
         line=1,
-        comments=[InlineComment(path="a.py", line=1, body="c1", comment_id=1, author="rv", created_at="1", is_reviewee=False)],
+        comments=[
+            InlineComment(
+                path="a.py",
+                line=1,
+                body="c1",
+                comment_id=1,
+                author="rv",
+                created_at="1",
+                is_reviewee=False,
+            )
+        ],
     )
     rc = ReviewComments(review_comments=[], inline_comments=[])
     rc.inline_comment_threads = [t1]
     pr = PullRequest(title="T", description="D", review_comments=rc, is_merged=False)
-
-    mode = EditMode(fake_context)
 
     # Provide deterministic translations focusing on inline thread appends
     def fake_t(key, **kw):
@@ -674,9 +838,11 @@ async def test_pr_to_text_appends_inline_comment_threads(monkeypatch, fake_conte
             return f"MERGE|{kw['merge_outcome']}"
         return key
 
-    monkeypatch.setattr("guildbotics.modes.edit_mode.t", fake_t)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.edit_mode.t", fake_t
+    )
 
-    text = mode.pr_to_text(pr)
+    text = edit_mode.pr_to_text(pr)
     # Should include inline thread section and merge outcome suffix
     assert "THREAD|1|" in text
     assert text.endswith("MERGE|closed")

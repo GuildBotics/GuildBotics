@@ -1,7 +1,7 @@
 # Contributing Guidelines
 
 ## Project Structure & Module Organization
-- `guildbotics/`: コアパッケージ。キーとなるモジュールには `drivers/` (スケジューラー)、`workflows/` (タスクオーケストレーション)、`modes/` (タスクタイプごとの動作)、`intelligences/` (ブレイン)、`integrations/`、`loader/`、`runtime/`、`entities/`、`utils/`、`templates/` が含まれます。
+- `guildbotics/`: コアパッケージ。キーとなるモジュールには `drivers/` (スケジューラー)、`workflows/` (タスクオーケストレーション)、`intelligences/` (ブレイン)、`integrations/`、`loader/`、`runtime/`、`entities/`、`utils/`、`templates/` が含まれます。
 - `tests/`: Pytestスイート。ユニットテストは `tests/guildbotics/` の下でパッケージパスをミラーリング；統合テストは `tests/it/` にあり、サンプル設定は `tests/it/config/` にあります。
 - `docs/`: アーキテクチャとデザイン (`docs/ARCHITECTURE.*.md`)。
 - `main.py`: スケジューラーを実行するためのエントリーポイント。
@@ -67,6 +67,5 @@
 
 ## Security & Configuration Tips
 - 秘密情報をコミットしない。
-- ドライバー、ワークフロー、モードの相互作用については `docs/ARCHITECTURE.en.md` をレビュー；一部のランタイムデータは `~/.guildbotics/data/` の下に保存される場合がある。
 - 該当する場合、外部入力を検証；明確なエラーで迅速に失敗。
 - 最小権限資格情報を使用；疑いまたは露出時に秘密情報をローテーション。
