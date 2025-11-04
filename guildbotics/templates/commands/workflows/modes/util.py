@@ -4,6 +4,13 @@ from guildbotics.utils.git_tool import GitTool
 
 
 async def get_git_tool(context: Context) -> GitTool:
+    """
+    Get the GitTool instance for the given context.
+    Args:
+        context (Context): The runtime context.
+    Returns:
+        GitTool: The GitTool instance.
+    """
     workspace_path = get_workspace_path(context.person.person_id)
     code_hosting_service = context.get_code_hosting_service(context.task.repository)
     git_user = context.person.account_info.get("git_user", "Default User")
@@ -20,10 +27,25 @@ async def get_git_tool(context: Context) -> GitTool:
 
 
 def get_branch_name(context: Context) -> str:
+    """
+    Get the branch name for the given context.
+    Args:
+        context (Context): The runtime context.
+    Returns:
+        str: The branch name.
+    """
     return f"ticket/{context.task.id}"
 
 
 async def checkout(context: Context, branch_name: str | None = None) -> GitTool:
+    """
+    Checkout the branch for the given context.
+    Args:
+        context (Context): The runtime context.
+        branch_name (str, optional): The branch name to checkout. If None, uses the default branch name. Defaults to None.
+    Returns:
+        GitTool: The GitTool instance after checkout.
+    """
     if branch_name is None:
         branch_name = get_branch_name(context)
     git_tool = await get_git_tool(context)

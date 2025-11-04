@@ -91,7 +91,7 @@ async def _main(context: Context, ticket_manager: TicketManager):
         "ticket_manager": ticket_manager,
     }
 
-    if _is_custom_command(messages):
+    if _is_custom_command(context, messages):
         response = await _invoke_custom_command(context, params)
     else:
         if not context.task.mode:
@@ -113,7 +113,15 @@ async def _main(context: Context, ticket_manager: TicketManager):
 
 
 async def _invoke_custom_command(context: Context, params: dict) -> AgentResponse:
-    content = _get_last_message(params["messages"])
+    """
+    Invoke a custom command based on the last message.
+    Args:
+        context (Context): The runtime context.
+        params (dict): The parameters to pass to the command.
+    Returns:
+        AgentResponse: The agent response.
+    """
+    content = _get_last_message(context, params["messages"])
     lines = content.splitlines()
     command_name, command_args = _preprocess_line(lines[0])
     if len(lines) > 1:
@@ -128,6 +136,13 @@ async def _invoke_custom_command(context: Context, params: dict) -> AgentRespons
 
 
 def _preprocess_line(line: str) -> tuple[str, list[str]]:
+    """
+    Preprocess a command line by extracting the command name and arguments.
+    Args:
+        line (str): The command line to preprocess.
+    Returns:
+        tuple[str, list[str]]: The command name and a list of arguments.
+    """
     try:
         words = shlex.split(line[2:].strip())
     except ValueError:
@@ -136,17 +151,42 @@ def _preprocess_line(line: str) -> tuple[str, list[str]]:
     return words[0], words[1:]
 
 
-def _get_last_message(messages: list[Message]) -> str:
-    return messages[-1].content.strip()
+def _get_last_message(context: Context, messages: list[Message]) -> str:
+    """
+    Get the content of the last message.
+    Args:
+        messages (list[Message]): The list of messages.
+    Returns:
+        str: The content of the last message.
+    """
+    if len(messages) == 1:
+        return context.task.description
+    else:
+        return messages[-1].content.strip()
 
 
-def _is_custom_command(messages: list[Message]) -> bool:
+def _is_custom_command(context: Context, messages: list[Message]) -> bool:
+    """
+    Determine if the last message is a custom command.
+    Args:
+        messages (list[Message]): The list of messages.
+    Returns:
+        bool: True if the last message is a custom command, False otherwise.
+    """
     if not messages:
         return False
-    return _get_last_message(messages).startswith("//")
+
+    return _get_last_message(context, messages).startswith("//")
 
 
 def _mode_to_command_name(mode: str | None) -> str:
+    """
+    Convert a mode name to a command name.
+    Args:
+        mode (str | None): The mode name.
+    Returns:
+        str: The command name.
+    """
     if not mode:
         mode = "comment"
 
@@ -154,6 +194,11 @@ def _mode_to_command_name(mode: str | None) -> str:
 
 
 async def main(context: Context):
+    """
+    Main function for the ticket-driven workflow.
+    Args:
+        context (Context): The runtime context.
+    """
     ticket_manager = context.get_ticket_manager()
     task = await ticket_manager.get_task_to_work_on()
     if task is None:

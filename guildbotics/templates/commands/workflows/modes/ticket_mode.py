@@ -14,6 +14,16 @@ async def main(
     git_tool: GitTool,
     ticket_manager: TicketManager,
 ):
+    """
+    Main function for ticket mode.
+    Args:
+        context (Context): The runtime context.
+        messages (list[Message]): The conversation messages.
+        git_tool (GitTool): The GitTool instance.
+        ticket_manager (TicketManager): The TicketManager instance.
+    Returns:
+        AgentResponse: The agent response.
+    """
     role = context.task.role if context.task.role else "professional"
 
     available_modes = Labels(Task.get_available_modes())

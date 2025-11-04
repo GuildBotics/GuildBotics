@@ -33,6 +33,16 @@ async def main(
     git_tool: GitTool,
     code_hosting_service: CodeHostingService,
 ) -> AgentResponse:
+    """
+    Main function for edit mode.
+    Args:
+        context (Context): The runtime context.
+        messages (list[Message]): The conversation messages.
+        git_tool (GitTool): The GitTool instance.
+        code_hosting_service (CodeHostingService): The code hosting service integration.
+    Returns:
+        AgentResponse: The agent response.
+    """
 
     inputs = messages_to_simple_dicts(messages)
 
@@ -133,6 +143,14 @@ async def main(
 async def _handle_retrospective(
     context: Context, code_hosting_service: CodeHostingService
 ) -> AgentResponse:
+    """
+    Handle the retrospective flow for the edit mode.
+    Args:
+        context (Context): The runtime context.
+        code_hosting_service (CodeHostingService): The code hosting service integration.
+    Returns:
+        AgentResponse: The agent response containing the evaluation and proposed improvements.
+    """
     pull_request_url = find_pr_url_from_task_comments(context.task, True)
     pr = await code_hosting_service.get_pull_request(pull_request_url)
     pr_text = pr_to_text(pr)
@@ -182,9 +200,22 @@ async def _handle_review_flow(
     git_tool,
     code_hosting_service: CodeHostingService,
 ) -> tuple[ReviewComments, bool, bool, str, list[Message]]:
-    """Process review-time edits and acknowledgements.
-
-    Returns a tuple of (comments, changed, is_asking, overall_message, conversation_history).
+    """
+    Handle the review flow for the edit mode.
+    Args:
+        context (Context): The runtime context.
+        inputs (list[dict]): The input messages as simple dicts.
+        messages (list[Message]): The original message objects.
+        pull_request_url (str): The URL of the pull request.
+        git_tool: The Git tool instance.
+        code_hosting_service (CodeHostingService): The code hosting service integration.
+    Returns:
+        tuple[ReviewComments, bool, bool, str, list[Message]]: A tuple containing:
+            - ReviewComments: The review comments object.
+            - bool: Whether any changes were made.
+            - bool: Whether the agent is asking for more information.
+            - str: The message to be sent in response.
+            - list[Message]: The updated conversation history.
     """
     context_location = t("modes.edit_mode.pull_request_context_location")
     comments = await code_hosting_service.get_pull_request_comments(pull_request_url)
@@ -293,6 +324,13 @@ async def _handle_review_flow(
 
 
 def pr_to_text(pr: PullRequest) -> str:
+    """
+    Convert a PullRequest object to a textual representation.
+    Args:
+        pr (PullRequest): The pull request object.
+    Returns:
+        str: The textual representation of the pull request.
+    """
     message = t(
         "modes.edit_mode.pull_request_text",
         title=pr.title,
@@ -317,6 +355,10 @@ def read_pull_request_template(context: Context, workspace: Path) -> str:
 
     Tries several common template locations for GitHub and GitLab.
     If no template file is found, returns a generic default template.
+
+    Args:
+        context (Context): The runtime context.
+        workspace (Path): The path to the repository workspace.
 
     Returns:
         str: The content of the first template file found, or a default template.
@@ -364,17 +406,17 @@ async def _acknowledge_comment(
     comment_body: str | None,
     is_inline: bool = False,
 ) -> bool:
-    """Decide action for a PR comment and acknowledge if appropriate.
-
-    - Runs `identify_pr_comment_action` on `comment_body` when provided.
-    - If the action is `ack`, adds a thumbs-up reaction to the target comment
-        using the appropriate API (inline vs issue) and returns True.
-    - Otherwise, returns False without side effects.
-
-    Exceptions from reaction API are swallowed with a warning log.
-
+    """
+    Determine if the comment indicates an acknowledgement (ACK) action, and if so, add a reaction to the comment.
+    Args:
+        context (Context): The runtime context.
+        code_hosting_service (CodeHostingService): The code hosting service integration.
+        pull_request_url (str): The URL of the pull request.
+        comment_id (int | None): The ID of the comment to react to.
+        comment_body (str | None): The body of the comment to analyze.
+        is_inline (bool, optional): Whether the comment is an inline comment. Defaults to False.
     Returns:
-        bool: True if acknowledged (reaction added or attempted), False otherwise.
+        bool: True if the comment was acknowledged (ACK) and reaction added, False otherwise.
     """
     action = "edit"
     if comment_body:
@@ -406,8 +448,11 @@ async def get_done_response(
     """
     Create a done response for the mode.
     Args:
-        title (str): The title to include in the done response.
-        url (str): The URL to include in the done response.
+        context (Context): The runtime context.
+        url (str): The URL to include in the response.
+        messages (list[Message]): The conversation history.
+        topic (str, optional): The topic to discuss. Defaults to "I have completed the task. Please review it.".
+        context_location (str, optional): The context location for the talk_as function. Defaults to "Ticket Comment".
     Returns:
         AgentResponse: The done response.
     """
