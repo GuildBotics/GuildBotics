@@ -1,5 +1,5 @@
-from logging import Logger
 import re
+from logging import Logger
 from typing import Any, ClassVar, cast
 
 from httpx import AsyncClient
@@ -20,7 +20,6 @@ from guildbotics.integrations.github.github_utils import (
 )
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.common import Labels
-from guildbotics.modes.mode_base import ModeBase
 from guildbotics.utils.i18n_tool import t
 
 
@@ -103,7 +102,7 @@ class GitHubTicketManager(TicketManager):
                         "name": name,
                         "description": mode or "",
                     }
-                    for name, mode in ModeBase.get_available_modes(self.team).items()
+                    for name, mode in Labels(Task.get_available_modes()).items()
                 ],
             },
             GitHubTicketManager.FIELD_ROLE: {

@@ -22,8 +22,9 @@ from guildbotics.entities.team import Person
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.github.github_utils import GitHubAppAuth
 from guildbotics.intelligences.functions import talk_as
-from guildbotics.modes.comment_mode import CommentMode
 from guildbotics.runtime import Context
+from guildbotics.templates.commands.workflows.modes import comment_mode
+from guildbotics.templates.commands.workflows.modes.util import checkout
 from guildbotics.utils.fileio import (
     CONFIG_PATH,
     get_template_path,
@@ -575,8 +576,8 @@ class SimpleSetupTool(SetupTool):
                     )
 
                     # Check Git and CLI Agent Settings
-                    comment_mode = CommentMode(c)
-                    res = await comment_mode.run(messages)
+                    git_tool = await checkout(c)
+                    res = await comment_mode.main(c, messages, git_tool)
 
                     print()
                     print("----- API Agent Output -----")

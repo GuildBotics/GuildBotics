@@ -1,7 +1,7 @@
 import pytest
 
 from guildbotics.entities.task import Task
-from guildbotics.intelligences.common import AgentResponse, Labels
+from guildbotics.intelligences.common import AgentResponse
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
 
 
@@ -34,12 +34,27 @@ class StubContext:
         self.task = task
         self._tm = tm
         self.team = object()  # not used when ModeBase.get_available_modes is mocked
+        self._invoke_handler = None
 
     def get_ticket_manager(self):
         return self._tm
 
     def update_task(self, task: Task) -> None:
         self.task = task
+
+    def get_code_hosting_service(self, repository=None):
+        # Return a minimal stub
+        return object()
+
+    def set_invoke_handler(self, handler):
+        """Set a custom invoke handler for testing."""
+        self._invoke_handler = handler
+
+    async def invoke(self, command_name: str, *args, **kwargs):
+        """Mock invoke method that delegates to a test-provided handler."""
+        if self._invoke_handler:
+            return await self._invoke_handler(command_name, *args, **kwargs)
+        raise NotImplementedError("invoke handler not set")
 
 
 @pytest.mark.asyncio
@@ -66,18 +81,29 @@ async def test_run_transitions_ready_to_in_progress_and_handles_asking(monkeypat
     )
     # Avoid touching real team/services resolution
     monkeypatch.setattr(
-        "guildbotics.modes.mode_base.ModeBase.get_available_modes",
-        lambda team: Labels({"comment": "desc"}),
+        "guildbotics.entities.Task.get_available_modes",
+        lambda: {"comment": "desc"},
     )
 
-    # Mode.run returns ASKING and should cause early return after commenting
-    class FakeMode:
-        async def run(self, messages):
-            return AgentResponse(status=AgentResponse.ASKING, message="need more info")
+    # Mock checkout to return a stub GitTool
+    class StubGitTool:
+        pass
+
+    async def fake_checkout(context):
+        return StubGitTool()
 
     monkeypatch.setattr(
-        "guildbotics.modes.mode_base.ModeBase.get_mode", lambda context: FakeMode()
+        "guildbotics.templates.commands.workflows.ticket_driven_workflow.checkout",
+        fake_checkout,
     )
+
+    # Set up invoke handler to return ASKING response
+    async def invoke_handler(command_name, *args, **kwargs):
+        # Expect command_name to be "workflows/modes/comment_mode"
+        assert command_name == "workflows/modes/comment_mode"
+        return AgentResponse(status=AgentResponse.ASKING, message="need more info")
+
+    ctx.set_invoke_handler(invoke_handler)
 
     # Act
     await ticket_driven_workflow.main(ctx)
@@ -110,14 +136,25 @@ async def test_run_completes_and_moves_in_progress_to_in_review(monkeypatch):
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
 
-    # Mode.run returns DONE -> should comment and move to IN_REVIEW
-    class FakeModeDone:
-        async def run(self, messages):
-            return AgentResponse(status=AgentResponse.DONE, message="done msg")
+    # Mock checkout to return a stub GitTool
+    class StubGitTool:
+        pass
+
+    async def fake_checkout(context):
+        return StubGitTool()
 
     monkeypatch.setattr(
-        "guildbotics.modes.mode_base.ModeBase.get_mode", lambda context: FakeModeDone()
+        "guildbotics.templates.commands.workflows.ticket_driven_workflow.checkout",
+        fake_checkout,
     )
+
+    # Set up invoke handler to return DONE response
+    async def invoke_handler(command_name, *args, **kwargs):
+        # Expect command_name to be "workflows/modes/comment_mode"
+        assert command_name == "workflows/modes/comment_mode"
+        return AgentResponse(status=AgentResponse.DONE, message="done msg")
+
+    ctx.set_invoke_handler(invoke_handler)
 
     # Act
     await ticket_driven_workflow.main(ctx)

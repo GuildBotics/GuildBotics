@@ -10,13 +10,13 @@ from guildbotics.intelligences.common import (
     NextTaskItem,
     NextTasksResponse,
 )
-from guildbotics.modes.ticket_mode import TicketMode
+from guildbotics.templates.commands.workflows.modes import ticket_mode
 
 
 class StubGitTool:
-    """Minimal stub for GitTool used by TicketMode.
+    """Minimal stub for GitTool used by ticket_mode.
 
-    Captures the branch passed to `checkout_branch` and exposes a fake `repo_path`.
+    Exposes a fake `repo_path` for testing.
     """
 
     def __init__(
@@ -29,21 +29,11 @@ class StubGitTool:
         self.user_email = user_email
         self.default_branch = default_branch
         self.repo_path = Path("/tmp/fake_repo")
-        self.checked_out = []
-
-    def checkout_branch(self, branch_name: str):
-        self.checked_out.append(branch_name)
-
-
-class StubCodeHostingService:
-    async def get_repository_url(self) -> str:
-        return "https://example.com/org/repo.git"
-
-    async def get_default_branch(self) -> str:
-        return "main"
 
 
 class StubTicketManager:
+    """Stub TicketManager for testing ticket_mode."""
+
     def __init__(self):
         self.created_tasks = None
 
@@ -55,25 +45,9 @@ class StubTicketManager:
         return f"https://tickets.local/{task.title.replace(' ', '_')}"
 
 
-class ProjectWithServices:
-    """Fake project exposing available services queried by ModeBase.get_available_modes."""
-
-    def get_language_code(self) -> str:
-        return "en"
-
-    def get_language_name(self) -> str:
-        return "English"
-
-    def get_available_services(self):
-        # Ensure ticket and code hosting dependent services are reported available
-        from guildbotics.entities.team import Service
-
-        return [Service.TICKET_MANAGER, Service.CODE_HOSTING_SERVICE]
-
-
 @pytest.mark.asyncio
 async def test_run_stubs_external_calls_and_creates_tickets(monkeypatch, fake_context):
-    """Unit test for TicketMode.run with all externals stubbed (pure logic).
+    """Unit test for ticket_mode.main with all externals stubbed (pure logic).
 
     - Stubs GitTool to avoid real git operations and captures branch checkout.
     - Stubs identify_next_tasks to control task flow.
@@ -81,8 +55,7 @@ async def test_run_stubs_external_calls_and_creates_tickets(monkeypatch, fake_co
     - Verifies owner propagation, function call wiring, and AgentResponse.
     """
 
-    # Prepare context: add required methods and attributes used by TicketMode
-    fake_context.team = type("T", (), {"project": ProjectWithServices()})()
+    # Prepare context: add required methods and attributes used by ticket_mode
     fake_context.task = Task(
         id="12345",
         title="Implement feature X",
@@ -90,26 +63,15 @@ async def test_run_stubs_external_calls_and_creates_tickets(monkeypatch, fake_co
         role="dev",
         owner="alice",
     )
-    fake_context.task.repository = "test-repo"  # Set repository for the task
 
     ticket_manager = StubTicketManager()
-
-    def get_code_hosting_service(repository: str | None = None):
-        return StubCodeHostingService()
-
-    def get_ticket_manager():
-        return ticket_manager
-
-    fake_context.get_code_hosting_service = get_code_hosting_service  # type: ignore[attr-defined]
-    fake_context.get_ticket_manager = get_ticket_manager  # type: ignore[attr-defined]
-
-    # Monkeypatch GitTool used inside mode_base (which TicketMode inherits from)
-    monkeypatch.setattr("guildbotics.modes.mode_base.GitTool", StubGitTool)
-
-    # Mock get_workspace_path to return a fake path
-    monkeypatch.setattr(
-        "guildbotics.modes.mode_base.get_workspace_path",
-        lambda person_id: Path("/tmp/fake_workspace"),
+    git_tool = StubGitTool(
+        workspace=Path("/tmp/fake_workspace"),
+        repo_url="https://example.com/org/repo.git",
+        logger=None,
+        user_name="testuser",
+        user_email="test@example.com",
+        default_branch="main",
     )
 
     # Track calls and inputs to the identify functions
@@ -144,7 +106,8 @@ async def test_run_stubs_external_calls_and_creates_tickets(monkeypatch, fake_co
 
     # Patch functions referenced within ticket_mode
     monkeypatch.setattr(
-        "guildbotics.modes.ticket_mode.identify_next_tasks", fake_identify_next_tasks
+        "guildbotics.templates.commands.workflows.modes.ticket_mode.identify_next_tasks",
+        fake_identify_next_tasks,
     )
 
     # Make i18n translation deterministic and simple
@@ -155,7 +118,9 @@ async def test_run_stubs_external_calls_and_creates_tickets(monkeypatch, fake_co
             return "Ticket Comment"
         return key
 
-    monkeypatch.setattr("guildbotics.modes.ticket_mode.t", fake_t)
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.ticket_mode.t", fake_t
+    )
 
     # Capture talk_as invocations and return a fixed assistant message
     talked = {}
@@ -164,26 +129,26 @@ async def test_run_stubs_external_calls_and_creates_tickets(monkeypatch, fake_co
         talked["args"] = (context, system_message, context_location, messages)
         return "assistant reply"
 
-    monkeypatch.setattr("guildbotics.modes.ticket_mode.talk_as", fake_talk_as)
-
-    # For stable available_modes, bypass ModeBase implementation
     monkeypatch.setattr(
-        "guildbotics.modes.ticket_mode.ModeBase.get_available_modes",
-        lambda team: Labels({"ticket": "desc"}),
+        "guildbotics.templates.commands.workflows.modes.ticket_mode.talk_as",
+        fake_talk_as,
     )
 
-    # Execute
-    mode = TicketMode(fake_context)
+    # For stable available_modes, bypass Task.get_available_modes
+    monkeypatch.setattr(
+        "guildbotics.entities.Task.get_available_modes",
+        lambda: {"ticket": "desc"},
+    )
+
+    # Execute the main function directly
     messages = [Message(content="hello", author="u", author_type=Message.USER)]
-    res = await mode.run(messages)
+    res = await ticket_mode.main(fake_context, messages, git_tool, ticket_manager)
 
     # Assertions
     assert res.status == AgentResponse.DONE
     assert res.message == "assistant reply"
 
-    # Git branch checkout occurred with expected naming
-    # Access the last constructed stub via monkeypatch is not direct,
-    # so assert through recorded identify_next call that repo_path was set by stub
+    # Verify identify_next_tasks was called
     assert calls["identify_next"], "identify_next_tasks was not called"
 
     # Role and messages are correctly forwarded
@@ -191,6 +156,8 @@ async def test_run_stubs_external_calls_and_creates_tickets(monkeypatch, fake_co
     assert first_next["role"] == "dev"
     assert first_next["messages"] == messages
     assert isinstance(first_next["available_modes"], Labels)
+    # Verify repo_path from git_tool was passed
+    assert first_next["repo_path"] == git_tool.repo_path
 
     # Ticket manager received tasks with propagated owner
     assert ticket_manager.created_tasks is not None
