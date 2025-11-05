@@ -80,8 +80,8 @@ ja:
   error_invalid_github_username: "指定したGitHubユーザーが存在しません。"
   error_invalid_github_apps_url: "有効なGitHub Appsの設定ページURLの形式: https://github.com/organizations/<org>/settings/apps/<app-slug>"
   error_config_dir_not_found: "指定した設定ディレクトリが見つかりません: %{path}"
-  error_project_yml_not_found: "%{path} が見つかりません。最初に `guildbotics init` を実行してください。"
-  error_no_active_member: "AIエージェントが登録されていません。`guildbotics add` を実行してください"
+  error_project_yml_not_found: "%{path} が見つかりません。最初に `guildbotics config init` を実行してください。"
+  error_no_active_member: "AIエージェントが登録されていません。`guildbotics config add` を実行してください"
   error_insufficient_config: "%{person}の設定に不備があります: %{details}"
 
   sentinel_none: "（未対応にする）"

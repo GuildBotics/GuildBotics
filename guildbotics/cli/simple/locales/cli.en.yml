@@ -80,8 +80,8 @@ en:
   error_invalid_github_username: "The specified GitHub user does not exist."
   error_invalid_github_apps_url: "Invalid GitHub Apps settings page URL format: https://github.com/organizations/<org>/settings/apps/<app-slug>"
   error_config_dir_not_found: "The specified configuration directory was not found: %{path}"
-  error_project_yml_not_found: "%{path} not found. Please run `guildbotics init` first."
-  error_no_active_member: "No active AI agents registered. Please run `guildbotics add`."
+  error_project_yml_not_found: "%{path} not found. Please run `guildbotics config init` first."
+  error_no_active_member: "No active AI agents registered. Please run `guildbotics config add`."
   error_insufficient_config: "Insufficient configuration for %{person}: %{details}"
 
   sentinel_none: "(Set to none)"

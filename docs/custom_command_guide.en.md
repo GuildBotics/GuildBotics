@@ -62,7 +62,7 @@ This leads the LLM to respond with "こんにちは".
 
 ### 1.3. Select a member
 
-If you have multiple members registered via `guildbotics add`, you must specify a member when running a command using the `<command>@<person_id>` form.
+If you have multiple members registered via `guildbotics config add`, you must specify a member when running a command using the `<command>@<person_id>` form.
 
 Example: `guildbotics run translate@yuki English Japanese`
 

@@ -245,14 +245,20 @@ def _parse_command_spec(command_spec: str) -> tuple[str, str | None]:
     return name, person
 
 
-@main.command()
+@main.group()
+def config() -> None:
+    """Manage GuildBotics configuration."""
+    pass
+
+
+@config.command()
 def add() -> None:
     """Add a new member to the GuildBotics project."""
     _load_env_from_cwd()
     get_setup_tool().add_member()
 
 
-@main.command()
+@config.command()
 def init() -> None:
     """Initialize the GuildBotics environment.
 
@@ -262,7 +268,7 @@ def init() -> None:
     get_setup_tool().init_project()
 
 
-@main.command()
+@config.command()
 def verify() -> None:
     """Verify the GuildBotics environment.
 

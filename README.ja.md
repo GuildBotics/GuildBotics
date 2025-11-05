@@ -158,10 +158,10 @@ uv tool install guildbotics
 以下のコマンドで初期セットアップを行ってください。
 
 ```bash
-guildbotics init
+guildbotics config init
 ```
 
-`guildbotics init` では、以下の内容をターミナル上で対話的に選択・入力した後、設定ファイルを生成します。
+`guildbotics config init` では、以下の内容をターミナル上で対話的に選択・入力した後、設定ファイルを生成します。
 
 - 言語の選択
   - 英語または日本語を選択
@@ -195,10 +195,10 @@ guildbotics init
 以下のコマンドでメンバーを追加できます。
 
 ```bash
-guildbotics add
+guildbotics config add
 ```
 
-`guildbotics add` では、プロジェクトメンバー（AIエージェントもしくは人間）の情報を対話的に入力することで、設定ファイルを生成します。
+`guildbotics config add` では、プロジェクトメンバー（AIエージェントもしくは人間）の情報を対話的に入力することで、設定ファイルを生成します。
 
 - メンバータイプの選択
   - 人間、マシンアカウント、GitHub App、代理エージェント（自分自身のアカウント利用）のいずれかを選択
@@ -239,7 +239,7 @@ guildbotics add
 - GitHub Projects のステータス紐付け設定
 
 ```bash
-guildbotics verify
+guildbotics config verify
 ```
 
 ### 5.3.1. カスタムフィールドの追加

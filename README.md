@@ -157,10 +157,10 @@ uv tool install guildbotics
 Run the following for initial setup:
 
 ```bash
-guildbotics init
+guildbotics config init
 ```
 
-`guildbotics init` is interactive in your terminal and then generates configuration files. You will:
+`guildbotics config init` is interactive in your terminal and then generates configuration files. You will:
 
 - Select language
   - English or Japanese
@@ -194,10 +194,10 @@ The following files are created/updated:
 Add members with:
 
 ```bash
-guildbotics add
+guildbotics config add
 ```
 
-`guildbotics add` interactively prompts for member (AI agent or human) information and generates configuration files.
+`guildbotics config add` interactively prompts for member (AI agent or human) information and generates configuration files.
 
 - Select member type
   - Choose one of: human, machine account, GitHub App, proxy agent (use your own account)
@@ -238,7 +238,7 @@ Run the following to verify configuration and perform the steps below:
 - Map GitHub Projects status columns
 
 ```bash
-guildbotics verify
+guildbotics config verify
 ```
 
 ### 5.3.1. Add Custom Fields
