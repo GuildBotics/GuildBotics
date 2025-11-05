@@ -62,7 +62,7 @@ Hello
 
 ### 1.3. メンバーの指定
 
-`guildbotics add` コマンドにより、複数のメンバーを登録している場合、コマンド実行時に `<コマンド>@<person_id>` の形式でメンバーを指定する必要があります。 
+`guildbotics config add` コマンドにより、複数のメンバーを登録している場合、コマンド実行時に `<コマンド>@<person_id>` の形式でメンバーを指定する必要があります。 
 
 例: `guildbotics run translate@yuki 英語 日本語`
 

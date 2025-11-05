@@ -1,0 +1,3 @@
+model_class: agno.models.lmstudio.LMStudio
+parameters:
+  id: gpt-oss-20b
