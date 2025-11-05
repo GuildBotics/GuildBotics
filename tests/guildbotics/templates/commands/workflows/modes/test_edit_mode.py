@@ -209,7 +209,7 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
 
     # Ticket manager mock to capture created tasks
     created = {}
-    added_comments: list[str] = []
+    added_comments: list[tuple[Task, str]] = []
 
     class StubTicketManager:
         async def create_tickets(self, tasks: list[Task]):
