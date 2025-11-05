@@ -82,25 +82,33 @@ async def _main(context: Context, ticket_manager: TicketManager):
         context.update_task(context.task)
         await ticket_manager.update_ticket(context.task)
 
-    git_tool = await checkout(context)
     code_hosting_service = context.get_code_hosting_service(context.task.repository)
-    params = {
-        "messages": messages,
-        "git_tool": git_tool,
-        "code_hosting_service": code_hosting_service,
-        "ticket_manager": ticket_manager,
-    }
 
-    if _is_custom_command(context, messages):
-        response = await _invoke_custom_command(context, params)
+    if context.task.status == Task.RETROSPECTIVE:
+        response = await context.invoke(
+            "workflows/retrospective", code_hosting_service=code_hosting_service
+        )
     else:
-        if not context.task.mode:
-            available_modes = Labels(Task.get_available_modes())
-            context.task.mode = await identify_mode(context, available_modes, input)
-            await ticket_manager.update_ticket(context.task)
+        git_tool = await checkout(context)
+        params = {
+            "messages": messages,
+            "git_tool": git_tool,
+            "code_hosting_service": code_hosting_service,
+            "ticket_manager": ticket_manager,
+        }
 
-        command_name = _mode_to_command_name(context.task.mode)
-        response = await context.invoke(command_name, **params)
+        if _is_custom_command(context, messages):
+            response = await _invoke_custom_command(context, params)
+        else:
+            if not context.task.mode:
+                available_modes = Labels(Task.get_available_modes())
+                context.task.mode = await identify_mode(
+                    context, available_modes, input
+                )
+                await ticket_manager.update_ticket(context.task)
+
+            command_name = _mode_to_command_name(context.task.mode)
+            response = await context.invoke(command_name, **params)
 
     # If the response is asking for more information, return it.
     if not response.skip_ticket_comment:

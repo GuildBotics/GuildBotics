@@ -19,6 +19,10 @@ from guildbotics.intelligences.common import (
     RootCauseAnalysis,
     RootCauseItem,
 )
+from guildbotics.templates.commands.workflows import (
+    retrospective,
+    ticket_driven_workflow,
+)
 from guildbotics.templates.commands.workflows.modes import edit_mode
 from tests.conftest import FakeContext
 
@@ -152,14 +156,12 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
         PullRequest(title="T", description="D", review_comments=rc, is_merged=True)
     )
 
-    git_tool, code_hosting = stub_mode_env(monkeypatch, fake_context, ch)
-
     # Stub intelligences functions used in retrospective path
     async def fake_eval(context, pr_text):
         return "EVAL"
 
     monkeypatch.setattr(
-        "guildbotics.templates.commands.workflows.modes.edit_mode.evaluate_interaction_performance",
+        "guildbotics.templates.commands.workflows.retrospective.evaluate_interaction_performance",
         fake_eval,
     )
 
@@ -179,7 +181,7 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
         return rca
 
     monkeypatch.setattr(
-        "guildbotics.templates.commands.workflows.modes.edit_mode.analyze_root_cause",
+        "guildbotics.templates.commands.workflows.retrospective.analyze_root_cause",
         fake_rca,
     )
 
@@ -201,22 +203,35 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
         return recs
 
     monkeypatch.setattr(
-        "guildbotics.templates.commands.workflows.modes.edit_mode.propose_process_improvements",
+        "guildbotics.templates.commands.workflows.retrospective.propose_process_improvements",
         fake_recs,
     )
 
     # Ticket manager mock to capture created tasks
     created = {}
+    added_comments: list[tuple[Task, str]] = []
 
     class StubTicketManager:
         async def create_tickets(self, tasks: list[Task]):
             created["titles"] = [t.title for t in tasks]
 
-    fake_context.get_ticket_manager = lambda: StubTicketManager()  # type: ignore[attr-defined]
+        async def add_comment_to_ticket(self, task: Task, message: str):
+            added_comments.append((task, message))
+
+    stub_ticket_manager = StubTicketManager()
+    fake_context.get_ticket_manager = lambda: stub_ticket_manager  # type: ignore[attr-defined]
+    fake_context.get_code_hosting_service = lambda repo=None: ch  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.modes.util.checkout",
+        lambda context: (_ for _ in ()).throw(
+            AssertionError("checkout should not run")
+        ),
+    )
 
     # Make i18n stable and talk_as deterministic
     monkeypatch.setattr(
-        "guildbotics.templates.commands.workflows.modes.edit_mode.t",
+        "guildbotics.templates.commands.workflows.retrospective.t",
         lambda key, **kw: key,
     )
 
@@ -224,17 +239,26 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
         return "DISCUSS"
 
     monkeypatch.setattr(
-        "guildbotics.templates.commands.workflows.modes.edit_mode.talk_as",
+        "guildbotics.templates.commands.workflows.retrospective.talk_as",
         fake_talk_eval,
     )
 
+    invoked = {}
+
+    async def fake_invoke(name, **kwargs):
+        assert name == "workflows/retrospective"
+        invoked["called"] = kwargs
+        return await retrospective.main(fake_context, **kwargs)
+
+    fake_context.invoke = fake_invoke  # type: ignore[attr-defined]
+
     # Act
-    messages = [Message(content="start", author="u", author_type=Message.USER)]
-    res = await edit_mode.main(fake_context, messages, git_tool, code_hosting)
+    await ticket_driven_workflow._main(fake_context, stub_ticket_manager)
 
     # Assert: asking with combined message and only 5 tickets created
-    assert res.status == AgentResponse.ASKING
-    assert "DISCUSS" in res.message
+    assert invoked
+    assert len(added_comments) == 1
+    assert "DISCUSS" in added_comments[0][1]
     assert len(created.get("titles", [])) == 5
 
 
