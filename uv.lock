@@ -36,6 +36,25 @@ wheels = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.72.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "docstring-parser" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/07/61f3ca8e69c5dcdaec31b36b79a53ea21c5b4ca5e93c7df58c71f43bf8d8/anthropic-0.72.0.tar.gz", hash = "sha256:8971fe76dcffc644f74ac3883069beb1527641115ae0d6eb8fa21c1ce4082f7a", size = 493721, upload-time = "2025-10-28T19:13:01.755Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/b7/160d4fb30080395b4143f1d1a4f6c646ba9105561108d2a434b606c03579/anthropic-0.72.0-py3-none-any.whl", hash = "sha256:0e9f5a7582f038cab8efbb4c959e49ef654a56bfc7ba2da51b5a7b8a84de2e4d", size = 357464, upload-time = "2025-10-28T19:13:00.215Z" },
+]
+
+[[package]]
 name = "anyio"
 version = "4.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -519,6 +538,7 @@ name = "guildbotics"
 source = { editable = "." }
 dependencies = [
     { name = "agno" },
+    { name = "anthropic" },
     { name = "click" },
     { name = "croniter" },
     { name = "cryptography" },
@@ -557,6 +577,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "agno", specifier = ">=1.7,<2.0" },
+    { name = "anthropic", specifier = ">=0.40,<1.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0" },
     { name = "click", specifier = ">=8.2,<9.0" },
     { name = "croniter", specifier = ">=3.0" },

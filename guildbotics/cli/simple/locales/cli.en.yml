@@ -14,6 +14,7 @@ en:
   repo_access_ssh: "SSH"
   google_api_key_prompt: "Enter your Google API key:"
   openai_api_key_prompt: "Enter your OpenAI API key:"
+  anthropic_api_key_prompt: "Enter your Anthropic API key:"
   llm_api_type_prompt: "Select the LLM API type:"
 
   config_content: "Configuration content:"
@@ -22,6 +23,7 @@ en:
   config_env_file: ".env file"
   config_google_api_key: "Google API key"
   config_openai_api_key: "OpenAI API key"
+  config_anthropic_api_key: "Anthropic API key"
   config_cli_agent: "CLI agent"
   config_llm_api: "LLM API"
   config_github_project_url: "GitHub project URL"

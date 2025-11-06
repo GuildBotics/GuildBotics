@@ -52,6 +52,7 @@ class ProjectConfig(BaseModel):
     llm_api_type_label: str = Field(default="")
     google_api_key: str = Field(default="")
     openai_api_key: str = Field(default="")
+    anthropic_api_key: str = Field(default="")
     cli_agent: str = Field(default="")
     cli_agent_label: str = Field(default="")
     github_project_url: str = Field(default="")
@@ -158,6 +159,7 @@ class SimpleSetupTool(SetupTool):
         llm_api_type_map = {
             "OpenAI": "openai",
             "Google Gemini": "gemini",
+            "Anthropic Claude": "anthropic",
         }
 
         config.llm_api_type_label = questionary.select(
@@ -175,11 +177,16 @@ class SimpleSetupTool(SetupTool):
                 config.openai_api_key = questionary.text(
                     t("cli.openai_api_key_prompt")
                 ).ask()
+            if config.llm_api_type == "anthropic":
+                config.anthropic_api_key = questionary.text(
+                    t("cli.anthropic_api_key_prompt")
+                ).ask()
 
         # Step 5. CLI Agent Selection
         cli_agent_map = {
             "OpenAI Codex CLI": "codex",
             "Gemini CLI": "gemini",
+            "Claude Code": "claude",
         }
 
         config.cli_agent_label = questionary.select(
@@ -224,6 +231,10 @@ class SimpleSetupTool(SetupTool):
             if config.llm_api_type == "openai":
                 click.echo(
                     f"  {t('cli.config_openai_api_key')} : {config.openai_api_key}"
+                )
+            if config.llm_api_type == "anthropic":
+                click.echo(
+                    f"  {t('cli.config_anthropic_api_key')} : {config.anthropic_api_key}"
                 )
         click.echo(f"  {t('cli.config_cli_agent')} : {config.cli_agent_label}")
         click.echo(
@@ -284,6 +295,7 @@ class SimpleSetupTool(SetupTool):
             env_file = env_file_template.format(
                 google_api_key=f"GOOGLE_API_KEY={config.google_api_key}",
                 openai_api_key=f"OPENAI_API_KEY={config.openai_api_key}",
+                anthropic_api_key=f"ANTHROPIC_API_KEY={config.anthropic_api_key}",
             )
 
             if config.env_file_option == "overwrite":

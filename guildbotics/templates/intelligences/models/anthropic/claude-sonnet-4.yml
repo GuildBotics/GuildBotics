@@ -1,0 +1,6 @@
+model_class: agno.models.anthropic.Claude
+parameters:
+  id: claude-sonnet-4-5
+rate_limit:
+  max_requests_per_minute: 50
+  max_requests_per_day: 5000

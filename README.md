@@ -23,7 +23,7 @@ A tool to collaborate with AI agents via a task board.
     - [4.3.1. Using a Machine Account (Machine User)](#431-using-a-machine-account-machine-user)
     - [4.3.2. Using a GitHub App](#432-using-a-github-app)
     - [4.3.3. Using Your Own Account as a Proxy Agent](#433-using-your-own-account-as-a-proxy-agent)
-  - [4.4. Gemini API or OpenAI API](#44-gemini-api-or-openai-api)
+  - [4.4. LLM API (Gemini, OpenAI, or Anthropic)](#44-llm-api-gemini-openai-or-anthropic)
   - [4.5. CLI Agent](#45-cli-agent)
 - [5. Install and Set Up GuildBotics](#5-install-and-set-up-guildbotics)
   - [5.1. Initial Setup](#51-initial-setup)
@@ -78,9 +78,11 @@ The current version supports the following:
 - CLI Agent
   - Google Gemini CLI
   - OpenAI Codex CLI
+  - Claude Code
 - LLM API
   - Google Gemini 2.5 Flash
   - OpenAI GPT-5 Mini
+  - Anthropic Claude Haiku 4
 
 # 4. Prerequisites
 ## 4.1. Git Environment
@@ -138,11 +140,17 @@ After creating the GitHub App, do the following:
 ### 4.3.3. Using Your Own Account as a Proxy Agent
 If you use your own account as the AI agent, issue a **Classic** PAT. Select the scopes `repo` and `project`.
 
-## 4.4. Gemini API or OpenAI API
-Obtain a Gemini API key or an OpenAI API key.
+## 4.4. LLM API (Gemini, OpenAI, or Anthropic)
+Choose one of the following:
+- Google Gemini API: Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- OpenAI API: Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+- Anthropic Claude API: Get your API key from [Anthropic Console](https://console.anthropic.com/settings/keys)
 
 ## 4.5. CLI Agent
-Install and sign in to either [Gemini CLI](https://github.com/google-gemini/gemini-cli/) or [OpenAI Codex CLI](https://github.com/openai/codex/).
+Install and sign in to one of the following CLI agents:
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
+- [OpenAI Codex CLI](https://github.com/openai/codex/)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
 
 
 # 5. Install and Set Up GuildBotics
@@ -171,7 +179,7 @@ guildbotics config init
 - Select LLM API
   - Choose Gemini API or OpenAI API
 - Select a CLI agent
-  - Choose Gemini CLI or OpenAI Codex CLI
+  - Choose Gemini CLI, OpenAI Codex CLI, or Claude Code
 - Select repository access method
   - Choose HTTPS or SSH for Git operations
 - Enter the GitHub Project and repository URLs
@@ -411,6 +419,12 @@ Using Gemini CLI:
 
 ```yaml
 default: gemini-cli.yml
+```
+
+Using Claude Code:
+
+```yaml
+default: claude-cli.yml
 ```
 
 ## 7.5. Modifying the CLI Agent Script
