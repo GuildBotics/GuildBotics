@@ -23,7 +23,7 @@ AIエージェントとのやり取りをタスクボードを通じて行うた
     - [4.3.1. マシンアカウントを利用する場合](#431-マシンアカウントを利用する場合)
     - [4.3.2. GitHub Appを利用する場合](#432-github-appを利用する場合)
     - [4.3.3. 代理エージェント (AIエージェント用に自分自身のアカウント) を利用する場合](#433-代理エージェント-aiエージェント用に自分自身のアカウント-を利用する場合)
-  - [4.4. Gemini APIもしくはOpenAI API](#44-gemini-apiもしくはopenai-api)
+  - [4.4. LLM API（Gemini、OpenAI、または Anthropic）](#44-llm-apigeminiopenaiまたは-anthropic)
   - [4.5. CLI エージェント](#45-cli-エージェント)
 - [5. GuildBotics のインストールとセットアップ](#5-guildbotics-のインストールとセットアップ)
   - [5.1. 初期セットアップ](#51-初期セットアップ)
@@ -78,9 +78,11 @@ AIエージェントとのやり取りをタスクボードを通じて行うた
 - CLI エージェント
   - Google Gemini CLI
   - OpenAI Codex CLI
+  - Claude Code
 - LLM API
   - Google Gemini 2.5 Flash
   - OpenAI GPT-5 Mini
+  - Anthropic Claude Haiku 4
 
 # 4. 事前準備
 ## 4.1. Git環境
@@ -139,11 +141,17 @@ GitHub App作成後に以下の作業を行ってください。
 自分自身のアカウントをAIエージェント用に利用する場合、**Classic** PAT を発行してください。
 PATのスコープは、`repo` と `project` の2つを選択してください。
 
-## 4.4. Gemini APIもしくはOpenAI API
-Gemini API キーもしくは OpenAI API キーを取得してください。
+## 4.4. LLM API（Gemini、OpenAI、または Anthropic）
+以下のいずれかを選択してください:
+- Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey) からAPIキーを取得
+- OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys) からAPIキーを取得
+- Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys) からAPIキーを取得
 
 ## 4.5. CLI エージェント
-[Gemini CLI](https://github.com/google-gemini/gemini-cli/) もしくは [OpenAI Codex CLI](https://github.com/openai/codex/) のいずれかをインストールして、起動して認証を行ってください。
+以下のCLI エージェントのいずれかをインストールして、起動して認証を行ってください。
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
+- [OpenAI Codex CLI](https://github.com/openai/codex/)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Pro または Max サブスクリプションが必要)
 
 
 # 5. GuildBotics のインストールとセットアップ
@@ -172,7 +180,7 @@ guildbotics config init
 - LLM APIの選択
   - Gemini API または OpenAI API を選択
 - CLI エージェントの選択
-  - Gemini CLI または OpenAI Codex CLI を選択
+  - Gemini CLI、OpenAI Codex CLI、または Claude Code を選択
 - リポジトリアクセス方法の選択
   - Git 操作用に HTTPS か SSH を選択
 - GitHub プロジェクトおよびリポジトリ URL の入力
@@ -188,6 +196,7 @@ guildbotics config init
   - CLIエージェントスクリプト定義ファイル (以下のいずれか):
     - `intelligences/cli_agents/codex-cli.yml`
     - `intelligences/cli_agents/gemini-cli.yml`
+    - `intelligences/cli_agents/claude-cli.yml`
 
 
 ## 5.2. メンバーの追加
@@ -414,6 +423,12 @@ Gemini CLI を使用する場合:
 
 ```yaml
 default: gemini-cli.yml
+```
+
+Claude Code を使用する場合:
+
+```yaml
+default: claude-cli.yml
 ```
 
 ## 7.5. CLI エージェント呼び出しスクリプトの変更

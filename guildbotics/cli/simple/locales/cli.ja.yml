@@ -14,6 +14,7 @@ ja:
   repo_access_ssh: "SSH"
   google_api_key_prompt: "Google APIキーを入力してください:"
   openai_api_key_prompt: "OpenAI APIキーを入力してください:"
+  anthropic_api_key_prompt: "Anthropic APIキーを入力してください:"
   llm_api_type_prompt: "利用するLLM APIの種類を選択してください:"
 
   config_content: "設定内容"
@@ -22,6 +23,7 @@ ja:
   config_env_file: ".env ファイル"
   config_google_api_key: "Google APIキー"
   config_openai_api_key: "OpenAI APIキー"
+  config_anthropic_api_key: "Anthropic APIキー"
   config_cli_agent: "CLIエージェントの種類"
   config_llm_api: "LLM APIの種類"
   config_github_project_url: "GitHubプロジェクトURL"

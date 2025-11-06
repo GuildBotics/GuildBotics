@@ -1,0 +1,8 @@
+env:
+script: |
+  res=$(mktemp)
+  log=$(mktemp)
+  cat "$PROMPT_FILE" | claude -p --dangerously-skip-permissions > "$res" 2> "$log"
+  cat "$log" >&2
+  cat "$res"
+  rm -f "$res" "$log"
