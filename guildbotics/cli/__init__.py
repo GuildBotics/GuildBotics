@@ -215,7 +215,7 @@ async def _run_custom_command(
     except PersonSelectionRequiredError as exc:
         available = ", ".join(exc.available) if exc.available else "none"
         raise click.ClickException(
-            "Specify a person using '--person' or '<command>@person>'."
+            "Specify a person using '--person' or '<command>@person'."
             f" Available: {available}"
         ) from exc
     except PersonNotFoundError as exc:
