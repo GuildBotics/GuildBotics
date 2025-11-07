@@ -2,7 +2,15 @@
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-A tool to collaborate with AI agents via a task board.
+A multi-agent task scheduling and command execution framework.
+
+GuildBotics enables you to:
+- Manage multiple AI agents with different roles and personalities
+- Schedule and execute commands (Markdown prompts, Python/Shell scripts, YAML workflows)
+- Integrate with external services via pluggable adapters
+- Support multiple LLM providers (Google Gemini, OpenAI, Anthropic Claude)
+
+**Example use case**: The default workflow integrates with GitHub Projects to enable ticket-driven AI agent collaboration (see [GitHub Integration Example](#6-github-integration-example)).
 
 ---
 
@@ -13,84 +21,181 @@ A tool to collaborate with AI agents via a task board.
 
 ---
 
-- [1. Capabilities](#1-capabilities)
-- [2. Environment](#2-environment)
-- [3. Supported Services / Software](#3-supported-services--software)
-- [4. Prerequisites](#4-prerequisites)
-  - [4.1. Git Environment](#41-git-environment)
-  - [4.2. Create a GitHub Project](#42-create-a-github-project)
-  - [4.3. Prepare a GitHub Account for the AI Agent](#43-prepare-a-github-account-for-the-ai-agent)
-    - [4.3.1. Using a Machine Account (Machine User)](#431-using-a-machine-account-machine-user)
-    - [4.3.2. Using a GitHub App](#432-using-a-github-app)
-    - [4.3.3. Using Your Own Account as a Proxy Agent](#433-using-your-own-account-as-a-proxy-agent)
-  - [4.4. LLM API (Gemini, OpenAI, or Anthropic)](#44-llm-api-gemini-openai-or-anthropic)
-  - [4.5. CLI Agent](#45-cli-agent)
-- [5. Install and Set Up GuildBotics](#5-install-and-set-up-guildbotics)
+- [1. Key Features](#1-key-features)
+  - [Core Framework](#core-framework)
+  - [Built-in Capabilities](#built-in-capabilities)
+- [2. Quick Start](#2-quick-start)
+- [3. Environment](#3-environment)
+  - [Supported Integrations](#supported-integrations)
+- [4. Installation](#4-installation)
+- [5. Basic Usage](#5-basic-usage)
   - [5.1. Initial Setup](#51-initial-setup)
   - [5.2. Add Members](#52-add-members)
-  - [5.3. Verify Settings / Add Custom Fields / Map Statuses](#53-verify-settings--add-custom-fields--map-statuses)
-    - [5.3.1. Add Custom Fields](#531-add-custom-fields)
-    - [5.3.2. Status Mapping](#532-status-mapping)
-- [6. Run](#6-run)
-  - [6.1. Start](#61-start)
-  - [6.2. How to Instruct the AI Agent](#62-how-to-instruct-the-ai-agent)
-  - [6.3. Interacting with the AI Agent](#63-interacting-with-the-ai-agent)
+  - [5.3. Run Commands](#53-run-commands)
+    - [Run a custom command](#run-a-custom-command)
+    - [Start the scheduler](#start-the-scheduler)
+- [6. GitHub Integration Example](#6-github-integration-example)
+  - [6.1. Prerequisites](#61-prerequisites)
+    - [6.1.1. Git Environment](#611-git-environment)
+    - [6.1.2. Create a GitHub Project](#612-create-a-github-project)
+    - [6.1.3. Prepare a GitHub Account for the AI Agent](#613-prepare-a-github-account-for-the-ai-agent)
+      - [Using a Machine Account (Machine User)](#using-a-machine-account-machine-user)
+      - [Using a GitHub App](#using-a-github-app)
+      - [Using Your Own Account as a Proxy Agent](#using-your-own-account-as-a-proxy-agent)
+    - [6.1.4. LLM API](#614-llm-api)
+    - [6.1.5. CLI Agent (Optional)](#615-cli-agent-optional)
+  - [6.2. Setup for GitHub Integration](#62-setup-for-github-integration)
+  - [6.3. Running the Ticket-Driven Workflow](#63-running-the-ticket-driven-workflow)
+    - [6.3.1. Start](#631-start)
+    - [6.3.2. How to Instruct the AI Agent](#632-how-to-instruct-the-ai-agent)
+    - [6.3.3. Interacting with the AI Agent](#633-interacting-with-the-ai-agent)
+  - [6.4. Capabilities](#64-capabilities)
 - [7. Reference](#7-reference)
   - [7.1. Account-Related Environment Variables](#71-account-related-environment-variables)
-    - [7.1.1. LLM API Variables](#711-llm-api-variables)
-    - [7.1.2. GitHub Access Settings](#712-github-access-settings)
-  - [7.2. Project Settings (`team/project.yml`)](#72-project-settings-teamprojectyml)
-  - [7.3. Member Settings (`team/members/<person_id>/person.yml`)](#73-member-settings-teammembersperson_idpersonyml)
-  - [7.4. Selecting a CLI Agent](#74-selecting-a-cli-agent)
-  - [7.5. Modifying the CLI Agent Script](#75-modifying-the-cli-agent-script)
-  - [7.6. Per-Agent CLI Agent Settings](#76-per-agent-cli-agent-settings)
-  - [7.7. Custom Command Prompts](#77-custom-command-prompts)
+  - [7.2. Configuration Files](#72-configuration-files)
+  - [7.3. Custom Commands](#73-custom-commands)
 - [8. Troubleshooting](#8-troubleshooting)
-  - [8.1. Error Logs](#81-error-logs)
-  - [8.2. Obtaining Debug Information](#82-obtaining-debug-information)
 - [9. Contributing](#9-contributing)
 
 ---
 
-# 1. Capabilities
-- Request tasks for AI agents on a task board
-  - Assign an AI agent to a ticket and move it to the **Ready** column to have the AI agent execute the task.
-- Review AI agent results on the task board
-  - When the agent completes a task, the ticket moves to **In Review** and the results are posted as ticket comments.
-- Create Pull Requests by AI agents
-  - When a task is completed, the AI agent creates a Pull Request.
-- Create tickets
-  - If you instruct the AI agent to create tickets, it automatically creates them on the task board.
-- Retrospective
-  - Move completed-task tickets to the **Retrospective** column and request a retrospective in a comment; the AI agent analyzes the interaction with reviewers on the created PR, extracts issues, and creates improvement tickets.
+# 1. Key Features
 
-# 2. Environment
+## Core Framework
+- **Multi-Agent Management**: Define multiple AI agents (persons) with distinct roles, personalities, and capabilities
+- **Flexible Scheduling**: Cron-based scheduled commands and routine commands per person
+- **Command Execution Framework**:
+  - Markdown commands (LLM prompts with structured output)
+  - Python scripts (with context injection)
+  - Shell scripts
+  - YAML workflows (command composition)
+- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Gemini CLI, Codex CLI, Claude Code)
+- **Extensible Integrations**: Pluggable adapters for external services
+
+## Built-in Capabilities
+- **GitHub Integration** (default): Ticket management via GitHub Projects/Issues, PR creation, code hosting
+- **Internationalization**: Multi-language support (English/Japanese)
+- **Custom Commands**: Define reusable command templates per person/role
+
+# 2. Quick Start
+
+```bash
+# Install
+uv tool install guildbotics
+
+# Initialize configuration
+guildbotics config init
+
+# Add an AI agent member
+guildbotics config add
+
+# Run a custom command
+echo "Hello" | guildbotics run translate English Japanese
+
+# Or start scheduler (runs default workflow: ticket_driven_workflow)
+guildbotics start
+```
+
+See [Basic Usage](#5-basic-usage) for details, or [GitHub Integration Example](#6-github-integration-example) for the ticket-driven workflow setup.
+
+# 3. Environment
 - OS: Linux (verified on Ubuntu 24.04) / macOS (verified on Sequoia)
-- Runtime: use `uv` (it automatically fetches/manages Python)
+- Runtime: `uv` (automatically fetches/manages Python)
 
-# 3. Supported Services / Software
-The current version supports the following:
+## Supported Integrations
+- **LLM Providers**: Google Gemini, OpenAI, Anthropic Claude
+- **CLI Agents**: Gemini CLI, OpenAI Codex CLI, Claude Code
+- **GitHub Integration**: Projects (v2), Issues, Pull Requests
 
-- Task board
-  - GitHub Projects (Project v2)
-- Code hosting service
-  - GitHub
-- CLI Agent
-  - Google Gemini CLI
-  - OpenAI Codex CLI
-  - Claude Code
-- LLM API
-  - Google Gemini 2.5 Flash
-  - OpenAI GPT-5 Mini
-  - Anthropic Claude Haiku 4
+# 4. Installation
 
-# 4. Prerequisites
-## 4.1. Git Environment
+```bash
+uv tool install guildbotics
+```
+
+# 5. Basic Usage
+
+## 5.1. Initial Setup
+
+Initialize configuration interactively:
+
+```bash
+guildbotics config init
+```
+
+This command will:
+- Select language (English/Japanese)
+- Choose configuration directory location
+- Configure LLM API settings
+- Set up basic project structure
+
+The following files are created:
+- `.env`: Environment variables
+- `.guildbotics/config/team/project.yml`: Project definition
+- `.guildbotics/config/intelligences/`: Brain and CLI agent settings
+
+## 5.2. Add Members
+
+Add AI agents or human team members:
+
+```bash
+guildbotics config add
+```
+
+This command prompts for:
+- Member type (human, AI agent, etc.)
+- Display name and person_id
+- Roles (e.g., programmer, architect, product_owner)
+- Speaking style (for AI agents)
+
+Creates:
+- `.guildbotics/config/team/members/<person_id>/person.yml`
+- Environment variables in `.env` (for credentials)
+
+Repeat for each team member.
+
+## 5.3. Run Commands
+
+### Run a custom command
+
+```bash
+guildbotics run <command_name> [args...]
+```
+
+Example:
+```bash
+echo "Hello" | guildbotics run translate English Japanese
+```
+
+See [Custom Commands](#73-custom-commands) and the [Custom Command Development Guide](docs/custom_command_guide.en.md) for creating your own commands.
+
+### Start the scheduler
+
+```bash
+guildbotics start [routine_commands...]
+```
+
+Starts the task scheduler to execute routine commands and scheduled tasks. If no commands are specified, runs the default `workflows/ticket_driven_workflow`.
+
+To stop:
+```bash
+guildbotics stop
+```
+
+# 6. GitHub Integration Example
+
+This section describes how to use the default `ticket_driven_workflow` which integrates with GitHub Projects and Issues for ticket-based AI agent collaboration.
+
+**Note**: This is one example use case. GuildBotics can be used for any scheduled automation tasks without GitHub integration.
+
+## 6.1. Prerequisites
+
+### 6.1.1. Git Environment
 - Configure Git access for repositories:
   - HTTPS: Install GCM (Git Credential Manager) and sign in
   - or SSH: Set up SSH keys and `known_hosts`
 
-## 4.2. Create a GitHub Project
+### 6.1.2. Create a GitHub Project
 Create a GitHub Projects (v2) project and add the following columns (statuses) in advance:
   - New
   - Ready
@@ -103,7 +208,7 @@ Note:
 - For existing projects, you can map already-existing statuses to the above ones with the settings described later.
 - If you do not use retrospectives, the Retrospective column is not required.
 
-## 4.3. Prepare a GitHub Account for the AI Agent
+### 6.1.3. Prepare a GitHub Account for the AI Agent
 Prepare an account the AI agent will use to access GitHub. You can choose one of the following:
 
 - **Machine Account** (Machine User)
@@ -113,7 +218,7 @@ Prepare an account the AI agent will use to access GitHub. You can choose one of
 - Use your own account as a **proxy agent**
   - The simplest option. The visual impression is more like “talking to yourself” than interacting with a separate AI agent.
 
-### 4.3.1. Using a Machine Account (Machine User)
+#### Using a Machine Account (Machine User)
 After creating a machine account, do the following:
 
 1. Add the machine account as a Collaborator to the project and repositories.
@@ -121,7 +226,7 @@ After creating a machine account, do the following:
   - Issue a **Classic** Personal Access Token.
   - Select the scopes `repo` and `project`.
 
-### 4.3.2. Using a GitHub App
+#### Using a GitHub App
 When creating a GitHub App, set the following permissions:
 
 - Repository permissions
@@ -137,150 +242,40 @@ After creating the GitHub App, do the following:
 1. On the app settings page, click “Generate a private key” to download a `.pem` file and save it.
 2. Install the app to your repository/organization via “Install App” and record the installation ID. The last digits in the page URL (`.../settings/installations/<installation_id>`) are the installation ID; keep it for configuration.
 
-### 4.3.3. Using Your Own Account as a Proxy Agent
+#### Using Your Own Account as a Proxy Agent
 If you use your own account as the AI agent, issue a **Classic** PAT. Select the scopes `repo` and `project`.
 
-## 4.4. LLM API (Gemini, OpenAI, or Anthropic)
+### 6.1.4. LLM API
 Choose one of the following:
 - Google Gemini API: Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 - OpenAI API: Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
 - Anthropic Claude API: Get your API key from [Anthropic Console](https://console.anthropic.com/settings/keys)
 
-## 4.5. CLI Agent
+### 6.1.5. CLI Agent (Optional)
 Install and sign in to one of the following CLI agents:
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
 
 
-# 5. Install and Set Up GuildBotics
-You can install with the following:
+## 6.2. Setup for GitHub Integration
 
-```bash
-uv tool install guildbotics
-```
-
-## 5.1. Initial Setup
-
-Run the following for initial setup:
-
-```bash
-guildbotics config init
-```
-
-`guildbotics config init` is interactive in your terminal and then generates configuration files. You will:
-
-- Select language
-  - English or Japanese
-- Select the configuration directory
-  - Either under the home directory or under the current directory
-- Create or update an environment file
-  - Choose to create, append to, or overwrite the `.env` file
-- Select LLM API
-  - Choose Gemini API or OpenAI API
-- Select a CLI agent
-  - Choose Gemini CLI, OpenAI Codex CLI, or Claude Code
-- Select repository access method
-  - Choose HTTPS or SSH for Git operations
-- Enter the GitHub Project and repository URLs
-  - Enter the GitHub Projects URL and the repository URL
-
-The following files are created/updated:
-
-- Current directory
-  - `.env` is created/updated with environment variables
-- `.guildbotics/config/` under the home directory or under the current directory
-  - Project definition: `team/project.yml`
-  - CLI agent mapping: `intelligences/cli_agent_mapping.yml`
-  - CLI agent script definitions (one of):
-    - `intelligences/cli_agents/codex-cli.yml`
-    - `intelligences/cli_agents/gemini-cli.yml`
-
-
-## 5.2. Add Members
-
-Add members with:
-
-```bash
-guildbotics config add
-```
-
-`guildbotics config add` interactively prompts for member (AI agent or human) information and generates configuration files.
-
-- Select member type
-  - Choose one of: human, machine account, GitHub App, proxy agent (use your own account)
-    - “Human” only provides member information to the AI agent and does not act as an AI agent.
-- Enter GitHub username (for human, machine account, GitHub App, proxy agent)
-  - For proxy agent, enter your own GitHub username
-- Enter the GitHub App URL (for GitHub App)
-- Enter the member ID (person_id) used in GuildBotics (all types)
-  - Lowercase alphanumeric only; defaults to the GitHub username
-- Enter the display name (all types)
-  - Full name of the member
-- Select roles (all types)
-  - Choose roles such as product owner, project manager, architect (multiple can be selected)
-- Select speaking style (for machine account, GitHub App, proxy agent)
-  - Choose friendly, professional, or machine
-- Set environment variables
-  - For GitHub App: input installation ID, App ID, and the private key path
-  - For machine account: input PAT
-
-Two types of files are created/updated:
-
-- Current directory
-  - `.env` is updated with environment variables; stores secrets such as PAT or GitHub App settings
-- `.guildbotics/config/` under home or current directory
-  - Member definition: `team/members/<person_id>/person.yml`
-
-If you want to add multiple AI agents, repeat the same steps for each.
-
-Note:
-`person_id` is the identifier used within GuildBotics. Because it is used in environment variable names and directory names, use only lowercase alphanumeric characters. Characters other than "-" and "_" or whitespace are not allowed.
-
-
-## 5.3. Verify Settings / Add Custom Fields / Map Statuses
-
-Run the following to verify configuration and perform the steps below:
-
-- Add GuildBotics-specific custom fields to GitHub Projects
-- Map GitHub Projects status columns
+After completing [Basic Usage](#5-basic-usage) steps, run the following to configure GitHub-specific settings:
 
 ```bash
 guildbotics config verify
 ```
 
-### 5.3.1. Add Custom Fields
-The following custom fields (all single-select) are added to GitHub Projects:
+This command:
+- Adds GuildBotics custom fields to GitHub Projects:
+  - `Mode`: Behavior mode (comment/edit/ticket)
+  - `Role`: Role to use for the task
+  - `Agent`: AI agent to execute the task
+- Maps GitHub Projects statuses to GuildBotics statuses (New/Ready/In Progress/In Review/Retrospective/Done)
 
-- `Mode`: Select the behavior mode of the AI agent
-  - `comment`: Responds to ticket instructions via comments
-  - `edit`: Edits files based on ticket instructions and creates a Pull Request
-  - `ticket`: Creates tickets
-- `Role`: Role to use when performing the work described in the ticket
-- `Agent`: Select the AI agent to execute the task
+## 6.3. Running the Ticket-Driven Workflow
 
-### 5.3.2. Status Mapping
-Map GitHub Projects statuses to the statuses used by GuildBotics.
-
-GuildBotics uses the following six statuses:
-  - New
-    - Set by the AI agent when the user requests ticket creation in `ticket` mode
-  - Ready
-    - Set by the user when requesting the AI agent to execute a task
-  - In Progress
-    - Set by the AI agent when it starts working on the task
-  - In Review
-    - Set by the AI agent when it completes the task
-  - Retrospective
-    - Set by the user when requesting a retrospective from the AI agent
-  - Done
-    - Set by the user when they deem the task complete
-
-The status mapping is saved to `.guildbotics/config/team/project.yml`.
-
-
-# 6. Run
-## 6.1. Start
+### 6.3.1. Start
 Start with:
 
 ```bash
@@ -309,7 +304,7 @@ guildbotics kill
 
 This is equivalent to `guildbotics stop --force --timeout 0`.
 
-## 6.2. How to Instruct the AI Agent
+### 6.3.2. How to Instruct the AI Agent
 
 To request a task from the AI agent, operate the GitHub Projects ticket as follows:
 
@@ -327,132 +322,98 @@ To request a task from the AI agent, operate the GitHub Projects ticket as follo
 Note:
 The AI agent clones the specified Git repository under `~/.guildbotics/data/workspaces/<person_id>` and works there.
 
-## 6.3. Interacting with the AI Agent
+### 6.3.3. Interacting with the AI Agent
 - If the AI agent has questions during work, it posts questions as ticket comments. Please respond in ticket comments. The agent periodically checks ticket comments and proceeds accordingly once answers are provided.
 - When the AI agent completes a task, it changes the ticket status to `In Review` and posts the results and the created Pull Request URL as a comment.
 - In `edit` mode, the AI agent creates a Pull Request. Please write review results as comments on the PR. When there are tickets in `In Review`, the agent checks for PR comments and responds accordingly if they exist.
 
+## 6.4. Capabilities
+
+With the ticket-driven workflow, you can:
+
+- **Request tasks for AI agents on a task board**
+  - Assign an AI agent to a ticket and move it to the **Ready** column to have the AI agent execute the task
+- **Review AI agent results on the task board**
+  - When the agent completes a task, the ticket moves to **In Review** and the results are posted as ticket comments
+- **Create Pull Requests by AI agents**
+  - When a task is completed, the AI agent creates a Pull Request
+- **Create tickets**
+  - If you instruct the AI agent to create tickets, it automatically creates them on the task board
+- **Retrospective**
+  - Move completed-task tickets to the **Retrospective** column and request a retrospective in a comment; the AI agent analyzes the interaction with reviewers on the created PR, extracts issues, and creates improvement tickets
 
 # 7. Reference
+
 ## 7.1. Account-Related Environment Variables
 
-GuildBotics uses the following environment variables:
+**LLM API Keys**:
+- `GOOGLE_API_KEY`: Google Gemini API
+- `OPENAI_API_KEY`: OpenAI API
+- `ANTHROPIC_API_KEY`: Anthropic Claude API
 
-- `GOOGLE_API_KEY`: Required to use the Gemini API
-- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: Personal Access Token for machine accounts
-- `{PERSON_ID}_GITHUB_APP_ID`: GitHub App ID
-- `{PERSON_ID}_GITHUB_INSTALLATION_ID`: GitHub App installation ID
-- `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: Path to the GitHub App private key
+**GitHub Access** (per-person, format: `{PERSON_ID}_...`):
+- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: PAT for machine accounts/proxy agents
+- `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: For GitHub Apps
 
-If a `.env` file exists, it is loaded automatically.
+If a `.env` file exists in the current directory, it is loaded automatically.
 
-### 7.1.1. LLM API Variables
+## 7.2. Configuration Files
 
-Set the Gemini API key to `GOOGLE_API_KEY`.
+**Project Configuration** (`team/project.yml`):
+- `language`: Project language
+- `repositories`: Repository definitions
+- `services.ticket_manager`: GitHub Projects settings
+- `services.code_hosting_service`: GitHub repository settings
 
+**Member Configuration** (`team/members/<person_id>/person.yml`):
+- `person_id`: Unique identifier (lowercase alphanumeric, `-`, `_` only)
+- `name`: Display name
+- `is_active`: Whether the member acts as an AI agent
+- `roles`: Role assignments
+- `routine_commands`: Override default routine commands
+- `task_schedules`: Cron-based scheduled commands
+
+**Brain/CLI Agent Configuration**:
+- `intelligences/cli_agent_mapping.yml`: Default CLI agent selection
+- `intelligences/cli_agents/*.yml`: CLI agent scripts
+- `team/members/<person_id>/intelligences/`: Per-agent overrides
+
+## 7.3. Custom Commands
+
+Create custom commands in `~/.guildbotics/config/commands/` (or project-local commands directory):
+
+- **Markdown files** (`.md`): LLM prompts with optional frontmatter
+- **Python files** (`.py`): Custom logic with context injection
+- **Shell scripts** (`.sh`): Shell commands
+- **YAML files** (`.yml`): Workflow composition
+
+For detailed creation and operation, see the [Custom Command Development Guide](docs/custom_command_guide.en.md).
+
+**Quick example**:
+```markdown
+<!-- translate.md -->
+If the following text is in ${1}, translate it to ${2}; if it is in ${2}, translate it to ${1}:
+```
+
+Usage:
 ```bash
-export GOOGLE_API_KEY=your_google_api_key
+echo "Hello" | guildbotics run translate English Japanese
 ```
-
-Set the OpenAI API key to `OPENAI_API_KEY`.
-
-```bash
-export OPENAI_API_KEY=your_openai_api_key
-```
-
-### 7.1.2. GitHub Access Settings
-
-Per-person secrets are referenced as `${PERSON_ID_UPPER}_${KEY_UPPER}` (example: `person_id: yuki`).
-
-- For machine users and proxy agents:
-
-  ```bash
-  export YUKI_GITHUB_ACCESS_TOKEN=ghp_xxx
-  ```
-
-- For GitHub Apps:
-
-  ```bash
-  export YUKI_GITHUB_APP_ID=123456
-  export YUKI_GITHUB_INSTALLATION_ID=987654321
-  export YUKI_GITHUB_PRIVATE_KEY_PATH=/absolute/path/to/your-app-private-key.pem
-  ```
-
-## 7.2. Project Settings (`team/project.yml`)
-- `team/project.yml`:
-  - `language`: Project language (e.g., `ja`, `en`)
-  - `repositories.name`: Repository name
-  - `services.ticket_manager.name`: `GitHub` (not changeable)
-  - `services.ticket_manager.owner`: GitHub user/organization name
-  - `services.ticket_manager.project_id`: GitHub Projects (v2) Project number
-  - `services.ticket_manager.url`: URL of the above project
-  - `services.code_hosting_service.repo_base_url`: Base URL used for cloning
-    - Example: `https://github.com` (HTTPS) or `ssh://git@github.com` (SSH)
-
-## 7.3. Member Settings (`team/members/<person_id>/person.yml`)
-- `team/members/<person_id>/person.yml`:
-  - `person_id`: Member ID (lowercase alphanumeric; symbols and spaces not allowed)
-  - `name`: Member name (full name)
-  - `is_active`: Whether the member can act as an AI agent (true/false)
-  - `person_type`: Member type (e.g., human/machine_user/github_apps/proxy_agent)
-  - `account_info.github_username`: GitHub username
-  - `account_info.git_user`: Git user name
-  - `account_info.git_email`: Git email address
-  - `profile`: Per-role profile settings. Use role IDs as keys (e.g., professional, programmer, product_owner) and optionally provide `summary`/`description`. Even an empty map (e.g., `product_owner:`) enables that role and merges with predefined roles (e.g., `roles/default.*.yml`).
-  - `speaking_style`: Description of speaking style
-  - `relationships`: Description of relationships with other members
-  - `routine_commands`: Optional list of command IDs that run as routine commands for the member. When provided, these override the defaults passed to `guildbotics start`.
-  - `task_schedules`: Scheduled command definitions. Each item requires a `command` (command ID) and `schedules` (list of cron expressions) to control periodic execution.
-
-
-## 7.4. Selecting a CLI Agent
-
-Switch CLI agents by editing `intelligences/cli_agent_mapping.yml`.
-
-Using Codex CLI:
-
-```yaml
-default: codex-cli.yml
-```
-
-Using Gemini CLI:
-
-```yaml
-default: gemini-cli.yml
-```
-
-Using Claude Code:
-
-```yaml
-default: claude-cli.yml
-```
-
-## 7.5. Modifying the CLI Agent Script
-Customize the CLI agent invocation by editing the YAML files under `intelligences/cli_agents`.
-
-## 7.6. Per-Agent CLI Agent Settings
-By default, all AI agents share the same CLI agent, but if `team/members/<person_id>/intelligences/cli_agent_mapping.yml` and/or `team/members/<person_id>/intelligences/cli_agents/*.yml` exist, they take precedence. This allows changing the CLI agent per member (AI agent).
-
-
-## 7.7. Custom Command Prompts
-You can execute arbitrary custom commands (custom prompts) by writing a line starting with `//` in the first line of the ticket body or comments.
-
-For detailed creation and operation, see [docs/custom_command_guide.en.md](docs/custom_command_guide.en.md).
 
 
 # 8. Troubleshooting
-## 8.1. Error Logs
-If an unexpected error occurs during task execution, a comment saying "An error occurred while executing the task. Please check the error log for details." is added to the ticket. The error log at `~/.guildbotics/data/error.log` contains details of the error.
 
-## 8.2. Obtaining Debug Information
-Set the following environment variables to obtain debug information:
+**Error Logs**: Check `~/.guildbotics/data/error.log` for details when errors occur.
 
-- `AGNO_DEBUG`: Extra debug output for the `agno` engine (`true`/`false`).
-- `LOG_LEVEL`: Log level (`debug` / `info` / `warning` / `error`).
-- `LOG_OUTPUT_DIR`: Log output directory (e.g., `./tmp/logs`). If set, logs printed to the console are also written to files under the specified directory.
-
+**Debug Output**: Set environment variables for detailed logging:
+- `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
+- `LOG_OUTPUT_DIR`: Directory to write log files (e.g., `./tmp/logs`)
+- `AGNO_DEBUG`: Extra debug output for the Agno engine (`true`/`false`)
 
 # 9. Contributing
-We welcome Pull Requests (PRs). We welcome any contributions, such as adding new features, bug fixes, documentation improvements, etc.
 
-Please read [CONTRIBUTING.md](https://github.com/GuildBotics/GuildBotics/blob/main/CONTRIBUTING.md) for coding style, testing, documentation, and security guidelines before opening a PR.
+We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Coding style and conventions
+- Testing guidelines
+- Documentation standards
+- Security best practices

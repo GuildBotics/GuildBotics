@@ -26,8 +26,8 @@ Note: This repository provides a fixed dependency file `pyproject.toml`. Use `uv
 - Simplicity first: apply KISS; avoid speculative abstraction (YAGNI).
 - Pragmatic SOLID: especially Single Responsibility—avoid bloated functions/modules.
 - DRY: no copy-paste duplication; factor shared logic into `utils/` or suitable shared modules.
-- One-way dependencies: prevent cyclic imports/architectural cycles; lower-level modules (`entities/`, `utils/`) must not depend on higher orchestration layers (`workflows/`, `drivers/`).
-- Respect existing architecture: review `docs/ARCHITECTURE.*.md` before altering boundaries.
+- One-way dependencies: prevent cyclic imports/architectural cycles; lower-level modules (`entities/`, `utils/`) must not depend on higher orchestration layers (`templates/`, `commands/`, `drivers/`).
+- Respect existing architecture: review `docs/ARCHITECTURE.md` before altering boundaries.
 - Performance mindset: do not prematurely optimize, but fix evident inefficiencies (N+1 calls, needless I/O, excessive complexity) when discovered.
 
 ## Testing Guidelines
