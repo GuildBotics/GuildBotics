@@ -84,7 +84,7 @@ GuildBotics follows a layered architecture with clear separation of concerns:
 
 ### Dependency Rules
 
-- **One-way dependencies**: Lower-level modules (`entities/`, `utils/`) must NOT depend on higher orchestration layers (`templates/`, `drivers/`)
+- **One-way dependencies**: Lower-level modules (`entities/`, `utils/`) must NOT depend on higher orchestration layers (`commands/`, `templates/`, `drivers/`)
 - **Interface-based**: Use abstract base classes for cross-layer communication
 - **Factory pattern**: Use factories for dependency injection and testability
 
