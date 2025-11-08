@@ -121,7 +121,7 @@ class AgnoAgentDefaultBrain(Brain):
                 self.model_config.name,
                 self.model_config.rate_limit.max_requests_per_minute,
             )
-        message = message if message else " "
+        message = self.patch_message(message)
         response = await agent.arun(message)
         content = response.content
         if self.response_class and (
@@ -131,3 +131,23 @@ class AgnoAgentDefaultBrain(Brain):
             content = to_response_class(str(content), self.response_class)
 
         return content
+
+    def patch_message(self, message: str) -> str:
+        """
+        Ensures the message passed to the agent is not empty.
+
+        Args:
+            message (str): The input message to be processed by the agent.
+
+        Returns:
+            str: The original message if provided; otherwise, a default instruction
+                 ("Execute exactly as specified in the system message.") to ensure
+                 the agent always receives a valid command.
+
+        This patching is necessary to prevent errors or undefined behavior when the agent
+        receives an empty message, by supplying a clear default instruction.
+        """
+        if message:
+            return message
+
+        return "Execute exactly as specified in the system message."
