@@ -184,6 +184,8 @@ def get_person_name(members: list[Person], username: str, comment_body: str) -> 
                 return member.name
 
     for member in members:
+        if is_proxy_agent(member):
+            continue
         if get_github_username(member) == username:
             return member.name
     return ""
@@ -196,7 +198,7 @@ def is_proxy_agent(person: Person) -> bool:
     Returns:
         bool: True if the person is a proxy agent, False otherwise.
     """
-    return person.person_type == "proxy_agent"
+    return person.person_type == GitHubAppAuth.PROXY_AGENT
 
 
 def get_proxy_agent_signature(person: Person) -> str:
@@ -220,9 +222,11 @@ def get_author_type(person: Person, username: str, content: str) -> str:
     Returns:
         str: The author type.
     """
-    if username == get_github_username(person, strict=True):
-        return Message.ASSISTANT
     if is_proxy_agent(person):
         if get_signature_line(content) == get_proxy_agent_signature(person):
             return Message.ASSISTANT
+        else:
+            return Message.USER
+    if username == get_github_username(person, strict=True):
+        return Message.ASSISTANT
     return Message.USER
