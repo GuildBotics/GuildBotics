@@ -121,6 +121,7 @@ class AgnoAgentDefaultBrain(Brain):
                 self.model_config.name,
                 self.model_config.rate_limit.max_requests_per_minute,
             )
+        message = message if message else " "
         response = await agent.arun(message)
         content = response.content
         if self.response_class and (
