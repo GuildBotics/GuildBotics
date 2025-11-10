@@ -112,9 +112,9 @@ async def test_run_stubs_external_calls_and_creates_tickets(monkeypatch, fake_co
 
     # Make i18n translation deterministic and simple
     def fake_t(key: str, **kwargs):
-        if key == "modes.ticket_mode.agent_response_message":
+        if key == "commands.workflows.modes.ticket_mode.agent_response_message":
             return f"Tickets created: {kwargs.get('task_labels')}"
-        if key == "modes.ticket_mode.agent_response_context_location":
+        if key == "commands.workflows.modes.ticket_mode.agent_response_context_location":
             return "Ticket Comment"
         return key
 

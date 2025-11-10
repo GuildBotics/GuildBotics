@@ -12,4 +12,3 @@ ja:
   pull_request_performance_evaluation: "## プルリクエストパフォーマンス評価\n### 評価スコア\n%{score} 点\n\n### 理由\n%{reason}\n\n### 背景\n - レビューコメント数: %{review_comment_count}\n - レビューサイクル数: %{review_cycle_count}\n - 修正依頼数: %{request_changes_count}\n - レビュー感情スコア: %{review_sentiment_score}\n\n%{context}\n"
   analyze_pr_root_cause: "# プルリクエスト評価結果\n%{evaluation}\n---\n# 元のPRレビューコメント\n%{pr_text}\n"
   default_pr_template: "## 概要\nこのPRでの変更点の簡単な説明。\n\n"
-  use_case_description: "Gitリポジトリ内のコードやドキュメントの作成・更新に使用します。Gitやコードホスティングサービスと連携し、プルリクエストやコード変更を管理します。"

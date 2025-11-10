@@ -41,7 +41,7 @@ async def main(
     await ticket_manager.create_tickets(tasks)
 
     evaluation_and_root_cause = t(
-        "modes.edit_mode.evaluation_and_root_cause",
+        "commands.workflows.modes.edit_mode.evaluation_and_root_cause",
         evaluation=evaluation,
         root_cause=str(root_cause),
     )
@@ -56,8 +56,8 @@ async def main(
 
     result = await talk_as(
         context,
-        t("modes.edit_mode.evaluation_topic"),
-        context_location=t("modes.edit_mode.evaluation_context_location"),
+        t("commands.workflows.modes.edit_mode.evaluation_topic"),
+        context_location=t("commands.workflows.modes.edit_mode.evaluation_context_location"),
         conversation_history=evaluation_messages,
     )
     return AgentResponse(

@@ -305,7 +305,7 @@ async def evaluate_interaction_performance(
     )
 
     return t(
-        "modes.edit_mode.pull_request_performance_evaluation",
+        "commands.workflows.modes.edit_mode.pull_request_performance_evaluation",
         score=int(evaluation.overall_score * 100),
         reason=evaluation.reason,
         review_comment_count=evaluation.review_comment_count,
@@ -344,7 +344,7 @@ async def analyze_root_cause(
     # Build the analysis prompt with either defaults (PR) or caller-provided labels.
     if evaluation_header_label is None and feedback_header_label is None:
         message = t(
-            "modes.edit_mode.analyze_pr_root_cause",
+            "commands.workflows.modes.edit_mode.analyze_pr_root_cause",
             evaluation=evaluation,
             pr_text=interaction_text,
         )

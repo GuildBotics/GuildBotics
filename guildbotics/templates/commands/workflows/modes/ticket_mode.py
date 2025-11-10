@@ -44,13 +44,13 @@ async def main(
 
     task_labels = [await ticket_manager.get_ticket_url(task) for task in tasks]
     system_message = t(
-        "modes.ticket_mode.agent_response_message",
+        "commands.workflows.modes.ticket_mode.agent_response_message",
         task_labels=Labels(task_labels),
     )
     message = await talk_as(
         context,
         system_message,
-        t("modes.ticket_mode.agent_response_context_location"),
+        t("commands.workflows.modes.ticket_mode.agent_response_context_location"),
         messages,
     )
     return AgentResponse(status=AgentResponse.DONE, message=message)

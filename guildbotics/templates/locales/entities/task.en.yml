@@ -1,0 +1,5 @@
+en:
+  available_modes:
+    comment: "This mode is used to add comments to tickets and reply to chats. It is primarily for communication and updates related to tasks."
+    edit: "This mode is used to create and update code or documents in a Git repository. It integrates with Git and code hosting services to manage pull requests and code changes."
+    ticket: "This mode is used for managing tasks in a ticket management system, including creating and updating tickets based on identified tasks."

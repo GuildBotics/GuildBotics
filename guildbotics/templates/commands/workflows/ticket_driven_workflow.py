@@ -36,7 +36,7 @@ async def _build_task_error_message(context) -> str:
         talked_text = await talk_as(
             context,
             error_text,
-            t("modes.ticket_mode.agent_response_context_location"),
+            t("commands.workflows.modes.ticket_mode.agent_response_context_location"),
             [],
         )
 
@@ -52,7 +52,7 @@ async def _main(context: Context, ticket_manager: TicketManager):
     # Prepare the input for the mode logic from the task details.
     messages = []
     title_and_description = t(
-        "workflows.ticket_driven_workflow.title_and_description",
+        "commands.workflows.ticket_driven_workflow.title_and_description",
         title=context.task.title,
         description=context.task.description,
     )
@@ -71,7 +71,7 @@ async def _main(context: Context, ticket_manager: TicketManager):
     input = title_and_description
     if context.task.comments:
         input += t(
-            "workflows.ticket_driven_workflow.comments",
+            "commands.workflows.ticket_driven_workflow.comments",
             comments=to_text(context.task.comments),
         )
         for comment in context.task.comments:

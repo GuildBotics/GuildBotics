@@ -501,7 +501,10 @@ async def test_nonreview_asking_returns_translated_question(monkeypatch, fake_co
 
     async def fake_talk_as(context, topic, context_location, conversation_history):
         # Should be called with ticket_comment_context_location translation key
-        assert context_location == "modes.edit_mode.ticket_comment_context_location"
+        assert (
+            context_location
+            == "commands.workflows.modes.edit_mode.ticket_comment_context_location"
+        )
         return "translated question"
 
     monkeypatch.setattr(
@@ -614,7 +617,9 @@ async def test_read_pull_request_template_default_when_missing(
     monkeypatch.setattr(
         "guildbotics.templates.commands.workflows.modes.edit_mode.t",
         lambda key, **kw: (
-            "DEFAULT" if key == "modes.edit_mode.default_pr_template" else key
+            "DEFAULT"
+            if key == "commands.workflows.modes.edit_mode.default_pr_template"
+            else key
         ),
     )
     result = edit_mode.read_pull_request_template(fake_context, tmp_path)
@@ -706,7 +711,7 @@ async def test_review_no_threads_edit_asking_empty_message_sets_default_question
     called = {"default_question": 0}
 
     def fake_t(key, **kw):
-        if key == "modes.edit_mode.default_question":
+        if key == "commands.workflows.modes.edit_mode.default_question":
             called["default_question"] += 1
             return "DEFAULT_QUESTION"
         return key
@@ -768,7 +773,7 @@ async def test_review_inline_threads_edit_done_sets_changed_and_overall_reply(
 
     # t() should return a stable default message to trigger overall reply path
     def fake_t(key, **kw):
-        if key == "modes.edit_mode.default_message":
+        if key == "commands.workflows.modes.edit_mode.default_message":
             return "DEFAULT_MESSAGE"
         return key
 
@@ -854,11 +859,11 @@ async def test_pr_to_text_appends_inline_comment_threads(monkeypatch, fake_conte
 
     # Provide deterministic translations focusing on inline thread appends
     def fake_t(key, **kw):
-        if key == "modes.edit_mode.pull_request_text":
+        if key == "commands.workflows.modes.edit_mode.pull_request_text":
             return "PRTEXT|"
-        if key == "modes.edit_mode.pull_request_inline_comment_thread":
+        if key == "commands.workflows.modes.edit_mode.pull_request_inline_comment_thread":
             return f"THREAD|{kw['thread_number']}|{kw['thread_text']}|"
-        if key == "modes.edit_mode.pull_request_merge_outcome":
+        if key == "commands.workflows.modes.edit_mode.pull_request_merge_outcome":
             return f"MERGE|{kw['merge_outcome']}"
         return key
 
