@@ -53,14 +53,57 @@ def get_template_path() -> Path:
     return find_package_subdir(Path("templates"))
 
 
-def _get_config_path(path: Path) -> Path:
+def get_primary_config_path(path: Path) -> Path:
+    """
+    Get the primary configuration path from GUILDBOTICS_CONFIG_DIR or CONFIG_PATH.
 
+    The returned path may not exist; check with .exists() if needed.
+
+    Args:
+        path (Path): The relative path to the configuration file.
+
+    Returns:
+        Path: The absolute path to the configuration file.
+    """
     config_dir = os.getenv("GUILDBOTICS_CONFIG_DIR", CONFIG_PATH)
-    p = Path(config_dir) / path
+    return Path(config_dir) / path
+
+
+def get_home_config_path(path: Path) -> Path:
+    """
+    Get the configuration path in the user's home directory.
+
+    The returned path may not exist; check with .exists() if needed.
+
+    Args:
+        path (Path): The relative path to the configuration file.
+
+    Returns:
+        Path: The absolute path under ~/.guildbotics/config/.
+    """
+    return Path.home() / CONFIG_PATH / path
+
+
+def _get_config_path(path: Path) -> Path:
+    """
+    Resolve the configuration path by searching in priority order.
+
+    Returns the first existing file from the following locations:
+    1. Primary config path (GUILDBOTICS_CONFIG_DIR or CONFIG_PATH)
+    2. Home config path (~/.guildbotics/config/)
+    3. Template path (returned even if not found)
+
+    Args:
+        path (Path): The relative path to the configuration file.
+
+    Returns:
+        Path: An absolute path to an existing file, or the template path fallback.
+    """
+    p = get_primary_config_path(path)
     if p.exists():
         return p
 
-    p = Path.home() / CONFIG_PATH / path
+    p = get_home_config_path(path)
     if p.exists():
         return p
 
@@ -68,6 +111,23 @@ def _get_config_path(path: Path) -> Path:
 
 
 def get_config_path(path_str: str, language_code: str | None = None) -> Path:
+    """
+    Get the configuration path, with optional language-specific localization.
+
+    If language_code is provided, searches for files in this order:
+    1. File with language code suffix (e.g., "config.ja.yaml")
+    2. English file with ".en" suffix (e.g., "config.en.yaml")
+    3. File without suffix (fallback)
+
+    Each search uses _get_config_path() to check multiple locations.
+
+    Args:
+        path_str (str): The relative path to the configuration file.
+        language_code (str | None): The language code for localization (optional).
+
+    Returns:
+        Path: The absolute path to the configuration file.
+    """
     if language_code:
         p = Path(path_str)
         new_path = _get_config_path(p.with_stem(f"{p.stem}.{language_code}"))
@@ -101,13 +161,13 @@ def get_person_config_path(
 def load_markdown_with_frontmatter(file: Path) -> dict:
     """
     Load a Markdown file with YAML front matter and return as dict.
-    Front matter keys are parsed as key-value pairs, and the body is stored under 'description'.
+    Front matter keys are parsed as key-value pairs, and the body is stored under 'body'.
 
     Args:
         file (Path): Path to the Markdown file.
 
     Returns:
-        dict: Parsed front matter with 'description' key for the body.
+        dict: Parsed front matter with 'body' key for the markdown body.
     """
     with file.open("r", encoding="utf-8") as f:
         content = f.read()

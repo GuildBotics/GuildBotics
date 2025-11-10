@@ -56,7 +56,7 @@ async def main(
             context, inputs, messages, pull_request_url, git_tool, code_hosting_service
         )
         if changed and message:
-            context_location = t("modes.edit_mode.pull_request_context_location")
+            context_location = t("commands.workflows.modes.edit_mode.pull_request_context_location")
             comments.reply = await talk_as(
                 context, message, context_location, conversation_history
             )
@@ -69,7 +69,7 @@ async def main(
             response.message = await talk_as(
                 context,
                 response.message,
-                t("modes.edit_mode.ticket_comment_context_location"),
+                t("commands.workflows.modes.edit_mode.ticket_comment_context_location"),
                 messages,
             )
             return response
@@ -158,7 +158,7 @@ async def _handle_review_flow(
             - str: The message to be sent in response.
             - list[Message]: The updated conversation history.
     """
-    context_location = t("modes.edit_mode.pull_request_context_location")
+    context_location = t("commands.workflows.modes.edit_mode.pull_request_context_location")
     comments = await code_hosting_service.get_pull_request_comments(pull_request_url)
 
     is_asking = False
@@ -176,7 +176,7 @@ async def _handle_review_flow(
             )
         )
 
-    message = t("modes.edit_mode.default_message")
+    message = t("commands.workflows.modes.edit_mode.default_message")
     changed = False
 
     if len(comments.inline_comment_threads) == 0:
@@ -212,7 +212,7 @@ async def _handle_review_flow(
             if not is_asking:
                 changed = True
             if is_asking and not response.message:
-                message = t("modes.edit_mode.default_question")
+                message = t("commands.workflows.modes.edit_mode.default_question")
     else:
         for thread in comments.inline_comment_threads:
             review_comment = inputs.copy()
@@ -273,19 +273,19 @@ def pr_to_text(pr: PullRequest) -> str:
         str: The textual representation of the pull request.
     """
     message = t(
-        "modes.edit_mode.pull_request_text",
+        "commands.workflows.modes.edit_mode.pull_request_text",
         title=pr.title,
         description=pr.description,
         review_comments=str(pr.review_comments),
     )
     for i, thread in enumerate(pr.review_comments.inline_comment_threads):
         message = message + t(
-            "modes.edit_mode.pull_request_inline_comment_thread",
+            "commands.workflows.modes.edit_mode.pull_request_inline_comment_thread",
             thread_number=i + 1,
             thread_text=str(thread),
         )
     message = message + t(
-        "modes.edit_mode.pull_request_merge_outcome",
+        "commands.workflows.modes.edit_mode.pull_request_merge_outcome",
         merge_outcome="merged" if pr.is_merged else "closed",
     )
     return message
@@ -312,7 +312,7 @@ def read_pull_request_template(context: Context, workspace: Path) -> str:
         ".gitlab/merge_request_templates/Default.md",
     ]
 
-    default_template_text = t("modes.edit_mode.default_pr_template")
+    default_template_text = t("commands.workflows.modes.edit_mode.default_pr_template")
     for rel in template_paths:
         tpl = workspace / rel
         if tpl.is_file():

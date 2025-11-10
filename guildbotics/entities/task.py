@@ -131,9 +131,9 @@ class Task(BaseModel):
     @staticmethod
     def get_available_modes() -> dict[str, str]:
         return {
-            "comment": t("modes.comment_mode.use_case_description"),
-            "edit": t("modes.edit_mode.use_case_description"),
-            "ticket": t("modes.ticket_mode.use_case_description"),
+            "comment": t("entities.task.available_modes.comment"),
+            "edit": t("entities.task.available_modes.edit"),
+            "ticket": t("entities.task.available_modes.ticket"),
         }
 
 
