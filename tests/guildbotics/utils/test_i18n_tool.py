@@ -82,7 +82,6 @@ def test_all_t_call_sites_produce_translated_strings() -> None:
     missing_entries = sorted(key for key in keys if key not in placeholder_map)
     assert not missing_entries, f"Missing locale entries for keys: {missing_entries}"
 
-    failures: list[str] = []
     translation_sanity_check = i18n_tool.t("entities.task.available_modes.comment")
     assert (
         translation_sanity_check != "entities.task.available_modes.comment"
