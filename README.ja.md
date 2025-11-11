@@ -123,7 +123,7 @@ guildbotics start
 - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
 
 ## 3.4. CLI エージェント
-以下のCLI エージェントのいずれかを事前にインストールしていちど起動し、認証を行ってください。
+以下のCLI エージェントのいずれかを事前にインストールして一度起動し、認証を行ってください。
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Pro または Max サブスクリプションが必要)
