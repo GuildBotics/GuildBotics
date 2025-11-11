@@ -12,13 +12,10 @@ from pydantic import BaseModel
 from guildbotics.entities.message import Message
 from guildbotics.intelligences.common import (
     AgentResponse,
-    ArtifactProcessEvaluation,
     DecisionResponse,
-    ImprovementRecommendations,
     Labels,
     MessageResponse,
     NextTasksResponse,
-    RootCauseAnalysis,
 )
 from guildbotics.runtime import Context
 from guildbotics.utils.i18n_tool import t
@@ -255,153 +252,6 @@ async def write_commit_message(context: Context, task_title: str, changes: str) 
         message="",
         params=params,
     )
-
-
-async def evaluate_interaction_performance(
-    context: Context,
-    interaction_text: str,
-    **retrospective_params: Any,
-) -> str:
-    """
-    Evaluate performance for a pull request-like interaction.
-
-    This function supports parameterization via keyword arguments to generalize
-    the retrospective flow beyond Pull Requests. Callers can provide optional
-    labels and subject information which are forwarded to the underlying
-    prompting template. Supported optional params include:
-
-    - subject_type: The artifact/interaction type label (e.g., "Pull Request", "Design Review").
-    - summary_label: Section label used in the input text to denote the overview/summary.
-    - feedback_label: Section label used to denote review/feedback comments.
-    - outcome_label: Section label used to denote the final outcome.
-    - positive_outcome_value / negative_outcome_value: Strings indicating success/failure.
-
-    Args:
-        interaction_text (str): Source text that contains the sections to evaluate.
-        retrospective_params: Optional keyword parameters to override defaults.
-
-    Returns:
-        str: A localized, human-readable evaluation summary.
-    """
-    lang = context.team.project.get_language_name()
-    # Localized defaults for PR retrospectives (moved to locale files)
-    default_params = {
-        "subject_type": t("intelligences.functions.subject_type"),
-        "summary_label": t("intelligences.functions.summary_label"),
-        "feedback_label": t("intelligences.functions.feedback_label"),
-        "outcome_label": t("intelligences.functions.outcome_label"),
-        "positive_outcome_value": t("intelligences.functions.positive_outcome_value"),
-        "negative_outcome_value": t("intelligences.functions.negative_outcome_value"),
-    }
-
-    merged_params = {**default_params, **retrospective_params}
-    params = {"language": lang, **merged_params}
-
-    evaluation: ArtifactProcessEvaluation = await get_content(
-        context,
-        "functions/evaluate_interaction_performance",
-        message=interaction_text,
-        params=params,
-    )
-
-    return t(
-        "commands.workflows.modes.edit_mode.pull_request_performance_evaluation",
-        score=int(evaluation.overall_score * 100),
-        reason=evaluation.reason,
-        review_comment_count=evaluation.review_comment_count,
-        review_cycle_count=evaluation.review_cycle_count,
-        request_changes_count=evaluation.request_changes_count,
-        review_sentiment_score=evaluation.review_sentiment_score,
-        context=evaluation.context,
-    )
-
-
-async def analyze_root_cause(
-    context: Context,
-    interaction_text: str,
-    evaluation: str,
-    *,
-    evaluation_header_label: str | None = None,
-    feedback_header_label: str | None = None,
-    subject_type: str | None = None,
-) -> RootCauseAnalysis:
-    """
-    Analyze root causes for a PR-like interaction, with optional parameterization.
-
-    Callers may override default section headers and subject type to reuse the
-    same analysis flow for other interaction types.
-
-    Args:
-        interaction_text (str): Original feedback/conversation text.
-        evaluation (str): A human-readable evaluation summary.
-        evaluation_header_label (str | None): Header label for the evaluation section.
-        feedback_header_label (str | None): Header label for the original feedback section.
-        subject_type (str | None): Artifact/interaction type label.
-
-    Returns:
-        RootCauseAnalysis: Structured root cause analysis result.
-    """
-    # Build the analysis prompt with either defaults (PR) or caller-provided labels.
-    if evaluation_header_label is None and feedback_header_label is None:
-        message = t(
-            "commands.workflows.modes.edit_mode.analyze_pr_root_cause",
-            evaluation=evaluation,
-            pr_text=interaction_text,
-        )
-    else:
-        eval_label = evaluation_header_label or "Evaluation Result"
-        fb_label = feedback_header_label or "Original Feedback"
-        message = (
-            f"# {eval_label}\n{evaluation}\n---\n# {fb_label}\n{interaction_text}\n"
-        )
-
-    lang = context.team.project.get_language_name()
-    session_state = {"language": lang}
-    if subject_type:
-        session_state["subject_type"] = subject_type
-    else:
-        # Default subject type localized via locale files
-        session_state["subject_type"] = t("intelligences.functions.subject_type")
-
-    result: RootCauseAnalysis = await get_content(
-        context,
-        "functions/analyze_root_cause",
-        message=message,
-        params=session_state,
-    )
-
-    return result
-
-
-async def propose_process_improvements(
-    context: Context,
-    root_cause_analysis: RootCauseAnalysis,
-    *,
-    subject_type: str | None = None,
-) -> ImprovementRecommendations:
-    """
-    Propose concrete, actionable improvements based on root cause analysis.
-
-    Optional subject_type enables generalization beyond PRs (e.g., design review,
-    incident response, support thread).
-    """
-    message = f"# RootCauseAnalysis:\n{str(root_cause_analysis)}\n"
-
-    lang = context.team.project.get_language_name()
-    session_state = {"language": lang}
-    if subject_type:
-        session_state["subject_type"] = subject_type
-    else:
-        session_state["subject_type"] = t("intelligences.functions.subject_type")
-
-    result: ImprovementRecommendations = await get_content(
-        context,
-        "functions/propose_process_improvements",
-        message=message,
-        params=session_state,
-    )
-
-    return result
 
 
 async def write_pull_request_description(
