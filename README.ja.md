@@ -40,6 +40,9 @@ GuildBotics でできること:
     - [5.4.3. Cron表記の詳細](#543-cron表記の詳細)
     - [5.4.4. スケジューラの内部動作](#544-スケジューラの内部動作)
   - [5.5. スケジュール設定の例](#55-スケジュール設定の例)
+    - [マルチエージェント・スケジュールワークフローの例](#マルチエージェントスケジュールワークフローの例)
+    - [複数スケジュールパターンの例](#複数スケジュールパターンの例)
+    - [ランダム化を活用した例](#ランダム化を活用した例)
 - [6. GitHub統合の使用例](#6-github統合の使用例)
   - [6.1. 事前準備](#61-事前準備)
     - [6.1.1. Git環境](#611-git環境)
@@ -215,7 +218,7 @@ guildbotics run <command_name> [args...]
 
 例:
 ```bash
-echo "Hello" | guildbotics run translate English Japanese
+echo "Hello" | guildbotics run translate 英語 日本語
 ```
 
 **スケジューラでの自動実行**:
@@ -242,7 +245,7 @@ GuildBoticsでは、チームメンバー毎に `person.yml` 設定ファイル�
 **特徴**:
 - スケジューラがアクティブな間、毎分実行
 - 複数のコマンドを指定した場合、順番に1つずつ実行
-- `person.yml` で指定しない場合、`guildbotics start` に渡されたデフォルトコマンドを使用
+- `person.yml` で指定しない場合、`guildbotics start` に渡されたデフォルトコマンドを使用 (引数指定がない場合は、 `workflows/ticket_driven_workflow` を使用)
 
 **設定例**:
 ```yaml
@@ -360,21 +363,6 @@ schedules:
 ## 5.5. スケジュール設定の例
 
 このセクションでは、実際のスケジュール設定の例を紹介します。
-
-### カスタムスケジュールコマンドの作成
-
-**日次レポート生成コマンドの例** (`~/.guildbotics/config/commands/workflows/daily_report.md`):
-```markdown
----
-model: gemini-2.0-flash-exp
----
-以下の内容を要約した日次レポートを生成してください:
-- 昨日完了したタスク
-- 進行中のタスク
-- 対応が必要なブロックされたタスク
-
-markdown形式で出力してください。
-```
 
 ### マルチエージェント・スケジュールワークフローの例
 
