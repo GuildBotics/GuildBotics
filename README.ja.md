@@ -34,6 +34,14 @@ GuildBotics でできること:
   - [5.3. コマンド実行](#53-コマンド実行)
     - [カスタムコマンドを実行](#カスタムコマンドを実行)
     - [スケジューラを起動](#スケジューラを起動)
+  - [5.4. スケジュール設定](#54-スケジュール設定)
+    - [person.yml での設定構造](#personyml-での設定構造)
+    - [ルーチンコマンドとスケジュールタスク](#ルーチンコマンドとスケジュールタスク)
+    - [Cron表記の形式](#cron表記の形式)
+    - [特殊なランダム化構文](#特殊なランダム化構文)
+    - [コマンドの配置](#コマンドの配置)
+    - [スケジューラの内部動作](#スケジューラの内部動作)
+    - [例: マルチエージェント・スケジュールワークフロー](#例-マルチエージェントスケジュールワークフロー)
 - [6. GitHub統合の使用例](#6-github統合の使用例)
   - [6.1. 事前準備](#61-事前準備)
     - [6.1.1. Git環境](#611-git環境)
@@ -181,6 +189,179 @@ guildbotics start [routine_commands...]
 ```bash
 guildbotics stop
 ```
+
+## 5.4. スケジュール設定
+
+GuildBoticsでは、チームメンバー毎に `person.yml` 設定ファイルを通じてスケジュールタスクを設定できます。これにより、AIエージェントが指定した時刻に自動的にコマンドを実行できるようになります。
+
+### person.yml での設定構造
+
+メンバーの `person.yml` ファイル（`.guildbotics/config/team/members/<person_id>/person.yml`）にスケジュール設定を追加します:
+
+```yaml
+person_id: alice
+name: Alice
+is_active: true
+
+# デフォルトのルーチンコマンドを上書き（オプション）
+routine_commands:
+  - workflows/ticket_driven_workflow
+  - workflows/custom_workflow
+
+# 特定の時刻に実行するコマンドをスケジュール
+task_schedules:
+  - command: workflows/cleanup
+    schedules:
+      - "0 2 * * *"        # 毎日午前2:00
+      - "30 14 * * 5"      # 毎週金曜日14:30
+  - command: workflows/backup
+    schedules:
+      - "0 0 1 * *"        # 毎月1日の午前0時
+```
+
+### ルーチンコマンドとスケジュールタスク
+
+**ルーチンコマンド** (`routine_commands`):
+- ラウンドロビン方式で継続的に実行
+- スケジューラがアクティブな間、毎分実行
+- `person.yml` で指定しない場合、`guildbotics start` に渡されたデフォルトコマンドを使用
+- 例: `workflows/ticket_driven_workflow` は新しいタスクを繰り返しチェック
+
+**スケジュールタスク** (`task_schedules`):
+- cron表記で定義された特定の時刻に実行
+- 各タスクはコマンドと1つ以上のスケジュールパターンを持つ
+- 毎分チェックされ、現在時刻がスケジュールに一致した時に実行
+
+### Cron表記の形式
+
+GuildBoticsは標準的な5フィールドのcron表記を使用します:
+
+```
+* * * * *
+│ │ │ │ │
+│ │ │ │ └─── 曜日 (0-6, 日曜日=0)
+│ │ │ └───── 月 (1-12)
+│ │ └─────── 日 (1-31)
+│ └───────── 時 (0-23)
+└─────────── 分 (0-59)
+```
+
+**よく使う例**:
+```yaml
+schedules:
+  - "0 9 * * *"          # 毎日午前9:00
+  - "*/15 * * * *"       # 15分毎
+  - "0 */2 * * *"        # 2時間毎
+  - "0 0 * * 0"          # 毎週日曜日の午前0時
+  - "30 8 1,15 * *"      # 毎月1日と15日の午前8:30
+  - "0 22 * * 1-5"       # 平日の午後10:00
+```
+
+### 特殊なランダム化構文
+
+GuildBoticsは標準cron記法を拡張し、ランダム化構文（ジッタ）をサポートしています:
+
+- `?`: デフォルト範囲内のランダムな値
+- `?(min-max)`: 指定範囲内のランダムな値
+
+**例**:
+```yaml
+schedules:
+  - "? 9 * * *"          # 毎日午前9:00-9:59のランダムな分
+  - "?(0-30) 14 * * *"   # 毎日14:00-14:30のランダムな分
+  - "0 ?(9-17) * * 1-5"  # 平日の9-17時のランダムな時刻（00分）
+```
+
+これは以下の用途に便利です:
+- 複数エージェント間での同時実行を回避
+- 人間らしい不規則なタイミングをシミュレート
+- 時間枠全体での負荷分散
+
+### コマンドの配置
+
+スケジュールで参照されるコマンドは以下のいずれかです:
+
+1. **ビルトインワークフロー**: パッケージ内の `guildbotics/templates/` に配置
+   - 例: `workflows/ticket_driven_workflow`
+
+2. **カスタムコマンド**: 設定ディレクトリに配置
+   - グローバル: `~/.guildbotics/config/commands/`
+   - プロジェクトローカル: `.guildbotics/config/commands/`
+   - メンバー毎: `.guildbotics/config/team/members/<person_id>/commands/`
+
+3. **コマンドの種類**:
+   - `.md` ファイル: LLMプロンプト（Markdownコマンド）
+   - `.py` ファイル: コンテキスト注入付きPythonスクリプト
+   - `.sh` ファイル: Shellスクリプト
+   - `.yml` ファイル: YAMLワークフロー合成
+
+**カスタムスケジュールコマンドの例** (`~/.guildbotics/config/commands/workflows/daily_report.md`):
+```markdown
+---
+model: gemini-2.0-flash-exp
+---
+以下の内容を要約した日次レポートを生成してください:
+- 昨日完了したタスク
+- 進行中のタスク
+- 対応が必要なブロックされたタスク
+
+markdown形式で出力してください。
+```
+
+### スケジューラの内部動作
+
+スケジューラの動作（`guildbotics/drivers/task_scheduler.py` より）:
+
+1. **person毎のワーカースレッド**: アクティブな各チームメンバーに専用のワーカースレッドが割り当てられます
+2. **分単位のチェックサイクル**: 毎分、スケジューラは以下を行います:
+   - 現在のpersonの全 `task_schedules` をチェック
+   - スケジュールが現在時刻に一致するコマンドを実行
+   - ラウンドロビン順で1つの `routine_command` を実行
+3. **ランダム化の処理**（`guildbotics/entities/task.py` より）:
+   - 初期化時に、ランダム化されたスケジュールの次回実行時刻を計算
+   - `?` フィールドについては、境界内でランダムな値をサンプリング
+   - 各実行境界に達した後、再サンプリング
+4. **エラーハンドリング**: 連続したコマンド失敗（デフォルト: 3回）でワーカースレッドを停止
+
+### 例: マルチエージェント・スケジュールワークフロー
+
+**シナリオ**: 異なるスケジュールを持つ2つのエージェント
+
+**エージェント1** (`.guildbotics/config/team/members/agent1/person.yml`):
+```yaml
+person_id: agent1
+name: Agent One
+is_active: true
+routine_commands:
+  - workflows/ticket_driven_workflow
+task_schedules:
+  - command: workflows/morning_standup
+    schedules:
+      - "0 9 * * 1-5"     # 平日午前9:00
+```
+
+**エージェント2** (`.guildbotics/config/team/members/agent2/person.yml`):
+```yaml
+person_id: agent2
+name: Agent Two
+is_active: true
+routine_commands:
+  - workflows/code_review_check
+task_schedules:
+  - command: workflows/cleanup_old_branches
+    schedules:
+      - "0 0 * * 0"       # 日曜日午前0時
+  - command: workflows/dependency_update_check
+    schedules:
+      - "?(0-59) 10 1 * *"  # 毎月1日の午前10時台のランダムな分
+```
+
+両方のエージェントを起動:
+```bash
+guildbotics start
+```
+
+両エージェントは並行して動作し、それぞれがルーチンコマンドを継続的に実行し、スケジュールタスクを指定された時刻に実行します。
 
 # 6. GitHub統合の使用例
 
