@@ -16,6 +16,7 @@ from guildbotics.intelligences.common import (
     RootCauseAnalysis,
     RootCauseItem,
 )
+from guildbotics.templates.commands.workflows import retrospective
 
 
 def test_to_text_with_model_and_list():
@@ -125,7 +126,7 @@ async def test_evaluate_interaction_performance_and_root_cause(
 
     # stub translation to produce deterministic string
     monkeypatch.setattr(
-        f,
+        retrospective,
         "t",
         lambda key, **kw: kw.get("subject_type")
         or kw.get("reason")
@@ -147,8 +148,8 @@ async def test_evaluate_interaction_performance_and_root_cause(
     async def fake_get_content_eval(context, name, message, **kwargs):
         return eval_model
 
-    monkeypatch.setattr(f, "get_content", fake_get_content_eval)
-    summary = await f.evaluate_interaction_performance(ctx, "text")
+    monkeypatch.setattr(retrospective, "get_content", fake_get_content_eval)
+    summary = await retrospective.evaluate_interaction_performance(ctx, "text")
     # Our t stub returns either reason/context/subject_type/key; ensure reason leaked
     assert "why" in summary or "ctx" in summary
 
@@ -168,8 +169,8 @@ async def test_evaluate_interaction_performance_and_root_cause(
     async def fake_get_content_rca(context, name, message, **kwargs):
         return rca
 
-    monkeypatch.setattr(f, "get_content", fake_get_content_rca)
-    assert await f.analyze_root_cause(ctx, "txt", "ev") is rca
+    monkeypatch.setattr(retrospective, "get_content", fake_get_content_rca)
+    assert await retrospective.analyze_root_cause(ctx, "txt", "ev") is rca
 
 
 @pytest.mark.asyncio
@@ -180,8 +181,13 @@ async def test_propose_process_improvements(monkeypatch, fake_context, stub_brai
     async def fake_get_content(context, name, message, **kwargs):
         return rec
 
-    monkeypatch.setattr(f, "get_content", fake_get_content)
-    assert await f.propose_process_improvements(ctx, RootCauseAnalysis(items=[])) is rec
+    monkeypatch.setattr(retrospective, "get_content", fake_get_content)
+    assert (
+        await retrospective.propose_process_improvements(
+            ctx, RootCauseAnalysis(items=[])
+        )
+        is rec
+    )
 
 
 @pytest.mark.asyncio
