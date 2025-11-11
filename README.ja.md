@@ -25,8 +25,11 @@ GuildBotics でできること:
   - [コアフレームワーク](#コアフレームワーク)
   - [組み込み機能](#組み込み機能)
 - [2. クイックスタート](#2-クイックスタート)
-- [3. 動作環境](#3-動作環境)
-  - [対応統合](#対応統合)
+- [3. 動作環境と事前準備](#3-動作環境と事前準備)
+  - [3.1. 動作環境](#31-動作環境)
+  - [3.2. 必須ソフトウェア](#32-必須ソフトウェア)
+  - [3.3. LLM API](#33-llm-api)
+  - [3.4. CLI エージェント](#34-cli-エージェント)
 - [4. インストール](#4-インストール)
 - [5. 基本的な使い方](#5-基本的な使い方)
   - [5.1. 初期セットアップ](#51-初期セットアップ)
@@ -51,8 +54,6 @@ GuildBotics でできること:
       - [マシンアカウントを利用する場合](#マシンアカウントを利用する場合)
       - [GitHub Appを利用する場合](#github-appを利用する場合)
       - [代理エージェント (AIエージェント用に自分自身のアカウント) を利用する場合](#代理エージェント-aiエージェント用に自分自身のアカウント-を利用する場合)
-    - [6.1.4. LLM API](#614-llm-api)
-    - [6.1.5. CLI エージェント（オプション）](#615-cli-エージェントオプション)
   - [6.2. GitHub統合のセットアップ](#62-github統合のセットアップ)
   - [6.3. チケット駆動ワークフローの実行](#63-チケット駆動ワークフローの実行)
     - [6.3.1. 起動](#631-起動)
@@ -62,7 +63,6 @@ GuildBotics でできること:
 - [7. リファレンス](#7-リファレンス)
   - [7.1. アカウント関連環境変数](#71-アカウント関連環境変数)
   - [7.2. 設定ファイル](#72-設定ファイル)
-  - [7.3. カスタムコマンド](#73-カスタムコマンド)
 - [8. トラブルシューティング](#8-トラブルシューティング)
 - [9. Contributing](#9-contributing)
 
@@ -107,14 +107,27 @@ guildbotics start
 
 詳細は[基本的な使い方](#5-基本的な使い方)を、またはチケット駆動ワークフローのセットアップは[GitHub統合の使用例](#6-github統合の使用例)を参照してください。
 
-# 3. 動作環境
+# 3. 動作環境と事前準備
+## 3.1. 動作環境
+以下の環境で動作します。
 - OS: Linux（Ubuntu 24.04 で動作確認）/ macOS（Sequoia で動作確認）
-- ランタイム: `uv`（必要な Python を uv が自動で取得・管理します）
 
-## 対応統合
-- **LLMプロバイダー**: Google Gemini、OpenAI、Anthropic Claude
-- **CLIエージェント**: Gemini CLI、OpenAI Codex CLI、Claude Code
-- **GitHub統合**: Projects (v2)、Issues、Pull Requests
+## 3.2. 必須ソフトウェア
+以下のソフトウェアを事前にインストールしてください。
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+## 3.3. LLM API
+以下の API キーのいずれかを事前に取得してください。
+- Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
+- OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
+- Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
+
+## 3.4. CLI エージェント
+以下のCLI エージェントのいずれかを事前にインストールしていちど起動し、認証を行ってください。
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
+- [OpenAI Codex CLI](https://github.com/openai/codex/)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Pro または Max サブスクリプションが必要)
+
 
 # 4. インストール
 
@@ -206,7 +219,7 @@ GuildBoticsでは、複数の種類のコマンドを実行できます。コマ
 以下のテキストが ${1} の場合は ${2} に、${2} の場合は ${1} に翻訳してください:
 ```
 
-詳細な作成方法は[カスタムコマンド](#73-カスタムコマンド)と[カスタムコマンド開発ガイド](docs/custom_command_guide.ja.md)を参照してください。
+詳細な作成方法は[カスタムコマンド開発ガイド](docs/custom_command_guide.ja.md)を参照してください。
 
 ### 5.3.2. コマンドの実行方法
 
@@ -229,10 +242,21 @@ guildbotics start [routine_commands...]
 
 ルーチンコマンドとスケジュールタスクを実行するタスクスケジューラを起動します。コマンドを指定しない場合、デフォルトの`workflows/ticket_driven_workflow`を実行します。
 
-停止するには:
+スケジューラを停止するには:
 ```bash
-guildbotics stop
+guildbotics stop [--timeout <seconds>] [--force]
 ```
+
+- SIGTERM を送信し、最大 `--timeout` 秒（デフォルト: 30）待機します。
+- タイムアウト内に終了せず、`--force` が指定されている場合、SIGKILL を送信します。
+
+即座に強制停止する場合:
+
+```bash
+guildbotics kill
+```
+
+これは `guildbotics stop --force --timeout 0` と同じです。
 
 ## 5.4. スケジュール機能
 
@@ -519,19 +543,6 @@ GitHub App作成後に以下の作業を行ってください。
 自分自身のアカウントをAIエージェント用に利用する場合、**Classic** PAT を発行してください。
 PATのスコープは、`repo` と `project` の2つを選択してください。
 
-### 6.1.4. LLM API
-以下のいずれかを選択してください:
-- Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey) からAPIキーを取得
-- OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys) からAPIキーを取得
-- Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys) からAPIキーを取得
-
-### 6.1.5. CLI エージェント（オプション）
-以下のCLI エージェントのいずれかをインストールして、起動して認証を行ってください。
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
-- [OpenAI Codex CLI](https://github.com/openai/codex/)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Pro または Max サブスクリプションが必要)
-
-
 ## 6.2. GitHub統合のセットアップ
 
 [基本的な使い方](#5-基本的な使い方)の手順を完了した後、GitHub固有の設定を行います:
@@ -553,26 +564,8 @@ guildbotics config verify
 以下のコマンドで起動します:
 
 ```bash
-guildbotics start [default_routine_commands...]
+guildbotics start
 ```
-
-- `default_routine_commands` は、定常的に実行するコマンドのリストです。指定しない場合は、 `workflows/ticket_driven_workflow` が既定値として利用されます。
-
-これにより、タスクスケジューラが起動し、AIエージェントがタスクを実行できるようになります。
-
-実行中のスケジューラを停止するには:
-
-```bash
-guildbotics stop
-```
-
-即座に強制停止する場合:
-
-```bash
-guildbotics kill
-```
-
-これは `guildbotics stop --force --timeout 0` と同じです。
 
 ### 6.3.2. AIエージェントへの作業指示
 
@@ -647,28 +640,6 @@ AIエージェントは `~/.guildbotics/data/workspaces/<person_id>` 配下に�
 - `intelligences/cli_agent_mapping.yml`: デフォルトCLIエージェント選択
 - `intelligences/cli_agents/*.yml`: CLIエージェントスクリプト
 - `team/members/<person_id>/intelligences/`: person毎の上書き
-
-## 7.3. カスタムコマンド
-
-`~/.guildbotics/config/commands/` （またはプロジェクトローカルのコマンドディレクトリ）にカスタムコマンドを作成:
-
-- **Markdownファイル** (`.md`): フロントマター付きLLMプロンプト
-- **Pythonファイル** (`.py`): コンテキスト注入付きカスタムロジック
-- **Shellスクリプト** (`.sh`): Shellコマンド
-- **YAMLファイル** (`.yml`): ワークフロー合成
-
-詳細な作成方法は[カスタムコマンド開発ガイド](docs/custom_command_guide.ja.md)を参照してください。
-
-**簡単な例**:
-```markdown
-<!-- translate.md -->
-以下のテキストが ${1} の場合は ${2} に、${2} の場合は ${1} に翻訳してください:
-```
-
-使い方:
-```bash
-echo "Hello" | guildbotics run translate English Japanese
-```
 
 # 8. トラブルシューティング
 

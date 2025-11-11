@@ -26,7 +26,10 @@ GuildBotics enables you to:
   - [Built-in Capabilities](#built-in-capabilities)
 - [2. Quick Start](#2-quick-start)
 - [3. Environment](#3-environment)
-  - [Supported Integrations](#supported-integrations)
+  - [3.1. Supported Platforms](#31-supported-platforms)
+  - [3.2. Required Software](#32-required-software)
+  - [3.3. LLM API](#33-llm-api)
+  - [3.4. CLI Agent](#34-cli-agent)
 - [4. Installation](#4-installation)
 - [5. Basic Usage](#5-basic-usage)
   - [5.1. Initial Setup](#51-initial-setup)
@@ -51,8 +54,6 @@ GuildBotics enables you to:
       - [Using a Machine Account (Machine User)](#using-a-machine-account-machine-user)
       - [Using a GitHub App](#using-a-github-app)
       - [Using Your Own Account as a Proxy Agent](#using-your-own-account-as-a-proxy-agent)
-    - [6.1.4. LLM API](#614-llm-api)
-    - [6.1.5. CLI Agent (Optional)](#615-cli-agent-optional)
   - [6.2. Setup for GitHub Integration](#62-setup-for-github-integration)
   - [6.3. Running the Ticket-Driven Workflow](#63-running-the-ticket-driven-workflow)
     - [6.3.1. Start](#631-start)
@@ -62,7 +63,6 @@ GuildBotics enables you to:
 - [7. Reference](#7-reference)
   - [7.1. Account-Related Environment Variables](#71-account-related-environment-variables)
   - [7.2. Configuration Files](#72-configuration-files)
-  - [7.3. Custom Commands](#73-custom-commands)
 - [8. Troubleshooting](#8-troubleshooting)
 - [9. Contributing](#9-contributing)
 
@@ -108,13 +108,26 @@ guildbotics start
 See [Basic Usage](#5-basic-usage) for details, or [GitHub Integration Example](#6-github-integration-example) for the ticket-driven workflow setup.
 
 # 3. Environment
+## 3.1. Supported Platforms
+GuildBotics runs on the following environments:
 - OS: Linux (verified on Ubuntu 24.04) / macOS (verified on Sequoia)
-- Runtime: `uv` (automatically fetches/manages Python)
 
-## Supported Integrations
-- **LLM Providers**: Google Gemini, OpenAI, Anthropic Claude
-- **CLI Agents**: Gemini CLI, OpenAI Codex CLI, Claude Code
-- **GitHub Integration**: Projects (v2), Issues, Pull Requests
+## 3.2. Required Software
+Please install the following software:
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+## 3.3. LLM API
+Please obtain one of the following API keys:
+- Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
+- OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
+- Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
+
+## 3.4. CLI Agent
+Please install one of the following CLI agents and authenticate:
+
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
+- [OpenAI Codex CLI](https://github.com/openai/codex/)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
 
 # 4. Installation
 
@@ -206,7 +219,7 @@ Commands can be placed in any of the following directories (in priority order):
 If the following text is in ${1}, translate it to ${2}; if it is in ${2}, translate it to ${1}:
 ```
 
-For detailed creation methods, see [Custom Commands](#73-custom-commands) and the [Custom Command Development Guide](docs/custom_command_guide.en.md).
+For detailed creation methods, see [Custom Command Development Guide](docs/custom_command_guide.en.md).
 
 ### 5.3.2. Command Execution Methods
 
@@ -229,10 +242,22 @@ guildbotics start [routine_commands...]
 
 Starts the task scheduler to execute routine commands and scheduled tasks. If no commands are specified, runs the default `workflows/ticket_driven_workflow`.
 
-To stop:
+To stop the running scheduler:
+
 ```bash
-guildbotics stop
+guildbotics stop [--timeout <seconds>] [--force]
 ```
+
+- Sends SIGTERM and waits up to `--timeout` seconds (default: 30).
+- If it does not exit within the timeout and `--force` is specified, sends SIGKILL.
+
+For an immediate force stop:
+
+```bash
+guildbotics kill
+```
+
+This is equivalent to `guildbotics stop --force --timeout 0`.
 
 ## 5.4. Schedule Features
 
@@ -519,18 +544,6 @@ After creating the GitHub App, do the following:
 #### Using Your Own Account as a Proxy Agent
 If you use your own account as the AI agent, issue a **Classic** PAT. Select the scopes `repo` and `project`.
 
-### 6.1.4. LLM API
-Choose one of the following:
-- Google Gemini API: Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
-- OpenAI API: Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
-- Anthropic Claude API: Get your API key from [Anthropic Console](https://console.anthropic.com/settings/keys)
-
-### 6.1.5. CLI Agent (Optional)
-Install and sign in to one of the following CLI agents:
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
-- [OpenAI Codex CLI](https://github.com/openai/codex/)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
-
 
 ## 6.2. Setup for GitHub Integration
 
@@ -553,30 +566,8 @@ This command:
 Start with:
 
 ```bash
-guildbotics start [default_routine_commands...]
+guildbotics start
 ```
-
-- `default_routine_commands` is a list of commands to execute routinely. If not specified, `workflows/ticket_driven_workflow` is used as the default.
-
-This starts the task scheduler, allowing AI agents to execute tasks.
-
-To stop the running scheduler:
-
-```bash
-guildbotics stop [--timeout <seconds>] [--force]
-```
-
-- Sends SIGTERM and waits up to `--timeout` seconds (default: 30).
-- If it does not exit within the timeout and `--force` is specified, sends SIGKILL.
-- If no scheduler is running, it reports the state and cleans up a stale pidfile if present.
-
-For an immediate force stop:
-
-```bash
-guildbotics kill
-```
-
-This is equivalent to `guildbotics stop --force --timeout 0`.
 
 ### 6.3.2. How to Instruct the AI Agent
 
@@ -651,28 +642,6 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 - `intelligences/cli_agent_mapping.yml`: Default CLI agent selection
 - `intelligences/cli_agents/*.yml`: CLI agent scripts
 - `team/members/<person_id>/intelligences/`: Per-agent overrides
-
-## 7.3. Custom Commands
-
-Create custom commands in `~/.guildbotics/config/commands/` (or project-local commands directory):
-
-- **Markdown files** (`.md`): LLM prompts with optional frontmatter
-- **Python files** (`.py`): Custom logic with context injection
-- **Shell scripts** (`.sh`): Shell commands
-- **YAML files** (`.yml`): Workflow composition
-
-For detailed creation and operation, see the [Custom Command Development Guide](docs/custom_command_guide.en.md).
-
-**Quick example**:
-```markdown
-<!-- translate.md -->
-If the following text is in ${1}, translate it to ${2}; if it is in ${2}, translate it to ${1}:
-```
-
-Usage:
-```bash
-echo "Hello" | guildbotics run translate English Japanese
-```
 
 
 # 8. Troubleshooting
