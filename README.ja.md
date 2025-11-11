@@ -32,16 +32,14 @@ GuildBotics でできること:
   - [5.1. 初期セットアップ](#51-初期セットアップ)
   - [5.2. メンバーの追加](#52-メンバーの追加)
   - [5.3. コマンド実行](#53-コマンド実行)
-    - [カスタムコマンドを実行](#カスタムコマンドを実行)
-    - [スケジューラを起動](#スケジューラを起動)
-  - [5.4. スケジュール設定](#54-スケジュール設定)
-    - [person.yml での設定構造](#personyml-での設定構造)
-    - [ルーチンコマンドとスケジュールタスク](#ルーチンコマンドとスケジュールタスク)
-    - [Cron表記の形式](#cron表記の形式)
-    - [特殊なランダム化構文](#特殊なランダム化構文)
-    - [コマンドの配置](#コマンドの配置)
-    - [スケジューラの内部動作](#スケジューラの内部動作)
-    - [例: マルチエージェント・スケジュールワークフロー](#例-マルチエージェントスケジュールワークフロー)
+    - [5.3.1. コマンドの種類と配置方法](#531-コマンドの種類と配置方法)
+    - [5.3.2. コマンドの実行方法](#532-コマンドの実行方法)
+  - [5.4. スケジュール機能](#54-スケジュール機能)
+    - [5.4.1. ルーチンコマンド](#541-ルーチンコマンド)
+    - [5.4.2. スケジュールタスク](#542-スケジュールタスク)
+    - [5.4.3. Cron表記の詳細](#543-cron表記の詳細)
+    - [5.4.4. スケジューラの内部動作](#544-スケジューラの内部動作)
+  - [5.5. スケジュール設定の例](#55-スケジュール設定の例)
 - [6. GitHub統合の使用例](#6-github統合の使用例)
   - [6.1. 事前準備](#61-事前準備)
     - [6.1.1. Git環境](#611-git環境)
@@ -164,7 +162,52 @@ guildbotics config add
 
 ## 5.3. コマンド実行
 
-### カスタムコマンドを実行
+### 5.3.1. コマンドの種類と配置方法
+
+GuildBoticsでは、複数の種類のコマンドを実行できます。コマンドはプロジェクトの設定ディレクトリに配置します。
+
+**コマンドの種類**:
+
+1. **Markdownコマンド** (`.md`): LLMプロンプトとして実行
+   - フロントマターでモデルや出力形式を指定可能
+   - テキスト処理、翻訳、要約などに最適
+
+2. **Pythonスクリプト** (`.py`): コンテキスト注入付きで実行
+   - プロジェクト情報やチームメンバー情報にアクセス可能
+   - 複雑な処理やAPI連携に最適
+
+3. **Shellスクリプト** (`.sh`): シェルコマンドとして実行
+   - システムコマンドやツール呼び出しに最適
+
+4. **YAMLワークフロー** (`.yml`): 複数のコマンドを組み合わせて実行
+   - コマンドの合成や条件分岐に最適
+
+**コマンドの配置場所**:
+
+コマンドは以下のいずれかのディレクトリに配置します（優先順位順）:
+
+1. **ビルトインワークフロー**: パッケージ内の `guildbotics/templates/` に配置
+   - 例: `workflows/ticket_driven_workflow`
+
+2. **メンバー毎のコマンド**: `.guildbotics/config/team/members/<person_id>/commands/`
+   - 特定のメンバー専用のコマンド
+
+3. **プロジェクトローカルコマンド**: `.guildbotics/config/commands/`
+   - プロジェクト全体で共有するコマンド
+
+4. **グローバルコマンド**: `~/.guildbotics/config/commands/`
+   - 全プロジェクトで共有するコマンド
+
+**簡単な例** (`~/.guildbotics/config/commands/translate.md`):
+```markdown
+以下のテキストが ${1} の場合は ${2} に、${2} の場合は ${1} に翻訳してください:
+```
+
+詳細な作成方法は[カスタムコマンド](#73-カスタムコマンド)と[カスタムコマンド開発ガイド](docs/custom_command_guide.ja.md)を参照してください。
+
+### 5.3.2. コマンドの実行方法
+
+**手動実行**:
 
 ```bash
 guildbotics run <command_name> [args...]
@@ -175,9 +218,7 @@ guildbotics run <command_name> [args...]
 echo "Hello" | guildbotics run translate English Japanese
 ```
 
-カスタムコマンドの作成方法は[カスタムコマンド](#73-カスタムコマンド)と[カスタムコマンド開発ガイド](docs/custom_command_guide.ja.md)を参照してください。
-
-### スケジューラを起動
+**スケジューラでの自動実行**:
 
 ```bash
 guildbotics start [routine_commands...]
@@ -190,14 +231,20 @@ guildbotics start [routine_commands...]
 guildbotics stop
 ```
 
-## 5.4. スケジュール設定
+## 5.4. スケジュール機能
 
-GuildBoticsでは、チームメンバー毎に `person.yml` 設定ファイルを通じてスケジュールタスクを設定できます。これにより、AIエージェントが指定した時刻に自動的にコマンドを実行できるようになります。
+GuildBoticsでは、チームメンバー毎に `person.yml` 設定ファイルを通じてスケジュールタスクを設定できます。スケジューラは2種類のコマンド実行方式をサポートしています。
 
-### person.yml での設定構造
+### 5.4.1. ルーチンコマンド
 
-メンバーの `person.yml` ファイル（`.guildbotics/config/team/members/<person_id>/person.yml`）にスケジュール設定を追加します:
+**ルーチンコマンド** (`routine_commands`) は、ラウンドロビン方式で継続的に実行されるコマンドです。
 
+**特徴**:
+- スケジューラがアクティブな間、毎分実行
+- 複数のコマンドを指定した場合、順番に1つずつ実行
+- `person.yml` で指定しない場合、`guildbotics start` に渡されたデフォルトコマンドを使用
+
+**設定例**:
 ```yaml
 person_id: alice
 name: Alice
@@ -207,6 +254,27 @@ is_active: true
 routine_commands:
   - workflows/ticket_driven_workflow
   - workflows/custom_workflow
+```
+
+**典型的な用途**:
+- タスクボードの定期チェック（例: `workflows/ticket_driven_workflow`）
+- 継続的な監視タスク
+- イベント駆動型の処理
+
+### 5.4.2. スケジュールタスク
+
+**スケジュールタスク** (`task_schedules`) は、cron表記で定義された特定の時刻に実行されるコマンドです。
+
+**特徴**:
+- 毎分チェックされ、現在時刻がスケジュールに一致した時に実行
+- 1つのコマンドに複数のスケジュールパターンを設定可能
+- ランダム化構文（ジッタ）をサポート
+
+**設定例**:
+```yaml
+person_id: alice
+name: Alice
+is_active: true
 
 # 特定の時刻に実行するコマンドをスケジュール
 task_schedules:
@@ -219,20 +287,12 @@ task_schedules:
       - "0 0 1 * *"        # 毎月1日の午前0時
 ```
 
-### ルーチンコマンドとスケジュールタスク
+**典型的な用途**:
+- 定期的なクリーンアップ処理
+- バックアップやレポート生成
+- 定時実行が必要なタスク
 
-**ルーチンコマンド** (`routine_commands`):
-- ラウンドロビン方式で継続的に実行
-- スケジューラがアクティブな間、毎分実行
-- `person.yml` で指定しない場合、`guildbotics start` に渡されたデフォルトコマンドを使用
-- 例: `workflows/ticket_driven_workflow` は新しいタスクを繰り返しチェック
-
-**スケジュールタスク** (`task_schedules`):
-- cron表記で定義された特定の時刻に実行
-- 各タスクはコマンドと1つ以上のスケジュールパターンを持つ
-- 毎分チェックされ、現在時刻がスケジュールに一致した時に実行
-
-### Cron表記の形式
+### 5.4.3. Cron表記の詳細
 
 GuildBoticsは標準的な5フィールドのcron表記を使用します:
 
@@ -257,9 +317,9 @@ schedules:
   - "0 22 * * 1-5"       # 平日の午後10:00
 ```
 
-### 特殊なランダム化構文
+**ランダム化構文（ジッタ）**:
 
-GuildBoticsは標準cron記法を拡張し、ランダム化構文（ジッタ）をサポートしています:
+GuildBoticsは標準cron記法を拡張し、ランダム化をサポートしています:
 
 - `?`: デフォルト範囲内のランダムな値
 - `?(min-max)`: 指定範囲内のランダムな値
@@ -272,30 +332,38 @@ schedules:
   - "0 ?(9-17) * * 1-5"  # 平日の9-17時のランダムな時刻（00分）
 ```
 
-これは以下の用途に便利です:
+**ランダム化の用途**:
 - 複数エージェント間での同時実行を回避
 - 人間らしい不規則なタイミングをシミュレート
 - 時間枠全体での負荷分散
 
-### コマンドの配置
+### 5.4.4. スケジューラの内部動作
 
-スケジュールで参照されるコマンドは以下のいずれかです:
+スケジューラの動作（`guildbotics/drivers/task_scheduler.py` および `guildbotics/entities/task.py` より）:
 
-1. **ビルトインワークフロー**: パッケージ内の `guildbotics/templates/` に配置
-   - 例: `workflows/ticket_driven_workflow`
+**アーキテクチャ**:
+1. **person毎のワーカースレッド**: アクティブな各チームメンバーに専用のワーカースレッドが割り当てられます
+2. **分単位のチェックサイクル**: 毎分、各ワーカースレッドは以下を行います:
+   - 現在のpersonの全 `task_schedules` をチェック
+   - スケジュールが現在時刻に一致するコマンドを実行
+   - ラウンドロビン順で1つの `routine_command` を実行
 
-2. **カスタムコマンド**: 設定ディレクトリに配置
-   - グローバル: `~/.guildbotics/config/commands/`
-   - プロジェクトローカル: `.guildbotics/config/commands/`
-   - メンバー毎: `.guildbotics/config/team/members/<person_id>/commands/`
+**ランダム化の処理**:
+1. 初期化時に、ランダム化されたスケジュールの次回実行時刻を計算
+2. `?` フィールドについては、境界内でランダムな値をサンプリング
+3. 各実行境界に達した後、再サンプリング
 
-3. **コマンドの種類**:
-   - `.md` ファイル: LLMプロンプト（Markdownコマンド）
-   - `.py` ファイル: コンテキスト注入付きPythonスクリプト
-   - `.sh` ファイル: Shellスクリプト
-   - `.yml` ファイル: YAMLワークフロー合成
+**エラーハンドリング**:
+- 連続したコマンド失敗（デフォルト: 3回）でワーカースレッドを停止
+- エラーログは `~/.guildbotics/data/error.log` に記録
 
-**カスタムスケジュールコマンドの例** (`~/.guildbotics/config/commands/workflows/daily_report.md`):
+## 5.5. スケジュール設定の例
+
+このセクションでは、実際のスケジュール設定の例を紹介します。
+
+### カスタムスケジュールコマンドの作成
+
+**日次レポート生成コマンドの例** (`~/.guildbotics/config/commands/workflows/daily_report.md`):
 ```markdown
 ---
 model: gemini-2.0-flash-exp
@@ -308,22 +376,7 @@ model: gemini-2.0-flash-exp
 markdown形式で出力してください。
 ```
 
-### スケジューラの内部動作
-
-スケジューラの動作（`guildbotics/drivers/task_scheduler.py` より）:
-
-1. **person毎のワーカースレッド**: アクティブな各チームメンバーに専用のワーカースレッドが割り当てられます
-2. **分単位のチェックサイクル**: 毎分、スケジューラは以下を行います:
-   - 現在のpersonの全 `task_schedules` をチェック
-   - スケジュールが現在時刻に一致するコマンドを実行
-   - ラウンドロビン順で1つの `routine_command` を実行
-3. **ランダム化の処理**（`guildbotics/entities/task.py` より）:
-   - 初期化時に、ランダム化されたスケジュールの次回実行時刻を計算
-   - `?` フィールドについては、境界内でランダムな値をサンプリング
-   - 各実行境界に達した後、再サンプリング
-4. **エラーハンドリング**: 連続したコマンド失敗（デフォルト: 3回）でワーカースレッドを停止
-
-### 例: マルチエージェント・スケジュールワークフロー
+### マルチエージェント・スケジュールワークフローの例
 
 **シナリオ**: 異なるスケジュールを持つ2つのエージェント
 
@@ -332,8 +385,12 @@ markdown形式で出力してください。
 person_id: agent1
 name: Agent One
 is_active: true
+
+# チケット駆動ワークフローを定期実行
 routine_commands:
   - workflows/ticket_driven_workflow
+
+# 平日午前9時に朝会レポートを生成
 task_schedules:
   - command: workflows/morning_standup
     schedules:
@@ -345,8 +402,12 @@ task_schedules:
 person_id: agent2
 name: Agent Two
 is_active: true
+
+# コードレビューチェックを定期実行
 routine_commands:
   - workflows/code_review_check
+
+# 週次・月次のメンテナンスタスク
 task_schedules:
   - command: workflows/cleanup_old_branches
     schedules:
@@ -356,12 +417,56 @@ task_schedules:
       - "?(0-59) 10 1 * *"  # 毎月1日の午前10時台のランダムな分
 ```
 
-両方のエージェントを起動:
+**両方のエージェントを起動**:
 ```bash
 guildbotics start
 ```
 
 両エージェントは並行して動作し、それぞれがルーチンコマンドを継続的に実行し、スケジュールタスクを指定された時刻に実行します。
+
+### 複数スケジュールパターンの例
+
+1つのコマンドに複数のスケジュールを設定する例:
+
+```yaml
+person_id: maintenance_bot
+name: Maintenance Bot
+is_active: true
+
+task_schedules:
+  # クリーンアップを平日の午前2時と週末の午前0時に実行
+  - command: workflows/cleanup
+    schedules:
+      - "0 2 * * 1-5"     # 平日午前2:00
+      - "0 0 * * 0,6"     # 週末午前0:00
+
+  # バックアップを毎日の午前3時と月初の午前0時に実行
+  - command: workflows/backup
+    schedules:
+      - "0 3 * * *"       # 毎日午前3:00
+      - "0 0 1 * *"       # 毎月1日の午前0時（月次バックアップ）
+```
+
+### ランダム化を活用した例
+
+複数エージェント間での競合を避けるためのランダム化設定:
+
+```yaml
+person_id: agent_alpha
+name: Agent Alpha
+is_active: true
+
+task_schedules:
+  # 午前9時台のランダムな時刻にチェックを実行
+  - command: workflows/morning_check
+    schedules:
+      - "?(0-59) 9 * * 1-5"  # 平日の9:00-9:59のランダムな分
+
+  # 日中の時間帯にランダムにモニタリングを実行
+  - command: workflows/health_check
+    schedules:
+      - "0 ?(9-17) * * *"    # 毎日9-17時のランダムな時刻（00分）
+```
 
 # 6. GitHub統合の使用例
 
