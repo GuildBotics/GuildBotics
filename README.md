@@ -34,6 +34,14 @@ GuildBotics enables you to:
   - [5.3. Run Commands](#53-run-commands)
     - [Run a custom command](#run-a-custom-command)
     - [Start the scheduler](#start-the-scheduler)
+  - [5.4. Schedule Configuration](#54-schedule-configuration)
+    - [Configuration Structure in person.yml](#configuration-structure-in-personyml)
+    - [Routine Commands vs Scheduled Tasks](#routine-commands-vs-scheduled-tasks)
+    - [Cron Expression Format](#cron-expression-format)
+    - [Special Randomization Syntax](#special-randomization-syntax)
+    - [Command Placement](#command-placement)
+    - [How Scheduling Works Internally](#how-scheduling-works-internally)
+    - [Example: Multi-Agent Scheduled Workflow](#example-multi-agent-scheduled-workflow)
 - [6. GitHub Integration Example](#6-github-integration-example)
   - [6.1. Prerequisites](#61-prerequisites)
     - [6.1.1. Git Environment](#611-git-environment)
@@ -181,6 +189,179 @@ To stop:
 ```bash
 guildbotics stop
 ```
+
+## 5.4. Schedule Configuration
+
+GuildBotics allows you to configure scheduled tasks for each team member via the `person.yml` configuration file. This enables AI agents to execute commands automatically at specified times.
+
+### Configuration Structure in person.yml
+
+Add schedule settings to your member's `person.yml` file (`.guildbotics/config/team/members/<person_id>/person.yml`):
+
+```yaml
+person_id: alice
+name: Alice
+is_active: true
+
+# Override default routine commands (optional)
+routine_commands:
+  - workflows/ticket_driven_workflow
+  - workflows/custom_workflow
+
+# Schedule commands to run at specific times
+task_schedules:
+  - command: workflows/cleanup
+    schedules:
+      - "0 2 * * *"        # Daily at 2:00 AM
+      - "30 14 * * 5"      # Every Friday at 14:30
+  - command: workflows/backup
+    schedules:
+      - "0 0 1 * *"        # First day of every month at midnight
+```
+
+### Routine Commands vs Scheduled Tasks
+
+**Routine Commands** (`routine_commands`):
+- Execute continuously in a round-robin fashion
+- Run every minute when the scheduler is active
+- If not specified in `person.yml`, uses the default commands passed to `guildbotics start`
+- Example: `workflows/ticket_driven_workflow` checks for new tasks repeatedly
+
+**Scheduled Tasks** (`task_schedules`):
+- Execute at specific times defined by cron expressions
+- Each task has a command and one or more schedule patterns
+- Checked every minute; executed when the current time matches the schedule
+
+### Cron Expression Format
+
+GuildBotics uses standard 5-field cron expressions:
+
+```
+* * * * *
+│ │ │ │ │
+│ │ │ │ └─── Day of week (0-6, Sunday=0)
+│ │ │ └───── Month (1-12)
+│ │ └─────── Day of month (1-31)
+│ └───────── Hour (0-23)
+└─────────── Minute (0-59)
+```
+
+**Common Examples**:
+```yaml
+schedules:
+  - "0 9 * * *"          # Every day at 9:00 AM
+  - "*/15 * * * *"       # Every 15 minutes
+  - "0 */2 * * *"        # Every 2 hours
+  - "0 0 * * 0"          # Every Sunday at midnight
+  - "30 8 1,15 * *"      # 1st and 15th of each month at 8:30 AM
+  - "0 22 * * 1-5"       # Weekdays at 10:00 PM
+```
+
+### Special Randomization Syntax
+
+GuildBotics extends standard cron with randomization syntax for jitter:
+
+- `?`: Random value within the default range
+- `?(min-max)`: Random value within the specified range
+
+**Examples**:
+```yaml
+schedules:
+  - "? 9 * * *"          # Random minute between 9:00-9:59 AM daily
+  - "?(0-30) 14 * * *"   # Random minute between 14:00-14:30 daily
+  - "0 ?(9-17) * * 1-5"  # Weekdays at random hour 9-17, on the hour
+```
+
+This is useful for:
+- Avoiding simultaneous execution across multiple agents
+- Simulating human-like irregular timing
+- Load distribution across time windows
+
+### Command Placement
+
+Commands referenced in schedules can be:
+
+1. **Built-in workflows**: Located in `guildbotics/templates/` within the package
+   - Example: `workflows/ticket_driven_workflow`
+
+2. **Custom commands**: Place in your configuration directory
+   - Global: `~/.guildbotics/config/commands/`
+   - Project-local: `.guildbotics/config/commands/`
+   - Per-member: `.guildbotics/config/team/members/<person_id>/commands/`
+
+3. **Command types**:
+   - `.md` files: LLM prompts (Markdown commands)
+   - `.py` files: Python scripts with context injection
+   - `.sh` files: Shell scripts
+   - `.yml` files: YAML workflow compositions
+
+**Example custom scheduled command** (`~/.guildbotics/config/commands/workflows/daily_report.md`):
+```markdown
+---
+model: gemini-2.0-flash-exp
+---
+Generate a daily report summarizing:
+- Tasks completed yesterday
+- Tasks in progress
+- Blocked tasks requiring attention
+
+Format the output as a markdown document.
+```
+
+### How Scheduling Works Internally
+
+The scheduler behavior (from `guildbotics/drivers/task_scheduler.py`):
+
+1. **Per-person worker threads**: Each active team member gets a dedicated worker thread
+2. **Minute-based check cycle**: Every minute, the scheduler:
+   - Checks all `task_schedules` for the current person
+   - Executes commands whose schedule matches the current time
+   - Executes one `routine_command` in round-robin order
+3. **Randomization handling** (from `guildbotics/entities/task.py`):
+   - On initialization, calculates the next execution time for randomized schedules
+   - For `?` fields, samples a random value within the boundary
+   - Re-samples after each execution boundary is reached
+4. **Error handling**: Consecutive command failures (default: 3) stop the worker thread
+
+### Example: Multi-Agent Scheduled Workflow
+
+**Scenario**: Two agents with different schedules
+
+**Agent 1** (`.guildbotics/config/team/members/agent1/person.yml`):
+```yaml
+person_id: agent1
+name: Agent One
+is_active: true
+routine_commands:
+  - workflows/ticket_driven_workflow
+task_schedules:
+  - command: workflows/morning_standup
+    schedules:
+      - "0 9 * * 1-5"     # Weekday mornings at 9:00 AM
+```
+
+**Agent 2** (`.guildbotics/config/team/members/agent2/person.yml`):
+```yaml
+person_id: agent2
+name: Agent Two
+is_active: true
+routine_commands:
+  - workflows/code_review_check
+task_schedules:
+  - command: workflows/cleanup_old_branches
+    schedules:
+      - "0 0 * * 0"       # Sunday midnight
+  - command: workflows/dependency_update_check
+    schedules:
+      - "?(0-59) 10 1 * *"  # First of month, random minute in 10 AM hour
+```
+
+Start both agents:
+```bash
+guildbotics start
+```
+
+Both agents will run concurrently, each executing their routine commands continuously and their scheduled tasks at the specified times.
 
 # 6. GitHub Integration Example
 
