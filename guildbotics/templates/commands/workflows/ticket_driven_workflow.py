@@ -9,6 +9,8 @@ from guildbotics.runtime import Context
 from guildbotics.templates.commands.workflows.modes.util import checkout
 from guildbotics.utils.i18n_tool import t
 
+COMMENT_MODE = "comment"
+
 
 async def _move_task_to_in_progress_if_ready(
     context: Context, ticket_manager: TicketManager
@@ -46,8 +48,11 @@ async def _build_task_error_message(context) -> str:
 
 
 async def _main(context: Context, ticket_manager: TicketManager):
-    # If the task is ready, move it to "In Progress".
-    await _move_task_to_in_progress_if_ready(context, ticket_manager)
+    if context.task.assignee != context.person.person_id:
+        context.task.mode = COMMENT_MODE
+    else:
+        # If the task is ready, move it to "In Progress".
+        await _move_task_to_in_progress_if_ready(context, ticket_manager)
 
     # Prepare the input for the mode logic from the task details.
     messages = []
@@ -102,9 +107,7 @@ async def _main(context: Context, ticket_manager: TicketManager):
         else:
             if not context.task.mode:
                 available_modes = Labels(Task.get_available_modes())
-                context.task.mode = await identify_mode(
-                    context, available_modes, input
-                )
+                context.task.mode = await identify_mode(context, available_modes, input)
                 await ticket_manager.update_ticket(context.task)
 
             command_name = _mode_to_command_name(context.task.mode)
@@ -196,7 +199,7 @@ def _mode_to_command_name(mode: str | None) -> str:
         str: The command name.
     """
     if not mode:
-        mode = "comment"
+        mode = COMMENT_MODE
 
     return f"workflows/modes/{mode}_mode"
 
