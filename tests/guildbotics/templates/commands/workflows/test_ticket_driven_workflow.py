@@ -33,6 +33,11 @@ class StubContext:
     def __init__(self, task: Task, tm: StubTicketManager):
         self.task = task
         self._tm = tm
+
+        class _PersonStub:
+            person_id = None
+
+        self.person = _PersonStub()
         self.team = object()  # not used when ModeBase.get_available_modes is mocked
         self._invoke_handler = None
 
