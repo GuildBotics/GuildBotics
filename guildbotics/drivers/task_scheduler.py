@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import datetime
 import threading
 
@@ -32,12 +33,16 @@ class TaskScheduler:
         }
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._service_threads: list[threading.Thread] = []
+        # Allow long-running commands to observe shutdown intent.
+        self.context.shutdown_event = self._stop_event
 
     def start(self):
         """
         Start the task scheduler.
         """
         threads: list[threading.Thread] = []
+        service_threads: list[threading.Thread] = []
         for p, scheduled_tasks in self.scheduled_tasks_list.items():
             if not p.is_active:
                 continue
@@ -49,9 +54,11 @@ class TaskScheduler:
             )
             thread.start()
             threads.append(thread)
+            service_threads.extend(self._start_service_workers(p))
         self._threads = threads
+        self._service_threads = service_threads
         # Wait on all threads (they run indefinitely)
-        for thread in threads:
+        for thread in threads + service_threads:
             thread.join()
 
     def shutdown(self, graceful: bool = True) -> None:
@@ -66,6 +73,10 @@ class TaskScheduler:
         for t in list(self._threads):
             if t.is_alive():
                 t.join()
+        for t in list(self._service_threads):
+            if t.is_alive():
+                t.join()
+        self._service_threads.clear()
 
     def _process_tasks_list(
         self, person: Person, scheduled_tasks: list[ScheduledCommand]
@@ -146,6 +157,76 @@ class TaskScheduler:
                 )
                 self._sleep_interruptible(sleep_sec)
             self.last_checked = start_time
+
+    def _start_service_workers(self, person: Person) -> list[threading.Thread]:
+        """Launch service command workers for the given person."""
+        threads: list[threading.Thread] = []
+        for index, command in enumerate(person.service_commands):
+            thread = threading.Thread(
+                target=self._run_service_worker,
+                args=(person, command),
+                name=f"{person.person_id}:service:{index}",
+            )
+            thread.start()
+            threads.append(thread)
+            self._sleep_interruptible(0.1)
+        return threads
+
+    def _run_service_worker(self, person: Person, command: str) -> None:
+        """Run a long-lived service command with restart/backoff."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._service_loop(person, command))
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+
+    async def _service_loop(self, person: Person, command: str) -> None:
+        backoff = 1.0
+        while not self._stop_event.is_set():
+            context = self.context.clone_for(person)
+            context.shutdown_event = self._stop_event
+            task = asyncio.create_task(run_command(context, command, "service"))
+            ok = await self._wait_for_service_task(task, context, command)
+            if self._stop_event.is_set():
+                break
+            if ok:
+                backoff = 1.0
+            else:
+                backoff = min(backoff * 2, 60.0)
+            await self._async_sleep_interruptible(backoff)
+
+    async def _wait_for_service_task(
+        self, task: asyncio.Task, context: Context, command: str
+    ) -> bool:
+        """Wait for a service task or cancel it on shutdown."""
+        while not task.done() and not self._stop_event.is_set():
+            await asyncio.sleep(1)
+
+        if self._stop_event.is_set() and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            return False
+
+        if task.cancelled():
+            return False
+        if task.exception():
+            context.logger.error(
+                f"Service command '{context.person.person_id}:{command}' failed: {task.exception()}"
+            )
+            return False
+        result = task.result()
+        return bool(result)
+
+    async def _async_sleep_interruptible(self, seconds: float) -> None:
+        """Async sleep that wakes up early on shutdown."""
+        remaining = seconds
+        while remaining > 0 and not self._stop_event.is_set():
+            step = min(1.0, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
 
     def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep in small steps so the stop event can interrupt waits."""

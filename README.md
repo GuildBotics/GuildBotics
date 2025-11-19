@@ -42,6 +42,7 @@ GuildBotics enables you to:
     - [5.4.2. Scheduled Tasks](#542-scheduled-tasks)
     - [5.4.3. Cron Expression Format](#543-cron-expression-format)
     - [5.4.4. How Scheduling Works Internally](#544-how-scheduling-works-internally)
+    - [5.4.5. Service Commands (Long-Running)](#545-service-commands-long-running)
   - [5.5. Schedule Configuration Examples](#55-schedule-configuration-examples)
     - [Multi-Agent Scheduled Workflow](#multi-agent-scheduled-workflow)
     - [Multiple Schedule Patterns](#multiple-schedule-patterns)
@@ -384,6 +385,22 @@ The scheduler behavior (from `guildbotics/drivers/task_scheduler.py` and `guildb
 **Error handling**:
 - Consecutive command failures (default: 3) stop the worker thread
 - Error logs are recorded in `~/.guildbotics/data/error.log`
+
+### 5.4.5. Service Commands (Long-Running)
+
+- Define `service_commands` per person in `person.yml` to run always-on processes (e.g., WebSocket clients). Each command runs in its own thread/async loop and is auto-restarted with backoff on errors.
+- Stop them with `guildbotics stop` / `guildbotics kill`, which signals graceful shutdown to the service commands.
+- Slack example (Socket Mode):
+
+```yaml
+# .guildbotics/config/team/members/<person_id>/person.yml
+service_commands:
+  - services/slack_socket_service workflow=workflows/ticket_driven_workflow
+```
+
+Person-scoped environment variables:
+- `SLACK_APP_TOKEN` (xapp-...) and `SLACK_BOT_TOKEN` (xoxb-...) must be set (use `.env` with `PERSONID_SLACK_APP_TOKEN`, etc.).
+- Optional: env `SLACK_MESSAGE_COMMAND` / `PERSONID_SLACK_MESSAGE_COMMAND` overrides the default message/app_mention command if inline param is not set; default is `workflows/ticket_driven_workflow`.
 
 ## 5.5. Schedule Configuration Examples
 

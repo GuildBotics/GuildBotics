@@ -303,6 +303,10 @@ class Person(BaseModel):
     routine_commands: list[str] = Field(
         default_factory=list, description="A list of routine commands for the person."
     )
+    service_commands: list[str] = Field(
+        default_factory=list,
+        description="Long-running services to start (may include inline params).",
+    )
 
     def __str__(self):
         return f"Person(person_id={self.person_id}, name={self.name})"
