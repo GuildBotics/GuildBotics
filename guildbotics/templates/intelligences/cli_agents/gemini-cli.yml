@@ -2,7 +2,7 @@ env:
 script: |
   res=$(mktemp)
   log=$(mktemp)
-  cat "$PROMPT_FILE" | gemini --sandbox --yolo > "$res" 2> "$log"
+  gemini -s -y "$(cat "$PROMPT_FILE")" > "$res" 2> "$log"
   cat "$log" >&2
   cat "$res"
   rm -f "$res" "$log"
