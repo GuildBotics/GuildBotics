@@ -1,5 +1,6 @@
 from copy import deepcopy
 from logging import Logger
+from threading import Event
 from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel
@@ -31,6 +32,7 @@ class Context:
         person: Person,
         task: Task,
         message: str,
+        shutdown_event: Event | None = None,
     ):
         """
         Initialize the WorkflowContext with a team, loader factory, and integration factory.
@@ -56,6 +58,8 @@ class Context:
         self.pipe = message
         self.shared_state: dict[str, Any] = {}
         self._invoker: Callable[[str, Any], Awaitable[Any]] | None = None
+        # When set, long-running commands should monitor and exit on shutdown.
+        self.shutdown_event: Event | None = shutdown_event
 
     @property
     def language_code(self) -> str:
@@ -90,6 +94,7 @@ class Context:
             Person(person_id="default_person", name="Default Person"),
             Task(title="Default Task", description="This is a default task."),
             message,
+            shutdown_event=None,
         )
 
     def clone_for(self, person: Person) -> "Context":
@@ -108,6 +113,7 @@ class Context:
             person,
             self.task,
             self.pipe,
+            shutdown_event=self.shutdown_event,
         )
 
     def update_task(self, task: Task) -> None:
