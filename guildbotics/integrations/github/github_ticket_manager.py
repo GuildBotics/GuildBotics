@@ -585,7 +585,14 @@ class GitHubTicketManager(TicketManager):
         return not comments.is_replied
 
     def _strip_signature_line(self, text: str, signature: str) -> str:
-        """Remove the trailing signature line if it matches the provided signature."""
+        """
+        Remove the trailing signature line if it matches the provided signature.
+        Args:
+            text (str): The original text.
+            signature (str): The signature line to remove.
+        Returns:
+            str: The text without the signature line.
+        """
         stripped = text.rstrip()
         if not stripped:
             return ""
@@ -597,7 +604,14 @@ class GitHubTicketManager(TicketManager):
     def _text_mentions_me(
         self, text: str | None, *, ignore_signature: bool = False
     ) -> bool:
-        """Return True when the given text contains a mention of the current user."""
+        """
+        Return True when the given text contains a mention of the current user.
+        Args:
+            text (str | None): The text to check for mentions.
+            ignore_signature (bool): Whether to ignore the signature line.
+        Returns:
+            bool: True if the text mentions the user, False otherwise.
+        """
         if not text:
             return False
 
@@ -608,22 +622,16 @@ class GitHubTicketManager(TicketManager):
         if self._mention_token and self._mention_token in content:
             return True
 
-        if self.username:
+        if not is_proxy_agent(self.person) and self._username_lower:
             mention_re = (
                 r"(^|[^A-Za-z0-9_])@"
-                + re.escape(self.username)
+                + re.escape(self._username_lower)
                 + r"(?=$|[^A-Za-z0-9-])"
             )
             if re.search(mention_re, text, flags=re.IGNORECASE):
                 return True
 
         return False
-
-    def _is_self_comment(self, login: str | None, author_type: str) -> bool:
-        """Determine whether a comment originates from the authenticated user."""
-        if login and login.lower() == self._username_lower:
-            return True
-        return author_type == Message.ASSISTANT
 
     async def get_ticket(self, column_name: str, all_items: list[dict]) -> Task | None:
         """
@@ -686,7 +694,7 @@ class GitHubTicketManager(TicketManager):
             # Check assignees
             if not is_proxy_agent(self.person) and assignees:
                 for a in assignees:
-                    if a.get("login") == self.username:
+                    if a.get("login") == self._username_lower:
                         is_assigned = True
                         assignee = self.person.person_id
                         break
@@ -866,7 +874,7 @@ class GitHubTicketManager(TicketManager):
         # Prepend mention to the issue author unless we are the author.
         # Avoid adding only when the body already mentions the issue author
         # (case-insensitive) to prevent duplicates.
-        if author_login and author_login != self.username:
+        if author_login and author_login != self._username_lower:
             # Explicitly check if the issue author is already mentioned.
             # GitHub usernames are case-insensitive, so we use re.IGNORECASE.
             author_mention_re = (
