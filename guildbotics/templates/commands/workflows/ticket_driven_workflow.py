@@ -1,3 +1,4 @@
+import re
 import shlex
 
 from guildbotics.entities.message import Message
@@ -8,6 +9,8 @@ from guildbotics.intelligences.functions import identify_mode, identify_role, to
 from guildbotics.runtime import Context
 from guildbotics.templates.commands.workflows.modes.util import checkout
 from guildbotics.utils.i18n_tool import t
+
+COMMENT_MODE = "comment"
 
 
 async def _move_task_to_in_progress_if_ready(
@@ -45,9 +48,36 @@ async def _build_task_error_message(context) -> str:
         return error_text
 
 
+def _should_react_to_ticket(
+    context: Context, task: Task, messages: list[Message]
+) -> bool:
+    """Determine whether the agent should react to the current ticket."""
+    is_my_ticket = task.assignee == context.person.person_id
+
+    if task.status == Task.RETROSPECTIVE:
+        return is_my_ticket
+
+    if not messages or len(messages) <= 1:
+        return is_my_ticket
+
+    person_lower = (context.person.person_id or "").casefold()
+    mentions = {
+        match.group(1).casefold()
+        for match in re.finditer(r"(?<!\S)(?:⚙|@)([\w.-]+)", messages[-1].content or "")
+    }
+    mentions_me = bool(person_lower and person_lower in mentions)
+    mentions_others = any(mention != person_lower for mention in mentions)
+
+    if is_my_ticket:
+        return (not mentions_others) or mentions_me
+    else:
+        return mentions_me
+
+
 async def _main(context: Context, ticket_manager: TicketManager):
-    # If the task is ready, move it to "In Progress".
-    await _move_task_to_in_progress_if_ready(context, ticket_manager)
+    assigned_to_me = context.task.assignee == context.person.person_id
+    if not assigned_to_me:
+        context.task.mode = COMMENT_MODE
 
     # Prepare the input for the mode logic from the task details.
     messages = []
@@ -77,6 +107,13 @@ async def _main(context: Context, ticket_manager: TicketManager):
         for comment in context.task.comments:
             messages.append(comment)
 
+    should_react = _should_react_to_ticket(context, context.task, messages)
+    if not should_react:
+        return
+
+    if assigned_to_me:
+        await _move_task_to_in_progress_if_ready(context, ticket_manager)
+
     if not context.task.role:
         context.task.role = await identify_role(context, input)
         context.update_task(context.task)
@@ -102,9 +139,7 @@ async def _main(context: Context, ticket_manager: TicketManager):
         else:
             if not context.task.mode:
                 available_modes = Labels(Task.get_available_modes())
-                context.task.mode = await identify_mode(
-                    context, available_modes, input
-                )
+                context.task.mode = await identify_mode(context, available_modes, input)
                 await ticket_manager.update_ticket(context.task)
 
             command_name = _mode_to_command_name(context.task.mode)
@@ -196,7 +231,7 @@ def _mode_to_command_name(mode: str | None) -> str:
         str: The command name.
     """
     if not mode:
-        mode = "comment"
+        mode = COMMENT_MODE
 
     return f"workflows/modes/{mode}_mode"
 

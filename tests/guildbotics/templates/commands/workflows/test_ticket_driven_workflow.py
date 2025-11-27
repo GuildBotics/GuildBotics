@@ -33,6 +33,11 @@ class StubContext:
     def __init__(self, task: Task, tm: StubTicketManager):
         self.task = task
         self._tm = tm
+
+        class _PersonStub:
+            person_id = None
+
+        self.person = _PersonStub()
         self.team = object()  # not used when ModeBase.get_available_modes is mocked
         self._invoke_handler = None
 
@@ -97,6 +102,14 @@ async def test_run_transitions_ready_to_in_progress_and_handles_asking(monkeypat
         fake_checkout,
     )
 
+    async def fake_should_react(context, task, messages):
+        return True
+
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.ticket_driven_workflow._should_react_to_ticket",
+        fake_should_react,
+    )
+
     # Set up invoke handler to return ASKING response
     async def invoke_handler(command_name, *args, **kwargs):
         # Expect command_name to be "workflows/modes/comment_mode"
@@ -148,6 +161,14 @@ async def test_run_completes_and_moves_in_progress_to_in_review(monkeypatch):
         fake_checkout,
     )
 
+    async def fake_should_react(context, task, messages):
+        return True
+
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.ticket_driven_workflow._should_react_to_ticket",
+        fake_should_react,
+    )
+
     # Set up invoke handler to return DONE response
     async def invoke_handler(command_name, *args, **kwargs):
         # Expect command_name to be "workflows/modes/comment_mode"
@@ -163,3 +184,26 @@ async def test_run_completes_and_moves_in_progress_to_in_review(monkeypatch):
     assert len(tm.commented) == 1 and tm.commented[0][1] == "done msg"
     assert len(tm.moved) == 1 and tm.moved[0][1] == Task.IN_REVIEW
     assert ctx.task.status == Task.IN_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_run_skips_when_reaction_not_required(monkeypatch):
+    task = Task(id="3", title="T3", description="D3", status=Task.READY)
+    tm = StubTicketManager(task)
+    ctx = StubContext(task, tm)
+
+    def fake_should_react(context, task, messages):
+        return False
+
+    monkeypatch.setattr(
+        "guildbotics.templates.commands.workflows.ticket_driven_workflow._should_react_to_ticket",
+        fake_should_react,
+    )
+
+    # Act
+    await ticket_driven_workflow.main(ctx)
+
+    # Assert nothing happened because the workflow exited early
+    assert tm.moved == []
+    assert tm.updated == []
+    assert tm.commented == []

@@ -72,6 +72,10 @@ class Task(BaseModel):
     repository: str | None = Field(
         default=None, description="The git repository associated with the task."
     )
+    assignee: str | None = Field(
+        default=None,
+        description="The person_id of the agent currently assigned to the task, if any.",
+    )
 
     def __lt__(self, other: "Task") -> bool:
         """

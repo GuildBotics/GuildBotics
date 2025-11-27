@@ -49,6 +49,7 @@ class TaskScheduler:
             )
             thread.start()
             threads.append(thread)
+            self._sleep_interruptible(2)
         self._threads = threads
         # Wait on all threads (they run indefinitely)
         for thread in threads:

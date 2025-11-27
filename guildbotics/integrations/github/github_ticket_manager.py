@@ -60,6 +60,8 @@ class GitHubTicketManager(TicketManager):
         self.url = str(config["url"])
         self.client: AsyncClient | None = None
         self.username = get_github_username(person, strict=True)
+        self._username_lower = self.username.lower() if self.username else ""
+        self._mention_token = f"⚙{self.person.person_id}"
 
         self.default_status_map = {
             Task.NEW: "New",
@@ -394,7 +396,13 @@ class GitHubTicketManager(TicketManager):
     def _to_task_field(self, name: str) -> str:
         return name.lower().replace(" ", "_")  # e.g., "Due Date" -> "due_date"
 
-    def _issue_to_task(self, issue: dict, status: str, field_values: dict) -> Task:
+    def _issue_to_task(
+        self,
+        issue: dict,
+        status: str,
+        field_values: dict,
+        assignee: str | None,
+    ) -> Task:
         """
         Convert a GitHub Issue JSON to a Task instance.
 
@@ -402,6 +410,7 @@ class GitHubTicketManager(TicketManager):
             issue (dict): The issue JSON payload.
             status (str): The current status.
             field_values (dict): Custom field values.
+            assignee (str | None): The assignee of the task.
 
         Returns:
             Task: The converted Task object.
@@ -413,6 +422,7 @@ class GitHubTicketManager(TicketManager):
             "status": status,
             "created_at": issue["createdAt"],
             "repository": f"{issue["repository"]["name"]}",
+            "assignee": assignee,
         }
 
         # Extract custom field values
@@ -574,6 +584,55 @@ class GitHubTicketManager(TicketManager):
         comments = await hosting_service.get_pull_request_comments(url)
         return not comments.is_replied
 
+    def _strip_signature_line(self, text: str, signature: str) -> str:
+        """
+        Remove the trailing signature line if it matches the provided signature.
+        Args:
+            text (str): The original text.
+            signature (str): The signature line to remove.
+        Returns:
+            str: The text without the signature line.
+        """
+        stripped = text.rstrip()
+        if not stripped:
+            return ""
+        lines = stripped.splitlines()
+        if lines and lines[-1].strip() == signature:
+            return "\n".join(lines[:-1])
+        return text
+
+    def _text_mentions_me(
+        self, text: str | None, *, ignore_signature: bool = False
+    ) -> bool:
+        """
+        Return True when the given text contains a mention of the current user.
+        Args:
+            text (str | None): The text to check for mentions.
+            ignore_signature (bool): Whether to ignore the signature line.
+        Returns:
+            bool: True if the text mentions the user, False otherwise.
+        """
+        if not text:
+            return False
+
+        content = text
+        if ignore_signature:
+            content = self._strip_signature_line(content, self._mention_token)
+
+        if self._mention_token and self._mention_token in content:
+            return True
+
+        if not is_proxy_agent(self.person) and self._username_lower:
+            mention_re = (
+                r"(^|[^A-Za-z0-9_])@"
+                + re.escape(self._username_lower)
+                + r"(?=$|[^A-Za-z0-9-])"
+            )
+            if re.search(mention_re, text, flags=re.IGNORECASE):
+                return True
+
+        return False
+
     async def get_ticket(self, column_name: str, all_items: list[dict]) -> Task | None:
         """
         Retrieve a ticket from a specific column by name, fetching all pages of items.
@@ -589,7 +648,7 @@ class GitHubTicketManager(TicketManager):
 
         # process each item in the specified column
         tasks: list[Task] = []
-        issue_number_map = {}
+        task_metadata: dict[str, dict[str, Any]] = {}
         for it in all_items:
             # extract status and custom field values
             status = None
@@ -630,41 +689,52 @@ class GitHubTicketManager(TicketManager):
                 continue
             assignees = issue.get("assignees", {}).get("nodes", [])
             is_assigned = False
+            assignee: str | None = None
 
             # Check assignees
             if not is_proxy_agent(self.person) and assignees:
-                for assignee in assignees:
-                    if assignee.get("login") == self.username:
+                for a in assignees:
+                    if a.get("login") == self._username_lower:
                         is_assigned = True
+                        assignee = self.person.person_id
                         break
 
             # Check custom fields if not assigned via assignees
             if not is_assigned:
-                signature = get_proxy_agent_signature(self.person)
                 for field_name, value in field_values.items():
                     if (
                         field_name == GitHubTicketManager.FIELD_AGENT
-                        and value == signature
+                        and value == self._mention_token
                     ):
                         is_assigned = True
+                        assignee = self.person.person_id
                         break
 
-            if not is_assigned:
-                continue
-
-            issue_number_map[issue["id"]] = issue["number"]
-            # convert issue dict to Task
-            tasks.append(self._issue_to_task(issue, status, field_values))
+            issue_mentions_me = self._text_mentions_me(issue.get("body"))
+            task = self._issue_to_task(issue, status, field_values, assignee)
+            tasks.append(task)
+            assert task.id, "Task ID must be set"
+            task_metadata[task.id] = {
+                "issue_number": issue["number"],
+                "assigned": is_assigned,
+                "issue_mentions_me": issue_mentions_me,
+            }
 
         tasks = sorted(tasks)
 
         for task in tasks:
+            assert task.id, "Task ID must be set"
+            metadata = task_metadata[task.id]
+            issue_number = metadata["issue_number"]
+            assigned = bool(metadata.get("assigned"))
+            mention_pending = bool(metadata.get("issue_mentions_me"))
+
             # fetch comments via REST and attach to Task
-            issue_number = issue_number_map.get(task.id)
             comments_resp = await client.get(
                 f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
             )
             comments_data = comments_resp.json()
+            comments_data.sort(key=lambda c: c.get("created_at") or "")
             comments = []
             for c in comments_data:
                 author_type = get_author_type(
@@ -682,6 +752,10 @@ class GitHubTicketManager(TicketManager):
                         timestamp=c["created_at"],
                     )
                 )
+                if self._text_mentions_me(c.get("body"), ignore_signature=True):
+                    mention_pending = True
+                if author_type == Message.ASSISTANT:
+                    mention_pending = False
             if comments:
                 # sort comments by creation timestamp ascending
                 comments.sort(key=lambda m: m.timestamp)
@@ -691,10 +765,13 @@ class GitHubTicketManager(TicketManager):
                 if (
                     author_type == Message.ASSISTANT
                     and not await self.has_pr_review_comments(task)
+                    and not mention_pending
                 ):
                     continue
 
-            return task
+            eligible = assigned or mention_pending
+            if eligible:
+                return task
         return None
 
     async def get_task_to_work_on(self) -> Task | None:
@@ -797,7 +874,7 @@ class GitHubTicketManager(TicketManager):
         # Prepend mention to the issue author unless we are the author.
         # Avoid adding only when the body already mentions the issue author
         # (case-insensitive) to prevent duplicates.
-        if author_login and author_login != self.username:
+        if author_login and author_login != self._username_lower:
             # Explicitly check if the issue author is already mentioned.
             # GitHub usernames are case-insensitive, so we use re.IGNORECASE.
             author_mention_re = (
@@ -810,7 +887,7 @@ class GitHubTicketManager(TicketManager):
             if not has_author_mention:
                 comment = f"@{author_login}\n\n{comment}"
         if is_proxy_agent(self.person):
-            comment = f"{comment}\n\n{get_proxy_agent_signature(self.person)}"
+            comment = f"{comment}\n\n{self._mention_token}"
         await client.post(
             f"{self._get_issue_path(task.repository)}/{issue_number}/comments",
             json={"body": comment},
