@@ -1,4 +1,4 @@
-FROM us-docker.pkg.dev/gemini-code-dev/gemini-cli/sandbox:0.18.4
+FROM us-docker.pkg.dev/gemini-code-dev/gemini-cli/sandbox:0.22.4
 
 USER root
 RUN apt-get update && \
