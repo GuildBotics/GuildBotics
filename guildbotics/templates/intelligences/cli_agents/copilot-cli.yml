@@ -1,0 +1,18 @@
+env:
+script: |
+  res=$(mktemp)
+  log=$(mktemp)
+
+  PROMPT="$(cat "$PROMPT_FILE")"
+
+  # Prefer quiet, non-streaming output when supported.
+  # Fall back for older/newer versions that don't recognize these flags.
+  if copilot --prompt "$PROMPT" --silent --stream off --allow-all-tools > "$res" 2> "$log"; then
+    :
+  else
+    copilot --prompt "$PROMPT" --allow-all-tools > "$res" 2> "$log"
+  fi
+
+  cat "$log" >&2
+  cat "$res"
+  rm -f "$res" "$log"

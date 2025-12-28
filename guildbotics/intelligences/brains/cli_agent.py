@@ -189,6 +189,9 @@ class CliAgentBrain(Brain):
         # Merge provided env with current environment
         env = (self.executable_info.env or {}).copy()
         env["PATH"] = os.environ.get("PATH", "")
+        xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+        if xdg_runtime_dir:
+            env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
 
         # Create temporary file for the prompt input
         tmp_file = tempfile.NamedTemporaryFile(mode="w", delete=False)

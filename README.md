@@ -128,6 +128,8 @@ Please install one of the following CLI agents and authenticate:
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
+- [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
+
 
 # 4. Installation
 
