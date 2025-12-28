@@ -2,3 +2,4 @@ default: gemini-cli.yml
 gemini: gemini-cli.yml
 codex: codex-cli.yml
 claude: claude-cli.yml
+copilot: copilot-cli.yml

@@ -127,6 +127,7 @@ guildbotics start
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Pro または Max サブスクリプションが必要)
+- [GitHub Copilot CLI](https://docs.github.com/ja/copilot/concepts/agents/about-copilot-cli)
 
 
 # 4. インストール

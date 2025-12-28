@@ -187,6 +187,7 @@ class SimpleSetupTool(SetupTool):
             "OpenAI Codex CLI": "codex",
             "Gemini CLI": "gemini",
             "Claude Code": "claude",
+            "GitHub Copilot CLI": "copilot",
         }
 
         config.cli_agent_label = questionary.select(
