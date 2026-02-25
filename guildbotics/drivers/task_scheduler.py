@@ -88,65 +88,71 @@ class TaskScheduler:
         )
         routine_command_index = 0
         consecutive_errors = 0
-        while not self._stop_event.is_set():
-            start_time = datetime.datetime.now()
-            context.logger.debug(f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}.")
+        try:
+            while not self._stop_event.is_set():
+                start_time = datetime.datetime.now()
+                context.logger.debug(f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}.")
 
-            # Run scheduled tasks
-            for scheduled_task in scheduled_tasks:
+                # Run scheduled tasks
+                for scheduled_task in scheduled_tasks:
+                    if self._stop_event.is_set():
+                        break
+                    if scheduled_task.should_run(start_time):
+                        ok = loop.run_until_complete(
+                            run_command(context, scheduled_task.command, "scheduled")
+                        )
+                        consecutive_errors, should_stop = self._update_consecutive_errors(
+                            ok, source="scheduled", consecutive_errors=consecutive_errors
+                        )
+                        if should_stop:
+                            return
+                    if self._stop_event.is_set():
+                        break
+                    self._sleep_interruptible(1)
+
+                # Check for tasks to work on
                 if self._stop_event.is_set():
                     break
-                if scheduled_task.should_run(start_time):
+
+                routine_command = (
+                    routine_commands[routine_command_index % len(routine_commands)]
+                    if routine_commands
+                    else ""
+                )
+                routine_command_index += 1
+
+                if routine_command and not self._stop_event.is_set():
                     ok = loop.run_until_complete(
-                        run_command(context, scheduled_task.command, "scheduled")
+                        run_command(context, routine_command, "routine")
                     )
-                    consecutive_errors, should_stop = self._update_consecutive_errors(
-                        ok, source="scheduled", consecutive_errors=consecutive_errors
+                    if not ok and not self._stop_event.is_set():
+                        consecutive_errors, should_stop = self._update_consecutive_errors(
+                            ok, source="routine", consecutive_errors=consecutive_errors
+                        )
+                        if should_stop:
+                            return
+                    else:
+                        consecutive_errors, _ = self._update_consecutive_errors(
+                            ok, source="routine", consecutive_errors=consecutive_errors
+                        )
+                    self._sleep_interruptible(1)
+
+                # Sleep until the next minute
+                end_time = datetime.datetime.now()
+                running_time = (end_time - start_time).total_seconds()
+                sleep_sec = 60 - running_time
+                if sleep_sec > 0 and not self._stop_event.is_set():
+                    next_check_time = end_time + datetime.timedelta(seconds=sleep_sec)
+                    self.context.logger.debug(
+                        f"Sleeping until {next_check_time:%Y-%m-%d %H:%M:%S}."
                     )
-                    if should_stop:
-                        return
-                if self._stop_event.is_set():
-                    break
-                self._sleep_interruptible(1)
-
-            # Check for tasks to work on
-            if self._stop_event.is_set():
-                break
-
-            routine_command = (
-                routine_commands[routine_command_index % len(routine_commands)]
-                if routine_commands
-                else ""
-            )
-            routine_command_index += 1
-
-            if routine_command and not self._stop_event.is_set():
-                ok = loop.run_until_complete(
-                    run_command(context, routine_command, "routine")
-                )
-                if not ok and not self._stop_event.is_set():
-                    consecutive_errors, should_stop = self._update_consecutive_errors(
-                        ok, source="routine", consecutive_errors=consecutive_errors
-                    )
-                    if should_stop:
-                        return
-                else:
-                    consecutive_errors, _ = self._update_consecutive_errors(
-                        ok, source="routine", consecutive_errors=consecutive_errors
-                    )
-                self._sleep_interruptible(1)
-
-            # Sleep until the next minute
-            end_time = datetime.datetime.now()
-            running_time = (end_time - start_time).total_seconds()
-            sleep_sec = 60 - running_time
-            if sleep_sec > 0 and not self._stop_event.is_set():
-                next_check_time = end_time + datetime.timedelta(seconds=sleep_sec)
-                self.context.logger.debug(
-                    f"Sleeping until {next_check_time:%Y-%m-%d %H:%M:%S}."
-                )
-                self._sleep_interruptible(sleep_sec)
-            self.last_checked = start_time
+                    self._sleep_interruptible(sleep_sec)
+                self.last_checked = start_time
+        finally:
+            try:
+                loop.run_until_complete(context.aclose())
+            finally:
+                loop.close()
 
     def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep in small steps so the stop event can interrupt waits."""

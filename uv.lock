@@ -558,6 +558,7 @@ dependencies = [
     { name = "questionary" },
     { name = "requests" },
     { name = "weasyprint" },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -603,6 +604,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "weasyprint", specifier = ">=66.0" },
+    { name = "websockets", specifier = ">=15.0.1" },
 ]
 provides-extras = ["dev", "redis", "test"]
 

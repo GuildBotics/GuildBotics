@@ -1,6 +1,19 @@
 from logging import Logger
 
+from guildbotics.drivers.chat_event_source import (
+    ChatEventSource,
+    PollingChatEventSource,
+)
 from guildbotics.entities import Person, Service, Team
+from guildbotics.integrations.chat_service import ChatService
+from guildbotics.integrations.chat_profile import (
+    get_chat_slack_base_url,
+)
+from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.integrations.slack.slack_chat_service import SlackChatService
+from guildbotics.integrations.slack.slack_socket_mode_chat_event_source import (
+    SocketModeChatEventSource,
+)
 from guildbotics.integrations.code_hosting_service import CodeHostingService
 from guildbotics.integrations.github.github_code_hosting_service import (
     GitHubCodeHostingService,
@@ -14,6 +27,9 @@ class SimpleIntegrationFactory(IntegrationFactory):
     """
     Default integration factory for creating message pollers.
     """
+
+    def __init__(self) -> None:
+        self._chat_event_sources: dict[tuple[str, str], ChatEventSource] = {}
 
     def create_ticket_manager(
         self, logger: Logger, person: Person, team: Team
@@ -52,3 +68,50 @@ class SimpleIntegrationFactory(IntegrationFactory):
         if name == "github":
             return GitHubCodeHostingService(person, team, repository)
         raise ValueError(f"Unsupported code hosting service: {name}")
+
+    def create_chat_service(self, logger: Logger, person: Person, team: Team) -> ChatService:
+        """
+        Create a chat service for the given person.
+
+        MVP: Slack only.
+        """
+        if not person.has_secret("SLACK_BOT_TOKEN"):
+            env_key = person.to_person_env_key("SLACK_BOT_TOKEN")
+            raise ValueError(
+                f"Slack Bot Token is required for person '{person.person_id}'. "
+                f"Set environment variable '{env_key}'."
+            )
+        token = person.get_secret("SLACK_BOT_TOKEN")
+        return SlackChatService(
+            logger=logger,
+            token=token,
+            base_url=get_chat_slack_base_url(person),
+        )
+
+    def create_chat_event_source(
+        self,
+        logger: Logger,
+        person: Person,
+        team: Team,
+        source_kind: str | None = None,
+    ) -> ChatEventSource:
+        selected_kind = (source_kind or "polling").strip().lower()
+        if selected_kind == "socket_mode":
+            key = (person.person_id, selected_kind)
+            cached = self._chat_event_sources.get(key)
+            if cached is not None:
+                return cached
+            source = SocketModeChatEventSource(
+                logger=logger,
+                person=person,
+                state_store=FileConversationStateStore(),
+                base_url=get_chat_slack_base_url(person),
+            )
+            self._chat_event_sources[key] = source
+            return source
+
+        # Polling sources are cheap and hold per-cycle cursor staging state.
+        return PollingChatEventSource(
+            chat_service=self.create_chat_service(logger, person, team),
+            state_store=FileConversationStateStore(),
+        )
