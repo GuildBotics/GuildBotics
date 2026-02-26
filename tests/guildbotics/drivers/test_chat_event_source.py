@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import threading
-import time
 import pytest
-import httpx
 
 from guildbotics.drivers.chat_event_source import PollingChatEventSource
 from guildbotics.integrations.chat_service import ChatEvent, ChatEventPage, ChatIdentity
@@ -12,6 +9,7 @@ from guildbotics.integrations.file_chat_state_store import FileConversationState
 from guildbotics.integrations.slack.slack_socket_mode_chat_event_source import (
     SocketModeChatEventSource,
 )
+from guildbotics.runtime.event_listener import IncomingChatEvent
 
 
 class FakeChatService:
@@ -48,37 +46,6 @@ class FakePerson:
 
     def to_person_env_key(self, key: str) -> str:
         return f"{self.person_id.upper()}_{key}"
-
-
-class FakeSocket:
-    def __init__(self, frames: list[str]) -> None:
-        self._frames = list(frames)
-        self.sent: list[str] = []
-        self.closed = False
-        self._lock = threading.Lock()
-        self._wait = threading.Condition(self._lock)
-
-    def recv(self) -> str:
-        deadline = time.time() + 1.0
-        with self._wait:
-            while not self._frames and not self.closed:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    raise RuntimeError("fake socket recv timeout")
-                self._wait.wait(timeout=remaining)
-            if self.closed:
-                raise RuntimeError("socket closed")
-            return self._frames.pop(0)
-
-    def send(self, text: str) -> None:
-        with self._wait:
-            self.sent.append(text)
-            self._wait.notify_all()
-
-    def close(self) -> None:
-        with self._wait:
-            self.closed = True
-            self._wait.notify_all()
 
 
 @pytest.mark.asyncio
@@ -151,41 +118,63 @@ async def test_polling_event_source_finalizes_cursor_even_without_events(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_socket_mode_event_source_fetches_and_acks_events(tmp_path):
+async def test_socket_mode_event_source_wraps_listener_and_manages_pending_events(
+    monkeypatch, tmp_path
+):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     person = FakePerson("alice")
-    frames = [
-        '{"type":"hello"}',
-        (
-            '{"envelope_id":"env-1","type":"events_api","payload":{"event":{"type":"message",'
-            '"channel":"C1","user":"U2","text":"<@UALICE1> hi","ts":"100.1"}}}'
-        ),
-        (
-            '{"envelope_id":"env-2","type":"events_api","payload":{"event":{"type":"message",'
-            '"channel":"C2","user":"U3","text":"ignored","ts":"100.2"}}}'
-        ),
-    ]
-    fake_ws = FakeSocket(frames)
-    open_calls = 0
+    created = {"listener": None}
 
-    def ws_connect(url: str):
-        assert url == "wss://example/socket"
-        return fake_ws
+    class _FakeListener:
+        def __init__(self, **kwargs):
+            created["listener"] = self
+            self.started = 0
+            self.stopped = 0
+            self._drains = [
+                [
+                    IncomingChatEvent(
+                        service_name="slack",
+                        channel_id="C1",
+                        event=ChatEvent(
+                            event_id="C1:100.1",
+                            channel_id="C1",
+                            message_ts="100.1",
+                            thread_ts="100.1",
+                            author_id="U2",
+                            text="hello",
+                        ),
+                    ),
+                    IncomingChatEvent(
+                        service_name="slack",
+                        channel_id="C2",
+                        event=ChatEvent(
+                            event_id="C2:100.2",
+                            channel_id="C2",
+                            message_ts="100.2",
+                            thread_ts="100.2",
+                            author_id="U3",
+                            text="ignored",
+                        ),
+                    ),
+                ],
+                [],
+                [],
+            ]
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal open_calls
-        assert request.url.path.endswith("/apps.connections.open")
-        open_calls += 1
-        return httpx.Response(200, json={"ok": True, "url": "wss://example/socket"})
+        def start(self):
+            self.started += 1
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    source = SocketModeChatEventSource(
-        logger=object(),
-        person=person,
-        state_store=state_store,
-        http_client=client,
-        ws_connect=ws_connect,
+        def stop(self):
+            self.stopped += 1
+
+        def drain_events(self):
+            return self._drains.pop(0) if self._drains else []
+
+    monkeypatch.setattr(
+        "guildbotics.integrations.slack.slack_socket_mode_chat_event_source.SlackSocketEventListener",
+        _FakeListener,
     )
+    source = SocketModeChatEventSource(logger=object(), person=person, state_store=state_store)
 
     items = await source.fetch_events(
         person_id="alice",
@@ -197,23 +186,10 @@ async def test_socket_mode_event_source_fetches_and_acks_events(tmp_path):
             }
         ],
     )
-    if not items:
-        await asyncio.sleep(0.05)
-        items = await source.fetch_events(
-            person_id="alice",
-            subscriptions=[
-                {
-                    "service": "slack",
-                    "channel_id": "C1",
-                    "enabled": True,
-                }
-            ],
-        )
     assert len(items) == 1
     assert items[0].event.channel_id == "C1"
-    assert items[0].event.mentions == ["UALICE1"]
-    assert json_contains_envelope(fake_ws.sent, "env-1")
-    assert open_calls == 1
+    assert created["listener"] is not None
+    assert created["listener"].started == 1
 
     # Before mark_processed, durable inbox replays the same unprocessed event.
     items2 = await source.fetch_events(
@@ -227,10 +203,7 @@ async def test_socket_mode_event_source_fetches_and_acks_events(tmp_path):
         ],
     )
     assert [x.event.event_id for x in items2] == ["C1:100.1"]
-    if not json_contains_envelope(fake_ws.sent, "env-2"):
-        await asyncio.sleep(0.05)
-    assert json_contains_envelope(fake_ws.sent, "env-2")
-    assert open_calls == 1
+    assert created["listener"].started == 2
 
     source.mark_processed(person_id="alice", item=items[0])
     assert state_store.is_processed_event("slack", "alice", "C1", "C1:100.1") is True
@@ -248,8 +221,7 @@ async def test_socket_mode_event_source_fetches_and_acks_events(tmp_path):
     )
     assert items3 == []
     await source.aclose()
-    assert fake_ws.closed is True
-    client.close()
+    assert created["listener"].stopped == 1
 
 
 @pytest.mark.asyncio
@@ -267,8 +239,3 @@ async def test_socket_mode_event_source_requires_app_token(tmp_path):
             person=NoTokenPerson(),
             state_store=state_store,
         )
-
-
-def json_contains_envelope(sent_payloads: list[str], envelope_id: str) -> bool:
-    needle = f'"envelope_id": "{envelope_id}"'
-    return any(needle in payload for payload in sent_payloads)

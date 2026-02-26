@@ -16,7 +16,6 @@ import pytest
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Repository, Role, Team
-from guildbotics.drivers.chat_event_source import ChatEventSource
 from guildbotics.integrations.chat_service import ChatIdentity
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.brains.brain import Brain
@@ -97,7 +96,6 @@ class DummyIntegrationFactory(IntegrationFactory):
         self.ticket_manager_calls: list[tuple[Person, Team]] = []
         self.code_hosting_calls: list[tuple[Person, Team, str | None]] = []
         self.chat_service_calls: list[tuple[Person, Team]] = []
-        self.chat_event_source_calls: list[tuple[Person, Team]] = []
 
     def create_ticket_manager(
         self, logger: logging.Logger, person: Person, team: Team
@@ -128,33 +126,6 @@ class DummyIntegrationFactory(IntegrationFactory):
                 self.closed = True
 
         return _DummyChatService()
-
-    def create_chat_event_source(
-        self,
-        logger: logging.Logger,
-        person: Person,
-        team: Team,
-        source_kind: str | None = None,
-    ) -> ChatEventSource:
-        self.chat_event_source_calls.append((person, team))
-
-        class _DummyChatEventSource:
-            def __init__(self) -> None:
-                self.closed = False
-
-            async def fetch_events(self, *, person_id: str, subscriptions: list[dict[str, Any]]):
-                return []
-
-            def mark_processed(self, *, person_id: str, item):
-                return None
-
-            def finalize_cycle(self, *, person_id: str):
-                return None
-
-            async def aclose(self):
-                self.closed = True
-
-        return _DummyChatEventSource()
 
 
 class DummyBrain(Brain):
@@ -261,66 +232,10 @@ def test_clone_for_independence_person_role_and_cache():
     assert ctx1.person is person1
     # Cached ticket manager must not be carried over
     assert ctx2.ticket_manager is None
-    assert ctx2.chat_event_source is None
     # Role is bound per person and task.role
     assert ctx2.active_role.id == "reviewer"
     # Message is copied
     assert ctx2.pipe == "Initial message"
-
-
-def test_get_chat_event_source_is_cached():
-    team = _make_team(language="en")
-    loader_factory = DummyLoaderFactory(team)
-    integration_factory = DummyIntegrationFactory()
-    brain_factory = DummyBrainFactory()
-    logger = logging.getLogger("test")
-
-    person = Person(person_id="p1", name="Tester")
-    task = Task(title="T", description="D")
-    ctx = Context(
-        loader_factory=loader_factory,
-        integration_factory=integration_factory,
-        brain_factory=brain_factory,
-        logger=logger,
-        person=person,
-        task=task,
-        message="Initial message",
-    )
-
-    e1 = ctx.get_chat_event_source()
-    e2 = ctx.get_chat_event_source()
-
-    assert e1 is e2
-    assert len(integration_factory.chat_event_source_calls) == 1
-
-
-def test_get_chat_event_source_is_cached_per_source_kind():
-    team = _make_team(language="en")
-    loader_factory = DummyLoaderFactory(team)
-    integration_factory = DummyIntegrationFactory()
-    brain_factory = DummyBrainFactory()
-    logger = logging.getLogger("test")
-
-    person = Person(person_id="p1", name="Tester")
-    task = Task(title="T", description="D")
-    ctx = Context(
-        loader_factory=loader_factory,
-        integration_factory=integration_factory,
-        brain_factory=brain_factory,
-        logger=logger,
-        person=person,
-        task=task,
-        message="Initial message",
-    )
-
-    s1 = ctx.get_chat_event_source("socket_mode")
-    s2 = ctx.get_chat_event_source("socket_mode")
-    p1 = ctx.get_chat_event_source("polling")
-    p2 = ctx.get_chat_event_source("polling")
-
-    assert s1 is s2
-    assert p1 is p2
-    assert s1 is not p1
 
 
 @pytest.mark.asyncio
@@ -344,13 +259,10 @@ async def test_context_aclose_closes_cached_chat_resources():
     )
 
     chat_service = ctx.get_chat_service()
-    chat_event_source = ctx.get_chat_event_source()
     await ctx.aclose()
 
     assert getattr(chat_service, "closed", False) is True
-    assert getattr(chat_event_source, "closed", False) is True
     assert ctx.chat_service is None
-    assert ctx.chat_event_source is None
 
 
 def test_update_task_re_resolves_active_role():

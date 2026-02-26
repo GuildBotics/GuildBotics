@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+"""Polling-oriented event source abstractions and compatibility wrappers.
+
+Socket Mode runtime execution has moved to `EventListenerRunner` + `EventListener`.
+This module remains for polling-based flows and compatibility wrappers.
+"""
+
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Any
 
-from guildbotics.integrations.chat_service import ChatEvent, ChatService
+from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.chat_state_store import ConversationStateStore
-
-@dataclass(slots=True)
-class ChatSubscriptionEvent:
-    service_name: str
-    channel_id: str
-    event: ChatEvent
+from guildbotics.runtime.event_listener import ChatSubscriptionEvent
 
 
 class ChatEventSource(ABC):

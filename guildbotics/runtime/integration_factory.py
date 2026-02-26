@@ -1,14 +1,10 @@
 from abc import ABC, abstractmethod
 from logging import Logger
-from typing import TYPE_CHECKING
 
 from guildbotics.entities import Person, Team
 from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.code_hosting_service import CodeHostingService
 from guildbotics.integrations.ticket_manager import TicketManager
-
-if TYPE_CHECKING:
-    from guildbotics.drivers.chat_event_source import ChatEventSource
 
 
 class IntegrationFactory(ABC):
@@ -55,15 +51,4 @@ class IntegrationFactory(ABC):
         Returns:
             ChatService: An instance of a chat service for the person.
         """
-        pass
-
-    @abstractmethod
-    def create_chat_event_source(
-        self,
-        logger: Logger,
-        person: Person,
-        team: Team,
-        source_kind: str | None = None,
-    ) -> "ChatEventSource":
-        """Create (or return cached) chat event source for the person/team."""
         pass

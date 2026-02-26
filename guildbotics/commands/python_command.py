@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,7 @@ def _load_python_module(path: Path) -> Any:
     if spec is None or spec.loader is None:
         raise CommandError(f"Unable to load python command module from '{path}'.")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module.__name__] = module
     spec.loader.exec_module(module)
     return module
 

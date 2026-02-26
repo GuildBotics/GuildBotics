@@ -4,12 +4,8 @@ from copy import deepcopy
 from typing import Any
 
 from guildbotics.commands.utils import stringify_output
-from guildbotics.drivers.chat_event_source import (
-    ChatEventSource,
-)
 from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.chat_profile import (
-    get_chat_slack_base_url,
     get_chat_subscriptions,
 )
 from guildbotics.integrations.chat_state_store import (
@@ -17,9 +13,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadMessageState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.integrations.slack.slack_socket_mode_chat_event_source import (
-    SocketModeChatEventSource,
-)
+from guildbotics.runtime.event_listener import INCOMING_CHAT_EVENT_KEY, IncomingChatEvent
 from guildbotics.templates.commands.workflows.chat.policies.models import (
     PolicyEvent,
     PolicyInput,
@@ -35,48 +29,25 @@ async def main(
     context: Any,
     chat_service: ChatService | None = None,
     state_store: ConversationStateStore | None = None,
-    event_source: ChatEventSource | None = None,
 ) -> None:
-    """Monitor configured chat subscriptions and react to incoming messages."""
+    """React to one incoming chat event provided via Context.shared_state."""
     chat_service = chat_service or context.get_chat_service()
     state_store = state_store or FileConversationStateStore()
     policy = ShouldReactPolicy()
-
-    subscriptions = get_chat_subscriptions(context.person)
-    if not subscriptions:
-        return
-    subscriptions = await _resolve_subscription_channels(context, chat_service, subscriptions)
-    if not subscriptions:
-        return
-
-    identity = await chat_service.get_bot_identity()
-    grouped = _group_subscriptions_by_event_source(subscriptions)
-    for source_kind, group_subs in grouped.items():
-        source = event_source if event_source is not None else _create_event_source_for_kind(
+    incoming = _read_incoming_event_from_context(context)
+    if incoming is not None:
+        identity = await chat_service.get_bot_identity()
+        await _handle_event(
             context=context,
-            source_kind=source_kind,
             chat_service=chat_service,
             state_store=state_store,
+            policy=policy,
+            service_name=incoming.service_name,
+            channel_id=incoming.channel_id,
+            identity_user_id=identity.user_id,
+            event=incoming.event,
         )
-        cycle_events = await source.fetch_events(
-            person_id=context.person.person_id,
-            subscriptions=group_subs,
-        )
-        try:
-            for item in cycle_events:
-                await _handle_event(
-                    context=context,
-                    chat_service=chat_service,
-                    state_store=state_store,
-                    policy=policy,
-                    service_name=item.service_name,
-                    channel_id=item.channel_id,
-                    identity_user_id=identity.user_id,
-                    event=item.event,
-                )
-                source.mark_processed(person_id=context.person.person_id, item=item)
-        finally:
-            source.finalize_cycle(person_id=context.person.person_id)
+    return
 
 
 async def _handle_event(
@@ -297,73 +268,6 @@ def _build_reply_text_fallback(
     return f"{person_name}: {latest_text}"
 
 
-async def _resolve_subscription_channels(
-    context: Any, chat_service: ChatService, subscriptions: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    resolved: list[dict[str, Any]] = []
-    for sub in subscriptions:
-        if not isinstance(sub, dict):
-            continue
-        item = dict(sub)
-        channel_id = str(item.get("channel_id", "")).strip()
-        if channel_id:
-            resolved.append(item)
-            continue
-        channel_name = str(item.get("channel_name", "")).strip()
-        if not channel_name:
-            continue
-        resolved_id = await chat_service.resolve_channel_id(channel_name)
-        if not resolved_id:
-            _log_info(
-                context,
-                "chat subscription skipped: channel_name=%s could not be resolved "
-                "(check channel name, bot channel membership, and Slack scopes "
-                "channels:read/groups:read)",
-                channel_name,
-            )
-            continue
-        item["channel_id"] = resolved_id
-        resolved.append(item)
-    return resolved
-
-
-def _group_subscriptions_by_event_source(
-    subscriptions: list[dict[str, Any]]
-) -> dict[str, list[dict[str, Any]]]:
-    out: dict[str, list[dict[str, Any]]] = {}
-    for sub in subscriptions:
-        source_kind = (
-            str(sub.get("event_source", "socket_mode")).strip().lower() or "socket_mode"
-        )
-        out.setdefault(source_kind, []).append(sub)
-    return out
-
-
-def _create_event_source_for_kind(
-    *,
-    context: Any,
-    source_kind: str,
-    chat_service: ChatService,
-    state_store: ConversationStateStore,
-) -> ChatEventSource:
-    if source_kind == "socket_mode":
-        if hasattr(context, "get_chat_event_source"):
-            try:
-                return context.get_chat_event_source(source_kind="socket_mode")
-            except TypeError:
-                return context.get_chat_event_source()
-        return SocketModeChatEventSource(
-            logger=getattr(context, "logger", None),
-            person=context.person,
-            state_store=state_store,
-            base_url=get_chat_slack_base_url(context.person),
-        )
-    raise ValueError(
-        "Unsupported Slack chat event_source for chat_conversation_workflow: "
-        f"'{source_kind}'. Use 'socket_mode'."
-    )
-
-
 def _log_info(context: Any, msg: str, *args: Any) -> None:
     logger = getattr(context, "logger", None)
     if logger is None:
@@ -372,3 +276,10 @@ def _log_info(context: Any, msg: str, *args: Any) -> None:
         logger.info(msg, *args)
     except Exception:
         return
+
+
+def _read_incoming_event_from_context(context: Any) -> IncomingChatEvent | None:
+    shared_state = getattr(context, "shared_state", None)
+    if not isinstance(shared_state, dict):
+        return None
+    return IncomingChatEvent.from_shared_state(shared_state.get(INCOMING_CHAT_EVENT_KEY))

@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from guildbotics.cli.setup_tool import SetupTool
 from guildbotics.drivers import (
     CommandError,
+    EventListenerRunner,
     PersonNotFoundError,
     PersonSelectionRequiredError,
     TaskScheduler,
@@ -100,6 +101,13 @@ def main() -> None:
 
 @main.command()
 @click.option(
+    "--only",
+    "only_target",
+    type=click.Choice(["scheduler", "events"], case_sensitive=False),
+    default=None,
+    help="Start only one runtime instead of both scheduler and event listener runner.",
+)
+@click.option(
     "--max-consecutive-errors",
     type=int,
     default=3,
@@ -108,9 +116,11 @@ def main() -> None:
 )
 @click.argument("default_routine_commands", nargs=-1)
 def start(
-    max_consecutive_errors: int, default_routine_commands: tuple[str, ...]
+    only_target: str | None,
+    max_consecutive_errors: int,
+    default_routine_commands: tuple[str, ...],
 ) -> None:
-    """Start the GuildBotics scheduler."""
+    """Start GuildBotics runtimes (scheduler and event listener runner)."""
     _load_env_from_cwd()
     pid_path = _pid_file_path()
     # Prevent multiple instances
@@ -133,16 +143,31 @@ def start(
     if not routine_commands:
         routine_commands = setup_tool.get_default_routines()
 
-    scheduler = TaskScheduler(
-        setup_tool.get_context(),
-        routine_commands,
-        consecutive_error_limit=max_consecutive_errors,
+    start_scheduler = only_target in (None, "scheduler")
+    start_events = only_target in (None, "events")
+
+    scheduler = (
+        TaskScheduler(
+            setup_tool.get_context(),
+            routine_commands,
+            consecutive_error_limit=max_consecutive_errors,
+        )
+        if start_scheduler
+        else None
+    )
+    event_runner = (
+        EventListenerRunner(setup_tool.get_context())
+        if start_events
+        else None
     )
 
     def _handle_signal(signum, frame):  # type: ignore[no-untyped-def]
         click.echo(f"Received signal {signum}. Shutting down...")
         try:
-            scheduler.shutdown(graceful=True)
+            if event_runner is not None:
+                event_runner.stop()
+            if scheduler is not None:
+                scheduler.shutdown(graceful=True)
         finally:
             _remove_pidfile(pid_path)
 
@@ -151,10 +176,19 @@ def start(
     signal.signal(signal.SIGTERM, _handle_signal)
 
     try:
-        scheduler.start()
+        if event_runner is not None:
+            event_runner.start()
+        if scheduler is not None:
+            scheduler.start()
+        elif event_runner is not None:
+            while event_runner.is_alive():
+                time.sleep(0.5)
     except KeyboardInterrupt:
         _handle_signal(signal.SIGINT, None)  # type: ignore[arg-type]
     finally:
+        if event_runner is not None:
+            event_runner.stop()
+            event_runner.join(timeout=5.0)
         _remove_pidfile(pid_path)
 
 
