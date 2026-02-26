@@ -200,7 +200,15 @@ class EventListenerRunner:
             )
             if not channel_ids:
                 continue
-            key, app_token = self._make_connection_key(person)
+            try:
+                key, app_token = self._make_connection_key(person)
+            except ValueError as e:
+                self._log_warning(
+                    "event listener runner skipped person=%s due to invalid socket_mode config: %s",
+                    person.person_id,
+                    e,
+                )
+                continue
             self._listener_tokens.setdefault(key, app_token)
             grouped.setdefault(key, []).append((person, channel_ids))
         return grouped

@@ -22,7 +22,12 @@ class _FakeContext:
     def __init__(self) -> None:
         self.closed = False
         self.last_clone = None
-        self.logger = types.SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None)
+        self.infos: list[tuple] = []
+        self.warnings: list[tuple] = []
+        self.logger = types.SimpleNamespace(
+            info=lambda *a, **k: self.infos.append(a),
+            warning=lambda *a, **k: self.warnings.append(a),
+        )
         self.team = types.SimpleNamespace(members=[])
 
     def clone_for(self, person):
@@ -598,3 +603,39 @@ async def test_aclose_sources_stops_listeners_and_clears_caches():
     assert runner._listener_tokens == {}
     assert runner._subscription_channel_cache == {}
     assert runner._last_group_log_state is None
+
+
+@pytest.mark.asyncio
+async def test_build_person_subscriptions_skips_person_with_missing_app_token(monkeypatch):
+    alice = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+    )
+    bob = Person(
+        person_id="bob",
+        name="Bob",
+        is_active=True,
+        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C2"}]}},
+    )
+    monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-alice")
+
+    ctx = _FakeContext()
+    ctx.team = types.SimpleNamespace(members=[alice, bob])
+    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+
+    async def _fake_resolve(person, subscriptions):
+        return subscriptions
+
+    monkeypatch.setattr(runner, "_resolve_subscription_channels", _fake_resolve)
+
+    grouped = await runner._build_person_subscriptions_by_connection()
+
+    assert len(grouped) == 1
+    only_group = next(iter(grouped.values()))
+    assert [person.person_id for person, _channel_ids in only_group] == ["alice"]
+    assert any(
+        "skipped person=%s" in str(args[0]) and len(args) >= 2 and args[1] == "bob"
+        for args in ctx.warnings
+    )

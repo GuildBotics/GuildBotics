@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 from dataclasses import asdict
 from pathlib import Path
+import tempfile
 
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
@@ -340,19 +342,40 @@ class FileConversationStateStore(ConversationStateStore):
         return self._read_json(self._thread_file(service, person_id, channel_id, thread_ts))
 
     def _read_json(self, path: Path) -> dict:
-        if not path.exists():
-            return {}
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+        with self._lock:
+            if not path.exists():
+                return {}
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
 
     def _write_json(self, path: Path, payload: dict) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=path.parent,
+                    prefix=f"{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+                    f.flush()
+                    os.fsync(f.fileno())
+                    tmp_path = Path(f.name)
+                tmp_path.replace(path)
+            finally:
+                if tmp_path is not None and tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except Exception:
+                        pass
 
 
 def _safe_segment(value: str) -> str:

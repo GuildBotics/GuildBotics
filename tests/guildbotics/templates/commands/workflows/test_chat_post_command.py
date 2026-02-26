@@ -57,11 +57,11 @@ async def test_posts_using_explicit_channel_id():
         ctx,
         service="slack",
         channel_id="C1",
-        command="reports/morning_summary",
+        command="examples/reports/morning_summary",
     )
 
     assert out == "daily summary"
-    assert ctx._calls == [("reports/morning_summary", ())]
+    assert ctx._calls == [("examples/reports/morning_summary", ())]
     assert ctx._svc.posts == [("C1", "daily summary", None)]
 
 
@@ -74,11 +74,11 @@ async def test_resolves_channel_name_when_channel_id_missing():
         ctx,
         service="slack",
         channel_name="dev-chat",
-        command='reports/ai_news_digest query="OpenAI"',
+        command='examples/reports/ai_news_digest query="OpenAI"',
     )
 
     assert out == "digest"
-    assert ctx._calls == [("reports/ai_news_digest", ("query=OpenAI",))]
+    assert ctx._calls == [("examples/reports/ai_news_digest", ("query=OpenAI",))]
     assert ctx._svc.posts == [("C2", "digest", None)]
 
 
@@ -90,7 +90,7 @@ async def test_skips_when_command_output_is_empty():
         ctx,
         service="slack",
         channel_id="C1",
-        command="reports/morning_summary",
+        command="examples/reports/morning_summary",
     )
 
     assert out == ""
@@ -106,10 +106,27 @@ async def test_logs_and_skips_when_channel_name_cannot_be_resolved():
         ctx,
         service="slack",
         channel_name="missing",
-        command="reports/morning_summary",
+        command="examples/reports/morning_summary",
     )
 
     assert out == ""
     assert ctx._svc.posts == []
     assert ctx._calls == []
     assert any("could not be resolved" in str(line[0]) for line in ctx.logger.lines)
+
+
+@pytest.mark.asyncio
+async def test_logs_and_skips_when_command_text_has_invalid_quotes():
+    ctx = _context(command_result="digest")
+
+    out = await chat_post_command.main(
+        ctx,
+        service="slack",
+        channel_id="C1",
+        command='examples/reports/ai_news_digest query="OpenAI',
+    )
+
+    assert out == ""
+    assert ctx._calls == []
+    assert ctx._svc.posts == []
+    assert any("invalid command syntax" in str(line[0]) for line in ctx.logger.lines)

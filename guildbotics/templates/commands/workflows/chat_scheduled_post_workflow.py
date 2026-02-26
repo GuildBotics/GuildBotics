@@ -41,7 +41,17 @@ async def main(
         if not (name and channel_id and cron_expr and command_text):
             continue
 
-        if not _is_due_now(cron_expr, now):
+        try:
+            if not _is_due_now(cron_expr, now):
+                continue
+        except Exception as e:
+            _log_info(
+                context,
+                "chat scheduled post skipped: invalid cron expression name=%s cron=%s error=%s",
+                name,
+                cron_expr,
+                e,
+            )
             continue
 
         slot = _minute_slot(now)
@@ -72,7 +82,15 @@ def _minute_slot(now: dt.datetime) -> str:
 
 
 async def _run_command_text(context: Any, command_text: str) -> str:
-    parts = shlex.split(command_text)
+    try:
+        parts = shlex.split(command_text)
+    except ValueError as e:
+        _log_info(
+            context,
+            "chat scheduled post skipped: invalid command syntax (check quotes): %s",
+            e,
+        )
+        return ""
     if not parts:
         return ""
     result = await context.invoke(parts[0], *parts[1:])

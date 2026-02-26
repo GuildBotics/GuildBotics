@@ -116,7 +116,7 @@ class SlackSocketEventListener(EventListener):
                         self._received_events += 1
                         self._queue.put(item)
                     self._ack_if_needed(ws, payload)
-            except BaseException as e:
+            except Exception as e:
                 if not self._stop_event.is_set():
                     self._log_debug(f"socket listener loop stopped ({type(e).__name__}: {e})")
             finally:

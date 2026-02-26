@@ -572,7 +572,7 @@ message_channels:
       enabled: true
 
 task_schedules:
-  - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
+  - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
     schedules:
       - "0 9 * * 1-5"
 ```
@@ -581,18 +581,18 @@ Points:
 
 - Monitored channels are defined in `message_channels`; entries with `chat.enabled: true` are monitored.
 - For scheduled posting, use `task_schedules` + `workflows/chat_post_command` (the post body is generated from a GuildBotics custom command output).
-- Example: `reports/ai_news_digest` gets candidate news from Google News RSS first, then an LLM formats it into a Slack-friendly summary.
+- Example: `examples/reports/ai_news_digest` gets candidate news from Google News RSS first, then an LLM formats it into a Slack-friendly summary.
 
 Example scheduled command (AI news digest):
 
 ```bash
-guildbotics run reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24
+guildbotics run examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24
 ```
 
 Example posting command (manual):
 
 ```bash
-guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
+guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
 ```
 
 This command first fetches candidate articles from Google News RSS, then uses an LLM to format a Japanese digest suitable for Slack.

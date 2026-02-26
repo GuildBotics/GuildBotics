@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 
-from guildbotics.templates.commands.reports.tools import fetch_ai_news
+from guildbotics.templates.commands.examples.reports.tools import fetch_ai_news
 
 
 def test_build_google_news_rss_url_contains_query_and_locale():
@@ -56,4 +56,3 @@ def test_parse_google_news_rss_handles_missing_channel_or_fields():
 
     xml = """<rss><channel><item><title>Missing link</title></item></channel></rss>"""
     assert fetch_ai_news.parse_google_news_rss(xml, max_age_hours=1000) == []
-

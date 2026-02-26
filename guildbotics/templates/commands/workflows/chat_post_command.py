@@ -68,7 +68,15 @@ async def _resolve_channel_id(
 
 
 async def _run_command_text(context: Any, command_text: str) -> str:
-    parts = shlex.split(command_text)
+    try:
+        parts = shlex.split(command_text)
+    except ValueError as e:
+        _log_info(
+            context,
+            "chat_post_command skipped: invalid command syntax (check quotes): %s",
+            e,
+        )
+        return ""
     if not parts:
         return ""
     result = await context.invoke(parts[0], *parts[1:])

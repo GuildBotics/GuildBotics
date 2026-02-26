@@ -24,8 +24,11 @@ class FakeChatService:
 
 
 class StubLogger:
+    def __init__(self) -> None:
+        self.lines: list[tuple] = []
+
     def info(self, *args, **kwargs):
-        return None
+        self.lines.append(args)
 
 
 def _context(command_result: object = "hello") -> types.SimpleNamespace:
@@ -39,7 +42,7 @@ def _context(command_result: object = "hello") -> types.SimpleNamespace:
                         "service": "slack",
                         "channel_id": "C1",
                         "cron": "0 9 * * 1-5",
-                        "command": "reports/morning_summary",
+                        "command": "examples/reports/morning_summary",
                         "enabled": True,
                     }
                 ]
@@ -68,7 +71,7 @@ def _context_channel_name_post(command_result: object = "hello") -> types.Simple
                         "service": "slack",
                         "channel_name": "dev-chat",
                         "cron": "0 9 * * 1-5",
-                        "command": "reports/morning_summary",
+                        "command": "examples/reports/morning_summary",
                         "enabled": True,
                     }
                 ]
@@ -95,7 +98,7 @@ async def test_posts_when_due_and_records_slot(tmp_path):
 
     await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
 
-    assert ctx._invoke_calls == [("reports/morning_summary", ())]
+    assert ctx._invoke_calls == [("examples/reports/morning_summary", ())]
     assert svc.posts == [("C1", "daily summary", None)]
 
     state = store.load_scheduled_post_state("slack", "alice", "morning-topic")
@@ -156,3 +159,52 @@ async def test_resolves_channel_name_when_channel_id_missing(tmp_path):
     await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
 
     assert svc.posts == [("C1", "daily summary", None)]
+
+
+@pytest.mark.asyncio
+async def test_logs_and_skips_when_scheduled_command_has_invalid_quotes(tmp_path):
+    ctx = _context(command_result="daily summary")
+    ctx.person.profile["chat"]["scheduled_posts"][0]["command"] = 'reports/x query="OpenAI'
+    svc = FakeChatService()
+    store = FileConversationStateStore(base_dir=tmp_path)
+    now = dt.datetime(2026, 2, 23, 9, 0, 5)
+
+    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+
+    assert ctx._invoke_calls == []
+    assert svc.posts == []
+    state = store.load_scheduled_post_state("slack", "alice", "morning-topic")
+    assert state.last_run_slot == "2026-02-23T09:00"
+    assert any("invalid command syntax" in str(line[0]) for line in ctx.logger.lines)
+
+
+@pytest.mark.asyncio
+async def test_skips_invalid_cron_entry_and_continues_other_scheduled_posts(tmp_path):
+    ctx = _context(command_result="daily summary")
+    ctx.person.profile["chat"]["scheduled_posts"] = [
+        {
+            "name": "broken",
+            "service": "slack",
+            "channel_id": "C1",
+            "cron": "not a cron",
+            "command": "reports/invalid",
+            "enabled": True,
+        },
+        {
+            "name": "morning-topic",
+            "service": "slack",
+            "channel_id": "C1",
+            "cron": "0 9 * * 1-5",
+            "command": "examples/reports/morning_summary",
+            "enabled": True,
+        },
+    ]
+    svc = FakeChatService()
+    store = FileConversationStateStore(base_dir=tmp_path)
+    now = dt.datetime(2026, 2, 23, 9, 0, 5)
+
+    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+
+    assert ctx._invoke_calls == [("examples/reports/morning_summary", ())]
+    assert svc.posts == [("C1", "daily summary", None)]
+    assert any("invalid cron expression" in str(line[0]) for line in ctx.logger.lines)

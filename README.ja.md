@@ -545,7 +545,7 @@ AIエージェントとして振る舞う Slack App（送信 + 受信）を Slac
 
 2人め以降も同様の設定を行えば追加できますが、Socket Mode の設定をスキップして最初のAIエージェントで設定した通信経路を共有することもできます。
 
-受信接続を共有する場合は、既存 Person と同じ App-Level Token を二人目の `{PERSON_ID}_SLACK_APP_TOKEN` に設定すします。
+受信接続を共有する場合は、既存 Person と同じ App-Level Token を二人目の `{PERSON_ID}_SLACK_APP_TOKEN` に設定します。
 
 - 例: `alice` と `bob` が同じ受信接続を共有する場合
   - `ALICE_SLACK_APP_TOKEN=<alice_xapp_token>`
@@ -571,7 +571,7 @@ message_channels:
       enabled: true
 
 task_schedules:
-  - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
+  - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
     schedules:
       - "0 9 * * 1-5"
 ```
@@ -580,19 +580,19 @@ task_schedules:
 
 - 監視対象チャネルは `person.yml` の `message_channels` で定義し、`chat.enabled: true` のものが対象
 - 定期投稿は `task_schedules` + `workflows/chat_post_command` を使う（投稿本文は GuildBotics カスタムコマンドの出力）
-- 例: `reports/ai_news_digest` は前段でニュースRSSを取得し、後段でLLMがSlack向けに要約整形するサンプル
+- 例: `examples/reports/ai_news_digest` は前段でニュースRSSを取得し、後段でLLMがSlack向けに要約整形するサンプル
 
 
 定期投稿コマンドの具体例（AIニュースダイジェスト）:
 
 ```bash
-guildbotics run reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24
+guildbotics run examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24
 ```
 
 投稿専用コマンドの例（手動）:
 
 ```bash
-guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
+guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
 ```
 
 このコマンドは、前段で Google News RSS からニュース候補を取得し、LLM で Slack 向けの日本語ダイジェスト文面に整形します。

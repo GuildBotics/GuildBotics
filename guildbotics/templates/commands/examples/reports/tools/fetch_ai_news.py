@@ -12,14 +12,14 @@ import requests
 DEFAULT_QUERY = "AI OR OpenAI OR Anthropic OR Google AI"
 
 
-async def main(
+def main(
     context,  # noqa: ANN001 - runtime injects Context
     query: str = DEFAULT_QUERY,
     language: str = "ja",
     country: str = "JP",
     limit: str | int = 8,
     max_age_hours: str | int = 36,
-):
+) -> dict[str, Any]:
     """Fetch recent AI news headlines from Google News RSS and return structured data."""
     _ = context  # unused in MVP sample but accepted for consistency with PythonCommand
     limit_n = _to_int(limit, 8, minimum=1, maximum=20)
@@ -121,4 +121,3 @@ def _to_int(value: str | int, default: int, *, minimum: int, maximum: int) -> in
     except Exception:
         return default
     return max(minimum, min(maximum, n))
-
