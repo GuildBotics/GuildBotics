@@ -46,6 +46,11 @@ GuildBotics enables you to:
     - [Multi-Agent Scheduled Workflow](#multi-agent-scheduled-workflow)
     - [Multiple Schedule Patterns](#multiple-schedule-patterns)
     - [Randomization Usage](#randomization-usage)
+  - [5.6. Slack Chat Workflow](#56-slack-chat-workflow)
+    - [5.6.1. Prerequisites (Slack Side)](#561-prerequisites-slack-side)
+      - [Basic Setup](#basic-setup)
+      - [Adding Multiple Agents](#adding-multiple-agents)
+    - [5.6.2. `person.yml` Example](#562-personyml-example)
 - [6. GitHub Integration Example](#6-github-integration-example)
   - [6.1. Prerequisites](#61-prerequisites)
     - [6.1.1. Git Environment](#611-git-environment)
@@ -242,7 +247,19 @@ echo "Hello" | guildbotics run translate English Japanese
 guildbotics start [routine_commands...]
 ```
 
-Starts the task scheduler to execute routine commands and scheduled tasks. If no commands are specified, runs the default `workflows/ticket_driven_workflow`.
+By default, this starts:
+
+- Task scheduler (routine commands / scheduled tasks)
+- Event listener runner (event-driven receivers such as Slack Socket Mode)
+
+If no command is specified, the scheduler runs `workflows/ticket_driven_workflow` as the default routine command.
+
+You can also limit startup to one side:
+
+```bash
+guildbotics start --only scheduler
+guildbotics start --only events
+```
 
 To stop the running scheduler:
 
@@ -483,6 +500,103 @@ task_schedules:
       - "0 ?(9-17) * * *"    # Daily, random hour between 9-17, on the hour
 ```
 
+## 5.6. Slack Chat Workflow
+
+In the Slack chat workflow, channels configured in `message_channels` of `person.yml` are monitored, and the agent replies to mentions and thread continuations. You can also post scheduled command outputs to channels.
+
+Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
+
+### 5.6.1. Prerequisites (Slack Side)
+
+#### Basic Setup
+
+Create a Slack App that acts as the AI agent (send + receive).
+
+1. Create a Slack App at https://api.slack.com/apps
+2. Grant required scopes
+   - Add them from `OAuth & Permissions` -> `Scopes`
+   - Minimum required scopes (add based on conversation types you use)
+     - `chat:write` (for `chat.postMessage`)
+     - `reactions:write` (for `reactions.add`)
+     - `channels:history` (for public channel `conversations.history`)
+     - `groups:history` (for private channel `conversations.history`)
+     - `im:history` (if handling DMs)
+     - `mpim:history` (if handling group DMs)
+   - If you want to configure via `channel_name`, also add name resolution scopes (`conversations.list`)
+     - `channels:read` (public channels)
+     - `groups:read` (private channels)
+   - Reference URLs (official Slack docs)
+     - `conversations.history`: `https://api.slack.com/methods/conversations.history`
+     - `conversations.list`: `https://api.slack.com/methods/conversations.list`
+     - `chat.postMessage`: `https://api.slack.com/methods/chat.postMessage`
+     - `reactions.add`: `https://api.slack.com/methods/reactions.add`
+3. Install the app to your workspace (reinstall may be required after scope changes)
+4. Set Bot Token (`xoxb-...`) in environment variable `{PERSON_ID}_SLACK_BOT_TOKEN`
+   - Example: for `alice`, set `ALICE_SLACK_BOT_TOKEN`
+5. Configure Socket Mode
+   - Enable `Enable Socket Mode` in `Socket Mode`
+   - Enable `Event Subscriptions` and add bot events
+     - For channels: `message.channels`, `message.groups`
+     - For DMs: `message.im`, `message.mpim`
+   - Issue an App-Level Token (`xapp-...`) in `Basic Information` and set `{PERSON_ID}_SLACK_APP_TOKEN`
+     - Example: for `alice`, set `ALICE_SLACK_APP_TOKEN`
+6. Invite the bot to target channels
+7. Configure target channels in `person.yml` under `message_channels`
+
+#### Adding Multiple Agents
+
+You can add additional agents with the same setup. Alternatively, you can skip Socket Mode setup for later agents and share the communication path configured for the first AI agent.
+
+To share incoming connections, set the later person's `{PERSON_ID}_SLACK_APP_TOKEN` to the same App-Level Token as the existing person.
+
+- Example: if `alice` and `bob` share the same incoming connection
+  - `ALICE_SLACK_APP_TOKEN=<alice_xapp_token>`
+  - `BOB_SLACK_APP_TOKEN=<alice_xapp_token>`
+
+If you want a separate incoming path (for example, separate workspaces or separate Slack Apps), create and configure another Slack App with its own Socket Mode / Event Subscriptions / App-Level Token.
+
+### 5.6.2. `person.yml` Example
+
+Configure chat receiving channels (`message_channels`) and scheduled posting (`task_schedules`) in `team/members/<person_id>/person.yml`.
+
+```yaml
+# team/members/alice/person.yml
+person_id: alice
+name: Alice
+is_active: true
+
+message_channels:
+  - service: slack
+    name: dev-chat
+    chat:
+      enabled: true
+
+task_schedules:
+  - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
+    schedules:
+      - "0 9 * * 1-5"
+```
+
+Points:
+
+- Monitored channels are defined in `message_channels`; entries with `chat.enabled: true` are monitored.
+- For scheduled posting, use `task_schedules` + `workflows/chat_post_command` (the post body is generated from a GuildBotics custom command output).
+- Example: `examples/reports/ai_news_digest` gets candidate news from Google News RSS first, then an LLM formats it into a Slack-friendly summary.
+
+Example scheduled command (AI news digest):
+
+```bash
+guildbotics run examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24
+```
+
+Example posting command (manual):
+
+```bash
+guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
+```
+
+This command first fetches candidate articles from Google News RSS, then uses an LLM to format a Japanese digest suitable for Slack.
+
 # 6. GitHub Integration Example
 
 This section describes how to use the default `ticket_driven_workflow` which integrates with GitHub Projects and Issues for ticket-based AI agent collaboration.
@@ -618,6 +732,10 @@ With the ticket-driven workflow, you can:
 - `OPENAI_API_KEY`: OpenAI API
 - `ANTHROPIC_API_KEY`: Anthropic Claude API
 
+**Slack Access**:
+- `{PERSON_ID}_SLACK_BOT_TOKEN`: Slack Bot Token per person
+- `{PERSON_ID}_SLACK_APP_TOKEN`: Slack App-Level Token per person
+
 **GitHub Access** (per-person, format: `{PERSON_ID}_...`):
 - `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: PAT for machine accounts/proxy agents
 - `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: For GitHub Apps
@@ -639,6 +757,8 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 - `roles`: Role assignments
 - `routine_commands`: Override default routine commands
 - `task_schedules`: Cron-based scheduled commands
+- `task_schedules[].command`: Scheduled posting can be configured with `workflows/chat_post_command ...`
+- `message_channels`: Monitored channel settings (`chat.enabled`, `chat.event_source=socket_mode`, `channel_id`/`name`)
 
 **Brain/CLI Agent Configuration**:
 - `intelligences/cli_agent_mapping.yml`: Default CLI agent selection

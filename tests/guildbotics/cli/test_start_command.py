@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from click.testing import CliRunner
+
+from guildbotics.cli import main as cli_main
+
+
+class _FakeSetupTool:
+    def __init__(self, context):
+        self._context = context
+
+    def get_context(self, message: str = ""):
+        return self._context
+
+    def init_project(self) -> None:
+        return None
+
+    def add_member(self) -> None:
+        return None
+
+    def verify_environment(self) -> None:
+        return None
+
+    def get_default_routines(self) -> list[str]:
+        return ["workflows/ticket_driven_workflow"]
+
+
+class _FakeScheduler:
+    def __init__(self, context, routine_commands, consecutive_error_limit):
+        self.context = context
+        self.routine_commands = list(routine_commands)
+        self.consecutive_error_limit = consecutive_error_limit
+        self.start_called = 0
+        self.shutdown_called = 0
+
+    def start(self):
+        self.start_called += 1
+
+    def shutdown(self, graceful: bool = True):
+        self.shutdown_called += 1
+
+
+class _FakeEventListenerRunner:
+    def __init__(self, context):
+        self.context = context
+        self.start_called = 0
+        self.stop_called = 0
+        self.join_called = 0
+
+    def start(self):
+        self.start_called += 1
+
+    def stop(self):
+        self.stop_called += 1
+
+    def join(self, timeout=None):
+        self.join_called += 1
+
+    def is_alive(self):
+        return False
+
+
+def _patch_start_dependencies(monkeypatch, tmp_path: Path):
+    context = object()
+    setup_tool = _FakeSetupTool(context)
+    created: dict[str, object] = {}
+    handlers: dict[object, object] = {}
+    call_order: list[str] = []
+
+    def _scheduler_factory(*args, **kwargs):
+        inst = _FakeScheduler(*args, **kwargs)
+        created["scheduler"] = inst
+        return inst
+
+    def _events_factory(*args, **kwargs):
+        inst = _FakeEventListenerRunner(*args, **kwargs)
+        created["events"] = inst
+        return inst
+
+    monkeypatch.setattr("guildbotics.cli.get_setup_tool", lambda: setup_tool)
+    monkeypatch.setattr("guildbotics.cli.TaskScheduler", _scheduler_factory)
+    monkeypatch.setattr("guildbotics.cli.EventListenerRunner", _events_factory)
+    monkeypatch.setattr("guildbotics.cli._load_env_from_cwd", lambda: None)
+    monkeypatch.setattr("guildbotics.cli._pid_file_path", lambda: tmp_path / "scheduler.pid")
+    monkeypatch.setattr(
+        "guildbotics.cli.signal.signal",
+        lambda sig, handler: handlers.__setitem__(sig, handler),
+    )
+
+    original_scheduler_factory = _scheduler_factory
+    original_events_factory = _events_factory
+
+    def _scheduler_factory_with_order(*args, **kwargs):
+        inst = original_scheduler_factory(*args, **kwargs)
+        original_start = inst.start
+        original_shutdown = inst.shutdown
+
+        def _start():
+            call_order.append("scheduler.start")
+            return original_start()
+
+        def _shutdown(*, graceful=True):
+            call_order.append("scheduler.shutdown")
+            return original_shutdown(graceful=graceful)
+
+        inst.start = _start
+        inst.shutdown = _shutdown
+        return inst
+
+    def _events_factory_with_order(*args, **kwargs):
+        inst = original_events_factory(*args, **kwargs)
+        original_start = inst.start
+        original_stop = inst.stop
+        original_join = inst.join
+
+        def _start():
+            call_order.append("events.start")
+            return original_start()
+
+        def _stop():
+            call_order.append("events.stop")
+            return original_stop()
+
+        def _join(timeout=None):
+            call_order.append("events.join")
+            return original_join(timeout=timeout)
+
+        inst.start = _start
+        inst.stop = _stop
+        inst.join = _join
+        return inst
+
+    monkeypatch.setattr("guildbotics.cli.TaskScheduler", _scheduler_factory_with_order)
+    monkeypatch.setattr("guildbotics.cli.EventListenerRunner", _events_factory_with_order)
+    return created, handlers, call_order
+
+
+def test_start_only_scheduler(monkeypatch, tmp_path):
+    created, _handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["start", "--only", "scheduler"])
+
+    assert result.exit_code == 0, result.output
+    assert "scheduler" in created
+    assert "events" not in created
+    assert created["scheduler"].start_called == 1
+
+
+def test_start_only_events(monkeypatch, tmp_path):
+    created, _handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["start", "--only", "events"])
+
+    assert result.exit_code == 0, result.output
+    assert "events" in created
+    assert "scheduler" not in created
+    assert created["events"].start_called == 1
+    assert created["events"].stop_called >= 1
+    assert created["events"].join_called >= 1
+
+
+def test_start_defaults_to_scheduler_and_events(monkeypatch, tmp_path):
+    created, _handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["start"])
+
+    assert result.exit_code == 0, result.output
+    assert "scheduler" in created
+    assert "events" in created
+    assert created["scheduler"].start_called == 1
+    assert created["events"].start_called == 1
+
+
+def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path):
+    created, handlers, call_order = _patch_start_dependencies(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    def _scheduler_start_and_signal():
+        created["scheduler"].start_called += 1
+        # Simulate SIGTERM while start command is running.
+        handlers[__import__("signal").SIGTERM](__import__("signal").SIGTERM, None)
+
+    # Patch after factory created by command invocation.
+    # We intercept via side effect on created instance inside custom factory wrapper.
+    original_factory = None
+    # Replace TaskScheduler factory again to inject the special start behavior.
+    def _task_scheduler_factory(context, routine_commands, consecutive_error_limit):
+        nonlocal original_factory
+        inst = _FakeScheduler(context, routine_commands, consecutive_error_limit)
+        original_factory = inst
+        created["scheduler"] = inst
+        # Preserve ordering logs
+        def _start():
+            call_order.append("scheduler.start")
+            return _scheduler_start_and_signal()
+        def _shutdown(*, graceful=True):
+            call_order.append("scheduler.shutdown")
+            return _FakeScheduler.shutdown(inst, graceful=graceful)
+        inst.start = _start
+        inst.shutdown = _shutdown
+        return inst
+
+    monkeypatch.setattr("guildbotics.cli.TaskScheduler", _task_scheduler_factory)
+
+    result = runner.invoke(cli_main, ["start"])
+
+    assert result.exit_code == 0, result.output
+    assert created["events"].start_called == 1
+    # Signal handler should stop events before scheduler shutdown.
+    first_stop = call_order.index("events.stop")
+    first_shutdown = call_order.index("scheduler.shutdown")
+    assert first_stop < first_shutdown

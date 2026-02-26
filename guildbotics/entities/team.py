@@ -189,7 +189,6 @@ class MessageChannel(BaseModel):
     A class representing a message channel.
 
     Attributes:
-        id (str): The unique identifier for the message channel.
         service (str): The service where the message channel is hosted (e.g., Discord, Slack).
         name (str): The name of the message channel.
         used_as (list[str]): A list of roles that use the message channel.
@@ -197,20 +196,23 @@ class MessageChannel(BaseModel):
         channel_info (dict): Additional information about the channel.
     """
 
-    id: str = Field(..., description="The unique identifier for the message channel.")
-    name: str = Field(..., description="The name of the message channel.")
+    name: str = Field(default="", description="The name of the message channel.")
     service: str = Field(
-        ...,
+        default="",
         description="The service where the message channel is hosted (e.g., Discord, Slack).",
     )
     used_as: list[str] = Field(
-        ..., description="A list of roles that use the message channel."
+        default_factory=list, description="A list of roles that use the message channel."
     )
     used_by: list[str] = Field(
-        ..., description="A list of roles that are used by the message channel."
+        default_factory=list, description="A list of roles that are used by the message channel."
     )
     channel_info: dict = Field(
         default_factory=dict, description="Additional information about the channel."
+    )
+    chat: dict = Field(
+        default_factory=dict,
+        description="Optional chat workflow settings for this message channel.",
     )
 
 

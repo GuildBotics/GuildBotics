@@ -12,8 +12,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import pytest
+
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Repository, Role, Team
+from guildbotics.integrations.chat_service import ChatIdentity
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.loader.team_loader import TeamLoader
@@ -92,6 +95,7 @@ class DummyIntegrationFactory(IntegrationFactory):
     def __init__(self):
         self.ticket_manager_calls: list[tuple[Person, Team]] = []
         self.code_hosting_calls: list[tuple[Person, Team, str | None]] = []
+        self.chat_service_calls: list[tuple[Person, Team]] = []
 
     def create_ticket_manager(
         self, logger: logging.Logger, person: Person, team: Team
@@ -106,6 +110,22 @@ class DummyIntegrationFactory(IntegrationFactory):
         """Record the call and return a sentinel object."""
         self.code_hosting_calls.append((person, team, repository))
         return object()
+
+    def create_chat_service(self, logger: logging.Logger, person: Person, team: Team):
+        """Record the call and return a minimal chat service stub."""
+        self.chat_service_calls.append((person, team))
+
+        class _DummyChatService:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def get_bot_identity(self):
+                return ChatIdentity(user_id="U_TEST", display_name="dummy")
+
+            async def aclose(self):
+                self.closed = True
+
+        return _DummyChatService()
 
 
 class DummyBrain(Brain):
@@ -216,6 +236,33 @@ def test_clone_for_independence_person_role_and_cache():
     assert ctx2.active_role.id == "reviewer"
     # Message is copied
     assert ctx2.pipe == "Initial message"
+
+
+@pytest.mark.asyncio
+async def test_context_aclose_closes_cached_chat_resources():
+    team = _make_team(language="en")
+    loader_factory = DummyLoaderFactory(team)
+    integration_factory = DummyIntegrationFactory()
+    brain_factory = DummyBrainFactory()
+    logger = logging.getLogger("test")
+
+    person = Person(person_id="p1", name="Tester")
+    task = Task(title="T", description="D")
+    ctx = Context(
+        loader_factory=loader_factory,
+        integration_factory=integration_factory,
+        brain_factory=brain_factory,
+        logger=logger,
+        person=person,
+        task=task,
+        message="Initial message",
+    )
+
+    chat_service = ctx.get_chat_service()
+    await ctx.aclose()
+
+    assert getattr(chat_service, "closed", False) is True
+    assert ctx.chat_service is None
 
 
 def test_update_task_re_resolves_active_role():

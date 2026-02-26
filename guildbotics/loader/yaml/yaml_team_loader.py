@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from guildbotics.entities import MessageChannel, Person, Project, Team
+from guildbotics.entities import Person, Project, Team
 from guildbotics.loader import TeamLoader
 from guildbotics.loader.yaml.yaml_role_loader import YamlRoleLoader
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
@@ -44,13 +44,6 @@ class YamlTeamLoader(TeamLoader):
                 person = Person.model_validate(person_data)
                 role_loader.extract_roles_from_profile(person)
 
-                message_channel_file = d / "message_channels.yml"
-                if message_channel_file.exists():
-                    message_channel_data = load_yaml_file(message_channel_file)
-                    person.message_channels = [
-                        MessageChannel.model_validate(channel)
-                        for channel in message_channel_data
-                    ]
                 members.append(person)
 
         return Team(members=members, project=project)

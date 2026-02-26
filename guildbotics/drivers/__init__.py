@@ -4,10 +4,12 @@ from guildbotics.drivers.command_runner import (
     PersonSelectionRequiredError,
     run_command,
 )
+from guildbotics.drivers.event_listener_runner import EventListenerRunner
 from guildbotics.drivers.task_scheduler import TaskScheduler
 
 __all__ = [
     "TaskScheduler",
+    "EventListenerRunner",
     "run_command",
     "CommandError",
     "PersonSelectionRequiredError",

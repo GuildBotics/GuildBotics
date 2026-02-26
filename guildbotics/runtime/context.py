@@ -1,4 +1,5 @@
 from copy import deepcopy
+import asyncio
 from logging import Logger
 from typing import Any, Awaitable, Callable
 
@@ -6,6 +7,7 @@ from pydantic import BaseModel
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
+from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.code_hosting_service import CodeHostingService
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.brains.brain import Brain
@@ -15,7 +17,6 @@ from guildbotics.runtime.loader_factory import LoaderFactory
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.log_utils import get_logger
-
 
 class Context:
     """
@@ -53,6 +54,7 @@ class Context:
         self.task = task
         self.active_role = person.get_role(task.role)
         self.ticket_manager: TicketManager | None = None
+        self.chat_service: ChatService | None = None
         self.pipe = message
         self.shared_state: dict[str, Any] = {}
         self._invoker: Callable[[str, Any], Awaitable[Any]] | None = None
@@ -169,6 +171,14 @@ class Context:
             self.person, self.team, repository
         )
 
+    def get_chat_service(self) -> ChatService:
+        """Get a chat service for the current person/team."""
+        if self.chat_service is None:
+            self.chat_service = self.integration_factory.create_chat_service(
+                self.logger, self.person, self.team
+            )
+        return self.chat_service
+
     def set_invoker(self, invoker: Callable[[str, Any], Awaitable[Any]]) -> None:
         self._invoker = invoker
 
@@ -182,6 +192,11 @@ class Context:
         self.shared_state[key] = shared_value
         self.pipe = text_value
 
+    async def aclose(self) -> None:
+        """Close cached integrations that hold network resources."""
+        await _maybe_aclose(self.chat_service)
+        self.chat_service = None
+
     def _normalize_for_shared_state(self, value: Any) -> Any:
         if isinstance(value, BaseModel):
             return value.model_dump()
@@ -193,3 +208,14 @@ class Context:
         if isinstance(value, dict):
             return deepcopy(value)
         return value
+
+
+async def _maybe_aclose(obj: Any) -> None:
+    if obj is None:
+        return
+    close = getattr(obj, "aclose", None)
+    if not callable(close):
+        return
+    result = close()
+    if asyncio.iscoroutine(result):
+        await result

@@ -1,6 +1,11 @@
 from logging import Logger
 
 from guildbotics.entities import Person, Service, Team
+from guildbotics.integrations.chat_service import ChatService
+from guildbotics.integrations.chat_profile import (
+    get_chat_slack_base_url,
+)
+from guildbotics.integrations.slack.slack_chat_service import SlackChatService
 from guildbotics.integrations.code_hosting_service import CodeHostingService
 from guildbotics.integrations.github.github_code_hosting_service import (
     GitHubCodeHostingService,
@@ -52,3 +57,22 @@ class SimpleIntegrationFactory(IntegrationFactory):
         if name == "github":
             return GitHubCodeHostingService(person, team, repository)
         raise ValueError(f"Unsupported code hosting service: {name}")
+
+    def create_chat_service(self, logger: Logger, person: Person, team: Team) -> ChatService:
+        """
+        Create a chat service for the given person.
+
+        MVP: Slack only.
+        """
+        if not person.has_secret("SLACK_BOT_TOKEN"):
+            env_key = person.to_person_env_key("SLACK_BOT_TOKEN")
+            raise ValueError(
+                f"Slack Bot Token is required for person '{person.person_id}'. "
+                f"Set environment variable '{env_key}'."
+            )
+        token = person.get_secret("SLACK_BOT_TOKEN")
+        return SlackChatService(
+            logger=logger,
+            token=token,
+            base_url=get_chat_slack_base_url(person),
+        )
