@@ -37,10 +37,21 @@ async def test_list_channel_events_normalizes_messages():
                 {"type": "message", "user": "UUSER1", "text": "<@UBOT123> hi", "ts": "100.1"},
                 {
                     "type": "message",
+                    "subtype": "message_changed",
+                    "text": "edited",
+                    "ts": "100.15",
+                },
+                {
+                    "type": "message",
                     "subtype": "bot_message",
                     "bot_id": "B1",
                     "text": "bot says",
                     "ts": "101.1",
+                },
+                {
+                    "type": "message",
+                    "subtype": "message_deleted",
+                    "ts": "101.15",
                 },
             ],
             "response_metadata": {"next_cursor": "abc"},
@@ -112,12 +123,78 @@ async def test_post_message_and_add_reaction_send_expected_payloads():
     client = _client_for(handler)
     svc = SlackChatService(logging.getLogger("test"), client=client, base_url="https://x.test")
     res = await svc.post_message("C1", "hello", thread_ts="100.1")
-    await svc.add_reaction("C1", "100.1", "eyes")
+    await svc.add_reaction("C1", "100.1", "ack")
     assert res.message_ts == "200.1"
     assert res.thread_ts == "100.1"
     assert any(path.endswith("/chat.postMessage") and "thread_ts=100.1" in body for path, body in seen)
-    assert any(path.endswith("/reactions.add") and "name=eyes" in body for path, body in seen)
+    assert any(
+        path.endswith("/reactions.add") and "name=white_check_mark" in body
+        for path, body in seen
+    )
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_add_reaction_raises_for_unknown_semantic_reaction():
+    client = _client_for(lambda request: httpx.Response(200, json={"ok": True}))
+    svc = SlackChatService(logging.getLogger("test"), client=client, base_url="https://x.test")
+    with pytest.raises(RuntimeError, match="Unsupported semantic reaction"):
+        await svc.add_reaction("C1", "100.1", "eyes")
+    await client.aclose()
+
+
+def test_normalize_and_render_participant_text_for_slack_mentions():
+    svc = SlackChatService(
+        logging.getLogger("test"),
+        client=_client_for(lambda request: httpx.Response(200, json={"ok": True})),
+        base_url="https://x.test",
+    )
+    participant_labels = {"UALICE": "alice", "UBOB": "bob"}
+
+    normalized = svc.normalize_participant_text("<@UALICE> hi <@UBOB>", participant_labels)
+    rendered = svc.render_participant_text("@alice hi @bob", participant_labels)
+
+    assert normalized == "@alice hi @bob"
+    assert rendered == "<@UALICE> hi <@UBOB>"
+
+
+def test_render_participant_text_does_not_convert_ephemeral_labels():
+    svc = SlackChatService(
+        logging.getLogger("test"),
+        client=_client_for(lambda request: httpx.Response(200, json={"ok": True})),
+        base_url="https://x.test",
+    )
+    participant_labels = {
+        "UALICE": "alice",
+        "UUSER1": "user_1",
+        "UAGENT1": "agent_1",
+    }
+
+    rendered = svc.render_participant_text("@alice @user_1 @agent_1", participant_labels)
+
+    assert rendered == "<@UALICE> user_1 agent_1"
+
+
+def test_render_participant_text_converts_hyphenated_person_labels():
+    svc = SlackChatService(
+        logging.getLogger("test"),
+        client=_client_for(lambda request: httpx.Response(200, json={"ok": True})),
+        base_url="https://x.test",
+    )
+    participant_labels = {
+        "UMAINT": "maintenance-bot",
+        "UALICE": "alice",
+    }
+
+    normalized = svc.normalize_participant_text(
+        "<@UMAINT> hi <@UALICE>", participant_labels
+    )
+    rendered = svc.render_participant_text(
+        "@maintenance-bot hi @alice", participant_labels
+    )
+
+    assert normalized == "@maintenance-bot hi @alice"
+    assert rendered == "<@UMAINT> hi <@UALICE>"
 
 
 @pytest.mark.asyncio

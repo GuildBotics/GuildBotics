@@ -114,3 +114,38 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
     assert [item.event.event_id for item in drained] == ["C1:100.1"]
     assert any("env-1" in msg for msg in ws1.sent)
 
+
+def test_to_incoming_event_ignores_message_changed_and_deleted():
+    listener = SlackSocketEventListener(
+        logger=_dummy_logger(),
+        app_token="xapp-test",
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda _req: httpx.Response(500))),
+        ws_connect=lambda _url: _FakeSocket([]),
+    )
+
+    changed = {
+        "type": "events_api",
+        "payload": {
+            "event": {
+                "type": "message",
+                "subtype": "message_changed",
+                "channel": "C1",
+                "ts": "100.1",
+                "text": "edited",
+            }
+        },
+    }
+    deleted = {
+        "type": "events_api",
+        "payload": {
+            "event": {
+                "type": "message",
+                "subtype": "message_deleted",
+                "channel": "C1",
+                "ts": "100.2",
+            }
+        },
+    }
+
+    assert listener._to_incoming_event(changed) is None
+    assert listener._to_incoming_event(deleted) is None

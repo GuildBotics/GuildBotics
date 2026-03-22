@@ -70,6 +70,20 @@ class _WorkflowChatService:
     async def add_reaction(self, channel_id: str, message_ts: str, reaction: str) -> None:
         self.reactions.append((channel_id, message_ts, reaction))
 
+    def normalize_participant_text(
+        self, text: str, participant_labels: dict[str, str]
+    ) -> str:
+        for user_id, label in participant_labels.items():
+            text = text.replace(f"<@{user_id}>", f"@{label}")
+        return text
+
+    def render_participant_text(
+        self, text: str, participant_labels: dict[str, str]
+    ) -> str:
+        for user_id, label in participant_labels.items():
+            text = text.replace(f"@{label}", f"<@{user_id}>")
+        return text
+
     async def aclose(self) -> None:
         return None
 

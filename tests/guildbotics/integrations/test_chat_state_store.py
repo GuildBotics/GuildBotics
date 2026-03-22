@@ -57,6 +57,8 @@ def test_thread_state_roundtrip(tmp_path):
         thread_ts="123.456",
         participants={"alice", "bob"},
         last_bot_replier_id="alice",
+        thread_topic="weekly AI news",
+        latest_focus="business angle grounded in current-week items",
         response_expected=False,
         thread_claimed_by_other=True,
     )
@@ -68,6 +70,8 @@ def test_thread_state_roundtrip(tmp_path):
     assert loaded.thread_ts == "123.456"
     assert loaded.participants == {"alice", "bob"}
     assert loaded.last_bot_replier_id == "alice"
+    assert loaded.thread_topic == "weekly AI news"
+    assert loaded.latest_focus == "business angle grounded in current-week items"
     assert loaded.response_expected is False
     assert loaded.thread_claimed_by_other is True
 
@@ -85,6 +89,8 @@ def test_load_missing_state_returns_defaults(tmp_path):
     assert thread.thread_ts == "100.1"
     assert thread.participants == set()
     assert thread.last_bot_replier_id is None
+    assert thread.thread_topic == ""
+    assert thread.latest_focus == ""
     assert thread.response_expected is True
     assert thread.thread_claimed_by_other is False
     assert store.load_thread_messages("slack", "alice", "C1", "100.1") == []

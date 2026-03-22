@@ -2,6 +2,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Literal
+
+SemanticReaction = Literal["ack", "agree", "celebrate", "support"]
+SEMANTIC_REACTIONS: tuple[SemanticReaction, ...] = (
+    "ack",
+    "agree",
+    "celebrate",
+    "support",
+)
 
 
 @dataclass(slots=True)
@@ -19,10 +28,14 @@ class ChatEvent:
     author_id: str | None
     text: str
     mentions: list[str] = field(default_factory=list)
-    is_message: bool = True
     is_edit_or_delete: bool = False
     is_bot_message: bool = False
     is_thread_reply: bool = False
+
+    def is_from_user(self, user_id: str | None) -> bool:
+        if not user_id:
+            return False
+        return self.author_id == user_id
 
 
 @dataclass(slots=True)
@@ -80,4 +93,16 @@ class ChatService(ABC):
     async def add_reaction(
         self, channel_id: str, message_ts: str, reaction: str
     ) -> None:
-        """Add a reaction to a message."""
+        """Add a semantic reaction to a message."""
+
+    def normalize_participant_text(
+        self, text: str, participant_labels: dict[str, str]
+    ) -> str:
+        """Normalize service-specific participant syntax into workflow-friendly labels."""
+        return text
+
+    def render_participant_text(
+        self, text: str, participant_labels: dict[str, str]
+    ) -> str:
+        """Render workflow-friendly participant labels into service-specific syntax."""
+        return text

@@ -4,25 +4,26 @@ from copy import deepcopy
 from typing import Any
 
 from guildbotics.commands.utils import stringify_output
-from guildbotics.integrations.chat_service import ChatService
+from guildbotics.entities.message import Message
+from guildbotics.integrations.chat_service import ChatEvent, ChatService
 from guildbotics.integrations.chat_profile import (
     get_chat_subscriptions,
 )
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
+    ThreadConversationState,
     ThreadMessageState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.intelligences.functions import talk_as
 from guildbotics.runtime.event_listener import INCOMING_CHAT_EVENT_KEY, IncomingChatEvent
-from guildbotics.templates.commands.workflows.chat.policies.models import (
-    PolicyEvent,
-    PolicyInput,
-    ProcessingState,
-    ThreadContext,
+from guildbotics.templates.commands.workflows.chat import should_react as should_react_command
+from guildbotics.templates.commands.workflows.chat.should_react import (
+    DecisionResult,
+    ReactionInput,
+    ReactionThreadContext,
 )
-from guildbotics.templates.commands.workflows.chat.policies.should_react import (
-    ShouldReactPolicy,
-)
+from guildbotics.utils.i18n_tool import t
 
 
 async def main(
@@ -33,7 +34,6 @@ async def main(
     """React to one incoming chat event provided via Context.shared_state."""
     chat_service = chat_service or context.get_chat_service()
     state_store = state_store or FileConversationStateStore()
-    policy = ShouldReactPolicy()
     incoming = _read_incoming_event_from_context(context)
     if incoming is not None:
         identity = await chat_service.get_bot_identity()
@@ -41,7 +41,6 @@ async def main(
             context=context,
             chat_service=chat_service,
             state_store=state_store,
-            policy=policy,
             service_name=incoming.service_name,
             channel_id=incoming.channel_id,
             identity_user_id=identity.user_id,
@@ -55,11 +54,10 @@ async def _handle_event(
     context: Any,
     chat_service: ChatService,
     state_store: ConversationStateStore,
-    policy: ShouldReactPolicy,
     service_name: str,
     channel_id: str,
     identity_user_id: str,
-    event: Any,
+    event: ChatEvent,
 ) -> None:
     thread_state = state_store.load_thread_state(
         service_name, context.person.person_id, channel_id, event.thread_ts
@@ -68,7 +66,13 @@ async def _handle_event(
         service_name, context.person.person_id, channel_id
     )
     already_processed = event.event_id in set(channel_state.processed_event_ids)
-    if not already_processed and event.is_message and not event.is_edit_or_delete:
+    if event.is_edit_or_delete:
+        if not already_processed:
+            state_store.mark_processed_event(
+                service_name, context.person.person_id, channel_id, event.event_id
+            )
+        return
+    if not already_processed:
         state_store.append_thread_message(
             service_name,
             context.person.person_id,
@@ -85,37 +89,18 @@ async def _handle_event(
             ),
         )
 
-    policy_input = PolicyInput(
+    decision = await _evaluate_should_react(
+        context=context,
+        chat_service=chat_service,
         self_person_id=context.person.person_id,
         self_user_id=identity_user_id,
-        event=PolicyEvent(
-            event_id=event.event_id,
-            channel_id=event.channel_id,
-            message_ts=event.message_ts,
-            thread_ts=event.thread_ts,
-            author_id=event.author_id,
-            text=event.text,
-            mentions=list(event.mentions),
-            is_message=event.is_message,
-            is_edit_or_delete=event.is_edit_or_delete,
-            is_bot_message=event.is_bot_message,
-            is_from_self=(event.author_id == identity_user_id),
-            is_in_subscribed_channel=(event.channel_id == channel_id),
-            is_thread_reply=event.is_thread_reply,
+        event=event,
+        thread_state=thread_state,
+        thread_messages=state_store.load_thread_messages(
+            service_name, context.person.person_id, channel_id, event.thread_ts
         ),
-        thread_context=ThreadContext(
-            participants=set(thread_state.participants),
-            last_bot_replier_id=thread_state.last_bot_replier_id,
-            bot_auto_turn_count=0,
-            too_many_recent_bot_replies=False,
-            thread_claimed_by_other=thread_state.thread_claimed_by_other,
-        ),
-        state=ProcessingState(
-            already_processed=already_processed,
-            response_expected=thread_state.response_expected,
-        ),
+        already_processed=already_processed,
     )
-    decision = policy.evaluate(policy_input)
 
     if hasattr(context, "logger"):
         try:
@@ -150,11 +135,19 @@ async def _handle_event(
     thread_messages = state_store.load_thread_messages(
         service_name, context.person.person_id, channel_id, event.thread_ts
     )
-    reply_text = await _build_reply_text(context, event, thread_messages)
+    reply_text, thread_context = await _build_reply_text(
+        context, event, thread_messages, identity_user_id, chat_service, thread_state
+    )
     if not reply_text.strip():
         return
+    author_labels = await _build_author_labels(
+        context, identity_user_id, event, thread_messages[-20:]
+    )
+    rendered_reply_text = chat_service.render_participant_text(reply_text, author_labels)
 
-    post_result = await chat_service.post_message(channel_id, reply_text, thread_ts=event.thread_ts)
+    post_result = await chat_service.post_message(
+        channel_id, rendered_reply_text, thread_ts=event.thread_ts
+    )
     # Record success of the external side effect immediately. If the process crashes
     # before source.mark_processed() runs, the event may replay but will be ignored.
     state_store.mark_processed_event(
@@ -170,63 +163,90 @@ async def _handle_event(
             thread_ts=post_result.thread_ts,
             message_ts=post_result.message_ts,
             author_id=identity_user_id,
-            text=reply_text,
+            text=rendered_reply_text,
             mentions=[],
             is_bot_message=True,
         ),
     )
     thread_state.participants.add(context.person.person_id)
-    thread_state.last_bot_replier_id = context.person.person_id
-    thread_state.response_expected = True
+    if thread_context.get("thread_topic"):
+        thread_state.thread_topic = thread_context["thread_topic"]
+    if thread_context.get("latest_focus"):
+        thread_state.latest_focus = thread_context["latest_focus"]
     state_store.save_thread_state(
         service_name, context.person.person_id, channel_id, event.thread_ts, thread_state
     )
 
 async def _build_reply_text(
-    context: Any, event: Any, thread_messages: list[ThreadMessageState]
-) -> str:
-    text = await _build_reply_text_via_command(context, event, thread_messages)
-    if text.strip():
-        return text
-    # Fallback for contexts without invoker / command failures.
-    return _build_reply_text_fallback(context, event, thread_messages)
+    context: Any,
+    event: ChatEvent,
+    thread_messages: list[ThreadMessageState],
+    self_user_id: str,
+    chat_service: ChatService,
+    thread_state: ThreadConversationState,
+) -> tuple[str, dict[str, str]]:
+    author_labels = await _build_author_labels(
+        context, self_user_id, event, thread_messages[-20:]
+    )
+    text, thread_context = await _build_reply_text_via_command(
+        context,
+        event,
+        thread_messages,
+        self_user_id,
+        author_labels,
+        chat_service,
+        thread_state,
+    )
+    if not text.strip():
+        # Fallback for contexts without invoker / command failures.
+        text = _build_reply_text_fallback(context, event, thread_messages)
+    return (
+        await _talk_as_reply(
+            context, text, thread_messages, self_user_id, author_labels, chat_service
+        ),
+        thread_context,
+    )
 
 
 async def _build_reply_text_via_command(
-    context: Any, event: Any, thread_messages: list[ThreadMessageState]
-) -> str:
+    context: Any,
+    event: ChatEvent,
+    thread_messages: list[ThreadMessageState],
+    self_user_id: str,
+    author_labels: dict[str, str],
+    chat_service: ChatService,
+    thread_state: ThreadConversationState,
+) -> tuple[str, dict[str, str]]:
     invoke = getattr(context, "invoke", None)
     if not callable(invoke):
-        return ""
+        return "", {}
+
+    prompt_thread_messages = [
+        _to_prompt_message_from_state(message, self_user_id, author_labels, chat_service)
+        for message in thread_messages[-20:]
+    ]
+    prompt_latest_message = _to_prompt_message_from_event(
+        event, self_user_id, author_labels, chat_service
+    )
 
     payload = {
-        "channel_id": getattr(event, "channel_id", ""),
-        "thread_ts": getattr(event, "thread_ts", ""),
-        "message_ts": getattr(event, "message_ts", ""),
-        "latest_message": {
-            "author_id": getattr(event, "author_id", None),
-            "text": getattr(event, "text", ""),
-            "mentions": list(getattr(event, "mentions", []) or []),
-            "is_thread_reply": bool(getattr(event, "is_thread_reply", False)),
-        },
+        "latest_message": _message_to_prompt_dict(prompt_latest_message),
         "thread_messages": [
-            {
-                "message_ts": msg.message_ts,
-                "author_id": msg.author_id,
-                "text": msg.text,
-                "mentions": list(msg.mentions),
-                "is_bot_message": msg.is_bot_message,
-            }
-            for msg in thread_messages[-20:]
+            _message_to_prompt_dict(message) for message in prompt_thread_messages
         ],
+        "previous_thread_context": {
+            "thread_topic": thread_state.thread_topic,
+            "latest_focus": thread_state.latest_focus,
+        },
     }
 
-    transcript_lines = []
-    for msg in thread_messages[-20:]:
-        speaker = "bot" if msg.is_bot_message else (msg.author_id or "user")
-        transcript_lines.append(f"[{speaker}] {msg.text}")
+    transcript_lines = [
+        f"[{message.author}] {message.content}" for message in prompt_thread_messages
+    ]
     if not transcript_lines:
-        transcript_lines.append(str(getattr(event, "text", "") or ""))
+        transcript_lines.append(
+            f"[{prompt_latest_message.author}] {prompt_latest_message.content}"
+        )
     transcript = "\n".join(transcript_lines)
 
     old_pipe = getattr(context, "pipe", "")
@@ -237,14 +257,20 @@ async def _build_reply_text_via_command(
             context.shared_state["chat_reply_input"] = payload
         if hasattr(context, "pipe"):
             context.pipe = transcript
-        result = await invoke("workflows/chat_reply")
-        return stringify_output(result).strip()
+        thread_context = await _classify_thread_context(context)
+        if has_shared_state:
+            context.shared_state["chat_reply_input"]["thread_context"] = thread_context
+        reply_intent = await _classify_reply_intent(context)
+        if has_shared_state:
+            context.shared_state["chat_reply_input"]["reply_intent"] = reply_intent
+        reply_result = await invoke("workflows/chat/chat_reply_actionable")
+        return stringify_output(reply_result).strip(), thread_context
     except Exception:
         _log_info(
             context,
             "chat reply command failed, falling back to placeholder reply generation",
         )
-        return ""
+        return "", {}
     finally:
         if has_shared_state and old_shared_state is not None:
             context.shared_state.clear()
@@ -254,18 +280,342 @@ async def _build_reply_text_via_command(
 
 
 def _build_reply_text_fallback(
-    context: Any, event: Any, thread_messages: list[ThreadMessageState]
+    context: Any, event: ChatEvent, thread_messages: list[ThreadMessageState]
 ) -> str:
-    latest_text = ""
-    for msg in reversed(thread_messages):
-        if not msg.is_bot_message:
-            latest_text = msg.text.strip()
-            if latest_text:
-                break
-    if not latest_text:
-        latest_text = (getattr(event, "text", "") or "").strip()
-    person_name = getattr(getattr(context, "person", None), "name", "Agent")
-    return f"{person_name}: {latest_text}"
+    return t("commands.workflows.chat_conversation_workflow.reply_generation_failed")
+
+
+async def _talk_as_reply(
+    context: Any,
+    text: str,
+    thread_messages: list[ThreadMessageState],
+    self_user_id: str,
+    author_labels: dict[str, str],
+    chat_service: ChatService,
+) -> str:
+    if not text.strip():
+        return text
+    try:
+        history = [
+            _to_prompt_message_from_state(
+                message, self_user_id, author_labels, chat_service
+            )
+            for message in thread_messages[-20:]
+        ]
+        talked_text = await talk_as(
+            context,
+            text,
+            t("commands.workflows.chat_conversation_workflow.context_location"),
+            history,
+        )
+        return talked_text.strip() or text
+    except Exception:
+        _log_info(
+            context,
+            "chat talk_as failed, using non-persona reply generation result",
+        )
+        return text
+
+
+async def _classify_reply_intent(context: Any) -> dict[str, str]:
+    invoke = getattr(context, "invoke", None)
+    if not callable(invoke):
+        return {
+            "label": "answer",
+            "reason": "default_without_invoker",
+            "confidence": "0.0",
+        }
+    try:
+        result = await invoke("workflows/chat/chat_reply_intent")
+    except Exception:
+        _log_info(context, "chat reply intent classification failed, defaulting to answer")
+        return {
+            "label": "answer",
+            "reason": "intent_classification_failed",
+            "confidence": "0.0",
+        }
+    return _normalize_reply_intent(result)
+
+
+async def _classify_thread_context(context: Any) -> dict[str, str]:
+    invoke = getattr(context, "invoke", None)
+    if not callable(invoke):
+        return {}
+    try:
+        result = await invoke("workflows/chat/chat_thread_context")
+    except Exception:
+        _log_info(context, "chat thread context classification failed, defaulting to empty context")
+        return {}
+    return _normalize_thread_context(result)
+
+
+def _normalize_reply_intent(result: Any) -> dict[str, str]:
+    if isinstance(result, dict):
+        label = str(result.get("label", "")).strip()
+        reason = str(result.get("reason", "")).strip()
+        confidence = str(result.get("confidence", "")).strip()
+    else:
+        label = str(getattr(result, "label", "")).strip()
+        reason = str(getattr(result, "reason", "")).strip()
+        confidence = str(getattr(result, "confidence", "")).strip()
+
+    if label not in {"answer", "supplement", "challenge", "clarify", "summarize"}:
+        label = "answer"
+    return {
+        "label": label,
+        "reason": reason or "no_reason",
+        "confidence": confidence or "0.0",
+    }
+
+
+def _normalize_thread_context(result: Any) -> dict[str, str]:
+    if isinstance(result, dict):
+        thread_topic = str(result.get("thread_topic", "")).strip()
+        latest_focus = str(result.get("latest_focus", "")).strip()
+        reason = str(result.get("reason", "")).strip()
+        confidence = str(result.get("confidence", "")).strip()
+    else:
+        thread_topic = str(getattr(result, "thread_topic", "")).strip()
+        latest_focus = str(getattr(result, "latest_focus", "")).strip()
+        reason = str(getattr(result, "reason", "")).strip()
+        confidence = str(getattr(result, "confidence", "")).strip()
+    normalized = {
+        "thread_topic": thread_topic,
+        "latest_focus": latest_focus,
+        "reason": reason or "no_reason",
+        "confidence": confidence or "0.0",
+    }
+    if not normalized["thread_topic"] and not normalized["latest_focus"]:
+        return {}
+    return normalized
+
+
+async def _build_author_labels(
+    context: Any,
+    self_user_id: str,
+    event: ChatEvent | None,
+    thread_messages: list[ThreadMessageState],
+) -> dict[str, str]:
+    ordered_ids: list[str] = []
+    bot_ids: set[str] = set()
+    person_labels = await _chat_user_to_person_labels(context)
+
+    def register(user_id: str | None, *, is_bot: bool) -> None:
+        if not user_id:
+            return
+        if user_id not in ordered_ids:
+            ordered_ids.append(user_id)
+        if is_bot:
+            bot_ids.add(user_id)
+
+    for message in thread_messages:
+        register(message.author_id, is_bot=message.is_bot_message)
+        for mention in message.mentions:
+            register(mention, is_bot=False)
+    if event is not None:
+        register(event.author_id, is_bot=event.is_bot_message)
+        for mention in event.mentions:
+            register(mention, is_bot=False)
+
+    self_person_id = str(getattr(getattr(context, "person", None), "person_id", "")).strip()
+    if not self_person_id:
+        self_person_id = "self"
+
+    labels: dict[str, str] = {}
+    if self_user_id:
+        labels[self_user_id] = self_person_id
+
+    agent_index = 1
+    user_index = 1
+    for user_id in ordered_ids:
+        if user_id in labels:
+            continue
+        mapped_person_id = person_labels.get(user_id)
+        if mapped_person_id:
+            labels[user_id] = mapped_person_id
+            continue
+        if user_id in bot_ids:
+            labels[user_id] = f"agent_{agent_index}"
+            agent_index += 1
+            continue
+        labels[user_id] = f"user_{user_index}"
+        user_index += 1
+    return labels
+
+
+async def _chat_user_to_person_labels(context: Any) -> dict[str, str]:
+    team = getattr(context, "team", None)
+    members = getattr(team, "members", []) if team is not None else []
+    return await _runtime_chat_user_to_person_labels(context, members)
+
+
+async def _runtime_chat_user_to_person_labels(
+    context: Any,
+    members: list[Any],
+) -> dict[str, str]:
+    clone_for = getattr(context, "clone_for", None)
+    if not callable(clone_for):
+        return {}
+
+    runtime_labels: dict[str, str] = {}
+    for member in members:
+        person_id = str(getattr(member, "person_id", "")).strip()
+        if not person_id or person_id in runtime_labels.values():
+            continue
+        try:
+            member_context = clone_for(member)
+        except Exception:
+            continue
+        try:
+            get_chat_service = getattr(member_context, "get_chat_service", None)
+            if not callable(get_chat_service):
+                continue
+            service = get_chat_service()
+            get_bot_identity = getattr(service, "get_bot_identity", None)
+            if not callable(get_bot_identity):
+                continue
+            identity = await get_bot_identity()
+            user_id = str(getattr(identity, "user_id", "")).strip()
+            if user_id:
+                runtime_labels[user_id] = person_id
+        except Exception:
+            continue
+        finally:
+            close = getattr(member_context, "aclose", None)
+            if callable(close):
+                try:
+                    result = close()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception:
+                    pass
+    return runtime_labels
+
+
+def _to_prompt_message_from_state(
+    message: ThreadMessageState,
+    self_user_id: str,
+    author_labels: dict[str, str],
+    chat_service: ChatService,
+) -> Message:
+    return Message(
+        content=chat_service.normalize_participant_text(message.text, author_labels),
+        author=_resolve_author_label(message.author_id, message.is_bot_message, author_labels),
+        author_type=_to_author_type(message.is_bot_message, message.author_id, self_user_id),
+        timestamp=message.message_ts,
+    )
+
+
+def _to_prompt_message_from_event(
+    event: ChatEvent,
+    self_user_id: str,
+    author_labels: dict[str, str],
+    chat_service: ChatService,
+) -> Message:
+    return Message(
+        content=chat_service.normalize_participant_text(event.text, author_labels),
+        author=_resolve_author_label(event.author_id, event.is_bot_message, author_labels),
+        author_type=_to_author_type(event.is_bot_message, event.author_id, self_user_id),
+        timestamp=event.message_ts,
+    )
+
+
+def _to_author_type(is_bot_message: bool, author_id: str | None, self_user_id: str) -> str:
+    if is_bot_message and author_id == self_user_id:
+        return Message.ASSISTANT
+    return Message.USER
+
+
+def _resolve_author_label(
+    author_id: str | None,
+    is_bot_message: bool,
+    author_labels: dict[str, str],
+) -> str:
+    if author_id:
+        label = author_labels.get(author_id)
+        if label:
+            return label
+    return "agent" if is_bot_message else "user"
+
+
+def _message_to_prompt_dict(message: Message) -> dict[str, str]:
+    return {
+        "content": message.content,
+        "author": message.author,
+        "author_type": message.author_type,
+    }
+
+
+async def _evaluate_should_react(
+    *,
+    context: Any,
+    chat_service: ChatService,
+    self_person_id: str,
+    self_user_id: str,
+    event: ChatEvent,
+    thread_state: ThreadConversationState,
+    thread_messages: list[ThreadMessageState],
+    already_processed: bool,
+) -> DecisionResult:
+    if already_processed:
+        return DecisionResult(decision="ignore", reason="already_processed")
+
+    author_labels = await _build_author_labels(context, self_user_id, event, thread_messages[-20:])
+    reaction_input = ReactionInput(
+        self_person_id=self_person_id,
+        self_user_id=self_user_id,
+        event=event,
+        thread_context=ReactionThreadContext(
+            participants=set(thread_state.participants),
+            last_bot_replier_id=thread_state.last_bot_replier_id,
+        ),
+        thread_messages=[
+            _message_to_prompt_dict(
+                _to_prompt_message_from_state(
+                    message, self_user_id, author_labels, chat_service
+                )
+            )
+            for message in thread_messages[-20:]
+        ],
+        already_processed=already_processed,
+    )
+
+    invoke = getattr(context, "invoke", None)
+    if callable(invoke):
+        result = await invoke(
+            "workflows/chat/should_react",
+            channel_type="chat",
+            reaction_input=reaction_input,
+        )
+    else:
+        result = await should_react_command.main(
+            context,
+            channel_type="chat",
+            reaction_input=reaction_input,
+        )
+    normalized = _normalize_policy_decision(result)
+    if normalized is None:
+        raise RuntimeError("should_react returned an invalid decision payload.")
+    return normalized
+
+
+def _normalize_policy_decision(result: Any) -> DecisionResult | None:
+    if isinstance(result, dict):
+        decision = str(result.get("decision", "")).strip()
+        reason = str(result.get("reason", "")).strip()
+        reaction = result.get("reaction")
+    else:
+        decision = str(getattr(result, "decision", "")).strip()
+        reason = str(getattr(result, "reason", "")).strip()
+        reaction = getattr(result, "reaction", None)
+
+    if decision not in {"ignore", "react_only", "reply"}:
+        return None
+    return DecisionResult(
+        decision=decision,  # type: ignore[arg-type]
+        reason=reason or "no_reason",
+        reaction=str(reaction) if reaction else None,
+    )
 
 
 def _log_info(context: Any, msg: str, *args: Any) -> None:

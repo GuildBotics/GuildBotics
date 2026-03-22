@@ -18,6 +18,8 @@ class ThreadConversationState:
     thread_ts: str
     participants: set[str] = field(default_factory=set)  # person_id
     last_bot_replier_id: str | None = None  # person_id
+    thread_topic: str = ""
+    latest_focus: str = ""
     response_expected: bool = True
     thread_claimed_by_other: bool = False
 

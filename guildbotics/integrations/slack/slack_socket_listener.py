@@ -194,6 +194,8 @@ class SlackSocketEventListener(EventListener):
             return None
         thread_ts = _str_or_none(event.get("thread_ts")) or ts
         subtype = str(event.get("subtype", ""))
+        if subtype in {"message_changed", "message_deleted"}:
+            return None
         text = str(event.get("text", "") or "")
         author_id = _str_or_none(event.get("user"))
         chat_event = ChatEvent(
@@ -204,8 +206,6 @@ class SlackSocketEventListener(EventListener):
             author_id=author_id,
             text=text,
             mentions=_extract_mentions(text),
-            is_message=True,
-            is_edit_or_delete=subtype in {"message_changed", "message_deleted"},
             is_bot_message=bool(event.get("bot_id")) or subtype == "bot_message",
             is_thread_reply=(thread_ts != ts),
         )

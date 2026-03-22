@@ -3,6 +3,7 @@ from typing import ClassVar, Literal
 from pydantic import BaseModel, Field
 
 from guildbotics.entities import Task
+from guildbotics.integrations.chat_service import SemanticReaction
 from guildbotics.utils.i18n_tool import t
 
 
@@ -17,6 +18,44 @@ class DecisionResponse(BaseModel):
 
     label: str = Field(..., description="The selected or classified label.")
     reason: str = Field(..., description="Explanation for the decision.")
+    confidence: float = Field(..., description="Confidence score between 0 and 1.")
+
+
+class ChatFollowupDecisionResponse(BaseModel):
+    """Decision model for follow-up chat participation."""
+
+    label: Literal["reply", "react_only", "ignore"] = Field(
+        ..., description="How this agent should respond to the follow-up."
+    )
+    reason: str = Field(..., description="Explanation for the decision.")
+    confidence: float = Field(..., description="Confidence score between 0 and 1.")
+    reaction: SemanticReaction | None = Field(
+        None,
+        description=(
+            "Service-independent semantic reaction to add when label is react_only."
+        ),
+    )
+
+
+class ChatReplyIntentResponse(BaseModel):
+    """Intent model for multi-party chat replies."""
+
+    label: Literal["answer", "supplement", "challenge", "clarify", "summarize"] = Field(
+        ..., description="The intended role of the next reply in the conversation."
+    )
+    reason: str = Field(..., description="Explanation for the selected intent.")
+    confidence: float = Field(..., description="Confidence score between 0 and 1.")
+
+
+class ChatThreadContextResponse(BaseModel):
+    """Structured thread-level context for chat replies."""
+
+    thread_topic: str = Field(..., description="The main theme of the thread so far.")
+    latest_focus: str = Field(
+        ...,
+        description="The most recent constraint, correction, or angle that should now be prioritized.",
+    )
+    reason: str = Field(..., description="Explanation for the extracted context.")
     confidence: float = Field(..., description="Confidence score between 0 and 1.")
 
 
