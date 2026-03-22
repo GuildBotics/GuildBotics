@@ -17,6 +17,7 @@ from guildbotics.integrations.chat_service import (
 
 _MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 _EPHEMERAL_PARTICIPANT_LABEL_RE = re.compile(r"^(?:user|agent)_\d+$", re.IGNORECASE)
+_PARTICIPANT_LABEL_MENTION_RE = re.compile(r"@([A-Za-z0-9_-]+)")
 _SLACK_REACTION_MAP: dict[SemanticReaction, str] = {
     "ack": "white_check_mark",
     "agree": "thumbsup",
@@ -176,7 +177,7 @@ class SlackChatService(ChatService):
                 return match.group(0)
             return f"<@{user_id}>"
 
-        return re.sub(r"@([A-Za-z0-9_]+)", repl, text or "")
+        return _PARTICIPANT_LABEL_MENTION_RE.sub(repl, text or "")
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:

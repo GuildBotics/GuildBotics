@@ -206,6 +206,7 @@ def _set_incoming_event(
     text: str,
     mentions: list[str] | None = None,
     is_thread_reply: bool = False,
+    is_edit_or_delete: bool = False,
 ) -> None:
     ctx.shared_state = {
         INCOMING_CHAT_EVENT_KEY: IncomingChatEvent(
@@ -219,6 +220,7 @@ def _set_incoming_event(
                 author_id=author_id,
                 text=text,
                 mentions=list(mentions or []),
+                is_edit_or_delete=is_edit_or_delete,
                 is_thread_reply=is_thread_reply,
             ),
         ).to_shared_state()
@@ -538,6 +540,109 @@ async def test_workflow_uses_runtime_identity_map_for_person_labels(tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_workflow_does_not_reuse_runtime_person_labels_across_contexts(
+    tmp_path, monkeypatch
+):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    alice = types.SimpleNamespace(
+        person_id="alice",
+        name="Alice",
+        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1", "enabled": True}]}},
+    )
+
+    first_ctx = RuntimeLookupContext(person=alice, logger=StubLogger(), reply_text="ベース返信")
+    first_ctx.team = types.SimpleNamespace(
+        members=[
+            alice,
+            types.SimpleNamespace(person_id="yuki", name="Yuki"),
+        ]
+    )
+    first_ctx._identity_map = {"alice": "U_ALICE", "yuki": "U_OTHER_BOT"}
+
+    first_thread_ts = "303.1"
+    state_store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        first_thread_ts,
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts=first_thread_ts,
+            message_ts="303.2",
+            author_id="U_OTHER_BOT",
+            text="別エージェントの発話",
+            mentions=[],
+            is_bot_message=True,
+        ),
+    )
+    _set_incoming_event(
+        first_ctx,
+        event_id="E_RUNTIME_SCOPE_1",
+        message_ts="303.3",
+        thread_ts=first_thread_ts,
+        text="<@U_ALICE> 続けて",
+        mentions=["U_ALICE"],
+        is_thread_reply=True,
+    )
+
+    async def fake_talk_as_first(context, topic, context_location, conversation_history):
+        return "キャラ口調の返信です。"
+
+    monkeypatch.setattr(chat_conversation_workflow, "talk_as", fake_talk_as_first)
+    await chat_conversation_workflow.main(
+        first_ctx, chat_service=service, state_store=state_store
+    )
+
+    second_ctx = _invoke_context_with_chat_profile(reply_text="ベース返信")
+    second_thread_ts = "304.1"
+    state_store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        second_thread_ts,
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts=second_thread_ts,
+            message_ts="304.2",
+            author_id="U_OTHER_BOT",
+            text="別エージェントの発話",
+            mentions=[],
+            is_bot_message=True,
+        ),
+    )
+    _set_incoming_event(
+        second_ctx,
+        event_id="E_RUNTIME_SCOPE_2",
+        message_ts="304.3",
+        thread_ts=second_thread_ts,
+        text="<@U_ALICE> 続けて",
+        mentions=["U_ALICE"],
+        is_thread_reply=True,
+    )
+
+    captured: dict[str, object] = {}
+
+    async def fake_talk_as_second(context, topic, context_location, conversation_history):
+        captured["conversation_history"] = conversation_history
+        return "キャラ口調の返信です。"
+
+    monkeypatch.setattr(chat_conversation_workflow, "talk_as", fake_talk_as_second)
+    await chat_conversation_workflow.main(
+        second_ctx, chat_service=service, state_store=state_store
+    )
+
+    history = captured["conversation_history"]
+    assert isinstance(history, list)
+    assert any(
+        isinstance(item, Message)
+        and item.content == "別エージェントの発話"
+        and item.author == "agent_1"
+        for item in history
+    )
+
+
+@pytest.mark.asyncio
 async def test_workflow_always_uses_actionable_reply_command(tmp_path):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
@@ -576,6 +681,29 @@ async def test_workflow_renders_participant_labels_back_to_service_mentions(tmp_
     await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
 
     assert service.posts[0][1] == "<@U_ALICE> 了解しました。"
+
+
+@pytest.mark.asyncio
+async def test_workflow_ignores_edit_or_delete_events_and_marks_processed(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = _context_with_chat_profile()
+    _set_incoming_event(
+        ctx,
+        event_id="E_EDIT_1",
+        message_ts="109.1",
+        text="edited message",
+        is_edit_or_delete=True,
+    )
+
+    await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
+
+    assert service.posts == []
+    assert service.reactions == []
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert "E_EDIT_1" in channel_state.processed_event_ids
+    thread_messages = state_store.load_thread_messages("slack", "alice", "C1", "109.1")
+    assert thread_messages == []
 
 
 @pytest.mark.asyncio
@@ -628,6 +756,53 @@ async def test_workflow_passes_previous_thread_context_and_persists_updated_cont
     updated = state_store.load_thread_state("slack", "alice", "C1", thread_ts)
     assert updated.thread_topic == "weekly AI news"
     assert updated.latest_focus == "business examples from this week's news, not generalities"
+
+
+@pytest.mark.asyncio
+async def test_workflow_does_not_clear_persisted_thread_context_when_classification_returns_empty(
+    tmp_path,
+):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = _invoke_context_with_chat_profile(reply_text="更新します。")
+    thread_ts = "108.9"
+    existing = state_store.load_thread_state("slack", "alice", "C1", thread_ts)
+    existing.thread_topic = "weekly AI news"
+    existing.latest_focus = "news-grounded business view"
+    state_store.save_thread_state("slack", "alice", "C1", thread_ts, existing)
+
+    async def invoke(name: str, /, *args, **kwargs):
+        ctx.invocations.append((name, args, kwargs))
+        if name == "workflows/chat/should_react":
+            return {"decision": "reply", "reason": "test", "reaction": None}
+        if name == "workflows/chat/chat_thread_context":
+            return {
+                "thread_topic": "",
+                "latest_focus": "",
+                "reason": "classification_failed",
+                "confidence": 0.0,
+            }
+        if name == "workflows/chat/chat_reply_intent":
+            return {"label": "clarify", "reason": "test", "confidence": 0.8}
+        if name == "workflows/chat/chat_reply_actionable":
+            return "更新します。"
+        return "更新します。"
+
+    ctx.invoke = invoke
+    _set_incoming_event(
+        ctx,
+        event_id="E_CONTEXT_EMPTY_1",
+        message_ts="108.10",
+        thread_ts=thread_ts,
+        text="今週のニュース前提で具体例を教えて",
+        is_thread_reply=True,
+    )
+
+    await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
+
+    updated = state_store.load_thread_state("slack", "alice", "C1", thread_ts)
+    assert updated.thread_topic == "weekly AI news"
+    assert updated.latest_focus == "news-grounded business view"
 
 
 @pytest.mark.asyncio

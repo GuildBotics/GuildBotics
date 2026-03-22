@@ -175,6 +175,28 @@ def test_render_participant_text_does_not_convert_ephemeral_labels():
     assert rendered == "<@UALICE> user_1 agent_1"
 
 
+def test_render_participant_text_converts_hyphenated_person_labels():
+    svc = SlackChatService(
+        logging.getLogger("test"),
+        client=_client_for(lambda request: httpx.Response(200, json={"ok": True})),
+        base_url="https://x.test",
+    )
+    participant_labels = {
+        "UMAINT": "maintenance-bot",
+        "UALICE": "alice",
+    }
+
+    normalized = svc.normalize_participant_text(
+        "<@UMAINT> hi <@UALICE>", participant_labels
+    )
+    rendered = svc.render_participant_text(
+        "@maintenance-bot hi @alice", participant_labels
+    )
+
+    assert normalized == "@maintenance-bot hi @alice"
+    assert rendered == "<@UMAINT> hi <@UALICE>"
+
+
 @pytest.mark.asyncio
 async def test_slack_api_error_raises_runtime_error():
     async def handler(request: httpx.Request) -> httpx.Response:

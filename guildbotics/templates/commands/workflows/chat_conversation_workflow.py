@@ -25,8 +25,6 @@ from guildbotics.templates.commands.workflows.chat.should_react import (
 )
 from guildbotics.utils.i18n_tool import t
 
-_RUNTIME_SLACK_USER_LABELS: dict[str, str] = {}
-
 
 async def main(
     context: Any,
@@ -68,6 +66,12 @@ async def _handle_event(
         service_name, context.person.person_id, channel_id
     )
     already_processed = event.event_id in set(channel_state.processed_event_ids)
+    if event.is_edit_or_delete:
+        if not already_processed:
+            state_store.mark_processed_event(
+                service_name, context.person.person_id, channel_id, event.event_id
+            )
+        return
     if not already_processed:
         state_store.append_thread_message(
             service_name,
@@ -165,9 +169,10 @@ async def _handle_event(
         ),
     )
     thread_state.participants.add(context.person.person_id)
-    if thread_context:
-        thread_state.thread_topic = thread_context.get("thread_topic", "")
-        thread_state.latest_focus = thread_context.get("latest_focus", "")
+    if thread_context.get("thread_topic"):
+        thread_state.thread_topic = thread_context["thread_topic"]
+    if thread_context.get("latest_focus"):
+        thread_state.latest_focus = thread_context["latest_focus"]
     state_store.save_thread_state(
         service_name, context.person.person_id, channel_id, event.thread_ts, thread_state
     )
@@ -335,22 +340,12 @@ async def _classify_reply_intent(context: Any) -> dict[str, str]:
 async def _classify_thread_context(context: Any) -> dict[str, str]:
     invoke = getattr(context, "invoke", None)
     if not callable(invoke):
-        return {
-            "thread_topic": "",
-            "latest_focus": "",
-            "reason": "default_without_invoker",
-            "confidence": "0.0",
-        }
+        return {}
     try:
         result = await invoke("workflows/chat/chat_thread_context")
     except Exception:
         _log_info(context, "chat thread context classification failed, defaulting to empty context")
-        return {
-            "thread_topic": "",
-            "latest_focus": "",
-            "reason": "thread_context_classification_failed",
-            "confidence": "0.0",
-        }
+        return {}
     return _normalize_thread_context(result)
 
 
@@ -384,12 +379,17 @@ def _normalize_thread_context(result: Any) -> dict[str, str]:
         latest_focus = str(getattr(result, "latest_focus", "")).strip()
         reason = str(getattr(result, "reason", "")).strip()
         confidence = str(getattr(result, "confidence", "")).strip()
-    return {
+    normalized = {
         "thread_topic": thread_topic,
         "latest_focus": latest_focus,
         "reason": reason or "no_reason",
         "confidence": confidence or "0.0",
     }
+    if not normalized["thread_topic"] and not normalized["latest_focus"]:
+        return {}
+    return normalized
+
+
 async def _build_author_labels(
     context: Any,
     self_user_id: str,
@@ -446,16 +446,12 @@ async def _build_author_labels(
 async def _chat_user_to_person_labels(context: Any) -> dict[str, str]:
     team = getattr(context, "team", None)
     members = getattr(team, "members", []) if team is not None else []
-    labels: dict[str, str] = dict(_RUNTIME_SLACK_USER_LABELS)
-    runtime_labels = await _runtime_chat_user_to_person_labels(context, members, labels)
-    labels.update(runtime_labels)
-    return labels
+    return await _runtime_chat_user_to_person_labels(context, members)
 
 
 async def _runtime_chat_user_to_person_labels(
     context: Any,
     members: list[Any],
-    labels: dict[str, str],
 ) -> dict[str, str]:
     clone_for = getattr(context, "clone_for", None)
     if not callable(clone_for):
@@ -464,7 +460,7 @@ async def _runtime_chat_user_to_person_labels(
     runtime_labels: dict[str, str] = {}
     for member in members:
         person_id = str(getattr(member, "person_id", "")).strip()
-        if not person_id or person_id in labels.values():
+        if not person_id or person_id in runtime_labels.values():
             continue
         try:
             member_context = clone_for(member)
@@ -482,7 +478,6 @@ async def _runtime_chat_user_to_person_labels(
             user_id = str(getattr(identity, "user_id", "")).strip()
             if user_id:
                 runtime_labels[user_id] = person_id
-                _RUNTIME_SLACK_USER_LABELS[user_id] = person_id
         except Exception:
             continue
         finally:
