@@ -1,0 +1,3 @@
+ja:
+  context_location: "チャット会話"
+  reply_generation_failed: "すみません、いま回答の生成に失敗しました。もう一度送ってください。続く場合は管理者に連絡してください。"

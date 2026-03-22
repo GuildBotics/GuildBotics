@@ -1,0 +1,3 @@
+en:
+  context_location: "Chat Conversation"
+  reply_generation_failed: "Sorry, I couldn't generate a reply right now. Please try again. If this keeps happening, contact the administrator."

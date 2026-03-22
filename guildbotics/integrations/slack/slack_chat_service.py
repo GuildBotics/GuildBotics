@@ -12,9 +12,17 @@ from guildbotics.integrations.chat_service import (
     ChatIdentity,
     ChatPostResult,
     ChatService,
+    SemanticReaction,
 )
 
 _MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
+_EPHEMERAL_PARTICIPANT_LABEL_RE = re.compile(r"^(?:user|agent)_\d+$", re.IGNORECASE)
+_SLACK_REACTION_MAP: dict[SemanticReaction, str] = {
+    "ack": "white_check_mark",
+    "agree": "thumbsup",
+    "celebrate": "tada",
+    "support": "heart",
+}
 
 
 class SlackChatService(ChatService):
@@ -57,7 +65,13 @@ class SlackChatService(ChatService):
             form["oldest"] = oldest_ts
         payload = await self._post_form("conversations.history", form)
         messages = payload.get("messages", [])
-        events = [self._to_event(channel_id, item) for item in messages if isinstance(item, dict)]
+        events: list[ChatEvent] = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            event = self._to_event(channel_id, item)
+            if event is not None:
+                events.append(event)
         metadata = payload.get("response_metadata", {})
         next_cursor = None
         if isinstance(metadata, dict):
@@ -118,10 +132,51 @@ class SlackChatService(ChatService):
     async def add_reaction(
         self, channel_id: str, message_ts: str, reaction: str
     ) -> None:
+        if reaction not in _SLACK_REACTION_MAP:
+            raise RuntimeError(f"Unsupported semantic reaction for Slack: {reaction}")
         await self._post_form(
             "reactions.add",
-            {"channel": channel_id, "timestamp": message_ts, "name": reaction},
+            {
+                "channel": channel_id,
+                "timestamp": message_ts,
+                "name": _SLACK_REACTION_MAP[reaction],
+            },
         )
+
+    def normalize_participant_text(
+        self, text: str, participant_labels: dict[str, str]
+    ) -> str:
+        def repl(match: re.Match[str]) -> str:
+            user_id = match.group(1)
+            label = participant_labels.get(user_id, "participant")
+            return f"@{label}"
+
+        return _MENTION_RE.sub(repl, text or "")
+
+    def render_participant_text(
+        self, text: str, participant_labels: dict[str, str]
+    ) -> str:
+        ephemeral_labels = {
+            label.casefold()
+            for label in participant_labels.values()
+            if label and _EPHEMERAL_PARTICIPANT_LABEL_RE.match(label)
+        }
+        label_to_user_id = {
+            label.casefold(): user_id
+            for user_id, label in participant_labels.items()
+            if user_id and label and not _EPHEMERAL_PARTICIPANT_LABEL_RE.match(label)
+        }
+
+        def repl(match: re.Match[str]) -> str:
+            label = match.group(1).strip().casefold()
+            if label in ephemeral_labels:
+                return match.group(1)
+            user_id = label_to_user_id.get(label)
+            if not user_id:
+                return match.group(0)
+            return f"<@{user_id}>"
+
+        return re.sub(r"@([A-Za-z0-9_]+)", repl, text or "")
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:
@@ -149,9 +204,10 @@ class SlackChatService(ChatService):
             self._owns_client = True
         return self._client
 
-    def _to_event(self, channel_id: str, raw: dict[str, Any]) -> ChatEvent:
+    def _to_event(self, channel_id: str, raw: dict[str, Any]) -> ChatEvent | None:
         subtype = str(raw.get("subtype", ""))
-        is_edit_or_delete = subtype in {"message_changed", "message_deleted"}
+        if subtype in {"message_changed", "message_deleted"}:
+            return None
         author_id = _str_or_none(raw.get("user"))
         text = str(raw.get("text", "") or "")
         thread_ts = _str_or_none(raw.get("thread_ts")) or str(raw.get("ts", "") or "")
@@ -166,8 +222,6 @@ class SlackChatService(ChatService):
             author_id=author_id,
             text=text,
             mentions=_extract_mentions(text),
-            is_message=True,
-            is_edit_or_delete=is_edit_or_delete,
             is_bot_message=is_bot_message,
             is_thread_reply=thread_ts != message_ts,
         )

@@ -7,7 +7,7 @@ import pytest
 
 from guildbotics.integrations.chat_service import ChatPostResult
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.templates.commands.workflows import chat_scheduled_post_workflow
+from guildbotics.templates.commands.workflows.chat import chat_scheduled_post_workflow
 
 
 class FakeChatService:

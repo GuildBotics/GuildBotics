@@ -134,6 +134,8 @@ uv sync --extra dev
 - 挙動変更時は、対応テストを `tests/guildbotics/...` に追加・更新する
 - コマンド仕様変更時は、`docs/custom_command_guide.en.md` / `docs/custom_command_guide.ja.md` の整合性も確認する
 - CLI のオプションやコマンド変更時は、`README.md` / `README.ja.md` の該当箇所も確認する
+- ユーザー向け文言を Python にハードコードしない。既存実装に合わせて `guildbotics.utils.i18n_tool.t()` を使い、翻訳キーを `guildbotics/templates/locales/...`（必要なら `*.ja.yml` / `*.en.yml`）へ追加する
+- i18n 文言を変更・追加した場合は、既存テストに合わせて翻訳キー経由で検証する（文言直書き前提のテストにしない）
 - `Context.pipe` / `shared_state` の更新順序はワークフロー互換性に直結するため、変更時は特に注意する
 - コマンド解決順 (`get_person_config_path`, `get_config_path`) を壊さない
 
