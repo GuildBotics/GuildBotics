@@ -13,13 +13,17 @@ from guildbotics.integrations.chat_profile import (
     get_chat_subscriptions,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.integrations.slack.slack_socket_listener import SlackSocketEventListener
+from guildbotics.integrations.slack.slack_socket_listener import (
+    SlackSocketEventListener,
+)
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     EventListener,
     IncomingChatEvent,
 )
+
+SubscriptionSignature = tuple[tuple[tuple[str, str], ...], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,9 +55,7 @@ class EventListenerRunner:
         self._thread_lock = threading.Lock()
         self._listeners: dict[SlackConnectionKey, EventListener] = {}
         self._listener_tokens: dict[SlackConnectionKey, str] = {}
-        self._subscription_channel_cache: dict[
-            str, tuple[tuple[tuple[str, str], ...], set[str]]
-        ] = {}
+        self._subscription_channel_cache: dict[str, tuple[SubscriptionSignature, set[str]]] = {}
         self._last_group_log_state: tuple[int, int] | None = None
         self._cycle_count = 0
         self._cycle_failure_count = 0
@@ -242,7 +244,7 @@ class EventListenerRunner:
 
     def _subscription_signature(
         self, subscriptions: list[dict[str, Any]]
-    ) -> tuple[tuple[tuple[str, str], ...], ...]:
+    ) -> SubscriptionSignature:
         # Signature uses fields that affect channel resolution/routing so config changes
         # trigger re-resolution without relying on object identity.
         items: list[tuple[tuple[str, str], ...]] = []

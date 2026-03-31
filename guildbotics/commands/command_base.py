@@ -50,7 +50,7 @@ class CommandBase(ABC):
         class_resolver: ClassResolver | None,
     ) -> None:
         """Populate the given CommandSpec with metadata from its file."""
-        pass
+        return None
 
     @classmethod
     def get_extensions(cls) -> list[str]:

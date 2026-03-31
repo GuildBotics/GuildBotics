@@ -8,8 +8,11 @@
 - `.env`, `.env.example`: ローカル設定。
 
 ## Build, Test, and Development Commands
-- 依存関係の同期: `uv sync --extra test`
+- CI 相当の依存関係を同期: `uv sync --extra test --extra dev`
+- Lint 実行: `uv run --no-sync ruff check guildbotics`
+- 型チェック実行: `uv run --no-sync mypy guildbotics`
 - テスト実行とカバレッジレポート作成: `uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml`  (生成物: `coverage.xml`)。
+- ローカル確認の推奨順序: `ruff` -> `mypy` -> `pytest`
 
 注: このリポジトリは固定された依存ファイル `pyproject.toml` を提供します。uv を使用して必要なライブラリを `uv sync` でインストールしてください。
 
@@ -42,7 +45,7 @@
 ## Commit & Pull Request Guidelines
 - Conventional Commitsを使用: `feat:`、`fix:`、`chore:`、`refactor:` など。短い、命令形の件名；詳細は本文に。英語または日本語で可。
 - PR: 明確な説明、リンクされたイシュー (`#123`)、関連するスクリーンショット/ログ、再現とテストステップ、環境/設定変更の注記。
-- レビューをリクエストする前に `pytest` が合格することを確認。
+- レビューをリクエストする前に `uv run --no-sync ruff check guildbotics`、`uv run --no-sync mypy guildbotics`、`pytest` が合格することを確認。
 
 ## Code Review Etiquette
 - すべてのフィードバックに対処 (実装または明確化)；コメントを無視しない。

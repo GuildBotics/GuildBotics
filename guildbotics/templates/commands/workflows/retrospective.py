@@ -16,6 +16,8 @@ from guildbotics.templates.commands.workflows.modes.edit_mode import (
 )
 from guildbotics.utils.i18n_tool import t
 
+MAX_RETROSPECTIVE_SUGGESTIONS = 5
+
 
 async def evaluate_interaction_performance(
     context: Context,
@@ -116,7 +118,7 @@ async def propose_process_improvements(
     else:
         session_state["subject_type"] = t("intelligences.functions.subject_type")
 
-    message = f"# RootCauseAnalysis:\n{str(root_cause_analysis)}\n"
+    message = f"# RootCauseAnalysis:\n{root_cause_analysis!s}\n"
     result: ImprovementRecommendations = await get_content(
         context,
         "functions/propose_process_improvements",
@@ -146,8 +148,8 @@ async def main(
     ticket_manager = context.get_ticket_manager()
 
     suggestions = sorted(proposal.suggestions)
-    if len(suggestions) > 5:
-        suggestions = suggestions[:5]
+    if len(suggestions) > MAX_RETROSPECTIVE_SUGGESTIONS:
+        suggestions = suggestions[:MAX_RETROSPECTIVE_SUGGESTIONS]
     tasks = [suggestion.to_task() for suggestion in suggestions]
     await ticket_manager.create_tickets(tasks)
 

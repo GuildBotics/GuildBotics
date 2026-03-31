@@ -120,11 +120,11 @@ class ReviewComment(BaseModel):
 class ReviewComments:
     """Model for review comments in a pull request."""
 
-    body: str | None = None
-    review_comments: list[ReviewComment] = []
-    inline_comment_threads: list[InlineCommentThread] = []
-    reply: str | None = None
-    is_replied: bool = False
+    body: str | None
+    review_comments: list[ReviewComment]
+    inline_comment_threads: list[InlineCommentThread]
+    reply: str | None
+    is_replied: bool
 
     def __init__(
         self,
@@ -134,6 +134,7 @@ class ReviewComments:
     ):
         """Initialize and sort both review_comments and inline_comments."""
         review_comments.sort()
+        self.reply = None
         self.review_comments = review_comments
         self.body = (
             "\n\n".join(str(comment) for comment in review_comments)

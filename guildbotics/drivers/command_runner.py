@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import (
@@ -65,7 +66,7 @@ class CommandRunner:
     async def _run(self, spec: CommandSpec) -> CommandOutcome | None:
         name = spec.name
         if name in self._call_stack:
-            cycle = " -> ".join(self._call_stack + [name])
+            cycle = " -> ".join([*self._call_stack, name])
             raise CommandError(f"Cyclic command invocation detected: {cycle}")
 
         self._call_stack.append(name)

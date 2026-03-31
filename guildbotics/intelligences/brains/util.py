@@ -1,6 +1,5 @@
 import json
 import textwrap
-from typing import Type
 
 from pydantic import BaseModel
 
@@ -16,7 +15,7 @@ def to_header(title: str) -> str:
 def to_plain_text(
     description: str | None,
     user_input: str | None,
-    response_class: Type[BaseModel] | None = None,
+    response_class: type[BaseModel] | None = None,
 ) -> str:
     plain_text = ""
 
@@ -34,7 +33,7 @@ def to_plain_text(
 
 
 def to_response_class(
-    raw_output: str | Type[BaseModel], response_class: Type[BaseModel]
+    raw_output: str | type[BaseModel], response_class: type[BaseModel]
 ) -> BaseModel | str:
     """Convert raw output to a response class."""
     if isinstance(raw_output, response_class):

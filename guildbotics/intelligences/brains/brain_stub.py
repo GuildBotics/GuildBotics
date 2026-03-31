@@ -1,5 +1,4 @@
 from logging import Logger
-from typing import Type
 
 from pydantic import BaseModel
 
@@ -20,7 +19,7 @@ class BrainStub(Brain):
         logger: Logger,
         description: str = "",
         template_engine: str = "default",
-        response_class: Type[BaseModel] | None = None,
+        response_class: type[BaseModel] | None = None,
     ):
         super().__init__(
             person_id, name, logger, description, template_engine, response_class

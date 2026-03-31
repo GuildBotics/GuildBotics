@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
@@ -14,8 +14,8 @@ from guildbotics.utils.text_utils import replace_placeholders
 
 
 class MarkdownCommand(CommandBase):
-    extensions = [".md"]
-    inline_key = "prompt"
+    extensions: ClassVar[list[str]] = [".md"]
+    inline_key: ClassVar[str] = "prompt"
 
     @classmethod
     def populate_spec(

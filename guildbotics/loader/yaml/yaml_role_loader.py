@@ -81,9 +81,8 @@ class YamlRoleLoader:
             base_roles (dict[str, Role]): The base roles to update from.
             target_roles (dict[str, Role]): The dictionary to update with loaded roles.
         """
-        for role_id, role_info in role_data.items():
-            if not isinstance(role_info, dict):
-                role_info = {}
+        for role_id, raw_role_info in role_data.items():
+            role_info = raw_role_info if isinstance(raw_role_info, dict) else {}
             new_role = Role(
                 id=role_id,
                 summary=role_info.get("summary", ""),

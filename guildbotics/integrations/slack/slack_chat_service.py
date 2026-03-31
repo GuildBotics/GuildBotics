@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from logging import Logger
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -109,7 +109,7 @@ class SlackChatService(ChatService):
                     continue
                 raw_name = str(item.get("name", "") or "")
                 normalized = str(item.get("name_normalized", "") or "")
-                if raw_name == name or normalized == name:
+                if name in (raw_name, normalized):
                     self._channel_name_cache[name] = cid
                     return cid
             metadata = payload.get("response_metadata", {})
@@ -135,12 +135,13 @@ class SlackChatService(ChatService):
     ) -> None:
         if reaction not in _SLACK_REACTION_MAP:
             raise RuntimeError(f"Unsupported semantic reaction for Slack: {reaction}")
+        reaction_name = _SLACK_REACTION_MAP[cast(SemanticReaction, reaction)]
         await self._post_form(
             "reactions.add",
             {
                 "channel": channel_id,
                 "timestamp": message_ts,
-                "name": _SLACK_REACTION_MAP[reaction],
+                "name": reaction_name,
             },
         )
 

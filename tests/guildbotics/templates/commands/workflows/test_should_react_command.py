@@ -27,10 +27,7 @@ def _reaction_input(*, mentions: list[str] | None = None) -> ReactionInput:
             is_bot_message=False,
             is_thread_reply=False,
         ),
-        thread_context=ReactionThreadContext(
-            participants=set(),
-            last_bot_replier_id=None,
-        ),
+        thread_context=ReactionThreadContext(participants=set()),
         thread_messages=[
             {
                 "content": "hello",

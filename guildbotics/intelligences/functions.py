@@ -1,10 +1,11 @@
 import io
 import json
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, TypeVar
+from typing import Any
 
 import yaml  # type: ignore
 from pydantic import BaseModel
@@ -21,10 +22,10 @@ from guildbotics.runtime import Context
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.import_utils import ClassResolver
 
-TBaseModel = TypeVar("TBaseModel", bound=BaseModel)
 
-
-def to_text(obj: dict | list[dict] | TBaseModel | list[TBaseModel]) -> str:
+def to_text[TBaseModel: BaseModel](
+    obj: dict | list[dict] | TBaseModel | list[TBaseModel],
+) -> str:
     """
     Convert a Pydantic model, its subclass, or a list of them to a text representation.
 
@@ -84,7 +85,7 @@ def messages_to_simple_dicts(messages: list[Message]) -> list[dict]:
     return inputs
 
 
-def to_dict(
+def to_dict[TBaseModel: BaseModel](
     context: Context,
     params: dict | None = None,
     cwd: Path | None = None,
@@ -107,7 +108,7 @@ def to_dict(
     return kwargs
 
 
-async def _get_content(
+async def _get_content[TBaseModel: BaseModel](
     context: Context,
     name: str,
     message: str,
@@ -120,7 +121,7 @@ async def _get_content(
     return await brain.run(message=message, **kwargs)
 
 
-async def convert_object(
+async def convert_object[TBaseModel: BaseModel](
     context: Context,
     message: str,
     response_model: type[TBaseModel],
@@ -420,7 +421,7 @@ async def to_agent_response(
 
     try:
         return AgentResponse.model_validate_json(json_str)
-    except Exception as e:
+    except Exception:
         if log_output:
             message_type = await identify_message_type(context, log_output)
             if message_type == "error":

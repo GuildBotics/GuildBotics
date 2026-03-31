@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 from guildbotics.commands.document_conversion_command import DocumentConversionCommand
 from guildbotics.commands.models import CommandOutcome
@@ -9,8 +10,8 @@ from guildbotics.commands.models import CommandOutcome
 class ToHtmlCommand(DocumentConversionCommand):
     """Inline command that converts Markdown input into styled HTML output."""
 
-    extensions = []
-    inline_key = "to_html"
+    extensions: ClassVar[list[str]] = []
+    inline_key: ClassVar[str] = "to_html"
     _DEFAULT_CSS_PATH = (
         Path(__file__).resolve().parent.parent
         / "assets"

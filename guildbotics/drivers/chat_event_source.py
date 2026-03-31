@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """Polling-oriented event source abstractions and compatibility wrappers.
 
 Socket Mode runtime execution has moved to `EventListenerRunner` + `EventListener`.
 This module remains for polling-based flows and compatibility wrappers.
 """
+
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any

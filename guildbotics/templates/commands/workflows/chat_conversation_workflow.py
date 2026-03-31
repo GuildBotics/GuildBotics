@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 from guildbotics.commands.utils import stringify_output
 from guildbotics.entities.message import Message
-from guildbotics.integrations.chat_service import ChatEvent, ChatService
-from guildbotics.integrations.chat_profile import (
-    get_chat_subscriptions,
+from guildbotics.integrations.chat_service import (
+    SEMANTIC_REACTIONS,
+    ChatEvent,
+    ChatService,
+    SemanticReaction,
 )
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
@@ -16,8 +19,13 @@ from guildbotics.integrations.chat_state_store import (
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.functions import talk_as
-from guildbotics.runtime.event_listener import INCOMING_CHAT_EVENT_KEY, IncomingChatEvent
-from guildbotics.templates.commands.workflows.chat import should_react as should_react_command
+from guildbotics.runtime.event_listener import (
+    INCOMING_CHAT_EVENT_KEY,
+    IncomingChatEvent,
+)
+from guildbotics.templates.commands.workflows.chat import (
+    should_react as should_react_command,
+)
 from guildbotics.templates.commands.workflows.chat.should_react import (
     DecisionResult,
     ReactionInput,
@@ -46,7 +54,6 @@ async def main(
             identity_user_id=identity.user_id,
             event=incoming.event,
         )
-    return
 
 
 async def _handle_event(
@@ -103,7 +110,7 @@ async def _handle_event(
     )
 
     if hasattr(context, "logger"):
-        try:
+        with suppress(Exception):
             context.logger.info(
                 "chat decision=%s reason=%s channel=%s thread=%s event=%s",
                 decision.decision,
@@ -112,8 +119,6 @@ async def _handle_event(
                 event.thread_ts,
                 event.event_id,
             )
-        except Exception:
-            pass
 
     if decision.decision == "ignore":
         return
@@ -567,7 +572,6 @@ async def _evaluate_should_react(
         event=event,
         thread_context=ReactionThreadContext(
             participants=set(thread_state.participants),
-            last_bot_replier_id=thread_state.last_bot_replier_id,
         ),
         thread_messages=[
             _message_to_prompt_dict(
@@ -611,10 +615,16 @@ def _normalize_policy_decision(result: Any) -> DecisionResult | None:
 
     if decision not in {"ignore", "react_only", "reply"}:
         return None
+    normalized_reaction: SemanticReaction | None = None
+    if reaction is not None:
+        reaction_value = str(reaction).strip()
+        if reaction_value not in SEMANTIC_REACTIONS:
+            return None
+        normalized_reaction = cast(SemanticReaction, reaction_value)
     return DecisionResult(
-        decision=decision,  # type: ignore[arg-type]
+        decision=decision,
         reason=reason or "no_reason",
-        reaction=str(reaction) if reaction else None,
+        reaction=normalized_reaction,
     )
 
 

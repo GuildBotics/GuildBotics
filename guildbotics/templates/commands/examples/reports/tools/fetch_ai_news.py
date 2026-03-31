@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import quote_plus
-import xml.etree.ElementTree as ET
 
 import requests
 
@@ -13,7 +13,7 @@ DEFAULT_QUERY = "AI OR OpenAI OR Anthropic OR Google AI"
 
 
 def main(
-    context,  # noqa: ANN001 - runtime injects Context
+    context,
     query: str = DEFAULT_QUERY,
     language: str = "ja",
     country: str = "JP",
@@ -33,7 +33,7 @@ def main(
         "language": language,
         "country": country,
         "feed_url": feed_url,
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": datetime.now(UTC).isoformat(),
         "item_count": len(items[:limit_n]),
         "items": items[:limit_n],
     }
@@ -54,7 +54,7 @@ def parse_google_news_rss(xml_text: str, *, max_age_hours: int = 36) -> list[dic
     if channel is None:
         return []
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = now - timedelta(hours=max(1, int(max_age_hours)))
     items: list[NewsItem] = []
     for item in channel.findall("./item"):
@@ -78,7 +78,7 @@ class NewsItem:
     published_at: datetime | None = None
 
     def sort_key(self) -> datetime:
-        return self.published_at or datetime.fromtimestamp(0, tz=timezone.utc)
+        return self.published_at or datetime.fromtimestamp(0, tz=UTC)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"title": self.title, "link": self.link}
@@ -101,7 +101,7 @@ def _parse_item(item: ET.Element) -> NewsItem | None:
     if pub_date:
         try:
             dt = parsedate_to_datetime(pub_date)
-            published_at = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            published_at = dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
         except Exception:
             published_at = None
 

@@ -1,6 +1,6 @@
 import datetime as dt
 import time
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 import httpx
 import jwt
@@ -10,6 +10,8 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person
 from guildbotics.integrations.github.async_client import get_async_client
+
+HTTP_UNAUTHORIZED = 401
 
 
 class GitHubTokenAuth(httpx.Auth):
@@ -40,8 +42,8 @@ class GitHubAppAuth(httpx.Auth):
         self.app_id = app_id
         self.installation_id = installation_id
         self.private_key_path = private_key_path
-        self._token: Optional[str] = None
-        self._expires_at: Optional[dt.datetime] = None
+        self._token: str | None = None
+        self._expires_at: dt.datetime | None = None
         self._leeway = dt.timedelta(seconds=120)
 
         with open(self.private_key_path, "rb") as f:
@@ -51,7 +53,7 @@ class GitHubAppAuth(httpx.Auth):
             self._private_key = key
 
     def _need_refresh(self) -> bool:
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         return (
             self._token is None
             or self._expires_at is None
@@ -92,9 +94,9 @@ class GitHubAppAuth(httpx.Auth):
         request.headers.setdefault("X-GitHub-Api-Version", "2022-11-28")
 
         try:
-            response = yield request
+            yield request
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 401:
+            if exc.response.status_code == HTTP_UNAUTHORIZED:
                 refresh_req = self._build_refresh_request(request)
                 refresh_resp = yield refresh_req
                 self._update_token_from_response(refresh_resp)
@@ -102,7 +104,6 @@ class GitHubAppAuth(httpx.Auth):
                 yield request
             else:
                 raise
-        return
 
 
 async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClient:
@@ -114,7 +115,7 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
     Returns:
         AsyncClient: An authenticated httpx.AsyncClient.
     """
-    auth: Optional[httpx.Auth] = None
+    auth: httpx.Auth | None = None
 
     if person.person_type == GitHubAppAuth.GITHUB_APPS:
         # Use GitHub App authentication with auto-refresh

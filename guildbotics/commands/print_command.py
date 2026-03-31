@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 from guildbotics.commands.markdown_command import MarkdownCommand
 from guildbotics.commands.models import CommandOutcome
 
@@ -13,8 +15,8 @@ class PrintCommand(MarkdownCommand):
     any AI/brain processing.
     """
 
-    extensions = []
-    inline_key = "print"
+    extensions: ClassVar[list[str]] = []
+    inline_key: ClassVar[str] = "print"
 
     async def run(self) -> CommandOutcome | None:
         self.spec.config["template_engine"] = "jinja2"

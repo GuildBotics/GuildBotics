@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import importlib
-from typing import Any, Optional, Type, cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 
 
-def load_class(module_and_cls: str) -> Type[Any]:
+def load_class(module_and_cls: str) -> type[Any]:
     """
     Load a class from a module given its full path.
 
@@ -25,7 +27,7 @@ def load_class(module_and_cls: str) -> Type[Any]:
         raise ImportError(f"Module '{module_path}' could not be imported") from e
     if not hasattr(module_obj, cls_name):
         raise ImportError(f"Class '{cls_name}' not found in module '{module_path}'")
-    return cast(Type[Any], getattr(module_obj, cls_name))
+    return cast(type[Any], getattr(module_obj, cls_name))
 
 
 def load_function(module_and_func: str) -> Any:
@@ -53,7 +55,7 @@ def load_function(module_and_func: str) -> Any:
 
 
 def instantiate_class(
-    module_and_cls: str, expected_type: Optional[Type[Any]] = None, **kwargs
+    module_and_cls: str, expected_type: type[Any] | None = None, **kwargs
 ) -> Any:
     """
     Instantiate a class from a module given its full path and parameters,
@@ -91,17 +93,17 @@ def instantiate_class(
 
 class ClassResolver:
     def __init__(
-        self, schema: str | None, parent: Optional["ClassResolver"] = None
+        self, schema: str | None, parent: ClassResolver | None = None
     ) -> None:
         self.schema = schema
-        self.model_classes: dict[str, Type[BaseModel]] = {}
+        self.model_classes: dict[str, type[BaseModel]] = {}
         self.parent = parent
         if schema:
             self.model_classes = self._build_pydantic_models_from_schema(schema)
 
     def _build_pydantic_models_from_schema(
         self, schema: str
-    ) -> dict[str, Type[BaseModel]]:
+    ) -> dict[str, type[BaseModel]]:
         lines = []
         for line in schema.splitlines():
             stripped = line.lstrip()
@@ -119,12 +121,12 @@ class ClassResolver:
 
         ns: dict[str, Any] = {"BaseModel": BaseModel}
         exec(
-            "from typing import *\n" + patched,  # noqa: S102
+            "from typing import *\n" + patched,
             ns,
             ns,
         )
 
-        models: dict[str, Type[BaseModel]] = {
+        models: dict[str, type[BaseModel]] = {
             k: v
             for k, v in ns.items()
             if isinstance(v, type) and issubclass(v, BaseModel) and v is not BaseModel
@@ -135,7 +137,7 @@ class ClassResolver:
 
         return models
 
-    def get_model_class(self, name: str) -> Optional[Type[BaseModel]]:
+    def get_model_class(self, name: str) -> type[BaseModel] | None:
         model_class = self.model_classes.get(name, None)
         if model_class is not None:
             return model_class
@@ -143,4 +145,4 @@ class ClassResolver:
         if self.parent is not None:
             return self.parent.get_model_class(name)
 
-        return cast(Type[BaseModel], load_class(name))
+        return cast(type[BaseModel], load_class(name))

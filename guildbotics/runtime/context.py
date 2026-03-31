@@ -1,7 +1,8 @@
-from copy import deepcopy
 import asyncio
+from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from logging import Logger
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -17,6 +18,7 @@ from guildbotics.runtime.loader_factory import LoaderFactory
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.log_utils import get_logger
+
 
 class Context:
     """

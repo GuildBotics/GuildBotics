@@ -1,6 +1,6 @@
 from logging import Logger
 from pathlib import Path
-from typing import Type, cast
+from typing import cast
 
 from pydantic import BaseModel, Field
 
@@ -19,7 +19,7 @@ class BrainConfig(BaseModel):
     Configuration for a brain.
     """
 
-    type: Type[Brain] = Field(..., description="The type of the intelligence.")
+    type: type[Brain] = Field(..., description="The type of the intelligence.")
     args: dict = Field(
         default_factory=dict, description="The arguments for the intelligence."
     )
@@ -63,7 +63,7 @@ class SimpleBrainFactory(BrainFactory):
                     person_id, f"commands/{name}.md", language_code
                 )
 
-            config = cast(dict, load_markdown_with_frontmatter(path))
+            config = load_markdown_with_frontmatter(path)
 
         class_resolver = ClassResolver(config.get("schema", ""), class_resolver)
         response_class = None

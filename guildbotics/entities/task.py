@@ -2,13 +2,20 @@ import calendar
 import datetime
 import random
 import re
-from typing import ClassVar, Optional, cast
+from typing import ClassVar, cast
 
 from croniter import croniter  # type: ignore[import]
 from pydantic import BaseModel, Field
 
 from guildbotics.entities.message import Message
 from guildbotics.utils.i18n_tool import t
+
+CRON_FIELD_COUNT = 5
+MINUTE_FIELD_INDEX = 0
+HOUR_FIELD_INDEX = 1
+DAY_OF_MONTH_FIELD_INDEX = 2
+MONTH_FIELD_INDEX = 3
+DAY_OF_WEEK_FIELD_INDEX = 4
 
 
 class Task(BaseModel):
@@ -90,16 +97,16 @@ class Task(BaseModel):
         if p1 != p2:
             return p1 < p2
 
-        def parse(dt: Optional[datetime.datetime]) -> datetime.datetime:
+        def parse(dt: datetime.datetime | None) -> datetime.datetime:
             """Convert datetime to UTC-aware for consistent comparison."""
             if dt is None:
                 # Default to maximum UTC datetime if missing
-                return datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
+                return datetime.datetime.max.replace(tzinfo=datetime.UTC)
             if dt.tzinfo is None:
                 # Treat naive datetime as UTC
-                return dt.replace(tzinfo=datetime.timezone.utc)
+                return dt.replace(tzinfo=datetime.UTC)
             # Normalize any timezone-aware datetime to UTC
-            return dt.astimezone(datetime.timezone.utc)
+            return dt.astimezone(datetime.UTC)
 
         d1, d2 = parse(self.due_date), parse(other.due_date)
         c1, c2 = parse(self.created_at), parse(other.created_at)
@@ -114,8 +121,8 @@ class Task(BaseModel):
             if comment.author_type != Message.ASSISTANT:
                 continue
             comment_lines = comment.content.splitlines()
-            for line in comment_lines:
-                line = line.strip()
+            for raw_line in comment_lines:
+                line = raw_line.strip()
                 if line.startswith(self.OUTPUT_PREFIX):
                     # line = "Output: [Title](https://example.com)"
                     title_and_url = line[len(self.OUTPUT_PREFIX) :].strip()
@@ -167,8 +174,8 @@ class ScheduledCommand(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
         parts = self.schedule.split()
-        if len(parts) != 5:
-            raise ValueError("Exactly 5 fields required")
+        if len(parts) != CRON_FIELD_COUNT:
+            raise ValueError(f"Exactly {CRON_FIELD_COUNT} fields required")
         # max_schedule: ?(a-b)->b, ?->default_max
         max_fields = []
         for idx, f in enumerate(parts):
@@ -206,21 +213,21 @@ class ScheduledCommand(BaseModel):
             else:
                 continue
 
-            if idx == 0:  # minute
+            if idx == MINUTE_FIELD_INDEX:  # minute
                 result = result.replace(minute=val)
-            elif idx == 1:  # hour
+            elif idx == HOUR_FIELD_INDEX:  # hour
                 result = result.replace(hour=val)
-            elif idx == 2:  # day of month
+            elif idx == DAY_OF_MONTH_FIELD_INDEX:  # day of month
                 # Clamp so as not to exceed the last day of the month
                 last = calendar.monthrange(result.year, result.month)[1]
                 day = min(val, last)
                 result = result.replace(day=day)
-            elif idx == 3:  # month
+            elif idx == MONTH_FIELD_INDEX:  # month
                 # Clamp day so it does not become invalid after changing the month
                 last = calendar.monthrange(result.year, val)[1]
                 day = min(result.day, last)
                 result = result.replace(month=val, day=day)
-            elif idx == 4:  # day of week (cron: 0=Sunday)
+            elif idx == DAY_OF_WEEK_FIELD_INDEX:  # day of week (cron: 0=Sunday)
                 # Adjust Python weekday: Mon=0…Sun=6 to cron format
                 cron_cur = (result.weekday() + 1) % 7
                 diff = (cron_cur - val) % 7

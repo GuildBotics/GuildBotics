@@ -363,7 +363,7 @@ def stop(timeout: int, force: bool) -> None:
     if force and _pid_is_running(pid):
         try:
             os.kill(pid, signal.SIGKILL)
-        except Exception as e:  # noqa: BLE001 - report and continue
+        except Exception as e:
             click.echo(f"Failed to SIGKILL {pid}: {e}")
         else:
             click.echo("Force killed scheduler.")
@@ -376,7 +376,7 @@ def stop(timeout: int, force: bool) -> None:
 
 @main.command()
 @click.pass_context
-def kill(ctx: click.Context) -> None:  # noqa: A001 - command name intentionally 'kill'
+def kill(ctx: click.Context) -> None:
     """Immediately force kill the running scheduler.
 
     Equivalent to: `guildbotics stop --force --timeout 0`.

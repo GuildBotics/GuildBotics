@@ -432,7 +432,7 @@ class Team(BaseModel):
         """
         role_members: dict[str, list[Person]] = {}
         for member in self.members:
-            for role_id in member.roles.keys():
+            for role_id in member.roles:
                 if role_id not in role_members:
                     role_members[role_id] = []
                 role_members[role_id].append(member)

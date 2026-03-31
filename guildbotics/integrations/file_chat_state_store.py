@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 import threading
+from contextlib import suppress
 from dataclasses import asdict
 from pathlib import Path
-import tempfile
 
+from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ConversationStateStore,
@@ -15,7 +17,6 @@ from guildbotics.integrations.chat_state_store import (
     ThreadConversationState,
     ThreadMessageState,
 )
-from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.utils.fileio import get_storage_path
 
 
@@ -98,11 +99,8 @@ class FileConversationStateStore(ConversationStateStore):
             channel_id=str(data.get("channel_id", channel_id)),
             thread_ts=str(data.get("thread_ts", thread_ts)),
             participants={str(item) for item in participants if str(item)},
-            last_bot_replier_id=_to_str_or_none(data.get("last_bot_replier_id")),
             thread_topic=str(data.get("thread_topic", "") or ""),
             latest_focus=str(data.get("latest_focus", "") or ""),
-            response_expected=bool(data.get("response_expected", True)),
-            thread_claimed_by_other=bool(data.get("thread_claimed_by_other", False)),
         )
 
     def save_thread_state(
@@ -372,10 +370,8 @@ class FileConversationStateStore(ConversationStateStore):
                 tmp_path.replace(path)
             finally:
                 if tmp_path is not None and tmp_path.exists():
-                    try:
+                    with suppress(Exception):
                         tmp_path.unlink()
-                    except Exception:
-                        pass
 
 
 def _safe_segment(value: str) -> str:

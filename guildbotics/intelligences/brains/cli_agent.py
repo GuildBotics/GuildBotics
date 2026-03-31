@@ -1,10 +1,11 @@
 import asyncio
 import os
 import tempfile
+from contextlib import suppress
 from datetime import datetime
 from logging import Logger
 from pathlib import Path
-from typing import Type, cast
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -21,7 +22,9 @@ class ExecutableInfo:
     Information about an executable script.
     """
 
-    def __init__(self, script: str, env: dict = {}, cwd: str | None = None):
+    def __init__(
+        self, script: str, env: dict | None = None, cwd: str | None = None
+    ):
         """
         Initialize the executable information.
 
@@ -31,7 +34,7 @@ class ExecutableInfo:
             cwd (str | None): The working directory for the script.
         """
         self.script = script
-        self.env = env
+        self.env = {} if env is None else env
         self.cwd = cwd
 
 
@@ -67,7 +70,7 @@ class PromptInfo:
 
     def __init__(
         self,
-        response_class: Type[BaseModel] | None,
+        response_class: type[BaseModel] | None,
         description: str,
     ):
         """
@@ -114,7 +117,7 @@ class CliAgentBrain(Brain):
         logger: Logger,
         description: str = "",
         template_engine: str = "default",
-        response_class: Type[BaseModel] | None = None,
+        response_class: type[BaseModel] | None = None,
         cli_agent: str = "default",
     ):
         super().__init__(
@@ -168,7 +171,6 @@ class CliAgentBrain(Brain):
         if self.response_class:
             output = to_response_class(output, self.response_class)
         if isinstance(output, AgentResponse):
-            output = cast(AgentResponse, output)
             log_file_path = Path(log_file)
             if output.status == AgentResponse.ASKING and log_file_path.exists():
                 output.message = f"{output.message}\n\nSee: {log_file_path.name}"
@@ -194,11 +196,11 @@ class CliAgentBrain(Brain):
             env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
 
         # Create temporary file for the prompt input
-        tmp_file = tempfile.NamedTemporaryFile(mode="w", delete=False)
-        tmp_file.write(input)
-        tmp_file.flush()
-        tmp_file.close()
-        env["PROMPT_FILE"] = tmp_file.name
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
+            tmp_file.write(input)
+            tmp_file.flush()
+            temp_file_name = tmp_file.name
+        env["PROMPT_FILE"] = temp_file_name
 
         try:
             # Launch subprocess in the cloned repository directory
@@ -238,13 +240,11 @@ class CliAgentBrain(Brain):
             return response.strip()
         finally:
             # Clean up temporary prompt file
-            self.remove_temp_file(tmp_file.name)
+            self.remove_temp_file(temp_file_name)
 
     def remove_temp_file(self, file_name: str):
         """
         Remove temporary files created during the execution of the CLI agent.
         """
-        try:
+        with suppress(OSError):
             os.remove(file_name)
-        except OSError:
-            pass

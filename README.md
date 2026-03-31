@@ -779,6 +779,7 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 
 We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
 - Coding style and conventions
+- Local lint/typecheck/test commands aligned with CI
 - Testing guidelines
 - Documentation standards
 - Security best practices

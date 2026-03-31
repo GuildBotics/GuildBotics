@@ -1,16 +1,16 @@
 from logging import Logger
 
 from guildbotics.entities import Person, Service, Team
-from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.chat_profile import (
     get_chat_slack_base_url,
 )
-from guildbotics.integrations.slack.slack_chat_service import SlackChatService
+from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.code_hosting_service import CodeHostingService
 from guildbotics.integrations.github.github_code_hosting_service import (
     GitHubCodeHostingService,
 )
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.integrations.slack.slack_chat_service import SlackChatService
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.runtime import IntegrationFactory
 
