@@ -54,6 +54,8 @@ async def main(
             identity_user_id=identity.user_id,
             event=incoming.event,
         )
+
+
 async def _handle_event(
     *,
     context: Any,
