@@ -154,7 +154,7 @@ class DecisionResponseList(BaseModel):
 
 
 class MissingInfoResponse(BaseModel):
-    """Full result of 7W2H analysis including ‘analysis required?’ flag."""
+    """Full result of 7W2H analysis including `analysis required?` flag."""
 
     analysis_required: bool = Field(
         ...,
@@ -199,8 +199,8 @@ class IssueBranchLevel3(BaseModel):
     status: Literal["provided", "missing"] = Field(
         ..., description="Coverage judgement for this branch."
     )
-    reason: str = Field(..., description="≤ 2-sentence explanation for the judgement.")
-    confidence: float = Field(..., description="Confidence 0–1.")
+    reason: str = Field(..., description="<= 2-sentence explanation for the judgement.")
+    confidence: float = Field(..., description="Confidence 0-1.")
 
 
 class IssueBranchLevel2(BaseModel):
@@ -218,8 +218,8 @@ class IssueBranchLevel2(BaseModel):
     status: Literal["provided", "missing"] = Field(
         ..., description="Coverage judgement for this branch."
     )
-    reason: str = Field(..., description="≤ 2-sentence explanation for the judgement.")
-    confidence: float = Field(..., description="Confidence 0–1.")
+    reason: str = Field(..., description="<= 2-sentence explanation for the judgement.")
+    confidence: float = Field(..., description="Confidence 0-1.")
     sub: list["IssueBranchLevel3"] | None = Field(
         None, description="Optional child branches."
     )
@@ -240,8 +240,8 @@ class IssueBranchLevel1(BaseModel):
     status: Literal["provided", "missing"] = Field(
         ..., description="Coverage judgement for this branch."
     )
-    reason: str = Field(..., description="≤ 2-sentence explanation for the judgement.")
-    confidence: float = Field(..., description="Confidence 0–1.")
+    reason: str = Field(..., description="<= 2-sentence explanation for the judgement.")
+    confidence: float = Field(..., description="Confidence 0-1.")
     sub: list[IssueBranchLevel2] | None = Field(None, description="child branches.")
 
 
@@ -262,7 +262,7 @@ class IssueTreeResponse(BaseModel):
         description=(
             "Top-level branches with recursive sub-branches. "
             'Each branch includes: label (str), status ("provided" | "missing"), '
-            "reason (str), confidence (float 0–1), and optional sub (list of child branches)."
+            "reason (str), confidence (float 0-1), and optional sub (list of child branches)."
         ),
     )
 
@@ -512,7 +512,7 @@ class RootCauseAnalysis(BaseModel):
     )
 
     def __str__(self):
-        item_dict = {}
+        item_dict: dict[str, list[RootCauseItem]] = {}
         items = sorted(self.items)
         for item in items:
             texts = item_dict.setdefault(item.perspective, [])

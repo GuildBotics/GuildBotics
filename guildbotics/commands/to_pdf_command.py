@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from typing import ClassVar
 
 from weasyprint import HTML  # type: ignore
 
@@ -12,8 +13,8 @@ from guildbotics.commands.models import CommandOutcome
 class ToPdfCommand(DocumentConversionCommand):
     """Inline command that converts Markdown or HTML input into a PDF document."""
 
-    extensions = []
-    inline_key = "to_pdf"
+    extensions: ClassVar[list[str]] = []
+    inline_key: ClassVar[str] = "to_pdf"
     _DEFAULT_CSS_PATH = (
         Path(__file__).resolve().parent.parent
         / "assets"

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from copy import deepcopy
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 from guildbotics.integrations.chat_service import (
-    ChatEvent,
     SEMANTIC_REACTIONS,
+    ChatEvent,
     SemanticReaction,
 )
 
@@ -21,7 +21,6 @@ class DecisionResult:
 @dataclass(slots=True)
 class ReactionThreadContext:
     participants: set[str] = field(default_factory=set)
-    last_bot_replier_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -111,13 +110,14 @@ async def _decide_thread_followup_with_llm(
             "author_type": "Assistant" if data.event.is_bot_message else "User",
         }
     )
+    thread_messages_payload = [dict(item) for item in data.thread_messages[-20:]]
     payload = {
         "latest_message": latest_message,
-        "thread_messages": [dict(item) for item in data.thread_messages[-20:]],
+        "thread_messages": thread_messages_payload,
     }
     transcript_lines = [
         f"[{item.get('author', '')}] {item.get('content', '')}".strip()
-        for item in payload["thread_messages"]
+        for item in thread_messages_payload
     ]
     transcript = "\n".join(line for line in transcript_lines if line.strip())
 
@@ -182,5 +182,5 @@ def _ignore(reason: str) -> DecisionResult:
 def _normalize_semantic_reaction(reaction: Any) -> SemanticReaction | None:
     value = str(reaction or "").strip()
     if value in SEMANTIC_REACTIONS:
-        return value
+        return cast(SemanticReaction, value)
     return None

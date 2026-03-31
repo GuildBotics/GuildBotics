@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.errors import CommandError

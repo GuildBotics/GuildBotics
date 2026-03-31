@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from logging import Logger
-from typing import Type
 
 from pydantic import BaseModel
 
@@ -14,7 +13,7 @@ class Brain(ABC):
         logger: Logger,
         description: str = "",
         template_engine: str = "default",
-        response_class: Type[BaseModel] | None = None,
+        response_class: type[BaseModel] | None = None,
     ):
         """
         Initialize the Intelligence.

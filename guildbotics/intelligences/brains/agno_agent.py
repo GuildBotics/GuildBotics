@@ -1,6 +1,6 @@
 from copy import deepcopy
 from logging import Logger
-from typing import Optional, Type, cast
+from typing import cast
 
 from agno.agent import Agent
 from agno.models.base import Model
@@ -24,8 +24,8 @@ class RateLimit(BaseModel):
         max_requests_per_day (Optional[int]): Max requests allowed per day.
     """
 
-    max_requests_per_minute: Optional[int] = None
-    max_requests_per_day: Optional[int] = None
+    max_requests_per_minute: int | None = None
+    max_requests_per_day: int | None = None
 
 
 class ModelConfig(BaseModel):
@@ -34,7 +34,7 @@ class ModelConfig(BaseModel):
     name: str
     model_class: str
     parameters: dict = {}
-    rate_limit: Optional[RateLimit] = None
+    rate_limit: RateLimit | None = None
     is_restricted_model: bool = False
 
 
@@ -69,7 +69,7 @@ class AgnoAgentDefaultBrain(Brain):
         logger: Logger,
         description: str = "",
         template_engine: str = "default",
-        response_class: Type[BaseModel] | None = None,
+        response_class: type[BaseModel] | None = None,
         model: str = "default",
     ):
         super().__init__(
@@ -98,7 +98,7 @@ class AgnoAgentDefaultBrain(Brain):
             message = to_plain_text(description, message, response_class)
         else:
             kwargs["description"] = description
-            if not "response_model" in kwargs and self.response_class:
+            if "response_model" not in kwargs and self.response_class:
                 kwargs["response_model"] = self.response_class
 
         kwargs["tool_call_limit"] = kwargs.get("tool_call_limit", 5)

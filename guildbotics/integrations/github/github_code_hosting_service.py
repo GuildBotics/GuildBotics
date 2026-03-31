@@ -257,7 +257,7 @@ class GitHubCodeHostingService(CodeHostingService):
                 continue
             by_user.setdefault(login, set()).add(content)
         return [
-            Reaction(username=u, contents=sorted(list(cs))) for u, cs in by_user.items()
+            Reaction(username=u, contents=sorted(cs)) for u, cs in by_user.items()
         ]
 
     def get_line_content(self, data: dict) -> str:

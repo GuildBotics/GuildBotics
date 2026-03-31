@@ -2,7 +2,6 @@ import asyncio
 import os
 import threading
 import time
-from typing import List
 
 REDIS_URL = os.getenv("REDIS_URL")
 if REDIS_URL:
@@ -33,7 +32,7 @@ class RateLimiter:
         self.name = name
         self.max_requests_per_minute = max_requests_per_minute
         self._lock: threading.Lock = threading.Lock()
-        self._request_timestamps: List[float] = []
+        self._request_timestamps: list[float] = []
         self._use_redis = _redis_client is not None
         if self._use_redis:
             self._redis = _redis_client

@@ -6,8 +6,8 @@ if TYPE_CHECKING:
     from guildbotics.commands.command_base import CommandBase
 
 # Lazy caches populated on first access
-_COMMAND_TYPES: tuple[type["CommandBase"], ...] | None = None
-_COMMAND_REGISTRY: dict[str, type["CommandBase"]] | None = None
+_COMMAND_TYPES: tuple[type[CommandBase], ...] | None = None
+_COMMAND_REGISTRY: dict[str, type[CommandBase]] | None = None
 
 
 def _ensure_registry() -> None:
@@ -46,7 +46,7 @@ def _ensure_registry() -> None:
     }
 
 
-def get_command_types() -> tuple[type["CommandBase"], ...]:
+def get_command_types() -> tuple[type[CommandBase], ...]:
     """Return the tuple of registered command types in registration order."""
     _ensure_registry()
     # mypy/pylance: _COMMAND_TYPES is ensured non-None after _ensure_registry
@@ -61,7 +61,7 @@ def get_command_extensions() -> tuple[str, ...]:
     return tuple(_COMMAND_REGISTRY.keys())
 
 
-def find_command_class(extension: str) -> type["CommandBase"]:
+def find_command_class(extension: str) -> type[CommandBase]:
     """Return the registered command class for the given file extension."""
     from guildbotics.commands.errors import CommandError
 

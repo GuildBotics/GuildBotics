@@ -119,7 +119,9 @@
 CI (`.github/workflows/ci.yml`) で使われている手順:
 
 ```bash
-uv sync --extra test
+uv sync --extra test --extra dev
+uv run --no-sync ruff check guildbotics
+uv run --no-sync mypy guildbotics
 uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
 ```
 
@@ -128,6 +130,12 @@ uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
 ```bash
 uv sync --extra dev
 ```
+
+エージェント作業時の品質確認:
+
+- Python コードを変更したら、原則として `ruff` と `mypy` と関連 `pytest` を実行してから完了報告する
+- 最低限の確認コマンドは `uv run --no-sync ruff check guildbotics`、`uv run --no-sync mypy guildbotics`、`uv run --no-sync python -m pytest ...`
+- 型エラーや lint エラーを回避するためだけの `# type: ignore` や noqa は、理由が明確でない限り追加しない
 
 ## 変更時の実務ルール
 

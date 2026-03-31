@@ -11,16 +11,16 @@ from guildbotics.entities.team import (
 )
 
 __all__ = [
+    "CommandSchedule",
     "FileInfo",
     "Message",
     "MessageChannel",
     "Person",
     "Project",
-    "Role",
     "Reaction",
-    "Service",
+    "Role",
     "ScheduledCommand",
+    "Service",
     "Task",
-    "CommandSchedule",
     "Team",
 ]

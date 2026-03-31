@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from contextlib import suppress
 from pathlib import Path
+from typing import ClassVar
 
 from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
@@ -12,8 +14,8 @@ from guildbotics.commands.utils import stringify_output
 
 
 class ShellScriptCommand(CommandBase):
-    extensions = [".sh"]
-    inline_key = "script"
+    extensions: ClassVar[list[str]] = [".sh"]
+    inline_key: ClassVar[str] = "script"
 
     async def run(self) -> CommandOutcome:
         env = os.environ.copy()
@@ -21,14 +23,16 @@ class ShellScriptCommand(CommandBase):
             env[key] = stringify_output(value)
 
         executable_path = self.spec.path
-        tmp_file = None
+        temp_file_name: str | None = None
         script = self.spec.get_config_value("script")
         if script is not None:
-            tmp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
-            tmp_file.write(script)
-            tmp_file.flush()
-            tmp_file.close()
-            executable_path = Path(tmp_file.name)
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".sh", delete=False
+            ) as tmp_file:
+                tmp_file.write(script)
+                tmp_file.flush()
+                temp_file_name = tmp_file.name
+            executable_path = Path(temp_file_name)
 
         if executable_path is None:
             raise CommandError(
@@ -70,8 +74,6 @@ class ShellScriptCommand(CommandBase):
                 f"Shell command '{executable_path}' could not be executed."
             ) from exc
         finally:
-            if tmp_file is not None:
-                try:
-                    os.remove(tmp_file.name)
-                except OSError:
-                    pass
+            if temp_file_name is not None:
+                with suppress(OSError):
+                    os.remove(temp_file_name)

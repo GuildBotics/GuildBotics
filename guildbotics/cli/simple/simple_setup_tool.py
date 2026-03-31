@@ -36,6 +36,10 @@ from guildbotics.utils.i18n_tool import get_system_default_language, set_languag
 BASE_DIR = Path(__file__).parent
 GITHUB_URL = "https://github.com/"
 TEMPLATE_PATH = BASE_DIR / "templates"
+GITHUB_APPS_URL_MIN_PARTS = 8
+GITHUB_PROJECT_URL_MIN_PARTS = 7
+GITHUB_REPOSITORY_URL_MIN_PARTS = 5
+HTTP_OK = 200
 
 
 i18n.load_path.append(BASE_DIR / "locales")
@@ -128,11 +132,10 @@ class SimpleSetupTool(SetupTool):
                 t("cli.target_directory_prompt"), choices=list(dir_map.keys())
             ).ask()
             config.config_dir = dir_map[config.config_dir_label]
-            if config.config_dir.exists():
-                if not questionary.confirm(
-                    t("cli.directory_confirm"), default=False
-                ).ask():
-                    return
+            if config.config_dir.exists() and not questionary.confirm(
+                t("cli.directory_confirm"), default=False
+            ).ask():
+                return
 
         # Step 3. Environment File Creation
         env_file_option_map = {
@@ -480,8 +483,9 @@ class SimpleSetupTool(SetupTool):
 
             private_key_path = questionary.text(
                 t("cli.input_github_private_key_path_prompt"),
-                validate=lambda text: len(text) > 0
-                and Path(text).exists()
+                validate=lambda text: (
+                    len(text) > 0 and Path(text).exists()
+                )
                 or t("cli.input_github_private_key_path_prompt"),
             ).ask()
 
@@ -674,7 +678,7 @@ class SimpleSetupTool(SetupTool):
     ) -> dict[str, str]:
         sentinel_none = t("cli.sentinel_none")
         mapping: dict[str, str] = {}
-        choices = [sentinel_none] + existing
+        choices = [sentinel_none, *existing]
 
         for std in standard:
             answer = questionary.select(
@@ -695,7 +699,7 @@ class SimpleSetupTool(SetupTool):
     def parse_github_apps_url(self, url: str, config: PersonConfig) -> str | bool:
         url_parts = url.split("/")
         if (
-            len(url_parts) < 8
+            len(url_parts) < GITHUB_APPS_URL_MIN_PARTS
             or not url.startswith(GITHUB_URL)
             or url_parts[3] != "organizations"
             or url_parts[5] != "settings"
@@ -720,13 +724,13 @@ class SimpleSetupTool(SetupTool):
             config.github_username = f"{name}[bot]"
             github_username = f"{quote(config.github_username)}"
         else:
-            config.person_id = name.split("@")[0]
+            config.person_id = name.split("@", maxsplit=1)[0]
             config.github_username = config.person_id
             github_username = config.person_id
 
         try:
             response = requests.get(f"https://api.github.com/users/{github_username}")
-            if response.status_code != 200:
+            if response.status_code != HTTP_OK:
                 return error_message
             data = response.json()
             config.github_user_id = data.get("id", 0)
@@ -739,7 +743,7 @@ class SimpleSetupTool(SetupTool):
     def parse_github_project_url(self, url: str, config: ProjectConfig) -> str | bool:
         url_parts = url.split("/")
         if (
-            len(url_parts) < 7
+            len(url_parts) < GITHUB_PROJECT_URL_MIN_PARTS
             or not url.startswith(GITHUB_URL)
             or url_parts[3] not in ["orgs", "users"]
             or url_parts[5] != "projects"
@@ -757,7 +761,11 @@ class SimpleSetupTool(SetupTool):
         self, url: str, config: ProjectConfig
     ) -> str | bool:
         url_parts = url.split("/")
-        if len(url_parts) < 5 or not url.startswith(GITHUB_URL) or url_parts[4] == "":
+        if (
+            len(url_parts) < GITHUB_REPOSITORY_URL_MIN_PARTS
+            or not url.startswith(GITHUB_URL)
+            or url_parts[4] == ""
+        ):
             return t("cli.error_invalid_github_repository_url")
         if url_parts[3] != config.owner:
             return t("cli.error_inconsistent_github_url")

@@ -5,8 +5,10 @@ import queue
 import re
 import threading
 import time
+from collections.abc import Callable
+from contextlib import suppress
 from logging import Logger
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
@@ -237,16 +239,12 @@ class SlackSocketEventListener(EventListener):
                 self._ws = None
 
     def _log_debug(self, message: str) -> None:
-        try:
+        with suppress(Exception):
             self._logger.debug(message)
-        except Exception:
-            pass
 
     def _log_info(self, message: str, *args: Any) -> None:
-        try:
+        with suppress(Exception):
             self._logger.info(message, *args)
-        except Exception:
-            pass
 
 
 def _extract_mentions(text: str) -> list[str]:

@@ -7,11 +7,10 @@ from typing import Any
 from croniter import croniter  # type: ignore[import]
 
 from guildbotics.commands.utils import stringify_output
-from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.chat_profile import get_chat_scheduled_posts
+from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
-    ScheduledPostState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 

@@ -1,4 +1,4 @@
-from typing import cast
+from typing import ClassVar, cast
 
 from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.models import CommandOutcome, CommandSpec
@@ -8,8 +8,8 @@ from guildbotics.utils.import_utils import ClassResolver
 
 
 class YamlCommand(CommandBase):
-    extensions = [".yaml", ".yml"]
-    inline_key = ""
+    extensions: ClassVar[list[str]] = [".yaml", ".yml"]
+    inline_key: ClassVar[str] = ""
 
     @classmethod
     def populate_spec(

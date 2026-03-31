@@ -49,7 +49,7 @@ async def main(
         (
             comments,
             changed,
-            is_asking,
+            _,
             message,
             conversation_history,
         ) = await _handle_review_flow(

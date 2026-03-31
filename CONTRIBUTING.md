@@ -8,8 +8,11 @@
 - `.env`, `.env.example`: Local configuration.
 
 ## Build, Test, and Development Commands
-- Sync dependencies: `uv sync --extra test`
+- Sync dependencies for CI-equivalent checks: `uv sync --extra test --extra dev`
+- Run lint checks: `uv run --no-sync ruff check guildbotics`
+- Run type checks: `uv run --no-sync mypy guildbotics`
 - Run tests and create coverage report: `uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml` (output: `coverage.xml`).
+- Recommended local verification order: `ruff` -> `mypy` -> `pytest`
 
 Note: This repository provides a fixed dependency file `pyproject.toml`. Use `uv sync` to install the required libraries.
 
@@ -42,7 +45,7 @@ Note: This repository provides a fixed dependency file `pyproject.toml`. Use `uv
 ## Commit & Pull Request Guidelines
 - Use Conventional Commits: `feat:`, `fix:`, `chore:`, `refactor:`, etc. Short, imperative subject; details in body. English or Japanese is fine.
 - PRs: clear description, linked issues (`#123`), screenshots/logs when relevant, reproduction and test steps, and note any env/config changes.
-- Ensure `pytest` passes before requesting review.
+- Ensure `uv run --no-sync ruff check guildbotics`, `uv run --no-sync mypy guildbotics`, and `pytest` pass before requesting review.
 
 ## Code Review Etiquette
 - Address all feedback (implement or clarify); do not ignore comments.
@@ -69,4 +72,3 @@ Note: This repository provides a fixed dependency file `pyproject.toml`. Use `uv
 - Never commit secrets.
 - Validate external input where applicable; fail fast with clear errors.
 - Use least-privilege credentials; rotate secrets upon suspicion or exposure.
-

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from logging import Logger
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
 from guildbotics.drivers.chat_event_source import ChatEventSource
 from guildbotics.integrations.chat_state_store import ConversationStateStore
-from guildbotics.integrations.slack.slack_socket_listener import SlackSocketEventListener
+from guildbotics.integrations.slack.slack_socket_listener import (
+    SlackSocketEventListener,
+)
 from guildbotics.runtime.event_listener import ChatSubscriptionEvent
 
 

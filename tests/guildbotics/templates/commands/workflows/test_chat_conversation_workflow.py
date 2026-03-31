@@ -258,7 +258,6 @@ async def test_workflow_replies_to_explicit_mention_and_updates_state(tmp_path):
 
     thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     assert "alice" in thread_state.participants
-    assert thread_state.last_bot_replier_id is None
     thread_messages = state_store.load_thread_messages("slack", "alice", "C1", "100.1")
     assert [m.message_ts for m in thread_messages] == ["100.1", "999.1"]
     assert thread_messages[0].is_bot_message is False

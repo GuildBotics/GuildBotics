@@ -147,7 +147,7 @@ class GitHubTicketManager(TicketManager):
         return payload["data"]
 
     async def _project_node(self) -> str:
-        """Return the node‑ID of the configured Project V2."""
+        """Return the node-ID of the configured Project V2."""
         if self._project_node_id:
             return self._project_node_id
 
@@ -248,7 +248,7 @@ class GitHubTicketManager(TicketManager):
 
     async def get_column_id(self, column_name: str) -> str | None:
         """
-        Return the option‑ID corresponding to *column_name*.
+        Return the option-ID corresponding to *column_name*.
 
         Ensures the Status column set is synced before fetching.
         """
@@ -385,7 +385,7 @@ class GitHubTicketManager(TicketManager):
 
             # Set custom field values
             field_values = {}
-            for field_name in self._custom_field_definitions.keys():
+            for field_name in self._custom_field_definitions:
                 value = await self._get_field_value_for_task(task, field_name)
                 if value:
                     field_values[field_name] = value
@@ -450,7 +450,7 @@ class GitHubTicketManager(TicketManager):
 
         # Build GraphQL fragments for custom fields
         custom_field_fragments = []
-        for field_name, field_info in self.custom_fields.items():
+        for _field_name, field_info in self.custom_fields.items():
             data_type = field_info["dataType"]
             if data_type == "SINGLE_SELECT":
                 custom_field_fragments.append(
@@ -934,7 +934,7 @@ class GitHubTicketManager(TicketManager):
 
         # Update custom field values
         field_values = {}
-        for field_name in self._custom_field_definitions.keys():
+        for field_name in self._custom_field_definitions:
             value = await self._get_field_value_for_task(task, field_name)
             if value:
                 field_values[field_name] = value
@@ -1050,7 +1050,7 @@ class GitHubTicketManager(TicketManager):
         """
 
         for opt in options:
-            if not "color" in opt:
+            if "color" not in opt:
                 opt["color"] = "GRAY"
 
         variables = {
@@ -1086,27 +1086,26 @@ class GitHubTicketManager(TicketManager):
                 # Create field then refresh cache to get option IDs
                 await self._create_custom_field(field_name, field_config)
                 created_any = True
-            else:
+            elif (
+                field_config.get("dataType") == "SINGLE_SELECT"
+                and "options" in field_config
+            ):
                 # For existing fields, check and update options if necessary
-                if (
-                    field_config.get("dataType") == "SINGLE_SELECT"
-                    and "options" in field_config
-                ):
-                    desired_options = field_config["options"]
-                    current_options = existing_fields[field_name].get("options", {})
-                    current_option_names = list(current_options.keys())
-                    missing_options = {}
-                    for opt in desired_options:
-                        if opt["name"] not in current_option_names:
-                            missing_options[opt["name"]] = opt.get("description", "")
+                desired_options = field_config["options"]
+                current_options = existing_fields[field_name].get("options", {})
+                current_option_names = list(current_options.keys())
+                missing_options = {}
+                for opt in desired_options:
+                    if opt["name"] not in current_option_names:
+                        missing_options[opt["name"]] = opt.get("description", "")
 
-                    if missing_options:
-                        message = t(
-                            "integrations.github.github_ticket_manager.add_custom_field_options",
-                            field=field_name,
-                            options=Labels(missing_options),
-                        )
-                        self.logger.warning(message)
+                if missing_options:
+                    message = t(
+                        "integrations.github.github_ticket_manager.add_custom_field_options",
+                        field=field_name,
+                        options=Labels(missing_options),
+                    )
+                    self.logger.warning(message)
 
         # If any fields were created, refresh the local cache to include option IDs
         if created_any:
@@ -1151,9 +1150,8 @@ class GitHubTicketManager(TicketManager):
                     return None  # Skip if option not found
                 return {"singleSelectOptionId": options[value_attr]}
 
-        elif field_name == GitHubTicketManager.FIELD_OWNER:
-            if task.owner:
-                return {"text": task.owner}
+        elif field_name == GitHubTicketManager.FIELD_OWNER and task.owner:
+            return {"text": task.owner}
 
         return None
 

@@ -33,7 +33,7 @@ def get_file_handler() -> logging.FileHandler | None:
 
 
 def get_logger() -> logging.Logger:
-    logger = logging.getLogger(f"guildbotics")
+    logger = logging.getLogger("guildbotics")
     logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] [@%(threadName)s] %(message)s"

@@ -4,7 +4,7 @@ import importlib.util
 import inspect
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
@@ -13,8 +13,8 @@ from guildbotics.commands.utils import stringify_output
 
 
 class PythonCommand(CommandBase):
-    extensions = [".py"]
-    inline_key = "python"
+    extensions: ClassVar[list[str]] = [".py"]
+    inline_key: ClassVar[str] = "python"
 
     async def run(self) -> CommandOutcome:
         if self.spec.path is None:
@@ -58,7 +58,7 @@ class PythonCommand(CommandBase):
         params = params[index:]
         if params:
             assigned_keywords = 0
-            for key in self.options.params.keys():
+            for key in self.options.params:
                 if _is_keyword(params, key):
                     call_kwargs[key] = kwargs.pop(key)
                     assigned_keywords += 1
