@@ -506,6 +506,8 @@ In the Slack chat workflow, channels configured in `message_channels` of `person
 
 Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
 
+For CLI-based chat replies, GuildBotics also keeps a per-agent memory repository under `~/.guildbotics/data/memory/<person_id>/`. The reply step runs in that directory so the configured CLI backend can use its standard instruction file such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`.
+
 ### 5.6.1. Prerequisites (Slack Side)
 
 #### Basic Setup
@@ -764,6 +766,7 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 - `intelligences/cli_agent_mapping.yml`: Default CLI agent selection
 - `intelligences/cli_agents/*.yml`: CLI agent scripts
 - `team/members/<person_id>/intelligences/`: Per-agent overrides
+- `~/.guildbotics/data/memory/<person_id>/`: Per-agent local memory repository for chat replies
 
 
 # 8. Troubleshooting

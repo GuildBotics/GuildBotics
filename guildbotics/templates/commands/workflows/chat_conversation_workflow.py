@@ -18,7 +18,6 @@ from guildbotics.integrations.chat_state_store import (
     ThreadMessageState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.functions import talk_as
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
@@ -32,6 +31,7 @@ from guildbotics.templates.commands.workflows.chat.should_react import (
     ReactionThreadContext,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.memory_repo import MemoryRepository
 
 
 async def main(
@@ -190,27 +190,18 @@ async def _build_reply_text(
     chat_service: ChatService,
     thread_state: ThreadConversationState,
 ) -> tuple[str, dict[str, str]]:
-    author_labels = await _build_author_labels(
-        context, self_user_id, event, thread_messages[-20:]
-    )
     text, thread_context = await _build_reply_text_via_command(
         context,
         event,
         thread_messages,
         self_user_id,
-        author_labels,
         chat_service,
         thread_state,
     )
     if not text.strip():
         # Fallback for contexts without invoker / command failures.
         text = _build_reply_text_fallback(context, event, thread_messages)
-    return (
-        await _talk_as_reply(
-            context, text, thread_messages, self_user_id, author_labels, chat_service
-        ),
-        thread_context,
-    )
+    return text, thread_context
 
 
 async def _build_reply_text_via_command(
@@ -218,7 +209,6 @@ async def _build_reply_text_via_command(
     event: ChatEvent,
     thread_messages: list[ThreadMessageState],
     self_user_id: str,
-    author_labels: dict[str, str],
     chat_service: ChatService,
     thread_state: ThreadConversationState,
 ) -> tuple[str, dict[str, str]]:
@@ -226,6 +216,9 @@ async def _build_reply_text_via_command(
     if not callable(invoke):
         return "", {}
 
+    author_labels = await _build_author_labels(
+        context, self_user_id, event, thread_messages[-20:]
+    )
     prompt_thread_messages = [
         _to_prompt_message_from_state(message, self_user_id, author_labels, chat_service)
         for message in thread_messages[-20:]
@@ -258,6 +251,8 @@ async def _build_reply_text_via_command(
     has_shared_state = isinstance(getattr(context, "shared_state", None), dict)
     old_shared_state = deepcopy(context.shared_state) if has_shared_state else None
     try:
+        memory_repo = _get_memory_repository(context)
+        memory_repo_path = memory_repo.get_repo_path() if memory_repo is not None else None
         if has_shared_state:
             context.shared_state["chat_reply_input"] = payload
         if hasattr(context, "pipe"):
@@ -268,8 +263,16 @@ async def _build_reply_text_via_command(
         reply_intent = await _classify_reply_intent(context)
         if has_shared_state:
             context.shared_state["chat_reply_input"]["reply_intent"] = reply_intent
-        reply_result = await invoke("workflows/chat/chat_reply_actionable")
-        return stringify_output(reply_result).strip(), thread_context
+        invoke_kwargs = {}
+        if memory_repo_path is not None:
+            invoke_kwargs["cwd"] = memory_repo_path
+        reply_result = await invoke(
+            "workflows/chat/chat_reply_actionable", **invoke_kwargs
+        )
+        reply_text = stringify_output(reply_result).strip()
+        if reply_text and memory_repo is not None:
+            memory_repo.commit_if_changed("Update agent memory")
+        return reply_text, thread_context
     except Exception:
         _log_info(
             context,
@@ -290,36 +293,15 @@ def _build_reply_text_fallback(
     return t("commands.workflows.chat_conversation_workflow.reply_generation_failed")
 
 
-async def _talk_as_reply(
-    context: Any,
-    text: str,
-    thread_messages: list[ThreadMessageState],
-    self_user_id: str,
-    author_labels: dict[str, str],
-    chat_service: ChatService,
-) -> str:
-    if not text.strip():
-        return text
+def _get_memory_repository(context: Any) -> MemoryRepository | None:
+    person = getattr(context, "person", None)
+    team = getattr(context, "team", None)
+    if person is None or team is None or getattr(team, "project", None) is None:
+        return None
     try:
-        history = [
-            _to_prompt_message_from_state(
-                message, self_user_id, author_labels, chat_service
-            )
-            for message in thread_messages[-20:]
-        ]
-        talked_text = await talk_as(
-            context,
-            text,
-            t("commands.workflows.chat_conversation_workflow.context_location"),
-            history,
-        )
-        return talked_text.strip() or text
+        return MemoryRepository(person, team)
     except Exception:
-        _log_info(
-            context,
-            "chat talk_as failed, using non-persona reply generation result",
-        )
-        return text
+        return None
 
 
 async def _classify_reply_intent(context: Any) -> dict[str, str]:

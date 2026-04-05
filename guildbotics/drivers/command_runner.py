@@ -72,7 +72,7 @@ class CommandRunner:
         self._call_stack.append(name)
 
         try:
-            command = spec.command_class(self._context, spec, self._cwd)
+            command = spec.command_class(self._context, spec, spec.cwd)
             outcome = await command.run()
             if outcome is not None:
                 self._context.update(
@@ -83,12 +83,14 @@ class CommandRunner:
             self._call_stack.pop()
 
     async def _invoke(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        cwd = kwargs.pop("cwd", None)
         spec = self._spec_factory.build_from_entry(
             self._current_spec(),
             {
                 "name": name,
                 "args": list(args),
                 "params": kwargs,
+                "cwd": cwd,
             },
         )
         outcome = await self._run_with_children(spec)

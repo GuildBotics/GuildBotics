@@ -22,20 +22,16 @@ class ExecutableInfo:
     Information about an executable script.
     """
 
-    def __init__(
-        self, script: str, env: dict | None = None, cwd: str | None = None
-    ):
+    def __init__(self, script: str, env: dict | None = None):
         """
         Initialize the executable information.
 
         Args:
             script (str): The script to execute.
             env (dict): Environment variables to set for the script.
-            cwd (str | None): The working directory for the script.
         """
         self.script = script
         self.env = {} if env is None else env
-        self.cwd = cwd
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
@@ -147,7 +143,7 @@ class CliAgentBrain(Brain):
             message (str): The message to pass to the agent.
             **kwargs: Arguments to pass to the agent.
         """
-        self.executable_info.cwd = kwargs["cwd"]
+        cwd = kwargs["cwd"]
         input = self.prompt_info.to_prompt(
             message, kwargs.get("session_state", {}), self.template_engine
         )
@@ -163,7 +159,7 @@ class CliAgentBrain(Brain):
             response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
             log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-        output = await self._execute_script(input, response_file, log_file)
+        output = await self._execute_script(input, response_file, log_file, cwd)
 
         self.logger.debug(
             f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
@@ -177,7 +173,9 @@ class CliAgentBrain(Brain):
 
         return output
 
-    async def _execute_script(self, input: str, response_file: str, log_file: str):
+    async def _execute_script(
+        self, input: str, response_file: str, log_file: str, cwd: Path | str
+    ):
         """
         Execute the script specified in the coding_agent.run configuration
         in a subprocess with the configured environment variables.
@@ -206,7 +204,7 @@ class CliAgentBrain(Brain):
             # Launch subprocess in the cloned repository directory
             process = await asyncio.create_subprocess_shell(
                 self.executable_info.script,
-                cwd=self.executable_info.cwd,
+                cwd=str(cwd),
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

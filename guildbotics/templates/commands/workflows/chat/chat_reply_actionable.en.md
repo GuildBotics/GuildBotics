@@ -29,7 +29,6 @@ When needed, autonomously execute or verify using available tools/environment an
 - Treat each distinct `author` as a separate participant
 - Respond to the latest message in context, not just the original topic
 - Preserve the full thread topic, but treat `latest_focus` as the highest-priority constraint for this reply
-- Ground the reply in concrete items already mentioned in the thread whenever possible instead of drifting into generic advice
 - Reply directly to the user's intent/question first
 - Follow the selected reply intent strictly:
   - `answer`: answer the open question directly
