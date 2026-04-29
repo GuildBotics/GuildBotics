@@ -16,6 +16,7 @@ from guildbotics.runtime.event_listener import (
     IncomingChatEvent,
 )
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
+from guildbotics.utils.memory_backend import MemoryContext, MemoryWriteResult
 
 EXPECTED_CHAT_INVOCATIONS = 4
 
@@ -89,6 +90,15 @@ class FakeInvokeContext(types.SimpleNamespace):
             "reason": "default",
             "confidence": 0.9,
         }
+        self._memory_update = {
+            "should_update": False,
+            "topic_id": "",
+            "title": "",
+            "summary": "",
+            "memory": "",
+            "reason": "default",
+            "confidence": 0.0,
+        }
         self.invocations: list[tuple[str, tuple, dict]] = []
         self.last_chat_reply_input = None
         self.last_pipe = ""
@@ -109,6 +119,8 @@ class FakeInvokeContext(types.SimpleNamespace):
             return self._reply_intent
         if name == "workflows/chat/chat_reply_actionable":
             return self._reply_text
+        if name == "workflows/chat/chat_memory_update":
+            return self._memory_update
         return self._reply_text
 
 
@@ -159,6 +171,19 @@ class FakeMemoryRepository:
     def commit_if_changed(self, message: str):
         self.commit_messages.append(message)
         return "deadbeef"
+
+
+class FakeMemoryBackend:
+    def __init__(self, path):
+        self.path = path
+        self.updates = []
+
+    def recall(self, query):
+        return MemoryContext(backend="fake")
+
+    def remember(self, update):
+        self.updates.append(update)
+        return MemoryWriteResult(changed=update.should_update, backend="fake")
 
 
 def _context_with_chat_profile() -> types.SimpleNamespace:
@@ -282,7 +307,9 @@ async def test_workflow_replies_to_explicit_mention_and_updates_state(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_workflow_uses_chat_reply_command_when_invoker_is_available(tmp_path):
+async def test_workflow_uses_chat_reply_command_when_invoker_is_available(
+    tmp_path, monkeypatch
+):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = _invoke_context_with_chat_profile(reply_text="確認します。まずエラーログを共有してください。")
@@ -293,6 +320,11 @@ async def test_workflow_uses_chat_reply_command_when_invoker_is_available(tmp_pa
         text="<@U_ALICE> explain this error",
         mentions=["U_ALICE"],
     )
+    monkeypatch.setattr(
+        chat_conversation_workflow,
+        "get_workspace_path",
+        lambda person_id: tmp_path / "workspace" / person_id,
+    )
 
     await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
 
@@ -302,7 +334,7 @@ async def test_workflow_uses_chat_reply_command_when_invoker_is_available(tmp_pa
     assert ctx.invocations[2][0] == "workflows/chat/chat_reply_intent"
     assert ctx.invocations[3][0] == "workflows/chat/chat_reply_actionable"
     assert ctx.invocations[3][1] == ()
-    assert ctx.invocations[3][2] == {}
+    assert ctx.invocations[3][2] == {"cwd": tmp_path / "workspace" / "alice"}
     assert "chat_reply_input" not in ctx.shared_state
     assert ctx.pipe == ""
     assert ctx.last_chat_reply_input is not None
@@ -316,6 +348,7 @@ async def test_workflow_uses_chat_reply_command_when_invoker_is_available(tmp_pa
         "author",
         "author_type",
     }
+    assert ctx.last_chat_reply_input["agent_profile"]["person_id"] == "alice"
     assert ctx.last_chat_reply_input["latest_message"]["author"] == "user_1"
     assert "@alice explain this error" in ctx.last_chat_reply_input["latest_message"]["content"]
     assert "explain this error" in ctx.last_pipe
@@ -371,11 +404,20 @@ async def test_workflow_passes_transcript_and_reply_intent_to_actionable_reply_c
 
 
 @pytest.mark.asyncio
-async def test_workflow_posts_actionable_reply_and_commits_memory(tmp_path, monkeypatch):
+async def test_workflow_posts_actionable_reply_and_updates_memory_backend(tmp_path, monkeypatch):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = _invoke_context_with_chat_profile(reply_text="ベース返信")
-    memory_repo = FakeMemoryRepository(tmp_path / "memory")
+    memory_backend = FakeMemoryBackend(tmp_path / "memory")
+    ctx._memory_update = {
+        "should_update": True,
+        "topic_id": "onboarding",
+        "title": "Onboarding",
+        "summary": "Initial onboarding decisions",
+        "memory": "# Onboarding\n\n## Decisions\n- Keep the first step short.",
+        "reason": "durable decision",
+        "confidence": 0.9,
+    }
     _set_incoming_event(
         ctx,
         event_id="E_TALK_AS_1",
@@ -386,15 +428,21 @@ async def test_workflow_posts_actionable_reply_and_commits_memory(tmp_path, monk
 
     monkeypatch.setattr(
         chat_conversation_workflow,
-        "_get_memory_repository",
-        lambda context: memory_repo,
+        "_get_memory_backend",
+        lambda context: memory_backend,
+    )
+    monkeypatch.setattr(
+        chat_conversation_workflow,
+        "get_workspace_path",
+        lambda person_id: tmp_path / "workspace" / person_id,
     )
 
     await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
 
     assert service.posts[0][1] == "ベース返信"
-    assert ctx.invocations[3][2] == {"cwd": memory_repo.path}
-    assert memory_repo.commit_messages == ["Update agent memory"]
+    assert ctx.invocations[3][2] == {"cwd": tmp_path / "workspace" / "alice"}
+    assert ctx.invocations[4][0] == "workflows/chat/chat_memory_update"
+    assert memory_backend.updates[0].topic_id == "onboarding"
 
 
 @pytest.mark.asyncio

@@ -3,8 +3,11 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import yaml
+
 from guildbotics.entities.team import Person, Team
 from guildbotics.utils.fileio import get_memory_repo_path
+from guildbotics.utils.person_profile import build_agent_profile
 
 
 class MemoryRepository:
@@ -37,8 +40,11 @@ class MemoryRepository:
         alias_changed = False
         alias_changed |= self._sync_instruction_alias("CLAUDE.md", agents_text)
         alias_changed |= self._sync_instruction_alias("GEMINI.md", agents_text)
+        index_created = self._ensure_memory_index()
 
-        if (is_new_repo or created_agents or alias_changed) and self._has_changes():
+        if (
+            is_new_repo or created_agents or alias_changed or index_created
+        ) and self._has_changes():
             self._git("add", "-A")
             self._git("commit", "-m", "Initialize agent memory")
 
@@ -90,40 +96,54 @@ class MemoryRepository:
             return git_email
         return f"{self.person.person_id}@guildbotics.local"
 
+    def _ensure_memory_index(self) -> bool:
+        index_path = self.repo_path / "memory_index.yml"
+        if index_path.exists():
+            return False
+        index_path.write_text(
+            yaml.safe_dump(
+                {
+                    "topics": {},
+                    "global": {
+                        "note": (
+                            "Use AGENTS.md for agent identity and durable behavior. "
+                            "Use topics/<topic_id>/memory.md for topic-scoped context."
+                        )
+                    },
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        return True
+
     def _render_agents_md(self) -> str:
         project = self.team.project
-        role_lines = []
-        for role in self.person.roles.values():
-            summary = role.summary.strip()
-            description = role.description.strip()
-            detail = ": ".join(part for part in [summary, description] if part)
-            role_lines.append(f"- {role.id}" + (f": {detail}" if detail else ""))
-        if not role_lines:
-            role_lines.append("- No explicit roles defined.")
-
-        relationship_text = self.person.relationships.strip() or "None recorded."
-        speaking_style = self.person.speaking_style.strip() or "No specific style recorded."
+        profile_text = yaml.safe_dump(
+            build_agent_profile(self.person),
+            allow_unicode=True,
+            sort_keys=False,
+        ).strip()
         project_name = project.name.strip() or "Unnamed project"
+        project_description = project.description.strip()
         language_code = project.get_language_code()
+        project_lines = [f"- Project: {project_name}"]
+        if project_description:
+            project_lines.append(f"- Description: {project_description}")
+        project_lines.append(f"- Language: {language_code}")
 
         return "\n".join(
             [
                 f"# {self.person.name}",
                 "",
-                "## Identity",
-                f"- Person ID: {self.person.person_id}",
-                f"- Name: {self.person.name}",
-                f"- Speaking style: {speaking_style}",
-                "",
-                "## Roles",
-                *role_lines,
+                "## Agent Profile",
+                "```yaml",
+                profile_text,
+                "```",
                 "",
                 "## Project Context",
-                f"- Project: {project_name}",
-                f"- Language: {language_code}",
-                "",
-                "## Relationships",
-                relationship_text,
+                *project_lines,
                 "",
                 "## Chat Reply Rules",
                 "- Return only the chat reply body.",
@@ -133,10 +153,17 @@ class MemoryRepository:
                 "- Keep the reply concise and specific.",
                 "",
                 "## Memory Update Rules",
-                "- After writing the reply, update this file only if you learned durable information that is likely to matter later.",
-                "- Prefer small edits over rewriting the whole file.",
+                "- Durable chat memory is updated after replies by a separate memory backend step.",
+                "- Do not describe memory checks or memory updates in chat replies.",
+                "- Do not edit `AGENTS.md` while writing a chat reply unless the user's durable preference or agent behavior rule clearly changed.",
                 "- Do not invent facts.",
                 "- Do not store transient one-off details unless they are likely to be reused.",
+                "",
+                "## Memory Navigation Rules",
+                "- Use topic memory from `memory_index.yml` and `topics/<topic_id>/memory.md` when it is provided in the prompt.",
+                "- Keep each topic focused; do not mix unrelated topics into one memory file.",
+                "- Store project or conversation decisions in topic memory, not in the agent profile above.",
+                "- Topic memory should usually contain `Summary`, `Decisions`, `Open Questions`, and `Current Direction` sections.",
                 "",
             ]
         )

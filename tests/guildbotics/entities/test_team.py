@@ -96,6 +96,12 @@ def test_project_get_language_name_non_empty():
         mock_lang.display_name.assert_called_once_with("en")
 
 
+def test_project_accepts_description():
+    project = Project(name="p", description="Project context for agents.")
+
+    assert project.description == "Project context for agents."
+
+
 # -----------------------------
 # Person tests
 # -----------------------------
@@ -180,7 +186,7 @@ def test_person_secret_helpers(monkeypatch):
 
 
 def test_team_get_role_members_and_available_ids():
-    project = Project(name="p", description={})
+    project = Project(name="p")
     alice = Person(
         person_id="u1",
         name="Alice",

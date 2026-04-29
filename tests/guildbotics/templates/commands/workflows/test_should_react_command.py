@@ -145,6 +145,7 @@ async def test_should_react_chat_uses_llm_decision_for_participating_thread():
     assert captured["name"] == "workflows/chat/chat_followup_should_reply"
     assert "chat_should_reply_input" in captured["shared_state"]
     assert captured["shared_state"]["chat_should_reply_input"]["latest_message"]["content"] == "hello"
+    assert captured["shared_state"]["chat_should_reply_input"]["is_thread_participant"] is True
     assert "[user_1] hello" in str(captured["pipe"])
     assert ctx.shared_state == {}
     assert ctx.pipe == ""
@@ -172,3 +173,36 @@ async def test_should_react_chat_uses_llm_react_only_for_participating_thread():
     assert result["decision"] == "react_only"
     assert result["reason"] == "a lightweight acknowledgement is enough"
     assert result["reaction"] == "ack"
+
+
+@pytest.mark.asyncio
+async def test_should_react_chat_uses_profile_for_ambient_join_decision():
+    captured: dict[str, object] = {}
+
+    async def invoke(name: str, /, *args, **kwargs):
+        captured["shared_state"] = dict(ctx.shared_state)
+        return {
+            "label": "reply",
+            "reason": "matches design interests",
+            "confidence": 0.84,
+        }
+
+    person = types.SimpleNamespace(
+        person_id="alice",
+        name="Alice",
+        speaking_style="Concise.",
+        relationships="Works with Bob.",
+        roles={},
+        profile={"character": {"interests": ["UX design"]}},
+    )
+    ctx = types.SimpleNamespace(person=person, shared_state={}, pipe="", invoke=invoke)
+
+    result = await should_react.main(
+        ctx, channel_type="chat", reaction_input=_reaction_input()
+    )
+
+    payload = captured["shared_state"]["chat_should_reply_input"]
+    assert result["decision"] == "reply"
+    assert result["reason"] == "matches design interests"
+    assert payload["agent_profile"]["character"]["interests"] == ["UX design"]
+    assert payload["is_thread_participant"] is False

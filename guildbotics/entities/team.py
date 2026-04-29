@@ -47,12 +47,16 @@ class Project(BaseModel):
 
     Attributes:
         name (str): The name of the project.
+        description (str): A brief description of the project.
         language (str): The default language for the project, represented as a language tag.
         repositories (list[Repository]): A list of repositories used in the project.
-        services (dict[str, dict[str, str]]): A dictionary of services used in the project.
+    services (dict[str, dict[str, str]]): A dictionary of services used in the project.
     """
 
     name: str = Field(default="", description="The name of the project.")
+    description: str = Field(
+        default="", description="A brief description of the project."
+    )
     language: str = Field(
         default="en",
         description="The default language for the project, represented as a language tag.",

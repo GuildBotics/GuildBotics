@@ -8,12 +8,19 @@ Read the thread history and the latest message, then produce a reply that can be
 
 This command is for actionable requests.
 When needed, autonomously execute or verify using available tools/environment and return the result clearly.
+When the user asks about the project, implementation, codebase, repository, or concrete feasibility, inspect relevant files under the current workspace before answering. The current working directory is the per-agent workspace root and may contain cloned repositories.
 
 ## Input (latest message)
 {{ context.shared_state.chat_reply_input.latest_message | tojson(indent=2) }}
 
 ## Input (thread history, up to 20 messages)
 {{ context.shared_state.chat_reply_input.thread_messages | tojson(indent=2) }}
+
+## Agent profile
+{{ context.shared_state.chat_reply_input.agent_profile | tojson(indent=2) }}
+
+## Relevant memory
+{{ context.shared_state.chat_reply_input.memory_context | tojson(indent=2) }}
 
 ## Thread context
 {{ context.shared_state.chat_reply_input.thread_context | tojson(indent=2) }}
@@ -26,9 +33,12 @@ When needed, autonomously execute or verify using available tools/environment an
 
 ## Output rules
 - Return only the Slack reply body (no preface, no explanation, no code fences)
+- Do not mention memory checks or memory updates
 - Treat each distinct `author` as a separate participant
 - Respond to the latest message in context, not just the original topic
 - Preserve the full thread topic, but treat `latest_focus` as the highest-priority constraint for this reply
+- Add this agent's distinct perspective when it helps, grounded in its role, interests, preferences, and relationships
+- Do not repeat other participants; move the conversation forward with a different angle, caveat, or concrete idea
 - Reply directly to the user's intent/question first
 - Follow the selected reply intent strictly:
   - `answer`: answer the open question directly
