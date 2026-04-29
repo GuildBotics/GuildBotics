@@ -4,16 +4,21 @@ import types
 
 import pytest
 
-from guildbotics.entities.message import Message
-from guildbotics.integrations.chat_state_store import ThreadMessageState
 from guildbotics.integrations.chat_service import (
     ChatEvent,
     ChatIdentity,
     ChatPostResult,
 )
+from guildbotics.integrations.chat_state_store import ThreadMessageState
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.runtime.event_listener import INCOMING_CHAT_EVENT_KEY, IncomingChatEvent
+from guildbotics.runtime.event_listener import (
+    INCOMING_CHAT_EVENT_KEY,
+    IncomingChatEvent,
+)
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
+from guildbotics.utils.memory_backend import MemoryContext, MemoryWriteResult
+
+EXPECTED_CHAT_INVOCATIONS = 4
 
 
 class StubLogger:
@@ -85,6 +90,15 @@ class FakeInvokeContext(types.SimpleNamespace):
             "reason": "default",
             "confidence": 0.9,
         }
+        self._memory_update = {
+            "should_update": False,
+            "topic_id": "",
+            "title": "",
+            "summary": "",
+            "memory": "",
+            "reason": "default",
+            "confidence": 0.0,
+        }
         self.invocations: list[tuple[str, tuple, dict]] = []
         self.last_chat_reply_input = None
         self.last_pipe = ""
@@ -105,6 +119,8 @@ class FakeInvokeContext(types.SimpleNamespace):
             return self._reply_intent
         if name == "workflows/chat/chat_reply_actionable":
             return self._reply_text
+        if name == "workflows/chat/chat_memory_update":
+            return self._memory_update
         return self._reply_text
 
 
@@ -142,6 +158,32 @@ class CrashAfterPostStateStore(FileConversationStateStore):
             self._crashed = True
             raise RuntimeError("simulated crash after post")
         return super().save_thread_state(service, person_id, channel_id, thread_ts, state)
+
+
+class FakeMemoryRepository:
+    def __init__(self, path):
+        self.path = path
+        self.commit_messages: list[str] = []
+
+    def get_repo_path(self):
+        return self.path
+
+    def commit_if_changed(self, message: str):
+        self.commit_messages.append(message)
+        return "deadbeef"
+
+
+class FakeMemoryBackend:
+    def __init__(self, path):
+        self.path = path
+        self.updates = []
+
+    def recall(self, query):
+        return MemoryContext(backend="fake")
+
+    def remember(self, update):
+        self.updates.append(update)
+        return MemoryWriteResult(changed=update.should_update, backend="fake")
 
 
 def _context_with_chat_profile() -> types.SimpleNamespace:
@@ -265,7 +307,9 @@ async def test_workflow_replies_to_explicit_mention_and_updates_state(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_workflow_uses_chat_reply_command_when_invoker_is_available(tmp_path):
+async def test_workflow_uses_chat_reply_command_when_invoker_is_available(
+    tmp_path, monkeypatch
+):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = _invoke_context_with_chat_profile(reply_text="確認します。まずエラーログを共有してください。")
@@ -276,16 +320,21 @@ async def test_workflow_uses_chat_reply_command_when_invoker_is_available(tmp_pa
         text="<@U_ALICE> explain this error",
         mentions=["U_ALICE"],
     )
+    monkeypatch.setattr(
+        chat_conversation_workflow,
+        "get_workspace_path",
+        lambda person_id: tmp_path / "workspace" / person_id,
+    )
 
     await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
 
-    assert len(ctx.invocations) == 4
+    assert len(ctx.invocations) == EXPECTED_CHAT_INVOCATIONS
     assert ctx.invocations[0][0] == "workflows/chat/should_react"
     assert ctx.invocations[1][0] == "workflows/chat/chat_thread_context"
     assert ctx.invocations[2][0] == "workflows/chat/chat_reply_intent"
     assert ctx.invocations[3][0] == "workflows/chat/chat_reply_actionable"
     assert ctx.invocations[3][1] == ()
-    assert ctx.invocations[3][2] == {}
+    assert ctx.invocations[3][2] == {"cwd": tmp_path / "workspace" / "alice"}
     assert "chat_reply_input" not in ctx.shared_state
     assert ctx.pipe == ""
     assert ctx.last_chat_reply_input is not None
@@ -299,6 +348,7 @@ async def test_workflow_uses_chat_reply_command_when_invoker_is_available(tmp_pa
         "author",
         "author_type",
     }
+    assert ctx.last_chat_reply_input["agent_profile"]["person_id"] == "alice"
     assert ctx.last_chat_reply_input["latest_message"]["author"] == "user_1"
     assert "@alice explain this error" in ctx.last_chat_reply_input["latest_message"]["content"]
     assert "explain this error" in ctx.last_pipe
@@ -354,10 +404,20 @@ async def test_workflow_passes_transcript_and_reply_intent_to_actionable_reply_c
 
 
 @pytest.mark.asyncio
-async def test_workflow_formats_reply_with_talk_as_when_available(tmp_path, monkeypatch):
+async def test_workflow_posts_actionable_reply_and_updates_memory_backend(tmp_path, monkeypatch):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = _invoke_context_with_chat_profile(reply_text="ベース返信")
+    memory_backend = FakeMemoryBackend(tmp_path / "memory")
+    ctx._memory_update = {
+        "should_update": True,
+        "topic_id": "onboarding",
+        "title": "Onboarding",
+        "summary": "Initial onboarding decisions",
+        "memory": "# Onboarding\n\n## Decisions\n- Keep the first step short.",
+        "reason": "durable decision",
+        "confidence": 0.9,
+    }
     _set_incoming_event(
         ctx,
         event_id="E_TALK_AS_1",
@@ -366,33 +426,27 @@ async def test_workflow_formats_reply_with_talk_as_when_available(tmp_path, monk
         mentions=["U_ALICE"],
     )
 
-    captured: dict[str, object] = {}
-
-    async def fake_talk_as(context, topic, context_location, conversation_history):
-        captured["topic"] = topic
-        captured["context_location"] = context_location
-        captured["conversation_history"] = conversation_history
-        return "キャラ口調の返信です。"
-
-    monkeypatch.setattr(chat_conversation_workflow, "talk_as", fake_talk_as)
+    monkeypatch.setattr(
+        chat_conversation_workflow,
+        "_get_memory_backend",
+        lambda context: memory_backend,
+    )
+    monkeypatch.setattr(
+        chat_conversation_workflow,
+        "get_workspace_path",
+        lambda person_id: tmp_path / "workspace" / person_id,
+    )
 
     await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
 
-    assert service.posts[0][1] == "キャラ口調の返信です。"
-    assert captured["topic"] == "ベース返信"
-    assert captured["context_location"] == chat_conversation_workflow.t(
-        "commands.workflows.chat_conversation_workflow.context_location"
-    )
-    history = captured["conversation_history"]
-    assert isinstance(history, list)
-    assert history
-    assert history[-1].content == "@alice persona reply"
+    assert service.posts[0][1] == "ベース返信"
+    assert ctx.invocations[3][2] == {"cwd": tmp_path / "workspace" / "alice"}
+    assert ctx.invocations[4][0] == "workflows/chat/chat_memory_update"
+    assert memory_backend.updates[0].topic_id == "onboarding"
 
 
 @pytest.mark.asyncio
-async def test_workflow_preserves_speaker_identity_in_transcript_and_talk_as_history(
-    tmp_path, monkeypatch
-):
+async def test_workflow_preserves_speaker_identity_in_transcript_and_reply_input(tmp_path):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = _invoke_context_with_chat_profile(reply_text="ベース返信")
@@ -437,45 +491,25 @@ async def test_workflow_preserves_speaker_identity_in_transcript_and_talk_as_his
         is_thread_reply=True,
     )
 
-    captured: dict[str, object] = {}
-
-    async def fake_talk_as(context, topic, context_location, conversation_history):
-        captured["conversation_history"] = conversation_history
-        return "キャラ口調の返信です。"
-
-    monkeypatch.setattr(chat_conversation_workflow, "talk_as", fake_talk_as)
-
     await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
 
     assert "[agent_1] 別エージェントの発話" in ctx.last_pipe
     assert "[alice] 自分の過去発話" in ctx.last_pipe
-
-    history = captured["conversation_history"]
-    assert isinstance(history, list)
-    assert any(
-        isinstance(item, Message)
-        and item.content == "別エージェントの発話"
-        and item.author == "agent_1"
-        and item.author_type == Message.USER
-        for item in history
-    )
-    assert any(
-        isinstance(item, Message)
-        and item.content == "自分の過去発話"
-        and item.author == "alice"
-        and item.author_type == Message.ASSISTANT
-        for item in history
-    )
-    assert any(
-        isinstance(item, Message)
-        and item.content == "@alice 続けて"
-        and item.author == "user_1"
-        for item in history
-    )
+    assert ctx.last_chat_reply_input is not None
+    assert ctx.last_chat_reply_input["thread_messages"][0] == {
+        "content": "別エージェントの発話",
+        "author": "agent_1",
+        "author_type": "User",
+    }
+    assert ctx.last_chat_reply_input["thread_messages"][1] == {
+        "content": "自分の過去発話",
+        "author": "alice",
+        "author_type": "Assistant",
+    }
 
 
 @pytest.mark.asyncio
-async def test_workflow_uses_runtime_identity_map_for_person_labels(tmp_path, monkeypatch):
+async def test_workflow_uses_runtime_identity_map_for_person_labels(tmp_path):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     person = types.SimpleNamespace(
@@ -517,30 +551,16 @@ async def test_workflow_uses_runtime_identity_map_for_person_labels(tmp_path, mo
         is_thread_reply=True,
     )
 
-    captured: dict[str, object] = {}
-
-    async def fake_talk_as(context, topic, context_location, conversation_history):
-        captured["conversation_history"] = conversation_history
-        return "キャラ口調の返信です。"
-
-    monkeypatch.setattr(chat_conversation_workflow, "talk_as", fake_talk_as)
-
     await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
 
     assert "[yuki] 別エージェントの発話" in ctx.last_pipe
-    history = captured["conversation_history"]
-    assert isinstance(history, list)
-    assert any(
-        isinstance(item, Message)
-        and item.content == "別エージェントの発話"
-        and item.author == "yuki"
-        for item in history
-    )
+    assert ctx.last_chat_reply_input is not None
+    assert ctx.last_chat_reply_input["thread_messages"][0]["author"] == "yuki"
 
 
 @pytest.mark.asyncio
 async def test_workflow_does_not_reuse_runtime_person_labels_across_contexts(
-    tmp_path, monkeypatch
+    tmp_path
 ):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
@@ -585,10 +605,6 @@ async def test_workflow_does_not_reuse_runtime_person_labels_across_contexts(
         is_thread_reply=True,
     )
 
-    async def fake_talk_as_first(context, topic, context_location, conversation_history):
-        return "キャラ口調の返信です。"
-
-    monkeypatch.setattr(chat_conversation_workflow, "talk_as", fake_talk_as_first)
     await chat_conversation_workflow.main(
         first_ctx, chat_service=service, state_store=state_store
     )
@@ -620,25 +636,11 @@ async def test_workflow_does_not_reuse_runtime_person_labels_across_contexts(
         is_thread_reply=True,
     )
 
-    captured: dict[str, object] = {}
-
-    async def fake_talk_as_second(context, topic, context_location, conversation_history):
-        captured["conversation_history"] = conversation_history
-        return "キャラ口調の返信です。"
-
-    monkeypatch.setattr(chat_conversation_workflow, "talk_as", fake_talk_as_second)
     await chat_conversation_workflow.main(
         second_ctx, chat_service=service, state_store=state_store
     )
 
-    history = captured["conversation_history"]
-    assert isinstance(history, list)
-    assert any(
-        isinstance(item, Message)
-        and item.content == "別エージェントの発話"
-        and item.author == "agent_1"
-        for item in history
-    )
+    assert "[agent_1] 別エージェントの発話" in second_ctx.last_pipe
 
 
 @pytest.mark.asyncio
@@ -656,7 +658,7 @@ async def test_workflow_always_uses_actionable_reply_command(tmp_path):
 
     await chat_conversation_workflow.main(ctx, chat_service=service, state_store=state_store)
 
-    assert len(ctx.invocations) == 4
+    assert len(ctx.invocations) == EXPECTED_CHAT_INVOCATIONS
     assert ctx.invocations[0][0] == "workflows/chat/should_react"
     assert ctx.invocations[1][0] == "workflows/chat/chat_thread_context"
     assert ctx.invocations[2][0] == "workflows/chat/chat_reply_intent"

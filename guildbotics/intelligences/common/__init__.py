@@ -59,6 +59,23 @@ class ChatThreadContextResponse(BaseModel):
     confidence: float = Field(..., description="Confidence score between 0 and 1.")
 
 
+class ChatMemoryUpdateResponse(BaseModel):
+    """Structured update proposal for durable chat memory."""
+
+    should_update: bool = Field(
+        ..., description="Whether durable memory should be updated."
+    )
+    topic_id: str = Field(
+        default="",
+        description="Stable topic identifier for the memory entry. Leave empty to derive from title.",
+    )
+    title: str = Field(..., description="Human-readable topic title.")
+    summary: str = Field(..., description="Short summary for memory lookup.")
+    memory: str = Field(..., description="Full markdown memory content.")
+    reason: str = Field(..., description="Explanation for the update decision.")
+    confidence: float = Field(..., description="Confidence score between 0 and 1.")
+
+
 class Labels:
     """A class to represent a set of labels for classification or selection tasks.
     It can be initialized with a list of labels or a dictionary mapping labels to their descriptions.

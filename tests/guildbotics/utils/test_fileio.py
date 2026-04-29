@@ -6,6 +6,7 @@ from guildbotics.utils.fileio import (
     _clean_data,
     find_package_subdir,
     get_config_path,
+    get_memory_repo_path,
     load_markdown_with_frontmatter,
     load_yaml_file,
     save_yaml_file,
@@ -88,6 +89,12 @@ def test_get_config_path_language_specific_and_fallback(tmp_path, monkeypatch):
     ja_file.unlink()
     resolved_fallback = get_config_path("prompt.yaml", language_code="ja")
     assert resolved_fallback == en_file
+
+
+def test_get_memory_repo_path_uses_storage_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert get_memory_repo_path("alice") == tmp_path / ".guildbotics" / "data" / "memory" / "alice"
 
 
 def test_clean_data_removes_none_and_empty_keys():

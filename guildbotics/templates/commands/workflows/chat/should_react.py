@@ -9,6 +9,7 @@ from guildbotics.integrations.chat_service import (
     ChatEvent,
     SemanticReaction,
 )
+from guildbotics.utils.person_profile import build_agent_profile
 
 
 @dataclass(slots=True)
@@ -89,17 +90,19 @@ def _followup_decision(data: ReactionInput) -> DecisionResult:
 
 async def decide_reaction_with_context(context: Any, data: ReactionInput) -> DecisionResult:
     decision = decide_reaction(data)
-    if decision.reason != "thread_followup_pending_llm":
-        return decision
-    return await _decide_thread_followup_with_llm(context, data)
+    if decision.reason == "thread_followup_pending_llm":
+        return await _decide_with_llm(context, data, fallback=_reply("thread_followup"))
+    if decision.reason == "no_trigger":
+        return await _decide_with_llm(context, data, fallback=_ignore("no_trigger"))
+    return decision
 
 
-async def _decide_thread_followup_with_llm(
-    context: Any, data: ReactionInput
+async def _decide_with_llm(
+    context: Any, data: ReactionInput, *, fallback: DecisionResult
 ) -> DecisionResult:
     invoke = getattr(context, "invoke", None)
     if not callable(invoke):
-        return _reply("thread_followup")
+        return fallback
 
     latest_message = (
         dict(data.thread_messages[-1])
@@ -114,6 +117,8 @@ async def _decide_thread_followup_with_llm(
     payload = {
         "latest_message": latest_message,
         "thread_messages": thread_messages_payload,
+        "agent_profile": build_agent_profile(getattr(context, "person", None)),
+        "is_thread_participant": data.self_person_id in data.thread_context.participants,
     }
     transcript_lines = [
         f"[{item.get('author', '')}] {item.get('content', '')}".strip()
@@ -131,7 +136,7 @@ async def _decide_thread_followup_with_llm(
             context.pipe = transcript
         result = await invoke("workflows/chat/chat_followup_should_reply")
     except Exception:
-        return _reply("thread_followup")
+        return fallback
     finally:
         if has_shared_state and old_shared_state is not None:
             context.shared_state.clear()
@@ -141,7 +146,7 @@ async def _decide_thread_followup_with_llm(
 
     normalized = _normalize_followup_result(result)
     if normalized is None:
-        return _reply("thread_followup")
+        return fallback
     return normalized
 
 

@@ -8,12 +8,19 @@ description: Slackチャット返信文を生成する（actionable向け）
 
 このコマンドは actionable（実行が必要な依頼）向けです。
 必要であれば、利用可能なツールや環境で自律的に実行・確認し、その結果を要点だけ返してください。
+ユーザーがプロジェクト、実装、コードベース、リポジトリ、または具体的な実現可能性について尋ねている場合は、回答前に現在の workspace 配下の関連ファイルを確認してください。現在の作業ディレクトリは agent ごとの workspace root であり、配下に clone 済みリポジトリが存在する場合があります。
 
 ## 入力（最新メッセージ）
 {{ context.shared_state.chat_reply_input.latest_message | tojson(indent=2) }}
 
 ## 入力（スレッド履歴・最大20件）
 {{ context.shared_state.chat_reply_input.thread_messages | tojson(indent=2) }}
+
+## エージェントプロフィール
+{{ context.shared_state.chat_reply_input.agent_profile | tojson(indent=2) }}
+
+## 関連メモリー
+{{ context.shared_state.chat_reply_input.memory_context | tojson(indent=2) }}
 
 ## スレッド文脈
 {{ context.shared_state.chat_reply_input.thread_context | tojson(indent=2) }}
@@ -26,10 +33,12 @@ description: Slackチャット返信文を生成する（actionable向け）
 
 ## 出力ルール
 - Slack に投稿する返信本文のみを返す（前置き・解説・コードフェンス不要）
+- メモリー確認やメモリー更新については書かない
 - 異なる `author` は、それぞれ別の参加者として扱う
 - 元の話題全体ではなく、最新メッセージに対する文脈上の返答を書く
 - スレッド全体のテーマは保ちつつ、`latest_focus` をこの返信で最優先の制約として守る
-- 可能な限り、スレッド内ですでに挙がっている具体的な項目や事例に結びつけて答え、一般論に流れない
+- 自分の役割・興味・嗜好・関係性に基づく、このエージェントならではの観点を必要な範囲で足す
+- 他の参加者と同じ内容を繰り返さず、違う角度・注意点・具体案で会話を前に進める
 - 日本語で書く
 - まず相手の意図/質問に直接答える
 - 選ばれた返信意図に厳密に従う

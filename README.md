@@ -506,6 +506,10 @@ In the Slack chat workflow, channels configured in `message_channels` of `person
 
 Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
 
+For CLI-based chat replies, GuildBotics runs the reply step from the per-agent workspace root at `~/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. It also keeps a separate per-agent memory repository under `~/.guildbotics/data/memory/<person_id>/`.
+The default file memory backend stores a `memory_index.yml` and topic-scoped memories under `topics/<topic_id>/memory.md`. GuildBotics recalls relevant memory before reply generation, passes it through the prompt, and runs a separate memory update step after posting the reply.
+You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat reply decisions and reply generation use this profile, so an agent can join even without an explicit mention when it can add a distinct perspective.
+
 ### 5.6.1. Prerequisites (Slack Side)
 
 #### Basic Setup
@@ -745,6 +749,8 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 ## 7.2. Configuration Files
 
 **Project Configuration** (`team/project.yml`):
+- `name`: Project name
+- `description`: Brief project description used as agent context
 - `language`: Project language
 - `repositories`: Repository definitions
 - `services.ticket_manager`: GitHub Projects settings
@@ -764,6 +770,7 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 - `intelligences/cli_agent_mapping.yml`: Default CLI agent selection
 - `intelligences/cli_agents/*.yml`: CLI agent scripts
 - `team/members/<person_id>/intelligences/`: Per-agent overrides
+- `~/.guildbotics/data/memory/<person_id>/`: Per-agent local memory repository for chat replies
 
 
 # 8. Troubleshooting

@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from builtins import type as builtin_type
 from logging import Logger
 from pathlib import Path
 from typing import cast
@@ -19,7 +22,7 @@ class BrainConfig(BaseModel):
     Configuration for a brain.
     """
 
-    type: type[Brain] = Field(..., description="The type of the intelligence.")
+    type: builtin_type[Brain] = Field(..., description="The type of the intelligence.")
     args: dict = Field(
         default_factory=dict, description="The arguments for the intelligence."
     )

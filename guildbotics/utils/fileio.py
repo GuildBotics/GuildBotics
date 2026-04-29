@@ -44,6 +44,19 @@ def get_workspace_path(person_id: str) -> Path:
     return get_storage_path() / "workspaces" / person_id
 
 
+def get_memory_repo_path(person_id: str) -> Path:
+    """
+    Get the memory repository path for a specific person.
+
+    Args:
+        person_id (str): The ID of the person.
+
+    Returns:
+        Path: The memory repository path for the person.
+    """
+    return get_storage_path() / "memory" / person_id
+
+
 def get_template_path() -> Path:
     """
     Get the path to the templates directory.

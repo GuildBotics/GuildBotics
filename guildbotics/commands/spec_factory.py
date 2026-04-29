@@ -63,6 +63,8 @@ class CommandSpecFactory:
         if stdin_override is not None:
             stdin_override = str(stdin_override)
 
+        cwd = self._resolve_cwd(config.get("cwd"), anchor.cwd)
+
         spec = CommandSpec(
             name=name,
             base_dir=path.parent if path else anchor.base_dir,
@@ -71,7 +73,7 @@ class CommandSpecFactory:
             params=params,
             args=args,
             stdin_override=stdin_override,
-            cwd=anchor.cwd,
+            cwd=cwd,
             command_index=anchor.command_index,
             config=config,
             class_resolver=anchor.class_resolver,
@@ -158,6 +160,13 @@ class CommandSpecFactory:
     def _get_placeholders_from_args(self, args: list[Any], kind: str) -> dict[str, str]:
         normalized_args = [str(arg) for arg in args]
         return get_placeholders_from_args(normalized_args, kind != ".py")
+
+    def _resolve_cwd(self, raw_cwd: Any, default: Path) -> Path:
+        if raw_cwd is None:
+            return default
+        if isinstance(raw_cwd, Path):
+            return raw_cwd
+        return Path(str(raw_cwd))
 
     def _default_name_from_path(self, path: Path) -> str:
         if path.name.startswith(".") and path.stem:

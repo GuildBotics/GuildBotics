@@ -47,12 +47,16 @@ class Project(BaseModel):
 
     Attributes:
         name (str): The name of the project.
+        description (str): A brief description of the project.
         language (str): The default language for the project, represented as a language tag.
         repositories (list[Repository]): A list of repositories used in the project.
         services (dict[str, dict[str, str]]): A dictionary of services used in the project.
     """
 
     name: str = Field(default="", description="The name of the project.")
+    description: str = Field(
+        default="", description="A brief description of the project."
+    )
     language: str = Field(
         default="en",
         description="The default language for the project, represented as a language tag.",
@@ -202,10 +206,12 @@ class MessageChannel(BaseModel):
         description="The service where the message channel is hosted (e.g., Discord, Slack).",
     )
     used_as: list[str] = Field(
-        default_factory=list, description="A list of roles that use the message channel."
+        default_factory=list,
+        description="A list of roles that use the message channel.",
     )
     used_by: list[str] = Field(
-        default_factory=list, description="A list of roles that are used by the message channel."
+        default_factory=list,
+        description="A list of roles that are used by the message channel.",
     )
     channel_info: dict = Field(
         default_factory=dict, description="Additional information about the channel."
