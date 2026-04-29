@@ -25,8 +25,7 @@ class MemoryRepository:
     def ensure_initialized(self) -> None:
         self.repo_path.mkdir(parents=True, exist_ok=True)
         is_new_repo = not (self.repo_path / ".git").exists()
-        if is_new_repo:
-            self._git("init")
+        if is_new_repo and self._git("init") is not None:
             self._git("config", "user.name", self._git_user_name())
             self._git("config", "user.email", self._git_user_email())
 
@@ -45,16 +44,15 @@ class MemoryRepository:
         if (
             is_new_repo or created_agents or alias_changed or index_created
         ) and self._has_changes():
-            self._git("add", "-A")
-            self._git("commit", "-m", "Initialize agent memory")
+            self._commit("Initialize agent memory")
 
     def commit_if_changed(self, message: str) -> str | None:
         self.ensure_initialized()
         if not self._has_changes():
             return None
 
-        self._git("add", "-A")
-        self._git("commit", "-m", message)
+        if not self._commit(message):
+            return None
         return self._git("rev-parse", "HEAD")
 
     def _sync_instruction_alias(self, file_name: str, content: str) -> bool:
@@ -76,14 +74,22 @@ class MemoryRepository:
     def _has_changes(self) -> bool:
         return bool(self._git("status", "--porcelain"))
 
-    def _git(self, *args: str) -> str:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=self.repo_path,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    def _commit(self, message: str) -> bool:
+        return self._git("add", "-A") is not None and self._git(
+            "commit", "-m", message
+        ) is not None
+
+    def _git(self, *args: str) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=self.repo_path,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
         return result.stdout.strip()
 
     def _git_user_name(self) -> str:

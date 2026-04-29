@@ -72,7 +72,9 @@ class FileMemoryBackend:
             path = str(raw.get("path", "")).strip()
             if not path or not self._matches(query, topic_id, title, summary):
                 continue
-            memory_path = repo_path / path
+            memory_path = self._memory_path(repo_path, path)
+            if memory_path is None:
+                continue
             items.append(
                 MemoryItem(
                     title=title,
@@ -117,6 +119,16 @@ class FileMemoryBackend:
         index_path = repo_path / "memory_index.yml"
         data = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
         return data if isinstance(data, dict) else {}
+
+    def _memory_path(self, repo_path: Path, path: str) -> Path | None:
+        raw_path = Path(path)
+        if raw_path.is_absolute():
+            return None
+        resolved_repo = repo_path.resolve()
+        resolved_path = (repo_path / raw_path).resolve()
+        if not resolved_path.is_relative_to(resolved_repo):
+            return None
+        return resolved_path
 
     def _matches(
         self, query: MemoryQuery, topic_id: str, title: str, summary: str

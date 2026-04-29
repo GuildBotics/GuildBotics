@@ -70,3 +70,23 @@ def test_memory_repo_commit_if_changed_commits_changes(tmp_path, monkeypatch):
     commit_sha = repo.commit_if_changed("Update memory")
 
     assert commit_sha is not None
+
+
+def test_memory_repo_degrades_without_git(tmp_path, monkeypatch):
+    def run_without_git(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("guildbotics.utils.memory_repo.subprocess.run", run_without_git)
+    repo = _make_repo(tmp_path, monkeypatch)
+
+    repo_path = repo.get_repo_path()
+    (repo_path / "AGENTS.md").write_text(
+        (repo_path / "AGENTS.md").read_text(encoding="utf-8") + "\n- Learns quickly.\n",
+        encoding="utf-8",
+    )
+
+    assert (repo_path / "AGENTS.md").exists()
+    assert (repo_path / "CLAUDE.md").exists()
+    assert (repo_path / "GEMINI.md").exists()
+    assert (repo_path / "memory_index.yml").exists()
+    assert repo.commit_if_changed("Update memory") is None
