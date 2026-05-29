@@ -983,7 +983,7 @@ def _open_questions_is_empty(memory_text: str) -> bool:
         return True
     match = re.search(r"^##\s+Open Questions\s*$", text, flags=re.MULTILINE)
     if not match:
-        return False
+        return True
     body_start = match.end()
     next_heading = re.search(r"^##\s+", text[body_start:], flags=re.MULTILINE)
     body = text[body_start : body_start + next_heading.start()] if next_heading else text[body_start:]

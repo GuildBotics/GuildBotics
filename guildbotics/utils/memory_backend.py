@@ -229,34 +229,47 @@ class FileMemoryBackend:
         memory_path = repo_path / path
         memory_path.parent.mkdir(parents=True, exist_ok=True)
         text = f"{update.memory.strip()}\n"
-        memory_path.write_text(text, encoding="utf-8")
+
+        content_changed = (
+            not memory_path.exists()
+            or memory_path.read_text(encoding="utf-8") != text
+        )
+        if content_changed:
+            memory_path.write_text(text, encoding="utf-8")
+
         index = self._load_index(repo_path)
         topics = index.setdefault("topics", {})
-        topics[topic_id] = {
+        updated_topic: dict[str, Any] = {
             "title": update.title.strip() or topic_id.replace("-", " ").title(),
             "summary": update.summary.strip(),
             "path": path,
         }
         if update.source:
-            topics[topic_id]["source"] = update.source
+            updated_topic["source"] = update.source
         if update.scope:
-            topics[topic_id]["scope"] = update.scope
+            updated_topic["scope"] = update.scope
         if update.metadata:
-            topics[topic_id]["metadata"] = update.metadata
+            updated_topic["metadata"] = update.metadata
         if update.retention:
-            topics[topic_id]["retention"] = update.retention
-        (repo_path / "memory_index.yml").write_text(
-            yaml.safe_dump(index, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-        commit_sha = self.repo.commit_if_changed("Update chat memory") or ""
+            updated_topic["retention"] = update.retention
+
+        topic_changed = topics.get(topic_id) != updated_topic
+        if topic_changed:
+            topics[topic_id] = updated_topic
+            (repo_path / "memory_index.yml").write_text(
+                yaml.safe_dump(index, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+
+        changed = content_changed or topic_changed
+        commit_sha = self.repo.commit_if_changed("Update chat memory") if changed else None
         return MemoryWriteResult(
-            changed=bool(commit_sha),
+            changed=changed,
             backend="file",
-            reference=commit_sha or path,
+            reference=(commit_sha or path) if changed else "",
             person_id=person_id,
             item_id=topic_id,
-            title=topics[topic_id]["title"],
+            title=updated_topic["title"],
             source=update.source,
             scope=update.scope,
             metadata=update.metadata,
@@ -558,9 +571,9 @@ def is_expired_retention(
         return False
     current = now or datetime.now().astimezone()
     if current.tzinfo is None:
-        current = current.astimezone()
+        current = current.replace(tzinfo=datetime.now().astimezone().tzinfo)
     if parsed.tzinfo is None:
-        parsed = parsed.astimezone()
+        parsed = parsed.replace(tzinfo=current.tzinfo)
     return parsed <= current
 
 

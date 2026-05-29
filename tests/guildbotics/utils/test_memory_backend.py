@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import guildbotics.utils.cognee_memory_backend as cognee_memory_backend
@@ -21,6 +22,7 @@ from guildbotics.utils.memory_backend import (
     MemoryQuery,
     MemoryUpdate,
     MemoryWriteResult,
+    is_expired_retention,
     write_memory_context_trace,
     write_memory_forget_trace,
     write_memory_recall_final_trace,
@@ -150,6 +152,48 @@ def test_file_memory_backend_forget_hides_topic_from_recall(tmp_path, monkeypatc
     assert context.items == []
 
 
+def test_file_memory_backend_remember_marks_changed_true_when_git_commit_unavailable(
+    tmp_path, monkeypatch
+):
+    backend = _backend(tmp_path, monkeypatch)
+    monkeypatch.setattr(backend.repo, "commit_if_changed", lambda _message: None)
+
+    result = backend.remember(
+        MemoryUpdate(
+            should_update=True,
+            topic_id="onboarding",
+            title="Onboarding",
+            summary="Initial onboarding flow decisions.",
+            memory="# Onboarding\n\n## Decisions\n- Keep the first step short.",
+            scope={"person_id": "alice"},
+        )
+    )
+
+    assert result.changed is True
+    assert result.reference == "topics/onboarding/memory.md"
+
+
+def test_file_memory_backend_remember_marks_changed_false_on_idempotent_write(
+    tmp_path, monkeypatch
+):
+    backend = _backend(tmp_path, monkeypatch)
+    update = MemoryUpdate(
+        should_update=True,
+        topic_id="onboarding",
+        title="Onboarding",
+        summary="Initial onboarding flow decisions.",
+        memory="# Onboarding\n\n## Decisions\n- Keep the first step short.",
+        scope={"person_id": "alice"},
+    )
+
+    first = backend.remember(update)
+    second = backend.remember(update)
+
+    assert first.changed is True
+    assert second.changed is False
+    assert second.reference == ""
+
+
 def test_file_memory_backend_recall_skips_expired_temporary_topic(tmp_path, monkeypatch):
     backend = _backend(tmp_path, monkeypatch)
     backend.remember(
@@ -178,6 +222,27 @@ def test_file_memory_backend_recall_skips_expired_temporary_topic(tmp_path, monk
     )
 
     assert context.items == []
+
+
+def test_is_expired_retention_handles_naive_expires_at_without_crashing():
+    # naive expires_at should not raise and should be compared safely.
+    assert (
+        is_expired_retention(
+            {"expires_at": "2026-05-01T00:00:00"},
+            now=datetime(2026, 5, 2, 0, 0, 0),
+        )
+        is True
+    )
+
+
+def test_is_expired_retention_handles_naive_now_without_crashing():
+    assert (
+        is_expired_retention(
+            {"expires_at": "2026-05-02T00:00:00+09:00"},
+            now=datetime(2026, 5, 1, 0, 0, 0),
+        )
+        is False
+    )
 
 
 def test_file_memory_backend_recall_skips_paths_outside_repo(tmp_path, monkeypatch):

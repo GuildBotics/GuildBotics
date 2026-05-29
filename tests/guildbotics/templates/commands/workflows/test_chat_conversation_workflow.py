@@ -1163,6 +1163,64 @@ async def test_memory_update_gate_suppresses_open_loop_with_empty_open_questions
 
 
 @pytest.mark.asyncio
+async def test_memory_update_gate_suppresses_open_loop_when_open_questions_section_missing(
+    monkeypatch,
+):
+    ctx = _invoke_context_with_chat_profile(reply_text="整理します")
+
+    async def keep_open_loop(context, payload):
+        return types.SimpleNamespace(
+            label="keep",
+            status="open_loop",
+            reason="There are unresolved items to revisit.",
+            evidence=["3つのタスク登録を必須にするかは未決です。"],
+            evidence_support="supports_memory",
+            confidence=0.84,
+        )
+
+    monkeypatch.setattr(
+        chat_conversation_workflow,
+        "should_keep_chat_memory_update",
+        keep_open_loop,
+    )
+
+    update = await chat_conversation_workflow._gate_memory_update(
+        ctx,
+        update=MemoryUpdate(
+            should_update=True,
+            topic_id="focusflow-onboarding-policy",
+            title="FocusFlow onboarding policy",
+            summary="Updated onboarding policy",
+            memory=(
+                "# FocusFlow onboarding policy\n\n"
+                "## Decisions\n- 通知の初期値は弱め。\n\n"
+                "## Current Direction\n- 継続検討。"
+            ),
+            metadata={"reason": "test"},
+        ),
+        proposal={"topic_id": "focusflow-onboarding-policy"},
+        payload={
+            "agent_profile": {"name": "Alice"},
+            "thread_context": {"thread_topic": "FocusFlow"},
+            "memory_context": {"items": []},
+            "thread_messages": [
+                {
+                    "author": "user_1",
+                    "content": "3つのタスク登録を必須にするかは未決です。",
+                }
+            ],
+            "reply_text": "整理します",
+        },
+    )
+
+    assert update.should_update is False
+    assert update.metadata["suppressed_reason"] == (
+        "memory retention status open_loop conflicts with empty Open Questions"
+    )
+    assert update.metadata["retention_status"] == "open_loop"
+
+
+@pytest.mark.asyncio
 async def test_memory_update_gate_applies_temporary_retention(monkeypatch):
     ctx = _invoke_context_with_chat_profile(reply_text="了解です")
 
