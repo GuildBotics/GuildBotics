@@ -59,6 +59,35 @@ class ChatThreadContextResponse(BaseModel):
     confidence: float = Field(..., description="Confidence score between 0 and 1.")
 
 
+class ChatMemoryRetentionPayload(BaseModel):
+    """Retention payload for durable chat memory entries."""
+
+    status: str = Field(
+        default="",
+        description="Retention status such as active, temporary, superseded, resolved.",
+    )
+    kind: str = Field(
+        default="",
+        description="Semantic kind such as current_fact, open_question, transition, temporary.",
+    )
+    expires_at: str = Field(
+        default="",
+        description="Absolute ISO 8601 expiration timestamp for temporary memory.",
+    )
+    reason: str = Field(
+        default="",
+        description="Short reason for the selected retention handling.",
+    )
+    subject_item_id: str = Field(
+        default="",
+        description="Subject memory item ID when kind is transition.",
+    )
+    effective_at: str = Field(
+        default="",
+        description="Absolute ISO 8601 timestamp when the change became effective.",
+    )
+
+
 class ChatMemoryUpdateResponse(BaseModel):
     """Structured update proposal for durable chat memory."""
 
@@ -72,7 +101,73 @@ class ChatMemoryUpdateResponse(BaseModel):
     title: str = Field(..., description="Human-readable topic title.")
     summary: str = Field(..., description="Short summary for memory lookup.")
     memory: str = Field(..., description="Full markdown memory content.")
+    forget_item_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Existing memory item IDs that should be forgotten before this update is "
+            "stored, or forgotten without storing a replacement."
+        ),
+    )
+    forget_reason: str = Field(
+        default="", description="Reason for forgetting the listed memory items."
+    )
+    retention: ChatMemoryRetentionPayload = Field(
+        default_factory=ChatMemoryRetentionPayload
+    )
     reason: str = Field(..., description="Explanation for the update decision.")
+    confidence: float = Field(..., description="Confidence score between 0 and 1.")
+
+
+class ChatMemoryRetentionDecision(BaseModel):
+    """Decision model for retaining or suppressing proposed chat memory."""
+
+    label: Literal["keep", "suppress"] = Field(
+        ..., description="Whether to persist the proposed memory update."
+    )
+    status: Literal[
+        "explicit_memory_request",
+        "future_relevance",
+        "open_loop",
+        "role_salience",
+        "emotional_salience",
+        "recurring_pattern",
+        "settled_context",
+        "ephemeral_response",
+        "unadopted_possibility",
+        "unsupported_inference",
+        "low_salience",
+    ] = Field(..., description="Primary retention category for the decision.")
+    reason: str = Field(..., description="Explanation for the decision.")
+    evidence: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Short evidence snippets from thread_messages that justify keeping. "
+            "Must be empty when label is suppress."
+        ),
+    )
+    evidence_support: Literal["supports_memory", "topic_only", "none"] = Field(
+        ...,
+        description=(
+            "How well the cited thread evidence supports the concrete memory content. "
+            "Use supports_memory only when the snippets contain the facts, decisions, "
+            "explicit memory request, or durable open loop being stored; topic_only "
+            "when they only show that the topic/question was raised."
+        ),
+    )
+    retention_mode: Literal["durable", "temporary"] = Field(
+        "durable",
+        description=(
+            "Whether the update should be retained as durable memory or as temporary "
+            "time-limited memory."
+        ),
+    )
+    temporary_expires_at: str = Field(
+        default="",
+        description=(
+            "Absolute ISO 8601 timestamp with timezone. Required when retention_mode "
+            "is temporary."
+        ),
+    )
     confidence: float = Field(..., description="Confidence score between 0 and 1.")
 
 
