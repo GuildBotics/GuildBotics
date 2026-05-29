@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import os
 
 import pytest
 
@@ -82,6 +83,12 @@ class FakeBrain:
 
     async def run(self, **kwargs):
         return self._result
+
+
+@pytest.fixture(autouse=True)
+def disable_live_memory_backend(monkeypatch):
+    if "GUILDBOTICS_MEMORY_BACKEND" not in os.environ:
+        monkeypatch.setenv("GUILDBOTICS_MEMORY_BACKEND", "none")
 
 
 @pytest.fixture

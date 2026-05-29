@@ -7,7 +7,7 @@ name = "guildbotics"
 dynamic = ["version"]
 description = "A tool to collaborate with AI agents via a task board"
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 license-files = [
   "LICENSE",
   "third_party_licenses/**",
@@ -26,7 +26,7 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = [
-  "click>=8.2,<9.0",
+  "click>=8.1.8,<9.0",
   "pydantic>=2.11,<3.0",
   "python-dotenv>=1.0",
   "PyYAML>=6.0",
@@ -43,12 +43,13 @@ dependencies = [
   "agno>=1.7,<2.0",
   "requests>=2.32",
   "google-genai>=1.29,<2.0",
-  "openai>=1.106,<2.0",
+  "openai>=1.106,<3.0",
   "anthropic>=0.40,<1.0",
   "jinja2>=3.1.6",
   "markdown-it-py>=4.0.0",
   "weasyprint>=66.0",
   "websockets>=15.0.1",
+  "cognee>=1.0.3,<2.0",
 ]
 
 [project.urls]
