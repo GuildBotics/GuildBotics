@@ -4,7 +4,6 @@ from guildbotics.runtime import LoaderFactory
 
 
 class SimpleLoaderFactory(LoaderFactory):
-
     def create_team_loader(self) -> TeamLoader:
         """
         Create a default team loader using YAML.

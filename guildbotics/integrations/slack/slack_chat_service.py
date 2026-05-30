@@ -128,7 +128,9 @@ class SlackChatService(ChatService):
             form["thread_ts"] = thread_ts
         payload = await self._post_form("chat.postMessage", form)
         ts = str(payload.get("ts", ""))
-        return ChatPostResult(channel_id=channel_id, message_ts=ts, thread_ts=thread_ts or ts)
+        return ChatPostResult(
+            channel_id=channel_id, message_ts=ts, thread_ts=thread_ts or ts
+        )
 
     async def add_reaction(
         self, channel_id: str, message_ts: str, reaction: str
@@ -227,6 +229,7 @@ class SlackChatService(ChatService):
             is_bot_message=is_bot_message,
             is_thread_reply=thread_ts != message_ts,
         )
+
 
 def _extract_mentions(text: str) -> list[str]:
     return _MENTION_RE.findall(text or "")

@@ -92,9 +92,7 @@ def instantiate_class(
 
 
 class ClassResolver:
-    def __init__(
-        self, schema: str | None, parent: ClassResolver | None = None
-    ) -> None:
+    def __init__(self, schema: str | None, parent: ClassResolver | None = None) -> None:
         self.schema = schema
         self.model_classes: dict[str, type[BaseModel]] = {}
         self.parent = parent

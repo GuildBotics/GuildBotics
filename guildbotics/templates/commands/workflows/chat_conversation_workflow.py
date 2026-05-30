@@ -155,7 +155,9 @@ async def _handle_event(
 
     if decision.decision == "react_only":
         if decision.reaction:
-            await chat_service.add_reaction(channel_id, event.message_ts, decision.reaction)
+            await chat_service.add_reaction(
+                channel_id, event.message_ts, decision.reaction
+            )
             # Record success of side effect before subsequent state writes so replay
             # after a crash does not repeat the same reaction.
             state_store.mark_processed_event(
@@ -165,7 +167,12 @@ async def _handle_event(
             service_name, context.person.person_id, channel_id, event.thread_ts
         )
         reply_text, thread_context = await _build_reply_text(
-            context, event, thread_messages, identity_user_id, chat_service, thread_state
+            context,
+            event,
+            thread_messages,
+            identity_user_id,
+            chat_service,
+            thread_state,
         )
         thread_state.participants.add(context.person.person_id)
         if thread_context.get("thread_topic"):
@@ -173,7 +180,11 @@ async def _handle_event(
         if thread_context.get("latest_focus"):
             thread_state.latest_focus = thread_context["latest_focus"]
         state_store.save_thread_state(
-            service_name, context.person.person_id, channel_id, event.thread_ts, thread_state
+            service_name,
+            context.person.person_id,
+            channel_id,
+            event.thread_ts,
+            thread_state,
         )
         await _update_chat_memory(
             context,
@@ -197,7 +208,9 @@ async def _handle_event(
     author_labels = await _build_author_labels(
         context, identity_user_id, event, thread_messages[-20:]
     )
-    rendered_reply_text = chat_service.render_participant_text(reply_text, author_labels)
+    rendered_reply_text = chat_service.render_participant_text(
+        reply_text, author_labels
+    )
 
     post_result = await chat_service.post_message(
         channel_id, rendered_reply_text, thread_ts=event.thread_ts
@@ -228,7 +241,11 @@ async def _handle_event(
     if thread_context.get("latest_focus"):
         thread_state.latest_focus = thread_context["latest_focus"]
     state_store.save_thread_state(
-        service_name, context.person.person_id, channel_id, event.thread_ts, thread_state
+        service_name,
+        context.person.person_id,
+        channel_id,
+        event.thread_ts,
+        thread_state,
     )
     await _update_chat_memory(
         context,
@@ -239,6 +256,7 @@ async def _handle_event(
         thread_context,
         rendered_reply_text,
     )
+
 
 async def _build_reply_text(
     context: Any,
@@ -278,7 +296,9 @@ async def _build_reply_text_via_command(
         context, self_user_id, event, thread_messages[-20:]
     )
     prompt_thread_messages = [
-        _to_prompt_message_from_state(message, self_user_id, author_labels, chat_service)
+        _to_prompt_message_from_state(
+            message, self_user_id, author_labels, chat_service
+        )
         for message in thread_messages[-20:]
     ]
     prompt_latest_message = _to_prompt_message_from_event(
@@ -459,7 +479,9 @@ async def _update_chat_memory(
     if memory_backend is None:
         return
     memory_debug: dict[str, Any] = {
-        "person_id": str(getattr(getattr(context, "person", None), "person_id", "")).strip(),
+        "person_id": str(
+            getattr(getattr(context, "person", None), "person_id", "")
+        ).strip(),
         "backend": _memory_backend_name(memory_backend),
         "event_id": str(getattr(event, "event_id", "")).strip(),
         "thread_ts": str(getattr(event, "thread_ts", "")).strip(),
@@ -591,10 +613,14 @@ async def _update_chat_memory(
                 "final": {
                     "should_update": memory_update.should_update,
                     "transition_item_id": (
-                        transition_result.item_id if transition_result is not None else ""
+                        transition_result.item_id
+                        if transition_result is not None
+                        else ""
                     ),
                     "transition_changed": (
-                        transition_result.changed if transition_result is not None else False
+                        transition_result.changed
+                        if transition_result is not None
+                        else False
                     ),
                     "changed": write_result.changed,
                     "reference": write_result.reference,
@@ -620,7 +646,9 @@ async def _update_chat_memory(
                 "debug": memory_debug,
             }
         )
-        _log_info(context, f"chat memory update failed: {exc.__class__.__name__}: {exc}")
+        _log_info(
+            context, f"chat memory update failed: {exc.__class__.__name__}: {exc}"
+        )
 
 
 def _memory_query(
@@ -653,6 +681,7 @@ def _normalize_memory_update(
     if isinstance(result, dict):
         get = result.get
     else:
+
         def get(key: str, default: Any = None) -> Any:
             return getattr(result, key, default)
 
@@ -724,9 +753,9 @@ async def _gate_memory_update_decision(
         for item in getattr(decision, "evidence", [])
         if str(item).strip()
     ]
-    evidence_support = str(
-        getattr(decision, "evidence_support", "none")
-    ).strip().lower()
+    evidence_support = (
+        str(getattr(decision, "evidence_support", "none")).strip().lower()
+    )
     gate_trace: dict[str, Any] = {
         "label": label,
         "status": status,
@@ -739,7 +768,9 @@ async def _gate_memory_update_decision(
     if label not in {"suppress", "reject", "drop", "no"}:
         if not evidence:
             metadata = dict(update.metadata)
-            metadata["suppressed_reason"] = "memory retention gate returned keep without thread evidence"
+            metadata["suppressed_reason"] = (
+                "memory retention gate returned keep without thread evidence"
+            )
             if status:
                 metadata["retention_status"] = status
             metadata["suppression_confidence"] = getattr(decision, "confidence", 0.0)
@@ -767,15 +798,13 @@ async def _gate_memory_update_decision(
                 }
             )
             return replace(update, should_update=False, metadata=metadata), gate_trace
-        gate_trace["post_checks"].append(
-            {"name": "evidence_required", "passed": True}
-        )
+        gate_trace["post_checks"].append({"name": "evidence_required", "passed": True})
         gate_trace["post_checks"].append(
             {"name": "evidence_support_required", "passed": True}
         )
-        retention_mode = str(
-            getattr(decision, "retention_mode", "durable")
-        ).strip().lower()
+        retention_mode = (
+            str(getattr(decision, "retention_mode", "durable")).strip().lower()
+        )
         temporary_expires_at = str(
             getattr(decision, "temporary_expires_at", "")
         ).strip()
@@ -787,7 +816,9 @@ async def _gate_memory_update_decision(
                 )
                 if status:
                     metadata["retention_status"] = status
-                metadata["suppression_confidence"] = getattr(decision, "confidence", 0.0)
+                metadata["suppression_confidence"] = getattr(
+                    decision, "confidence", 0.0
+                )
                 gate_trace["post_checks"].append(
                     {
                         "name": "temporary_expires_at_required",
@@ -798,7 +829,9 @@ async def _gate_memory_update_decision(
                         ),
                     }
                 )
-                return replace(update, should_update=False, metadata=metadata), gate_trace
+                return replace(
+                    update, should_update=False, metadata=metadata
+                ), gate_trace
             retention = dict(update.retention)
             retention["status"] = "temporary"
             retention["kind"] = "temporary"
@@ -898,9 +931,7 @@ def _promote_temporary_update_from_gate(
     )
     title = update.title.strip() or thread_topic or "Temporary Context"
     topic_id = update.topic_id.strip() or _topic_id(title) or "temporary-context"
-    summary = update.summary.strip() or (
-        f"Temporary context valid until {expires_at}."
-    )
+    summary = update.summary.strip() or (f"Temporary context valid until {expires_at}.")
     decision_reason = str(getattr(decision, "reason", "")).strip()
     memory = update.memory.strip()
     if not memory:
@@ -986,7 +1017,11 @@ def _open_questions_is_empty(memory_text: str) -> bool:
         return True
     body_start = match.end()
     next_heading = re.search(r"^##\s+", text[body_start:], flags=re.MULTILINE)
-    body = text[body_start : body_start + next_heading.start()] if next_heading else text[body_start:]
+    body = (
+        text[body_start : body_start + next_heading.start()]
+        if next_heading
+        else text[body_start:]
+    )
     normalized = " ".join(body.split()).strip().lower()
     return normalized in {"", "none", "- none", "* none"}
 
@@ -1123,9 +1158,10 @@ def _with_default_memory_retention(
     effective_at = str(retention.get("effective_at", "")).strip()
     if not effective_at:
         event_time = _chat_event_time_payload(event) if event is not None else {}
-        retention["effective_at"] = str(event_time.get("iso", "")).strip() or str(
-            _current_time_payload().get("iso", "")
-        ).strip()
+        retention["effective_at"] = (
+            str(event_time.get("iso", "")).strip()
+            or str(_current_time_payload().get("iso", "")).strip()
+        )
     return replace(update, retention=retention)
 
 
@@ -1186,7 +1222,11 @@ def _coalesce_memory_topic(
     ):
         return update
     title_id = _topic_id(update.title.strip()) if update.title.strip() else ""
-    if title_id and _topic_similarity(title_id, candidate.id) < _TOPIC_COALESCE_SIMILARITY_THRESHOLD:
+    if (
+        title_id
+        and _topic_similarity(title_id, candidate.id)
+        < _TOPIC_COALESCE_SIMILARITY_THRESHOLD
+    ):
         return replace(update, topic_id=canonical_candidate_id)
     if canonical_candidate is not None:
         return replace(
@@ -1233,9 +1273,9 @@ def _shares_topic_stem(left: str, right: str) -> bool:
         or len(right_tokens) < _TOPIC_STEM_TOKEN_COUNT
     ):
         return False
-    return left_tokens[:_TOPIC_STEM_TOKEN_COUNT] == right_tokens[
-        :_TOPIC_STEM_TOKEN_COUNT
-    ]
+    return (
+        left_tokens[:_TOPIC_STEM_TOKEN_COUNT] == right_tokens[:_TOPIC_STEM_TOKEN_COUNT]
+    )
 
 
 def _memory_transition_update(
@@ -1276,9 +1316,10 @@ def _memory_transition_update(
         # Never stack transition on top of transition.
         return None
     event_time = _chat_event_time_payload(event) if event is not None else {}
-    effective_at = str(event_time.get("iso", "")).strip() or str(
-        _current_time_payload().get("iso", "")
-    ).strip()
+    effective_at = (
+        str(event_time.get("iso", "")).strip()
+        or str(_current_time_payload().get("iso", "")).strip()
+    )
     event_token = _event_token(event, fallback=updated_item_id)
     title = f"{memory_update.title or previous.title} Change"
     reason = str(memory_update.metadata.get("reason", "")).strip()
@@ -1381,7 +1422,9 @@ async def _classify_reply_intent(context: Any) -> dict[str, str]:
     try:
         result = await invoke("workflows/chat/chat_reply_intent")
     except Exception:
-        _log_info(context, "chat reply intent classification failed, defaulting to answer")
+        _log_info(
+            context, "chat reply intent classification failed, defaulting to answer"
+        )
         return {
             "label": "answer",
             "reason": "intent_classification_failed",
@@ -1397,7 +1440,10 @@ async def _classify_thread_context(context: Any) -> dict[str, str]:
     try:
         result = await invoke("workflows/chat/chat_thread_context")
     except Exception:
-        _log_info(context, "chat thread context classification failed, defaulting to empty context")
+        _log_info(
+            context,
+            "chat thread context classification failed, defaulting to empty context",
+        )
         return {}
     return _normalize_thread_context(result)
 
@@ -1470,7 +1516,9 @@ async def _build_author_labels(
         for mention in event.mentions:
             register(mention, is_bot=False)
 
-    self_person_id = str(getattr(getattr(context, "person", None), "person_id", "")).strip()
+    self_person_id = str(
+        getattr(getattr(context, "person", None), "person_id", "")
+    ).strip()
     if not self_person_id:
         self_person_id = "self"
 
@@ -1553,8 +1601,12 @@ def _to_prompt_message_from_state(
 ) -> Message:
     return Message(
         content=chat_service.normalize_participant_text(message.text, author_labels),
-        author=_resolve_author_label(message.author_id, message.is_bot_message, author_labels),
-        author_type=_to_author_type(message.is_bot_message, message.author_id, self_user_id),
+        author=_resolve_author_label(
+            message.author_id, message.is_bot_message, author_labels
+        ),
+        author_type=_to_author_type(
+            message.is_bot_message, message.author_id, self_user_id
+        ),
         timestamp=message.message_ts,
     )
 
@@ -1567,13 +1619,19 @@ def _to_prompt_message_from_event(
 ) -> Message:
     return Message(
         content=chat_service.normalize_participant_text(event.text, author_labels),
-        author=_resolve_author_label(event.author_id, event.is_bot_message, author_labels),
-        author_type=_to_author_type(event.is_bot_message, event.author_id, self_user_id),
+        author=_resolve_author_label(
+            event.author_id, event.is_bot_message, author_labels
+        ),
+        author_type=_to_author_type(
+            event.is_bot_message, event.author_id, self_user_id
+        ),
         timestamp=event.message_ts,
     )
 
 
-def _to_author_type(is_bot_message: bool, author_id: str | None, self_user_id: str) -> str:
+def _to_author_type(
+    is_bot_message: bool, author_id: str | None, self_user_id: str
+) -> str:
     if is_bot_message and author_id == self_user_id:
         return Message.ASSISTANT
     return Message.USER
@@ -1613,7 +1671,9 @@ async def _evaluate_should_react(
     if already_processed:
         return DecisionResult(decision="ignore", reason="already_processed")
 
-    author_labels = await _build_author_labels(context, self_user_id, event, thread_messages[-20:])
+    author_labels = await _build_author_labels(
+        context, self_user_id, event, thread_messages[-20:]
+    )
     reaction_input = ReactionInput(
         self_person_id=self_person_id,
         self_user_id=self_user_id,
@@ -1690,4 +1750,6 @@ def _read_incoming_event_from_context(context: Any) -> IncomingChatEvent | None:
     shared_state = getattr(context, "shared_state", None)
     if not isinstance(shared_state, dict):
         return None
-    return IncomingChatEvent.from_shared_state(shared_state.get(INCOMING_CHAT_EVENT_KEY))
+    return IncomingChatEvent.from_shared_state(
+        shared_state.get(INCOMING_CHAT_EVENT_KEY)
+    )

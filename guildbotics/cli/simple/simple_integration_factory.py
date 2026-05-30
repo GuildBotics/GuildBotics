@@ -58,7 +58,9 @@ class SimpleIntegrationFactory(IntegrationFactory):
             return GitHubCodeHostingService(person, team, repository)
         raise ValueError(f"Unsupported code hosting service: {name}")
 
-    def create_chat_service(self, logger: Logger, person: Person, team: Team) -> ChatService:
+    def create_chat_service(
+        self, logger: Logger, person: Person, team: Team
+    ) -> ChatService:
         """
         Create a chat service for the given person.
 

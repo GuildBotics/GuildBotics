@@ -81,9 +81,9 @@ class GitHubTicketManager(TicketManager):
         self._status_field_id: str | None = None
         self.columns: dict[str, str] = {}  # column_name -> option_id
         self.custom_fields: dict[str, dict[str, Any]] = {}  # field_name -> field_info
-        self.role_usernames: dict[str, list[str]] = (
-            {}
-        )  # role_name -> list of user_node_id
+        self.role_usernames: dict[
+            str, list[str]
+        ] = {}  # role_name -> list of user_node_id
 
         #: Custom field definitions
         agents = []
@@ -421,7 +421,7 @@ class GitHubTicketManager(TicketManager):
             "description": issue.get("body", "") or "",
             "status": status,
             "created_at": issue["createdAt"],
-            "repository": f"{issue["repository"]["name"]}",
+            "repository": f"{issue['repository']['name']}",
             "assignee": assignee,
         }
 
@@ -520,7 +520,7 @@ class GitHubTicketManager(TicketManager):
                             }}
                             name
                           }}
-                          {''.join(custom_field_fragments)}
+                          {"".join(custom_field_fragments)}
                         }}
                       }}
                       content {{
@@ -1200,8 +1200,8 @@ class GitHubTicketManager(TicketManager):
             return
 
         query = f"""
-        mutation($proj:ID!, $item:ID!, {', '.join(f'$field{i}:ID!, $value{i}:ProjectV2FieldValue!' for i in range(len(mutations)))}) {{
-            {''.join(mutations)}
+        mutation($proj:ID!, $item:ID!, {", ".join(f"$field{i}:ID!, $value{i}:ProjectV2FieldValue!" for i in range(len(mutations)))}) {{
+            {"".join(mutations)}
         }}
         """
 

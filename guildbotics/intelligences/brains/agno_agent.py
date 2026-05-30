@@ -61,7 +61,6 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
 
 
 class AgnoAgentDefaultBrain(Brain):
-
     def __init__(
         self,
         person_id: str,

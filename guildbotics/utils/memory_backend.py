@@ -173,7 +173,7 @@ class FileMemoryBackend:
             path = str(raw.get("path", "")).strip()
             if (
                 not path
-                or _is_inactive_retention(self._item_map(raw, "retention"))
+                or is_inactive_retention(self._item_map(raw, "retention"))
                 or is_expired_retention(self._item_map(raw, "retention"))
                 or not self._matches(query, topic_id, title, summary)
             ):
@@ -195,7 +195,8 @@ class FileMemoryBackend:
                     score=1.0,
                     match_reason=self._match_reason(query, topic_id, title, summary),
                     source=self._item_map(raw, "source"),
-                    scope=self._item_map(raw, "scope") or {"person_id": query.person_id},
+                    scope=self._item_map(raw, "scope")
+                    or {"person_id": query.person_id},
                     metadata={
                         **self._item_map(raw, "metadata"),
                         "backend_item_id": topic_id,
@@ -224,15 +225,14 @@ class FileMemoryBackend:
                 retention=update.retention,
             )
         repo_path = self.repo.get_repo_path()
-        topic_id = _topic_id(update.topic_id or update.title)
+        topic_id = memory_topic_id(update.topic_id or update.title)
         path = f"topics/{topic_id}/memory.md"
         memory_path = repo_path / path
         memory_path.parent.mkdir(parents=True, exist_ok=True)
         text = f"{update.memory.strip()}\n"
 
         content_changed = (
-            not memory_path.exists()
-            or memory_path.read_text(encoding="utf-8") != text
+            not memory_path.exists() or memory_path.read_text(encoding="utf-8") != text
         )
         if content_changed:
             memory_path.write_text(text, encoding="utf-8")
@@ -262,7 +262,9 @@ class FileMemoryBackend:
             )
 
         changed = content_changed or topic_changed
-        commit_sha = self.repo.commit_if_changed("Update chat memory") if changed else None
+        commit_sha = (
+            self.repo.commit_if_changed("Update chat memory") if changed else None
+        )
         return MemoryWriteResult(
             changed=changed,
             backend="file",
@@ -450,7 +452,9 @@ def write_memory_recall_raw_trace(payload: JsonMap) -> None:
 def write_memory_recall_final_trace(payload: JsonMap) -> None:
     if not _trace_enabled():
         return
-    _append_trace({"event": "memory.recall.final", "timestamp": _timestamp(), **payload})
+    _append_trace(
+        {"event": "memory.recall.final", "timestamp": _timestamp(), **payload}
+    )
 
 
 def write_memory_remember_trace(result: MemoryWriteResult) -> None:
@@ -540,14 +544,14 @@ def _timestamp() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _topic_id(value: str) -> str:
+def memory_topic_id(value: str) -> str:
     normalized = re.sub(r"[^0-9A-Za-z]+", "-", value.lower()).strip("-")
     if normalized:
         return normalized[:80].strip("-") or "topic"
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
 
 
-def _is_inactive_retention(retention: JsonMap) -> bool:
+def is_inactive_retention(retention: JsonMap) -> bool:
     status = str(retention.get("status", "")).strip().lower()
     return status in {
         "superseded",

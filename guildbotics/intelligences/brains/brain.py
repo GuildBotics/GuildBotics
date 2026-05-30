@@ -5,7 +5,6 @@ from pydantic import BaseModel
 
 
 class Brain(ABC):
-
     def __init__(
         self,
         person_id: str,

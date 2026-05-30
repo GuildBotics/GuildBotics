@@ -48,7 +48,6 @@ def get_brain_mapping(person_id: str) -> dict[str, BrainConfig]:
 
 
 class SimpleBrainFactory(BrainFactory):
-
     def create_brain(
         self,
         person_id: str,

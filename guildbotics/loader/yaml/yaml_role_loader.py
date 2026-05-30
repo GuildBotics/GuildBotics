@@ -5,7 +5,6 @@ from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
 
 class YamlRoleLoader:
-
     def __init__(self, language_code: str | None = None):
         """
         Initialize the YamlRoleLoader with an optional language code.

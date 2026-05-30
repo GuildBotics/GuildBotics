@@ -56,7 +56,9 @@ async def main(
             context, inputs, messages, pull_request_url, git_tool, code_hosting_service
         )
         if changed and message:
-            context_location = t("commands.workflows.modes.edit_mode.pull_request_context_location")
+            context_location = t(
+                "commands.workflows.modes.edit_mode.pull_request_context_location"
+            )
             comments.reply = await talk_as(
                 context, message, context_location, conversation_history
             )
@@ -158,7 +160,9 @@ async def _handle_review_flow(
             - str: The message to be sent in response.
             - list[Message]: The updated conversation history.
     """
-    context_location = t("commands.workflows.modes.edit_mode.pull_request_context_location")
+    context_location = t(
+        "commands.workflows.modes.edit_mode.pull_request_context_location"
+    )
     comments = await code_hosting_service.get_pull_request_comments(pull_request_url)
 
     is_asking = False

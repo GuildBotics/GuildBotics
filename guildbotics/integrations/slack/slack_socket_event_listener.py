@@ -8,4 +8,3 @@ from guildbotics.integrations.slack.slack_socket_listener import (
 )
 
 __all__ = ["SlackSocketEventListener"]
-

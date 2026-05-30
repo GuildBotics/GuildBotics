@@ -156,9 +156,7 @@ def start(
         else None
     )
     event_runner = (
-        EventListenerRunner(setup_tool.get_context())
-        if start_events
-        else None
+        EventListenerRunner(setup_tool.get_context()) if start_events else None
     )
 
     def _handle_signal(signum, frame):  # type: ignore[no-untyped-def]

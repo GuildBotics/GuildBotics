@@ -120,7 +120,9 @@ class SlackSocketEventListener(EventListener):
                     self._ack_if_needed(ws, payload)
             except Exception as e:
                 if not self._stop_event.is_set():
-                    self._log_debug(f"socket listener loop stopped ({type(e).__name__}: {e})")
+                    self._log_debug(
+                        f"socket listener loop stopped ({type(e).__name__}: {e})"
+                    )
             finally:
                 self._clear_ws_if_same(ws)
                 if ws is not None:
@@ -211,7 +213,9 @@ class SlackSocketEventListener(EventListener):
             is_bot_message=bool(event.get("bot_id")) or subtype == "bot_message",
             is_thread_reply=(thread_ts != ts),
         )
-        return IncomingChatEvent(service_name="slack", channel_id=channel_id, event=chat_event)
+        return IncomingChatEvent(
+            service_name="slack", channel_id=channel_id, event=chat_event
+        )
 
     def _parse_json(self, raw: Any) -> dict[str, Any] | None:
         text = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)

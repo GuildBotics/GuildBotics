@@ -91,7 +91,9 @@ class SocketModeChatEventSource(ChatEventSource):
     ) -> list[ChatSubscriptionEvent]:
         out: list[ChatSubscriptionEvent] = []
         for channel_id in sorted(subscribed_channels):
-            events = self._state_store.load_pending_events("slack", person_id, channel_id)
+            events = self._state_store.load_pending_events(
+                "slack", person_id, channel_id
+            )
             for event in events:
                 out.append(
                     ChatSubscriptionEvent(
@@ -109,7 +111,9 @@ class SocketModeChatEventSource(ChatEventSource):
 
     @staticmethod
     def _require_app_token(person: Any) -> str:
-        if not getattr(person, "has_secret", None) or not person.has_secret("SLACK_APP_TOKEN"):
+        if not getattr(person, "has_secret", None) or not person.has_secret(
+            "SLACK_APP_TOKEN"
+        ):
             env_key = person.to_person_env_key("SLACK_APP_TOKEN")
             raise ValueError(
                 f"Slack App Token is required for Socket Mode on person '{person.person_id}'. "

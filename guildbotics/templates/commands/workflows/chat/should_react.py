@@ -66,8 +66,12 @@ async def main(
 
 
 def decide_reaction(data: ReactionInput) -> DecisionResult:
-    targeted_to_me = bool(data.self_user_id and data.self_user_id in data.event.mentions)
-    targeted_to_others = any(user_id != data.self_user_id for user_id in data.event.mentions)
+    targeted_to_me = bool(
+        data.self_user_id and data.self_user_id in data.event.mentions
+    )
+    targeted_to_others = any(
+        user_id != data.self_user_id for user_id in data.event.mentions
+    )
     continuation = (
         data.event.is_thread_reply
         and data.self_person_id in data.thread_context.participants
@@ -88,7 +92,9 @@ def _followup_decision(data: ReactionInput) -> DecisionResult:
     return DecisionResult(decision="reply", reason="thread_followup_pending_llm")
 
 
-async def decide_reaction_with_context(context: Any, data: ReactionInput) -> DecisionResult:
+async def decide_reaction_with_context(
+    context: Any, data: ReactionInput
+) -> DecisionResult:
     decision = decide_reaction(data)
     if decision.reason == "thread_followup_pending_llm":
         return await _decide_with_llm(context, data, fallback=_reply("thread_followup"))
@@ -118,7 +124,8 @@ async def _decide_with_llm(
         "latest_message": latest_message,
         "thread_messages": thread_messages_payload,
         "agent_profile": build_agent_profile(getattr(context, "person", None)),
-        "is_thread_participant": data.self_person_id in data.thread_context.participants,
+        "is_thread_participant": data.self_person_id
+        in data.thread_context.participants,
     }
     transcript_lines = [
         f"[{item.get('author', '')}] {item.get('content', '')}".strip()

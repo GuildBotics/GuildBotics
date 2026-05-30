@@ -39,7 +39,9 @@ class IntegrationFactory(ABC):
         pass
 
     @abstractmethod
-    def create_chat_service(self, logger: Logger, person: Person, team: Team) -> ChatService:
+    def create_chat_service(
+        self, logger: Logger, person: Person, team: Team
+    ) -> ChatService:
         """
         Create a chat service for the given person and team.
 

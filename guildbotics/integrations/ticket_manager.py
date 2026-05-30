@@ -5,7 +5,6 @@ from guildbotics.entities import Person, Task, Team
 
 
 class TicketManager(ABC):
-
     def __init__(self, logger: Logger, person: Person, team: Team):
         """
         Initialize the ticket manager.

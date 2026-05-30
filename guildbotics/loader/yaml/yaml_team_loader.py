@@ -33,7 +33,6 @@ class YamlTeamLoader(TeamLoader):
         members: list[Person] = []
         members_dir = self.dir / "members"
         if members_dir.exists():
-
             role_loader = YamlRoleLoader(project.get_language_code())
             Person.DEFINED_ROLES = role_loader.load_all()
             for d in members_dir.iterdir():

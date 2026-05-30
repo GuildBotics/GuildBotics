@@ -69,7 +69,9 @@ class FileConversationStateStore(ConversationStateStore):
                 "oldest_ts": state.oldest_ts,
                 "processed_event_ids": processed,
             }
-            self._write_json(self._channel_file(service, person_id, channel_id), payload)
+            self._write_json(
+                self._channel_file(service, person_id, channel_id), payload
+            )
 
     def is_processed_event(
         self, service: str, person_id: str, channel_id: str, event_id: str
@@ -114,7 +116,9 @@ class FileConversationStateStore(ConversationStateStore):
         payload = self._read_thread_payload(service, person_id, channel_id, thread_ts)
         payload.update(asdict(state))
         payload["participants"] = sorted(state.participants)
-        self._write_json(self._thread_file(service, person_id, channel_id, thread_ts), payload)
+        self._write_json(
+            self._thread_file(service, person_id, channel_id, thread_ts), payload
+        )
 
     def load_thread_messages(
         self, service: str, person_id: str, channel_id: str, thread_ts: str
@@ -182,7 +186,9 @@ class FileConversationStateStore(ConversationStateStore):
 
         merged.sort(key=lambda x: str(x.get("message_ts", "")))
         payload["messages"] = merged[-self._max_thread_messages :]
-        self._write_json(self._thread_file(service, person_id, channel_id, thread_ts), payload)
+        self._write_json(
+            self._thread_file(service, person_id, channel_id, thread_ts), payload
+        )
 
     def load_scheduled_post_state(
         self, service: str, person_id: str, schedule_name: str
@@ -192,7 +198,9 @@ class FileConversationStateStore(ConversationStateStore):
             data = self._read_json(path)
             if not data:
                 return ScheduledPostState()
-            return ScheduledPostState(last_run_slot=_to_str_or_none(data.get("last_run_slot")))
+            return ScheduledPostState(
+                last_run_slot=_to_str_or_none(data.get("last_run_slot"))
+            )
 
     def save_scheduled_post_state(
         self,
@@ -211,7 +219,9 @@ class FileConversationStateStore(ConversationStateStore):
         self, service: str, person_id: str, channel_id: str
     ) -> list[ChatEvent]:
         with self._lock:
-            data = self._read_json(self._pending_events_file(service, person_id, channel_id))
+            data = self._read_json(
+                self._pending_events_file(service, person_id, channel_id)
+            )
             raw_items = data.get("events") or []
             if not isinstance(raw_items, list):
                 return []
@@ -292,7 +302,8 @@ class FileConversationStateStore(ConversationStateStore):
             filtered = [
                 raw
                 for raw in raw_items
-                if isinstance(raw, dict) and _to_str_or_none(raw.get("event_id")) != event_id
+                if isinstance(raw, dict)
+                and _to_str_or_none(raw.get("event_id")) != event_id
             ]
             if filtered:
                 data["events"] = filtered
@@ -308,7 +319,11 @@ class FileConversationStateStore(ConversationStateStore):
         return self._base_dir / _safe_segment(service) / _safe_segment(person_id)
 
     def _channel_file(self, service: str, person_id: str, channel_id: str) -> Path:
-        return self._root(service, person_id) / "channels" / f"{_safe_segment(channel_id)}.json"
+        return (
+            self._root(service, person_id)
+            / "channels"
+            / f"{_safe_segment(channel_id)}.json"
+        )
 
     def _thread_file(
         self, service: str, person_id: str, channel_id: str, thread_ts: str
@@ -320,14 +335,18 @@ class FileConversationStateStore(ConversationStateStore):
             / f"{_safe_segment(thread_ts)}.json"
         )
 
-    def _scheduled_post_file(self, service: str, person_id: str, schedule_name: str) -> Path:
+    def _scheduled_post_file(
+        self, service: str, person_id: str, schedule_name: str
+    ) -> Path:
         return (
             self._root(service, person_id)
             / "scheduled_posts"
             / f"{_safe_segment(schedule_name)}.json"
         )
 
-    def _pending_events_file(self, service: str, person_id: str, channel_id: str) -> Path:
+    def _pending_events_file(
+        self, service: str, person_id: str, channel_id: str
+    ) -> Path:
         return (
             self._root(service, person_id)
             / "pending_events"
@@ -337,7 +356,9 @@ class FileConversationStateStore(ConversationStateStore):
     def _read_thread_payload(
         self, service: str, person_id: str, channel_id: str, thread_ts: str
     ) -> dict:
-        return self._read_json(self._thread_file(service, person_id, channel_id, thread_ts))
+        return self._read_json(
+            self._thread_file(service, person_id, channel_id, thread_ts)
+        )
 
     def _read_json(self, path: Path) -> dict:
         with self._lock:

@@ -39,7 +39,9 @@ def main(
     }
 
 
-def build_google_news_rss_url(query: str, *, language: str = "ja", country: str = "JP") -> str:
+def build_google_news_rss_url(
+    query: str, *, language: str = "ja", country: str = "JP"
+) -> str:
     lang = (language or "ja").lower()
     ctry = (country or "JP").upper()
     return (
@@ -48,7 +50,9 @@ def build_google_news_rss_url(query: str, *, language: str = "ja", country: str 
     )
 
 
-def parse_google_news_rss(xml_text: str, *, max_age_hours: int = 36) -> list[dict[str, Any]]:
+def parse_google_news_rss(
+    xml_text: str, *, max_age_hours: int = 36
+) -> list[dict[str, Any]]:
     root = ET.fromstring(xml_text)
     channel = root.find("./channel")
     if channel is None:
