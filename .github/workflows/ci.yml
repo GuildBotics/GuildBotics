@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - '**'
+      - "**"
 
 jobs:
   test:
@@ -25,11 +25,17 @@ jobs:
       - name: Sync dependencies
         run: uv sync --extra test --extra dev
 
+      - name: Run Ruff format
+        run: uv run --no-sync ruff format --check guildbotics
+
       - name: Run Ruff
         run: uv run --no-sync ruff check guildbotics
 
       - name: Run Mypy
         run: uv run --no-sync mypy guildbotics
+
+      - name: Run Pylint duplicate-code
+        run: uv run --no-sync pylint guildbotics
 
       - name: Run tests
         run: uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml

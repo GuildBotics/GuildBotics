@@ -22,6 +22,8 @@ from guildbotics.utils.memory_backend import (
     MemoryUpdate,
     MemoryWriteResult,
     is_expired_retention,
+    is_inactive_retention,
+    memory_topic_id,
     write_memory_forget_trace,
     write_memory_recall_final_trace,
     write_memory_recall_raw_trace,
@@ -194,8 +196,7 @@ class CogneeMemoryBackend:
                     "drop_score_lte_zero": False,
                 },
                 "candidates": [
-                    _final_recall_trace_candidate(candidate)
-                    for candidate in candidates
+                    _final_recall_trace_candidate(candidate) for candidate in candidates
                 ],
                 "hits": [
                     {
@@ -216,7 +217,7 @@ class CogneeMemoryBackend:
 
     def remember(self, update: MemoryUpdate) -> MemoryWriteResult:
         person_id = str(update.scope.get("person_id", self.person_id)).strip()
-        item_id = _topic_id(update.topic_id or update.title)
+        item_id = memory_topic_id(update.topic_id or update.title)
         title = update.title.strip() or item_id.replace("-", " ").title()
         if not update.should_update or not update.memory.strip():
             return MemoryWriteResult(
@@ -356,7 +357,8 @@ class FakeMemoryBackend:
         items = [
             item
             for item in self._items_by_dataset.get(self.dataset_name, [])
-            if _fake_matches(query, item) and not _is_inactive_retention(item.retention)
+            if _fake_matches(query, item)
+            and not is_inactive_retention(item.retention)
             and not is_expired_retention(item.retention)
         ]
         return MemoryContext(
@@ -367,7 +369,7 @@ class FakeMemoryBackend:
         )
 
     def remember(self, update: MemoryUpdate) -> MemoryWriteResult:
-        item_id = _topic_id(update.topic_id or update.title)
+        item_id = memory_topic_id(update.topic_id or update.title)
         title = update.title.strip() or item_id.replace("-", " ").title()
         person_id = str(update.scope.get("person_id", self.person_id)).strip()
         if not update.should_update or not update.memory.strip():
@@ -445,7 +447,9 @@ def configure_cognee_environment_from_guildbotics_keys() -> None:
     system_root = Path(
         os.environ.setdefault("SYSTEM_ROOT_DIRECTORY", "~/.cognee/system")
     ).expanduser()
-    logs_dir = Path(os.environ.setdefault("COGNEE_LOGS_DIR", "~/.cognee/logs")).expanduser()
+    logs_dir = Path(
+        os.environ.setdefault("COGNEE_LOGS_DIR", "~/.cognee/logs")
+    ).expanduser()
     (system_root / "databases").mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -639,7 +643,9 @@ def _recall_candidates(
     raw_text = _result_text(raw_result)
     strict_header_validation = "__node_content_start__" in raw_text
     candidates: list[dict[str, Any]] = []
-    for node_index, node_content in enumerate(_node_contents_from_raw_result(raw_result)):
+    for node_index, node_content in enumerate(
+        _node_contents_from_raw_result(raw_result)
+    ):
         header = _parse_header(node_content)
         if not _has_valid_memory_header(header, strict=strict_header_validation):
             continue
@@ -654,7 +660,7 @@ def _recall_candidates(
         drop_reasons = []
         if not node_content.strip():
             drop_reasons.append("empty_content")
-        if _is_inactive_retention(item.retention):
+        if is_inactive_retention(item.retention):
             drop_reasons.append("inactive_retention")
         if is_expired_retention(item.retention):
             drop_reasons.append("expired_retention")
@@ -682,7 +688,7 @@ def _recall_candidate(
     drop_reasons = []
     if not content.strip():
         drop_reasons.append("empty_content")
-    if _is_inactive_retention(item.retention):
+    if is_inactive_retention(item.retention):
         drop_reasons.append("inactive_retention")
     if is_expired_retention(item.retention):
         drop_reasons.append("expired_retention")
@@ -715,11 +721,15 @@ def _raw_recall_trace_item(
                 parsed_header=header,
             )
         )
-    item = parsed_nodes[0] if parsed_nodes else _memory_item_from_content(
-        content=content,
-        raw_result=raw_result,
-        dataset_name=dataset_name,
-        fallback_index=index,
+    item = (
+        parsed_nodes[0]
+        if parsed_nodes
+        else _memory_item_from_content(
+            content=content,
+            raw_result=raw_result,
+            dataset_name=dataset_name,
+            fallback_index=index,
+        )
     )
     return {
         "index": index,
@@ -964,21 +974,3 @@ def _fake_matches(query: MemoryQuery, item: MemoryItem) -> bool:
     ).casefold()
     needles = [item.id, item.title, item.summary]
     return any(needle and needle.casefold() in haystack for needle in needles)
-
-
-def _topic_id(value: str) -> str:
-    normalized = re.sub(r"[^0-9A-Za-z]+", "-", value.lower()).strip("-")
-    if normalized:
-        return normalized[:80].strip("-") or "topic"
-    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
-
-
-def _is_inactive_retention(retention: JsonMap) -> bool:
-    status = str(retention.get("status", "")).strip().lower()
-    return status in {
-        "superseded",
-        "resolved",
-        "archived",
-        "do_not_recall",
-        "forgotten",
-    }

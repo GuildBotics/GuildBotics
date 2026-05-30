@@ -170,7 +170,9 @@ async def main(
     result = await talk_as(
         context,
         t("commands.workflows.modes.edit_mode.evaluation_topic"),
-        context_location=t("commands.workflows.modes.edit_mode.evaluation_context_location"),
+        context_location=t(
+            "commands.workflows.modes.edit_mode.evaluation_context_location"
+        ),
         conversation_history=evaluation_messages,
     )
     return AgentResponse(

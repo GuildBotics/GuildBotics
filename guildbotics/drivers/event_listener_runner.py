@@ -55,7 +55,9 @@ class EventListenerRunner:
         self._thread_lock = threading.Lock()
         self._listeners: dict[SlackConnectionKey, EventListener] = {}
         self._listener_tokens: dict[SlackConnectionKey, str] = {}
-        self._subscription_channel_cache: dict[str, tuple[SubscriptionSignature, set[str]]] = {}
+        self._subscription_channel_cache: dict[
+            str, tuple[SubscriptionSignature, set[str]]
+        ] = {}
         self._last_group_log_state: tuple[int, int] | None = None
         self._cycle_count = 0
         self._cycle_failure_count = 0
@@ -89,7 +91,9 @@ class EventListenerRunner:
         thread = self._thread
         return bool(thread is not None and thread.is_alive())
 
-    async def dispatch_incoming_event(self, person: Person, item: IncomingChatEvent) -> str:
+    async def dispatch_incoming_event(
+        self, person: Person, item: IncomingChatEvent
+    ) -> str:
         """Dispatch a single incoming event to the workflow for one person."""
         context = self.context.clone_for(person)
         context.shared_state[INCOMING_CHAT_EVENT_KEY] = item.to_shared_state()
@@ -239,7 +243,10 @@ class EventListenerRunner:
             self._subscription_channel_cache.pop(person.person_id, None)
             return set()
 
-        self._subscription_channel_cache[person.person_id] = (signature, set(channel_ids))
+        self._subscription_channel_cache[person.person_id] = (
+            signature,
+            set(channel_ids),
+        )
         return channel_ids
 
     def _subscription_signature(
@@ -339,7 +346,9 @@ class EventListenerRunner:
                 f"Set environment variable '{env_key}'."
             )
         app_token = person.get_secret("SLACK_APP_TOKEN")
-        base_url = (get_chat_slack_base_url(person) or "https://slack.com/api").rstrip("/")
+        base_url = (get_chat_slack_base_url(person) or "https://slack.com/api").rstrip(
+            "/"
+        )
         return (
             SlackConnectionKey(
                 service="slack",
@@ -350,7 +359,9 @@ class EventListenerRunner:
             app_token,
         )
 
-    def _is_processed_for_person(self, person: Person, incoming: IncomingChatEvent) -> bool:
+    def _is_processed_for_person(
+        self, person: Person, incoming: IncomingChatEvent
+    ) -> bool:
         return self._state_store.is_processed_event(
             incoming.service_name,
             person.person_id,
@@ -358,7 +369,9 @@ class EventListenerRunner:
             incoming.event.event_id,
         )
 
-    def _mark_processed_for_person(self, person: Person, incoming: IncomingChatEvent) -> None:
+    def _mark_processed_for_person(
+        self, person: Person, incoming: IncomingChatEvent
+    ) -> None:
         self._state_store.mark_processed_event(
             incoming.service_name,
             person.person_id,

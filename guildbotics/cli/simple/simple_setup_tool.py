@@ -88,7 +88,6 @@ class PersonConfig(BaseModel):
 
 
 class SimpleSetupTool(SetupTool):
-
     def get_context(self, message: str = "") -> Context:
         return Context.get_default(
             SimpleLoaderFactory(),
@@ -132,9 +131,12 @@ class SimpleSetupTool(SetupTool):
                 t("cli.target_directory_prompt"), choices=list(dir_map.keys())
             ).ask()
             config.config_dir = dir_map[config.config_dir_label]
-            if config.config_dir.exists() and not questionary.confirm(
-                t("cli.directory_confirm"), default=False
-            ).ask():
+            if (
+                config.config_dir.exists()
+                and not questionary.confirm(
+                    t("cli.directory_confirm"), default=False
+                ).ask()
+            ):
                 return
 
         # Step 3. Environment File Creation
@@ -466,8 +468,9 @@ class SimpleSetupTool(SetupTool):
             installation_id = int(
                 questionary.text(
                     t("cli.input_github_installation_id_prompt"),
-                    validate=lambda text: text.isdigit()
-                    or t("cli.input_github_installation_id_prompt"),
+                    validate=lambda text: (
+                        text.isdigit() or t("cli.input_github_installation_id_prompt")
+                    ),
                 ).ask()
             )
             env_vars.append(f"{sanitized_id}_GITHUB_INSTALLATION_ID={installation_id}")
@@ -475,8 +478,9 @@ class SimpleSetupTool(SetupTool):
             app_id = int(
                 questionary.text(
                     t("cli.input_github_app_id_prompt"),
-                    validate=lambda text: text.isdigit()
-                    or t("cli.input_github_app_id_prompt"),
+                    validate=lambda text: (
+                        text.isdigit() or t("cli.input_github_app_id_prompt")
+                    ),
                 ).ask()
             )
             env_vars.append(f"{sanitized_id}_GITHUB_APP_ID={app_id}")
@@ -484,9 +488,9 @@ class SimpleSetupTool(SetupTool):
             private_key_path = questionary.text(
                 t("cli.input_github_private_key_path_prompt"),
                 validate=lambda text: (
-                    len(text) > 0 and Path(text).exists()
-                )
-                or t("cli.input_github_private_key_path_prompt"),
+                    (len(text) > 0 and Path(text).exists())
+                    or t("cli.input_github_private_key_path_prompt")
+                ),
             ).ask()
 
             env_vars.append(
@@ -499,8 +503,9 @@ class SimpleSetupTool(SetupTool):
         ]:
             access_token = questionary.text(
                 t("cli.input_github_access_token_prompt"),
-                validate=lambda text: len(text) > 0
-                or t("cli.input_github_access_token_prompt"),
+                validate=lambda text: (
+                    len(text) > 0 or t("cli.input_github_access_token_prompt")
+                ),
             ).ask()
             env_vars.append(f"{sanitized_id}_GITHUB_ACCESS_TOKEN={access_token}")
 

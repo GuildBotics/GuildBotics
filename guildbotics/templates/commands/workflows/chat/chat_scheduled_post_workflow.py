@@ -69,6 +69,7 @@ async def main(
             service_name, context.person.person_id, name, sched_state
         )
 
+
 def _is_due_now(cron_expr: str, now: dt.datetime) -> bool:
     minute = now.replace(second=0, microsecond=0)
     prev = minute - dt.timedelta(minutes=1)

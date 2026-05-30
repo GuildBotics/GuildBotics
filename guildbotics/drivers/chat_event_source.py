@@ -43,7 +43,9 @@ class PollingChatEventSource(ChatEventSource):
         self._state_store = state_store
         self._pending: dict[
             tuple[str, str, str],  # (person_id, service, channel)
-            tuple[str | None, str | None, list[str]],  # (cursor, oldest_ts, processed_ids)
+            tuple[
+                str | None, str | None, list[str]
+            ],  # (cursor, oldest_ts, processed_ids)
         ] = {}
 
     async def fetch_events(
@@ -105,13 +107,17 @@ class PollingChatEventSource(ChatEventSource):
         ) in self._pending.items():
             if pending_person_id != person_id:
                 continue
-            state = self._state_store.load_channel_cursor(service_name, person_id, channel_id)
+            state = self._state_store.load_channel_cursor(
+                service_name, person_id, channel_id
+            )
             state.cursor = cursor
             state.oldest_ts = oldest_ts
             state.processed_event_ids = _dedupe_keep_order(
                 list(state.processed_event_ids) + list(processed_event_ids)
             )
-            self._state_store.save_channel_cursor(service_name, person_id, channel_id, state)
+            self._state_store.save_channel_cursor(
+                service_name, person_id, channel_id, state
+            )
         self._pending = {}
 
 

@@ -15,7 +15,6 @@ HTTP_UNAUTHORIZED = 401
 
 
 class GitHubTokenAuth(httpx.Auth):
-
     requires_request_body = False
     requires_response_body = False
 
@@ -29,7 +28,6 @@ class GitHubTokenAuth(httpx.Auth):
 
 
 class GitHubAppAuth(httpx.Auth):
-
     HUMAN: ClassVar[str] = "human"
     MACHINE_USER: ClassVar[str] = "machine_user"
     GITHUB_APPS: ClassVar[str] = "github_apps"

@@ -91,7 +91,9 @@ class TaskScheduler:
         try:
             while not self._stop_event.is_set():
                 start_time = datetime.datetime.now()
-                context.logger.debug(f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}.")
+                context.logger.debug(
+                    f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}."
+                )
 
                 # Run scheduled tasks
                 for scheduled_task in scheduled_tasks:
@@ -101,8 +103,12 @@ class TaskScheduler:
                         ok = loop.run_until_complete(
                             run_command(context, scheduled_task.command, "scheduled")
                         )
-                        consecutive_errors, should_stop = self._update_consecutive_errors(
-                            ok, source="scheduled", consecutive_errors=consecutive_errors
+                        consecutive_errors, should_stop = (
+                            self._update_consecutive_errors(
+                                ok,
+                                source="scheduled",
+                                consecutive_errors=consecutive_errors,
+                            )
                         )
                         if should_stop:
                             return
@@ -126,8 +132,12 @@ class TaskScheduler:
                         run_command(context, routine_command, "routine")
                     )
                     if not ok and not self._stop_event.is_set():
-                        consecutive_errors, should_stop = self._update_consecutive_errors(
-                            ok, source="routine", consecutive_errors=consecutive_errors
+                        consecutive_errors, should_stop = (
+                            self._update_consecutive_errors(
+                                ok,
+                                source="routine",
+                                consecutive_errors=consecutive_errors,
+                            )
                         )
                         if should_stop:
                             return

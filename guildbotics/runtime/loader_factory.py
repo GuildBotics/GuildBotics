@@ -4,7 +4,6 @@ from guildbotics.loader.team_loader import TeamLoader
 
 
 class LoaderFactory(ABC):
-
     @abstractmethod
     def create_team_loader(self) -> TeamLoader:
         """

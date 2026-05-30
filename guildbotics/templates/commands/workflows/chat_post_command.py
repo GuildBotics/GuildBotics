@@ -52,7 +52,9 @@ async def _resolve_channel_id(
     if channel_id:
         return channel_id
     if not channel_name:
-        _log_info(context, "chat_post_command skipped: channel_id or channel_name is required")
+        _log_info(
+            context, "chat_post_command skipped: channel_id or channel_name is required"
+        )
         return ""
     resolved = await chat_service.resolve_channel_id(channel_name)
     if not resolved:

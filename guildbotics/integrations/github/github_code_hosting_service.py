@@ -256,9 +256,7 @@ class GitHubCodeHostingService(CodeHostingService):
             if not content or not login:
                 continue
             by_user.setdefault(login, set()).add(content)
-        return [
-            Reaction(username=u, contents=sorted(cs)) for u, cs in by_user.items()
-        ]
+        return [Reaction(username=u, contents=sorted(cs)) for u, cs in by_user.items()]
 
     def get_line_content(self, data: dict) -> str:
         """Extract the content of a specific line from a GitHub diff hunk.

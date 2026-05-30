@@ -11,7 +11,6 @@ from guildbotics.intelligences.common import (
 
 
 class BrainStub(Brain):
-
     def __init__(
         self,
         person_id: str,

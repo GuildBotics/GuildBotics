@@ -57,12 +57,16 @@ def _parse_event_from_shared_state(
     return _parse_generic_event_from_shared_state(raw_event)
 
 
-def _parse_slack_event_from_shared_state(raw_event: dict[str, object]) -> ChatEvent | None:
+def _parse_slack_event_from_shared_state(
+    raw_event: dict[str, object],
+) -> ChatEvent | None:
     # Slack-specific parser entrypoint (currently same schema as generic ChatEvent).
     return _parse_generic_event_from_shared_state(raw_event)
 
 
-def _parse_generic_event_from_shared_state(raw_event: dict[str, object]) -> ChatEvent | None:
+def _parse_generic_event_from_shared_state(
+    raw_event: dict[str, object],
+) -> ChatEvent | None:
     try:
         event_id = str(raw_event["event_id"])
         channel_id = str(raw_event["channel_id"])
@@ -70,7 +74,11 @@ def _parse_generic_event_from_shared_state(raw_event: dict[str, object]) -> Chat
         thread_ts = str(raw_event["thread_ts"])
         author_id_raw = raw_event.get("author_id")
         mentions_raw = raw_event.get("mentions", [])
-        mentions = [str(item) for item in mentions_raw] if isinstance(mentions_raw, list) else []
+        mentions = (
+            [str(item) for item in mentions_raw]
+            if isinstance(mentions_raw, list)
+            else []
+        )
         return ChatEvent(
             event_id=event_id,
             channel_id=channel_id,

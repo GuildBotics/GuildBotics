@@ -75,9 +75,10 @@ class MemoryRepository:
         return bool(self._git("status", "--porcelain"))
 
     def _commit(self, message: str) -> bool:
-        return self._git("add", "-A") is not None and self._git(
-            "commit", "-m", message
-        ) is not None
+        return (
+            self._git("add", "-A") is not None
+            and self._git("commit", "-m", message) is not None
+        )
 
     def _git(self, *args: str) -> str | None:
         try:
