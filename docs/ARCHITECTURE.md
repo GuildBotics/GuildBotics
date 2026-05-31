@@ -20,6 +20,7 @@ GuildBotics is a multi-agent task scheduling and command execution framework. It
 - **Brain Abstraction**: Supports multiple LLM providers (Google Gemini, OpenAI, Anthropic Claude) and CLI agents
 - **Extensible Integrations**: Pluggable integration framework for external services
 - **Internationalization**: Multi-language support via i18n
+- **Desktop Boundary**: Local API daemon for the planned Tauri desktop application
 
 ### Example Use Cases
 
@@ -35,8 +36,14 @@ GuildBotics follows a layered architecture with clear separation of concerns:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ Layer 9: CLI (User Interface)                   │
-│  - start, run, config, stop commands            │
+│ Layer 9: User Interfaces                        │
+│  - CLI: start, run, config, stop commands       │
+│  - Desktop: Tauri frontend via Local API        │
+└─────────────────────────────────────────────────┘
+                      ↓
+┌─────────────────────────────────────────────────┐
+│ Layer 8.5: App API                              │
+│  - Local REST/WebSocket daemon for desktop UI   │
 └─────────────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────┐
@@ -124,6 +131,23 @@ guildbotics/
 - `run`: Execute custom commands
 - `config`: Configuration management (init, add, verify)
 - `stop`/`kill`: Process management
+
+#### App API (`guildbotics/app_api/`)
+
+**Responsibility**: Local API boundary for desktop clients
+
+The desktop GUI does not reimplement the Python execution engine. It starts a local
+backend daemon and talks to it over `127.0.0.1` using REST and WebSocket endpoints.
+The API requires a per-process session token and keeps CLI fallback intact for
+unsupported GUI environments. See `docs/desktop_app_plan.ja.md` for packaging and
+support policy.
+
+Runtime lifecycle differs between CLI and desktop. `guildbotics start` owns the
+user-level daemon pidfile and starts the scheduler / event listener runner as a
+CLI process. The App API sidecar does not write that pidfile; it manages
+scheduler and event-listener lifecycles inside the sidecar process and reports
+`starting` / `running` / `stopping` / `stopped` / `failed` states to the desktop
+client.
 
 #### Runtime (`guildbotics/runtime/`)
 

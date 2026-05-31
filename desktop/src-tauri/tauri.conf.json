@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "GuildBotics",
+  "version": "0.1.0",
+  "identifier": "io.github.guildbotics.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "GuildBotics",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 680
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"],
+    "externalBin": ["binaries/guildbotics-app-api"],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}
