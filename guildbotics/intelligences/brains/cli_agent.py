@@ -2,10 +2,11 @@ import asyncio
 import os
 import tempfile
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime
 from logging import Logger
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -35,6 +36,13 @@ class ExecutableInfo:
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
+
+
+@dataclass(frozen=True)
+class CliAgentExecutionResult:
+    stdout: str
+    stderr: str
+    returncode: int
 
 
 def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
@@ -159,7 +167,8 @@ class CliAgentBrain(Brain):
             response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
             log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-        output = await self._execute_script(input, response_file, log_file, cwd)
+        result = await self._execute_script(input, response_file, log_file, cwd)
+        output: Any = result.stdout
 
         self.logger.debug(
             f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
@@ -173,9 +182,30 @@ class CliAgentBrain(Brain):
 
         return output
 
+    async def run_with_execution_details(
+        self, message: str, **kwargs
+    ) -> CliAgentExecutionResult:
+        cwd = kwargs["cwd"]
+        input = self.prompt_info.to_prompt(
+            message, kwargs.get("session_state", {}), self.template_engine
+        )
+        self.logger.debug(
+            f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
+        )
+
+        response_file = ""
+        log_file = ""
+        output_dir = get_log_output_dir()
+        if output_dir:
+            current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
+            log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
+
+        return await self._execute_script(input, response_file, log_file, cwd)
+
     async def _execute_script(
         self, input: str, response_file: str, log_file: str, cwd: Path | str
-    ):
+    ) -> CliAgentExecutionResult:
         """
         Execute the script specified in the coding_agent.run configuration
         in a subprocess with the configured environment variables.
@@ -219,14 +249,14 @@ class CliAgentBrain(Brain):
             )
 
             # Log the outputs
-            if stderr:
-                stderr_output = stderr.decode()
+            stderr_output = stderr.decode(errors="replace")
+            if stderr_output:
                 self.logger.debug(stderr_output)
                 if log_file:
                     with open(log_file, "w") as f:
                         f.write(stderr_output)
 
-            response = stdout.decode()
+            response = stdout.decode(errors="replace")
             self.logger.info(f"CLI Agent '{self.cli_agent}' response:\n{response}")
             if response_file:
                 with open(response_file, "w") as f:
@@ -235,7 +265,11 @@ class CliAgentBrain(Brain):
             if process.returncode != 0:
                 self.logger.error(f"CLI Agent exited with code {process.returncode}")
 
-            return response.strip()
+            return CliAgentExecutionResult(
+                stdout=response.strip(),
+                stderr=stderr_output.strip(),
+                returncode=process.returncode or 0,
+            )
         finally:
             # Clean up temporary prompt file
             self.remove_temp_file(temp_file_name)

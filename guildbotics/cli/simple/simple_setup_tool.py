@@ -4,15 +4,20 @@ import re
 import traceback
 from pathlib import Path
 from typing import cast
-from urllib.parse import quote
 
 import click
 import i18n  # type: ignore
 import questionary
-import requests  # type: ignore
 from pydantic import BaseModel, Field
 
 from guildbotics.cli.setup_tool import SetupTool
+from guildbotics.cli.simple.setup_service import (
+    PersonSetupInput,
+    ProjectSetupInput,
+    SetupServiceError,
+    SimplePersonSetupService,
+    SimpleProjectSetupService,
+)
 from guildbotics.cli.simple.simple_brain_factory import SimpleBrainFactory
 from guildbotics.cli.simple.simple_integration_factory import SimpleIntegrationFactory
 from guildbotics.cli.simple.simple_loader_factory import SimpleLoaderFactory
@@ -25,21 +30,10 @@ from guildbotics.intelligences.functions import talk_as
 from guildbotics.runtime import Context
 from guildbotics.templates.commands.workflows.modes import comment_mode
 from guildbotics.templates.commands.workflows.modes.util import checkout
-from guildbotics.utils.fileio import (
-    CONFIG_PATH,
-    get_template_path,
-    load_yaml_file,
-    save_yaml_file,
-)
+from guildbotics.utils.fileio import CONFIG_PATH
 from guildbotics.utils.i18n_tool import get_system_default_language, set_language, t
 
 BASE_DIR = Path(__file__).parent
-GITHUB_URL = "https://github.com/"
-TEMPLATE_PATH = BASE_DIR / "templates"
-GITHUB_APPS_URL_MIN_PARTS = 8
-GITHUB_PROJECT_URL_MIN_PARTS = 7
-GITHUB_REPOSITORY_URL_MIN_PARTS = 5
-HTTP_OK = 200
 
 
 i18n.load_path.append(BASE_DIR / "locales")
@@ -255,61 +249,26 @@ class SimpleSetupTool(SetupTool):
             click.echo(t("cli.config_cancel"))
             return
 
-        # Step 9. Configuration File Creation
-        project_config_template = (TEMPLATE_PATH / "project.yml").read_text()
-        project_config = project_config_template.format(
-            language=config.language,
-            repository_name=config.repository_name,
-            owner=config.owner,
-            project_id=config.project_id,
-            project_url=config.github_project_url,
-            repo_base_url=config.repo_base_url,
-        )
-
-        project_config_file = config.config_dir / "team/project.yml"
-        print(f"Create: {project_config_file}")
-        project_config_file.parent.mkdir(parents=True, exist_ok=True)
-        project_config_file.write_text(project_config)
-
-        model_mapping_template = get_template_path() / "intelligences/model_mapping.yml"
-        model_mapping: dict = cast(dict, load_yaml_file(model_mapping_template))
-        model_mapping["default"] = model_mapping[config.llm_api_type]
-        model_mapping_file = config.config_dir / "intelligences/model_mapping.yml"
-        print(f"Create: {model_mapping_file}")
-        model_mapping_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(model_mapping_file, model_mapping)
-
-        cli_mapping_template = (
-            get_template_path() / "intelligences/cli_agent_mapping.yml"
-        )
-        cli_mapping: dict = cast(dict, load_yaml_file(cli_mapping_template))
-        cli_mapping["default"] = cli_mapping[config.cli_agent]
-        cli_mapping_file = config.config_dir / "intelligences/cli_agent_mapping.yml"
-        print(f"Create: {cli_mapping_file}")
-        save_yaml_file(cli_mapping_file, cli_mapping)
-
-        cli_agent_config_src_dir = get_template_path() / "intelligences/cli_agents"
-        cli_agent_config_dst_dir = config.config_dir / "intelligences/cli_agents"
-        cli_agent_config_dst_dir.mkdir(parents=True, exist_ok=True)
-        for src_file in cli_agent_config_src_dir.glob("*.yml"):
-            dst_file = cli_agent_config_dst_dir / src_file.name
-            print(f"Create: {dst_file}")
-            dst_file.write_text(src_file.read_text())
-
-        if self.is_env_file_operation_required(config):
-            env_file_template = (TEMPLATE_PATH / ".env.example").read_text()
-            env_file = env_file_template.format(
-                google_api_key=f"GOOGLE_API_KEY={config.google_api_key}",
-                openai_api_key=f"OPENAI_API_KEY={config.openai_api_key}",
-                anthropic_api_key=f"ANTHROPIC_API_KEY={config.anthropic_api_key}",
+        setup_result = SimpleProjectSetupService().write_project(
+            ProjectSetupInput(
+                config_dir=config.config_dir,
+                env_file_path=env_file_path,
+                env_file_option=config.env_file_option,
+                language=config.language,
+                repository_name=config.repository_name,
+                owner=config.owner,
+                project_id=config.project_id,
+                github_project_url=config.github_project_url,
+                repo_base_url=config.repo_base_url,
+                llm_api_type=config.llm_api_type,
+                cli_agent=config.cli_agent,
+                google_api_key=config.google_api_key,
+                openai_api_key=config.openai_api_key,
+                anthropic_api_key=config.anthropic_api_key,
             )
-
-            if config.env_file_option == "overwrite":
-                print(f"Create: {env_file_path}")
-                env_file_path.write_text(env_file)
-            elif config.env_file_option == "append":
-                print(f"Append: {env_file_path}")
-                env_file_path.write_text(f"{env_file_path.read_text()}\n\n{env_file}")
+        )
+        for created_file in setup_result.files:
+            print(f"{created_file.action.capitalize()}: {created_file.path}")
 
     def get_config_dir(self) -> Path | None:
         special_config_dir = os.getenv("GUILDBOTICS_CONFIG_DIR")
@@ -426,7 +385,7 @@ class SimpleSetupTool(SetupTool):
             t("cli.roles_prompt"),
             choices=list(role_map.keys()),
         ).ask()
-        config.roles = [f"{role_map[label]}:" for label in config.roles_label]
+        config.roles = [role_map[label] for label in config.roles_label]
 
         # Step 6. Select Speaking Style
         if config.person_type in [
@@ -447,25 +406,13 @@ class SimpleSetupTool(SetupTool):
                 f"cli.speaking_style_{speaking_style}_description"
             )
 
-        # Step 7. Create Person Configuration
-        person_config_template = (TEMPLATE_PATH / "person.yml").read_text()
-        person_config = person_config_template.format(
-            github_username=config.github_username,
-            person_id=config.person_id,
-            person_name=config.person_name,
-            person_type=config.person_type,
-            is_active=str(config.is_active).lower(),
-            git_email=config.git_email,
-            roles=f"  {'\n  '.join(config.roles)}",
-            speaking_style=config.speaking_style,
-            relationships="",
-        )
-
-        # Step 8. Set Environment Variables
-        sanitized_id = config.person_id.replace("-", "_").upper()
-        env_vars = []
+        # Step 7. Set Environment Variables
+        github_installation_id = None
+        github_app_id = None
+        github_private_key_path = None
+        github_access_token = ""
         if config.person_type == GitHubAppAuth.GITHUB_APPS:
-            installation_id = int(
+            github_installation_id = int(
                 questionary.text(
                     t("cli.input_github_installation_id_prompt"),
                     validate=lambda text: (
@@ -473,9 +420,8 @@ class SimpleSetupTool(SetupTool):
                     ),
                 ).ask()
             )
-            env_vars.append(f"{sanitized_id}_GITHUB_INSTALLATION_ID={installation_id}")
 
-            app_id = int(
+            github_app_id = int(
                 questionary.text(
                     t("cli.input_github_app_id_prompt"),
                     validate=lambda text: (
@@ -483,52 +429,61 @@ class SimpleSetupTool(SetupTool):
                     ),
                 ).ask()
             )
-            env_vars.append(f"{sanitized_id}_GITHUB_APP_ID={app_id}")
 
-            private_key_path = questionary.text(
-                t("cli.input_github_private_key_path_prompt"),
-                validate=lambda text: (
-                    (len(text) > 0 and Path(text).exists())
-                    or t("cli.input_github_private_key_path_prompt")
-                ),
-            ).ask()
-
-            env_vars.append(
-                f"{sanitized_id}_GITHUB_PRIVATE_KEY_PATH={private_key_path}"
+            github_private_key_path = Path(
+                questionary.text(
+                    t("cli.input_github_private_key_path_prompt"),
+                    validate=lambda text: (
+                        (len(text) > 0 and Path(text).exists())
+                        or t("cli.input_github_private_key_path_prompt")
+                    ),
+                ).ask()
             )
 
         if config.person_type in [
             GitHubAppAuth.MACHINE_USER,
             GitHubAppAuth.PROXY_AGENT,
         ]:
-            access_token = questionary.text(
+            github_access_token = questionary.text(
                 t("cli.input_github_access_token_prompt"),
                 validate=lambda text: (
                     len(text) > 0 or t("cli.input_github_access_token_prompt")
                 ),
             ).ask()
-            env_vars.append(f"{sanitized_id}_GITHUB_ACCESS_TOKEN={access_token}")
 
-        # Step 9. Create Person Configuration File
-        person_config_file = config_dir / f"team/members/{config.person_id}/person.yml"
-        print(f"Create: {person_config_file}")
-        person_config_file.parent.mkdir(parents=True, exist_ok=True)
-        person_config_file.write_text(person_config)
-
-        # Step 10. Update Environment Variables
+        # Step 8. Create Person Configuration File
         add_secret = False
         env_file_path = Path.cwd() / ".env"
         if env_file_path.exists():
             add_secret = questionary.confirm(
                 t("cli.secret_info_prompt"), default=True
             ).ask()
-        if add_secret:
-            print(f"Append: {env_file_path}")
-            env_file_path.write_text(
-                f"{env_file_path.read_text()}\n\n# {config.person_id}\n"
-                + "\n".join(env_vars)
-            )
-        else:
+
+        person_input = PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file_path,
+            append_env_file=add_secret,
+            person_type=config.person_type,
+            person_id=config.person_id,
+            person_name=config.person_name,
+            is_active=config.is_active,
+            github_username=config.github_username,
+            git_email=config.git_email,
+            roles=config.roles,
+            speaking_style=config.speaking_style,
+            github_installation_id=github_installation_id,
+            github_app_id=github_app_id,
+            github_private_key_path=github_private_key_path,
+            github_access_token=github_access_token,
+        )
+        person_service = SimplePersonSetupService()
+        env_vars = person_service.build_environment_variables(person_input)
+        setup_result = person_service.write_person(person_input)
+        for created_file in setup_result.files:
+            print(f"{created_file.action.capitalize()}: {created_file.path}")
+
+        # Step 9. Show Environment Variables
+        if not add_secret and env_vars:
             print()
             print(t("cli.environment_variable_prompt"))
             for env_var in env_vars:
@@ -702,82 +657,56 @@ class SimpleSetupTool(SetupTool):
         return config.env_file_option != "skip"
 
     def parse_github_apps_url(self, url: str, config: PersonConfig) -> str | bool:
-        url_parts = url.split("/")
-        if (
-            len(url_parts) < GITHUB_APPS_URL_MIN_PARTS
-            or not url.startswith(GITHUB_URL)
-            or url_parts[3] != "organizations"
-            or url_parts[5] != "settings"
-            or url_parts[6] != "apps"
-            or url_parts[7] == ""
-        ):
+        try:
+            config.github_username = SimplePersonSetupService().parse_github_apps_url(
+                url
+            )
+        except SetupServiceError:
             return t("cli.error_invalid_github_apps_url")
-
-        config.github_username = url_parts[7]
         return True
 
     def parse_github_username(
         self, name: str, config: PersonConfig, is_github_apps: bool = False
     ) -> str | bool:
-        error_message = t("cli.error_invalid_github_username")
-        if name == "":
-            return error_message
-
-        github_username = ""
-        if is_github_apps:
-            config.person_id = name
-            config.github_username = f"{name}[bot]"
-            github_username = f"{quote(config.github_username)}"
-        else:
-            config.person_id = name.split("@", maxsplit=1)[0]
-            config.github_username = config.person_id
-            github_username = config.person_id
-
         try:
-            response = requests.get(f"https://api.github.com/users/{github_username}")
-            if response.status_code != HTTP_OK:
-                return error_message
-            data = response.json()
-            config.github_user_id = data.get("id", 0)
-            config.git_email = f"{config.github_user_id}+{config.github_username}@users.noreply.github.com"
-        except Exception:
-            return error_message
+            reference = SimplePersonSetupService().resolve_github_user(
+                name, is_github_apps=is_github_apps
+            )
+        except SetupServiceError:
+            return t("cli.error_invalid_github_username")
 
+        config.person_id = reference.person_id
+        config.github_username = reference.github_username
+        config.github_user_id = reference.github_user_id
+        config.git_email = reference.git_email
         return True
 
     def parse_github_project_url(self, url: str, config: ProjectConfig) -> str | bool:
-        url_parts = url.split("/")
-        if (
-            len(url_parts) < GITHUB_PROJECT_URL_MIN_PARTS
-            or not url.startswith(GITHUB_URL)
-            or url_parts[3] not in ["orgs", "users"]
-            or url_parts[5] != "projects"
-            or url_parts[6] == ""
-        ):
+        try:
+            reference = SimpleProjectSetupService().parse_github_project_url(url)
+        except SetupServiceError:
             return t("cli.error_invalid_github_project_url")
 
-        config.project_type = url_parts[3]
-        config.owner = url_parts[4]
-        config.project_id = url_parts[6].split("?")[0]
-        config.github_project_url = f"{GITHUB_URL}{config.project_type}/{config.owner}/projects/{config.project_id}"
+        config.project_type = reference.project_type
+        config.owner = reference.owner
+        config.project_id = reference.project_id
+        config.github_project_url = reference.url
         return True
 
     def parse_github_repository_url(
         self, url: str, config: ProjectConfig
     ) -> str | bool:
-        url_parts = url.split("/")
-        if (
-            len(url_parts) < GITHUB_REPOSITORY_URL_MIN_PARTS
-            or not url.startswith(GITHUB_URL)
-            or url_parts[4] == ""
-        ):
+        try:
+            reference = SimpleProjectSetupService().parse_github_repository_url(
+                url, owner=config.owner
+            )
+        except SetupServiceError as exc:
+            if exc.code == "inconsistent_github_url":
+                return t("cli.error_inconsistent_github_url")
             return t("cli.error_invalid_github_repository_url")
-        if url_parts[3] != config.owner:
-            return t("cli.error_inconsistent_github_url")
-        config.repository_name = url_parts[4]
-        config.github_repository_url = (
-            f"{GITHUB_URL}{config.owner}/{config.repository_name}"
-        )
+
+        config.repository_name = reference.repository_name
+        config.github_repository_url = reference.url
         return True
 
     def get_default_routines(self) -> list[str]:
