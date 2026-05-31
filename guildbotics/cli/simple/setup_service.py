@@ -260,7 +260,9 @@ class SimpleProjectSetupService:
     ) -> ProjectConfigSnapshot:
         project_file = config_dir / "team/project.yml"
         if not project_file.exists():
-            raise SetupServiceError("project_not_found", "Project config was not found.")
+            raise SetupServiceError(
+                "project_not_found", "Project config was not found."
+            )
         project_data = cast(dict, load_yaml_file(project_file))
 
         model_mapping = self._load_mapping(
@@ -283,7 +285,9 @@ class SimpleProjectSetupService:
         owner = str(ticket_manager.get("owner", ""))
         project_id = str(ticket_manager.get("project_id", ""))
         github_project_url = str(ticket_manager.get("url", ""))
-        github_enabled = bool(owner and project_id and github_project_url and repository_name)
+        github_enabled = bool(
+            owner and project_id and github_project_url and repository_name
+        )
 
         code_hosting = services.get("code_hosting_service", {}) if services else {}
         repo_base_url = str(code_hosting.get("repo_base_url", "https://github.com"))
@@ -484,9 +488,7 @@ class SimpleProjectSetupService:
         if any(value for value in env_updates.values() if value):
             env_file_existed = config.env_file_path.exists()
             env_values = (
-                dict(dotenv_values(config.env_file_path))
-                if env_file_existed
-                else {}
+                dict(dotenv_values(config.env_file_path)) if env_file_existed else {}
             )
             for key, value in env_updates.items():
                 if value:
@@ -585,7 +587,9 @@ class SimplePersonSetupService:
         person_data = cast(dict, load_yaml_file(person_file))
         account_info = person_data.get("account_info", {})
         profile = person_data.get("profile", {})
-        professional = profile.get("professional", {}) if isinstance(profile, dict) else {}
+        professional = (
+            profile.get("professional", {}) if isinstance(profile, dict) else {}
+        )
         character = profile.get("character", {}) if isinstance(profile, dict) else {}
         roles = list(professional.keys()) if isinstance(professional, dict) else []
         character_data = character if isinstance(character, dict) else {}
@@ -596,7 +600,8 @@ class SimplePersonSetupService:
             channels = [
                 str(channel.get("name", ""))
                 for channel in raw_channels
-                if isinstance(channel, dict) and str(channel.get("service", "")).lower() == "slack"
+                if isinstance(channel, dict)
+                and str(channel.get("service", "")).lower() == "slack"
             ]
             channels = [channel for channel in channels if channel]
 
@@ -620,9 +625,13 @@ class SimplePersonSetupService:
             github_private_key_path=str(
                 env.get(f"{env_prefix}_GITHUB_PRIVATE_KEY_PATH") or ""
             ),
-            has_github_installation_id=bool(env.get(f"{env_prefix}_GITHUB_INSTALLATION_ID")),
+            has_github_installation_id=bool(
+                env.get(f"{env_prefix}_GITHUB_INSTALLATION_ID")
+            ),
             has_github_app_id=bool(env.get(f"{env_prefix}_GITHUB_APP_ID")),
-            has_github_private_key_path=bool(env.get(f"{env_prefix}_GITHUB_PRIVATE_KEY_PATH")),
+            has_github_private_key_path=bool(
+                env.get(f"{env_prefix}_GITHUB_PRIVATE_KEY_PATH")
+            ),
             has_github_access_token=bool(env.get(f"{env_prefix}_GITHUB_ACCESS_TOKEN")),
             has_slack_bot_token=bool(env.get(f"{env_prefix}_SLACK_BOT_TOKEN")),
             has_slack_app_token=bool(env.get(f"{env_prefix}_SLACK_APP_TOKEN")),
@@ -721,9 +730,7 @@ class SimplePersonSetupService:
         old_person_dir = original_person_file.parent
         new_person_dir = config.config_dir / f"team/members/{config.person_id}"
         if old_person_dir != new_person_dir and new_person_dir.exists():
-            raise SetupServiceError(
-                "person_id_conflict", "Member ID already exists."
-            )
+            raise SetupServiceError("person_id_conflict", "Member ID already exists.")
         if old_person_dir != new_person_dir:
             new_person_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old_person_dir), str(new_person_dir))
@@ -905,10 +912,18 @@ class SimplePersonSetupService:
         return preserved
 
     def _read_env_values(self, env_file_path: Path) -> dict[str, str]:
-        raw_values = dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
-        return {str(key): str(value) for key, value in raw_values.items() if value is not None}
+        raw_values = (
+            dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
+        )
+        return {
+            str(key): str(value)
+            for key, value in raw_values.items()
+            if value is not None
+        }
 
-    def _write_env_values(self, env_file_path: Path, env_values: dict[str, str]) -> None:
+    def _write_env_values(
+        self, env_file_path: Path, env_values: dict[str, str]
+    ) -> None:
         env_file_path.parent.mkdir(parents=True, exist_ok=True)
         lines = [f"{key}={value}" for key, value in env_values.items()]
         env_file_path.write_text("\n".join(lines))

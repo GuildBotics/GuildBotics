@@ -206,7 +206,9 @@ class AppRuntime:
 
     def start_scheduler(self, request: SchedulerStartRequest) -> RuntimeStatus:
         if request.only != "events":
-            routine_commands = request.routine_commands or get_setup_tool().get_default_routines()
+            routine_commands = (
+                request.routine_commands or get_setup_tool().get_default_routines()
+            )
             if not self.is_github_integration_enabled():
                 for command in routine_commands:
                     if self.requires_github_for_routine(command):
@@ -273,7 +275,10 @@ class AppRuntime:
             )
             agents.append(
                 CliAgentDetection(
-                    name=name, executable=executable, detected=path is not None, path=path or ""
+                    name=name,
+                    executable=executable,
+                    detected=path is not None,
+                    path=path or "",
                 )
             )
         return CliAgentDetectionsResponse(agents=agents)

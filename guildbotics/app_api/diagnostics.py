@@ -16,7 +16,9 @@ from guildbotics.intelligences.functions import talk_as
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
-DiagnosticSection = Literal["config", "members", "llm", "cli_agent", "github", "slack", "git"]
+DiagnosticSection = Literal[
+    "config", "members", "llm", "cli_agent", "github", "slack", "git"
+]
 DiagnosticStatus = Literal["ok", "warning", "error"]
 
 
@@ -35,7 +37,9 @@ class ScenarioDiagnosticsService:
                     "config",
                     "config_load",
                     "error",
-                    self._safe_error("Configuration could not be loaded", context_error),
+                    self._safe_error(
+                        "Configuration could not be loaded", context_error
+                    ),
                 )
             )
             return self._response(checks, [])
@@ -83,7 +87,9 @@ class ScenarioDiagnosticsService:
             )
             return self._response(checks, [])
 
-        inactive_members = [member.person_id for member in members if not member.is_active]
+        inactive_members = [
+            member.person_id for member in members if not member.is_active
+        ]
         if inactive_members:
             checks.append(
                 self._check(
@@ -192,7 +198,9 @@ class ScenarioDiagnosticsService:
             )
         ]
         for member in members:
-            checks.append(await self._check_cli_agent_brain(context, member, executable))
+            checks.append(
+                await self._check_cli_agent_brain(context, member, executable)
+            )
         return checks
 
     async def _check_cli_agent_brain(
@@ -224,7 +232,9 @@ class ScenarioDiagnosticsService:
                     target=executable,
                     context={"brain_type": type(brain).__name__},
                 )
-            with tempfile.TemporaryDirectory(prefix="guildbotics-diagnostics-cli-") as tmp:
+            with tempfile.TemporaryDirectory(
+                prefix="guildbotics-diagnostics-cli-"
+            ) as tmp:
                 result = await brain.run_with_execution_details(message, cwd=Path(tmp))
 
             if result.returncode != 0:
@@ -335,7 +345,9 @@ class ScenarioDiagnosticsService:
                         )
                     )
                 if project.is_available_service(Service.CODE_HOSTING_SERVICE):
-                    default_branch = await c.get_code_hosting_service().get_default_branch()
+                    default_branch = (
+                        await c.get_code_hosting_service().get_default_branch()
+                    )
                     checks.append(
                         self._check(
                             "git",
