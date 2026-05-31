@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from guildbotics.app_api.cli_agents import resolve_default_cli_executable
 from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsResponse
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Service
@@ -14,7 +15,6 @@ from guildbotics.integrations.github.github_ticket_manager import GitHubTicketMa
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.functions import talk_as
 from guildbotics.runtime import Context
-from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
 DiagnosticSection = Literal[
     "config", "members", "llm", "cli_agent", "github", "slack", "git"
@@ -471,26 +471,7 @@ class ScenarioDiagnosticsService:
         )
 
     def _resolve_default_cli_executable(self) -> str:
-        try:
-            mapping = cast(
-                dict[str, Any],
-                load_yaml_file(get_config_path("intelligences/cli_agent_mapping.yml")),
-            )
-            executable_info_file = str(mapping.get("default", ""))
-            executable_info = cast(
-                dict[str, Any],
-                load_yaml_file(
-                    get_config_path(f"intelligences/cli_agents/{executable_info_file}")
-                ),
-            )
-            script = str(executable_info.get("script", ""))
-        except Exception:
-            return ""
-
-        for executable in ("codex", "gemini", "claude", "copilot"):
-            if executable in script:
-                return executable
-        return ""
+        return resolve_default_cli_executable()
 
     def _response(
         self, checks: list[DiagnosticCheck], active_members: list[str]

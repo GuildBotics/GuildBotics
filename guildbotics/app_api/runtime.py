@@ -10,6 +10,11 @@ from typing import Any, cast
 
 from dotenv import load_dotenv
 
+from guildbotics.app_api.cli_agents import (
+    CLI_AGENT_EXECUTABLES,
+    load_cli_agent_script,
+    resolve_cli_executable,
+)
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import CommandEventLogHandler, EventBus
@@ -264,10 +269,10 @@ class AppRuntime:
         except Exception:
             mapping = {}
         agents: list[CliAgentDetection] = []
-        for name in ("codex", "gemini", "claude", "copilot"):
+        for name in CLI_AGENT_EXECUTABLES:
             executable_info_file = str(mapping.get(name, ""))
-            script = self._load_cli_agent_script(executable_info_file)
-            executable = self._resolve_cli_executable(script)
+            script = load_cli_agent_script(get_template_path(), executable_info_file)
+            executable = resolve_cli_executable(script)
             path = (
                 shutil.which(executable, path=os.environ.get("PATH"))
                 if executable
@@ -296,27 +301,6 @@ class AppRuntime:
 
     def requires_github_for_routine(self, command: str) -> bool:
         return command == "workflows/ticket_driven_workflow"
-
-    def _load_cli_agent_script(self, executable_info_file: str) -> str:
-        if not executable_info_file:
-            return ""
-        try:
-            executable_info = cast(
-                dict[str, Any],
-                load_yaml_file(
-                    get_template_path()
-                    / f"intelligences/cli_agents/{executable_info_file}"
-                ),
-            )
-            return str(executable_info.get("script", ""))
-        except Exception:
-            return ""
-
-    def _resolve_cli_executable(self, script: str) -> str:
-        for executable in ("codex", "gemini", "claude", "copilot"):
-            if executable in script:
-                return executable
-        return ""
 
     def _get_context(self, message: str = "") -> Context:
         self._load_workspace_env()

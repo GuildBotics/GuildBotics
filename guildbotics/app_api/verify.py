@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from dotenv import dotenv_values
 
+from guildbotics.app_api.cli_agents import resolve_default_cli_executable
 from guildbotics.app_api.models import ConfigStatus, VerifyCheck, VerifyResponse
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.github_utils import GitHubAppAuth
@@ -230,26 +231,7 @@ class VerifyService:
         return ""
 
     def _resolve_default_cli_executable(self) -> str:
-        try:
-            mapping = cast(
-                dict[str, Any],
-                load_yaml_file(get_config_path("intelligences/cli_agent_mapping.yml")),
-            )
-            executable_info_file = str(mapping.get("default", ""))
-            executable_info = cast(
-                dict[str, Any],
-                load_yaml_file(
-                    get_config_path(f"intelligences/cli_agents/{executable_info_file}")
-                ),
-            )
-            script = str(executable_info.get("script", ""))
-        except Exception:
-            return ""
-
-        for executable in ("codex", "gemini", "claude", "copilot"):
-            if executable in script:
-                return executable
-        return ""
+        return resolve_default_cli_executable()
 
     def _read_env(self, env_file: Path) -> dict[str, str | None]:
         values: dict[str, str | None] = (
