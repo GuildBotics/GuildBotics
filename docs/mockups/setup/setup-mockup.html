@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GuildBotics セットアップ画面 UX 提案モックアップ</title>
+<style>
+  :root {
+    color: #202124;
+    background: #f5f6f4;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+      "Hiragino Sans", "Segoe UI", sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+
+  /* ---- state switcher (mockup chrome only) ---- */
+  .switcher {
+    background: #0f1417; color: #dce4df;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; font-size: 13px; border-bottom: 1px solid #26343c;
+  }
+  .switcher strong { color: #fff; font-weight: 700; }
+  .switcher .spacer { flex: 1; }
+  .switcher button {
+    background: #26343c; color: #dce4df; border: 0; border-radius: 6px;
+    padding: 7px 12px; cursor: pointer; font: inherit;
+  }
+  .switcher button.active { background: #2f80ed; color: #fff; }
+  .note { color: #8b9a93; font-size: 12px; }
+
+  /* ---- shared shell ---- */
+  .screen { display: none; }
+  .screen.active { display: block; }
+  .shell { display: grid; grid-template-columns: 250px 1fr; min-height: calc(100vh - 41px); }
+  .sidebar {
+    background: #172026; color: #f7faf8;
+    display: flex; flex-direction: column; gap: 28px; padding: 22px 18px;
+  }
+  .sidebar h1 { margin: 0; font-size: 19px; }
+  .sidebar .sub { color: #b7c3bd; margin: 6px 0 0; font-size: 12px; }
+  .nav { display: flex; flex-direction: column; gap: 4px; }
+  .nav-item {
+    background: transparent; color: #dce4df; border: 0; border-radius: 6px;
+    display: flex; align-items: center; gap: 10px; padding: 9px 11px;
+    cursor: pointer; font: inherit; text-align: left; width: 100%;
+  }
+  .nav-item .ic { width: 18px; text-align: center; opacity: 0.9; }
+  .nav-item.active, .nav-item:hover { background: #26343c; }
+
+  .workspace { display: flex; flex-direction: column; gap: 18px; padding: 22px 24px 48px; }
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; }
+  .eyebrow {
+    color: #64736d; font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .topbar h2 { margin: 4px 0 0; font-size: 22px; }
+
+  /* ---- status banner ---- */
+  .banner { border-radius: 10px; padding: 16px 18px; display: flex; align-items: center; gap: 16px; }
+  .banner.guide { background: #fff7e6; border: 1px solid #f0d39a; }
+  .banner.done { background: #eaf6f0; border: 1px solid #bfe3d2; padding: 11px 16px; }
+  .banner .big { font-size: 15px; font-weight: 700; }
+  .banner.done .big { font-size: 14px; color: #0d6b47; }
+  .banner .desc { color: #7a4f00; font-size: 13px; margin-top: 3px; }
+  .progress { flex: 0 0 200px; height: 8px; background: #f0e0bd; border-radius: 99px; overflow: hidden; }
+  .progress > i { display: block; height: 100%; background: #d79900; }
+  .banner .grow { flex: 1; }
+  .banner button {
+    background: #1f2937; color: #fff; border: 0; border-radius: 6px;
+    padding: 9px 14px; cursor: pointer; font: inherit; white-space: nowrap;
+  }
+  .banner.done button { background: #0d6b47; }
+
+  /* ---- two column: section list + form ---- */
+  .layout { display: grid; grid-template-columns: 250px 1fr; gap: 18px; align-items: start; }
+  .sectionlist {
+    background: #fff; border: 1px solid #d8ded9; border-radius: 10px;
+    padding: 8px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .group-label {
+    color: #8b9a93; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em; padding: 12px 12px 4px;
+  }
+  .sec {
+    display: flex; align-items: center; gap: 10px; padding: 11px 12px;
+    border-radius: 8px; cursor: pointer; border: 0; background: transparent;
+    font: inherit; text-align: left; width: 100%; color: #202124;
+  }
+  .sec:hover { background: #f3f5f3; }
+  .sec.active { background: #eef3fb; box-shadow: inset 0 0 0 1px #cfe0f7; }
+  .sec .badge {
+    width: 20px; height: 20px; border-radius: 99px; flex: 0 0 20px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: #fff;
+  }
+  .badge.ok { background: #0d6b47; }
+  .badge.warn { background: #d79900; }
+  .badge.todo { background: #c4ccc7; }
+  .badge.opt { background: #fff; border: 1px solid #c4ccc7; color: #8b9a93; }
+  .sec .label { flex: 1; }
+  .sec .hint { color: #8b9a93; font-size: 11px; }
+
+  .panel {
+    background: #fff; border: 1px solid #d8ded9; border-radius: 10px;
+    padding: 22px; display: flex; flex-direction: column; gap: 18px;
+  }
+  .form-pane { display: none; }
+  .form-pane.shown { display: flex; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; }
+  .panel-head h3 { margin: 0; font-size: 17px; }
+  .panel-head .sub { color: #64736d; font-size: 13px; margin: 4px 0 0; }
+  .subhead { font-size: 14px; font-weight: 700; color: #202124; }
+
+  label { color: #45514c; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .field-help { color: #8b9a93; font-size: 12px; }
+  input, select, textarea {
+    border: 1px solid #c8d0ca; border-radius: 6px; padding: 10px 12px; font: inherit;
+    background: #fff; width: 100%;
+  }
+  input::placeholder { color: #aab4ae; }
+  .seg { display: inline-flex; border: 1px solid #c8d0ca; border-radius: 8px; overflow: hidden; align-self: flex-start; }
+  .seg button {
+    background: #fff; border: 0; padding: 9px 16px; cursor: pointer; font: inherit;
+    color: #45514c; border-right: 1px solid #e2e7e3;
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: #1f2937; color: #fff; }
+
+  /* selection cards (LLM / CLI agent) */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .card {
+    border: 1px solid #c8d0ca; border-radius: 10px; padding: 13px 14px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 4px; background: #fff;
+  }
+  .card.on { border-color: #1f2937; box-shadow: inset 0 0 0 1px #1f2937; }
+  .card .t { font-weight: 600; }
+  .card .d { color: #8b9a93; font-size: 12px; }
+  .detect { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 2px; }
+  .dot { width: 8px; height: 8px; border-radius: 99px; flex: 0 0 8px; }
+  .dot.ok { background: #0d6b47; } .dot.no { background: #b3261e; }
+
+  /* secrets */
+  .secret-row {
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid #c8d0ca; border-radius: 6px; padding: 9px 12px; background: #f8faf9;
+  }
+  .secret-row .mask { font-family: ui-monospace, monospace; color: #45514c; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { font-size: 12px; font-weight: 700; border-radius: 99px; padding: 2px 9px; white-space: nowrap; }
+  .pill.set { background: #eaf6f0; color: #0d6b47; }
+  .pill.unset { background: #fde7e7; color: #b3261e; }
+  .secret-row .grow { flex: 1; }
+  .ghost {
+    background: #fff; color: #1f2937; border: 1px solid #c8d0ca; border-radius: 6px;
+    padding: 8px 12px; cursor: pointer; font: inherit; white-space: nowrap;
+  }
+  .keylist { display: grid; gap: 8px; }
+  .keylabel { color: #64736d; font-size: 12px; margin-top: 8px; }
+
+  .autosave-hint { color: #8b9a93; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+  .saved { color: #0d6b47; font-weight: 600; }
+  .info-box { background: #f3f5f3; border: 1px solid #e0e5e1; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #5a665f; }
+  .cond-note { background: #eef3fb; border: 1px solid #d3e3f8; border-radius: 8px; padding: 9px 12px; font-size: 12px; color: #1c4e8a; }
+
+  .form-actions { display: flex; gap: 10px; align-items: center; padding-top: 4px; }
+  .btn-primary {
+    background: #1f2937; color: #fff; border: 0; border-radius: 6px;
+    padding: 10px 18px; cursor: pointer; font: inherit; font-weight: 600;
+  }
+  .btn-primary:hover { background: #111827; }
+  .form-actions .note { margin-left: auto; }
+
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .stack { display: grid; gap: 16px; }
+
+  .checkrow { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chk {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid #c8d0ca; border-radius: 99px; padding: 7px 13px;
+    font-size: 13px; cursor: pointer; color: #45514c; background: #fff;
+  }
+  .chk.on { background: #eef3fb; border-color: #9cc0f0; color: #1c4e8a; }
+
+  .member-card {
+    display: flex; align-items: center; gap: 14px;
+    border: 1px solid #d8ded9; border-radius: 10px; padding: 13px 15px; background: #fff;
+  }
+  .member-card.active-edit { box-shadow: inset 0 0 0 2px #cfe0f7; background: #fbfdff; }
+  .avatar {
+    width: 38px; height: 38px; border-radius: 99px; flex: 0 0 38px;
+    background: #26343c; color: #fff; display: inline-flex; align-items: center;
+    justify-content: center; font-weight: 700;
+  }
+  .member-card .mname { font-weight: 600; }
+  .member-card .mmeta { color: #64736d; font-size: 12px; margin-top: 2px; }
+  .member-card .grow { flex: 1; }
+  .chip { display: inline-block; font-size: 11px; background: #eef1ef; color: #45514c; border-radius: 99px; padding: 2px 9px; margin-right: 5px; }
+  .switch { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: #45514c; }
+  .switch .track { width: 34px; height: 19px; border-radius: 99px; background: #0d6b47; position: relative; flex: 0 0 34px; }
+  .switch .track.off { background: #c4ccc7; }
+  .switch .track i { position: absolute; top: 2px; right: 2px; width: 15px; height: 15px; background: #fff; border-radius: 99px; }
+  .switch .track.off i { right: auto; left: 2px; }
+
+  .drawer { border: 1px solid #cfe0f7; border-radius: 10px; background: #fbfdff; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .drawer h4 { margin: 0; font-size: 15px; }
+  .divider { height: 1px; background: #e6ebe7; margin: 2px 0; }
+
+  /* tabs (member form) */
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid #e0e5e1; }
+  .tab {
+    background: transparent; border: 0; border-bottom: 2px solid transparent;
+    padding: 9px 14px; cursor: pointer; font: inherit; color: #64736d;
+  }
+  .tab:hover { color: #1c4e8a; }
+  .tab.on { color: #1c4e8a; border-bottom-color: #2f80ed; font-weight: 600; }
+  .tabpane { display: none; flex-direction: column; gap: 16px; }
+  .tabpane.on { display: flex; }
+  .default-chip { font-size: 11px; font-weight: 700; background: #eef1ef; color: #5a665f; border-radius: 99px; padding: 2px 9px; margin-left: 8px; vertical-align: middle; }
+
+  /* config tables (brain mapping / model defs / cli agent defs) */
+  .cfgtable { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .cfgtable th { text-align: left; color: #64736d; font-weight: 600; font-size: 12px; padding: 8px 10px; border-bottom: 1px solid #e6ebe7; }
+  .cfgtable td { padding: 8px 10px; border-bottom: 1px solid #f0f2f0; vertical-align: middle; }
+  .cfgtable tr:last-child td { border-bottom: 0; }
+  .cfgtable select, .cfgtable input { padding: 6px 8px; }
+  .cfgtable .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  .cfgtable .num { width: 84px; }
+  .badge-engine { font-size: 11px; font-weight: 700; border-radius: 6px; padding: 2px 8px; }
+  .badge-engine.llm { background: #eef3fb; color: #1c4e8a; }
+  .badge-engine.cli { background: #f0eef9; color: #5a3da8; }
+  .table-wrap { border: 1px solid #e6ebe7; border-radius: 8px; overflow: hidden; }
+  details.adv { border: 1px solid #e0e5e1; border-radius: 8px; padding: 0; background: #fafbfa; }
+  details.adv > summary { cursor: pointer; padding: 12px 14px; font-weight: 600; font-size: 14px; list-style: none; display: flex; align-items: center; gap: 8px; }
+  details.adv > summary::-webkit-details-marker { display: none; }
+  details.adv > summary::before { content: "▸"; color: #8b9a93; }
+  details.adv[open] > summary::before { content: "▾"; }
+  details.adv > .adv-body { padding: 0 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+</style>
+</head>
+<body>
+
+<div class="switcher">
+  <strong>GuildBotics セットアップ画面 — UX 提案モック</strong>
+  <span class="note">単一設定画面 + 初回ガイド / 自動保存 / コアと任意連携を分離 / AIは1画面 / Slackはメンバー内</span>
+  <span class="spacer"></span>
+  <button data-go="s1" class="active">① 初回ガイド</button>
+  <button data-go="s2">② 設定済み（各セクション）</button>
+  <button data-go="s3">③ メンバー追加/編集</button>
+</div>
+
+<!-- ============================================================= -->
+<!-- STATE 1: 初回ガイド -->
+<!-- ============================================================= -->
+<div class="screen active" id="s1">
+  <div class="shell">
+    <aside class="sidebar">
+      <div><h1>GuildBotics</h1><p class="sub">ローカルワークスペース</p></div>
+      <nav class="nav">
+        <button class="nav-item"><span class="ic">▣</span> オーバービュー</button>
+        <button class="nav-item"><span class="ic">⌘</span> コマンド</button>
+        <button class="nav-item active"><span class="ic">⚙</span> セットアップ</button>
+      </nav>
+    </aside>
+
+    <section class="workspace">
+      <div class="topbar"><div><div class="eyebrow">セットアップ</div><h2>はじめに</h2></div></div>
+
+      <div class="banner guide">
+        <div>
+          <div class="big">コア設定：4項目中 1項目 設定済み</div>
+          <div class="desc">次は「LLM・CLIエージェント」。コア設定が緑になれば実行できます。GitHub などの連携は後から任意で追加できます。</div>
+        </div>
+        <div class="grow"></div>
+        <div class="progress"><i style="width:25%"></i></div>
+        <button>次へ →</button>
+      </div>
+
+      <div class="layout">
+        <div class="sectionlist">
+          <div class="group-label">コア設定（必須）</div>
+          <button class="sec"><span class="badge ok">✓</span><span class="label">プロジェクト</span></button>
+          <button class="sec active"><span class="badge warn">!</span><span class="label">LLM・CLIエージェント</span><span class="hint">次へ</span></button>
+          <button class="sec"><span class="badge warn">!</span><span class="label">メンバー</span><span class="hint">0人</span></button>
+          <button class="sec"><span class="badge todo">–</span><span class="label">シークレット</span></button>
+          <div class="group-label">連携（任意）</div>
+          <button class="sec"><span class="badge opt">○</span><span class="label">GitHub</span><span class="hint">任意</span></button>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h3>LLM・CLIエージェント<span class="default-chip">チーム既定</span></h3>
+              <p class="sub">エージェントの思考に使う LLM と、コード実行に使う CLI エージェントの<strong>デフォルト</strong>を設定します。メンバーごとに上書きできます。</p>
+            </div>
+            <span class="autosave-hint">自動保存</span>
+          </div>
+
+          <div class="subhead">デフォルトの LLM プロバイダ</div>
+          <label>LLM API の種類（利用する 1 つを選択）</label>
+          <div class="cards">
+            <div class="card"><span class="t">OpenAI</span><span class="d">GPT 系</span></div>
+            <div class="card"><span class="t">Google Gemini</span><span class="d">Gemini 系</span></div>
+            <div class="card"><span class="t">Anthropic Claude</span><span class="d">Claude 系</span></div>
+          </div>
+          <label>
+            APIキー
+            <input type="password" placeholder="選択したプロバイダのキーを入力" />
+            <span class="field-help">入力後すぐに .env に保存します（マスク表示・生値は再表示しません）。</span>
+          </label>
+
+          <div class="divider"></div>
+
+          <div class="subhead">デフォルトの CLI エージェント</div>
+          <div class="cards">
+            <div class="card"><span class="t">Claude Code</span><span class="d">claude</span><span class="detect"><span class="dot ok"></span>検出済み</span></div>
+            <div class="card"><span class="t">OpenAI Codex CLI</span><span class="d">codex</span><span class="detect"><span class="dot no"></span>未検出</span></div>
+            <div class="card"><span class="t">Gemini CLI</span><span class="d">gemini</span><span class="detect"><span class="dot no"></span>未検出</span></div>
+            <div class="card"><span class="t">GitHub Copilot CLI</span><span class="d">copilot</span><span class="detect"><span class="dot no"></span>未検出</span></div>
+          </div>
+          <div class="info-box">ここはチーム全体の<strong>デフォルト</strong>です。CLI エージェントは同梱されず、PATH を通すと自動検出されます。個々のメンバーは「メンバー → LLM・CLIエージェント」タブで上書きできます。詳細（機能ごとの割り当て・モデル定義）は設定画面の同セクションで調整できます。</div>
+
+          <div class="form-actions">
+            <button class="btn-primary">次へ →</button>
+            <button class="ghost">この項目はあとで</button>
+            <span class="note">変更は即時保存されます</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<!-- STATE 2: 設定済み（クリックで各セクション切替） -->
+<!-- ============================================================= -->
+<div class="screen" id="s2">
+  <div class="shell">
+    <aside class="sidebar">
+      <div><h1>GuildBotics</h1><p class="sub">日本語</p></div>
+      <nav class="nav">
+        <button class="nav-item"><span class="ic">▣</span> オーバービュー</button>
+        <button class="nav-item"><span class="ic">⌘</span> コマンド</button>
+        <button class="nav-item active"><span class="ic">⚙</span> セットアップ</button>
+      </nav>
+    </aside>
+
+    <section class="workspace">
+      <div class="topbar"><div><div class="eyebrow">セットアップ</div><h2>設定</h2></div></div>
+
+      <div class="banner done">
+        <div class="big">✓ コア設定 完了 — 実行できます</div>
+        <div class="grow"></div>
+        <span class="note" style="color:#0d6b47">最終検証: 2分前 · 問題なし</span>
+        <button>検証を実行</button>
+      </div>
+
+      <div class="layout">
+        <div class="sectionlist">
+          <div class="group-label">コア設定（必須）</div>
+          <button class="sec active" data-pane="project"><span class="badge ok">✓</span><span class="label">プロジェクト</span></button>
+          <button class="sec" data-pane="ai"><span class="badge ok">✓</span><span class="label">LLM・CLIエージェント</span></button>
+          <button class="sec" data-pane="members"><span class="badge ok">✓</span><span class="label">メンバー</span><span class="hint">2人</span></button>
+          <button class="sec" data-pane="secrets"><span class="badge ok">✓</span><span class="label">シークレット</span></button>
+          <div class="group-label">連携（任意）</div>
+          <button class="sec" data-pane="github"><span class="badge ok">✓</span><span class="label">GitHub</span><span class="hint">接続済み</span></button>
+        </div>
+
+        <div class="stack">
+          <!-- PROJECT -->
+          <div class="panel form-pane shown" data-pane="project">
+            <div class="panel-head">
+              <div><h3>プロジェクト</h3><p class="sub">初回設定と同じ画面です。各項目はいつでも変更できます。</p></div>
+              <span class="autosave-hint saved">✓ 保存済み</span>
+            </div>
+            <label>使用する言語
+              <div class="seg"><button>English</button><button class="on">日本語</button></div>
+            </label>
+            <label>作業ディレクトリ（コマンドの実行基点・起動ディレクトリ）
+              <div class="secret-row" style="background:#fff">
+                <span class="mask" style="font-family:inherit">~/Projects/acme-bots</span>
+                <span class="grow"></span>
+                <button class="ghost">参照…</button>
+              </div>
+              <span class="field-help">GUI が backend / コマンドを実行する基点フォルダ。`.env` やプロジェクト固有コマンド（.guildbotics/config/commands）はここを基準に読み込まれます。</span>
+            </label>
+            <label>設定ファイルの保存場所
+              <div class="seg"><button>ホーム共通 (~/.guildbotics/config)</button><button class="on">作業ディレクトリ内 (&lt;作業ディレクトリ&gt;/.guildbotics/config)</button></div>
+              <span class="field-help">複数プロジェクトで共有するなら「ホーム共通」、プロジェクトごとに分けるなら「作業ディレクトリ内」。</span>
+            </label>
+            <label>プロジェクトの説明（エージェントの文脈に使用）
+              <input value="社内ツールの開発・運用を自動化するチーム" />
+            </label>
+            <span class="autosave-hint">自動保存 · team/project.yml に反映</span>
+          </div>
+
+          <!-- AI: LLM + CLI agent (merged) -->
+          <div class="panel form-pane" data-pane="ai">
+            <div class="panel-head">
+              <div><h3>LLM・CLIエージェント<span class="default-chip">チーム既定</span></h3><p class="sub">エージェントの「頭脳」設定。デフォルトに加え、機能ごとの割り当て・モデル定義まで調整できます。保存先は intelligences/。メンバーごとの上書きは「メンバー → LLM・CLIエージェント」タブ。</p></div>
+              <span class="autosave-hint saved">✓ 保存済み</span>
+            </div>
+
+            <!-- (1) デフォルト -->
+            <div class="subhead">デフォルト</div>
+            <div class="two">
+              <label>デフォルトの LLM モデル（model_mapping: default）
+                <select>
+                  <optgroup label="OpenAI"><option selected>gpt-5-mini</option><option>gpt-5-nano</option></optgroup>
+                  <optgroup label="Anthropic"><option>claude-haiku-4</option><option>claude-sonnet-4</option><option>claude-opus-4</option></optgroup>
+                  <optgroup label="Google"><option>gemini-3-flash</option><option>gemini-2.5-flash</option><option>gemma-3-27b-it</option></optgroup>
+                  <optgroup label="ローカル"><option>lmstudio / gpt-oss-20b</option></optgroup>
+                </select>
+              </label>
+              <label>デフォルトの CLI エージェント（cli_agent_mapping: default）
+                <select><option selected>Claude Code (claude) ・検出済み</option><option>OpenAI Codex CLI (codex) ・検出済み</option><option>Gemini CLI (gemini) ・未検出</option><option>GitHub Copilot CLI (copilot) ・未検出</option></select>
+              </label>
+            </div>
+            <label>APIキー（OpenAI）</label>
+            <div class="secret-row">
+              <span class="pill set">設定済み</span><span class="mask">OPENAI_API_KEY = ••••••••••••</span>
+              <span class="grow"></span><button class="ghost">置き換える</button>
+            </div>
+            <div class="info-box">CLI エージェントは同梱されません。PATH を通すと自動検出され、検証（verify）と連動します。</div>
+
+            <!-- (2) 機能ごとの割り当て -->
+            <details class="adv">
+              <summary>機能ごとのブレイン割り当て（brain_mapping）</summary>
+              <div class="adv-body">
+                <div class="info-box">各機能を「LLM モデル」か「CLI エージェント」に割り当てます（例: ファイル編集・計画は CLI、一般思考は LLM）。コマンドは frontmatter の <span class="mono">brain:</span> でこの機能名を指定します。</div>
+                <div class="table-wrap"><table class="cfgtable">
+                  <tr><th>機能</th><th>エンジン種別</th><th>使用するモデル / エージェント</th></tr>
+                  <tr><td>default<span class="field-help">一般思考</span></td><td><span class="badge-engine llm">LLM</span></td><td>gpt-5-mini</td></tr>
+                  <tr><td>file_editor<span class="field-help">ファイル編集</span></td><td><span class="badge-engine cli">CLI</span></td><td>Claude Code</td></tr>
+                  <tr><td>task_planner<span class="field-help">タスク計画</span></td><td><span class="badge-engine cli">CLI</span></td><td>Claude Code</td></tr>
+                  <tr><td>agno</td><td><span class="badge-engine llm">LLM</span></td><td>gpt-5-mini</td></tr>
+                  <tr><td>cli</td><td><span class="badge-engine cli">CLI</span></td><td>Claude Code</td></tr>
+                </table></div>
+                <button class="ghost" style="align-self:flex-start">＋ 機能を追加</button>
+              </div>
+            </details>
+
+            <!-- (3) モデル定義 -->
+            <details class="adv">
+              <summary>モデル定義（models/）</summary>
+              <div class="adv-body">
+                <div class="info-box">利用するモデルの定義（モデル ID など）。named slot（default / gemini / openai / anthropic）から参照されます。</div>
+                <div class="table-wrap"><table class="cfgtable">
+                  <tr><th>スロット</th><th>プロバイダ</th><th>モデルID</th><th></th></tr>
+                  <tr><td>default / openai</td><td>OpenAI</td><td class="mono">gpt-5-mini</td><td><button class="ghost">編集</button></td></tr>
+                  <tr><td>anthropic</td><td>Anthropic</td><td class="mono">claude-haiku-4-5</td><td><button class="ghost">編集</button></td></tr>
+                  <tr><td>gemini</td><td>Google</td><td class="mono">gemini-3-flash</td><td><button class="ghost">編集</button></td></tr>
+                </table></div>
+                <button class="ghost" style="align-self:flex-start">＋ モデルを追加</button>
+              </div>
+            </details>
+
+            <!-- (4) CLI エージェント定義 -->
+            <details class="adv">
+              <summary>CLI エージェント定義（cli_agents/・呼び出しスクリプト）</summary>
+              <div class="adv-body">
+                <div class="info-box">CLI 呼び出しの env / shell スクリプト。上級者向け。アプリ同梱はせず PATH 上の実行ファイルを呼びます。</div>
+                <div class="table-wrap"><table class="cfgtable">
+                  <tr><th>名前</th><th>検出</th><th>スクリプト（抜粋）</th><th></th></tr>
+                  <tr><td>claude-cli</td><td><span class="detect"><span class="dot ok"></span>検出済み</span></td><td class="mono">claude -p --dangerously-skip-permissions</td><td><button class="ghost">編集</button></td></tr>
+                  <tr><td>codex-cli</td><td><span class="detect"><span class="dot ok"></span>検出済み</span></td><td class="mono">codex exec …</td><td><button class="ghost">編集</button></td></tr>
+                  <tr><td>gemini-cli</td><td><span class="detect"><span class="dot no"></span>未検出</span></td><td class="mono">gemini …</td><td><button class="ghost">編集</button></td></tr>
+                </table></div>
+                <button class="ghost" style="align-self:flex-start">＋ CLI エージェントを追加</button>
+              </div>
+            </details>
+          </div>
+
+          <!-- MEMBERS (summary) -->
+          <div class="panel form-pane" data-pane="members">
+            <div class="panel-head">
+              <div><h3>メンバー</h3><p class="sub">追加・編集は同じフォームを開きます（③参照）。Slack などメンバー単位の連携もここで設定します。</p></div>
+            </div>
+            <div class="member-card">
+              <div class="avatar">山</div>
+              <div><div class="mname">山田 太郎</div><div class="mmeta">人間 · @yamada-taro</div>
+                <div style="margin-top:6px"><span class="chip">プロダクトオーナー</span><span class="chip">プロジェクトマネージャー</span></div></div>
+              <div class="grow"></div><span class="switch"><span class="track off"><i></i></span>稼働</span><button class="ghost">編集</button>
+            </div>
+            <div class="member-card">
+              <div class="avatar">B</div>
+              <div><div class="mname">Builder Bot</div><div class="mmeta">AIエージェント (GitHub Apps) · @builder-bot[bot]</div>
+                <div style="margin-top:6px"><span class="chip">アーキテクト</span><span class="chip">インフラエンジニア</span><span class="chip">Slack</span></div></div>
+              <div class="grow"></div><span class="switch"><span class="track"><i></i></span>稼働</span><button class="ghost">編集</button>
+            </div>
+            <button class="ghost" style="align-self:flex-start">＋ メンバーを追加</button>
+          </div>
+
+          <!-- SECRETS -->
+          <div class="panel form-pane" data-pane="secrets">
+            <div class="panel-head">
+              <div><h3>シークレット</h3><p class="sub">APIキーやトークンを一覧・管理します。生値は表示されません。</p></div>
+              <span class="autosave-hint saved">✓ 保存済み</span>
+            </div>
+            <div class="info-box">現在の保存先は作業ディレクトリの <strong>.env</strong> ファイルです。将来的に OS キーチェーンなど、より安全な保存先を選べるようにする予定です。</div>
+            <div class="two">
+              <label>保存先と書き込み方法
+                <div class="seg"><button class="on">.env に追記</button><button>.env を上書き</button><button>書き込まない</button></div>
+              </label>
+              <label>.env のパス<input value="&lt;作業ディレクトリ&gt;/.env" readonly /></label>
+            </div>
+            <div class="keylabel">LLM プロバイダ キー（プロジェクト共通）</div>
+            <div class="keylist">
+              <div class="secret-row"><span class="pill set">設定済み</span><span class="mask">OPENAI_API_KEY</span><span class="grow"></span><button class="ghost">置き換える</button></div>
+              <div class="secret-row"><span class="pill unset">未設定</span><span class="mask">ANTHROPIC_API_KEY</span><span class="grow"></span><button class="ghost">設定する</button></div>
+              <div class="secret-row"><span class="pill unset">未設定</span><span class="mask">GOOGLE_API_KEY</span><span class="grow"></span><button class="ghost">設定する</button></div>
+            </div>
+            <div class="info-box">ここはプロジェクト共通のキー（LLM など）を管理します。メンバー個別の認証情報（GitHub / Slack トークン）は各メンバーの編集画面で設定するため、ここには重複して並べません。</div>
+          </div>
+
+          <!-- GITHUB (optional, project-level integration) -->
+          <div class="panel form-pane" data-pane="github">
+            <div class="panel-head">
+              <div><h3>GitHub <span class="chip">任意の連携</span></h3><p class="sub">チケット駆動ワークフロー（ticket_driven_workflow）を使う場合のみ。プロジェクト単位の設定です。</p></div>
+              <span class="switch"><span class="track"><i></i></span>この連携を使う</span>
+            </div>
+            <div class="info-box">GitHub はコア設定ではありません。未接続でも、翻訳などの単発コマンドやスケジュール実行は利用できます。なお各メンバーの GitHub 認証（App / トークン）はメンバー編集画面で設定します。</div>
+            <label>GitHubプロジェクトのURL
+              <input value="https://github.com/orgs/acme/projects/7" />
+              <span class="field-help">形式: https://github.com/&lt;orgs または users&gt;/&lt;owner&gt;/projects/&lt;project_id&gt;</span>
+            </label>
+            <label>GitHubリポジトリのURL<input value="https://github.com/acme/backend" /></label>
+            <label>Git リポジトリへのアクセス方法
+              <div class="seg"><button class="on">HTTPS (Git Credential Manager 経由)</button><button>SSH</button></div>
+            </label>
+            <div class="divider"></div>
+            <div class="panel-head"><div><h4 style="margin:0">GitHub Projects のステータス対応</h4><p class="sub">New / Ready / In Progress / In Review / Retrospective / Done を既存ステータスへ対応付け（任意）。</p></div><button class="ghost">対応を設定</button></div>
+            <span class="autosave-hint">自動保存 · team/project.yml に反映</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<!-- STATE 3: メンバー追加/編集 -->
+<!-- ============================================================= -->
+<div class="screen" id="s3">
+  <div class="shell">
+    <aside class="sidebar">
+      <div><h1>GuildBotics</h1><p class="sub">日本語</p></div>
+      <nav class="nav">
+        <button class="nav-item"><span class="ic">▣</span> オーバービュー</button>
+        <button class="nav-item"><span class="ic">⌘</span> コマンド</button>
+        <button class="nav-item active"><span class="ic">⚙</span> セットアップ</button>
+      </nav>
+    </aside>
+
+    <section class="workspace">
+      <div class="topbar"><div><div class="eyebrow">セットアップ</div><h2>メンバー</h2></div></div>
+
+      <div class="layout">
+        <div class="sectionlist">
+          <div class="group-label">コア設定（必須）</div>
+          <button class="sec"><span class="badge ok">✓</span><span class="label">プロジェクト</span></button>
+          <button class="sec"><span class="badge ok">✓</span><span class="label">LLM・CLIエージェント</span></button>
+          <button class="sec active"><span class="badge ok">✓</span><span class="label">メンバー</span><span class="hint">2人</span></button>
+          <button class="sec"><span class="badge ok">✓</span><span class="label">シークレット</span></button>
+          <div class="group-label">連携（任意）</div>
+          <button class="sec"><span class="badge ok">✓</span><span class="label">GitHub</span><span class="hint">接続済み</span></button>
+        </div>
+
+        <div class="stack">
+          <div class="member-card">
+            <div class="avatar">山</div>
+            <div><div class="mname">山田 太郎</div><div class="mmeta">人間 · @yamada-taro</div>
+              <div style="margin-top:6px"><span class="chip">プロダクトオーナー</span><span class="chip">プロジェクトマネージャー</span></div></div>
+            <div class="grow"></div><span class="switch"><span class="track off"><i></i></span>稼働</span><button class="ghost">編集</button>
+          </div>
+
+          <div class="member-card active-edit">
+            <div class="avatar">B</div>
+            <div><div class="mname">Builder Bot</div><div class="mmeta">AIエージェント (GitHub Apps) · @builder-bot[bot]</div>
+              <div style="margin-top:6px"><span class="chip">アーキテクト</span><span class="chip">インフラエンジニア</span><span class="chip">Slack</span></div></div>
+            <div class="grow"></div><span class="switch"><span class="track"><i></i></span>稼働</span><button class="ghost">編集中</button>
+          </div>
+
+          <button class="ghost" style="align-self:flex-start">＋ メンバーを追加</button>
+
+          <div class="drawer">
+            <div class="panel-head"><h4>メンバーを編集 — Builder Bot</h4><span class="note">追加と編集は同じフォームです</span></div>
+
+            <div class="tabs">
+              <button class="tab on" data-tab="basic">基本</button>
+              <button class="tab" data-tab="ai">LLM・CLIエージェント</button>
+              <button class="tab" data-tab="github">GitHub 認証</button>
+              <button class="tab" data-tab="chat">チャット (Slack)</button>
+            </div>
+
+            <!-- TAB: 基本 -->
+            <div class="tabpane on" data-tab="basic">
+              <label>登録するメンバーの種類
+                <select><option>人間</option><option>AIエージェント (マシンユーザー)</option><option selected>AIエージェント (GitHub Apps)</option><option>AIエージェント (代理エージェント)</option></select>
+              </label>
+              <div class="cond-note">種類に応じて「GitHub 認証」タブの入力欄が切り替わります（GitHub Apps を選択中）。</div>
+              <div class="two">
+                <label>GitHub Apps 設定ページURL<input value="https://github.com/organizations/acme/settings/apps/builder-bot" /></label>
+                <label>メンバーID (person_id)<input value="builder-bot" /><span class="field-help">小文字英数字・ハイフン・アンダースコアのみ</span></label>
+              </div>
+              <label>フルネーム<input value="Builder Bot" /></label>
+              <label>役割（複数選択可）
+                <div class="checkrow">
+                  <span class="chk">プロダクトオーナー</span><span class="chk">プロジェクトマネージャー</span>
+                  <span class="chk on">アーキテクト</span><span class="chk on">インフラエンジニア</span>
+                  <span class="chk">デザイナー</span><span class="chk">コンテンツクリエイター</span>
+                  <span class="chk">データアナリスト</span><span class="chk">営業・マーケティング</span><span class="chk">カスタマーサポート</span>
+                </div>
+              </label>
+              <label>会話スタイル
+                <div class="seg"><button class="on">プロフェッショナル</button><button>フレンドリー</button><button>マシン</button></div>
+              </label>
+              <label class="switch" style="flex-direction:row;align-items:center"><span class="track"><i></i></span> このメンバーを稼働させる（is_active）</label>
+            </div>
+
+            <!-- TAB: GitHub 認証 -->
+            <div class="tabpane" data-tab="github">
+              <div class="info-box">メンバー種別「GitHub Apps」の認証です。種別を変えると入力欄（アクセストークン等）も変わります。値はマスク表示します。</div>
+              <div class="two">
+                <label>GitHubインストールID<input value="48217640" /></label>
+                <label>GitHub App ID<input value="1029384" /></label>
+              </div>
+              <label>GitHubプライベートキーのパス<input value="~/.guildbotics/keys/builder-bot.pem" /></label>
+              <div class="secret-row">
+                <span class="pill set">設定済み</span>
+                <span class="mask">BUILDER_BOT_GITHUB_PRIVATE_KEY_PATH = ••••••••</span>
+                <span class="grow"></span><button class="ghost">置き換える</button>
+              </div>
+            </div>
+
+            <!-- TAB: LLM・CLIエージェント（メンバー上書き） -->
+            <div class="tabpane" data-tab="ai">
+              <div class="info-box">未指定なら<strong>チーム既定</strong>（LLM: gpt-5-mini / CLI: Claude Code）に従います。このメンバーだけ別の設定を使う場合に上書きします。保存先: team/members/builder-bot/intelligences/</div>
+              <div class="two">
+                <label>LLM モデル
+                  <div class="seg"><button class="on">既定に従う</button><button>個別に指定</button></div>
+                </label>
+                <label>CLI エージェント（個別に指定中）
+                  <div class="seg"><button>既定に従う</button><button class="on">個別に指定</button></div>
+                </label>
+              </div>
+              <label>このメンバーの CLI エージェント
+                <select><option>Claude Code (claude) ・検出済み</option><option selected>OpenAI Codex CLI (codex) ・検出済み</option><option>Gemini CLI (gemini) ・未検出</option><option>GitHub Copilot CLI (copilot) ・未検出</option></select>
+              </label>
+              <details class="adv">
+                <summary>機能ごとの割り当てを上書き（brain_mapping）</summary>
+                <div class="adv-body">
+                  <div class="info-box">既定では機能割り当てもチーム設定を継承します。このメンバーだけ「ファイル編集は Codex」等にしたい場合に上書きします。</div>
+                  <div class="table-wrap"><table class="cfgtable">
+                    <tr><th>機能</th><th>割り当て</th></tr>
+                    <tr><td>file_editor<span class="field-help">ファイル編集</span></td><td><span class="badge-engine cli">CLI</span> OpenAI Codex CLI（上書き）</td></tr>
+                    <tr><td>その他</td><td>チーム既定を継承</td></tr>
+                  </table></div>
+                </div>
+              </details>
+            </div>
+
+            <!-- TAB: チャット (Slack) -->
+            <div class="tabpane" data-tab="chat">
+              <div class="panel-head">
+                <div class="subhead">チャット連携（Slack）<span class="chip">任意</span></div>
+                <span class="switch"><span class="track"><i></i></span>このメンバーで有効にする</span>
+              </div>
+              <div class="info-box">Slack はメンバー単位の設定です。チャットワークフローを使う場合のみ。`{PERSON_ID}_SLACK_*` と message_channels に保存されます。</div>
+              <div class="keylist">
+                <div class="secret-row"><span class="pill set">設定済み</span><span class="mask">BUILDER_BOT_SLACK_BOT_TOKEN (xoxb-…)</span><span class="grow"></span><button class="ghost">置き換える</button></div>
+                <div class="secret-row"><span class="pill set">設定済み</span><span class="mask">BUILDER_BOT_SLACK_APP_TOKEN (xapp-…)</span><span class="grow"></span><button class="ghost">置き換える</button></div>
+              </div>
+              <label>監視チャンネル (message_channels)</label>
+              <div class="member-card" style="padding:11px 14px">
+                <span class="mask" style="font-family:inherit">#dev-chat</span><div class="grow"></div>
+                <span class="switch"><span class="track"><i></i></span>chat有効</span><button class="ghost">削除</button>
+              </div>
+              <button class="ghost" style="align-self:flex-start">＋ チャンネルを追加</button>
+            </div>
+
+            <!-- always-visible footer -->
+            <div class="divider"></div>
+            <label class="switch" style="flex-direction:row;align-items:center"><span class="track"><i></i></span> シークレットを .env に追記する</label>
+            <div class="form-actions">
+              <button class="btn-primary">変更を保存</button>
+              <button class="ghost">キャンセル</button>
+              <span class="note">team/members/builder-bot/ 配下に書き込み</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  // top-level state switcher
+  document.querySelectorAll('.switcher [data-go]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.switcher [data-go]').forEach(function (b) { b.classList.remove('active'); });
+      document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('active'); });
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.go).classList.add('active');
+      window.scrollTo(0, 0);
+    });
+  });
+
+  // member form tabs (scoped per drawer)
+  document.querySelectorAll('.tabs').forEach(function (tabs) {
+    var container = tabs.closest('.drawer');
+    var btns = tabs.querySelectorAll('.tab');
+    btns.forEach(function (b) {
+      b.addEventListener('click', function () {
+        btns.forEach(function (x) { x.classList.remove('on'); });
+        b.classList.add('on');
+        container.querySelectorAll('.tabpane').forEach(function (p) { p.classList.remove('on'); });
+        var pane = container.querySelector('.tabpane[data-tab="' + b.dataset.tab + '"]');
+        if (pane) pane.classList.add('on');
+      });
+    });
+  });
+
+  // section list -> form pane switching (scoped per screen)
+  document.querySelectorAll('.screen').forEach(function (screen) {
+    var secs = screen.querySelectorAll('.sec[data-pane]');
+    secs.forEach(function (sec) {
+      sec.addEventListener('click', function () {
+        secs.forEach(function (s) { s.classList.remove('active'); });
+        sec.classList.add('active');
+        screen.querySelectorAll('.form-pane').forEach(function (p) { p.classList.remove('shown'); });
+        var pane = screen.querySelector('.form-pane[data-pane="' + sec.dataset.pane + '"]');
+        if (pane) pane.classList.add('shown');
+        window.scrollTo(0, 0);
+      });
+    });
+  });
+</script>
+</body>
+</html>

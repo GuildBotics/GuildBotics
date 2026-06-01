@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import threading
+import time
 
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
@@ -55,18 +56,24 @@ class TaskScheduler:
         for thread in threads:
             thread.join()
 
-    def shutdown(self, graceful: bool = True) -> None:
+    def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
         """Signal all worker threads to stop and wait for them.
 
         Args:
             graceful: When True, allow current iteration to complete before exit.
+            timeout: Maximum total seconds to wait for worker threads. None waits forever.
         """
         # Currently, graceful and forceful behave the same at thread level.
         # The stop event is checked between operations and during sleeps.
         self._stop_event.set()
+        deadline = time.monotonic() + timeout if timeout is not None else None
         for t in list(self._threads):
             if t.is_alive():
-                t.join()
+                if deadline is None:
+                    t.join()
+                else:
+                    remaining = max(0.0, deadline - time.monotonic())
+                    t.join(timeout=remaining)
 
     def _process_tasks_list(
         self, person: Person, scheduled_tasks: list[ScheduledCommand]

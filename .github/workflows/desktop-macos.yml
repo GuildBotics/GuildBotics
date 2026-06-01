@@ -1,0 +1,62 @@
+name: Build Desktop macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    env:
+      UV_LOCKED: "1"
+      GUILDBOTICS_DESKTOP_TARGET: aarch64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Sync Python dependencies
+        run: uv sync --extra test --extra dev
+
+      - name: Build Python app API sidecar
+        run: |
+          uv run --with pyinstaller python -m PyInstaller \
+            --name guildbotics-app-api \
+            --collect-data guildbotics \
+            --onefile guildbotics/app_api/__main__.py
+          mkdir -p desktop/src-tauri/binaries
+          cp dist/guildbotics-app-api desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm install
+
+      - name: Build desktop app
+        working-directory: desktop
+        run: npm run tauri build -- --target aarch64-apple-darwin
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: guildbotics-desktop-macos-arm64
+          path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg

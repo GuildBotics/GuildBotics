@@ -1,0 +1,3710 @@
+import {
+  ActionIcon,
+  Accordion,
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Card,
+  Divider,
+  Group,
+  Modal,
+  MultiSelect,
+  PasswordInput,
+  Progress,
+  Select,
+  SegmentedControl,
+  Stack,
+  Switch,
+  TagsInput,
+  Tabs,
+  Text,
+  TextInput,
+  Textarea,
+  ThemeIcon,
+  Title,
+  Tooltip,
+} from "@mantine/core";
+import { useForm, type UseFormReturnType } from "@mantine/form";
+import { zodResolver } from "mantine-form-zod-resolver";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  Check,
+  CheckCircle2,
+  CircleAlert,
+  Eraser,
+  FileKey,
+  Folder,
+  FolderOpen,
+  Save,
+  TriangleAlert,
+  WandSparkles,
+  XCircle,
+} from "lucide-react";
+import type { TFunction } from "i18next";
+import type { ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { z } from "zod";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
+
+import {
+  type DiagnosticCheck,
+  type CliAgentDetection,
+  type ConfigStatus,
+  type BrainAssignment,
+  type CliAgentDefinition,
+  type IntelligenceConfig,
+  type MemberSetupRequest,
+  type MemberConfig,
+  type MemberConfigUpdateRequest,
+  type RoleOption,
+  type ProjectConfig,
+  type ProjectConfigUpdateRequest,
+  type ProjectSetupRequest,
+  ApiRequestError,
+  addMemberConfig,
+  deleteMemberConfig,
+  getCliAgentDetections,
+  getConfigStatus,
+  getIntelligenceConfig,
+  getMemberConfig,
+  getProjectConfig,
+  getRoleOptions,
+  getTeam,
+  initConfig,
+  resolveMemberIdentity,
+  runScenarioDiagnostics,
+  updateMemberConfig,
+  updateIntelligenceConfig,
+  updateProjectConfig,
+} from "../api/client";
+import { restartBackend } from "../api/backend";
+import { normalizeLanguage } from "../i18n";
+
+const projectSchema = createProjectSchema((key: string) => key);
+
+function createProjectSchema(t: TFunction | ((key: string) => string)) {
+  return z
+  .object({
+    workspaceDir: z.string().min(1, t("setup.validation.workspaceRequired")),
+    configLocation: z.enum(["home", "workspace"]),
+    envFileOption: z.enum(["skip", "append", "overwrite"]),
+    language: z.enum(["en", "ja"]),
+    description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
+    llmApiType: z.enum(["openai", "gemini", "anthropic"]),
+    cliAgent: z.enum(["codex", "gemini", "claude", "copilot"]),
+    googleApiKey: z.string(),
+    openaiApiKey: z.string(),
+    anthropicApiKey: z.string(),
+    githubDecision: z.enum(["", "disabled", "enabled"]),
+    githubEnabled: z.boolean(),
+    githubProjectUrl: z.string(),
+    githubRepositoryUrl: z.string(),
+    repoAccess: z.enum(["https", "ssh"]),
+  })
+  .superRefine((values, ctx) => {
+    if (!values.githubDecision) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["githubDecision"],
+        message: t("setup.validation.githubDecisionRequired"),
+      });
+      return;
+    }
+    if (values.githubDecision !== "enabled") {
+      return;
+    }
+    const githubErrors = getGitHubFieldErrors(values, t);
+    if (githubErrors.githubProjectUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["githubProjectUrl"],
+        message: githubErrors.githubProjectUrl,
+      });
+    }
+    if (githubErrors.githubRepositoryUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["githubRepositoryUrl"],
+        message: githubErrors.githubRepositoryUrl,
+      });
+    }
+  });
+}
+
+type ProjectFormValues = z.infer<typeof projectSchema>;
+type ProjectForm = UseFormReturnType<ProjectFormValues>;
+type LlmProviderAvailability = Record<ProjectFormValues["llmApiType"], boolean>;
+const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "github", "members"] as const;
+const CORE_SETUP_SECTIONS_CONFIGURED = [
+  "project",
+  "intelligence",
+  "github",
+  "members",
+] as const;
+type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
+const LLM_PROVIDER_OPTIONS = [
+  { value: "openai", label: "OpenAI", family: "GPT" },
+  { value: "gemini", label: "Google Gemini", family: "Gemini" },
+  { value: "anthropic", label: "Anthropic Claude", family: "Claude" },
+] as const;
+
+const CLI_AGENT_OPTIONS = [
+  { value: "claude", label: "Claude Code" },
+  { value: "codex", label: "OpenAI Codex CLI" },
+  { value: "gemini", label: "Gemini CLI" },
+  { value: "copilot", label: "GitHub Copilot CLI" },
+] as const;
+const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "machine"] as const;
+type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
+const DEFAULT_MEMBER_ROLE = "professional";
+const MASKED_SECRET_PLACEHOLDER = "••••••••••••";
+
+const MEMBER_TYPE_OPTIONS = [
+  "",
+  "human",
+  "machine_user",
+  "github_apps",
+  "proxy_agent",
+] as const;
+type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
+type GitHubMemberType = Exclude<MemberType, "">;
+
+export function SetupPage() {
+  const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
+  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  const team = useQuery({
+    queryKey: ["team"],
+    queryFn: getTeam,
+    retry: false,
+  });
+  const cliDetections = useQuery({
+    queryKey: ["cli-agent-detections"],
+    queryFn: getCliAgentDetections,
+    retry: false,
+  });
+  const hasExistingProject = Boolean(
+    config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
+  );
+  const projectConfig = useQuery({
+    queryKey: ["project-config"],
+    queryFn: getProjectConfig,
+    enabled: hasExistingProject,
+    retry: false,
+  });
+  const saveMutation = useMutation({
+    mutationFn: async (values: ProjectFormValues) => {
+      if (hasExistingProject) {
+        if (!projectConfig.data) {
+          throw new Error("project config has not been loaded yet");
+        }
+        return updateProjectConfig(
+          toProjectUpdateRequest(values, config.data, projectConfig.data),
+        );
+      }
+      return initConfig(
+        toProjectSetupRequest(values, config.data, {
+          envFileOption: getInitialEnvFileOption(config.data),
+        }),
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["config"] });
+      queryClient.invalidateQueries({ queryKey: ["team"] });
+      queryClient.invalidateQueries({ queryKey: ["project-config"] });
+    },
+  });
+
+  const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
+  const projectLanguage = normalizeLanguage(team.data?.project.language_code);
+  const activeMemberCount = (team.data?.members ?? []).filter((member) => member.is_active).length;
+  const detectedCliAgentNames = useMemo(
+    () =>
+      new Set(
+        (cliDetections.data?.agents ?? [])
+          .filter((agent) => agent.detected)
+          .map((agent) => agent.name),
+      ),
+    [cliDetections.data?.agents],
+  );
+  const validationSchema = useMemo(() => createProjectSchema(t), [t]);
+  const initialValues = useMemo(
+    () =>
+      initialProjectValues(
+        config.data,
+        appLanguage,
+        projectLanguage,
+        hasExistingProject ? projectConfig.data : undefined,
+      ),
+    [appLanguage, config.data, hasExistingProject, projectConfig.data, projectLanguage],
+  );
+  const form = useForm<ProjectFormValues>({
+    initialValues,
+    validate: zodResolver(validationSchema),
+  });
+  const selectedCliAgentDetected = cliDetections.isLoading
+    ? true
+    : detectedCliAgentNames.has(form.values.cliAgent);
+  const [section, setSection] = useState("project");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle",
+  );
+  const [setupCreated, setSetupCreated] = useState(false);
+  const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
+  const canAutosave = hasExistingProject && projectConfig.isSuccess;
+  const llmProviderAvailability = useMemo(
+    () => ({
+      openai: Boolean(form.values.openaiApiKey.trim() || projectConfig.data?.has_openai_api_key),
+      gemini: Boolean(form.values.googleApiKey.trim() || projectConfig.data?.has_google_api_key),
+      anthropic: Boolean(
+        form.values.anthropicApiKey.trim() || projectConfig.data?.has_anthropic_api_key,
+      ),
+    }),
+    [
+      form.values.anthropicApiKey,
+      form.values.googleApiKey,
+      form.values.openaiApiKey,
+      projectConfig.data?.has_anthropic_api_key,
+      projectConfig.data?.has_google_api_key,
+      projectConfig.data?.has_openai_api_key,
+    ],
+  );
+  const effectiveActiveMemberCount = hasExistingProject
+    ? activeMemberCount
+    : Math.max(activeMemberCount, draftActiveMemberCount);
+  const coreSections: readonly CoreSection[] = hasExistingProject
+    ? CORE_SETUP_SECTIONS_CONFIGURED
+    : CORE_SETUP_SECTIONS_INITIAL;
+  const initialProgress = useMemo(
+    () =>
+      getInitialCoreStatus(
+        form.values,
+        effectiveActiveMemberCount,
+        selectedCliAgentDetected,
+      ),
+    [effectiveActiveMemberCount, form.values, selectedCliAgentDetected],
+  );
+  const currentCoreSectionIndex = coreSections.indexOf(section as CoreSection);
+  const currentCoreSection =
+    currentCoreSectionIndex >= 0 ? coreSections[currentCoreSectionIndex] : null;
+  const canGoBack = currentCoreSectionIndex > 0;
+  const canGoNext =
+    currentCoreSectionIndex >= 0 && currentCoreSectionIndex < coreSections.length - 1;
+  const goBackSection = () => {
+    if (!canGoBack) {
+      return;
+    }
+    setSection(coreSections[currentCoreSectionIndex - 1]);
+  };
+  const goNextSection = () => {
+    if (!canGoNext) {
+      return;
+    }
+    setSection(coreSections[currentCoreSectionIndex + 1]);
+  };
+
+  useEffect(() => {
+    form.setValues(initialValues);
+    form.resetDirty(initialValues);
+  }, [initialValues]);
+
+  useEffect(() => {
+    if (coreSections.includes(section as CoreSection)) {
+      return;
+    }
+    setSection(coreSections[0]);
+  }, [coreSections, section]);
+
+  useAutosave(form, config.data, validationSchema, saveMutation.mutateAsync, setSaveState, canAutosave);
+
+  const setupStatus = useSetupStatus(config.data, effectiveActiveMemberCount, form.values);
+  const visibleStatus = hasExistingProject ? setupStatus : initialProgress;
+  const currentSectionReady = currentCoreSection
+    ? isCoreSectionReady(currentCoreSection, visibleStatus)
+    : true;
+  const saveNow = async () => {
+    if (form.validate().hasErrors) {
+      setSaveState("error");
+      return;
+    }
+    const creatingInitialSetup = !hasExistingProject;
+    setSaveState("saving");
+    try {
+      await saveMutation.mutateAsync(form.values);
+      localStorage.setItem("guildbotics.workspace", form.values.workspaceDir);
+      if (creatingInitialSetup) {
+        await restartBackend(form.values.workspaceDir);
+        await Promise.all([
+          queryClient.refetchQueries({ queryKey: ["config"] }),
+          queryClient.refetchQueries({ queryKey: ["team"] }),
+        ]);
+      }
+      form.resetDirty(form.values);
+      setSaveState("saved");
+      setSetupCreated(creatingInitialSetup);
+    } catch {
+      setSaveState("error");
+    }
+  };
+  const changeWorkspace = (value: string) => {
+    form.setFieldValue("workspaceDir", value);
+    if (value.trim()) {
+      localStorage.setItem("guildbotics.workspace", value);
+    }
+  };
+
+  return (
+    <Stack gap="lg">
+      <Group justify="space-between" align="flex-start">
+        <Box>
+          <Text className="eyebrow">{t("setup.eyebrow")}</Text>
+          <Title order={2}>
+            {hasExistingProject ? t("setup.configuredTitle") : t("setup.title")}
+          </Title>
+          <Text size="sm" c="dimmed" mt={4}>
+            {hasExistingProject ? t("setup.saveMode.auto") : t("setup.saveMode.manual")}
+          </Text>
+        </Box>
+      </Group>
+
+      <SetupStatusBanner
+        status={visibleStatus}
+        hasExistingProject={hasExistingProject}
+        initialProgress={initialProgress}
+        onCreateInitial={saveNow}
+        creating={saveMutation.isPending}
+        canGoBack={canGoBack}
+        canGoNext={canGoNext}
+        currentSectionReady={currentSectionReady}
+        onGoBack={goBackSection}
+        onGoNext={goNextSection}
+      />
+
+      {setupCreated ? (
+        <Alert color="green" title={t("setup.initialCreated.title")}>
+          {t("setup.initialCreated.body")}
+        </Alert>
+      ) : null}
+
+      <div className="setup-layout">
+        <SetupSectionNav
+          active={section}
+          onChange={setSection}
+          status={visibleStatus}
+        />
+        <Stack gap="md">
+          {section === "project" ? (
+            <ProjectSection
+              form={form}
+              saveState={saveState}
+              autosaveEnabled={canAutosave}
+              onWorkspaceChange={changeWorkspace}
+            />
+          ) : null}
+          {section === "intelligence" ? (
+            <IntelligenceSection
+              form={form}
+              saveState={saveState}
+              autosaveEnabled={canAutosave}
+              detections={cliDetections.data?.agents ?? []}
+              detectionLoading={cliDetections.isLoading}
+              projectConfig={projectConfig.data}
+            />
+          ) : null}
+          {section === "github" ? <GitHubIntegrationSection form={form} /> : null}
+          {section === "members" ? (
+            <MembersSection
+              activeMemberCount={effectiveActiveMemberCount}
+              members={team.data?.members ?? []}
+              config={config.data}
+              workspaceDir={form.values.workspaceDir}
+              configLocation={form.values.configLocation}
+              cliDetections={cliDetections.data?.agents ?? []}
+              llmProviderAvailability={llmProviderAvailability}
+              onMemberActiveDelta={(delta) => {
+                if (!hasExistingProject && delta !== 0) {
+                  setDraftActiveMemberCount((count) => Math.max(0, count + delta));
+                }
+                queryClient.invalidateQueries({ queryKey: ["team"] });
+              }}
+            />
+          ) : null}
+        </Stack>
+      </div>
+
+      {saveMutation.error ? (
+        <Alert color="red" title={t("setup.saveErrorTitle")}>
+          {saveMutation.error.message}
+        </Alert>
+      ) : null}
+    </Stack>
+  );
+}
+
+function SetupStatusBanner({
+  status,
+  hasExistingProject,
+  initialProgress,
+  onCreateInitial,
+  creating,
+  canGoBack,
+  canGoNext,
+  currentSectionReady,
+  onGoBack,
+  onGoNext,
+}: {
+  status: SetupStatus;
+  hasExistingProject: boolean;
+  initialProgress: InitialProgress;
+  onCreateInitial: () => Promise<void>;
+  creating: boolean;
+  canGoBack: boolean;
+  canGoNext: boolean;
+  currentSectionReady: boolean;
+  onGoBack: () => void;
+  onGoNext: () => void;
+}) {
+  const { t } = useTranslation();
+  if (!hasExistingProject) {
+    return (
+      <Card withBorder radius="md" p="md" className="guide-banner">
+        <Group justify="space-between" wrap="nowrap">
+          <Box>
+            <Text fw={700}>{t("setup.status.inputProgressTitle", initialProgress)}</Text>
+            <Text size="sm" c="dimmed">
+              {t("setup.status.inputProgressMessage")}
+            </Text>
+          </Box>
+          <Progress value={initialProgress.percent} w={220} />
+        </Group>
+        <Group justify="flex-end" mt="sm">
+          {initialProgress.ready ? (
+            <Button leftSection={<Save size={16} />} loading={creating} onClick={() => void onCreateInitial()}>
+              {t("setup.saveInitial")}
+            </Button>
+          ) : (
+            <>
+              <Button variant="default" disabled={!canGoBack} onClick={onGoBack}>
+                {t("setup.status.back")}
+              </Button>
+              <Button variant="default" disabled={!canGoNext || !currentSectionReady} onClick={onGoNext}>
+                {t("setup.status.next")}
+              </Button>
+            </>
+          )}
+        </Group>
+      </Card>
+    );
+  }
+
+  if (status.ready) {
+    return (
+      <Alert color="green" icon={<Check size={18} />} title={t("setup.status.readyTitle")}>
+        {t("setup.status.readyMessage")}
+      </Alert>
+    );
+  }
+  return (
+    <Card withBorder radius="md" p="md" className="guide-banner">
+      <Group justify="space-between" wrap="nowrap">
+        <Box>
+          <Text fw={700}>{t("setup.status.progressTitle", status)}</Text>
+          <Text size="sm" c="dimmed">
+            {t("setup.status.progressMessage")}
+          </Text>
+        </Box>
+        <Progress value={(status.done / status.total) * 100} w={220} />
+      </Group>
+    </Card>
+  );
+}
+
+function SetupSectionNav({
+  active,
+  onChange,
+  status,
+}: {
+  active: string;
+  onChange: (value: string) => void;
+  status: SetupStatus;
+}) {
+  const { t } = useTranslation();
+  const items: Array<readonly [CoreSection, string, boolean]> = [
+    ["project", t("setup.nav.project"), status.projectReady],
+    ["intelligence", t("setup.nav.intelligence"), status.intelligenceReady],
+    ["github", t("setup.nav.github"), status.githubReady],
+    ["members", t("setup.nav.members"), status.membersReady],
+  ];
+  return (
+    <Card withBorder radius="md" p="xs" className="setup-nav">
+      {items.map(([value, label, ok]) => (
+        <button
+          className={`setup-nav-item ${active === value ? "active" : ""}`}
+          key={value}
+          type="button"
+          onClick={() => onChange(value)}
+        >
+          <StatusIcon ok={ok} />
+          <span>{label}</span>
+        </button>
+      ))}
+    </Card>
+  );
+}
+
+function StatusIcon({ ok }: { ok: boolean }) {
+  return ok ? (
+    <ThemeIcon color="green" radius="xl" size={22}>
+      <Check size={14} />
+    </ThemeIcon>
+  ) : (
+    <ThemeIcon color="yellow" radius="xl" size={22}>
+      <CircleAlert size={14} />
+    </ThemeIcon>
+  );
+}
+
+function ProjectSection({
+  form,
+  saveState,
+  autosaveEnabled,
+  onWorkspaceChange,
+}: {
+  form: ProjectForm;
+  saveState: "idle" | "saving" | "saved" | "error";
+  autosaveEnabled: boolean;
+  onWorkspaceChange: (value: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Card withBorder radius="md" p="lg">
+      <PanelHeader
+        title={t("setup.project.title")}
+        subtitle={t("setup.project.subtitle")}
+        saveState={autosaveEnabled ? saveState : undefined}
+      />
+      <Stack mt="md">
+        <LabeledSegmentedControl
+          label={t("setup.project.agentLanguage")}
+          description={t("setup.project.agentLanguageDescription")}
+          data={[
+            { label: t("app.language.english"), value: "en" },
+            { label: t("app.language.japanese"), value: "ja" },
+          ]}
+          value={form.values.language}
+          onChange={(value) => form.setFieldValue("language", value as ProjectFormValues["language"])}
+        />
+        <FolderPicker
+          value={form.values.workspaceDir}
+          onChange={onWorkspaceChange}
+        />
+        <LabeledSegmentedControl
+          label={t("setup.project.configLocation")}
+          data={[
+            { label: t("setup.project.homeConfig"), value: "home" },
+            { label: t("setup.project.workspaceConfig"), value: "workspace" },
+          ]}
+          value={form.values.configLocation}
+          onChange={(value) =>
+            form.setFieldValue("configLocation", value as ProjectFormValues["configLocation"])
+          }
+        />
+        <Textarea
+          label={t("setup.project.description")}
+          autosize
+          minRows={2}
+          {...form.getInputProps("description")}
+        />
+      </Stack>
+    </Card>
+  );
+}
+
+function IntelligenceSection({
+  form,
+  saveState,
+  autosaveEnabled,
+  detections,
+  detectionLoading,
+  projectConfig,
+}: {
+  form: ProjectForm;
+  saveState: "idle" | "saving" | "saved" | "error";
+  autosaveEnabled: boolean;
+  detections: CliAgentDetection[];
+  detectionLoading: boolean;
+  projectConfig: ProjectConfig | undefined;
+}) {
+  const { t } = useTranslation();
+  const selectedProviderKeyField = getProviderKeyField(form.values.llmApiType);
+  const selectedProviderKeyLabel = getProviderKeyLabel(form.values.llmApiType);
+  const selectedProviderKey = form.values[selectedProviderKeyField];
+  const selectedProviderKeyConfigured =
+    selectedProviderKey.trim().length > 0 ||
+    isProjectProviderKeyConfigured(projectConfig, form.values.llmApiType);
+  const detectedCliAgents = useMemo(
+    () => new Set(detections.filter((agent) => agent.detected).map((agent) => agent.name)),
+    [detections],
+  );
+  useEffect(() => {
+    if (detectionLoading) {
+      return;
+    }
+    if (detectedCliAgents.size === 0) {
+      return;
+    }
+    if (detectedCliAgents.has(form.values.cliAgent)) {
+      return;
+    }
+    const fallback = CLI_AGENT_OPTIONS.find((option) => detectedCliAgents.has(option.value));
+    if (fallback) {
+      form.setFieldValue("cliAgent", fallback.value);
+    }
+  }, [detectionLoading, detectedCliAgents, form]);
+  return (
+    <Card withBorder radius="md" p="lg">
+      <PanelHeader
+        title={t("setup.intelligence.title")}
+        subtitle={t("setup.intelligence.subtitle")}
+        saveState={autosaveEnabled ? saveState : undefined}
+        badge={t("setup.intelligence.teamDefault")}
+      />
+      <Stack mt="md">
+        <Text size="sm" fw={700}>
+          {t("setup.intelligence.defaultProvider")}
+        </Text>
+        <Text size="sm" c="dimmed">
+          {t("setup.intelligence.providerDescription")}
+        </Text>
+        <div className="option-card-grid">
+          {LLM_PROVIDER_OPTIONS.map((option) => {
+            const active = form.values.llmApiType === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={`option-card ${active ? "active" : ""}`}
+                onClick={() => form.setFieldValue("llmApiType", option.value)}
+              >
+                <span className="title">{option.label}</span>
+                <span className="caption">{option.family}</span>
+              </button>
+            );
+          })}
+        </div>
+        <PasswordInput
+          label={selectedProviderKeyLabel}
+          description={
+            selectedProviderKeyConfigured
+              ? t("setup.intelligence.keyConfiguredDescription")
+              : undefined
+          }
+          placeholder={
+            selectedProviderKeyConfigured
+              ? MASKED_SECRET_PLACEHOLDER
+              : t("setup.intelligence.keyPlaceholder")
+          }
+          value={selectedProviderKey}
+          onChange={(event) => form.setFieldValue(selectedProviderKeyField, event.currentTarget.value)}
+        />
+        <Divider />
+        <Text size="sm" fw={700}>
+          {t("setup.intelligence.defaultCliAgent")}
+        </Text>
+        <div className="option-card-grid">
+          {CLI_AGENT_OPTIONS.map((option) => {
+            const detection = detections.find((entry) => entry.name === option.value);
+            const detected = detectionLoading
+              ? form.values.cliAgent === option.value
+              : Boolean(detection?.detected);
+            const active = form.values.cliAgent === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={`option-card ${active ? "active" : ""}`}
+                disabled={!detected}
+                onClick={() => form.setFieldValue("cliAgent", option.value)}
+              >
+                <span className="title">{option.label}</span>
+                <span className="caption">{option.value}</span>
+                <span className={`detection ${detected ? "ok" : "ng"}`}>
+                  <i />
+                  {detected ? t("setup.intelligence.detected") : t("setup.intelligence.notDetected")}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <Text size="sm" c="dimmed">
+          {t("setup.intelligence.cliHint")}
+        </Text>
+        {autosaveEnabled ? (
+          <Accordion variant="contained">
+            <Accordion.Item value="advanced-intelligence">
+              <Accordion.Control>{t("setup.intelligence.advanced")}</Accordion.Control>
+              <Accordion.Panel>
+                <IntelligenceEditor enabled={autosaveEnabled} detections={detections} />
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
+        ) : null}
+      </Stack>
+    </Card>
+  );
+}
+
+function IntelligenceEditor({
+  personId,
+  savePersonId,
+  enabled,
+  detections,
+  llmProviderAvailability,
+  saveMode = "auto",
+  onRegisterSave,
+}: {
+  personId?: string;
+  savePersonId?: string;
+  enabled: boolean;
+  detections: CliAgentDetection[];
+  llmProviderAvailability?: LlmProviderAvailability;
+  saveMode?: "auto" | "external";
+  onRegisterSave?: (save: (() => Promise<void>) | null) => void;
+}) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: ["intelligence-config", personId ?? "team"],
+    queryFn: () => getIntelligenceConfig(personId),
+    enabled,
+  });
+  const [draft, setDraft] = useState<IntelligenceConfig | null>(null);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [envErrors, setEnvErrors] = useState<Record<string, string>>({});
+  const previous = useRef("");
+  const mutation = useMutation({
+    mutationFn: updateIntelligenceConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["intelligence-config", personId ?? "team"] });
+      queryClient.invalidateQueries({ queryKey: ["project-config"] });
+    },
+  });
+
+  useEffect(() => {
+    if (!query.data) {
+      return;
+    }
+    setDraft(query.data);
+    previous.current = JSON.stringify(toIntelligenceUpdatePayload(query.data, savePersonId));
+    setSaveState("idle");
+  }, [query.data, savePersonId]);
+
+  const payload = draft ? toIntelligenceUpdatePayload(draft, savePersonId) : null;
+  const serializedPayload = payload ? JSON.stringify(payload) : "";
+  const dirty = Boolean(serializedPayload && previous.current !== serializedPayload);
+  const canSave = Boolean(payload && dirty && Object.keys(envErrors).length === 0);
+
+  const saveDraft = useCallback(async () => {
+    if (!payload || !serializedPayload || Object.keys(envErrors).length > 0) {
+      return;
+    }
+    setSaveState("saving");
+    try {
+      previous.current = serializedPayload;
+      await mutation.mutateAsync(payload);
+      setSaveState("saved");
+    } catch (error) {
+      previous.current = "";
+      setSaveState("error");
+      throw error;
+    }
+  }, [envErrors, mutation, payload, serializedPayload]);
+
+  useEffect(() => {
+    if (!enabled || saveMode !== "auto" || !canSave) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void saveDraft().catch(() => undefined);
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [canSave, enabled, saveDraft, saveMode]);
+
+  useEffect(() => {
+    if (saveMode !== "external" || !enabled || !onRegisterSave) {
+      return;
+    }
+    onRegisterSave(saveDraft);
+    return () => onRegisterSave(null);
+  }, [enabled, onRegisterSave, saveDraft, saveMode]);
+
+  if (!enabled) {
+    return (
+      <Text size="sm" c="dimmed">
+        {t("setup.intelligence.createBeforeAdvanced")}
+      </Text>
+    );
+  }
+  if (query.isLoading || !draft) {
+    return <Text size="sm" c="dimmed">{t("setup.intelligence.loadingAdvanced")}</Text>;
+  }
+  if (query.error) {
+    return (
+      <Alert color="red" title={t("setup.intelligence.loadAdvancedError")}>
+        {query.error.message}
+      </Alert>
+    );
+  }
+
+  const modelSlots = Object.keys(draft.model_mapping);
+  const cliSlots = Object.keys(draft.cli_agent_mapping);
+  const modelOptions = draft.models.map((model) => ({
+    value: model.path,
+    label: `${model.provider || "model"} / ${model.model_id || model.path}`,
+  }));
+  const cliFileOptions = draft.cli_agents.map((agent) => ({
+    value: agent.path,
+    label: agent.name,
+  }));
+  const cliSlotOptions = cliSlots.map((slot) => ({ value: slot, label: slot }));
+  const modelSlotOptions = modelSlots.map((slot) => ({ value: slot, label: slot }));
+  const detectedByPath = Object.fromEntries(
+    detections.map((entry) => [`${entry.name}-cli.yml`, entry]),
+  ) as Record<string, CliAgentDetection>;
+
+  const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
+    setDraft((current) => (current ? recipe(current) : current));
+  };
+
+  if (personId) {
+    const defaultModel = draft.model_mapping.default ?? "";
+    const defaultCliAgent = draft.cli_agent_mapping.default ?? "";
+    return (
+      <Stack gap="md">
+        <Group justify="space-between">
+          <Text size="sm" c="dimmed">
+            {t("setup.intelligence.memberOverrideDescription")}
+          </Text>
+          {saveMode === "auto" ? <AutosaveIndicator state={saveState} /> : null}
+        </Group>
+        <Switch
+          label={t("setup.intelligence.inheritTeamDefaults")}
+          checked={draft.inherited}
+          onChange={(event) =>
+            updateDraft((current) => ({
+              ...current,
+              inherited: event.currentTarget.checked,
+            }))
+          }
+        />
+        {draft.inherited ? (
+          <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
+            {t("setup.intelligence.inheritingBody")}
+          </InfoCallout>
+        ) : (
+          <Stack gap="md">
+            <Stack gap="xs">
+              <Text size="sm" fw={700}>
+                {t("setup.intelligence.memberDefaultProvider")}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {t("setup.intelligence.memberDefaultProviderDescription")}
+              </Text>
+              <div className="option-card-grid">
+                {LLM_PROVIDER_OPTIONS.map((option) => {
+                  const modelPath = draft.model_mapping[option.value];
+                  const available = Boolean(modelPath && llmProviderAvailability?.[option.value]);
+                  const active = defaultModel === modelPath;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`option-card ${active ? "active" : ""}`}
+                      disabled={!available}
+                      onClick={() =>
+                        updateDraft((current) => ({
+                          ...current,
+                          model_mapping: {
+                            ...current.model_mapping,
+                            default: modelPath ?? defaultModel,
+                          },
+                        }))
+                      }
+                    >
+                      <span className="title">{option.label}</span>
+                      <span className="caption">{option.family}</span>
+                      <span className={`detection ${available ? "ok" : "ng"}`}>
+                        <i />
+                        {available
+                          ? t("setup.intelligence.apiKeyConfigured")
+                          : t("setup.intelligence.apiKeyMissing")}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Stack>
+
+            <Stack gap="xs">
+              <Text size="sm" fw={700}>
+                {t("setup.intelligence.memberDefaultCliAgent")}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {t("setup.intelligence.memberDefaultCliAgentDescription")}
+              </Text>
+              <div className="option-card-grid">
+                {CLI_AGENT_OPTIONS.map((option) => {
+                  const agentPath = draft.cli_agent_mapping[option.value];
+                  const detected = Boolean(detections.find((entry) => entry.name === option.value)?.detected);
+                  const available = Boolean(agentPath && detected);
+                  const active = defaultCliAgent === agentPath;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`option-card ${active ? "active" : ""}`}
+                      disabled={!available}
+                      onClick={() =>
+                        updateDraft((current) => ({
+                          ...current,
+                          cli_agent_mapping: {
+                            ...current.cli_agent_mapping,
+                            default: agentPath ?? defaultCliAgent,
+                          },
+                        }))
+                      }
+                    >
+                      <span className="title">{option.label}</span>
+                      <span className="caption">{option.value}</span>
+                      <span className={`detection ${available ? "ok" : "ng"}`}>
+                        <i />
+                        {available
+                          ? t("setup.intelligence.detected")
+                          : t("setup.intelligence.notDetected")}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Stack>
+          </Stack>
+        )}
+        {mutation.error ? (
+          <Alert color="red" title={t("setup.intelligence.saveAdvancedError")}>
+            {mutation.error.message}
+          </Alert>
+        ) : null}
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack gap="md">
+      <Group justify="space-between">
+        <Text size="sm" c="dimmed">
+          {t("setup.intelligence.teamAdvancedDescription")}
+        </Text>
+        {saveMode === "auto" ? <AutosaveIndicator state={saveState} /> : null}
+      </Group>
+      {draft.inherited ? (
+        <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
+          {t("setup.intelligence.inheritingBody")}
+        </InfoCallout>
+      ) : (
+        <>
+          <Card withBorder radius="sm" p="md">
+            <Stack gap="sm">
+              <Text fw={700} size="sm">{t("setup.intelligence.modelMapping")}</Text>
+              {modelSlots.map((slot) => (
+                <Group key={slot} align="flex-end">
+                  <TextInput value={slot} label={t("setup.intelligence.slot")} readOnly flex={1} />
+                  <Select
+                    label={t("setup.intelligence.model")}
+                    data={modelOptions}
+                    value={draft.model_mapping[slot] ?? ""}
+                    onChange={(value) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        model_mapping: {
+                          ...current.model_mapping,
+                          [slot]: value ?? current.model_mapping[slot],
+                        },
+                      }))
+                    }
+                    flex={2}
+                  />
+                </Group>
+              ))}
+            </Stack>
+          </Card>
+
+          <Card withBorder radius="sm" p="md">
+            <Stack gap="sm">
+              <Text fw={700} size="sm">{t("setup.intelligence.modelDefinitions")}</Text>
+              {draft.models.map((model) => (
+                <Group key={model.path} align="flex-end">
+                  <TextInput label={t("setup.intelligence.path")} value={model.path} readOnly flex={1.3} />
+                  <TextInput
+                    label={t("setup.intelligence.modelClass")}
+                    value={model.model_class}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        models: updateByPath(current.models, model.path, {
+                          model_class: event.currentTarget.value,
+                        }),
+                      }))
+                    }
+                    flex={2}
+                  />
+                  <TextInput
+                    label={t("setup.intelligence.modelId")}
+                    value={model.model_id}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        models: updateByPath(current.models, model.path, {
+                          model_id: event.currentTarget.value,
+                        }),
+                      }))
+                    }
+                    flex={1.4}
+                  />
+                </Group>
+              ))}
+            </Stack>
+          </Card>
+
+          <Card withBorder radius="sm" p="md">
+            <Stack gap="sm">
+              <Text fw={700} size="sm">{t("setup.intelligence.cliMapping")}</Text>
+              {cliSlots.map((slot) => (
+                <Group key={slot} align="flex-end">
+                  <TextInput value={slot} label={t("setup.intelligence.slot")} readOnly flex={1} />
+                  <Select
+                    label={t("setup.intelligence.cliAgent")}
+                    data={cliFileOptions}
+                    value={draft.cli_agent_mapping[slot] ?? ""}
+                    onChange={(value) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        cli_agent_mapping: {
+                          ...current.cli_agent_mapping,
+                          [slot]: value ?? current.cli_agent_mapping[slot],
+                        },
+                      }))
+                    }
+                    flex={2}
+                  />
+                </Group>
+              ))}
+            </Stack>
+          </Card>
+
+          <Card withBorder radius="sm" p="md">
+            <Stack gap="sm">
+              <Text fw={700} size="sm">{t("setup.intelligence.brainMapping")}</Text>
+              {draft.brain_mapping.map((assignment) => (
+                <Group key={assignment.name} align="flex-end">
+                  <TextInput label={t("setup.intelligence.feature")} value={assignment.name} readOnly flex={1} />
+                  <Select
+                    label={t("setup.intelligence.engine")}
+                    data={[
+                      { value: "llm", label: "LLM" },
+                      { value: "cli", label: "CLI" },
+                    ]}
+                    value={assignment.engine}
+                    onChange={(value) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        brain_mapping: updateBrain(current.brain_mapping, assignment.name, {
+                          engine: (value as "llm" | "cli") ?? assignment.engine,
+                          target:
+                            value === "cli"
+                              ? cliSlots[0] ?? "default"
+                              : modelSlots[0] ?? "default",
+                        }),
+                      }))
+                    }
+                    flex={1}
+                  />
+                  <Select
+                    label={t("setup.intelligence.target")}
+                    data={assignment.engine === "cli" ? cliSlotOptions : modelSlotOptions}
+                    value={assignment.target}
+                    onChange={(value) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        brain_mapping: updateBrain(current.brain_mapping, assignment.name, {
+                          target: value ?? assignment.target,
+                        }),
+                      }))
+                    }
+                    flex={1.5}
+                  />
+                </Group>
+              ))}
+            </Stack>
+          </Card>
+
+          <Card withBorder radius="sm" p="md">
+            <Stack gap="md">
+              <Text fw={700} size="sm">{t("setup.intelligence.cliDefinitions")}</Text>
+              {draft.cli_agents.map((agent) => {
+                const detection = detectedByPath[agent.path];
+                return (
+                  <Card key={agent.path} withBorder radius="sm" p="sm">
+                    <Stack gap="sm">
+                      <Group justify="space-between">
+                        <Text fw={600} size="sm">{agent.name}</Text>
+                        <Badge color={detection?.detected || agent.detected ? "green" : "red"} variant="light">
+                          {detection?.detected || agent.detected
+                            ? t("setup.intelligence.detected")
+                            : t("setup.intelligence.notDetected")}
+                        </Badge>
+                      </Group>
+                      <Textarea
+                        label={t("setup.intelligence.envJson")}
+                        autosize
+                        minRows={2}
+                        value={JSON.stringify(agent.env ?? {}, null, 2)}
+                        error={envErrors[agent.path]}
+                        onChange={(event) => {
+                          const nextText = event.currentTarget.value;
+                          try {
+                            const parsed = JSON.parse(nextText || "{}") as unknown;
+                            if (!isRecord(parsed)) {
+                              throw new Error("env must be an object");
+                            }
+                            setEnvErrors((current) => {
+                              const next = { ...current };
+                              delete next[agent.path];
+                              return next;
+                            });
+                            updateDraft((current) => ({
+                              ...current,
+                              cli_agents: updateByPath(current.cli_agents, agent.path, {
+                                env: parsed,
+                              }),
+                            }));
+                          } catch {
+                            setEnvErrors((current) => ({
+                              ...current,
+                              [agent.path]: t("setup.intelligence.envJsonError"),
+                            }));
+                          }
+                        }}
+                      />
+                      <Textarea
+                        label={t("setup.intelligence.script")}
+                        autosize
+                        minRows={5}
+                        value={agent.script}
+                        onChange={(event) =>
+                          updateDraft((current) => ({
+                            ...current,
+                            cli_agents: updateByPath(current.cli_agents, agent.path, {
+                              script: event.currentTarget.value,
+                            }),
+                          }))
+                        }
+                      />
+                    </Stack>
+                  </Card>
+                );
+              })}
+            </Stack>
+          </Card>
+        </>
+      )}
+      {mutation.error ? (
+        <Alert color="red" title={t("setup.intelligence.saveAdvancedError")}>
+          {mutation.error.message}
+        </Alert>
+      ) : null}
+    </Stack>
+  );
+}
+
+function MembersSection({
+  activeMemberCount,
+  members,
+  config,
+  workspaceDir,
+  configLocation,
+  cliDetections,
+  llmProviderAvailability,
+  onMemberActiveDelta,
+}: {
+  activeMemberCount: number;
+  members: Array<{ person_id: string; name: string; is_active: boolean; roles: string[] }>;
+  config: ConfigStatus | undefined;
+  workspaceDir: string;
+  configLocation: "home" | "workspace";
+  cliDetections: CliAgentDetection[];
+  llmProviderAvailability: LlmProviderAvailability;
+  onMemberActiveDelta: (delta: number) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
+  const hasActiveMember = activeMemberCount > 0;
+  const [mode, setMode] = useState<"idle" | "add" | "edit">("idle");
+  const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<string | null>("basic");
+  const [personType, setPersonType] = useState<MemberType>("");
+  const [identity, setIdentity] = useState("");
+  const [personId, setPersonId] = useState("");
+  const [personName, setPersonName] = useState("");
+  const [githubUsername, setGithubUsername] = useState("");
+  const [gitEmail, setGitEmail] = useState("");
+  const [roles, setRoles] = useState<string[]>([]);
+  const [githubAccessToken, setGithubAccessToken] = useState("");
+  const [githubInstallationId, setGithubInstallationId] = useState("");
+  const [githubAppId, setGithubAppId] = useState("");
+  const [githubPrivateKeyPath, setGithubPrivateKeyPath] = useState("");
+  const [speakingStylePreset, setSpeakingStylePreset] =
+    useState<SpeakingStylePreset>("professional");
+  const [speakingStyle, setSpeakingStyle] = useState("");
+  const [relationships, setRelationships] = useState("");
+  const [characterArchetype, setCharacterArchetype] = useState("");
+  const [characterTraits, setCharacterTraits] = useState<string[]>([]);
+  const [characterInterests, setCharacterInterests] = useState<string[]>([]);
+  const [characterJoinWhenText, setCharacterJoinWhenText] = useState("");
+  const [characterAvoidWhenText, setCharacterAvoidWhenText] = useState("");
+  const [characterContributionText, setCharacterContributionText] = useState("");
+  const [characterExtras, setCharacterExtras] = useState<Record<string, unknown>>({});
+  const [slackBotToken, setSlackBotToken] = useState("");
+  const [slackAppToken, setSlackAppToken] = useState("");
+  const [slackChannelsText, setSlackChannelsText] = useState("");
+  const [isActive, setIsActive] = useState(true);
+  const [storedMemberSecrets, setStoredMemberSecrets] = useState({
+    githubInstallationId: false,
+    githubAppId: false,
+    githubPrivateKeyPath: false,
+    githubAccessToken: false,
+    slackBotToken: false,
+    slackAppToken: false,
+  });
+  const [identityResolveError, setIdentityResolveError] = useState("");
+  const [savingMember, setSavingMember] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [draftMembers, setDraftMembers] = useState<MemberConfig[]>([]);
+  const memberIntelligenceSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const emptyAddDefaultsAppliedRef = useRef(false);
+  const hasPersistedProject = Boolean(
+    config?.primary_project_file_exists || config?.home_project_file_exists,
+  );
+  const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
+  const rolesQuery = useQuery({
+    queryKey: ["member-role-options", appLanguage],
+    queryFn: () => getRoleOptions(appLanguage),
+  });
+  const roleOptions = useMemo(
+    () =>
+      (rolesQuery.data?.roles ?? []).map((option: RoleOption) => ({
+        value: option.role_id,
+        label: option.role_id,
+      })),
+    [rolesQuery.data?.roles],
+  );
+  const roleSummaries = useMemo(
+    () =>
+      Object.fromEntries(
+        (rolesQuery.data?.roles ?? []).map((option: RoleOption) => [
+          option.role_id,
+          option.summary,
+        ]),
+      ) as Record<string, string>,
+    [rolesQuery.data?.roles],
+  );
+  const speakingStyleTemplates = useMemo(
+    () => getSpeakingStyleTemplates(t),
+    [t],
+  );
+  const characterPresetExamples = useMemo(
+    () => getCharacterPresetExamples(appLanguage),
+    [appLanguage],
+  );
+  const displayedMembers = useMemo(() => {
+    const persistedIds = new Set(members.map((member) => member.person_id));
+    return [
+      ...members,
+      ...draftMembers
+        .filter((member) => !persistedIds.has(member.person_id))
+        .map((member) => ({
+          person_id: member.person_id,
+          name: member.person_name,
+          is_active: member.is_active,
+          roles: member.roles,
+        })),
+    ];
+  }, [draftMembers, members]);
+  const formVisible = mode !== "idle" || displayedMembers.length === 0;
+  const formMode = mode === "edit" ? "edit" : "add";
+
+  useEffect(() => {
+    setIsActive(personType !== "human");
+  }, [personType]);
+  const applyPresetFields = (preset: SpeakingStylePreset) => {
+    const sample = characterPresetExamples[preset];
+    setSpeakingStyle(speakingStyleTemplates[preset]);
+    setCharacterArchetype(sample.archetype);
+    setCharacterTraits(sample.traits);
+    setCharacterInterests(sample.interests);
+    setCharacterJoinWhenText(sample.joinWhen.join("\n"));
+    setCharacterAvoidWhenText(sample.avoidWhen.join("\n"));
+    setCharacterContributionText(sample.contributionStyle.join("\n"));
+  };
+
+  const clearPresetFields = () => {
+    setSpeakingStyle("");
+    setCharacterArchetype("");
+    setCharacterTraits([]);
+    setCharacterInterests([]);
+    setCharacterJoinWhenText("");
+    setCharacterAvoidWhenText("");
+    setCharacterContributionText("");
+  };
+
+  useEffect(() => {
+    if (displayedMembers.length > 0 || mode !== "idle") {
+      emptyAddDefaultsAppliedRef.current = false;
+      return;
+    }
+    if (!emptyAddDefaultsAppliedRef.current) {
+      setSpeakingStylePreset("professional");
+      setRoles([DEFAULT_MEMBER_ROLE]);
+      applyPresetFields("professional");
+      emptyAddDefaultsAppliedRef.current = true;
+    }
+  }, [characterPresetExamples, displayedMembers.length, mode, speakingStyleTemplates]);
+
+  const clearForm = ({ withDefaults = false }: { withDefaults?: boolean } = {}) => {
+    setIdentity("");
+    setPersonId("");
+    setPersonName("");
+    setGithubUsername("");
+    setGitEmail("");
+    setRoles(withDefaults ? [DEFAULT_MEMBER_ROLE] : []);
+    setGithubAccessToken("");
+    setGithubInstallationId("");
+    setGithubAppId("");
+    setGithubPrivateKeyPath("");
+    setSpeakingStylePreset("professional");
+    if (withDefaults) {
+      applyPresetFields("professional");
+    } else {
+      clearPresetFields();
+    }
+    setRelationships("");
+    setCharacterExtras({});
+    setSlackBotToken("");
+    setSlackAppToken("");
+    setSlackChannelsText("");
+    setPersonType("");
+    setStoredMemberSecrets({
+      githubInstallationId: false,
+      githubAppId: false,
+      githubPrivateKeyPath: false,
+      githubAccessToken: false,
+      slackBotToken: false,
+      slackAppToken: false,
+    });
+    setIdentityResolveError("");
+    setActiveTab("basic");
+  };
+
+  const fillFormFromMember = (member: MemberConfig) => {
+    setPersonType(member.person_type);
+    setIdentity("");
+    setPersonId(member.person_id);
+    setPersonName(member.person_name);
+    setGithubUsername(member.github_username);
+    setGitEmail(member.git_email);
+    setRoles(member.roles);
+    const preset = inferSpeakingStylePreset(member.speaking_style, speakingStyleTemplates);
+    setSpeakingStylePreset(preset);
+    setSpeakingStyle(member.speaking_style);
+    setRelationships(member.relationships);
+    const characterFields = parseCharacterFields(member.character ?? {});
+    setCharacterArchetype(characterFields.archetype);
+    setCharacterTraits(characterFields.traits);
+    setCharacterInterests(characterFields.interests);
+    setCharacterJoinWhenText(characterFields.joinWhen.join("\n"));
+    setCharacterAvoidWhenText(characterFields.avoidWhen.join("\n"));
+    setCharacterContributionText(characterFields.contributionStyle.join("\n"));
+    setCharacterExtras(characterFields.extras);
+    setSlackChannelsText(member.slack_channels.join(", "));
+    setGithubAccessToken("");
+    setGithubInstallationId(member.github_installation_id?.toString() ?? "");
+    setGithubAppId(member.github_app_id?.toString() ?? "");
+    setGithubPrivateKeyPath(member.github_private_key_path);
+    setSlackBotToken("");
+    setSlackAppToken("");
+    setStoredMemberSecrets({
+      githubInstallationId: member.has_github_installation_id,
+      githubAppId: member.has_github_app_id,
+      githubPrivateKeyPath: member.has_github_private_key_path,
+      githubAccessToken: member.has_github_access_token,
+      slackBotToken: member.has_slack_bot_token,
+      slackAppToken: member.has_slack_app_token,
+    });
+    setIsActive(member.is_active);
+  };
+
+  const memberConfigMutation = useMutation({
+    mutationFn: getMemberConfig,
+    onSuccess: (snapshot) => {
+      fillFormFromMember(snapshot);
+      setMode("edit");
+    },
+  });
+  const resolveMutation = useMutation({
+    mutationFn: resolveMemberIdentity,
+  });
+  const memberDiagnosticsMutation = useMutation({
+    mutationFn: (targetPersonId: string) => runScenarioDiagnostics(targetPersonId),
+  });
+  const addMemberMutation = useMutation({
+    mutationFn: addMemberConfig,
+    onSuccess: (_, request) => {
+      if (!hasPersistedProject) {
+        setDraftMembers((current) => [
+          ...current.filter((member) => member.person_id !== request.person_id),
+          memberRequestToConfig(request),
+        ]);
+      }
+      onMemberActiveDelta(isActive ? 1 : 0);
+      queryClient.invalidateQueries({ queryKey: ["team"] });
+      memberDiagnosticsMutation.reset();
+      clearForm();
+      setMode("idle");
+      setEditingPersonId(null);
+    },
+  });
+  const updateMemberMutation = useMutation({
+    mutationFn: ({
+      originalPersonId,
+      body,
+    }: {
+      originalPersonId: string;
+      body: MemberConfigUpdateRequest;
+    }) => updateMemberConfig(originalPersonId, body),
+    onSuccess: (_, variables) => {
+      const previous =
+        members.find((member) => member.person_id === variables.originalPersonId) ??
+        draftMembers.find((member) => member.person_id === variables.originalPersonId);
+      const previousActive = previous?.is_active ?? false;
+      const delta = Number(isActive) - Number(previousActive);
+      if (!hasPersistedProject) {
+        setDraftMembers((current) => [
+          ...current.filter((member) => member.person_id !== variables.originalPersonId),
+          memberRequestToConfig(variables.body),
+        ]);
+      }
+      onMemberActiveDelta(delta);
+      queryClient.invalidateQueries({ queryKey: ["team"] });
+      setEditingPersonId(personId.trim());
+    },
+  });
+  const deleteMemberMutation = useMutation({
+    mutationFn: ({
+      targetPersonId,
+      configDir,
+      envFilePath,
+    }: {
+      targetPersonId: string;
+      configDir: string;
+      envFilePath: string;
+    }) =>
+      deleteMemberConfig(targetPersonId, {
+        config_dir: configDir,
+        env_file_path: envFilePath,
+      }),
+    onSuccess: (_, variables) => {
+      const removed =
+        members.find((member) => member.person_id === variables.targetPersonId) ??
+        draftMembers.find((member) => member.person_id === variables.targetPersonId);
+      if (!hasPersistedProject) {
+        setDraftMembers((current) =>
+          current.filter((member) => member.person_id !== variables.targetPersonId),
+        );
+      }
+      onMemberActiveDelta(removed?.is_active ? -1 : 0);
+      queryClient.invalidateQueries({ queryKey: ["team"] });
+      memberDiagnosticsMutation.reset();
+      clearForm();
+      setMode("idle");
+      setEditingPersonId(null);
+    },
+  });
+
+  const usesGitHubMember = personType !== "";
+  const configDir = resolveConfigDir(config, workspaceDir, configLocation);
+  const envFilePath = joinPath(workspaceDir, ".env");
+  const requiresGitHubAuth =
+    personType === "machine_user" || personType === "proxy_agent";
+  const requiresGitHubAppsAuth = personType === "github_apps";
+  const authReady = requiresGitHubAuth
+    ? githubAccessToken.trim().length > 0 || storedMemberSecrets.githubAccessToken
+    : requiresGitHubAppsAuth
+      ? githubInstallationId.trim().length > 0 &&
+        githubAppId.trim().length > 0 &&
+        githubPrivateKeyPath.trim().length > 0
+      : true;
+  const githubIdentityReady =
+    !usesGitHubMember ||
+    (githubUsername.trim().length > 0 && gitEmail.trim().length > 0);
+  const memberErrors = getMemberFieldErrors(
+    {
+      personType,
+      identity,
+      personId,
+      personName,
+      githubUsername,
+      gitEmail,
+      githubInstallationId,
+      githubAppId,
+      githubPrivateKeyPath,
+      githubAccessToken,
+      slackBotToken,
+      slackAppToken,
+      storedMemberSecrets,
+      slackChannelsText,
+      roles,
+      speakingStyle,
+      characterArchetype,
+      characterTraits,
+      characterInterests,
+      characterJoinWhenText,
+      characterAvoidWhenText,
+      characterContributionText,
+      existingPersonIds: displayedMembers.map((member) => member.person_id),
+      originalPersonId: formMode === "edit" ? editingPersonId : null,
+    },
+    t,
+  );
+  const canResolveIdentity =
+    usesGitHubMember &&
+    getGitHubResolveInput(personType, identity, githubUsername).trim().length > 0 &&
+    (personType === "github_apps"
+      ? isGitHubAppsUrl(identity)
+      : isGitHubUsername(githubUsername));
+  const canSubmit =
+    configDir.trim().length > 0 &&
+    workspaceDir.trim().length > 0 &&
+    personId.trim().length > 0 &&
+    personName.trim().length > 0 &&
+    roles.length > 0 &&
+    speakingStyle.trim().length > 0 &&
+    characterArchetype.trim().length > 0 &&
+    characterTraits.length > 0 &&
+    characterInterests.length > 0 &&
+    characterJoinWhenText.trim().length > 0 &&
+    characterAvoidWhenText.trim().length > 0 &&
+    characterContributionText.trim().length > 0 &&
+    githubIdentityReady &&
+    authReady &&
+    Object.keys(memberErrors).length === 0;
+  const activePresetSample = characterPresetExamples[speakingStylePreset];
+  const hasMemberError = (keys: Array<keyof MemberFieldErrors>) =>
+    keys.some((key) => Boolean(memberErrors[key]));
+  const basicTabHasError = hasMemberError([
+    "personId",
+    "personName",
+    "roles",
+    "speakingStyle",
+    "characterArchetype",
+    "characterTraits",
+    "characterInterests",
+    "characterJoinWhenText",
+    "characterAvoidWhenText",
+    "characterContributionText",
+  ]);
+  const githubTabHasError = hasMemberError([
+    "identity",
+    "githubUsername",
+    "gitEmail",
+    "githubInstallationId",
+    "githubAppId",
+    "githubPrivateKeyPath",
+    "githubAccessToken",
+  ]);
+  const slackTabHasError = hasMemberError([
+    "slackChannelsText",
+    "slackBotToken",
+    "slackAppToken",
+  ]);
+  const githubResolveLabel =
+    personType === "github_apps"
+      ? t("setup.members.githubAppsUrl")
+      : t("setup.members.githubUsername");
+  const githubResolveDescription =
+    personType === "github_apps"
+      ? t("setup.members.githubAppsUrlHint")
+      : t("setup.members.githubUsernameHint");
+  const githubResolveValue = personType === "github_apps" ? identity : githubUsername;
+  const githubResolveError =
+    personType === "github_apps"
+      ? memberErrors.identity || identityResolveError
+      : memberErrors.githubUsername || identityResolveError;
+
+  const handleResolve = async () => {
+    if (!canResolveIdentity) {
+      return;
+    }
+    setIdentityResolveError("");
+    try {
+      const resolved = await resolveMutation.mutateAsync({
+        person_type: personType as GitHubMemberType,
+        identity: getGitHubResolveInput(personType, identity, githubUsername).trim(),
+      });
+      if (
+        !resolved.github_username.trim() ||
+        !resolved.git_email.trim() ||
+        resolved.github_user_id <= 0
+      ) {
+        setIdentityResolveError(t("setup.validation.memberGithubIdentityNotFound"));
+        return;
+      }
+      setGithubUsername(resolved.github_username);
+      setGitEmail(resolved.git_email);
+    } catch (error) {
+      setIdentityResolveError(getMemberResolveErrorMessage(error, t));
+    }
+  };
+
+  const buildMemberRequest = (): MemberSetupRequest => {
+    const request: MemberSetupRequest = {
+      config_dir: configDir,
+      env_file_path: envFilePath,
+      append_env_file: Boolean(config?.env_file_exists),
+      person_type: personType,
+      person_id: personId.trim(),
+      person_name: personName.trim(),
+      is_active: isActive,
+      github_username: githubUsername.trim(),
+      git_email: gitEmail.trim(),
+      roles,
+      speaking_style: speakingStyle.trim(),
+      relationships: relationships.trim(),
+      character: buildCharacterPayload({
+        archetype: characterArchetype,
+        traits: characterTraits,
+        interests: characterInterests,
+        joinWhen: splitLines(characterJoinWhenText),
+        avoidWhen: splitLines(characterAvoidWhenText),
+        contributionStyle: splitLines(characterContributionText),
+        extras: characterExtras,
+      }),
+      slack_bot_token: slackBotToken.trim(),
+      slack_app_token: slackAppToken.trim(),
+      slack_channels: slackChannelsText
+        .split(",")
+        .map((channel) => channel.trim())
+        .filter(Boolean),
+    };
+    if (personType === "github_apps") {
+      request.github_installation_id = githubInstallationId
+        ? Number(githubInstallationId)
+        : undefined;
+      request.github_app_id = githubAppId ? Number(githubAppId) : undefined;
+      request.github_private_key_path = githubPrivateKeyPath || undefined;
+    }
+    if (personType === "machine_user" || personType === "proxy_agent") {
+      request.github_access_token = githubAccessToken || undefined;
+    }
+    return request;
+  };
+
+  const handleSaveMember = async () => {
+    if (!canSubmit) {
+      return;
+    }
+    setSavingMember(true);
+    try {
+      const request = buildMemberRequest();
+      if (formMode === "edit" && editingPersonId) {
+        if (!hasPersistedProject) {
+          const previous =
+            draftMembers.find((member) => member.person_id === editingPersonId) ??
+            members.find((member) => member.person_id === editingPersonId);
+          const delta = Number(isActive) - Number(previous?.is_active ?? false);
+          setDraftMembers((current) => [
+            ...current.filter((member) => member.person_id !== editingPersonId),
+            memberRequestToConfig({ ...request, original_person_id: editingPersonId }),
+          ]);
+          onMemberActiveDelta(delta);
+          setEditingPersonId(personId.trim());
+          return;
+        }
+        await updateMemberMutation.mutateAsync({
+          originalPersonId: editingPersonId,
+          body: {
+            ...request,
+            original_person_id: editingPersonId,
+          },
+        });
+        await memberIntelligenceSaveRef.current?.();
+        return;
+      }
+      await addMemberMutation.mutateAsync(request);
+    } finally {
+      setSavingMember(false);
+    }
+  };
+
+  const startAddMode = () => {
+    memberDiagnosticsMutation.reset();
+    setMode("add");
+    setEditingPersonId(null);
+    clearForm({ withDefaults: true });
+  };
+
+  const startEditMode = (memberId: string) => {
+    memberDiagnosticsMutation.reset();
+    setEditingPersonId(memberId);
+    const draft = draftMembers.find((member) => member.person_id === memberId);
+    if (draft && !hasPersistedProject) {
+      fillFormFromMember(draft);
+      setMode("edit");
+      return;
+    }
+    memberConfigMutation.mutate(memberId);
+  };
+
+  const handleDeleteMember = async () => {
+    if (!editingPersonId || !configDir.trim() || !envFilePath.trim()) {
+      return;
+    }
+    await deleteMemberMutation.mutateAsync({
+      targetPersonId: editingPersonId,
+      configDir,
+      envFilePath,
+    });
+    setDeleteConfirmOpen(false);
+  };
+
+  return (
+    <Card withBorder radius="md" p="lg">
+      <Modal
+        opened={deleteConfirmOpen}
+        onClose={() => setDeleteConfirmOpen(false)}
+        title={t("setup.members.deleteConfirmTitle")}
+        centered
+      >
+        <Stack>
+          <Text size="sm">
+            {t("setup.members.deleteConfirmBody", {
+              name: personName || editingPersonId || "",
+            })}
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setDeleteConfirmOpen(false)}>
+              {t("setup.members.cancelButton")}
+            </Button>
+            <Button
+              color="red"
+              loading={deleteMemberMutation.isPending}
+              onClick={() => void handleDeleteMember()}
+            >
+              {t("setup.members.deleteButton")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <PanelHeader
+        title={t("setup.members.title")}
+        subtitle={t("setup.members.subtitle")}
+      />
+      <Stack mt="md">
+        <Group justify="space-between">
+          <Text size="sm" fw={500}>
+            {t("setup.members.activeCountLabel")}
+          </Text>
+          <Badge color={hasActiveMember ? "green" : "yellow"} variant="light">
+            {t("setup.members.activeCountValue", { count: activeMemberCount })}
+          </Badge>
+        </Group>
+        {!hasActiveMember ? (
+          <InfoCallout title={t("setup.members.requiredTitle")}>
+            {t("setup.members.requiredBody")}
+          </InfoCallout>
+        ) : null}
+        {displayedMembers.length > 0 ? (
+          <Stack gap={6}>
+            {displayedMembers.map((member) => (
+              <Group key={member.person_id} justify="space-between">
+                <Text size="sm">{member.name} ({member.person_id})</Text>
+                <Group gap="xs">
+                  <Badge color={member.is_active ? "green" : "gray"} variant="light">
+                    {member.is_active ? t("setup.members.memberActive") : t("setup.members.memberInactive")}
+                  </Badge>
+                  <Button size="xs" variant="default" onClick={() => startEditMode(member.person_id)}>
+                    {t("setup.members.editButton")}
+                  </Button>
+                </Group>
+              </Group>
+            ))}
+          </Stack>
+        ) : null}
+        {displayedMembers.length > 0 ? (
+          <Group justify="space-between">
+            {mode === "edit" && editingPersonId ? (
+              <Badge variant="light">{t("setup.members.editingBadge", { id: editingPersonId })}</Badge>
+            ) : (
+              <span />
+            )}
+            <Button variant="default" onClick={startAddMode}>
+              {t("setup.members.newButton")}
+            </Button>
+          </Group>
+        ) : null}
+        {formVisible ? (
+          <>
+            <Divider />
+            <Text fw={600}>
+              {formMode === "edit" ? t("setup.members.editTitle") : t("setup.members.addTitle")}
+            </Text>
+            <Tabs value={activeTab} onChange={setActiveTab}>
+          <Tabs.List>
+            <Tabs.Tab
+              value="basic"
+              rightSection={basicTabHasError ? <TabErrorIcon label={t("setup.members.tabHasError")} /> : null}
+            >
+              {t("setup.members.tabs.basic")}
+            </Tabs.Tab>
+            <Tabs.Tab value="intelligence">{t("setup.members.tabs.intelligence")}</Tabs.Tab>
+            <Tabs.Tab
+              value="github"
+              rightSection={githubTabHasError ? <TabErrorIcon label={t("setup.members.tabHasError")} /> : null}
+            >
+              {t("setup.members.tabs.github")}
+            </Tabs.Tab>
+            <Tabs.Tab
+              value="slack"
+              rightSection={slackTabHasError ? <TabErrorIcon label={t("setup.members.tabHasError")} /> : null}
+            >
+              {t("setup.members.tabs.slack")}
+            </Tabs.Tab>
+            <Tabs.Tab value="diagnostics">{t("setup.members.tabs.diagnostics")}</Tabs.Tab>
+          </Tabs.List>
+
+          <Tabs.Panel value="basic" pt="md">
+            <Stack>
+              <TextInput
+                label={t("setup.members.personId")}
+                value={personId}
+                onChange={(event) => setPersonId(event.currentTarget.value)}
+                error={memberErrors.personId}
+              />
+              <TextInput
+                label={t("setup.members.personName")}
+                value={personName}
+                onChange={(event) => setPersonName(event.currentTarget.value)}
+                error={memberErrors.personName}
+              />
+              <MultiSelect
+                label={t("setup.members.roles")}
+                placeholder={t("setup.members.rolesPlaceholder")}
+                data={roleOptions}
+                value={roles}
+                onChange={setRoles}
+                searchable
+                clearable
+                nothingFoundMessage={t("setup.members.rolesEmpty")}
+                error={
+                  rolesQuery.error
+                    ? t("setup.members.rolesLoadError")
+                    : memberErrors.roles
+                }
+                renderOption={({ option }) => {
+                  const summary = roleSummaries[option.value];
+                  return (
+                    <Stack gap={2}>
+                      <Text size="sm">{option.label}</Text>
+                      {summary ? (
+                        <Text size="xs" c="dimmed">
+                          {summary}
+                        </Text>
+                      ) : null}
+                    </Stack>
+                  );
+                }}
+              />
+              <SegmentedControl
+                fullWidth
+                data={SPEAKING_STYLE_OPTIONS.map((value) => ({
+                  value,
+                  label: t(`setup.members.speakingStyleOptions.${value}`),
+                }))}
+                value={speakingStylePreset}
+                onChange={(value) => {
+                  const preset = (value as SpeakingStylePreset) ?? "professional";
+                  setSpeakingStylePreset(preset);
+                  applyPresetFields(preset);
+                }}
+              />
+              <Group justify="flex-end" mt={-4}>
+                <Button
+                  size="xs"
+                  variant="default"
+                  leftSection={<Eraser size={14} />}
+                  onClick={clearPresetFields}
+                >
+                  {t("setup.members.clearDefaults")}
+                </Button>
+              </Group>
+              <TagsInput
+                label={
+                  <DefaultableLabel
+                    text={t("setup.members.characterTraits")}
+                    tooltip={t("setup.members.applyDefaultTooltip")}
+                    onApply={() => setCharacterTraits(activePresetSample.traits)}
+                  />
+                }
+                value={characterTraits}
+                onChange={setCharacterTraits}
+                placeholder={activePresetSample.traits.join(", ")}
+                error={memberErrors.characterTraits}
+              />
+              <TagsInput
+                label={
+                  <DefaultableLabel
+                    text={t("setup.members.characterInterests")}
+                    tooltip={t("setup.members.applyDefaultTooltip")}
+                    onApply={() => setCharacterInterests(activePresetSample.interests)}
+                  />
+                }
+                value={characterInterests}
+                onChange={setCharacterInterests}
+                placeholder={activePresetSample.interests.join(", ")}
+                error={memberErrors.characterInterests}
+              />
+              <Textarea
+                label={
+                  <DefaultableLabel
+                    text={t("setup.members.speakingStyle")}
+                    tooltip={t("setup.members.applyDefaultTooltip")}
+                    onApply={() => setSpeakingStyle(speakingStyleTemplates[speakingStylePreset])}
+                  />
+                }
+                autosize
+                minRows={3}
+                value={speakingStyle}
+                onChange={(event) => setSpeakingStyle(event.currentTarget.value)}
+                placeholder={speakingStyleTemplates[speakingStylePreset]}
+                error={memberErrors.speakingStyle}
+              />
+              <TextInput
+                label={
+                  <DefaultableLabel
+                    text={t("setup.members.characterArchetype")}
+                    tooltip={t("setup.members.applyDefaultTooltip")}
+                    onApply={() => setCharacterArchetype(activePresetSample.archetype)}
+                  />
+                }
+                value={characterArchetype}
+                onChange={(event) => setCharacterArchetype(event.currentTarget.value)}
+                description={t("setup.members.characterArchetypeHint")}
+                placeholder={activePresetSample.archetype}
+                error={memberErrors.characterArchetype}
+              />
+              <Textarea
+                label={
+                  <DefaultableLabel
+                    text={t("setup.members.characterJoinWhen")}
+                    tooltip={t("setup.members.applyDefaultTooltip")}
+                    onApply={() => setCharacterJoinWhenText(activePresetSample.joinWhen.join("\n"))}
+                  />
+                }
+                autosize
+                minRows={3}
+                value={characterJoinWhenText}
+                onChange={(event) => setCharacterJoinWhenText(event.currentTarget.value)}
+                description={t("setup.members.characterListHint")}
+                placeholder={activePresetSample.joinWhen.join("\n")}
+                error={memberErrors.characterJoinWhenText}
+              />
+              <Textarea
+                label={
+                  <DefaultableLabel
+                    text={t("setup.members.characterAvoidWhen")}
+                    tooltip={t("setup.members.applyDefaultTooltip")}
+                    onApply={() => setCharacterAvoidWhenText(activePresetSample.avoidWhen.join("\n"))}
+                  />
+                }
+                autosize
+                minRows={3}
+                value={characterAvoidWhenText}
+                onChange={(event) => setCharacterAvoidWhenText(event.currentTarget.value)}
+                description={t("setup.members.characterListHint")}
+                placeholder={activePresetSample.avoidWhen.join("\n")}
+                error={memberErrors.characterAvoidWhenText}
+              />
+              <Textarea
+                label={
+                  <DefaultableLabel
+                    text={t("setup.members.characterContributionStyle")}
+                    tooltip={t("setup.members.applyDefaultTooltip")}
+                    onApply={() =>
+                      setCharacterContributionText(activePresetSample.contributionStyle.join("\n"))
+                    }
+                  />
+                }
+                autosize
+                minRows={3}
+                value={characterContributionText}
+                onChange={(event) => setCharacterContributionText(event.currentTarget.value)}
+                description={t("setup.members.characterListHint")}
+                placeholder={activePresetSample.contributionStyle.join("\n")}
+                error={memberErrors.characterContributionText}
+              />
+              <Textarea
+                label={t("setup.members.relationships")}
+                autosize
+                minRows={2}
+                value={relationships}
+                onChange={(event) => setRelationships(event.currentTarget.value)}
+                placeholder={activePresetSample.relationships}
+              />
+              <Switch
+                label={t("setup.members.activeSwitch")}
+                checked={isActive}
+                onChange={(event) => setIsActive(event.currentTarget.checked)}
+              />
+            </Stack>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="intelligence" pt="md">
+            {formMode === "edit" && editingPersonId ? (
+              <IntelligenceEditor
+                personId={editingPersonId}
+                savePersonId={personId.trim()}
+                enabled={Boolean(configDir)}
+                detections={cliDetections}
+                llmProviderAvailability={llmProviderAvailability}
+                saveMode="external"
+                onRegisterSave={(save) => {
+                  memberIntelligenceSaveRef.current = save;
+                }}
+              />
+            ) : (
+              <Text size="sm" c="dimmed">
+                {t("setup.members.saveBeforeIntelligence")}
+              </Text>
+            )}
+          </Tabs.Panel>
+
+          <Tabs.Panel value="github" pt="md">
+            <Stack>
+              <Select
+                label={t("setup.members.githubMode")}
+                description={t("setup.members.githubModeHint")}
+                data={MEMBER_TYPE_OPTIONS.map((option) => ({
+                  value: option || "none",
+                  label: t(`setup.members.typeOptions.${option || "none"}`),
+                }))}
+                value={personType || "none"}
+                onChange={(value) => {
+                  setPersonType(value === "none" ? "" : ((value ?? "") as MemberType));
+                  setIdentityResolveError("");
+                }}
+              />
+              {!usesGitHubMember ? (
+                <Text size="sm" c="dimmed">
+                  {t("setup.members.githubDisabledMemberHint")}
+                </Text>
+              ) : (
+                <>
+                  <Stack gap={4}>
+                    <div>
+                      <Text fw={500} size="sm">
+                        {githubResolveLabel}
+                      </Text>
+                      <Text c="dimmed" size="xs">
+                        {githubResolveDescription}
+                      </Text>
+                    </div>
+                    <div className="field-action-row">
+                      <TextInput
+                        aria-label={githubResolveLabel}
+                        value={githubResolveValue}
+                        onChange={(event) => {
+                          if (personType === "github_apps") {
+                            setIdentity(event.currentTarget.value);
+                          } else {
+                            setGithubUsername(event.currentTarget.value);
+                          }
+                          setIdentityResolveError("");
+                        }}
+                        error={Boolean(githubResolveError)}
+                        flex={1}
+                      />
+                      <Button
+                        variant="default"
+                        loading={resolveMutation.isPending}
+                        disabled={!canResolveIdentity}
+                        onClick={() => void handleResolve()}
+                      >
+                        {t("setup.members.resolve")}
+                      </Button>
+                    </div>
+                    {githubResolveError ? (
+                      <Text c="red" size="xs">
+                        {githubResolveError}
+                      </Text>
+                    ) : null}
+                  </Stack>
+                  {personType === "github_apps" ? (
+                    <TextInput
+                      label={t("setup.members.githubResolvedIdentity")}
+                      value={githubUsername}
+                      onChange={(event) => setGithubUsername(event.currentTarget.value)}
+                      error={memberErrors.githubUsername}
+                    />
+                  ) : null}
+                  <TextInput
+                    label={t("setup.members.gitEmail")}
+                    value={gitEmail}
+                    onChange={(event) => setGitEmail(event.currentTarget.value)}
+                    error={memberErrors.gitEmail}
+                  />
+                </>
+              )}
+              {personType === "github_apps" ? (
+                <>
+                  <TextInput
+                    label={t("setup.members.installationId")}
+                    value={githubInstallationId}
+                    onChange={(event) => setGithubInstallationId(event.currentTarget.value)}
+                    error={memberErrors.githubInstallationId}
+                  />
+                  <TextInput
+                    label={t("setup.members.appId")}
+                    value={githubAppId}
+                    onChange={(event) => setGithubAppId(event.currentTarget.value)}
+                    error={memberErrors.githubAppId}
+                  />
+                  <FilePicker
+                    label={t("setup.members.privateKeyPath")}
+                    value={githubPrivateKeyPath}
+                    onChange={setGithubPrivateKeyPath}
+                    error={memberErrors.githubPrivateKeyPath}
+                  />
+                </>
+              ) : null}
+              {personType === "machine_user" || personType === "proxy_agent" ? (
+                <PasswordInput
+                  label={t("setup.members.accessToken")}
+                  placeholder={
+                    storedMemberSecrets.githubAccessToken
+                      ? MASKED_SECRET_PLACEHOLDER
+                      : t("setup.members.accessTokenPlaceholder")
+                  }
+                  value={githubAccessToken}
+                  onChange={(event) => setGithubAccessToken(event.currentTarget.value)}
+                  error={memberErrors.githubAccessToken}
+                />
+              ) : null}
+              {personType === "human" ? (
+                <Text size="sm" c="dimmed">
+                  {t("setup.members.githubAuthNotRequired")}
+                </Text>
+              ) : null}
+            </Stack>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="slack" pt="md">
+            <Stack>
+              <TextInput
+                label={t("setup.members.slackChannels")}
+                value={slackChannelsText}
+                onChange={(event) => setSlackChannelsText(event.currentTarget.value)}
+                description={t("setup.members.slackChannelsHint")}
+                error={memberErrors.slackChannelsText}
+              />
+              <PasswordInput
+                label={t("setup.members.slackBotToken")}
+                  placeholder={
+                  storedMemberSecrets.slackBotToken
+                    ? MASKED_SECRET_PLACEHOLDER
+                    : t("setup.members.slackBotTokenPlaceholder")
+                }
+                value={slackBotToken}
+                onChange={(event) => setSlackBotToken(event.currentTarget.value)}
+                error={memberErrors.slackBotToken}
+              />
+              <PasswordInput
+                label={t("setup.members.slackAppToken")}
+                  placeholder={
+                  storedMemberSecrets.slackAppToken
+                    ? MASKED_SECRET_PLACEHOLDER
+                    : t("setup.members.slackAppTokenPlaceholder")
+                }
+                value={slackAppToken}
+                onChange={(event) => setSlackAppToken(event.currentTarget.value)}
+                error={memberErrors.slackAppToken}
+              />
+            </Stack>
+          </Tabs.Panel>
+          <Tabs.Panel value="diagnostics" pt="md">
+            <MemberDiagnosticsPanel
+              personId={editingPersonId}
+              formMode={formMode}
+              loading={memberDiagnosticsMutation.isPending}
+              error={memberDiagnosticsMutation.error}
+              checks={memberDiagnosticsMutation.data?.checks ?? []}
+              onRun={() => {
+                if (editingPersonId) {
+                  memberDiagnosticsMutation.mutate(editingPersonId);
+                }
+              }}
+            />
+          </Tabs.Panel>
+            </Tabs>
+            <Divider />
+            <Group justify="space-between" className="form-footer">
+          <Box>
+            {formMode === "edit" ? (
+              <Button
+                color="red"
+                variant="default"
+                loading={deleteMemberMutation.isPending}
+                onClick={() => setDeleteConfirmOpen(true)}
+              >
+                {t("setup.members.deleteButton")}
+              </Button>
+            ) : null}
+          </Box>
+          <Button
+            loading={savingMember || addMemberMutation.isPending || updateMemberMutation.isPending}
+            disabled={!canSubmit}
+            onClick={() => void handleSaveMember()}
+          >
+            {formMode === "edit" ? t("setup.members.saveButton") : t("setup.members.addButton")}
+          </Button>
+            </Group>
+          </>
+        ) : null}
+        {memberConfigMutation.error ? (
+          <Alert color="red" title={t("setup.members.loadError")}>
+            {memberConfigMutation.error.message}
+          </Alert>
+        ) : null}
+        {resolveMutation.error ? (
+          <Alert color="red" title={t("setup.members.resolveError")}>
+            {resolveMutation.error.message}
+          </Alert>
+        ) : null}
+        {addMemberMutation.error ? (
+          <Alert color="red" title={t("setup.members.addError")}>
+            {addMemberMutation.error.message}
+          </Alert>
+        ) : null}
+        {updateMemberMutation.error ? (
+          <Alert color="red" title={t("setup.members.updateError")}>
+            {updateMemberMutation.error.message}
+          </Alert>
+        ) : null}
+        {deleteMemberMutation.error ? (
+          <Alert color="red" title={t("setup.members.deleteError")}>
+            {deleteMemberMutation.error.message}
+          </Alert>
+        ) : null}
+      </Stack>
+    </Card>
+  );
+}
+
+function GitHubIntegrationSection({
+  form,
+}: {
+  form: ProjectForm;
+}) {
+  const { t } = useTranslation();
+  const githubErrors = getGitHubFieldErrors(form.values, t);
+  return (
+    <Card withBorder radius="md" p="lg">
+      <PanelHeader
+        title={t("setup.github.title")}
+        subtitle={t("setup.github.subtitle")}
+      />
+      <Stack mt="md">
+        <Select
+          label={t("setup.github.decision")}
+          placeholder={t("setup.github.decisionPlaceholder")}
+          data={[
+            { value: "disabled", label: t("setup.github.disabled") },
+            { value: "enabled", label: t("setup.github.enabled") },
+          ]}
+          value={form.values.githubDecision || null}
+          onChange={(value) => {
+            const decision = (value ?? "") as ProjectFormValues["githubDecision"];
+            form.setFieldValue("githubDecision", decision);
+            form.setFieldValue("githubEnabled", decision === "enabled");
+          }}
+          error={form.errors.githubDecision}
+        />
+        {form.values.githubDecision === "disabled" ? (
+          <Text size="sm" c="dimmed">
+            {t("setup.github.disabledHint")}
+          </Text>
+        ) : null}
+        <TextInput
+          label={t("setup.github.projectUrl")}
+          disabled={form.values.githubDecision !== "enabled"}
+          {...form.getInputProps("githubProjectUrl")}
+          error={githubErrors.githubProjectUrl || form.errors.githubProjectUrl}
+        />
+        <TextInput
+          label={t("setup.github.repositoryUrl")}
+          disabled={form.values.githubDecision !== "enabled"}
+          {...form.getInputProps("githubRepositoryUrl")}
+          error={githubErrors.githubRepositoryUrl || form.errors.githubRepositoryUrl}
+        />
+        <SegmentedControl
+          disabled={form.values.githubDecision !== "enabled"}
+          data={[
+            { label: "HTTPS", value: "https" },
+            { label: "SSH", value: "ssh" },
+          ]}
+          {...form.getInputProps("repoAccess")}
+        />
+      </Stack>
+    </Card>
+  );
+}
+
+function MemberDiagnosticsPanel({
+  personId,
+  formMode,
+  loading,
+  error,
+  checks,
+  onRun,
+}: {
+  personId: string | null;
+  formMode: "add" | "edit";
+  loading: boolean;
+  error: Error | null;
+  checks: DiagnosticCheck[];
+  onRun: () => void;
+}) {
+  const { t } = useTranslation();
+  if (formMode !== "edit" || !personId) {
+    return (
+      <InfoCallout title={t("setup.members.diagnostics.saveFirstTitle")}>
+        {t("setup.members.diagnostics.saveFirstBody")}
+      </InfoCallout>
+    );
+  }
+
+  const issues = checks.filter((check) => check.status !== "ok");
+  return (
+    <Stack>
+      <Group justify="space-between">
+        <Box>
+          <Text fw={700}>{t("setup.members.diagnostics.title")}</Text>
+          <Text size="sm" c="dimmed">
+            {t("setup.members.diagnostics.description")}
+          </Text>
+        </Box>
+        <Button loading={loading} onClick={onRun}>
+          {t("setup.members.diagnostics.run")}
+        </Button>
+      </Group>
+      {error ? (
+        <Alert color="red" title={t("setup.members.diagnostics.failed")}>
+          {error.message}
+        </Alert>
+      ) : null}
+      {!loading && checks.length === 0 && !error ? (
+        <Text size="sm" c="dimmed">
+          {t("setup.members.diagnostics.notRun")}
+        </Text>
+      ) : null}
+      {checks.length > 0 && issues.length === 0 ? (
+        <Alert color="green" title={t("setup.members.diagnostics.ok")}>
+          {t("setup.members.diagnostics.okDescription", { count: checks.length })}
+        </Alert>
+      ) : null}
+      {checks.length > 0 ? (
+        <Stack gap="xs">
+          {checks.map((check, index) => (
+            <Alert
+              color={diagnosticColor(check.status)}
+              icon={diagnosticIcon(check.status)}
+              className={`diagnostic-alert ${check.status}`}
+              key={`${check.section}-${check.code}-${check.target}-${index}`}
+              title={diagnosticTitle(t, check)}
+            >
+              <Text size="xs" c="dimmed" mb={4}>
+                {t(`overview.diagnosticSections.${check.section}`)}
+                {check.target ? ` / ${check.target}` : ""}
+              </Text>
+              {diagnosticDescription(t, check) ? (
+                <Text size="sm">{diagnosticDescription(t, check)}</Text>
+              ) : null}
+              {diagnosticDetail(t, check) ? (
+                <Text size="xs" c="dimmed" mt={6}>
+                  {diagnosticDetail(t, check)}
+                </Text>
+              ) : null}
+            </Alert>
+          ))}
+        </Stack>
+      ) : null}
+    </Stack>
+  );
+}
+
+function diagnosticColor(status: DiagnosticCheck["status"]) {
+  if (status === "ok") {
+    return "teal";
+  }
+  if (status === "warning") {
+    return "orange";
+  }
+  return "red";
+}
+
+function diagnosticIcon(status: DiagnosticCheck["status"]) {
+  if (status === "ok") {
+    return <CheckCircle2 size={18} />;
+  }
+  if (status === "warning") {
+    return <TriangleAlert size={18} />;
+  }
+  return <XCircle size={18} />;
+}
+
+function diagnosticTitle(t: TFunction, check: DiagnosticCheck) {
+  const namespace =
+    check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
+  return t(`${namespace}.${check.code}.title`, { defaultValue: check.message });
+}
+
+function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
+  const namespace =
+    check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
+  return t(`${namespace}.${check.code}.description`, {
+    defaultValue: check.status === "ok" ? "" : check.message,
+  });
+}
+
+function diagnosticDetail(t: TFunction, check: DiagnosticCheck) {
+  if (check.status === "ok") {
+    return "";
+  }
+  const description = diagnosticDescription(t, check);
+  return description && description !== check.message ? check.message : "";
+}
+
+function PanelHeader({
+  title,
+  subtitle,
+  badge,
+  saveState,
+}: {
+  title: string;
+  subtitle: string;
+  badge?: string;
+  saveState?: "idle" | "saving" | "saved" | "error";
+}) {
+  return (
+    <Group justify="space-between" align="flex-start">
+      <Box>
+        <Group gap="xs">
+          <Title order={3}>{title}</Title>
+          {badge ? <Badge>{badge}</Badge> : null}
+        </Group>
+        <Text size="sm" c="dimmed">
+          {subtitle}
+        </Text>
+      </Box>
+      {saveState ? <AutosaveIndicator state={saveState} /> : null}
+    </Group>
+  );
+}
+
+function AutosaveIndicator({ state }: { state: "idle" | "saving" | "saved" | "error" }) {
+  const { t } = useTranslation();
+  const label = {
+    idle: t("setup.autosave.idle"),
+    saving: t("setup.autosave.saving"),
+    saved: t("setup.autosave.saved"),
+    error: t("setup.autosave.error"),
+  }[state];
+  const color = state === "error" ? "red" : state === "saved" ? "green" : "gray";
+  return (
+    <Badge color={color} variant="light" leftSection={<Save size={12} />}>
+      {label}
+    </Badge>
+  );
+}
+
+function FolderPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [picking, setPicking] = useState(false);
+  const pickDirectory = async () => {
+    setPicking(true);
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected === "string") {
+        onChange(selected);
+      }
+    } finally {
+      setPicking(false);
+    }
+  };
+  return (
+    <Group align="flex-end" wrap="nowrap">
+      <TextInput
+        label={t("setup.project.workspace")}
+        leftSection={<Folder size={16} />}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        description={t("setup.project.workspaceDescription")}
+        flex={1}
+      />
+      <Button
+        leftSection={<FolderOpen size={16} />}
+        loading={picking}
+        onClick={pickDirectory}
+        variant="default"
+      >
+        {t("setup.project.choose")}
+      </Button>
+    </Group>
+  );
+}
+
+function FilePicker({
+  label,
+  value,
+  onChange,
+  error,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+}) {
+  const { t } = useTranslation();
+  const [picking, setPicking] = useState(false);
+  const pickFile = async () => {
+    setPicking(true);
+    try {
+      const selected = await open({ directory: false, multiple: false });
+      if (typeof selected === "string") {
+        onChange(selected);
+      }
+    } finally {
+      setPicking(false);
+    }
+  };
+  return (
+    <div className="field-action-row">
+      <TextInput
+        label={label}
+        leftSection={<FileKey size={16} />}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        error={error}
+        flex={1}
+      />
+      <Button
+        className="field-action-button"
+        leftSection={<FolderOpen size={16} />}
+        loading={picking}
+        onClick={pickFile}
+        variant="default"
+      >
+        {t("setup.project.choose")}
+      </Button>
+    </div>
+  );
+}
+
+function LabeledSegmentedControl({
+  label,
+  description,
+  data,
+  value,
+  onChange,
+}: {
+  label: string;
+  description?: string;
+  data: { label: string; value: string }[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Stack gap={6}>
+      <Text size="sm" fw={500}>
+        {label}
+      </Text>
+      {description ? (
+        <Text size="xs" c="dimmed">
+          {description}
+        </Text>
+      ) : null}
+      <SegmentedControl data={data} value={value} onChange={onChange} />
+    </Stack>
+  );
+}
+
+function DefaultableLabel({
+  text,
+  tooltip,
+  onApply,
+}: {
+  text: string;
+  tooltip: string;
+  onApply: () => void;
+}) {
+  return (
+    <Group justify="space-between" wrap="nowrap" gap="xs">
+      <Text size="sm" fw={500}>
+        {text}
+      </Text>
+      <Tooltip label={tooltip} withArrow>
+        <ActionIcon variant="subtle" size="sm" onClick={onApply} aria-label={tooltip}>
+          <WandSparkles size={14} />
+        </ActionIcon>
+      </Tooltip>
+    </Group>
+  );
+}
+
+function TabErrorIcon({ label }: { label: string }) {
+  return (
+    <Tooltip label={label} withArrow>
+      <ThemeIcon color="yellow" variant="light" size="sm" radius="xl">
+        <CircleAlert size={12} />
+      </ThemeIcon>
+    </Tooltip>
+  );
+}
+
+function InfoCallout({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Alert color="yellow" icon={<CircleAlert size={18} />} title={title}>
+      {children}
+    </Alert>
+  );
+}
+
+function useAutosave(
+  form: ProjectForm,
+  config: ConfigStatus | undefined,
+  schema: typeof projectSchema,
+  save: (values: ProjectFormValues) => Promise<unknown>,
+  setSaveState: (state: "idle" | "saving" | "saved" | "error") => void,
+  enabled: boolean,
+) {
+  const previous = useRef("");
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    const serialized = JSON.stringify(form.values);
+    if (!previous.current) {
+      previous.current = serialized;
+      return;
+    }
+    if (previous.current === serialized) {
+      return;
+    }
+    previous.current = serialized;
+    if (!form.isDirty()) {
+      setSaveState("idle");
+      return;
+    }
+    if (
+      !config?.primary_project_file_exists
+      && !config?.home_project_file_exists
+    ) {
+      setSaveState("idle");
+      return;
+    }
+    const validation = schema.safeParse(form.values);
+    if (!validation.success) {
+      setSaveState("idle");
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      setSaveState("saving");
+      try {
+        await save(validation.data);
+        setSaveState("saved");
+      } catch {
+        setSaveState("error");
+      }
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [enabled, form.values, config, save, schema, setSaveState]);
+}
+
+function useSetupStatus(
+  config: ConfigStatus | undefined,
+  activeMemberCount: number,
+  values: ProjectFormValues,
+): SetupStatus {
+  const projectReady = Boolean(
+    config?.primary_project_file_exists || config?.home_project_file_exists,
+  );
+  const githubReady = isGitHubDecisionComplete(values);
+  const intelligenceReady = projectReady;
+  const membersReady = activeMemberCount > 0;
+  const done = [
+    projectReady,
+    intelligenceReady,
+    githubReady,
+    membersReady,
+  ].filter(Boolean).length;
+  return {
+    projectReady,
+    intelligenceReady,
+    githubReady,
+    membersReady,
+    done,
+    total: 4,
+    ready: projectReady && intelligenceReady && githubReady && membersReady,
+  };
+}
+
+type SetupStatus = {
+  projectReady: boolean;
+  intelligenceReady: boolean;
+  githubReady: boolean;
+  membersReady: boolean;
+  done: number;
+  total: number;
+  ready: boolean;
+};
+
+type InitialProgress = {
+  projectReady: boolean;
+  intelligenceReady: boolean;
+  githubReady: boolean;
+  membersReady: boolean;
+  done: number;
+  total: number;
+  percent: number;
+  ready: boolean;
+};
+
+function isCoreSectionReady(
+  section: CoreSection,
+  status: SetupStatus | InitialProgress,
+): boolean {
+  if (section === "project") {
+    return status.projectReady;
+  }
+  if (section === "intelligence") {
+    return status.intelligenceReady;
+  }
+  if (section === "github") {
+    return status.githubReady;
+  }
+  if (section === "members") {
+    return status.membersReady;
+  }
+  return false;
+}
+
+function getProviderKeyField(
+  provider: ProjectFormValues["llmApiType"],
+): "openaiApiKey" | "googleApiKey" | "anthropicApiKey" {
+  if (provider === "openai") {
+    return "openaiApiKey";
+  }
+  if (provider === "gemini") {
+    return "googleApiKey";
+  }
+  return "anthropicApiKey";
+}
+
+function getProviderKeyLabel(provider: ProjectFormValues["llmApiType"]): string {
+  if (provider === "openai") {
+    return "OpenAI API key";
+  }
+  if (provider === "gemini") {
+    return "Google API key";
+  }
+  return "Anthropic API key";
+}
+
+function getInitialCoreStatus(
+  values: ProjectFormValues,
+  activeMemberCount: number,
+  selectedCliAgentDetected: boolean,
+): InitialProgress {
+  const projectReady =
+    values.workspaceDir.trim().length > 0 && values.description.trim().length > 0;
+  const intelligenceReady =
+    Boolean(values.llmApiType) &&
+    Boolean(values.cliAgent) &&
+    selectedCliAgentDetected &&
+    isProviderKeyProvided(values);
+  const githubReady = isGitHubDecisionComplete(values);
+  const membersReady = activeMemberCount > 0;
+  const checks = [projectReady, intelligenceReady, githubReady, membersReady];
+  const done = checks.filter(Boolean).length;
+  const total = checks.length;
+  return {
+    projectReady,
+    intelligenceReady,
+    githubReady,
+    membersReady,
+    done,
+    total,
+    percent: Math.round((done / total) * 100),
+    ready: done === total,
+  };
+}
+
+function isGitHubDecisionComplete(values: ProjectFormValues): boolean {
+  if (values.githubDecision === "disabled") {
+    return true;
+  }
+  if (values.githubDecision !== "enabled") {
+    return false;
+  }
+  const parsed = parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl);
+  return parsed.projectValid && parsed.repositoryValid && parsed.ownerConsistent;
+}
+
+function getGitHubFieldErrors(
+  values: ProjectFormValues,
+  t: TFunction | ((key: string) => string),
+): { githubProjectUrl?: string; githubRepositoryUrl?: string } {
+  if (values.githubDecision !== "enabled") {
+    return {};
+  }
+  const parsed = parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl);
+  const errors: { githubProjectUrl?: string; githubRepositoryUrl?: string } = {};
+  if (!values.githubProjectUrl.trim()) {
+    errors.githubProjectUrl = t("setup.validation.githubProjectRequired");
+  } else if (!parsed.projectValid) {
+    errors.githubProjectUrl = t("setup.validation.githubProjectInvalid");
+  }
+  if (!values.githubRepositoryUrl.trim()) {
+    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryRequired");
+  } else if (!parsed.repositoryValid) {
+    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryInvalid");
+  } else if (parsed.projectValid && !parsed.ownerConsistent) {
+    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryOwnerMismatch");
+  }
+  return errors;
+}
+
+type MemberFieldErrors = Partial<
+  Record<
+    | "personId"
+    | "personName"
+    | "roles"
+    | "speakingStyle"
+    | "characterArchetype"
+    | "characterTraits"
+    | "characterInterests"
+    | "characterJoinWhenText"
+    | "characterAvoidWhenText"
+    | "characterContributionText"
+    | "identity"
+    | "githubUsername"
+    | "gitEmail"
+    | "githubInstallationId"
+    | "githubAppId"
+    | "githubPrivateKeyPath"
+    | "githubAccessToken"
+    | "slackBotToken"
+    | "slackAppToken"
+    | "slackChannelsText",
+    string
+  >
+>;
+
+function getMemberFieldErrors(
+  values: {
+    personType: MemberType;
+    identity: string;
+    personId: string;
+    personName: string;
+    githubUsername: string;
+    gitEmail: string;
+    githubInstallationId: string;
+    githubAppId: string;
+    githubPrivateKeyPath: string;
+    githubAccessToken: string;
+    slackBotToken: string;
+    slackAppToken: string;
+    slackChannelsText: string;
+    storedMemberSecrets: {
+      githubInstallationId: boolean;
+      githubAppId: boolean;
+      githubPrivateKeyPath: boolean;
+      githubAccessToken: boolean;
+      slackBotToken: boolean;
+      slackAppToken: boolean;
+    };
+    roles: string[];
+    speakingStyle: string;
+    characterArchetype: string;
+    characterTraits: string[];
+    characterInterests: string[];
+    characterJoinWhenText: string;
+    characterAvoidWhenText: string;
+    characterContributionText: string;
+    existingPersonIds: string[];
+    originalPersonId: string | null;
+  },
+  t: TFunction | ((key: string) => string),
+): MemberFieldErrors {
+  const errors: MemberFieldErrors = {};
+  const personId = values.personId.trim();
+  const originalPersonId = values.originalPersonId?.trim() ?? "";
+  const duplicatedPersonId = values.existingPersonIds.some(
+    (existingPersonId) =>
+      existingPersonId.trim() === personId && existingPersonId.trim() !== originalPersonId,
+  );
+  if (!personId) {
+    errors.personId = t("setup.validation.memberIdRequired");
+  } else if (!/^[a-z0-9_-]+$/.test(personId)) {
+    errors.personId = t("setup.validation.memberIdInvalid");
+  } else if (duplicatedPersonId) {
+    errors.personId = t("setup.validation.memberIdDuplicate");
+  }
+  if (!values.personName.trim()) {
+    errors.personName = t("setup.validation.memberNameRequired");
+  }
+  if (values.roles.length === 0) {
+    errors.roles = t("setup.validation.memberRolesRequired");
+  }
+  if (!values.speakingStyle.trim()) {
+    errors.speakingStyle = t("setup.validation.memberSpeakingStyleRequired");
+  }
+  if (!values.characterArchetype.trim()) {
+    errors.characterArchetype = t("setup.validation.memberCharacterArchetypeRequired");
+  }
+  if (values.characterTraits.length === 0) {
+    errors.characterTraits = t("setup.validation.memberCharacterTraitsRequired");
+  }
+  if (values.characterInterests.length === 0) {
+    errors.characterInterests = t("setup.validation.memberCharacterInterestsRequired");
+  }
+  if (!values.characterJoinWhenText.trim()) {
+    errors.characterJoinWhenText = t("setup.validation.memberCharacterJoinWhenRequired");
+  }
+  if (!values.characterAvoidWhenText.trim()) {
+    errors.characterAvoidWhenText = t("setup.validation.memberCharacterAvoidWhenRequired");
+  }
+  if (!values.characterContributionText.trim()) {
+    errors.characterContributionText = t("setup.validation.memberCharacterContributionRequired");
+  }
+
+  const usesGitHubMember = values.personType !== "";
+  if (values.personType === "github_apps") {
+    const missingGitHubReference =
+      !values.githubUsername.trim() || !values.gitEmail.trim();
+    if (missingGitHubReference && !values.identity.trim()) {
+      errors.identity = t("setup.validation.memberGithubAppsUrlRequired");
+    } else if (values.identity.trim() && !isGitHubAppsUrl(values.identity)) {
+      errors.identity = t("setup.validation.memberGithubAppsUrlInvalid");
+    }
+    if (!values.githubUsername.trim()) {
+      errors.githubUsername = t("setup.validation.memberGithubUsernameRequired");
+    }
+  } else if (usesGitHubMember) {
+    if (!values.githubUsername.trim()) {
+      errors.githubUsername = t("setup.validation.memberGithubUsernameRequired");
+    } else if (!isGitHubUsername(values.githubUsername)) {
+      errors.githubUsername = t("setup.validation.memberGithubUsernameInvalid");
+    }
+  }
+  if (usesGitHubMember && !values.gitEmail.trim()) {
+    errors.gitEmail = t("setup.validation.memberGitEmailRequired");
+  } else if (values.gitEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.gitEmail.trim())) {
+    errors.gitEmail = t("setup.validation.memberGitEmailInvalid");
+  }
+
+  if (values.personType === "github_apps") {
+    if (!values.githubInstallationId.trim()) {
+      errors.githubInstallationId = t("setup.validation.githubInstallationIdRequired");
+    } else if (
+      values.githubInstallationId.trim() &&
+      !/^\d+$/.test(values.githubInstallationId.trim())
+    ) {
+      errors.githubInstallationId = t("setup.validation.githubInstallationIdInvalid");
+    }
+    if (!values.githubAppId.trim()) {
+      errors.githubAppId = t("setup.validation.githubAppIdRequired");
+    } else if (values.githubAppId.trim() && !/^\d+$/.test(values.githubAppId.trim())) {
+      errors.githubAppId = t("setup.validation.githubAppIdInvalid");
+    }
+    if (!values.githubPrivateKeyPath.trim()) {
+      errors.githubPrivateKeyPath = t("setup.validation.githubPrivateKeyPathRequired");
+    }
+  }
+
+  if (
+    (values.personType === "machine_user" || values.personType === "proxy_agent") &&
+    !values.githubAccessToken.trim() &&
+    !values.storedMemberSecrets.githubAccessToken
+  ) {
+    errors.githubAccessToken = t("setup.validation.githubAccessTokenRequired");
+  } else if (
+    values.githubAccessToken.trim() &&
+    !isGitHubAccessToken(values.githubAccessToken)
+  ) {
+    errors.githubAccessToken = t("setup.validation.githubAccessTokenInvalid");
+  }
+
+  if (values.slackBotToken.trim() && !isSlackBotToken(values.slackBotToken)) {
+    errors.slackBotToken = t("setup.validation.slackBotTokenInvalid");
+  }
+  if (values.slackAppToken.trim() && !isSlackAppToken(values.slackAppToken)) {
+    errors.slackAppToken = t("setup.validation.slackAppTokenInvalid");
+  }
+
+  const slackChannels = values.slackChannelsText
+    .split(",")
+    .map((channel) => channel.trim())
+    .filter(Boolean);
+  if (
+    slackChannels.length > 0 &&
+    !values.slackBotToken.trim() &&
+    !values.storedMemberSecrets.slackBotToken
+  ) {
+    errors.slackBotToken = t("setup.validation.slackBotTokenRequired");
+  }
+  if (
+    slackChannels.length > 0 &&
+    !values.slackAppToken.trim() &&
+    !values.storedMemberSecrets.slackAppToken
+  ) {
+    errors.slackAppToken = t("setup.validation.slackAppTokenRequired");
+  }
+
+  const invalidSlackChannels = slackChannels.filter(
+    (channel) => !isSlackChannelReference(channel),
+  );
+  if (invalidSlackChannels.length > 0) {
+    errors.slackChannelsText = t("setup.validation.slackChannelsInvalid");
+  }
+
+  return errors;
+}
+
+function getMemberResolveErrorMessage(
+  error: unknown,
+  t: TFunction | ((key: string) => string),
+): string {
+  if (error instanceof ApiRequestError) {
+    if (
+      error.code === "invalid_github_username" ||
+      error.code === "invalid_github_apps_url"
+    ) {
+      return t("setup.validation.memberGithubIdentityNotFound");
+    }
+  }
+  return t("setup.validation.memberGithubIdentityResolveFailed");
+}
+
+function isGitHubAppsUrl(value: string): boolean {
+  const parts = value.trim().split("/");
+  return Boolean(
+    value.trim().startsWith("https://github.com/") &&
+      parts[3] === "organizations" &&
+      parts[4] &&
+      parts[5] === "settings" &&
+      parts[6] === "apps" &&
+      parts[7],
+  );
+}
+
+function getGitHubResolveInput(
+  personType: MemberType,
+  identity: string,
+  githubUsername: string,
+): string {
+  return personType === "github_apps" ? identity : githubUsername;
+}
+
+function isGitHubUsername(value: string): boolean {
+  const username = value.trim();
+  return (
+    /^[A-Za-z0-9-]{1,39}$/.test(username) &&
+    !username.startsWith("-") &&
+    !username.endsWith("-")
+  );
+}
+
+function isSlackChannelReference(value: string): boolean {
+  const channel = value.trim();
+  return (
+    /^[CGD][A-Z0-9]{8,}$/.test(channel) ||
+    /^#?[a-z0-9][a-z0-9_-]{0,79}$/.test(channel)
+  );
+}
+
+function isSlackBotToken(value: string): boolean {
+  return /^xoxb-[A-Za-z0-9-]{8,}$/.test(value.trim());
+}
+
+function isSlackAppToken(value: string): boolean {
+  return /^xapp-[A-Za-z0-9-]{8,}$/.test(value.trim());
+}
+
+function isGitHubAccessToken(value: string): boolean {
+  return /^(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})$/.test(
+    value.trim(),
+  );
+}
+
+function isProjectProviderKeyConfigured(
+  projectConfig: ProjectConfig | undefined,
+  provider: ProjectFormValues["llmApiType"],
+): boolean {
+  if (!projectConfig) {
+    return false;
+  }
+  if (provider === "openai") {
+    return projectConfig.has_openai_api_key;
+  }
+  if (provider === "gemini") {
+    return projectConfig.has_google_api_key;
+  }
+  return projectConfig.has_anthropic_api_key;
+}
+
+function isProviderKeyProvided(values: ProjectFormValues): boolean {
+  if (values.llmApiType === "openai") {
+    return values.openaiApiKey.trim().length > 0;
+  }
+  if (values.llmApiType === "gemini") {
+    return values.googleApiKey.trim().length > 0;
+  }
+  return values.anthropicApiKey.trim().length > 0;
+}
+
+function getInitialEnvFileOption(
+  config: ConfigStatus | undefined,
+): ProjectFormValues["envFileOption"] {
+  return config?.env_file_exists ? "append" : "overwrite";
+}
+
+function initialProjectValues(
+  config: ConfigStatus | undefined,
+  appLanguage: ProjectFormValues["language"],
+  projectLanguage: ProjectFormValues["language"] | null,
+  projectConfig: ProjectConfig | undefined,
+): ProjectFormValues {
+  if (projectConfig) {
+    return {
+      workspaceDir: config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "",
+      configLocation:
+        projectConfig.config_dir.startsWith(config?.cwd ?? "") ? "workspace" : "home",
+      envFileOption: getInitialEnvFileOption(config),
+      language: projectConfig.language,
+      description: projectConfig.description ?? "",
+      llmApiType: projectConfig.llm_api_type,
+      cliAgent: projectConfig.cli_agent,
+      googleApiKey: "",
+      openaiApiKey: "",
+      anthropicApiKey: "",
+      githubDecision: projectConfig.github_enabled ? "enabled" : "disabled",
+      githubEnabled: projectConfig.github_enabled,
+      githubProjectUrl: projectConfig.github_project_url ?? "",
+      githubRepositoryUrl: projectConfig.github_repository_url ?? "",
+      repoAccess: projectConfig.repo_base_url === "ssh://git@github.com" ? "ssh" : "https",
+    };
+  }
+  const cwd = config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "";
+  return {
+    workspaceDir: cwd,
+    configLocation: config?.primary_config_dir?.startsWith(cwd) ? "workspace" : "home",
+    envFileOption: getInitialEnvFileOption(config),
+    language: config?.primary_project_file_exists ? projectLanguage ?? appLanguage : appLanguage,
+    description: "",
+    llmApiType: "openai",
+    cliAgent: "codex",
+    googleApiKey: "",
+    openaiApiKey: "",
+    anthropicApiKey: "",
+    githubDecision: "",
+    githubEnabled: false,
+    githubProjectUrl: "",
+    githubRepositoryUrl: "",
+    repoAccess: "https",
+  };
+}
+
+function toProjectSetupRequest(
+  values: ProjectFormValues,
+  config: ConfigStatus | undefined,
+  options: { envFileOption?: ProjectFormValues["envFileOption"] } = {},
+): ProjectSetupRequest {
+  const workspaceConfigDir = joinPath(values.workspaceDir, ".guildbotics/config");
+  const homeConfigDir = config?.home_config_dir ?? workspaceConfigDir;
+  const github = values.githubDecision === "enabled"
+    ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
+    : null;
+  return {
+    config_dir: values.configLocation === "home" ? homeConfigDir : workspaceConfigDir,
+    env_file_path: joinPath(values.workspaceDir, ".env"),
+    env_file_option: options.envFileOption ?? values.envFileOption,
+    language: values.language,
+    description: values.description,
+    repository_name: github?.repositoryName ?? "",
+    owner: github?.owner ?? "",
+    project_id: github?.projectId ?? "",
+    github_project_url: github?.projectUrl ?? "",
+    repo_base_url: values.repoAccess === "ssh" ? "ssh://git@github.com" : "https://github.com",
+    llm_api_type: values.llmApiType,
+    cli_agent: values.cliAgent,
+    google_api_key: values.googleApiKey,
+    openai_api_key: values.openaiApiKey,
+    anthropic_api_key: values.anthropicApiKey,
+  };
+}
+
+function toProjectUpdateRequest(
+  values: ProjectFormValues,
+  config: ConfigStatus | undefined,
+  snapshot: ProjectConfig,
+): ProjectConfigUpdateRequest {
+  const github = values.githubDecision === "enabled"
+    ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
+    : null;
+  return {
+    config_dir: snapshot.config_dir || config?.primary_config_dir || "",
+    env_file_path: snapshot.env_file_path || joinPath(values.workspaceDir, ".env"),
+    language: values.language,
+    description: values.description,
+    llm_api_type: values.llmApiType,
+    cli_agent: values.cliAgent,
+    github_enabled: values.githubDecision === "enabled",
+    repository_name: github?.repositoryName ?? "",
+    owner: github?.owner ?? "",
+    project_id: github?.projectId ?? "",
+    github_project_url: github?.projectUrl ?? "",
+    repo_base_url: values.repoAccess === "ssh" ? "ssh://git@github.com" : "https://github.com",
+    google_api_key: values.googleApiKey.trim() ? values.googleApiKey : undefined,
+    openai_api_key: values.openaiApiKey.trim() ? values.openaiApiKey : undefined,
+    anthropic_api_key: values.anthropicApiKey.trim() ? values.anthropicApiKey : undefined,
+  };
+}
+
+function getSpeakingStyleTemplates(
+  t: TFunction,
+): Record<SpeakingStylePreset, string> {
+  return {
+    friendly: t("setup.members.speakingStyleDescriptions.friendly"),
+    professional: t("setup.members.speakingStyleDescriptions.professional"),
+    machine: t("setup.members.speakingStyleDescriptions.machine"),
+  };
+}
+
+function inferSpeakingStylePreset(
+  speakingStyle: string,
+  templates: Record<SpeakingStylePreset, string>,
+): SpeakingStylePreset {
+  const normalized = speakingStyle.trim();
+  if (!normalized) {
+    return "professional";
+  }
+  for (const preset of SPEAKING_STYLE_OPTIONS) {
+    if (templates[preset] === normalized) {
+      return preset;
+    }
+  }
+  return "professional";
+}
+
+type CharacterPresetExample = {
+  archetype: string;
+  traits: string[];
+  interests: string[];
+  joinWhen: string[];
+  avoidWhen: string[];
+  contributionStyle: string[];
+  relationships: string;
+};
+
+function getCharacterPresetExamples(
+  language: "en" | "ja",
+): Record<SpeakingStylePreset, CharacterPresetExample> {
+  if (language === "ja") {
+    return {
+      friendly: {
+        archetype: "親しみやすいアイデアメーカー",
+        traits: ["明るい", "共感的", "社交的"],
+        interests: ["UX", "コンテンツ企画", "コミュニティ"],
+        joinWhen: [
+          "会話が固くなっていて、ユーザー目線を足したいとき",
+          "アイデア出しや発散が必要なとき",
+        ],
+        avoidWhen: [
+          "厳密な技術詳細だけで、自分の観点を足しにくいとき",
+          "すでに結論が固まっていて、脱線しそうなとき",
+        ],
+        contributionStyle: [
+          "ユーザーの気持ちや体験を言語化する",
+          "具体案をやわらかく提案する",
+        ],
+        relationships:
+          "例:\n他メンバーAに対して: 分析力を尊敬しつつ、必要ならユーザー視点を補う。\n他メンバーBに対して: 発想を歓迎し、実現に向けた具体化を一緒に進める。",
+      },
+      professional: {
+        archetype: "戦略的プロジェクトマネージャー",
+        traits: ["戦略的", "整理上手", "責任感が強い"],
+        interests: ["アーキテクチャ", "計画立案", "品質管理"],
+        joinWhen: [
+          "設計方針、品質、リスク、優先順位が論点のとき",
+          "会話が発散していて整理が必要なとき",
+        ],
+        avoidWhen: [
+          "雑談だけでプロジェクト判断に繋がらないとき",
+          "既に十分整理されていて過剰介入になるとき",
+        ],
+        contributionStyle: [
+          "論点・制約・次アクションを明確にする",
+          "抜け漏れやリスクを短く指摘する",
+        ],
+        relationships:
+          "例:\n他メンバーAに対して: 意思決定を尊重し、議論を計画と実行可能性に接続する。\n他メンバーBに対して: 創造性を活かしつつ、実現可能な形に落とし込む支援を行う。\nチームに対して: 品質・設計整合性・リスク管理の観点を担う。",
+      },
+      machine: {
+        archetype: "正確性重視の実行支援エージェント",
+        traits: ["正確", "簡潔", "再現性重視"],
+        interests: ["仕様確認", "ログ分析", "手順最適化"],
+        joinWhen: [
+          "事実確認、手順化、エラー切り分けが必要なとき",
+          "結論を実行タスクに分解したいとき",
+        ],
+        avoidWhen: [
+          "感情的な雑談が中心で、判断材料が不足しているとき",
+          "仮説だけで具体データがないとき",
+        ],
+        contributionStyle: [
+          "根拠と前提を明示して提案する",
+          "手順と期待結果をセットで示す",
+        ],
+        relationships:
+          "例:\n他メンバーAに対して: 意思決定を実行手順へ落とし込む。\n他メンバーBに対して: アイデアを検証可能なタスクへ変換する。",
+      },
+    };
+  }
+  return {
+    friendly: {
+      archetype: "friendly_idea_contributor",
+      traits: ["friendly", "empathetic", "social"],
+      interests: ["ux", "content", "community"],
+      joinWhen: [
+        "When the discussion needs user perspective",
+        "When brainstorming is needed",
+      ],
+      avoidWhen: [
+        "When only deep technical details are discussed",
+        "When adding comments would derail a settled decision",
+      ],
+      contributionStyle: [
+        "Translate user feelings into actionable insights",
+        "Suggest concrete ideas in a lightweight tone",
+      ],
+      relationships:
+        "Example:\nWith member A: respect analysis and add user perspective when needed.\nWith member B: amplify ideas and help make them executable.",
+    },
+    professional: {
+      archetype: "strategic_project_manager",
+      traits: ["strategic", "organized", "responsible"],
+      interests: ["architecture", "planning", "quality"],
+      joinWhen: [
+        "When architecture, risk, quality, or priorities are discussed",
+        "When the conversation needs structure",
+      ],
+      avoidWhen: [
+        "When discussion is pure small talk",
+        "When the plan is already clear and intervention adds noise",
+      ],
+      contributionStyle: [
+        "Clarify constraints and next actions",
+        "Highlight risks and gaps concisely",
+      ],
+      relationships:
+        "Example:\nWith member A: connect leadership decisions to executable plans.\nWith member B: keep creativity while shaping feasible implementation.",
+    },
+    machine: {
+      archetype: "precision_execution_assistant",
+      traits: ["precise", "concise", "reproducible"],
+      interests: ["spec validation", "log analysis", "workflow optimization"],
+      joinWhen: [
+        "When facts, diagnostics, or procedures are needed",
+        "When decisions need concrete execution steps",
+      ],
+      avoidWhen: [
+        "When context is emotional only and lacks actionable details",
+        "When there is no reliable data for decision support",
+      ],
+      contributionStyle: [
+        "State assumptions and evidence explicitly",
+        "Provide steps with expected outcomes",
+      ],
+      relationships:
+        "Example:\nWith member A: convert decisions into concrete steps.\nWith member B: turn ideas into testable tasks.",
+    },
+  };
+}
+
+function parseCharacterFields(character: Record<string, unknown>): {
+  archetype: string;
+  traits: string[];
+  interests: string[];
+  joinWhen: string[];
+  avoidWhen: string[];
+  contributionStyle: string[];
+  extras: Record<string, unknown>;
+} {
+  const source = isRecord(character) ? character : {};
+  const conversation = isRecord(source.conversation_preferences)
+    ? source.conversation_preferences
+    : {};
+  const conversationExtras: Record<string, unknown> = { ...conversation };
+  delete conversationExtras.join_when;
+  delete conversationExtras.avoid_when;
+  delete conversationExtras.contribution_style;
+  const extras: Record<string, unknown> = { ...source };
+  delete extras.archetype;
+  delete extras.traits;
+  delete extras.interests;
+  delete extras.conversation_preferences;
+  if (Object.keys(conversationExtras).length > 0) {
+    extras.conversation_preferences = conversationExtras;
+  }
+
+  return {
+    archetype: stringOrEmpty(source.archetype),
+    traits: toStringList(source.traits),
+    interests: toStringList(source.interests),
+    joinWhen: toStringList(conversation.join_when),
+    avoidWhen: toStringList(conversation.avoid_when),
+    contributionStyle: toStringList(conversation.contribution_style),
+    extras,
+  };
+}
+
+function buildCharacterPayload({
+  archetype,
+  traits,
+  interests,
+  joinWhen,
+  avoidWhen,
+  contributionStyle,
+  extras,
+}: {
+  archetype: string;
+  traits: string[];
+  interests: string[];
+  joinWhen: string[];
+  avoidWhen: string[];
+  contributionStyle: string[];
+  extras: Record<string, unknown>;
+}): Record<string, unknown> {
+  const payload: Record<string, unknown> = { ...extras };
+  if (archetype.trim()) {
+    payload.archetype = archetype.trim();
+  }
+  if (traits.length > 0) {
+    payload.traits = traits;
+  }
+  if (interests.length > 0) {
+    payload.interests = interests;
+  }
+  const existingConversation = isRecord(payload.conversation_preferences)
+    ? payload.conversation_preferences
+    : {};
+  const conversation: Record<string, unknown> = { ...existingConversation };
+  if (joinWhen.length > 0) {
+    conversation.join_when = joinWhen;
+  } else {
+    delete conversation.join_when;
+  }
+  if (avoidWhen.length > 0) {
+    conversation.avoid_when = avoidWhen;
+  } else {
+    delete conversation.avoid_when;
+  }
+  if (contributionStyle.length > 0) {
+    conversation.contribution_style = contributionStyle;
+  } else {
+    delete conversation.contribution_style;
+  }
+  if (Object.keys(conversation).length > 0) {
+    payload.conversation_preferences = conversation;
+  } else {
+    delete payload.conversation_preferences;
+  }
+  return payload;
+}
+
+function splitLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function toStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => String(item).trim())
+    .filter((item) => item.length > 0);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePersonId?: string) {
+  const personId = savePersonId || config.person_id;
+  if (config.person_id && config.inherited) {
+    return {
+      config_dir: config.config_dir,
+      person_id: personId,
+      inherit_team_defaults: true,
+    };
+  }
+  if (config.person_id) {
+    return {
+      config_dir: config.config_dir,
+      person_id: personId,
+      inherit_team_defaults: false,
+      model_mapping: config.model_mapping,
+      cli_agent_mapping: config.cli_agent_mapping,
+    };
+  }
+  return {
+    config_dir: config.config_dir,
+    person_id: personId,
+    inherit_team_defaults: false,
+    model_mapping: config.model_mapping,
+    models: config.models,
+    cli_agent_mapping: config.cli_agent_mapping,
+    cli_agents: config.cli_agents,
+    brain_mapping: config.brain_mapping,
+  };
+}
+
+function updateByPath<T extends { path: string }>(
+  items: T[],
+  path: string,
+  patch: Partial<T>,
+): T[] {
+  return items.map((item) => (item.path === path ? { ...item, ...patch } : item));
+}
+
+function updateBrain(
+  assignments: BrainAssignment[],
+  name: string,
+  patch: Partial<BrainAssignment>,
+): BrainAssignment[] {
+  return assignments.map((assignment) =>
+    assignment.name === name ? { ...assignment, ...patch } : assignment,
+  );
+}
+
+function stringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function parseGitHub(projectUrl: string, repositoryUrl: string) {
+  const normalizedProjectUrl = projectUrl.trim();
+  const normalizedRepositoryUrl = repositoryUrl.trim();
+  const projectParts = normalizedProjectUrl.split("/");
+  const repoParts = normalizedRepositoryUrl.split("/");
+  const projectType = projectParts[3] ?? "";
+  const owner = projectParts[4] ?? "";
+  const projectId = projectParts[6]?.split("?")[0] ?? "";
+  const repositoryOwner = repoParts[3] ?? "";
+  const repositoryName = repoParts[4] ?? "";
+  const projectValid = Boolean(
+    normalizedProjectUrl.startsWith("https://github.com/") &&
+      ["orgs", "users"].includes(projectType) &&
+      owner &&
+      projectParts[5] === "projects" &&
+      projectId,
+  );
+  const repositoryValid = Boolean(
+    normalizedRepositoryUrl.startsWith("https://github.com/") &&
+      repositoryOwner &&
+      repositoryName,
+  );
+  const ownerConsistent = projectValid && repositoryValid && repositoryOwner === owner;
+  return {
+    owner: projectValid ? owner : "",
+    projectId: projectValid ? projectId : "",
+    repositoryName: repositoryValid && ownerConsistent ? repositoryName : "",
+    projectUrl: projectValid
+      ? `https://github.com/${projectType}/${owner}/projects/${projectId}`
+      : normalizedProjectUrl,
+    projectValid,
+    repositoryValid,
+    ownerConsistent,
+  };
+}
+
+function joinPath(base: string, suffix: string) {
+  return `${base.replace(/\/$/, "")}/${suffix}`;
+}
+
+function memberRequestToConfig(
+  request: MemberSetupRequest | MemberConfigUpdateRequest,
+): MemberConfig {
+  return {
+    person_id: request.person_id,
+    person_name: request.person_name,
+    person_type: request.person_type,
+    is_active: request.is_active,
+    github_username: request.github_username,
+    git_email: request.git_email,
+    roles: request.roles ?? [],
+    speaking_style: request.speaking_style ?? "",
+    relationships: request.relationships ?? "",
+    character: request.character ?? {},
+    github_installation_id: request.github_installation_id ?? null,
+    github_app_id: request.github_app_id ?? null,
+    github_private_key_path: request.github_private_key_path ?? "",
+    has_github_installation_id: Boolean(request.github_installation_id),
+    has_github_app_id: Boolean(request.github_app_id),
+    has_github_private_key_path: Boolean(request.github_private_key_path),
+    has_github_access_token: Boolean(request.github_access_token),
+    has_slack_bot_token: Boolean(request.slack_bot_token),
+    has_slack_app_token: Boolean(request.slack_app_token),
+    slack_channels: request.slack_channels ?? [],
+  };
+}
+
+function resolveConfigDir(
+  config: ConfigStatus | undefined,
+  workspaceDir: string,
+  configLocation: "home" | "workspace",
+): string {
+  const workspaceConfigDir = joinPath(workspaceDir, ".guildbotics/config");
+  if (configLocation === "workspace") {
+    return workspaceConfigDir;
+  }
+  return config?.home_config_dir ?? workspaceConfigDir;
+}

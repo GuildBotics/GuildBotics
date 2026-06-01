@@ -1,0 +1,517 @@
+const API_BASE = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
+let sessionToken = import.meta.env.VITE_GUILDBOTICS_API_TOKEN ?? "";
+
+export function configureApi(token: string) {
+  sessionToken = token;
+}
+
+export type ConfigStatus = {
+  cwd: string;
+  env_file: string;
+  env_file_exists: boolean;
+  primary_config_dir: string;
+  primary_project_file: string;
+  primary_project_file_exists: boolean;
+  home_config_dir: string;
+  home_project_file: string;
+  home_project_file_exists: boolean;
+  storage_dir: string;
+};
+
+export type WorkspaceChangeRequest = {
+  workspace_dir: string;
+};
+
+export type TeamSummary = {
+  project: {
+    name: string;
+    language_code: string;
+    language_name: string;
+  };
+  members: Array<{
+    person_id: string;
+    name: string;
+    is_active: boolean;
+    roles: string[];
+  }>;
+};
+
+export type RuntimeUnitStatus = {
+  target: "scheduler" | "events";
+  state: "starting" | "running" | "stopping" | "stopped" | "failed";
+  running: boolean;
+  started_at: string | null;
+  stopped_at: string | null;
+  error: string | null;
+};
+
+export type RuntimeStatus = {
+  scheduler: RuntimeUnitStatus;
+  events: RuntimeUnitStatus;
+};
+
+export type VerifyCheck = {
+  code: string;
+  status: "ok" | "warning" | "error";
+  message: string;
+  target: string;
+  context: Record<string, unknown>;
+};
+
+export type VerifyResponse = {
+  ok: boolean;
+  config: ConfigStatus;
+  active_members: string[];
+  checks: VerifyCheck[];
+  warnings: VerifyCheck[];
+  errors: VerifyCheck[];
+};
+
+export type DiagnosticCheck = {
+  section: "config" | "members" | "llm" | "cli_agent" | "github" | "slack" | "git";
+  code: string;
+  status: "ok" | "warning" | "error";
+  message: string;
+  target: string;
+  person_id: string;
+  context: Record<string, unknown>;
+};
+
+export type ScenarioDiagnosticsResponse = {
+  ok: boolean;
+  active_members: string[];
+  checks: DiagnosticCheck[];
+  warnings: DiagnosticCheck[];
+  errors: DiagnosticCheck[];
+};
+
+export type CliAgentDetection = {
+  name: "codex" | "gemini" | "claude" | "copilot";
+  executable: string;
+  detected: boolean;
+  path: string;
+};
+
+export type CliAgentDetectionsResponse = {
+  agents: CliAgentDetection[];
+};
+
+export type RuntimeEvent = {
+  type: string;
+  request_id: string | null;
+  payload: Record<string, unknown>;
+  timestamp: string;
+};
+
+export type CommandRunResponse = {
+  request_id: string;
+  output: string;
+};
+
+export type ProjectSetupRequest = {
+  config_dir: string;
+  env_file_path: string;
+  env_file_option: "skip" | "append" | "overwrite";
+  language: "en" | "ja";
+  description?: string;
+  repository_name?: string;
+  owner?: string;
+  project_id?: string;
+  github_project_url?: string;
+  repo_base_url?: "https://github.com" | "ssh://git@github.com";
+  llm_api_type: "openai" | "gemini" | "anthropic";
+  cli_agent: "codex" | "gemini" | "claude" | "copilot";
+  google_api_key?: string;
+  openai_api_key?: string;
+  anthropic_api_key?: string;
+};
+
+export type ProjectConfig = {
+  config_dir: string;
+  env_file_path: string;
+  language: "en" | "ja";
+  description: string;
+  llm_api_type: "openai" | "gemini" | "anthropic";
+  cli_agent: "codex" | "gemini" | "claude" | "copilot";
+  github_enabled: boolean;
+  github_project_url: string;
+  github_repository_url: string;
+  repo_base_url: "https://github.com" | "ssh://git@github.com";
+  has_google_api_key: boolean;
+  has_openai_api_key: boolean;
+  has_anthropic_api_key: boolean;
+};
+
+export type ProjectConfigUpdateRequest = {
+  config_dir: string;
+  env_file_path: string;
+  language: "en" | "ja";
+  description?: string;
+  llm_api_type: "openai" | "gemini" | "anthropic";
+  cli_agent: "codex" | "gemini" | "claude" | "copilot";
+  github_enabled: boolean;
+  repository_name?: string;
+  owner?: string;
+  project_id?: string;
+  github_project_url?: string;
+  repo_base_url: "https://github.com" | "ssh://git@github.com";
+  google_api_key?: string;
+  openai_api_key?: string;
+  anthropic_api_key?: string;
+};
+
+export type MemberSetupRequest = {
+  config_dir: string;
+  env_file_path: string;
+  append_env_file?: boolean;
+  person_type: "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
+  person_id: string;
+  person_name: string;
+  is_active: boolean;
+  github_username: string;
+  git_email: string;
+  roles?: string[];
+  speaking_style?: string;
+  relationships?: string;
+  character?: Record<string, unknown>;
+  github_installation_id?: number;
+  github_app_id?: number;
+  github_private_key_path?: string;
+  github_access_token?: string;
+  slack_bot_token?: string;
+  slack_app_token?: string;
+  slack_channels?: string[];
+};
+
+export type MemberResolveRequest = {
+  person_type: "human" | "machine_user" | "github_apps" | "proxy_agent";
+  identity: string;
+};
+
+export type MemberResolveResponse = {
+  person_id: string;
+  github_username: string;
+  github_user_id: number;
+  git_email: string;
+};
+
+export type MemberConfig = {
+  person_id: string;
+  person_name: string;
+  person_type: "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
+  is_active: boolean;
+  github_username: string;
+  git_email: string;
+  roles: string[];
+  speaking_style: string;
+  relationships: string;
+  character: Record<string, unknown>;
+  github_installation_id: number | null;
+  github_app_id: number | null;
+  github_private_key_path: string;
+  has_github_installation_id: boolean;
+  has_github_app_id: boolean;
+  has_github_private_key_path: boolean;
+  has_github_access_token: boolean;
+  has_slack_bot_token: boolean;
+  has_slack_app_token: boolean;
+  slack_channels: string[];
+};
+
+export type MemberConfigUpdateRequest = {
+  config_dir: string;
+  env_file_path: string;
+  original_person_id: string;
+  person_type: "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
+  person_id: string;
+  person_name: string;
+  is_active: boolean;
+  github_username: string;
+  git_email: string;
+  roles?: string[];
+  speaking_style?: string;
+  relationships?: string;
+  character?: Record<string, unknown>;
+  github_installation_id?: number;
+  github_app_id?: number;
+  github_private_key_path?: string;
+  github_access_token?: string;
+  slack_bot_token?: string;
+  slack_app_token?: string;
+  slack_channels?: string[];
+};
+
+export type MemberDeleteRequest = {
+  config_dir: string;
+  env_file_path: string;
+};
+
+export type RuntimeLog = {
+  level: string;
+  message: string;
+  request_id: string | null;
+  timestamp: string;
+};
+
+export type RoutineOption = {
+  command: string;
+  requires_github: boolean;
+};
+
+export type RoutineOptionsResponse = {
+  routines: RoutineOption[];
+};
+
+export type RoleOption = {
+  role_id: string;
+  summary: string;
+  description: string;
+};
+
+export type RoleOptionsResponse = {
+  roles: RoleOption[];
+};
+
+export type ModelDefinition = {
+  path: string;
+  provider: string;
+  model_class: string;
+  model_id: string;
+};
+
+export type CliAgentDefinition = {
+  path: string;
+  name: string;
+  env: Record<string, unknown>;
+  script: string;
+  detected: boolean;
+  detected_path: string;
+};
+
+export type BrainAssignment = {
+  name: string;
+  brain_class: string;
+  engine: "llm" | "cli";
+  target: string;
+};
+
+export type IntelligenceConfig = {
+  config_dir: string;
+  person_id: string | null;
+  inherited: boolean;
+  model_mapping: Record<string, string>;
+  models: ModelDefinition[];
+  cli_agent_mapping: Record<string, string>;
+  cli_agents: CliAgentDefinition[];
+  brain_mapping: BrainAssignment[];
+};
+
+export type IntelligenceConfigUpdateRequest = {
+  config_dir: string;
+  person_id?: string | null;
+  inherit_team_defaults?: boolean;
+  model_mapping?: Record<string, string>;
+  models?: ModelDefinition[];
+  cli_agent_mapping?: Record<string, string>;
+  cli_agents?: CliAgentDefinition[];
+  brain_mapping?: BrainAssignment[];
+};
+
+export type ConfigWriteResponse = {
+  project: { files: Array<{ path: string; action: string }> } | null;
+  member: { files: Array<{ path: string; action: string }> } | null;
+  intelligence?: { files: Array<{ path: string; action: string }> } | null;
+};
+
+export type ApiErrorPayload = {
+  code: string;
+  message: string;
+  context: Record<string, unknown>;
+};
+
+export class ApiRequestError extends Error {
+  code: string;
+  context: Record<string, unknown>;
+
+  constructor(payload: ApiErrorPayload) {
+    super(payload.message);
+    this.name = "ApiRequestError";
+    this.code = payload.code;
+    this.context = payload.context;
+  }
+}
+
+export async function getConfigStatus(): Promise<ConfigStatus> {
+  return request("/config/status");
+}
+
+export async function setWorkspace(body: WorkspaceChangeRequest): Promise<ConfigStatus> {
+  return request("/workspace", { method: "POST", body });
+}
+
+export async function getTeam(): Promise<TeamSummary> {
+  return request("/team");
+}
+
+export async function getSchedulerStatus(): Promise<RuntimeStatus> {
+  return request("/scheduler/status");
+}
+
+export async function getSchedulerRoutines(): Promise<RoutineOptionsResponse> {
+  return request("/scheduler/routines");
+}
+
+export async function getRoleOptions(language: "en" | "ja"): Promise<RoleOptionsResponse> {
+  return request(`/config/roles?language=${encodeURIComponent(language)}`);
+}
+
+export async function startScheduler(body: Record<string, unknown>): Promise<RuntimeStatus> {
+  return request("/scheduler/start", { method: "POST", body });
+}
+
+export async function stopScheduler(): Promise<RuntimeStatus> {
+  return request("/scheduler/stop", { method: "POST" });
+}
+
+export async function verify(): Promise<VerifyResponse> {
+  return request("/verify", { method: "POST" });
+}
+
+export async function runScenarioDiagnostics(
+  personId?: string,
+): Promise<ScenarioDiagnosticsResponse> {
+  const query = personId ? `?person_id=${encodeURIComponent(personId)}` : "";
+  return request(`/diagnostics/scenario${query}`, { method: "POST" });
+}
+
+export async function getCliAgentDetections(): Promise<CliAgentDetectionsResponse> {
+  return request("/intelligences/cli-agents/detection");
+}
+
+export async function getIntelligenceConfig(personId?: string): Promise<IntelligenceConfig> {
+  const query = personId ? `?person_id=${encodeURIComponent(personId)}` : "";
+  return request(`/config/intelligences${query}`);
+}
+
+export async function updateIntelligenceConfig(
+  body: IntelligenceConfigUpdateRequest,
+): Promise<ConfigWriteResponse> {
+  return request("/config/intelligences", { method: "PUT", body });
+}
+
+export async function runCommand(body: {
+  command: string;
+  args?: string[];
+  person?: string;
+  message?: string;
+}): Promise<CommandRunResponse> {
+  return request("/commands/run", { method: "POST", body });
+}
+
+export async function initConfig(body: ProjectSetupRequest): Promise<ConfigWriteResponse> {
+  return request("/config/init", { method: "POST", body });
+}
+
+export async function getProjectConfig(): Promise<ProjectConfig> {
+  return request("/config/project");
+}
+
+export async function updateProjectConfig(
+  body: ProjectConfigUpdateRequest,
+): Promise<ConfigWriteResponse> {
+  return request("/config/project", { method: "PUT", body });
+}
+
+export async function addMemberConfig(body: MemberSetupRequest): Promise<ConfigWriteResponse> {
+  return request("/config/members", { method: "POST", body });
+}
+
+export async function resolveMemberIdentity(
+  body: MemberResolveRequest,
+): Promise<MemberResolveResponse> {
+  return request("/config/members/resolve", { method: "POST", body });
+}
+
+export async function getMemberConfig(personId: string): Promise<MemberConfig> {
+  return request(`/config/members/${encodeURIComponent(personId)}`);
+}
+
+export async function updateMemberConfig(
+  personId: string,
+  body: MemberConfigUpdateRequest,
+): Promise<ConfigWriteResponse> {
+  return request(`/config/members/${encodeURIComponent(personId)}`, {
+    method: "PUT",
+    body,
+  });
+}
+
+export async function deleteMemberConfig(
+  personId: string,
+  body: MemberDeleteRequest,
+): Promise<ConfigWriteResponse> {
+  return request(`/config/members/${encodeURIComponent(personId)}`, {
+    method: "DELETE",
+    body,
+  });
+}
+
+export function subscribeEvents(onEvent: (event: RuntimeEvent) => void): () => void {
+  const socket = new WebSocket(`${websocketBase()}/events?token=${encodeURIComponent(sessionToken)}`);
+  socket.onmessage = (message) => {
+    onEvent(JSON.parse(message.data) as RuntimeEvent);
+  };
+  return () => socket.close();
+}
+
+export function subscribeLogs(onLog: (log: RuntimeLog) => void): () => void {
+  const socket = new WebSocket(`${websocketBase()}/logs?token=${encodeURIComponent(sessionToken)}`);
+  socket.onmessage = (message) => {
+    onLog(JSON.parse(message.data) as RuntimeLog);
+  };
+  return () => socket.close();
+}
+
+async function request<T>(
+  path: string,
+  options: { method?: string; body?: unknown } = {},
+): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: options.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "X-GuildBotics-Session-Token": sessionToken,
+    },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  if (!response.ok) {
+    throw new ApiRequestError(await readError(response));
+  }
+  return response.json();
+}
+
+async function readError(response: Response): Promise<ApiErrorPayload> {
+  try {
+    const payload = (await response.json()) as Partial<ApiErrorPayload>;
+    if (payload.code && payload.message) {
+      return {
+        code: payload.code,
+        message: payload.message,
+        context: payload.context ?? {},
+      };
+    }
+  } catch {
+    // Fall through to the stable fallback below.
+  }
+  return {
+    code: "http_error",
+    message: `HTTP ${response.status}`,
+    context: {},
+  };
+}
+
+function websocketBase(): string {
+  const url = new URL(API_BASE);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString().replace(/\/$/, "");
+}
