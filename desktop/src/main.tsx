@@ -31,7 +31,10 @@ startBackend()
     );
   })
   .catch((error: unknown) => {
-    document.body.innerHTML = `<pre class="startup-error">${String(error)}</pre>`;
+    const message = document.createElement("pre");
+    message.className = "startup-error";
+    message.textContent = String(error);
+    document.body.replaceChildren(message);
   });
 
 window.addEventListener("beforeunload", () => {

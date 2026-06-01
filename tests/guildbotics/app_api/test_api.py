@@ -928,6 +928,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
         def get_default_routines(self) -> list[str]:
             return ["routine"]
 
+    default_stop_timeout = 10.0
     started = threading.Event()
     release = threading.Event()
 
@@ -949,8 +950,11 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             started.set()
             release.wait(THREAD_WAIT_SECONDS)
 
-        def shutdown(self, graceful: bool = True) -> None:
+        def shutdown(
+            self, graceful: bool = True, timeout: float | None = None
+        ) -> None:
             self.shutdown_calls += 1
+            self.shutdown_timeout = timeout
             release.set()
 
     monkeypatch.setattr(
@@ -962,7 +966,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
         BlockingScheduler,
     )
 
-    runtime = AppRuntime(EventBus())
+    runtime = AppRuntime(EventBus(), stop_timeout_seconds=default_stop_timeout)
 
     first = runtime.start_scheduler(SchedulerStartRequest(only="scheduler"))
     assert first.scheduler.state == "running"
@@ -975,10 +979,62 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
     stopped = runtime.stop_scheduler()
     assert stopped.scheduler.state == "stopped"
     assert BlockingScheduler.instances[0].shutdown_calls == 1
+    assert BlockingScheduler.instances[0].shutdown_timeout == default_stop_timeout
 
     stopped_again = runtime.stop_scheduler()
     assert stopped_again.scheduler.state == "stopped"
     assert BlockingScheduler.instances[0].shutdown_calls == 1
+
+
+def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None:
+    class SetupToolStub:
+        def get_context(self, message: str = "") -> object:
+            return object()
+
+        def get_default_routines(self) -> list[str]:
+            return ["routine"]
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class StuckScheduler:
+        def __init__(
+            self,
+            context: object,
+            routine_commands: list[str],
+            consecutive_error_limit: int,
+        ) -> None:
+            self.shutdown_timeout: float | None = None
+
+        def start(self) -> None:
+            started.set()
+            release.wait(THREAD_WAIT_SECONDS)
+
+        def shutdown(
+            self, graceful: bool = True, timeout: float | None = None
+        ) -> None:
+            self.shutdown_timeout = timeout
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.get_setup_tool",
+        lambda: SetupToolStub(),
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.lifecycle.TaskScheduler",
+        StuckScheduler,
+    )
+
+    runtime = AppRuntime(EventBus(), stop_timeout_seconds=0.01)
+
+    first = runtime.start_scheduler(SchedulerStartRequest(only="scheduler"))
+    assert first.scheduler.state == "running"
+    assert started.wait(THREAD_WAIT_SECONDS)
+
+    stopped = runtime.stop_scheduler()
+    assert stopped.scheduler.state == "failed"
+    assert stopped.scheduler.running is True
+    assert stopped.scheduler.error == "Scheduler did not stop before timeout."
+    release.set()
 
 
 def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:

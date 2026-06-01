@@ -42,6 +42,7 @@ jobs:
         run: |
           uv run --with pyinstaller python -m PyInstaller \
             --name guildbotics-app-api \
+            --collect-data guildbotics \
             --onefile guildbotics/app_api/__main__.py
           mkdir -p desktop/src-tauri/binaries
           cp dist/guildbotics-app-api desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin

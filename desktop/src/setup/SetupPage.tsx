@@ -3587,6 +3587,15 @@ function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePersonId?: 
       inherit_team_defaults: true,
     };
   }
+  if (config.person_id) {
+    return {
+      config_dir: config.config_dir,
+      person_id: personId,
+      inherit_team_defaults: false,
+      model_mapping: config.model_mapping,
+      cli_agent_mapping: config.cli_agent_mapping,
+    };
+  }
   return {
     config_dir: config.config_dir,
     person_id: personId,

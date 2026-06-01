@@ -200,7 +200,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
             self._transition_locked("stopping", running=True)
 
         if scheduler is not None:
-            scheduler.shutdown(graceful=True)
+            scheduler.shutdown(graceful=True, timeout=self._stop_timeout_seconds)
         if thread is not None:
             thread.join(timeout=self._stop_timeout_seconds)
 
