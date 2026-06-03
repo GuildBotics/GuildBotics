@@ -13,9 +13,13 @@ from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
     CliAgentDetectionsResponse,
+    CommandOption,
+    CommandOptionsResponse,
     CommandRunRequest,
     ConfigStatus,
     DiagnosticCheck,
+    PromptTraceStatus,
+    PromptTraceUpdateRequest,
     RuntimeStatus,
     RuntimeUnitStatus,
     ScenarioDiagnosticsResponse,
@@ -32,6 +36,8 @@ HTTP_UNAUTHORIZED = 401
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_CONFLICT = 409
 THREAD_WAIT_SECONDS = 2.0
+DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
+DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 
 
 def _runtime_status(
@@ -76,14 +82,21 @@ class RuntimeStub:
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
         project_file = workspace_dir / ".guildbotics/config/team/project.yml"
+        config_dir = workspace_dir / ".guildbotics/config"
+        project_file_exists = project_file.exists()
         self.config_status = self.config_status.model_copy(
             update={
                 "cwd": workspace_dir,
                 "env_file": workspace_dir / ".env",
                 "env_file_exists": (workspace_dir / ".env").exists(),
-                "primary_config_dir": workspace_dir / ".guildbotics/config",
+                "primary_config_dir": config_dir,
+                "primary_config_location": "workspace",
                 "primary_project_file": project_file,
-                "primary_project_file_exists": project_file.exists(),
+                "primary_project_file_exists": project_file_exists,
+                "active_config_dir": config_dir if project_file_exists else None,
+                "active_config_location": "workspace"
+                if project_file_exists
+                else "missing",
             }
         )
         return self.config_status
@@ -107,6 +120,20 @@ class RuntimeStub:
             )
         return {"request_id": "stub-request", "output": f"ran {request.command}"}
 
+    def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
+        return CommandOptionsResponse(
+            options=[
+                CommandOption(
+                    command="hello",
+                    label="Hello",
+                    category="custom",
+                    source="workspace",
+                    path=self.config_status.cwd
+                    / ".guildbotics/config/commands/hello.py",
+                )
+            ]
+        )
+
     def get_scheduler_status(self) -> RuntimeStatus:
         return _runtime_status()
 
@@ -114,6 +141,44 @@ class RuntimeStub:
         if request.only == "events":
             return _runtime_status(events_state="running")
         return _runtime_status(scheduler_state="running", events_state="running")
+
+    def get_prompt_trace_status(
+        self, limit: int = 20, read_path: str | None = None
+    ) -> PromptTraceStatus:
+        output_trace_file = self.config_status.storage_dir / "run/prompt_trace.jsonl"
+        trace_file = Path(read_path) if read_path else output_trace_file
+        return PromptTraceStatus(
+            enabled=False,
+            env_file=self.config_status.env_file,
+            env_file_exists=self.config_status.env_file.exists(),
+            trace_file=trace_file,
+            output_trace_file=output_trace_file,
+            default_trace_file=output_trace_file,
+            trace_file_exists=False,
+            event_count=0,
+            events=[],
+        )
+
+    def update_prompt_trace(
+        self, request: PromptTraceUpdateRequest, *, limit: int = 20
+    ) -> PromptTraceStatus:
+        output_trace_file = (
+            Path(request.trace_path)
+            if request.trace_path
+            else self.config_status.storage_dir / "run/prompt_trace.jsonl"
+        )
+        return PromptTraceStatus(
+            enabled=request.enabled,
+            env_file=self.config_status.env_file,
+            env_file_exists=True,
+            trace_file=output_trace_file,
+            output_trace_file=output_trace_file,
+            default_trace_file=self.config_status.storage_dir
+            / "run/prompt_trace.jsonl",
+            trace_file_exists=False,
+            event_count=0,
+            events=[],
+        )
 
     def get_default_routines(self) -> list[str]:
         return ["workflows/ticket_driven_workflow"]
@@ -228,6 +293,279 @@ def test_workspace_change_updates_runtime_workspace(tmp_path: Path) -> None:
     )
 
 
+def test_runtime_config_status_reports_workspace_active_location(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    project_file = tmp_path / ".guildbotics/config/team/project.yml"
+    project_file.parent.mkdir(parents=True)
+    project_file.write_text("language: en\n")
+
+    status = AppRuntime(EventBus()).get_config_status()
+
+    assert status.primary_config_dir == tmp_path / ".guildbotics/config"
+    assert status.primary_config_location == "workspace"
+    assert status.active_config_dir == tmp_path / ".guildbotics/config"
+    assert status.active_config_location == "workspace"
+
+
+def test_app_runtime_command_options_describe_workspace_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    command_file = tmp_path / ".guildbotics/config/commands/workflows/demo.py"
+    command_file.parent.mkdir(parents=True)
+    command_file.write_text(
+        "\n".join(
+            [
+                "from guildbotics.integrations.ticket_manager import TicketManager",
+                "",
+                "async def main(context, title, *, dry_run='false'):",
+                '    """Run a demo workflow."""',
+                "    return title",
+            ]
+        )
+    )
+
+    person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
+    project = type(
+        "ProjectStub",
+        (),
+        {
+            "get_language_code": lambda self: "en",
+            "is_available_service": lambda self, service: False,
+        },
+    )()
+    team = type("TeamStub", (), {"project": project, "members": [person]})()
+    context = type(
+        "ContextStub",
+        (),
+        {
+            "team": team,
+            "person": person,
+            "clone_for": lambda self, selected: self,
+        },
+    )()
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    response = runtime.get_command_options()
+    option = next(item for item in response.options if item.command == "workflows/demo")
+
+    assert option.label == "Demo"
+    assert option.description == "Run a demo workflow."
+    assert option.category == "workflow"
+    assert [argument.name for argument in option.arguments] == ["title", "dry_run"]
+    assert option.requirements[0].kind == "github"
+    assert option.requirements[0].satisfied is False
+
+
+def test_app_runtime_command_options_exclude_template_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
+    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    team = type("TeamStub", (), {"project": project, "members": [person]})()
+    context = type(
+        "ContextStub",
+        (),
+        {
+            "team": team,
+            "person": person,
+            "clone_for": lambda self, selected: self,
+        },
+    )()
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    response = runtime.get_command_options()
+
+    assert response.options == []
+
+
+def test_app_runtime_command_options_seed_empty_workspace_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    project_file = tmp_path / ".guildbotics/config/team/project.yml"
+    project_file.parent.mkdir(parents=True)
+    project_file.write_text("language: ja\n")
+    commands_dir = tmp_path / ".guildbotics/config/commands"
+    commands_dir.mkdir(parents=True)
+    person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
+    project = type("ProjectStub", (), {"get_language_code": lambda self: "ja"})()
+    team = type("TeamStub", (), {"project": project, "members": [person]})()
+    context = type(
+        "ContextStub",
+        (),
+        {
+            "team": team,
+            "person": person,
+            "clone_for": lambda self, selected: self,
+        },
+    )()
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    response = runtime.get_command_options()
+
+    assert (commands_dir / "translate.md").exists()
+    assert {option.command for option in response.options} >= {
+        "translate",
+        "summarize",
+        "get-time-of-day",
+        "context-info",
+    }
+    requirements = {
+        option.command: {requirement.kind for requirement in option.requirements}
+        for option in response.options
+    }
+    assert requirements["get-time-of-day"] == {"llm"}
+    assert requirements["summarize"] == {"cli_agent"}
+    assert requirements["context-info"] == set()
+
+
+def test_app_runtime_command_options_propagate_nested_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    commands_dir = tmp_path / ".guildbotics/config/commands"
+    commands_dir.mkdir(parents=True)
+    (commands_dir / "cli-task.md").write_text(
+        "\n".join(["---", "brain: cli", "---", "Summarize ${file}."])
+    )
+    (commands_dir / "nested.yml").write_text(
+        "\n".join(
+            [
+                "commands:",
+                "  - command: cli-task file=README.md",
+                "  - prompt: Explain the summary.",
+            ]
+        )
+    )
+    person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
+    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    team = type("TeamStub", (), {"project": project, "members": [person]})()
+    context = type(
+        "ContextStub",
+        (),
+        {
+            "team": team,
+            "person": person,
+            "clone_for": lambda self, selected: self,
+        },
+    )()
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    nested = next(
+        option
+        for option in runtime.get_command_options().options
+        if option.command == "nested"
+    )
+
+    assert {requirement.kind for requirement in nested.requirements} == {
+        "cli_agent",
+        "llm",
+    }
+
+
+def test_app_runtime_command_options_resolve_brain_mapping_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    config_dir = tmp_path / ".guildbotics/config"
+    commands_dir = config_dir / "commands"
+    commands_dir.mkdir(parents=True)
+    (commands_dir / "edit.md").write_text(
+        "\n".join(["---", "brain: file_editor", "---", "Edit ${file}."])
+    )
+    brain_mapping = config_dir / "intelligences/brain_mapping.yml"
+    brain_mapping.parent.mkdir(parents=True)
+    brain_mapping.write_text(
+        "\n".join(
+            [
+                "default:",
+                "  class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain",
+                "file_editor:",
+                "  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain",
+            ]
+        )
+    )
+    person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
+    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    team = type("TeamStub", (), {"project": project, "members": [person]})()
+    context = type(
+        "ContextStub",
+        (),
+        {
+            "team": team,
+            "person": person,
+            "clone_for": lambda self, selected: self,
+        },
+    )()
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    option = runtime.get_command_options().options[0]
+
+    assert {requirement.kind for requirement in option.requirements} == {"cli_agent"}
+
+
+def test_app_runtime_command_options_extract_markdown_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    command_file = tmp_path / ".guildbotics/config/commands/translate.md"
+    command_file.parent.mkdir(parents=True)
+    command_file.write_text(
+        "\n".join(
+            [
+                "---",
+                "description: Translate ${1} to ${target}.",
+                "---",
+                "If this is ${1}, translate it into ${2}. {{ extra_note }}",
+            ]
+        )
+    )
+    person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
+    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    team = type("TeamStub", (), {"project": project, "members": [person]})()
+    context = type(
+        "ContextStub",
+        (),
+        {
+            "team": team,
+            "person": person,
+            "clone_for": lambda self, selected: self,
+        },
+    )()
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    option = runtime.get_command_options().options[0]
+
+    assert [(arg.name, arg.kind) for arg in option.arguments] == [
+        ("1", "positional"),
+        ("2", "positional"),
+        ("extra_note", "keyword"),
+        ("target", "keyword"),
+    ]
+
+
 def test_command_run_uses_runtime(tmp_path: Path) -> None:
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
 
@@ -243,6 +581,20 @@ def test_command_run_uses_runtime(tmp_path: Path) -> None:
         "request_id": "stub-request",
         "output": "ran hello",
     }
+
+
+def test_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/commands/options",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+        )
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["options"][0]["command"] == "hello"
+    assert response.json()["options"][0]["label"] == "Hello"
 
 
 def test_event_stream_replays_request_id(tmp_path: Path) -> None:
@@ -301,6 +653,43 @@ def test_scheduler_start_only_events_uses_runtime(tmp_path: Path) -> None:
     assert response.status_code == HTTP_OK
     assert response.json()["events"]["state"] == "running"
     assert response.json()["scheduler"]["state"] == "stopped"
+
+
+def test_prompt_trace_status_endpoint_uses_runtime(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    read_path = tmp_path / "old_trace.jsonl"
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/prompt-trace",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+            params={"path": str(read_path)},
+        )
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["enabled"] is False
+    assert response.json()["trace_file"] == str(read_path)
+    assert response.json()["output_trace_file"] == str(
+        tmp_path / "home/.guildbotics/data/run/prompt_trace.jsonl"
+    )
+    assert response.json()["event_count"] == 0
+
+
+def test_prompt_trace_update_endpoint_uses_runtime(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    trace_path = tmp_path / "trace.jsonl"
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/prompt-trace",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+            json={"enabled": True, "trace_path": str(trace_path)},
+        )
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["enabled"] is True
+    assert response.json()["trace_file"] == str(trace_path)
+    assert response.json()["output_trace_file"] == str(trace_path)
 
 
 def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
@@ -920,6 +1309,80 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
     runtime.get_team_summary()
 
 
+def test_app_runtime_updates_prompt_trace_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE_PATH", raising=False)
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        '{"event":"llm.request","timestamp":"2026-06-01T12:00:00+09:00",'
+        '"person_id":"alice","brain":"default","message":"hello"}\n'
+    )
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.update_prompt_trace(
+        PromptTraceUpdateRequest(enabled=True, trace_path=str(trace_path))
+    )
+
+    assert os.environ["GUILDBOTICS_PROMPT_TRACE"] == "1"
+    assert os.environ["GUILDBOTICS_PROMPT_TRACE_PATH"] == str(trace_path)
+    assert "GUILDBOTICS_PROMPT_TRACE=1" in (tmp_path / ".env").read_text()
+    assert status.enabled is True
+    assert status.trace_file == trace_path
+    assert status.event_count == 1
+    assert status.events[0].person_id == "alice"
+    assert status.events[0].prompt == "hello"
+
+
+def test_app_runtime_formats_prompt_trace_description_and_transcript(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        '{"event":"chat.reply_input","timestamp":"2026-06-01T12:00:00+09:00",'
+        '"person_id":"alice","transcript":"one\\ntwo",'
+        '"payload":{"thread_messages":[{"author":"alice","content":"hello"}]}}\n'
+        '{"event":"llm.request","timestamp":"2026-06-01T12:00:01+09:00",'
+        '"person_id":"alice","brain":"functions/answer",'
+        '"description":"system\\nprompt","message":"hello"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(trace_path))
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.get_prompt_trace_status()
+
+    assert status.events[0].description == "system\nprompt"
+    assert status.events[0].fields.get("description") is None
+    assert status.events[1].transcript == "one\ntwo"
+    assert status.events[1].fields.get("transcript") is None
+
+
+def test_app_runtime_formats_structured_prompt_trace_response(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        '{"event":"llm.response","timestamp":"2026-06-01T12:00:00+09:00",'
+        '"person_id":"alice","brain":"functions/answer",'
+        '"content":{"status":"ok","message":"こんにちは"}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(trace_path))
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.get_prompt_trace_status()
+
+    assert status.event_count == 1
+    assert status.events[0].response == (
+        '{\n  "message": "こんにちは",\n  "status": "ok"\n}'
+    )
+
+
 def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
     class SetupToolStub:
         def get_context(self, message: str = "") -> object:
@@ -940,19 +1403,19 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             context: object,
             routine_commands: list[str],
             consecutive_error_limit: int,
+            routine_interval_minutes: int,
         ) -> None:
             self.shutdown_calls = 0
             self.routine_commands = routine_commands
             self.consecutive_error_limit = consecutive_error_limit
+            self.routine_interval_minutes = routine_interval_minutes
             BlockingScheduler.instances.append(self)
 
         def start(self) -> None:
             started.set()
             release.wait(THREAD_WAIT_SECONDS)
 
-        def shutdown(
-            self, graceful: bool = True, timeout: float | None = None
-        ) -> None:
+        def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             self.shutdown_calls += 1
             self.shutdown_timeout = timeout
             release.set()
@@ -970,6 +1433,13 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
 
     first = runtime.start_scheduler(SchedulerStartRequest(only="scheduler"))
     assert first.scheduler.state == "running"
+    assert first.scheduler.routine_commands == ["routine"]
+    assert first.scheduler.max_consecutive_errors == DEFAULT_MAX_CONSECUTIVE_ERRORS
+    assert first.scheduler.routine_interval_minutes == DEFAULT_ROUTINE_INTERVAL_MINUTES
+    assert (
+        BlockingScheduler.instances[0].routine_interval_minutes
+        == DEFAULT_ROUTINE_INTERVAL_MINUTES
+    )
     assert started.wait(THREAD_WAIT_SECONDS)
 
     second = runtime.start_scheduler(SchedulerStartRequest(only="scheduler"))
@@ -1003,6 +1473,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
             context: object,
             routine_commands: list[str],
             consecutive_error_limit: int,
+            routine_interval_minutes: int,
         ) -> None:
             self.shutdown_timeout: float | None = None
 
@@ -1010,9 +1481,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
             started.set()
             release.wait(THREAD_WAIT_SECONDS)
 
-        def shutdown(
-            self, graceful: bool = True, timeout: float | None = None
-        ) -> None:
+        def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             self.shutdown_timeout = timeout
 
     monkeypatch.setattr(
@@ -1124,8 +1593,11 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
             return ["routine"]
 
     class StuckEventListener:
+        instances: ClassVar[list["StuckEventListener"]] = []
+
         def __init__(self, context: object) -> None:
             self.alive = False
+            StuckEventListener.instances.append(self)
 
         def start(self) -> None:
             self.alive = True
@@ -1158,6 +1630,12 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
     assert stopped.events.running is True
     assert stopped.events.error == "Event listener runner did not stop before timeout."
 
+    StuckEventListener.instances[0].alive = False
+    refreshed = runtime.get_scheduler_status()
+    assert refreshed.events.state == "stopped"
+    assert refreshed.events.running is False
+    assert refreshed.events.error is None
+
 
 def test_app_runtime_rejects_github_required_routine_without_integration() -> None:
     runtime = AppRuntime(EventBus())
@@ -1170,6 +1648,14 @@ def test_app_runtime_rejects_github_required_routine_without_integration() -> No
         )
 
     assert exc_info.value.code == "github_integration_required_for_routine"
+
+
+def test_app_runtime_preserves_github_requirement_for_default_ticket_routine() -> None:
+    runtime = AppRuntime(EventBus())
+
+    assert (
+        runtime.requires_github_for_routine("workflows/ticket_driven_workflow") is True
+    )
 
 
 @pytest.mark.asyncio

@@ -10,11 +10,14 @@ export type ConfigStatus = {
   env_file: string;
   env_file_exists: boolean;
   primary_config_dir: string;
+  primary_config_location: "workspace" | "home" | "custom";
   primary_project_file: string;
   primary_project_file_exists: boolean;
   home_config_dir: string;
   home_project_file: string;
   home_project_file_exists: boolean;
+  active_config_dir: string | null;
+  active_config_location: "workspace" | "home" | "custom" | "missing";
   storage_dir: string;
 };
 
@@ -43,11 +46,57 @@ export type RuntimeUnitStatus = {
   started_at: string | null;
   stopped_at: string | null;
   error: string | null;
+  routine_commands: string[];
+  max_consecutive_errors: number | null;
+  routine_interval_minutes: number | null;
+  active_member_count: number | null;
+  worker_count: number | null;
+  workflow_command: string | null;
+  subscription_count: number | null;
+  listener_count: number | null;
+  cycle_count: number | null;
+  cycle_failure_count: number | null;
+  events_drained_count: number | null;
+  events_delivered_count: number | null;
+  events_skipped_processed_count: number | null;
 };
 
 export type RuntimeStatus = {
   scheduler: RuntimeUnitStatus;
   events: RuntimeUnitStatus;
+};
+
+export type PromptTraceEntry = {
+  event: string;
+  timestamp: string;
+  person_id: string;
+  brain: string;
+  command: string;
+  target: string;
+  cwd: string;
+  description: string;
+  transcript: string;
+  prompt: string;
+  response: string;
+  error: string;
+  fields: Record<string, unknown>;
+};
+
+export type PromptTraceStatus = {
+  enabled: boolean;
+  env_file: string;
+  env_file_exists: boolean;
+  trace_file: string;
+  output_trace_file: string;
+  default_trace_file: string;
+  trace_file_exists: boolean;
+  event_count: number;
+  events: PromptTraceEntry[];
+};
+
+export type PromptTraceUpdateRequest = {
+  enabled: boolean;
+  trace_path?: string;
 };
 
 export type VerifyCheck = {
@@ -106,6 +155,36 @@ export type RuntimeEvent = {
 export type CommandRunResponse = {
   request_id: string;
   output: string;
+};
+
+export type CommandArgumentOption = {
+  name: string;
+  kind: "positional" | "keyword";
+  required: boolean;
+  default: string;
+};
+
+export type CommandRequirement = {
+  kind: "github" | "slack" | "cli_agent" | "llm";
+  satisfied: boolean;
+  message: string;
+};
+
+export type CommandOption = {
+  command: string;
+  label: string;
+  description: string;
+  category: "workflow" | "function" | "example" | "custom";
+  source: "workspace" | "home" | "template";
+  path: string;
+  arguments: CommandArgumentOption[];
+  supports_raw_args: boolean;
+  recommended_input: string;
+  requirements: CommandRequirement[];
+};
+
+export type CommandOptionsResponse = {
+  options: CommandOption[];
 };
 
 export type ProjectSetupRequest = {
@@ -181,6 +260,8 @@ export type MemberSetupRequest = {
   slack_bot_token?: string;
   slack_app_token?: string;
   slack_channels?: string[];
+  routine_commands?: string[];
+  task_schedules?: MemberTaskSchedule[];
 };
 
 export type MemberResolveRequest = {
@@ -216,6 +297,13 @@ export type MemberConfig = {
   has_slack_bot_token: boolean;
   has_slack_app_token: boolean;
   slack_channels: string[];
+  routine_commands: string[];
+  task_schedules: MemberTaskSchedule[];
+};
+
+export type MemberTaskSchedule = {
+  command: string;
+  schedules: string[];
 };
 
 export type MemberConfigUpdateRequest = {
@@ -239,6 +327,8 @@ export type MemberConfigUpdateRequest = {
   slack_bot_token?: string;
   slack_app_token?: string;
   slack_channels?: string[];
+  routine_commands?: string[];
+  task_schedules?: MemberTaskSchedule[];
 };
 
 export type MemberDeleteRequest = {
@@ -252,6 +342,8 @@ export type RuntimeLog = {
   request_id: string | null;
   timestamp: string;
 };
+
+export type StreamStatus = "connecting" | "connected" | "disconnected" | "error";
 
 export type RoutineOption = {
   command: string;
@@ -373,6 +465,27 @@ export async function stopScheduler(): Promise<RuntimeStatus> {
   return request("/scheduler/stop", { method: "POST" });
 }
 
+export async function getPromptTrace(
+  limit = 20,
+  path?: string,
+): Promise<PromptTraceStatus> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (path) {
+    params.set("path", path);
+  }
+  return request(`/prompt-trace?${params.toString()}`);
+}
+
+export async function updatePromptTrace(
+  body: PromptTraceUpdateRequest,
+  limit = 20,
+): Promise<PromptTraceStatus> {
+  return request(`/prompt-trace?limit=${encodeURIComponent(String(limit))}`, {
+    method: "PUT",
+    body,
+  });
+}
+
 export async function verify(): Promise<VerifyResponse> {
   return request("/verify", { method: "POST" });
 }
@@ -404,8 +517,14 @@ export async function runCommand(body: {
   args?: string[];
   person?: string;
   message?: string;
+  cwd?: string;
 }): Promise<CommandRunResponse> {
   return request("/commands/run", { method: "POST", body });
+}
+
+export async function getCommandOptions(person?: string): Promise<CommandOptionsResponse> {
+  const query = person ? `?person=${encodeURIComponent(person)}` : "";
+  return request(`/commands/options${query}`);
 }
 
 export async function initConfig(body: ProjectSetupRequest): Promise<ConfigWriteResponse> {
@@ -456,19 +575,33 @@ export async function deleteMemberConfig(
   });
 }
 
-export function subscribeEvents(onEvent: (event: RuntimeEvent) => void): () => void {
+export function subscribeEvents(
+  onEvent: (event: RuntimeEvent) => void,
+  onStatus?: (status: StreamStatus) => void,
+): () => void {
   const socket = new WebSocket(`${websocketBase()}/events?token=${encodeURIComponent(sessionToken)}`);
+  onStatus?.("connecting");
+  socket.onopen = () => onStatus?.("connected");
   socket.onmessage = (message) => {
     onEvent(JSON.parse(message.data) as RuntimeEvent);
   };
+  socket.onerror = () => onStatus?.("error");
+  socket.onclose = () => onStatus?.("disconnected");
   return () => socket.close();
 }
 
-export function subscribeLogs(onLog: (log: RuntimeLog) => void): () => void {
+export function subscribeLogs(
+  onLog: (log: RuntimeLog) => void,
+  onStatus?: (status: StreamStatus) => void,
+): () => void {
   const socket = new WebSocket(`${websocketBase()}/logs?token=${encodeURIComponent(sessionToken)}`);
+  onStatus?.("connecting");
+  socket.onopen = () => onStatus?.("connected");
   socket.onmessage = (message) => {
     onLog(JSON.parse(message.data) as RuntimeLog);
   };
+  socket.onerror = () => onStatus?.("error");
+  socket.onclose = () => onStatus?.("disconnected");
   return () => socket.close();
 }
 

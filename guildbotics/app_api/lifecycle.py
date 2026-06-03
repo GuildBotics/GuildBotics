@@ -4,7 +4,7 @@ import threading
 import traceback
 from collections.abc import Callable
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
@@ -55,6 +55,7 @@ class RuntimeLifecycleService:
                 self._scheduler.start(
                     routine_commands=routine_commands,
                     max_consecutive_errors=request.max_consecutive_errors,
+                    routine_interval_minutes=request.routine_interval_minutes,
                 )
             else:
                 self._events.start()
@@ -112,18 +113,24 @@ class _RuntimeLifecycle:
             if state == "stopped":
                 error = None
 
-        self._status = RuntimeUnitStatus(
-            target=self._target,
-            state=state,
-            running=running,
-            started_at=started_at,
-            stopped_at=stopped_at,
-            error=error,
+        self._status = self._status.model_copy(
+            update={
+                "target": self._target,
+                "state": state,
+                "running": running,
+                "started_at": started_at,
+                "stopped_at": stopped_at,
+                "error": error,
+            }
         )
         self._event_bus.publish_event(
             f"{self._target}.{state}", self._status.model_dump()
         )
         return self._status
+
+    def _update_metadata_locked(self, values: dict[str, Any]) -> None:
+        if values:
+            self._status = self._status.model_copy(update=values)
 
     def _refresh_locked(self) -> None:
         return
@@ -160,6 +167,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         *,
         routine_commands: list[str],
         max_consecutive_errors: int,
+        routine_interval_minutes: int,
     ) -> RuntimeUnitStatus:
         with self._lock:
             self._refresh_locked()
@@ -172,6 +180,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
                 self._context_factory(),
                 routine_commands,
                 consecutive_error_limit=max_consecutive_errors,
+                routine_interval_minutes=routine_interval_minutes,
             )
         except Exception as exc:
             self._mark_failed(exc)
@@ -186,6 +195,14 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         with self._lock:
             self._scheduler = scheduler
             self._thread = thread
+            self._update_metadata_locked(
+                {
+                    "routine_commands": list(routine_commands),
+                    "max_consecutive_errors": max_consecutive_errors,
+                    "routine_interval_minutes": routine_interval_minutes,
+                    **_runtime_summary(scheduler),
+                }
+            )
             status = self._transition_locked("running", running=True)
         thread.start()
         return status.model_copy()
@@ -206,11 +223,13 @@ class SchedulerLifecycle(_RuntimeLifecycle):
 
         with self._lock:
             if thread is not None and thread.is_alive():
+                self._update_metadata_locked(_runtime_summary(scheduler))
                 return self._transition_locked(
                     "failed",
                     running=True,
                     error="Scheduler did not stop before timeout.",
                 ).model_copy()
+            self._update_metadata_locked({"worker_count": 0})
             self._scheduler = None
             self._thread = None
             return self._transition_locked("stopped", running=False).model_copy()
@@ -236,12 +255,15 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         if (
             self._thread is not None
             and not self._thread.is_alive()
-            and self._status.state != "failed"
+            and (self._status.state != "failed" or self._status.running)
         ):
+            self._update_metadata_locked({"worker_count": 0})
             self._scheduler = None
             self._thread = None
             if self._status.state != "stopped":
                 self._transition_locked("stopped", running=False)
+        elif self._scheduler is not None:
+            self._update_metadata_locked(_runtime_summary(self._scheduler))
 
 
 class EventListenerLifecycle(_RuntimeLifecycle):
@@ -276,6 +298,7 @@ class EventListenerLifecycle(_RuntimeLifecycle):
 
         with self._lock:
             self._runner = runner
+            self._update_metadata_locked(_runtime_summary(runner))
             if runner.is_alive():
                 status = self._transition_locked("running", running=True)
             else:
@@ -296,11 +319,14 @@ class EventListenerLifecycle(_RuntimeLifecycle):
 
         with self._lock:
             if runner is not None and runner.is_alive():
+                self._update_metadata_locked(_runtime_summary(runner))
                 return self._transition_locked(
                     "failed",
                     running=True,
                     error="Event listener runner did not stop before timeout.",
                 ).model_copy()
+            if runner is not None:
+                self._update_metadata_locked(_runtime_summary(runner))
             self._runner = None
             return self._transition_locked("stopped", running=False).model_copy()
 
@@ -308,11 +334,14 @@ class EventListenerLifecycle(_RuntimeLifecycle):
         if (
             self._runner is not None
             and not self._runner.is_alive()
-            and self._status.state != "failed"
+            and (self._status.state != "failed" or self._status.running)
         ):
+            self._update_metadata_locked(_runtime_summary(self._runner))
             self._runner = None
             if self._status.state != "stopped":
                 self._transition_locked("stopped", running=False)
+        elif self._runner is not None:
+            self._update_metadata_locked(_runtime_summary(self._runner))
 
 
 def _selected_targets(only: str | None) -> list[RuntimeTarget]:
@@ -325,3 +354,15 @@ def _selected_targets(only: str | None) -> list[RuntimeTarget]:
 
 def _timestamp() -> str:
     return datetime.now().astimezone().isoformat()
+
+
+def _runtime_summary(runtime: object | None) -> dict[str, Any]:
+    if runtime is None:
+        return {}
+    get_status_summary = getattr(runtime, "get_status_summary", None)
+    if not callable(get_status_summary):
+        return {}
+    summary = get_status_summary()
+    if isinstance(summary, dict):
+        return summary
+    return {}

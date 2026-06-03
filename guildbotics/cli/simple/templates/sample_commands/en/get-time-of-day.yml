@@ -1,0 +1,7 @@
+description: Determine the current time of day and generate a suitable greeting.
+commands:
+  - name: current_time
+    script: echo "The current time is `date`."
+  - name: time_of_day
+    command: functions/identify_item item_type="Time of day" candidates="Early morning, Morning, Noon, Afternoon, Evening, Night, Late night"
+  - prompt: Please provide a suitable greeting for the current time of day.

@@ -12,7 +12,7 @@ from guildbotics.cli.simple.setup_service import (
     SimpleProjectSetupService,
 )
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
-from guildbotics.utils.fileio import load_yaml_file
+from guildbotics.utils.fileio import load_yaml_file, save_yaml_file
 
 
 def test_write_project_creates_cli_compatible_files(tmp_path: Path) -> None:
@@ -40,6 +40,10 @@ def test_write_project_creates_cli_compatible_files(tmp_path: Path) -> None:
     assert config_dir / "team/project.yml" in created_paths
     assert config_dir / "intelligences/model_mapping.yml" in created_paths
     assert config_dir / "intelligences/cli_agent_mapping.yml" in created_paths
+    assert config_dir / "commands/translate.md" in created_paths
+    assert config_dir / "commands/summarize.md" in created_paths
+    assert config_dir / "commands/get-time-of-day.yml" in created_paths
+    assert config_dir / "commands/context-info.md" in created_paths
     assert env_file_path in created_paths
     assert "OPENAI_API_KEY=test-openai-key" in env_file_path.read_text()
 
@@ -70,6 +74,34 @@ def test_write_project_without_github_creates_loadable_core_config(
     assert team.project.repositories == []
     assert team.project.services == {}
     assert "GOOGLE_API_KEY=test-google-key" in env_file_path.read_text()
+    assert "指定した2言語間で翻訳" in (config_dir / "commands/translate.md").read_text()
+
+
+def test_write_project_does_not_copy_samples_when_commands_exist(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file_path = tmp_path / ".env"
+    existing_command = config_dir / "commands/custom.md"
+    existing_command.parent.mkdir(parents=True)
+    existing_command.write_text("custom")
+
+    result = SimpleProjectSetupService().write_project(
+        ProjectSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file_path,
+            env_file_option="overwrite",
+            language="ja",
+            llm_api_type="gemini",
+            cli_agent="claude",
+            google_api_key="test-google-key",
+        )
+    )
+
+    created_paths = {created_file.path for created_file in result.files}
+    assert existing_command.read_text() == "custom"
+    assert config_dir / "commands/translate.md" not in created_paths
+    assert not (config_dir / "commands/translate.md").exists()
 
 
 def test_project_service_parses_github_urls() -> None:
@@ -237,7 +269,9 @@ def test_write_person_handles_braces_in_free_text(tmp_path: Path) -> None:
     assert "{pm}" in text
 
 
-def test_update_project_is_non_destructive_for_env_and_cli_agents(tmp_path: Path) -> None:
+def test_update_project_is_non_destructive_for_env_and_cli_agents(
+    tmp_path: Path,
+) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     env_file = tmp_path / ".env"
     env_file.write_text("OPENAI_API_KEY=existing-openai\nEXTRA=value")
@@ -274,6 +308,8 @@ def test_update_project_is_non_destructive_for_env_and_cli_agents(tmp_path: Path
     )
 
     assert custom_cli_file.read_text() == "script: echo custom"
+    assert (config_dir / "commands/translate.md").exists()
+    assert "指定した2言語間で翻訳" in (config_dir / "commands/translate.md").read_text()
     env_text = env_file.read_text()
     assert "OPENAI_API_KEY=existing-openai" in env_text
     assert "EXTRA=value" in env_text
@@ -328,6 +364,111 @@ def test_member_read_update_delete_with_slack(tmp_path: Path) -> None:
     assert snapshot.has_slack_bot_token is True
     assert snapshot.slack_channels == ["C1"]
     assert snapshot.character["archetype"] == "creative_designer"
+
+
+def test_member_config_round_trips_patrol_settings(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file = tmp_path / ".env"
+    service = SimplePersonSetupService()
+
+    service.write_person(
+        PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            append_env_file=False,
+            person_type="machine_user",
+            person_id="alice",
+            person_name="Alice",
+            is_active=True,
+            github_username="alice",
+            git_email="1+alice@users.noreply.github.com",
+            roles=["architect"],
+            speaking_style="style-a",
+            routine_commands=["workflows/ticket_driven_workflow"],
+            task_schedules=[
+                {
+                    "command": "reports/morning_summary region=jp",
+                    "schedules": ["0 9 * * 1-5", "30 14 * * *"],
+                }
+            ],
+        )
+    )
+
+    snapshot = service.read_person_config(
+        config_dir=config_dir,
+        person_id="alice",
+        env_file_path=env_file,
+    )
+
+    assert snapshot.routine_commands == ["workflows/ticket_driven_workflow"]
+    assert [schedule.model_dump() for schedule in snapshot.task_schedules] == [
+        {
+            "command": "reports/morning_summary region=jp",
+            "schedules": ["0 9 * * 1-5", "30 14 * * *"],
+        }
+    ]
+
+    service.update_person(
+        PersonUpdateInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            original_person_id="alice",
+            append_env_file=False,
+            person_type="machine_user",
+            person_id="alice",
+            person_name="Alice",
+            is_active=True,
+            github_username="alice",
+            git_email="1+alice@users.noreply.github.com",
+            roles=["architect"],
+            speaking_style="style-a",
+            routine_commands=[],
+            task_schedules=[],
+        )
+    )
+
+    updated = load_yaml_file(config_dir / "team/members/alice/person.yml")
+    assert "routine_commands" not in updated
+    assert "task_schedules" not in updated
+
+
+def test_read_person_config_skips_invalid_task_schedules(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file = tmp_path / ".env"
+    service = SimplePersonSetupService()
+    service.write_person(
+        PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            append_env_file=False,
+            person_type="machine_user",
+            person_id="alice",
+            person_name="Alice",
+            is_active=True,
+            github_username="alice",
+            git_email="1+alice@users.noreply.github.com",
+            roles=["architect"],
+            speaking_style="style-a",
+        )
+    )
+    person_file = config_dir / "team/members/alice/person.yml"
+    person_data = load_yaml_file(person_file)
+    person_data["task_schedules"] = [
+        {"command": "reports/morning_summary", "schedules": ["0 9 * * 1-5"]},
+        {"command": "bad", "schedules": ["invalid cron"]},
+        "not a schedule",
+    ]
+    save_yaml_file(person_file, person_data)
+
+    snapshot = service.read_person_config(
+        config_dir=config_dir,
+        person_id="alice",
+        env_file_path=env_file,
+    )
+
+    assert [schedule.model_dump() for schedule in snapshot.task_schedules] == [
+        {"command": "reports/morning_summary", "schedules": ["0 9 * * 1-5"]}
+    ]
 
 
 def test_read_person_config_exposes_non_secret_github_apps_values(

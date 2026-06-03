@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "dialog:allow-open",
+    "shell:allow-open",
     {
       "identifier": "shell:allow-execute",
       "allow": [

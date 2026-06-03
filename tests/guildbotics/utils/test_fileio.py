@@ -7,6 +7,7 @@ from guildbotics.utils.fileio import (
     find_package_subdir,
     get_config_path,
     get_memory_repo_path,
+    get_primary_config_path,
     load_markdown_with_frontmatter,
     load_yaml_file,
     save_yaml_file,
@@ -16,7 +17,7 @@ from guildbotics.utils.fileio import (
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_load_markdown_with_frontmatter_handles_newlines(tmp_path, newline):
     """Front matter parses correctly when files use LF or CRLF newlines."""
-    content = ("---\n" "brain: cli\n" "---\n" "Body text\n").replace("\n", newline)
+    content = ("---\nbrain: cli\n---\nBody text\n").replace("\n", newline)
 
     path = tmp_path / "prompt.md"
     path.write_text(content, encoding="utf-8")
@@ -91,10 +92,22 @@ def test_get_config_path_language_specific_and_fallback(tmp_path, monkeypatch):
     assert resolved_fallback == en_file
 
 
+def test_get_primary_config_path_uses_absolute_workspace_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+
+    assert get_primary_config_path(Path("team/project.yml")) == (
+        tmp_path / ".guildbotics/config/team/project.yml"
+    )
+
+
 def test_get_memory_repo_path_uses_storage_root(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    assert get_memory_repo_path("alice") == tmp_path / ".guildbotics" / "data" / "memory" / "alice"
+    assert (
+        get_memory_repo_path("alice")
+        == tmp_path / ".guildbotics" / "data" / "memory" / "alice"
+    )
 
 
 def test_clean_data_removes_none_and_empty_keys():

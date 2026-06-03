@@ -1,0 +1,7 @@
+description: 現在時刻から時間帯を判定し、自然な挨拶を生成します。
+commands:
+  - name: current_time
+    script: echo "現在の時刻は`date +%T`です"
+  - name: time_of_day
+    command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
+  - prompt: 現在の時間帯にふさわしい挨拶をしてください

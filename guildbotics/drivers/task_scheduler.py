@@ -7,6 +7,8 @@ from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
 from guildbotics.runtime import Context
 
+DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
+
 
 class TaskScheduler:
     def __init__(
@@ -14,6 +16,7 @@ class TaskScheduler:
         context: Context,
         default_routine_commands: list[str],
         consecutive_error_limit: int = 3,
+        routine_interval_minutes: int = DEFAULT_ROUTINE_INTERVAL_MINUTES,
     ):
         """
         Initialize the TaskScheduler with a list of jobs.
@@ -22,12 +25,15 @@ class TaskScheduler:
             default_routine_commands (list[str]): List of default routine commands to run.
             consecutive_error_limit (int): Maximum number of consecutive errors allowed
                 before stopping the worker loop.
+            routine_interval_minutes (int): Minimum interval between routine command
+                executions for each worker.
         """
         self.context = context
         self.default_routine_commands = default_routine_commands
         # Stop the scheduling loop for a worker when this many errors occur consecutively.
         # A non-positive value is treated as 1 to avoid infinite loops on error.
         self.consecutive_error_limit = max(1, int(consecutive_error_limit))
+        self.routine_interval_minutes = max(1, int(routine_interval_minutes))
         self.scheduled_tasks_list = {
             p: p.get_scheduled_commands() for p in context.team.members
         }
@@ -75,6 +81,18 @@ class TaskScheduler:
                     remaining = max(0.0, deadline - time.monotonic())
                     t.join(timeout=remaining)
 
+    def get_status_summary(self) -> dict[str, int]:
+        """Return lightweight runtime counters for GUI status displays."""
+        active_member_count = sum(
+            1 for person in self.context.team.members if person.is_active
+        )
+        worker_count = sum(1 for thread in self._threads if thread.is_alive())
+        return {
+            "active_member_count": active_member_count,
+            "worker_count": worker_count,
+            "routine_interval_minutes": self.routine_interval_minutes,
+        }
+
     def _process_tasks_list(
         self, person: Person, scheduled_tasks: list[ScheduledCommand]
     ) -> None:
@@ -94,6 +112,7 @@ class TaskScheduler:
             else self.default_routine_commands
         )
         routine_command_index = 0
+        next_routine_time: datetime.datetime | None = None
         consecutive_errors = 0
         try:
             while not self._stop_event.is_set():
@@ -127,16 +146,22 @@ class TaskScheduler:
                 if self._stop_event.is_set():
                     break
 
-                routine_command = (
-                    routine_commands[routine_command_index % len(routine_commands)]
-                    if routine_commands
-                    else ""
+                routine_due = (
+                    next_routine_time is None or start_time >= next_routine_time
                 )
-                routine_command_index += 1
+                routine_command = ""
+                if routine_commands and routine_due:
+                    routine_command = routine_commands[
+                        routine_command_index % len(routine_commands)
+                    ]
+                    routine_command_index += 1
 
                 if routine_command and not self._stop_event.is_set():
                     ok = loop.run_until_complete(
                         run_command(context, routine_command, "routine")
+                    )
+                    next_routine_time = datetime.datetime.now() + datetime.timedelta(
+                        minutes=self.routine_interval_minutes
                     )
                     if not ok and not self._stop_event.is_set():
                         consecutive_errors, should_stop = (
