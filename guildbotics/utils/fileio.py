@@ -78,8 +78,10 @@ def get_primary_config_path(path: Path) -> Path:
     Returns:
         Path: The absolute path to the configuration file.
     """
-    config_dir = os.getenv("GUILDBOTICS_CONFIG_DIR", CONFIG_PATH)
-    return Path(config_dir) / path
+    config_dir = Path(os.getenv("GUILDBOTICS_CONFIG_DIR", CONFIG_PATH)).expanduser()
+    if not config_dir.is_absolute():
+        config_dir = Path.cwd() / config_dir
+    return config_dir / path
 
 
 def get_home_config_path(path: Path) -> Path:

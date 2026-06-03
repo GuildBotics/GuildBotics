@@ -14,10 +14,12 @@ from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yam
 
 BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
+SAMPLE_COMMANDS_PATH = TEMPLATE_PATH / "sample_commands"
 GITHUB_URL = "https://github.com/"
 GITHUB_APPS_URL_MIN_PARTS = 8
 GITHUB_PROJECT_URL_MIN_PARTS = 7
 GITHUB_REPOSITORY_URL_MIN_PARTS = 5
+CRON_FIELD_COUNT = 5
 HTTP_OK = 200
 GITHUB_USER_LOOKUP_TIMEOUT_SECONDS = 10.0
 SLACK_CHANNEL_ID_PATTERN = re.compile(r"^[CGD][A-Z0-9]{8,}$")
@@ -175,6 +177,28 @@ class ProjectUpdateInput(BaseModel):
         return self
 
 
+class PersonTaskScheduleInput(BaseModel):
+    command: str
+    schedules: list[str] = Field(default_factory=list)
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, value: str) -> str:
+        command = value.strip()
+        if not command:
+            raise ValueError("command is required")
+        return command
+
+    @field_validator("schedules")
+    @classmethod
+    def validate_schedules(cls, value: list[str]) -> list[str]:
+        schedules = [schedule.strip() for schedule in value if schedule.strip()]
+        for schedule in schedules:
+            if len(schedule.split()) != CRON_FIELD_COUNT:
+                raise ValueError("schedule must be a five-field cron expression")
+        return schedules
+
+
 class PersonSetupInput(BaseModel):
     config_dir: Path
     env_file_path: Path
@@ -196,6 +220,8 @@ class PersonSetupInput(BaseModel):
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_channels: list[str] = Field(default_factory=list)
+    routine_commands: list[str] = Field(default_factory=list)
+    task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
 
     @field_validator("person_id")
     @classmethod
@@ -248,6 +274,8 @@ class PersonConfigSnapshot(BaseModel):
     has_slack_bot_token: bool = False
     has_slack_app_token: bool = False
     slack_channels: list[str] = Field(default_factory=list)
+    routine_commands: list[str] = Field(default_factory=list)
+    task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
 
 
 class PersonUpdateInput(PersonSetupInput):
@@ -395,6 +423,8 @@ class SimpleProjectSetupService:
             dst_file.write_text(src_file.read_text())
             files.append(CreatedFile(path=dst_file, action="create"))
 
+        files.extend(self.ensure_sample_commands(config.config_dir, config.language))
+
         if config.env_file_option != "skip":
             env_file = self.render_env_file(config)
             config.env_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -408,6 +438,33 @@ class SimpleProjectSetupService:
                 files.append(CreatedFile(path=config.env_file_path, action="append"))
 
         return ProjectSetupResult(files=files)
+
+    def ensure_sample_commands(
+        self, config_dir: Path, language: str
+    ) -> list[CreatedFile]:
+        commands_dir = config_dir / "commands"
+        if commands_dir.exists() and any(
+            path.is_file() for path in commands_dir.rglob("*")
+        ):
+            return []
+
+        sample_dir = SAMPLE_COMMANDS_PATH / language
+        if not sample_dir.exists():
+            sample_dir = SAMPLE_COMMANDS_PATH / "en"
+        if not sample_dir.exists():
+            return []
+
+        files: list[CreatedFile] = []
+        for src_file in sample_dir.rglob("*"):
+            if not src_file.is_file():
+                continue
+            dst_file = commands_dir / src_file.relative_to(sample_dir)
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dst_file)
+            if dst_file.suffix == ".sh":
+                dst_file.chmod(0o755)
+            files.append(CreatedFile(path=dst_file, action="create"))
+        return files
 
     def update_project(self, config: ProjectUpdateInput) -> ProjectSetupResult:
         files: list[CreatedFile] = []
@@ -506,6 +563,8 @@ class SimpleProjectSetupService:
                     action="update" if env_file_existed else "create",
                 )
             )
+
+        files.extend(self.ensure_sample_commands(config.config_dir, config.language))
 
         return ProjectSetupResult(files=files)
 
@@ -636,6 +695,16 @@ class SimplePersonSetupService:
             has_slack_bot_token=bool(env.get(f"{env_prefix}_SLACK_BOT_TOKEN")),
             has_slack_app_token=bool(env.get(f"{env_prefix}_SLACK_APP_TOKEN")),
             slack_channels=channels,
+            routine_commands=[
+                str(command).strip()
+                for command in person_data.get("routine_commands", [])
+                if str(command).strip()
+            ],
+            task_schedules=[
+                PersonTaskScheduleInput.model_validate(schedule)
+                for schedule in person_data.get("task_schedules", [])
+                if isinstance(schedule, dict)
+            ],
         )
 
     def parse_github_apps_url(self, url: str) -> str:
@@ -823,6 +892,18 @@ class SimplePersonSetupService:
                 for channel in config.slack_channels
                 if channel
             ]
+        routine_commands = [
+            command.strip() for command in config.routine_commands if command.strip()
+        ]
+        if routine_commands:
+            person_config["routine_commands"] = routine_commands
+        task_schedules = [
+            schedule.model_dump()
+            for schedule in config.task_schedules
+            if schedule.command.strip() and schedule.schedules
+        ]
+        if task_schedules:
+            person_config["task_schedules"] = task_schedules
         return person_config
 
     def _build_slack_message_channel(

@@ -91,6 +91,23 @@ class EventListenerRunner:
         thread = self._thread
         return bool(thread is not None and thread.is_alive())
 
+    def get_status_summary(self) -> dict[str, int | str]:
+        """Return lightweight runtime counters for GUI status displays."""
+        subscription_count = sum(
+            len(channel_ids)
+            for _, channel_ids in self._subscription_channel_cache.values()
+        )
+        return {
+            "workflow_command": self.workflow_command,
+            "subscription_count": subscription_count,
+            "listener_count": len(self._listeners),
+            "cycle_count": self._cycle_count,
+            "cycle_failure_count": self._cycle_failure_count,
+            "events_drained_count": self._events_drained_count,
+            "events_delivered_count": self._events_delivered_count,
+            "events_skipped_processed_count": self._events_skipped_processed_count,
+        }
+
     async def dispatch_incoming_event(
         self, person: Person, item: IncomingChatEvent
     ) -> str:

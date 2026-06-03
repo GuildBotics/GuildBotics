@@ -1,5 +1,3 @@
-import { Command } from "@tauri-apps/plugin-shell";
-
 import { configureApi, setWorkspace } from "./client";
 
 const API_BASE = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
@@ -24,6 +22,11 @@ export async function startBackend() {
     return;
   }
 
+  if (!isTauriRuntime()) {
+    throw new Error("GuildBotics backend is not configured for browser preview.");
+  }
+
+  const { Command } = await import("@tauri-apps/plugin-shell");
   const command = Command.sidecar("binaries/guildbotics-app-api", [
     "--host",
     "127.0.0.1",
@@ -60,6 +63,10 @@ async function applyWorkspace(workspace: string) {
     currentWorkspace = "";
     throw error;
   }
+}
+
+function isTauriRuntime() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 async function waitForHealth(token: string) {

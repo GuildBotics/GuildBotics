@@ -58,6 +58,7 @@ from guildbotics.utils.memory_backend import (
     write_memory_remember_trace,
 )
 from guildbotics.utils.person_profile import build_agent_profile
+from guildbotics.utils.prompt_trace import write_prompt_trace
 
 _MIN_CHAT_TIMESTAMP = 946684800.0
 _TOPIC_COALESCE_SIMILARITY_THRESHOLD = 0.3
@@ -357,6 +358,31 @@ async def _build_reply_text_via_command(
         if has_shared_state:
             context.shared_state["chat_reply_input"]["reply_intent"] = reply_intent
         invoke_kwargs = {"cwd": workspace_path} if workspace_path is not None else {}
+        write_prompt_trace(
+            "chat.reply_input",
+            {
+                "person_id": getattr(context.person, "person_id", ""),
+                "service": getattr(event, "service_name", ""),
+                "channel": event.channel_id,
+                "thread_ts": event.thread_ts,
+                "event_id": event.event_id,
+                "command": "workflows/chat/chat_reply_actionable",
+                "cwd": workspace_path,
+                "transcript": transcript,
+                "payload": (
+                    context.shared_state.get("chat_reply_input", {})
+                    if has_shared_state
+                    else {
+                        **payload,
+                        "thread_context": thread_context,
+                        "memory_context": (
+                            asdict(memory_context) if memory_context is not None else {}
+                        ),
+                        "reply_intent": reply_intent,
+                    }
+                ),
+            },
+        )
         reply_result = await invoke(
             "workflows/chat/chat_reply_actionable", **invoke_kwargs
         )

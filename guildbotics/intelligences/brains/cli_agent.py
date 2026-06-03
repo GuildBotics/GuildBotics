@@ -15,6 +15,7 @@ from guildbotics.intelligences.brains.util import to_plain_text, to_response_cla
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.log_utils import get_log_output_dir
+from guildbotics.utils.prompt_trace import write_prompt_trace
 from guildbotics.utils.text_utils import replace_placeholders
 
 
@@ -158,6 +159,7 @@ class CliAgentBrain(Brain):
         self.logger.debug(
             f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
         )
+        self._write_request_trace(input, kwargs)
 
         response_file = ""
         log_file = ""
@@ -169,6 +171,7 @@ class CliAgentBrain(Brain):
 
         result = await self._execute_script(input, response_file, log_file, cwd)
         output: Any = result.stdout
+        self._write_response_trace(result)
 
         self.logger.debug(
             f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
@@ -192,6 +195,7 @@ class CliAgentBrain(Brain):
         self.logger.debug(
             f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
         )
+        self._write_request_trace(input, kwargs)
 
         response_file = ""
         log_file = ""
@@ -201,7 +205,9 @@ class CliAgentBrain(Brain):
             response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
             log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-        return await self._execute_script(input, response_file, log_file, cwd)
+        result = await self._execute_script(input, response_file, log_file, cwd)
+        self._write_response_trace(result)
+        return result
 
     async def _execute_script(
         self, input: str, response_file: str, log_file: str, cwd: Path | str
@@ -280,3 +286,31 @@ class CliAgentBrain(Brain):
         """
         with suppress(OSError):
             os.remove(file_name)
+
+    def _write_request_trace(self, prompt: str, kwargs: dict[str, Any]) -> None:
+        write_prompt_trace(
+            "cli_agent.request",
+            {
+                "person_id": self.person_id,
+                "brain": self.name,
+                "cli_agent": self.cli_agent,
+                "cwd": kwargs.get("cwd"),
+                "response_class": (
+                    self.response_class.__name__ if self.response_class else ""
+                ),
+                "prompt": prompt,
+            },
+        )
+
+    def _write_response_trace(self, result: CliAgentExecutionResult) -> None:
+        write_prompt_trace(
+            "cli_agent.response",
+            {
+                "person_id": self.person_id,
+                "brain": self.name,
+                "cli_agent": self.cli_agent,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            },
+        )

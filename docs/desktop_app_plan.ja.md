@@ -24,12 +24,12 @@ GuildBotics の既存 CLI 体験を維持しながら、macOS 向けのデスク
 
 ## サポート方針
 
-| 環境 | GUI v1 | CLI |
-| --- | --- | --- |
+| 環境                      | GUI v1   | CLI      |
+| ------------------------- | -------- | -------- |
 | macOS Apple Silicon arm64 | 正式対応 | 継続対応 |
-| macOS Intel | 対象外 | 継続対応 |
-| Linux | 対象外 | 継続対応 |
-| Windows | 対象外 | 将来検討 |
+| macOS Intel               | 対象外   | 継続対応 |
+| Linux                     | 対象外   | 継続対応 |
+| Windows                   | 対象外   | 将来検討 |
 
 GUI 非対応環境でも、既存 CLI が fallback として動作することを維持する。
 
@@ -159,7 +159,7 @@ frontend は `message` を表示し、分岐や復旧導線には `code` と `co
 実施順序の明確化:
 
 - UI 実装の完了を先に達成するため、`advanced intelligence 設定 UI` を packaging より先に実施する。
-- よって実施順は `Session 8 (advanced intelligence)` → `Session 8.1 (GUI 向け設定検証 UX)` → `Session 8.2 (Overview 運用画面)` → `Session 8.3 (Commands 実行画面)` → `Session 9 (packaging)` → `Session 10 (CI/fallback)` とする。
+- よって実施順は `Session 8 (advanced intelligence)` → `Session 8.1 (GUI 向け設定検証 UX)` → `Session 8.2 (Overview 運用画面)` → `Session 8.3 (Commands 実行画面)` → `Session 8.4 (メンバー別巡回設定)` → `Session 9 (packaging)` → `Session 10 (CI/fallback)` とする。
 
 ### Session 1: Local API contract を安定化する
 
@@ -518,16 +518,17 @@ uv run --no-sync mypy guildbotics
 
 ### Session 8.2: Overview 運用画面を仮実装から完成状態へ寄せる
 
-状態: 未着手。
+状態: 完成。
 
 目的:
 
-- 現在の Overview は config / scheduler / events / logs の最小導線を持つが、運用画面としては仮実装状態である。
-- セットアップ完了後にユーザーが最初に見る画面として、状態把握、診断、scheduler 起動停止、runtime stream の UX を完成させる。
+- 現在の Overview は config / scheduler / events / logs の最小導線を持つが、サービス実行、状態確認、診断が同一画面に混在しており、運用画面としては仮実装状態である。
+- セットアップ完了後にユーザーが最初に見る画面として、常駐サービスの開始/停止と稼働状態を扱う「サービス実行」を成立させる。診断・ログ・prompt trace は「診断」へ分離し、目的別に辿れる構成にする。
 
 現状:
 
 - `/overview` route は存在し、`GET /config/status`、`GET /team`、`GET /config/project`、`GET /scheduler/status`、`GET /scheduler/routines`、`POST /scheduler/start`、`POST /scheduler/stop`、`POST /verify`、`WS /events`、`WS /logs` に接続済み。
+- サイドメニューは「サービス実行」「コマンド実行」「診断」「設定」に分ける。`/overview` は互換用に `/service` へ redirect する。
 - ただし `scheduler.data` を raw JSON の `<pre>` で表示している。
 - Events / Logs は最新行を並べるだけで、空状態、接続状態、フィルタ、request id との対応、エラー時表示が不足している。
 - 日本語環境でも `Overview`、`Runtime Control`、`Configuration`、`Ready`、`Missing`、`Found`、`Active members`、`Scheduler`、`Running`、`Stopped`、`Start`、`Stop` など英語表記が残っている。
@@ -535,18 +536,40 @@ uv run --no-sync mypy guildbotics
 
 主な作業:
 
-- Overview の i18n を完成させ、日本語環境で内部用語・英語ラベルが残らないようにする。
+- Overview の i18n を完成させ、日本語環境で内部用語・英語ラベルが残らないようにする。最終的な画面名は「概要」ではなく「サービス実行」とする。
+- 「サービス実行」は、常駐サービスとしての scheduler / event listener の開始・停止と状態把握に絞る。
+- 「コマンド実行」は、CLI `guildbotics run` 相当の one-off command 実行に絞る。
+- 「診断」は、準備状態、設定検証、runtime event/log stream、出力済み prompt trace の確認に絞る。
+- 診断画面はタブで「準備状態」「プロンプトトレース」「実行ストリーム」に分ける。実行ストリーム内の `events/logs` 切り替えは二段タブにせず segmented control とする。
 - raw JSON 表示を廃止し、scheduler / event listener の状態をユーザー向けの状態カードとして表示する。
-- config / `.env` / GitHub / active member / runtime の状態を、次に必要な操作が分かる形で整理する。
+- CLI の `guildbotics start` は `--only scheduler|events`、`--max-consecutive-errors`、routine command 引数を持つが、Overview では CLI 用語をそのまま出さず、通常導線を「自動運用を開始」へ寄せる。
+- runtime はユーザー向けに以下の 2 つの稼働単位として表示する。
+  - **自動巡回**: `TaskScheduler`。巡回処理 (GitHub チケット対応等) を実行する。メンバーごとのルーチンワークフロー / 定期コマンド設定は Session 8.4 で扱うため、Session 8.2 時点の説明文は詳細に踏み込まない。
+  - **チャット対応**: `EventListenerRunner`。Slack などのチャットイベントを受けて `workflows/chat_conversation_workflow` を実行し、必要な応答を投稿する。
+- 自動巡回カードには、状態、起動時刻、停止時刻、巡回ワークフロー、対象 active member、GitHub 必須フラグ、エラーを表示する。
+- チャット対応カードには、状態、起動時刻、停止時刻、応答ワークフロー、対象 subscription、受信/処理/スキップ/失敗回数、エラーを表示する。
+- 通常操作は「自動運用を開始」と「停止」を主導線にする。起動対象は三択の segmented control ではなく、「自動巡回」「チャット対応」それぞれの ON/OFF スイッチとして表示し、両方 OFF の場合は開始できないことを明示する。
+- ルーチンコマンド、巡回間隔（分）、連続失敗で停止する回数は自動巡回専用の設定として、自動巡回の説明・状態と同じグループ内に配置する。巡回間隔の既定値は 10 分とし、分単位で変更できるようにする。入力項目と同じ値を状態表示として重複表示しない。
+- `GET /scheduler/status` は `state/running/started_at/stopped_at/error` だけでは運用画面に不足するため、GUI 向けに開始時の routine commands、routine interval minutes、max consecutive errors、scheduler active worker count、event listener の counters を返すよう拡張する。
+- config / `.env` / GitHub / active member / runtime の状態を、次に必要な操作が分かる形で整理する。サービス実行画面では起動可否に関わる警告だけを出し、詳細な準備状態と検証結果は診断画面に置く。
 - scheduler start / stop の pending、失敗、二重押し、GitHub 必須 routine guard を見直す。
-- Events / Logs viewer に空状態、接続状態、エラー状態、フィルタ、request id / command との紐付け表示を追加する。
-- 軽量診断 `/verify` の扱いを Session 8.1 の決定に合わせ、Overview 内に残す場合は「何を検証し、何を検証しないか」を UI 上で誤解なく表現する。
-- Setup 未完了時は、Overview で操作できない理由と Setup への導線を明示する。
+- 停止 timeout は「停止要求は送ったが、sidecar 内 worker thread の終了確認が待機時間内に完了しなかった状態」として扱う。通常の 5 秒 polling で `stopped` に戻ることが多いため、初期表示では警告 alert にせず `停止中` として表示し、「終了処理に少し時間がかかっています」程度の補足に留める。後続の status refresh で thread 終了が確認できたら `stopped` に戻す。
+- GitHub 必須 routine が選択され、GitHub 未設定の場合は開始ボタンを無効化し、「チケット駆動ワークフローには GitHub 連携が必要です」と設定導線を表示する。
+- 診断画面に Events / Logs viewer を配置し、空状態、接続状態、エラー状態、フィルタ、request id / command との紐付け表示を追加する。
+- Events / Logs は raw payload を常時表示せず、時刻、種別、対象 request id、command、ユーザー向け要約を一覧表示し、詳細は必要時だけ開ける形にする。
+- Slack チャット応答の会話スタイル調査用に、prompt trace を opt-in で出力できるようにする。`GUILDBOTICS_PROMPT_TRACE=1` で有効化し、既定では storage の `run/prompt_trace.jsonl`、`GUILDBOTICS_PROMPT_TRACE_PATH` 指定時はその path に JSONL を出力する。
+- prompt trace には、chat reply 入力（`agent_profile`、`thread_messages`、`reply_intent`、`memory_context` など）、LLM request/response、CLI agent request/response を記録する。prompt や Slack 発言を含むため既定は OFF とする。
+- prompt trace の ON/OFF と出力 path は、これから実行する処理の実行前設定として「サービス実行」と「コマンド実行」に配置する。ON/OFF と出力 path は `.env` に保存し、sidecar プロセスの環境変数にも即時反映する。
+- prompt trace の出力 path と表示対象 path は別物として扱う。出力 path はこれから追記する JSONL の保存先であり、表示対象 path は過去に保存済みの JSONL を読み込むための入力である。`診断` の `プロンプトトレース` タブでは表示対象 path を指定でき、出力設定を変えずに任意の記録済み trace file を読み込めるようにする。どちらもファイルパス入力欄そのものを主操作とし、Enter / focus out で適用する。ファイル選択と既定値復帰は、入力欄に紐づく補助アイコンとして配置する。
+- prompt trace の最新 event は raw JSON ではなく、event 種別、person、brain / command / cwd などのメタ情報、prompt/input、response/output に分けて表示する。デバッグ用途のため prompt 本文は表示するが、機密情報を含む可能性を UI 上で明示する。
+- 軽量診断 `/verify` の扱いを Session 8.1 の決定に合わせ、診断内で「何を検証し、何を検証しないか」を UI 上で誤解なく表現する。
+- Setup 未完了時は、サービス実行画面で操作できない理由と Setup への導線を明示する。
 - Playwright または component test で、設定済み / 未設定 / GitHub 未設定 / scheduler 起動失敗の主要状態を確認する。
 
 完了条件:
 
-- Overview が「仮のステータス表示」ではなく、設定後に日常的に使える運用ホームとして成立している。
+- サービス実行が「仮のステータス表示」ではなく、設定後に日常的に使える常駐サービス実行画面として成立している。
+- 診断が準備状態、runtime stream、prompt trace を扱う診断専用画面として成立している。
 - 日本語環境で主要 UI 文言が日本語化されている。
 - raw JSON や未整形の内部 payload が通常 UI に露出していない。
 - Setup 未完了、GitHub 未設定、runtime 停止中、runtime 起動中、runtime 起動失敗の状態が判別でき、次の操作が明確である。
@@ -559,38 +582,54 @@ npm run build
 
 ### Session 8.3: Commands 実行画面を仮実装から完成状態へ寄せる
 
-状態: 未着手。
+状態: 完了。
 
 目的:
 
-- 現在の Commands は `POST /commands/run` と event/log stream に接続済みだが、コマンド実行 UI としては仮実装状態である。
-- CLI `guildbotics run` 相当の操作を GUI で迷わず実行・確認できる状態にする。
+- 現在の Commands は `POST /commands/run` と event/log stream に接続済みだが、one-off command 実行 UI としては仮実装状態である。
+- 「サービス実行」は常駐サービスの開始/停止、「コマンド実行」は `guildbotics run` 相当の一回限りの手動実行、という役割分担を明確にする。
+- セットアップ済みユーザーが、メンバー、コマンド、入力、必要な調査ログ出力を指定し、実行結果と関連ログを同じ文脈で確認できる状態にする。
 
 現状:
 
 - `/commands` route は存在し、active member 選択、command 文字列、message 入力、`POST /commands/run`、`WS /events`、`WS /logs` に接続済み。
-- ただし command は自由入力のみで、既存 command の候補提示、routine / workflow の説明、引数入力支援がない。
-- 実行結果は `<pre>` に request id と output を出すだけで、成功 / 失敗 / 実行中 / 履歴 / 詳細表示の整理が不足している。
+- prompt trace 出力設定は「コマンド実行」に配置済みで、実行前に ON/OFF と出力 path を変更できる。
+- ただし command は自由入力のみで、既存 command の候補提示、workflow / routine の説明、引数入力支援がない。
+- CLI `guildbotics run` は `--person`、`--cwd`、`custom_command`、追加 args、stdin message を扱えるが、GUI では `cwd` と追加 args の扱いが整理されていない。
+- 実行結果は `<pre>` に request id と output を出すだけで、実行中 / 成功 / 失敗 / 再実行 / 関連ログ / 詳細表示の整理が不足している。
 - `ticket_driven_workflow` だけを GitHub 必須として判定しており、他 command の要件判定や実行前 validation は不足している。
-- 日本語環境でも `Commands`、`Run Command`、`Run`、`Command`、`Message` など英語表記が残っている。
+- command event / log stream は表示されているが、現在の実行 request id との関係が弱く、診断画面の runtime stream と役割が重複して見える。
+- 日本語環境の主要文言は改善済みだが、コマンド実行画面としての情報設計は未整理である。
 
 主な作業:
 
-- Commands の i18n を完成させ、日本語環境で主要 UI 文言が日本語化されている状態にする。
-- command 入力を自由入力だけでなく、利用可能な command / routine 候補を選べる UI にする。
-- member 選択、message、command、追加 args の関係を CLI の `guildbotics run` と整合させる。
-- 実行中、成功、失敗、キャンセル不可/可否、再実行の状態表示を整理する。
-- 実行結果は raw `<pre>` ではなく、summary、stdout/output、event log、error detail を分けて表示する。
-- command event / log stream は request id で現在の実行と紐付け、他の runtime log と混ざって見えないようにする。
-- GitHub 必須 command の guard を、hard-coded command 名だけでなく command metadata または backend 判定に寄せる。
-- Setup 未完了、active member なし、CLI agent 未検出、LLM key 未設定など、実行前に分かる問題を明示する。
+- Commands の i18n を確認し、日本語環境で主要 UI 文言が日本語化されている状態を保つ。Session 8.2 の判断に合わせ、タイトル上の decorative eyebrow のような意味の薄い補助ラベルは追加しない。
+- 画面名は「コマンド実行」とし、サービス常駐操作ではなく一回限りの手動実行であることが UI 構造から分かるようにする。
+- 画面上部は、実行フォームと直近の実行状態が視線移動少なく確認できる配置にする。カードを過度に入れ子にせず、フォーム、調査ログ出力、結果を明確なグループとして並べる。
+- command 入力を自由入力だけでなく、利用可能な command / workflow / routine 候補を選べる UI にする。自由入力は上級者向けに残す。
+- command 候補取得用の backend API を追加する。候補には、表示名、実行 command、説明、引数の有無、GitHub / Slack / CLI agent / LLM などの必要条件、推奨される入力形式を含める。
+- command 候補 API は、既存の command 解決順と同じ設定解決を使う。特定 command 名の hard-code ではなく、既存 command metadata または backend 判定に寄せる。
+- GUI の command 候補はユーザーが編集できる member/project/home commands に絞り、`guildbotics/templates/commands` の部品的な組み込み command は一覧から除外する。初期設定作成またはプロジェクト設定保存時に `config/commands` が空なら、custom command guide ベースのサンプル command を配置する。
+- member 選択、message、command、追加 args、cwd の関係を CLI の `guildbotics run` と整合させる。GUI では `cwd` は詳細設定として扱い、通常は現在の workspace 既定値を使う。
+- message 入力は「標準入力相当」であることをユーザーが理解できる名称にする。ただし内部語を前面に出さず、コマンドへ渡す入力文として扱う。
+- 追加 args は command 候補に応じて structured form で入力できるようにし、対応できない command では raw args 入力へ fallback する。
+- prompt trace 出力設定は「この実行で発生する LLM / CLI 呼び出しの記録設定」として、実行フォームの近くに置く。診断画面の「表示するトレースファイル」と混同しないよう、出力先 path のみを扱う。
+- 実行中、成功、失敗の状態表示を整理する。v1 でキャンセルできない場合はキャンセル UI を出さず、実行中は二重実行を防ぐ。直近履歴や「再実行を準備」のような曖昧な補助導線は出さず、現在の実行結果に集中する。
+- 実行結果は raw `<pre>` ではなく、概要、出力、関連イベント、関連ログ、エラー詳細を分けて表示する。長文 output はスクロール可能な等幅領域で表示し、ページ全体の横幅を広げない。
+- command event / log stream は request id で現在の実行と紐付け、現在の実行に関係する行だけを標準表示にする。全体 runtime stream は診断画面へ任せる。
+- 失敗時は、通常表示では復旧に必要な要約を出し、traceback や内部 payload は詳細表示に閉じる。
+- Setup 未完了、active member なし、CLI agent 未検出、LLM key 未設定、GitHub / Slack 未設定など、実行前に分かる問題を必要条件に応じて明示する。
+- サービス実行と同様に、テキストやボタンの位置が内容量や折り返しで不自然にずれないよう、固定形式の要素には stable dimensions と上詰めレイアウトを使う。
 - command 実行の component / integration test を追加する。
 
 完了条件:
 
-- Commands 画面から主要 command を選択・実行し、進捗と結果を GUI 上で理解できる。
+- コマンド実行画面から主要 command / workflow / routine を選択・実行し、進捗と結果を GUI 上で理解できる。
+- 自由入力 command も残り、候補にない command を CLI と同じ発想で実行できる。
+- 現在の実行に関連する event / log / output が request id でまとまり、診断画面の全体 stream と役割が重複して見えない。
+- prompt trace 出力を ON にして実行した場合、診断画面のプロンプトトレースでその記録を追える。
 - 失敗時に traceback や内部 payload を通常 UI に露出せず、詳細表示として扱える。
-- 日本語環境で主要 UI 文言が日本語化されている。
+- 日本語環境で主要 UI 文言が日本語化され、内部用語だけでは意味が分からないラベルが残っていない。
 - `guildbotics run` の主要ユースケースが GUI から破綻なく実行できる。
 
 確認:
@@ -598,6 +637,75 @@ npm run build
 ```bash
 npm run build
 uv run --no-sync python -m pytest tests/guildbotics/app_api tests/guildbotics/cli/test_run_command.py
+```
+
+### Session 8.4: メンバー別巡回設定を GUI から編集できるようにする
+
+状態: 完了。
+
+目的:
+
+- 自動巡回の実体である `TaskScheduler` は、active member ごとに worker を立て、各メンバーの設定に基づいて処理を実行する。
+- しかし現在の GUI では、起動時の共通ルーチンワークフローと連続失敗上限だけを設定でき、メンバーごとの「ルーチンワークフロー」と「定期コマンド」を編集できない。
+- サービス実行画面の説明文で内部設定名を出さずに済むよう、メンバーごとの巡回設定を GUI 上で確認・編集できる導線を追加する。
+
+現状:
+
+- `Person` model には `routine_commands` と `task_schedules` がある。
+- `TaskScheduler` はメンバーに `routine_commands` があればそれを使い、なければ起動時に渡された default routine commands を使う。
+- `TaskScheduler` は各メンバーの `task_schedules` を cron schedule として展開し、該当時刻に scheduled command として実行する。
+- 現在のサービス実行画面では、共通既定値としてのルーチンワークフロー、巡回間隔（分）、連続失敗上限を設定できるが、メンバー別 `routine_commands` / `task_schedules` の編集 UI はない。
+- サービス実行画面の主操作は右上の `実行` / `停止` 排他ボタンに整理済みであり、自動巡回カード内には共通既定値の設定だけを置いている。
+- Commands 画面では command 候補 API、説明付き候補表示、必要条件バッジ、引数入力支援、スクリプト path 表示/コピー/オープンが実装済みである。
+- command 候補一覧は `guildbotics/templates/commands` の部品的な組み込み command をそのまま表示せず、workspace / home commands を中心に扱う。初期 project commands が空の場合は sample commands を配置する方針である。
+- 診断基盤の本格的な相関 ID / trace UI 再設計は Session 8.4 の範囲外とし、`docs/runtime_diagnostics_todo.ja.md` で別 TODO として扱う。
+- そのため、「自動巡回」の説明に `task_schedules` などの内部名を出すと、GUI 利用者には意味が分からない。
+
+主な作業:
+
+- メンバーごとの設定画面に「巡回設定」セクションを追加する。
+- 「ルーチンワークフロー」は、メンバー個別の上書き設定として表示する。未設定の場合はサービス実行画面で選ぶ共通既定値を使うことを明示する。
+- 「定期コマンド」は、cron schedule と実行コマンドの組として追加・編集・削除できるようにする。
+- 定期コマンドの入力 UI は、内部名 `task_schedules` を前面に出さず、「いつ」「どのコマンドを実行するか」が分かる表現にする。
+- cron 表記は自由入力だけにせず、毎時 / 毎日 / 毎週などの基本パターンを選べる UI と、詳細 cron 入力を併用する。
+- コマンド入力は、Commands 画面と同じ command 候補 API・validation 方針を再利用する。候補表示はファイル名だけでなく説明文を含め、必要条件バッジも同じ意味で表示する。
+- ルーチンワークフロー / 定期コマンドの command 選択では、Commands 画面と同じく workspace / home の command 候補を優先し、部品的な package template command を直接選ばせない。
+- 選択した command について、Commands 画面と同じくスクリプト path の表示、コピー、デスクトップ実行時のオープン導線を用意する。ただしフォームの主操作を圧迫しないよう、リンク表示はコマンド入力直下の補助情報に留める。
+- 定期コマンドの引数入力は、Commands 画面の structured argument 入力を再利用する。候補 metadata で引数定義が取れない場合は raw args 入力へ fallback する。
+- メンバー設定保存時に `routine_commands` / `task_schedules` を既存 YAML へ反映する backend API を追加または既存 API を拡張する。
+- 保存 API は既存 `Person` model と YAML 構造を正とし、GUI 専用の別 schema を作らない。
+- 保存後は team / command options / scheduler status を再取得し、サービス実行画面に戻った時に共通既定値とメンバー別上書きの関係が破綻しないようにする。
+- 設定後に、サービス実行画面の自動巡回カードから「メンバー別巡回設定」へ辿れる導線を追加する。
+- Session 8.4 完了後、自動巡回の説明文を再検討し、「共通既定値」「メンバー別上書き」「定期実行」の関係が GUI 上で自然に理解できる文言へ更新する。サービス実行画面では細かい内部設定名を出さず、詳細編集への導線を示す。
+- 診断画面の runtime stream / prompt trace は Session 8.4 では大きく拡張しない。巡回設定の保存・実行で必要な最低限の event/log 表示に留め、相関 ID に基づく診断再設計は runtime diagnostics TODO へ送る。
+
+完了条件:
+
+- GUI からメンバーごとのルーチンワークフローを設定・解除できる。
+- GUI からメンバーごとの定期コマンドを追加・編集・削除できる。
+- ルーチンワークフロー / 定期コマンドの command 選択が Commands 画面の候補表示・説明・必要条件・引数入力方針と一貫している。
+- サービス実行画面だけを見ても、自動巡回で何が実行されるか、詳細設定をどこで変更するかが分かる。
+- 内部設定名 `routine_commands` / `task_schedules` を知らないユーザーでも操作できる。
+- 保存後の YAML が既存 `Person` model と `TaskScheduler` にそのまま読み込まれる。
+- 診断基盤の相関 ID / 統合タイムライン再設計は Session 8.4 の完了条件に含めず、`docs/runtime_diagnostics_todo.ja.md` に追跡されている。
+
+実装結果:
+
+- メンバー編集フォームに「巡回」タブを追加し、個別巡回ワークフローの設定・解除と、定期実行コマンドの追加・編集・削除を同じ保存ボタンで反映できるようにした。
+- `GET/PUT /config/members/{person_id}` の model と `SimplePersonSetupService` を拡張し、`routine_commands` / `task_schedules` を既存 `person.yml` 構造のまま読み書きするようにした。
+- 定期実行 UI は毎時 / 毎日 / 毎週 / 詳細 cron の入力を持ち、command 候補 API の説明・必要条件・script path 表示・copy/open 導線と structured args / raw args fallback を再利用するようにした。
+- サービス実行画面の自動巡回カードに、共通既定値とメンバー別上書きの関係を示す説明と、メンバー別巡回設定への導線を追加した。
+
+確認:
+
+```bash
+npm run build
+uv run --no-sync python -m pytest tests/guildbotics/cli/simple/test_setup_service.py -q
+uv run --no-sync python -m pytest tests/guildbotics/app_api/test_api.py -q
+uv run --no-sync python -m pytest tests/guildbotics/entities/test_team.py -q
+uv run --no-sync ruff check guildbotics
+uv run --no-sync mypy guildbotics
+uv run --no-sync pylint guildbotics
 ```
 
 ### Session 9: macOS arm64 packaging を実際に通す

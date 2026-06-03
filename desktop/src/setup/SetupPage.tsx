@@ -2,6 +2,7 @@ import {
   ActionIcon,
   Accordion,
   Alert,
+  Anchor,
   Badge,
   Box,
   Button,
@@ -10,6 +11,7 @@ import {
   Group,
   Modal,
   MultiSelect,
+  NumberInput,
   PasswordInput,
   Progress,
   Select,
@@ -27,16 +29,18 @@ import {
 } from "@mantine/core";
 import { useForm, type UseFormReturnType } from "@mantine/form";
 import { zodResolver } from "mantine-form-zod-resolver";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   Check,
   CheckCircle2,
   CircleAlert,
+  Copy,
   Eraser,
   FileKey,
   Folder,
   FolderOpen,
+  Plus,
   Save,
+  Trash2,
   TriangleAlert,
   WandSparkles,
   XCircle,
@@ -47,8 +51,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import {
+  type CommandOption,
   type DiagnosticCheck,
   type CliAgentDetection,
   type ConfigStatus,
@@ -58,6 +64,7 @@ import {
   type MemberSetupRequest,
   type MemberConfig,
   type MemberConfigUpdateRequest,
+  type MemberTaskSchedule,
   type RoleOption,
   type ProjectConfig,
   type ProjectConfigUpdateRequest,
@@ -66,6 +73,7 @@ import {
   addMemberConfig,
   deleteMemberConfig,
   getCliAgentDetections,
+  getCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
   getMemberConfig,
@@ -170,9 +178,26 @@ const MEMBER_TYPE_OPTIONS = [
 ] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
 type GitHubMemberType = Exclude<MemberType, "">;
+type MemberEditorTab = "basic" | "intelligence" | "patrol" | "github" | "slack" | "diagnostics";
+type CronPreset = "hourly" | "daily" | "weekly" | "custom";
+type ScheduledCommandDraft = {
+  id: string;
+  commandMode: "catalog" | "custom";
+  command: string;
+  customCommand: string;
+  argValues: Record<string, string>;
+  rawArgs: string;
+  scheduleMode: CronPreset;
+  minute: number;
+  hour: number;
+  weekday: string;
+  cron: string;
+};
+const WEEKDAY_OPTIONS = ["0", "1", "2", "3", "4", "5", "6"] as const;
 
 export function SetupPage() {
   const { t, i18n } = useTranslation();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({
@@ -254,6 +279,8 @@ export function SetupPage() {
   const [setupCreated, setSetupCreated] = useState(false);
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
   const canAutosave = hasExistingProject && projectConfig.isSuccess;
+  const focusMemberTab =
+    searchParams.get("tab") === "patrol" ? "patrol" : undefined;
   const llmProviderAvailability = useMemo(
     () => ({
       openai: Boolean(form.values.openaiApiKey.trim() || projectConfig.data?.has_openai_api_key),
@@ -317,6 +344,12 @@ export function SetupPage() {
     setSection(coreSections[0]);
   }, [coreSections, section]);
 
+  useEffect(() => {
+    if (searchParams.get("section") === "members") {
+      setSection("members");
+    }
+  }, [searchParams]);
+
   useAutosave(form, config.data, validationSchema, saveMutation.mutateAsync, setSaveState, canAutosave);
 
   const setupStatus = useSetupStatus(config.data, effectiveActiveMemberCount, form.values);
@@ -359,7 +392,6 @@ export function SetupPage() {
     <Stack gap="lg">
       <Group justify="space-between" align="flex-start">
         <Box>
-          <Text className="eyebrow">{t("setup.eyebrow")}</Text>
           <Title order={2}>
             {hasExistingProject ? t("setup.configuredTitle") : t("setup.title")}
           </Title>
@@ -423,6 +455,7 @@ export function SetupPage() {
               configLocation={form.values.configLocation}
               cliDetections={cliDetections.data?.agents ?? []}
               llmProviderAvailability={llmProviderAvailability}
+              initialTab={focusMemberTab}
               onMemberActiveDelta={(delta) => {
                 if (!hasExistingProject && delta !== 0) {
                   setDraftActiveMemberCount((count) => Math.max(0, count + delta));
@@ -1236,6 +1269,7 @@ function MembersSection({
   configLocation,
   cliDetections,
   llmProviderAvailability,
+  initialTab,
   onMemberActiveDelta,
 }: {
   activeMemberCount: number;
@@ -1245,6 +1279,7 @@ function MembersSection({
   configLocation: "home" | "workspace";
   cliDetections: CliAgentDetection[];
   llmProviderAvailability: LlmProviderAvailability;
+  initialTab?: MemberEditorTab;
   onMemberActiveDelta: (delta: number) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -1252,7 +1287,7 @@ function MembersSection({
   const hasActiveMember = activeMemberCount > 0;
   const [mode, setMode] = useState<"idle" | "add" | "edit">("idle");
   const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string | null>("basic");
+  const [activeTab, setActiveTab] = useState<string | null>(initialTab ?? "basic");
   const [personType, setPersonType] = useState<MemberType>("");
   const [identity, setIdentity] = useState("");
   const [personId, setPersonId] = useState("");
@@ -1278,6 +1313,9 @@ function MembersSection({
   const [slackBotToken, setSlackBotToken] = useState("");
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackChannelsText, setSlackChannelsText] = useState("");
+  const [routineOverrideEnabled, setRoutineOverrideEnabled] = useState(false);
+  const [routineCommands, setRoutineCommands] = useState<string[]>([]);
+  const [scheduledCommands, setScheduledCommands] = useState<ScheduledCommandDraft[]>([]);
   const [isActive, setIsActive] = useState(true);
   const [storedMemberSecrets, setStoredMemberSecrets] = useState({
     githubInstallationId: false,
@@ -1301,6 +1339,12 @@ function MembersSection({
     queryKey: ["member-role-options", appLanguage],
     queryFn: () => getRoleOptions(appLanguage),
   });
+  const commandOptions = useQuery({
+    queryKey: ["command-options", editingPersonId ?? "team"],
+    queryFn: () => getCommandOptions(editingPersonId ?? undefined),
+    enabled: hasPersistedProject,
+    retry: false,
+  });
   const roleOptions = useMemo(
     () =>
       (rolesQuery.data?.roles ?? []).map((option: RoleOption) => ({
@@ -1319,6 +1363,11 @@ function MembersSection({
       ) as Record<string, string>,
     [rolesQuery.data?.roles],
   );
+  const commandCatalog = commandOptions.data?.options ?? [];
+  const commandOptionByValue = useMemo(
+    () => new Map(commandCatalog.map((option) => [option.command, option])),
+    [commandCatalog],
+  );
   const speakingStyleTemplates = useMemo(
     () => getSpeakingStyleTemplates(t),
     [t],
@@ -1327,6 +1376,11 @@ function MembersSection({
     () => getCharacterPresetExamples(appLanguage),
     [appLanguage],
   );
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   const displayedMembers = useMemo(() => {
     const persistedIds = new Set(members.map((member) => member.person_id));
     return [
@@ -1403,6 +1457,9 @@ function MembersSection({
     setSlackBotToken("");
     setSlackAppToken("");
     setSlackChannelsText("");
+    setRoutineOverrideEnabled(false);
+    setRoutineCommands([]);
+    setScheduledCommands([]);
     setPersonType("");
     setStoredMemberSecrets({
       githubInstallationId: false,
@@ -1413,7 +1470,7 @@ function MembersSection({
       slackAppToken: false,
     });
     setIdentityResolveError("");
-    setActiveTab("basic");
+    setActiveTab(initialTab ?? "basic");
   };
 
   const fillFormFromMember = (member: MemberConfig) => {
@@ -1443,6 +1500,13 @@ function MembersSection({
     setGithubPrivateKeyPath(member.github_private_key_path);
     setSlackBotToken("");
     setSlackAppToken("");
+    setRoutineOverrideEnabled(member.routine_commands.length > 0);
+    setRoutineCommands(member.routine_commands);
+    setScheduledCommands(
+      flattenTaskSchedules(member.task_schedules).map((entry) =>
+        scheduledCommandToDraft(entry, commandCatalog),
+      ),
+    );
     setStoredMemberSecrets({
       githubInstallationId: member.has_github_installation_id,
       githubAppId: member.has_github_app_id,
@@ -1478,6 +1542,8 @@ function MembersSection({
       }
       onMemberActiveDelta(isActive ? 1 : 0);
       queryClient.invalidateQueries({ queryKey: ["team"] });
+      queryClient.invalidateQueries({ queryKey: ["command-options"] });
+      queryClient.invalidateQueries({ queryKey: ["scheduler"] });
       memberDiagnosticsMutation.reset();
       clearForm();
       setMode("idle");
@@ -1506,6 +1572,8 @@ function MembersSection({
       }
       onMemberActiveDelta(delta);
       queryClient.invalidateQueries({ queryKey: ["team"] });
+      queryClient.invalidateQueries({ queryKey: ["command-options"] });
+      queryClient.invalidateQueries({ queryKey: ["scheduler"] });
       setEditingPersonId(personId.trim());
     },
   });
@@ -1586,6 +1654,13 @@ function MembersSection({
     },
     t,
   );
+  const patrolSettingsValid =
+    (!routineOverrideEnabled || routineCommands.length > 0) &&
+    scheduledCommands.every(
+      (draft) =>
+        buildScheduledCommandExpression(draft, commandOptionByValue).trim().length > 0 &&
+        isValidCron(draftToCron(draft)),
+    );
   const canResolveIdentity =
     usesGitHubMember &&
     getGitHubResolveInput(personType, identity, githubUsername).trim().length > 0 &&
@@ -1607,6 +1682,7 @@ function MembersSection({
     characterContributionText.trim().length > 0 &&
     githubIdentityReady &&
     authReady &&
+    patrolSettingsValid &&
     Object.keys(memberErrors).length === 0;
   const activePresetSample = characterPresetExamples[speakingStylePreset];
   const hasMemberError = (keys: Array<keyof MemberFieldErrors>) =>
@@ -1705,6 +1781,8 @@ function MembersSection({
         .split(",")
         .map((channel) => channel.trim())
         .filter(Boolean),
+      routine_commands: routineOverrideEnabled ? routineCommands : [],
+      task_schedules: buildTaskSchedules(scheduledCommands, commandOptionByValue),
     };
     if (personType === "github_apps") {
       request.github_installation_id = githubInstallationId
@@ -1766,6 +1844,7 @@ function MembersSection({
   const startEditMode = (memberId: string) => {
     memberDiagnosticsMutation.reset();
     setEditingPersonId(memberId);
+    setActiveTab(initialTab ?? "basic");
     const draft = draftMembers.find((member) => member.person_id === memberId);
     if (draft && !hasPersistedProject) {
       fillFormFromMember(draft);
@@ -1877,6 +1956,7 @@ function MembersSection({
               {t("setup.members.tabs.basic")}
             </Tabs.Tab>
             <Tabs.Tab value="intelligence">{t("setup.members.tabs.intelligence")}</Tabs.Tab>
+            <Tabs.Tab value="patrol">{t("setup.members.tabs.patrol")}</Tabs.Tab>
             <Tabs.Tab
               value="github"
               rightSection={githubTabHasError ? <TabErrorIcon label={t("setup.members.tabHasError")} /> : null}
@@ -2098,6 +2178,20 @@ function MembersSection({
             )}
           </Tabs.Panel>
 
+          <Tabs.Panel value="patrol" pt="md">
+            <PatrolSettingsEditor
+              commandCatalog={commandCatalog}
+              commandOptionByValue={commandOptionByValue}
+              commandOptionsLoading={commandOptions.isLoading}
+              routineOverrideEnabled={routineOverrideEnabled}
+              routineCommands={routineCommands}
+              scheduledCommands={scheduledCommands}
+              onRoutineOverrideChange={setRoutineOverrideEnabled}
+              onRoutineCommandsChange={setRoutineCommands}
+              onScheduledCommandsChange={setScheduledCommands}
+            />
+          </Tabs.Panel>
+
           <Tabs.Panel value="github" pt="md">
             <Stack>
               <Select
@@ -2316,6 +2410,387 @@ function MembersSection({
         ) : null}
       </Stack>
     </Card>
+  );
+}
+
+function PatrolSettingsEditor({
+  commandCatalog,
+  commandOptionByValue,
+  commandOptionsLoading,
+  routineOverrideEnabled,
+  routineCommands,
+  scheduledCommands,
+  onRoutineOverrideChange,
+  onRoutineCommandsChange,
+  onScheduledCommandsChange,
+}: {
+  commandCatalog: CommandOption[];
+  commandOptionByValue: Map<string, CommandOption>;
+  commandOptionsLoading: boolean;
+  routineOverrideEnabled: boolean;
+  routineCommands: string[];
+  scheduledCommands: ScheduledCommandDraft[];
+  onRoutineOverrideChange: (enabled: boolean) => void;
+  onRoutineCommandsChange: (commands: string[]) => void;
+  onScheduledCommandsChange: (commands: ScheduledCommandDraft[]) => void;
+}) {
+  const { t } = useTranslation();
+  const commandOptions = commandCatalog.map((option) => ({
+    value: option.command,
+    label: `${option.label} (${option.command})`,
+  }));
+  const updateScheduled = (
+    id: string,
+    recipe: (current: ScheduledCommandDraft) => ScheduledCommandDraft,
+  ) => {
+    onScheduledCommandsChange(
+      scheduledCommands.map((command) => (command.id === id ? recipe(command) : command)),
+    );
+  };
+
+  return (
+    <Stack>
+      <InfoCallout title={t("setup.members.patrol.title")}>
+        {t("setup.members.patrol.description")}
+      </InfoCallout>
+      <Switch
+        checked={routineOverrideEnabled}
+        label={t("setup.members.patrol.overrideRoutine")}
+        description={t("setup.members.patrol.overrideRoutineHint")}
+        onChange={(event) => onRoutineOverrideChange(event.currentTarget.checked)}
+      />
+      {routineOverrideEnabled ? (
+        <MultiSelect
+          label={t("setup.members.patrol.routineCommands")}
+          data={commandOptions}
+          value={routineCommands}
+          onChange={onRoutineCommandsChange}
+          searchable
+          clearable
+          error={
+            routineCommands.length === 0
+              ? t("setup.members.patrol.routineRequired")
+              : undefined
+          }
+          nothingFoundMessage={t("commands.noCommandOptions")}
+          renderOption={({ option }) => {
+            const commandOption = commandOptionByValue.get(option.value);
+            return <CommandOptionRow label={option.label} option={commandOption} />;
+          }}
+        />
+      ) : (
+        <Text size="sm" c="dimmed">
+          {t("setup.members.patrol.usesServiceDefault")}
+        </Text>
+      )}
+
+      <Divider />
+      <Group justify="space-between" align="center">
+        <Box>
+          <Text fw={700}>{t("setup.members.patrol.scheduledCommands")}</Text>
+          <Text size="sm" c="dimmed">
+            {t("setup.members.patrol.scheduledCommandsHint")}
+          </Text>
+        </Box>
+        <Button
+          size="xs"
+          variant="default"
+          leftSection={<Plus size={14} />}
+          onClick={() =>
+            onScheduledCommandsChange([
+              ...scheduledCommands,
+              createScheduledCommandDraft(commandCatalog[0]?.command ?? ""),
+            ])
+          }
+        >
+          {t("setup.members.patrol.addSchedule")}
+        </Button>
+      </Group>
+
+      {commandOptionsLoading ? (
+        <Text size="sm" c="dimmed">
+          {t("setup.members.patrol.loadingCommands")}
+        </Text>
+      ) : null}
+
+      {scheduledCommands.length === 0 ? (
+        <div className="empty-row">{t("setup.members.patrol.noSchedules")}</div>
+      ) : (
+        <Stack>
+          {scheduledCommands.map((draft) => {
+            const option =
+              draft.commandMode === "catalog"
+                ? commandOptionByValue.get(draft.command) ?? null
+                : null;
+            const cron = draftToCron(draft);
+            const cronError = isValidCron(cron) ? "" : t("setup.members.patrol.cronInvalid");
+            return (
+              <Card withBorder radius="sm" p="md" key={draft.id}>
+                <Stack>
+                  <Group justify="space-between" align="center">
+                    <SegmentedControl
+                      size="xs"
+                      value={draft.commandMode}
+                      onChange={(value) =>
+                        updateScheduled(draft.id, (current) => ({
+                          ...current,
+                          commandMode: value as ScheduledCommandDraft["commandMode"],
+                        }))
+                      }
+                      data={[
+                        { value: "catalog", label: t("commands.modeCatalog") },
+                        { value: "custom", label: t("commands.modeCustom") },
+                      ]}
+                    />
+                    <ActionIcon
+                      aria-label={t("setup.members.patrol.removeSchedule")}
+                      color="red"
+                      variant="subtle"
+                      onClick={() =>
+                        onScheduledCommandsChange(
+                          scheduledCommands.filter((command) => command.id !== draft.id),
+                        )
+                      }
+                    >
+                      <Trash2 size={16} />
+                    </ActionIcon>
+                  </Group>
+
+                  {draft.commandMode === "catalog" ? (
+                    <Select
+                      label={t("commands.command")}
+                      searchable
+                      nothingFoundMessage={t("commands.noCommandOptions")}
+                      value={draft.command}
+                      data={commandOptions}
+                      onChange={(value) =>
+                        updateScheduled(draft.id, (current) => ({
+                          ...current,
+                          command: value ?? "",
+                          argValues: {},
+                          rawArgs: "",
+                        }))
+                      }
+                      renderOption={({ option: selectOption }) => (
+                        <CommandOptionRow
+                          label={selectOption.label}
+                          option={commandOptionByValue.get(selectOption.value)}
+                        />
+                      )}
+                    />
+                  ) : (
+                    <TextInput
+                      label={t("commands.command")}
+                      value={draft.customCommand}
+                      onChange={(event) =>
+                        updateScheduled(draft.id, (current) => ({
+                          ...current,
+                          customCommand: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  )}
+
+                  {option ? <CommandOptionSummary option={option} /> : null}
+                  {draft.commandMode === "catalog" && option?.arguments.length ? (
+                    <div className="command-args-grid">
+                      {option.arguments.map((argument) => (
+                        <TextInput
+                          key={`${draft.id}-${argument.kind}-${argument.name}`}
+                          label={`${argument.name}${argument.required ? " *" : ""}`}
+                          placeholder={argument.default || argument.kind}
+                          value={draft.argValues[argument.name] ?? ""}
+                          onChange={(event) =>
+                            updateScheduled(draft.id, (current) => ({
+                              ...current,
+                              argValues: {
+                                ...current.argValues,
+                                [argument.name]: event.currentTarget.value,
+                              },
+                            }))
+                          }
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                  {draft.commandMode === "custom" || !option?.arguments.length ? (
+                    <TextInput
+                      label={t("commands.rawArgs")}
+                      placeholder={t("commands.rawArgsPlaceholder")}
+                      value={draft.rawArgs}
+                      onChange={(event) =>
+                        updateScheduled(draft.id, (current) => ({
+                          ...current,
+                          rawArgs: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  ) : null}
+
+                  <SegmentedControl
+                    value={draft.scheduleMode}
+                    onChange={(value) =>
+                      updateScheduled(draft.id, (current) => ({
+                        ...current,
+                        scheduleMode: value as CronPreset,
+                      }))
+                    }
+                    data={[
+                      { value: "weekly", label: t("setup.members.patrol.cronPresets.weekly") },
+                      { value: "daily", label: t("setup.members.patrol.cronPresets.daily") },
+                      { value: "hourly", label: t("setup.members.patrol.cronPresets.hourly") },
+                      { value: "custom", label: t("setup.members.patrol.cronPresets.custom") },
+                    ]}
+                  />
+                  {draft.scheduleMode === "custom" ? (
+                    <TextInput
+                      label={t("setup.members.patrol.cron")}
+                      description={t("setup.members.patrol.cronHint")}
+                      value={draft.cron}
+                      error={cronError}
+                      onChange={(event) =>
+                        updateScheduled(draft.id, (current) => ({
+                          ...current,
+                          cron: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  ) : (
+                    <div className="schedule-grid">
+                      {draft.scheduleMode === "weekly" ? (
+                        <Select
+                          label={t("setup.members.patrol.weekday")}
+                          value={draft.weekday}
+                          data={WEEKDAY_OPTIONS.map((day) => ({
+                            value: day,
+                            label: t(`setup.members.patrol.weekdays.${day}`),
+                          }))}
+                          onChange={(value) =>
+                            updateScheduled(draft.id, (current) => ({
+                              ...current,
+                              weekday: value ?? "1",
+                            }))
+                          }
+                        />
+                      ) : (
+                        <div className="schedule-empty-cell" />
+                      )}
+                      {draft.scheduleMode !== "hourly" ? (
+                        <NumberInput
+                          label={t("setup.members.patrol.hour")}
+                          min={0}
+                          max={23}
+                          allowDecimal={false}
+                          value={draft.hour}
+                          onChange={(value) =>
+                            updateScheduled(draft.id, (current) => ({
+                              ...current,
+                              hour: typeof value === "number" ? value : 9,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <div className="schedule-empty-cell" />
+                      )}
+                      <NumberInput
+                        label={t("setup.members.patrol.minute")}
+                        min={0}
+                        max={59}
+                        allowDecimal={false}
+                        value={draft.minute}
+                        onChange={(value) =>
+                          updateScheduled(draft.id, (current) => ({
+                            ...current,
+                            minute: typeof value === "number" ? value : 0,
+                          }))
+                        }
+                      />
+                      <TextInput
+                        classNames={{ input: "readonly-cron-input" }}
+                        label={t("setup.members.patrol.generatedCron")}
+                        value={cron}
+                        readOnly
+                        error={cronError}
+                      />
+                    </div>
+                  )}
+                </Stack>
+              </Card>
+            );
+          })}
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
+function CommandOptionRow({
+  label,
+  option,
+}: {
+  label: string;
+  option: CommandOption | undefined;
+}) {
+  return (
+    <Stack gap={2}>
+      <Text size="sm">{label}</Text>
+      {option?.description ? (
+        <Text size="xs" c="dimmed">
+          {option.description}
+        </Text>
+      ) : null}
+    </Stack>
+  );
+}
+
+function CommandOptionSummary({ option }: { option: CommandOption }) {
+  const { t } = useTranslation();
+  return (
+    <div className="command-option-summary">
+      <Group gap="xs">
+        <Badge variant="outline">{t(`commands.sources.${option.source}`)}</Badge>
+        {option.requirements.map((requirement) => (
+          <Badge
+            key={requirement.kind}
+            color={requirement.satisfied ? "green" : "yellow"}
+            variant="light"
+          >
+            {t(`commands.requirements.${requirement.kind}`)}
+          </Badge>
+        ))}
+      </Group>
+      {option.description ? (
+        <Text c="dimmed" size="sm">
+          {option.description}
+        </Text>
+      ) : null}
+      <div className="command-script-path">
+        <Anchor
+          href={localFileHref(option.path)}
+          size="sm"
+          title={option.path}
+          onClick={(event) => {
+            if (!isTauriRuntime()) {
+              return;
+            }
+            event.preventDefault();
+            void openLocalFile(option.path).catch(console.error);
+          }}
+        >
+          {option.path}
+        </Anchor>
+        <Tooltip label={t("commands.copyScriptPath")}>
+          <ActionIcon
+            aria-label={t("commands.copyScriptPath")}
+            size="sm"
+            variant="subtle"
+            onClick={() => void navigator.clipboard?.writeText(option.path).catch(console.error)}
+          >
+            <Copy size={14} />
+          </ActionIcon>
+        </Tooltip>
+      </div>
+    </div>
   );
 }
 
@@ -2558,6 +3033,10 @@ function FolderPicker({
   const pickDirectory = async () => {
     setPicking(true);
     try {
+      if (!isTauriRuntime()) {
+        return;
+      }
+      const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: true, multiple: false });
       if (typeof selected === "string") {
         onChange(selected);
@@ -2604,6 +3083,10 @@ function FilePicker({
   const pickFile = async () => {
     setPicking(true);
     try {
+      if (!isTauriRuntime()) {
+        return;
+      }
+      const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: false, multiple: false });
       if (typeof selected === "string") {
         onChange(selected);
@@ -2702,6 +3185,10 @@ function InfoCallout({ title, children }: { title: string; children: ReactNode }
       {children}
     </Alert>
   );
+}
+
+function isTauriRuntime() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 function useAutosave(
@@ -3204,6 +3691,12 @@ function getInitialEnvFileOption(
   return config?.env_file_exists ? "append" : "overwrite";
 }
 
+function toFormConfigLocation(
+  location: ConfigStatus["active_config_location"] | ConfigStatus["primary_config_location"] | undefined,
+): ProjectFormValues["configLocation"] {
+  return location === "workspace" ? "workspace" : "home";
+}
+
 function initialProjectValues(
   config: ConfigStatus | undefined,
   appLanguage: ProjectFormValues["language"],
@@ -3213,8 +3706,7 @@ function initialProjectValues(
   if (projectConfig) {
     return {
       workspaceDir: config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "",
-      configLocation:
-        projectConfig.config_dir.startsWith(config?.cwd ?? "") ? "workspace" : "home",
+      configLocation: toFormConfigLocation(config?.active_config_location),
       envFileOption: getInitialEnvFileOption(config),
       language: projectConfig.language,
       description: projectConfig.description ?? "",
@@ -3233,7 +3725,7 @@ function initialProjectValues(
   const cwd = config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "";
   return {
     workspaceDir: cwd,
-    configLocation: config?.primary_config_dir?.startsWith(cwd) ? "workspace" : "home",
+    configLocation: toFormConfigLocation(config?.primary_config_location),
     envFileOption: getInitialEnvFileOption(config),
     language: config?.primary_project_file_exists ? projectLanguage ?? appLanguage : appLanguage,
     description: "",
@@ -3694,7 +4186,220 @@ function memberRequestToConfig(
     has_slack_bot_token: Boolean(request.slack_bot_token),
     has_slack_app_token: Boolean(request.slack_app_token),
     slack_channels: request.slack_channels ?? [],
+    routine_commands: request.routine_commands ?? [],
+    task_schedules: request.task_schedules ?? [],
   };
+}
+
+function flattenTaskSchedules(taskSchedules: MemberTaskSchedule[]) {
+  return taskSchedules.flatMap((schedule) =>
+    schedule.schedules.map((cron) => ({
+      command: schedule.command,
+      schedule: cron,
+    })),
+  );
+}
+
+function scheduledCommandToDraft(
+  entry: { command: string; schedule: string },
+  commandCatalog: CommandOption[],
+): ScheduledCommandDraft {
+  const parsedCommand = parseCommandExpression(entry.command, commandCatalog);
+  const parsedCron = parseCron(entry.schedule);
+  return {
+    id: newDraftId(),
+    commandMode: parsedCommand.option ? "catalog" : "custom",
+    command: parsedCommand.option?.command ?? commandCatalog[0]?.command ?? "",
+    customCommand: parsedCommand.option ? "" : parsedCommand.command,
+    argValues: {},
+    rawArgs: parsedCommand.args,
+    scheduleMode: parsedCron.mode,
+    minute: parsedCron.minute,
+    hour: parsedCron.hour,
+    weekday: parsedCron.weekday,
+    cron: entry.schedule,
+  };
+}
+
+function createScheduledCommandDraft(command = ""): ScheduledCommandDraft {
+  return {
+    id: newDraftId(),
+    commandMode: command ? "catalog" : "custom",
+    command,
+    customCommand: "",
+    argValues: {},
+    rawArgs: "",
+    scheduleMode: "daily",
+    minute: 0,
+    hour: 9,
+    weekday: "1",
+    cron: "0 9 * * *",
+  };
+}
+
+function buildTaskSchedules(
+  drafts: ScheduledCommandDraft[],
+  commandOptionByValue: Map<string, CommandOption>,
+): MemberTaskSchedule[] {
+  const grouped = new Map<string, string[]>();
+  for (const draft of drafts) {
+    const command = buildScheduledCommandExpression(draft, commandOptionByValue);
+    const schedule = draftToCron(draft);
+    if (!command || !isValidCron(schedule)) {
+      continue;
+    }
+    grouped.set(command, [...(grouped.get(command) ?? []), schedule]);
+  }
+  return Array.from(grouped.entries()).map(([command, schedules]) => ({
+    command,
+    schedules,
+  }));
+}
+
+function buildScheduledCommandExpression(
+  draft: ScheduledCommandDraft,
+  commandOptionByValue: Map<string, CommandOption>,
+): string {
+  const option =
+    draft.commandMode === "catalog" ? commandOptionByValue.get(draft.command) ?? null : null;
+  const command = draft.commandMode === "catalog" ? draft.command : draft.customCommand.trim();
+  if (!command) {
+    return "";
+  }
+  const args = buildSetupCommandArgs(option, draft.argValues, draft.rawArgs);
+  return [command, ...args.map(quoteCommandArg)].join(" ");
+}
+
+function buildSetupCommandArgs(
+  option: CommandOption | null,
+  values: Record<string, string>,
+  rawArgs: string,
+): string[] {
+  const args: string[] = [];
+  if (option) {
+    for (const argument of option.arguments) {
+      const value = values[argument.name]?.trim();
+      if (!value) {
+        continue;
+      }
+      args.push(argument.kind === "positional" ? value : `${argument.name}=${value}`);
+    }
+  }
+  return [...args, ...splitCommandLine(rawArgs)];
+}
+
+function parseCommandExpression(expression: string, commandCatalog: CommandOption[]) {
+  const command = expression.trim();
+  const option = [...commandCatalog]
+    .sort((a, b) => b.command.length - a.command.length)
+    .find((candidate) => command === candidate.command || command.startsWith(`${candidate.command} `));
+  if (option) {
+    return {
+      option,
+      command: option.command,
+      args: command.slice(option.command.length).trim(),
+    };
+  }
+  const [first = "", ...rest] = splitCommandLine(command);
+  return { option: null, command: first, args: rest.join(" ") };
+}
+
+function draftToCron(draft: ScheduledCommandDraft): string {
+  const minute = clampInteger(draft.minute, 0, 59);
+  const hour = clampInteger(draft.hour, 0, 23);
+  if (draft.scheduleMode === "hourly") {
+    return `${minute} * * * *`;
+  }
+  if (draft.scheduleMode === "daily") {
+    return `${minute} ${hour} * * *`;
+  }
+  if (draft.scheduleMode === "weekly") {
+    return `${minute} ${hour} * * ${draft.weekday || "1"}`;
+  }
+  return draft.cron.trim();
+}
+
+function parseCron(schedule: string): {
+  mode: CronPreset;
+  minute: number;
+  hour: number;
+  weekday: string;
+} {
+  const parts = schedule.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return { mode: "custom", minute: 0, hour: 9, weekday: "1" };
+  }
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+  if (hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    return { mode: "hourly", minute: toCronNumber(minute, 0), hour: 9, weekday: "1" };
+  }
+  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    return {
+      mode: "daily",
+      minute: toCronNumber(minute, 0),
+      hour: toCronNumber(hour, 9),
+      weekday: "1",
+    };
+  }
+  if (
+    dayOfMonth === "*" &&
+    month === "*" &&
+    (WEEKDAY_OPTIONS as readonly string[]).includes(dayOfWeek)
+  ) {
+    return {
+      mode: "weekly",
+      minute: toCronNumber(minute, 0),
+      hour: toCronNumber(hour, 9),
+      weekday: dayOfWeek,
+    };
+  }
+  return { mode: "custom", minute: toCronNumber(minute, 0), hour: 9, weekday: "1" };
+}
+
+function isValidCron(schedule: string): boolean {
+  return schedule.trim().split(/\s+/).length === 5;
+}
+
+function toCronNumber(value: string, fallback: number): number {
+  return /^\d+$/.test(value) ? Number(value) : fallback;
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function splitCommandLine(value: string): string[] {
+  const args: string[] = [];
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  for (const match of value.matchAll(pattern)) {
+    args.push(match[1] ?? match[2] ?? match[3] ?? "");
+  }
+  return args.filter(Boolean);
+}
+
+function quoteCommandArg(value: string): string {
+  if (!/\s/.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
+}
+
+function newDraftId(): string {
+  return crypto.randomUUID?.() ?? `schedule-${Date.now()}-${Math.random()}`;
+}
+
+async function openLocalFile(path: string) {
+  if (!isTauriRuntime()) {
+    return;
+  }
+  const { open } = await import("@tauri-apps/plugin-shell");
+  await open(path);
+}
+
+function localFileHref(path: string) {
+  const normalizedPath = path.replace(/\\/g, "/");
+  const prefix = normalizedPath.startsWith("/") ? "file://" : "file:///";
+  return encodeURI(`${prefix}${normalizedPath}`);
 }
 
 function resolveConfigDir(

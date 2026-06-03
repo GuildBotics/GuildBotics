@@ -19,6 +19,7 @@ from guildbotics.app_api.intelligences import IntelligenceConfigService
 from guildbotics.app_api.models import (
     ApiError,
     CliAgentDetectionsResponse,
+    CommandOptionsResponse,
     CommandRunRequest,
     CommandRunResponse,
     ConfigStatus,
@@ -32,6 +33,8 @@ from guildbotics.app_api.models import (
     MemberResolveResponse,
     ProjectConfigResponse,
     ProjectConfigUpdateRequest,
+    PromptTraceStatus,
+    PromptTraceUpdateRequest,
     RoleOption,
     RoleOptionsResponse,
     RoutineOption,
@@ -168,6 +171,17 @@ def create_app(
     def team(_: None = Depends(require_token)) -> TeamSummary:
         return app_runtime.get_team_summary()
 
+    @app.get(
+        "/commands/options",
+        response_model=CommandOptionsResponse,
+        responses=error_responses,
+    )
+    def command_options(
+        person: str | None = None,
+        _: None = Depends(require_token),
+    ) -> CommandOptionsResponse:
+        return app_runtime.get_command_options(person)
+
     @app.post(
         "/commands/run",
         response_model=CommandRunResponse,
@@ -246,6 +260,30 @@ def create_app(
     )
     def scheduler_stop(_: None = Depends(require_token)) -> RuntimeStatus:
         return app_runtime.stop_scheduler()
+
+    @app.get(
+        "/prompt-trace",
+        response_model=PromptTraceStatus,
+        responses=error_responses,
+    )
+    def prompt_trace_status(
+        limit: Annotated[int, Query(ge=1, le=1000)] = 20,
+        path: str | None = None,
+        _: None = Depends(require_token),
+    ) -> PromptTraceStatus:
+        return app_runtime.get_prompt_trace_status(limit=limit, read_path=path)
+
+    @app.put(
+        "/prompt-trace",
+        response_model=PromptTraceStatus,
+        responses=error_responses,
+    )
+    def prompt_trace_update(
+        request: PromptTraceUpdateRequest,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 20,
+        _: None = Depends(require_token),
+    ) -> PromptTraceStatus:
+        return app_runtime.update_prompt_trace(request, limit=limit)
 
     @app.post("/verify", response_model=VerifyResponse, responses=error_responses)
     def verify(_: None = Depends(require_token)) -> VerifyResponse:
@@ -329,11 +367,8 @@ def create_app(
     )
     def config_project(_: None = Depends(require_token)) -> ProjectConfigResponse:
         status = app_runtime.get_config_status()
-        if status.primary_project_file_exists:
-            config_dir = status.primary_config_dir
-        elif status.home_project_file_exists:
-            config_dir = status.home_config_dir
-        else:
+        config_dir = _get_existing_config_dir(status)
+        if config_dir is None:
             raise AppApiError(
                 "project_not_found",
                 "Project config was not found.",
@@ -383,7 +418,7 @@ def create_app(
         try:
             payload = request.model_dump()
             status = app_runtime.get_config_status()
-            if status.primary_project_file_exists or status.home_project_file_exists:
+            if _get_existing_config_dir(status) is not None:
                 payload["config_dir"] = _resolve_existing_config_dir(app_runtime)
                 payload["env_file_path"] = status.env_file
             result = SimplePersonSetupService().write_person(
@@ -403,11 +438,8 @@ def create_app(
         _: None = Depends(require_token),
     ) -> MemberConfigResponse:
         status = app_runtime.get_config_status()
-        if status.primary_project_file_exists:
-            config_dir = status.primary_config_dir
-        elif status.home_project_file_exists:
-            config_dir = status.home_config_dir
-        else:
+        config_dir = _get_existing_config_dir(status)
+        if config_dir is None:
             raise AppApiError(
                 "project_not_found",
                 "Project config was not found.",
@@ -511,10 +543,9 @@ def create_app(
 
 def _resolve_existing_config_dir(app_runtime: AppRuntime) -> Path:
     status = app_runtime.get_config_status()
-    if status.primary_project_file_exists:
-        return status.primary_config_dir
-    if status.home_project_file_exists:
-        return status.home_config_dir
+    config_dir = _get_existing_config_dir(status)
+    if config_dir is not None:
+        return config_dir
     raise AppApiError(
         "project_not_found",
         "Project config was not found.",
@@ -524,6 +555,16 @@ def _resolve_existing_config_dir(app_runtime: AppRuntime) -> Path:
         },
         status_code=400,
     )
+
+
+def _get_existing_config_dir(status: ConfigStatus) -> Path | None:
+    if status.active_config_dir is not None:
+        return status.active_config_dir
+    if status.primary_project_file_exists:
+        return status.primary_config_dir
+    if status.home_project_file_exists:
+        return status.home_config_dir
+    return None
 
 
 def _error_response(

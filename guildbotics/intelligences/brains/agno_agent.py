@@ -12,6 +12,7 @@ from guildbotics.intelligences.brains.util import to_plain_text, to_response_cla
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.import_utils import instantiate_class
 from guildbotics.utils.log_utils import get_file_handler
+from guildbotics.utils.prompt_trace import write_prompt_trace
 from guildbotics.utils.rate_limiter import acquire
 from guildbotics.utils.text_utils import replace_placeholders
 
@@ -121,8 +122,10 @@ class AgnoAgentDefaultBrain(Brain):
                 self.model_config.rate_limit.max_requests_per_minute,
             )
         message = self.patch_message(message)
+        self._write_request_trace(message, description, kwargs)
         response = await agent.arun(message)
         content = response.content
+        self._write_response_trace(content)
         if self.response_class and (
             self.model_config.is_restricted_model
             or not isinstance(content, self.response_class)
@@ -150,3 +153,35 @@ class AgnoAgentDefaultBrain(Brain):
             return message
 
         return "Execute exactly as specified in the system message."
+
+    def _write_request_trace(
+        self, message: str, description: str, kwargs: dict
+    ) -> None:
+        write_prompt_trace(
+            "llm.request",
+            {
+                "person_id": self.person_id,
+                "brain": self.name,
+                "model": self.model_config.name,
+                "model_class": self.model_config.model_class,
+                "restricted_model": self.model_config.is_restricted_model,
+                "response_class": (
+                    self.response_class.__name__ if self.response_class else ""
+                ),
+                "description": description,
+                "message": message,
+                "session_state": kwargs.get("session_state", {}),
+                "add_state_in_messages": kwargs.get("add_state_in_messages", False),
+            },
+        )
+
+    def _write_response_trace(self, content: object) -> None:
+        write_prompt_trace(
+            "llm.response",
+            {
+                "person_id": self.person_id,
+                "brain": self.name,
+                "model": self.model_config.name,
+                "content": content,
+            },
+        )

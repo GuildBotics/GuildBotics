@@ -30,5 +30,10 @@
     "macOS": {
       "minimumSystemVersion": "13.0"
     }
+  },
+  "plugins": {
+    "shell": {
+      "open": "^((mailto:\\w+)|(tel:\\w+)|(https?://\\w+)|(/.+\\.(md|ya?ml|py|sh)))"
+    }
   }
 }
