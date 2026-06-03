@@ -12,7 +12,7 @@ from guildbotics.cli.simple.setup_service import (
     SimpleProjectSetupService,
 )
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
-from guildbotics.utils.fileio import load_yaml_file
+from guildbotics.utils.fileio import load_yaml_file, save_yaml_file
 
 
 def test_write_project_creates_cli_compatible_files(tmp_path: Path) -> None:
@@ -430,6 +430,45 @@ def test_member_config_round_trips_patrol_settings(tmp_path: Path) -> None:
     updated = load_yaml_file(config_dir / "team/members/alice/person.yml")
     assert "routine_commands" not in updated
     assert "task_schedules" not in updated
+
+
+def test_read_person_config_skips_invalid_task_schedules(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file = tmp_path / ".env"
+    service = SimplePersonSetupService()
+    service.write_person(
+        PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            append_env_file=False,
+            person_type="machine_user",
+            person_id="alice",
+            person_name="Alice",
+            is_active=True,
+            github_username="alice",
+            git_email="1+alice@users.noreply.github.com",
+            roles=["architect"],
+            speaking_style="style-a",
+        )
+    )
+    person_file = config_dir / "team/members/alice/person.yml"
+    person_data = load_yaml_file(person_file)
+    person_data["task_schedules"] = [
+        {"command": "reports/morning_summary", "schedules": ["0 9 * * 1-5"]},
+        {"command": "bad", "schedules": ["invalid cron"]},
+        "not a schedule",
+    ]
+    save_yaml_file(person_file, person_data)
+
+    snapshot = service.read_person_config(
+        config_dir=config_dir,
+        person_id="alice",
+        env_file_path=env_file,
+    )
+
+    assert [schedule.model_dump() for schedule in snapshot.task_schedules] == [
+        {"command": "reports/morning_summary", "schedules": ["0 9 * * 1-5"]}
+    ]
 
 
 def test_read_person_config_exposes_non_secret_github_apps_values(

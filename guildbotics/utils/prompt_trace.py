@@ -30,9 +30,9 @@ def write_prompt_trace(event: str, payload: JsonMap) -> None:
     if not prompt_trace_enabled():
         return
     item = {
+        **_normalize(payload),
         "event": event,
         "timestamp": _timestamp(),
-        **_normalize(payload),
     }
     path = prompt_trace_path()
     path.parent.mkdir(parents=True, exist_ok=True)

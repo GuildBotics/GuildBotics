@@ -33,3 +33,21 @@ def test_prompt_trace_writes_jsonl_only_when_enabled(
     assert events[0]["prompt"] == "hello"
     assert events[0]["cwd"] == str(tmp_path)
     assert events[0]["items"] == [{"nested": True}]
+
+
+def test_prompt_trace_payload_cannot_override_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    trace_path = tmp_path / "prompt_trace.jsonl"
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(trace_path))
+
+    write_prompt_trace(
+        "llm.request",
+        {"event": "spoofed", "timestamp": "spoofed", "person_id": "alice"},
+    )
+
+    event = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert event["event"] == "llm.request"
+    assert event["timestamp"] != "spoofed"
+    assert event["person_id"] == "alice"

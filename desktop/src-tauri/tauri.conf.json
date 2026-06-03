@@ -33,7 +33,7 @@
   },
   "plugins": {
     "shell": {
-      "open": "^((mailto:\\w+)|(tel:\\w+)|(https?://\\w+)|(/.+\\.(md|ya?ml|py|sh)))"
+      "open": "^((mailto:[^\\s@]+@[^\\s@]+\\.[^\\s@]+)|(tel:\\+?[0-9][0-9(). -]*)|(https?://[^\\s]+)|(/.+\\.(md|ya?ml|py|sh)))$"
     }
   }
 }

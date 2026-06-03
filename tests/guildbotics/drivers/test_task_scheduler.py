@@ -81,3 +81,51 @@ def test_task_scheduler_runs_routine_at_configured_minute_interval(monkeypatch) 
         dt.datetime(2026, 1, 1, 9, 0, 0),
         dt.datetime(2026, 1, 1, 9, 3, 0),
     ]
+
+
+def test_task_scheduler_measures_routine_interval_after_routine_finishes(
+    monkeypatch,
+) -> None:
+    class FakeDateTime(dt.datetime):
+        current = dt.datetime(2026, 1, 1, 9, 0, 0)
+
+        @classmethod
+        def now(cls, tz: dt.tzinfo | None = None) -> dt.datetime:
+            if tz is None:
+                return cls.current
+            return cls.current.replace(tzinfo=tz)
+
+    person = _Person()
+    scheduler = TaskScheduler(
+        _Context(person),
+        ["routine"],
+        routine_interval_minutes=3,
+    )
+    calls: list[dt.datetime] = []
+    first_finished_at: dt.datetime | None = None
+
+    async def fake_run_command(
+        context: object,
+        command: str,
+        task_type: str,
+    ) -> bool:
+        nonlocal first_finished_at
+        calls.append(FakeDateTime.current)
+        if len(calls) == 1:
+            FakeDateTime.current += dt.timedelta(minutes=2)
+            first_finished_at = FakeDateTime.current
+        if len(calls) == EXPECTED_ROUTINE_CALL_COUNT:
+            scheduler.shutdown()
+        return True
+
+    def fake_sleep(seconds: float) -> None:
+        FakeDateTime.current += dt.timedelta(seconds=seconds)
+
+    monkeypatch.setattr(task_scheduler.datetime, "datetime", FakeDateTime)
+    monkeypatch.setattr(task_scheduler, "run_command", fake_run_command)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", fake_sleep)
+
+    scheduler._process_tasks_list(person, [])
+
+    assert first_finished_at is not None
+    assert calls[1] >= first_finished_at + dt.timedelta(minutes=3)

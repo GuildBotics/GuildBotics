@@ -155,13 +155,13 @@ class TaskScheduler:
                         routine_command_index % len(routine_commands)
                     ]
                     routine_command_index += 1
-                    next_routine_time = start_time + datetime.timedelta(
-                        minutes=self.routine_interval_minutes
-                    )
 
                 if routine_command and not self._stop_event.is_set():
                     ok = loop.run_until_complete(
                         run_command(context, routine_command, "routine")
+                    )
+                    next_routine_time = datetime.datetime.now() + datetime.timedelta(
+                        minutes=self.routine_interval_minutes
                     )
                     if not ok and not self._stop_event.is_set():
                         consecutive_errors, should_stop = (

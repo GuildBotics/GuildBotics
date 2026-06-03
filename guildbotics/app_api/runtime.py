@@ -23,6 +23,7 @@ from guildbotics.app_api.cli_agents import (
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import CommandEventLogHandler, EventBus
+from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     ActiveConfigLocation,
@@ -62,6 +63,7 @@ from guildbotics.entities import Service
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
     get_home_config_path,
+    get_person_config_path,
     get_primary_config_path,
     get_storage_path,
     get_template_path,
@@ -73,6 +75,8 @@ from guildbotics.utils.prompt_trace import (
     prompt_trace_path,
     read_prompt_trace_events,
 )
+
+TICKET_DRIVEN_WORKFLOW = "workflows/ticket_driven_workflow"
 
 
 def _normalized_path(path: Path) -> Path:
@@ -441,10 +445,12 @@ class AppRuntime:
             return False
 
     def requires_github_for_routine(self, command: str) -> bool:
+        if command == TICKET_DRIVEN_WORKFLOW:
+            return True
         try:
             options = self.get_command_options()
         except Exception:
-            return command == "workflows/ticket_driven_workflow"
+            return False
         return any(
             option.command == command
             and any(requirement.kind == "github" for requirement in option.requirements)
@@ -735,22 +741,45 @@ def _command_requirement_kinds(
         return set()
     seen.add(resolved_path)
 
-    kinds: set[str] = _direct_command_requirement_kinds(path, metadata)
+    kinds: set[str] = _direct_command_requirement_kinds(path, metadata, context)
     kinds.update(_child_command_requirement_kinds(path, metadata, context, seen))
     return kinds
 
 
-def _direct_command_requirement_kinds(path: Path, metadata: dict[str, Any]) -> set[str]:
+def _direct_command_requirement_kinds(
+    path: Path, metadata: dict[str, Any], context: Context
+) -> set[str]:
     if path.suffix == ".md":
-        brain = str(metadata.get("brain", "")).lower()
-        if brain == "cli":
-            return {"cli_agent"}
-        elif brain not in {"none", "-", "null", "disabled"}:
-            return {"llm"}
+        kind = _markdown_brain_requirement_kind(metadata, context)
+        if kind:
+            return {kind}
         return set()
     if path.suffix == ".py":
         return _python_requirement_kinds(path)
     return set()
+
+
+def _markdown_brain_requirement_kind(
+    metadata: dict[str, Any], context: Context
+) -> str | None:
+    brain = str(metadata.get("brain", "default")).strip()
+    if brain.lower() in {"none", "-", "null", "disabled"}:
+        return None
+    if brain.lower() == "cli":
+        return "cli_agent"
+
+    try:
+        mapping = load_yaml_file(
+            get_person_config_path(
+                context.person.person_id, "intelligences/brain_mapping.yml"
+            )
+        )
+    except Exception:
+        mapping = {}
+    brain_config = mapping.get(brain, {}) if isinstance(mapping, dict) else {}
+    if isinstance(brain_config, dict) and brain_config.get("class") == CLI_BRAIN_CLASS:
+        return "cli_agent"
+    return "llm"
 
 
 def _child_command_requirement_kinds(

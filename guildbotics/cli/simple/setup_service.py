@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import requests  # type: ignore
 from dotenv import dotenv_values
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
@@ -197,6 +197,20 @@ class PersonTaskScheduleInput(BaseModel):
             if len(schedule.split()) != CRON_FIELD_COUNT:
                 raise ValueError("schedule must be a five-field cron expression")
         return schedules
+
+
+def _read_task_schedules(raw_schedules: object) -> list[PersonTaskScheduleInput]:
+    if not isinstance(raw_schedules, list):
+        return []
+    schedules = []
+    for schedule in raw_schedules:
+        if not isinstance(schedule, dict):
+            continue
+        try:
+            schedules.append(PersonTaskScheduleInput.model_validate(schedule))
+        except ValidationError:
+            continue
+    return schedules
 
 
 class PersonSetupInput(BaseModel):
@@ -700,11 +714,7 @@ class SimplePersonSetupService:
                 for command in person_data.get("routine_commands", [])
                 if str(command).strip()
             ],
-            task_schedules=[
-                PersonTaskScheduleInput.model_validate(schedule)
-                for schedule in person_data.get("task_schedules", [])
-                if isinstance(schedule, dict)
-            ],
+            task_schedules=_read_task_schedules(person_data.get("task_schedules", [])),
         )
 
     def parse_github_apps_url(self, url: str) -> str:

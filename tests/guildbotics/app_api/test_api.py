@@ -479,6 +479,50 @@ def test_app_runtime_command_options_propagate_nested_requirements(
     }
 
 
+def test_app_runtime_command_options_resolve_brain_mapping_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    config_dir = tmp_path / ".guildbotics/config"
+    commands_dir = config_dir / "commands"
+    commands_dir.mkdir(parents=True)
+    (commands_dir / "edit.md").write_text(
+        "\n".join(["---", "brain: file_editor", "---", "Edit ${file}."])
+    )
+    brain_mapping = config_dir / "intelligences/brain_mapping.yml"
+    brain_mapping.parent.mkdir(parents=True)
+    brain_mapping.write_text(
+        "\n".join(
+            [
+                "default:",
+                "  class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain",
+                "file_editor:",
+                "  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain",
+            ]
+        )
+    )
+    person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
+    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    team = type("TeamStub", (), {"project": project, "members": [person]})()
+    context = type(
+        "ContextStub",
+        (),
+        {
+            "team": team,
+            "person": person,
+            "clone_for": lambda self, selected: self,
+        },
+    )()
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    option = runtime.get_command_options().options[0]
+
+    assert {requirement.kind for requirement in option.requirements} == {"cli_agent"}
+
+
 def test_app_runtime_command_options_extract_markdown_arguments(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1604,6 +1648,14 @@ def test_app_runtime_rejects_github_required_routine_without_integration() -> No
         )
 
     assert exc_info.value.code == "github_integration_required_for_routine"
+
+
+def test_app_runtime_preserves_github_requirement_for_default_ticket_routine() -> None:
+    runtime = AppRuntime(EventBus())
+
+    assert (
+        runtime.requires_github_for_routine("workflows/ticket_driven_workflow") is True
+    )
 
 
 @pytest.mark.asyncio
