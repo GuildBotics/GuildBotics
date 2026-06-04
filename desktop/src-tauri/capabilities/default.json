@@ -6,17 +6,6 @@
   "permissions": [
     "core:default",
     "dialog:allow-open",
-    "shell:allow-open",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/guildbotics-app-api",
-          "cmd": "binaries/guildbotics-app-api",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    }
+    "shell:allow-open"
   ]
 }

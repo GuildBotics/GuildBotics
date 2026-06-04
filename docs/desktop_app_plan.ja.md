@@ -138,7 +138,7 @@ frontend は `message` を表示し、分岐や復旧導線には `code` と `co
 - Setup UI から GitHub 未設定の fresh workspace に project config と `.env` を生成できることを確認済み。
 - frontend API client に `WS /events` の subscription helper を追加し、command runner 画面で実行イベントを表示するようにした。
 - `desktop/src/api/backend.ts` で Tauri sidecar 起動と health check の入口を追加済み。
-- `.github/workflows/desktop-macos.yml` に macOS arm64 desktop artifact build の骨格を追加済み。
+- `.github/workflows/desktop-macos.yml` に macOS arm64 desktop artifact build を実装済み。`desktop/sidecar/guildbotics-app-api.spec` ベースで PyInstaller sidecar を build し、sidecar health smoke test、optional な signing / notarization step を経て `tauri build` で DMG を生成する。secrets 未設定なら unsigned DMG、secrets 設定済みなら signed + notarized DMG を生成する。ローカル実機で unsigned DMG 生成まで検証済み。
 - `to_pdf` の WeasyPrint import を実行時 lazy import にし、PDF を使わない command 実行が native dependency 不足に巻き込まれないようにした。
 - `GET /config/intelligences` と `PUT /config/intelligences` を追加し、チーム既定と member override の `model_mapping.yml` / `brain_mapping.yml` / `cli_agent_mapping.yml` / `models/*` / `cli_agents/*` を GUI から読み書きできるようにした。
 - Setup UI の `LLM・CLIエージェント` 詳細設定から「準備中」表示を削除し、機能割り当て、モデル定義、CLI エージェント定義を編集できるようにした。
@@ -149,7 +149,8 @@ frontend は `message` を表示し、分岐や復旧導線には `code` と `co
 - `POST /verify` は GUI 向けの軽量・非対話 check として実装済み。既存 `config verify` と異なり、外部サービス変更や対話 prompt は行わない。
 - `POST /scheduler/stop` は v1 では sidecar 内 runtime 全体を停止する。個別 runtime の停止 UI は未実装。
 - `WS /logs` は global log stream の skeleton であり、UI 統合は未整備。
-- macOS signing / notarization secrets は未設定。
+- macOS signing / notarization secrets は未設定。workflow は secrets 未設定時に unsigned DMG を生成する。secrets 名は `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_KEYCHAIN_PASSWORD` / `APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID`。
+- packaged GUI sidecar は `weasyprint` を同梱しないため、`to_pdf` 系の PDF 変換は GUI からは使えない（native dependency を入れた CLI が fallback）。sidecar は PyInstaller onefile のため初回起動時の自己展開に約 10 秒かかる。
 - local full pytest は WeasyPrint native dependency がない環境では `tests/guildbotics/drivers/commands/test_to_pdf_command.py` が失敗する。
 
 ## セッション分割 TODO
@@ -710,6 +711,8 @@ uv run --no-sync pylint guildbotics
 
 ### Session 9: macOS arm64 packaging を実際に通す
 
+状態: 完了。
+
 目的:
 
 - Mac Apple Silicon 用の desktop artifact を CI で生成できるようにする。
@@ -727,6 +730,30 @@ uv run --no-sync pylint guildbotics
 - GitHub Actions の manual run で unsigned DMG artifact が生成される。
 - secrets 設定済み環境では signed + notarized DMG が生成される。
 - fresh Mac で app 起動、backend health、config status 表示まで確認できる。
+
+Session 9 完了メモ（2026-06-03）:
+
+- PyInstaller の sidecar build を再現可能にするため、`desktop/sidecar/guildbotics-app-api.spec` を追加した。`guildbotics` package は config 経由で brain / command を動的解決する（`load_class`）ため、静的 import graph に依存せず submodule と data file をまとめて収集する。`.gitignore` の `*.spec` 除外に対して `!desktop/sidecar/*.spec` の例外を追加し、spec を version control に含めた。
+- `weasyprint` は spec の `excludes` で sidecar に含めない方針とした。`ToPdfCommand` は実行時 lazy import で、native lib 不在時は `CommandError` を返すため、GTK / Pango / Cairo を持たない CI でも sidecar が build できる。packaged GUI の PDF 変換は v1 既知の制約とし、native dependency を入れた CLI を fallback とする。
+- `.github/workflows/desktop-macos.yml` を更新し、(1) spec ベースの sidecar build、(2) build 直後の sidecar health smoke test、(3) signing / notarization の optional step、(4) `tauri build` を実行する。secrets 未設定でも unsigned DMG が生成される。
+- signing / notarization 用 secrets 名を確定した: `APPLE_CERTIFICATE`（base64 .p12）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_KEYCHAIN_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（app-specific password）、`APPLE_TEAM_ID`。`APPLE_CERTIFICATE` が無ければ signing step を skip、`APPLE_CERTIFICATE` と `APPLE_ID` が揃った時だけ notarization 用 env を渡す。Tauri は env が空なら unsigned build を生成する。
+- onefile sidecar は初回起動時に temp dir へ自己展開するため cold start に約 10 秒かかる。`desktop/src/api/backend.ts` の health 待ち deadline を 15 秒から 45 秒へ広げ、fresh Mac の初回起動を backend 起動失敗扱いにしないようにした。
+- ローカル実機検証（macOS Apple Silicon, 2026-06-03）:
+  - `desktop/sidecar/guildbotics-app-api.spec` から PyInstaller onefile（約 212MB）を build 成功。
+  - build した sidecar を直接起動し、`GET /health` が `{"status":"ok"}`、`GET /config/status` が cwd / config path を正しく返すことを確認（cwd を workspace として扱う設計が packaged binary でも機能）。
+  - `npm run tauri build -- --target aarch64-apple-darwin` で unsigned DMG（`GuildBotics_0.1.0_aarch64.dmg`, 約 215MB）を生成。DMG 内の `GuildBotics.app/Contents/MacOS/` に desktop 本体と sidecar `guildbotics-app-api` が同梱され、ad-hoc 署名であることを確認。
+  - 注意: ローカルの `cargo` は Homebrew 版 1.83 が PATH 優先になっていると `edition2024` 要求の依存解決に失敗する。rustup の stable toolchain（1.85 以降）を使う必要がある。CI runner (macos-14) の既定 toolchain は要件を満たす。
+- インストール後の起動検証で 2 件の packaging bug を修正した:
+  - **アプリアイコン**: `tauri.conf.json` の `bundle` に `icon` 指定が無く、Tauri 組み込みのデフォルトアイコンが使われていた。`icons/*.png` / `icon.icns`（GuildBotics アイコン）を `bundle.icon` に明示した。
+  - **sidecar 起動の ACL**: 当初 frontend が `Command.sidecar(...).spawn()` で sidecar を起動しており、capability が `shell:allow-execute` のみで `Command plugin:shell|spawn not allowed by ACL` になっていた。後述の lifecycle 再設計で sidecar 起動を Rust 側へ移したため、frontend からの shell spawn 自体を廃止し、capability は `shell:allow-open` のみに戻した（Rust 内からの sidecar spawn は ACL の対象外）。
+- インストール後の再起動検証で sidecar lifecycle のバグを修正した（`ウインドウを閉じて再起動すると invalid_session_token になる`）:
+  - **原因**: sidecar 起動が frontend にあり、(1) macOS ではウィンドウを閉じてもアプリが Dock に残り、JS spawn した sidecar がアプリ終了後も orphan 化する、(2) window 再表示のたびに新しいトークンで固定ポート 8765 に別 sidecar を起動しようとし、orphan とポート競合 → 古い sidecar が古いトークンで応答 → `invalid_session_token`。
+  - **修正**: sidecar lifecycle を Rust（`desktop/src-tauri/src/lib.rs`）へ移管。アプリプロセスごとに 1 度だけ起動し、`RunEvent::Exit` で kill する。ポートは固定 8765 ではなく起動時に空きポートを動的取得し、orphan 衝突を回避する。frontend（`desktop/src/api/backend.ts`）は `backend_info` command で port / token を取得して既存バックエンドを再利用し、window 再表示で二重起動しない。workspace 切替は sidecar 再起動ではなく実行時 `POST /workspace` に統一した。
+  - **PyInstaller onefile の orphan 対策**: onefile は bootloader が実 worker を子プロセスとして起動するため、bootloader だけを kill しても worker が port を握ったまま残る。sidecar に親 PID 監視 watchdog（`GUILDBOTICS_APP_API_PARENT_PID`、`guildbotics/app_api/server.py`）を追加し、Rust が渡したアプリ PID が消えたら worker 自身も終了するようにした。CLI 実行時は env 未設定のため watchdog は無効。
+  - **実機検証**: 起動 → ウィンドウを閉じる → 再起動でバックエンド再利用（listen port 1 つ、`invalid_session_token` 解消）、通常終了で orphan ゼロ・ポート解放、アプリ SIGKILL（クラッシュ相当）でも watchdog が約 3 秒で sidecar を回収することを確認した。
+- 起動 UX を 2 点改善した:
+  - **起動中の白画面解消**: backend health 待ちの間（onefile cold start で約 10 秒）にこれまで白画面だったのを、`desktop/src/main.tsx` の `Bootstrap` でローダー + 起動メッセージを表示し、失敗時は理由と再試行ボタンを出すようにした。
+  - **未設定時の初期画面**: 初期表示ルートを設定状態で分岐し、project config 未作成なら `サービス実行` ではなく `設定` 画面（`/setup`）を開くようにした（`desktop/src/App.tsx` の `IndexRedirect`）。fresh workspace で `config/status` の `primary/home_project_file_exists` がともに false のとき `/setup` に遷移することを実機確認した。
 
 確認:
 

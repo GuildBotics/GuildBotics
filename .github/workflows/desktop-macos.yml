@@ -41,18 +41,84 @@ jobs:
       - name: Build Python app API sidecar
         run: |
           uv run --with pyinstaller python -m PyInstaller \
-            --name guildbotics-app-api \
-            --collect-data guildbotics \
-            --onefile guildbotics/app_api/__main__.py
+            desktop/sidecar/guildbotics-app-api.spec \
+            --noconfirm --clean \
+            --distpath dist --workpath build/sidecar
           mkdir -p desktop/src-tauri/binaries
-          cp dist/guildbotics-app-api desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
+          cp dist/guildbotics-app-api \
+            desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
+
+      - name: Smoke-test sidecar binary
+        run: |
+          desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin \
+            --host 127.0.0.1 --port 8765 --token ci-smoke-token &
+          SIDECAR_PID=$!
+          trap 'kill "$SIDECAR_PID" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS \
+              -H "X-GuildBotics-Session-Token: ci-smoke-token" \
+              http://127.0.0.1:8765/health >/dev/null; then
+              echo "sidecar health check passed"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "sidecar did not become healthy in time" >&2
+          exit 1
 
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm install
 
+      # Optional code signing. When the APPLE_CERTIFICATE secret is absent the
+      # build still succeeds and produces an unsigned DMG.
+      - name: Detect signing secrets
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_ID" ]; then
+            echo "notarize=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import Apple signing certificate
+        if: steps.signing.outputs.sign == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/guildbotics-signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
       - name: Build desktop app
         working-directory: desktop
+        env:
+          # Only pass the signing identity when the certificate was actually
+          # imported; otherwise an identity set without a certificate would make
+          # Tauri attempt to sign and fail. Empty value produces an unsigned build.
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.sign == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          # Notarization is performed by Tauri only when these are all set.
+          APPLE_ID: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_TEAM_ID || '' }}
         run: npm run tauri build -- --target aarch64-apple-darwin
 
       - name: Upload desktop artifacts

@@ -1,8 +1,15 @@
-const API_BASE = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
+let apiBase = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
 let sessionToken = import.meta.env.VITE_GUILDBOTICS_API_TOKEN ?? "";
 
-export function configureApi(token: string) {
+export function configureApi(token: string, baseUrl?: string) {
   sessionToken = token;
+  if (baseUrl) {
+    apiBase = baseUrl;
+  }
+}
+
+export function getApiBase(): string {
+  return apiBase;
 }
 
 export type ConfigStatus = {
@@ -609,7 +616,7 @@ async function request<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase}${path}`, {
     method: options.method ?? "GET",
     headers: {
       "Content-Type": "application/json",
@@ -644,7 +651,7 @@ async function readError(response: Response): Promise<ApiErrorPayload> {
 }
 
 function websocketBase(): string {
-  const url = new URL(API_BASE);
+  const url = new URL(apiBase);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString().replace(/\/$/, "");
 }
