@@ -59,7 +59,6 @@ import {
   type CliAgentDetection,
   type ConfigStatus,
   type BrainAssignment,
-  type CliAgentDefinition,
   type IntelligenceConfig,
   type MemberSetupRequest,
   type MemberConfig,
@@ -90,67 +89,65 @@ import {
 import { restartBackend } from "../api/backend";
 import { normalizeLanguage } from "../i18n";
 
-const projectSchema = createProjectSchema((key: string) => key);
-
 function createProjectSchema(t: TFunction | ((key: string) => string)) {
   return z
-  .object({
-    workspaceDir: z.string().min(1, t("setup.validation.workspaceRequired")),
-    configLocation: z.enum(["home", "workspace"]),
-    envFileOption: z.enum(["skip", "append", "overwrite"]),
-    language: z.enum(["en", "ja"]),
-    description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
-    llmApiType: z.enum(["openai", "gemini", "anthropic"]),
-    cliAgent: z.enum(["codex", "gemini", "claude", "copilot"]),
-    googleApiKey: z.string(),
-    openaiApiKey: z.string(),
-    anthropicApiKey: z.string(),
-    githubDecision: z.enum(["", "disabled", "enabled"]),
-    githubEnabled: z.boolean(),
-    githubProjectUrl: z.string(),
-    githubRepositoryUrl: z.string(),
-    repoAccess: z.enum(["https", "ssh"]),
-  })
-  .superRefine((values, ctx) => {
-    if (!values.githubDecision) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["githubDecision"],
-        message: t("setup.validation.githubDecisionRequired"),
-      });
-      return;
-    }
-    if (values.githubDecision !== "enabled") {
-      return;
-    }
-    const githubErrors = getGitHubFieldErrors(values, t);
-    if (githubErrors.githubProjectUrl) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["githubProjectUrl"],
-        message: githubErrors.githubProjectUrl,
-      });
-    }
-    if (githubErrors.githubRepositoryUrl) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["githubRepositoryUrl"],
-        message: githubErrors.githubRepositoryUrl,
-      });
-    }
-  });
+    .object({
+      workspaceDir: z.string().min(1, t("setup.validation.workspaceRequired")),
+      configLocation: z.enum(["home", "workspace"]),
+      envFileOption: z.enum(["skip", "append", "overwrite"]),
+      language: z.enum(["en", "ja"]),
+      description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
+      llmApiType: z.enum(["openai", "gemini", "anthropic"]),
+      cliAgent: z.enum(["codex", "gemini", "claude", "copilot"]),
+      googleApiKey: z.string(),
+      openaiApiKey: z.string(),
+      anthropicApiKey: z.string(),
+      githubDecision: z.enum(["", "disabled", "enabled"]),
+      githubEnabled: z.boolean(),
+      githubProjectUrl: z.string(),
+      githubRepositoryUrl: z.string(),
+      repoAccess: z.enum(["https", "ssh"]),
+    })
+    .superRefine((values, ctx) => {
+      if (!values.githubDecision) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["githubDecision"],
+          message: t("setup.validation.githubDecisionRequired"),
+        });
+        return;
+      }
+      if (values.githubDecision !== "enabled") {
+        return;
+      }
+      const githubErrors = getGitHubFieldErrors(values, t);
+      if (githubErrors.githubProjectUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["githubProjectUrl"],
+          message: githubErrors.githubProjectUrl,
+        });
+      }
+      if (githubErrors.githubRepositoryUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["githubRepositoryUrl"],
+          message: githubErrors.githubRepositoryUrl,
+        });
+      }
+    });
 }
 
-type ProjectFormValues = z.infer<typeof projectSchema>;
+type ProjectFormValues = z.infer<ReturnType<typeof createProjectSchema>>;
 type ProjectForm = UseFormReturnType<ProjectFormValues>;
 type LlmProviderAvailability = Record<ProjectFormValues["llmApiType"], boolean>;
+type IntelligenceDraftState = {
+  key: string;
+  config: IntelligenceConfig;
+  savedSerialized: string;
+};
 const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "github", "members"] as const;
-const CORE_SETUP_SECTIONS_CONFIGURED = [
-  "project",
-  "intelligence",
-  "github",
-  "members",
-] as const;
+const CORE_SETUP_SECTIONS_CONFIGURED = ["project", "intelligence", "github", "members"] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
 const LLM_PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI", family: "GPT" },
@@ -169,13 +166,7 @@ type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
 const DEFAULT_MEMBER_ROLE = "professional";
 const MASKED_SECRET_PLACEHOLDER = "••••••••••••";
 
-const MEMBER_TYPE_OPTIONS = [
-  "",
-  "human",
-  "machine_user",
-  "github_apps",
-  "proxy_agent",
-] as const;
+const MEMBER_TYPE_OPTIONS = ["", "human", "machine_user", "github_apps", "proxy_agent"] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
 type GitHubMemberType = Exclude<MemberType, "">;
 type MemberEditorTab = "basic" | "intelligence" | "patrol" | "github" | "slack" | "diagnostics";
@@ -225,9 +216,7 @@ export function SetupPage() {
         if (!projectConfig.data) {
           throw new Error("project config has not been loaded yet");
         }
-        return updateProjectConfig(
-          toProjectUpdateRequest(values, config.data, projectConfig.data),
-        );
+        return updateProjectConfig(toProjectUpdateRequest(values, config.data, projectConfig.data));
       }
       return initConfig(
         toProjectSetupRequest(values, config.data, {
@@ -273,14 +262,11 @@ export function SetupPage() {
     ? true
     : detectedCliAgentNames.has(form.values.cliAgent);
   const [section, setSection] = useState("project");
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle",
-  );
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [setupCreated, setSetupCreated] = useState(false);
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
   const canAutosave = hasExistingProject && projectConfig.isSuccess;
-  const focusMemberTab =
-    searchParams.get("tab") === "patrol" ? "patrol" : undefined;
+  const focusMemberTab = searchParams.get("tab") === "patrol" ? "patrol" : undefined;
   const llmProviderAvailability = useMemo(
     () => ({
       openai: Boolean(form.values.openaiApiKey.trim() || projectConfig.data?.has_openai_api_key),
@@ -305,15 +291,14 @@ export function SetupPage() {
     ? CORE_SETUP_SECTIONS_CONFIGURED
     : CORE_SETUP_SECTIONS_INITIAL;
   const initialProgress = useMemo(
-    () =>
-      getInitialCoreStatus(
-        form.values,
-        effectiveActiveMemberCount,
-        selectedCliAgentDetected,
-      ),
+    () => getInitialCoreStatus(form.values, effectiveActiveMemberCount, selectedCliAgentDetected),
     [effectiveActiveMemberCount, form.values, selectedCliAgentDetected],
   );
-  const currentCoreSectionIndex = coreSections.indexOf(section as CoreSection);
+  const requestedSection = searchParams.get("section") === "members" ? "members" : section;
+  const activeSection = coreSections.includes(requestedSection as CoreSection)
+    ? requestedSection
+    : coreSections[0];
+  const currentCoreSectionIndex = coreSections.indexOf(activeSection as CoreSection);
   const currentCoreSection =
     currentCoreSectionIndex >= 0 ? coreSections[currentCoreSectionIndex] : null;
   const canGoBack = currentCoreSectionIndex > 0;
@@ -335,22 +320,16 @@ export function SetupPage() {
   useEffect(() => {
     form.setValues(initialValues);
     form.resetDirty(initialValues);
-  }, [initialValues]);
+  }, [form, initialValues]);
 
-  useEffect(() => {
-    if (coreSections.includes(section as CoreSection)) {
-      return;
-    }
-    setSection(coreSections[0]);
-  }, [coreSections, section]);
-
-  useEffect(() => {
-    if (searchParams.get("section") === "members") {
-      setSection("members");
-    }
-  }, [searchParams]);
-
-  useAutosave(form, config.data, validationSchema, saveMutation.mutateAsync, setSaveState, canAutosave);
+  useAutosave(
+    form,
+    config.data,
+    validationSchema,
+    saveMutation.mutateAsync,
+    setSaveState,
+    canAutosave,
+  );
 
   const setupStatus = useSetupStatus(config.data, effectiveActiveMemberCount, form.values);
   const visibleStatus = hasExistingProject ? setupStatus : initialProgress;
@@ -421,13 +400,9 @@ export function SetupPage() {
       ) : null}
 
       <div className="setup-layout">
-        <SetupSectionNav
-          active={section}
-          onChange={setSection}
-          status={visibleStatus}
-        />
+        <SetupSectionNav active={activeSection} onChange={setSection} status={visibleStatus} />
         <Stack gap="md">
-          {section === "project" ? (
+          {activeSection === "project" ? (
             <ProjectSection
               form={form}
               saveState={saveState}
@@ -435,7 +410,7 @@ export function SetupPage() {
               onWorkspaceChange={changeWorkspace}
             />
           ) : null}
-          {section === "intelligence" ? (
+          {activeSection === "intelligence" ? (
             <IntelligenceSection
               form={form}
               saveState={saveState}
@@ -445,8 +420,8 @@ export function SetupPage() {
               projectConfig={projectConfig.data}
             />
           ) : null}
-          {section === "github" ? <GitHubIntegrationSection form={form} /> : null}
-          {section === "members" ? (
+          {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
+          {activeSection === "members" ? (
             <MembersSection
               activeMemberCount={effectiveActiveMemberCount}
               members={team.data?.members ?? []}
@@ -514,7 +489,11 @@ function SetupStatusBanner({
         </Group>
         <Group justify="flex-end" mt="sm">
           {initialProgress.ready ? (
-            <Button leftSection={<Save size={16} />} loading={creating} onClick={() => void onCreateInitial()}>
+            <Button
+              leftSection={<Save size={16} />}
+              loading={creating}
+              onClick={() => void onCreateInitial()}
+            >
               {t("setup.saveInitial")}
             </Button>
           ) : (
@@ -522,7 +501,11 @@ function SetupStatusBanner({
               <Button variant="default" disabled={!canGoBack} onClick={onGoBack}>
                 {t("setup.status.back")}
               </Button>
-              <Button variant="default" disabled={!canGoNext || !currentSectionReady} onClick={onGoNext}>
+              <Button
+                variant="default"
+                disabled={!canGoNext || !currentSectionReady}
+                onClick={onGoNext}
+              >
                 {t("setup.status.next")}
               </Button>
             </>
@@ -627,12 +610,11 @@ function ProjectSection({
             { label: t("app.language.japanese"), value: "ja" },
           ]}
           value={form.values.language}
-          onChange={(value) => form.setFieldValue("language", value as ProjectFormValues["language"])}
+          onChange={(value) =>
+            form.setFieldValue("language", value as ProjectFormValues["language"])
+          }
         />
-        <FolderPicker
-          value={form.values.workspaceDir}
-          onChange={onWorkspaceChange}
-        />
+        <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
         <LabeledSegmentedControl
           label={t("setup.project.configLocation")}
           data={[
@@ -740,7 +722,9 @@ function IntelligenceSection({
               : t("setup.intelligence.keyPlaceholder")
           }
           value={selectedProviderKey}
-          onChange={(event) => form.setFieldValue(selectedProviderKeyField, event.currentTarget.value)}
+          onChange={(event) =>
+            form.setFieldValue(selectedProviderKeyField, event.currentTarget.value)
+          }
         />
         <Divider />
         <Text size="sm" fw={700}>
@@ -765,7 +749,9 @@ function IntelligenceSection({
                 <span className="caption">{option.value}</span>
                 <span className={`detection ${detected ? "ok" : "ng"}`}>
                   <i />
-                  {detected ? t("setup.intelligence.detected") : t("setup.intelligence.notDetected")}
+                  {detected
+                    ? t("setup.intelligence.detected")
+                    : t("setup.intelligence.notDetected")}
                 </span>
               </button>
             );
@@ -813,10 +799,9 @@ function IntelligenceEditor({
     queryFn: () => getIntelligenceConfig(personId),
     enabled,
   });
-  const [draft, setDraft] = useState<IntelligenceConfig | null>(null);
+  const [draftState, setDraftState] = useState<IntelligenceDraftState | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [envErrors, setEnvErrors] = useState<Record<string, string>>({});
-  const previous = useRef("");
   const mutation = useMutation({
     mutationFn: updateIntelligenceConfig,
     onSuccess: () => {
@@ -825,18 +810,16 @@ function IntelligenceEditor({
     },
   });
 
-  useEffect(() => {
-    if (!query.data) {
-      return;
-    }
-    setDraft(query.data);
-    previous.current = JSON.stringify(toIntelligenceUpdatePayload(query.data, savePersonId));
-    setSaveState("idle");
-  }, [query.data, savePersonId]);
-
+  const querySerializedPayload = query.data
+    ? JSON.stringify(toIntelligenceUpdatePayload(query.data, savePersonId))
+    : "";
+  const draftKey = `${personId ?? "team"}:${querySerializedPayload}`;
+  const activeDraftState = draftState?.key === draftKey ? draftState : null;
+  const draft = activeDraftState?.config ?? query.data ?? null;
   const payload = draft ? toIntelligenceUpdatePayload(draft, savePersonId) : null;
   const serializedPayload = payload ? JSON.stringify(payload) : "";
-  const dirty = Boolean(serializedPayload && previous.current !== serializedPayload);
+  const savedSerialized = activeDraftState?.savedSerialized ?? querySerializedPayload;
+  const dirty = Boolean(serializedPayload && savedSerialized !== serializedPayload);
   const canSave = Boolean(payload && dirty && Object.keys(envErrors).length === 0);
 
   const saveDraft = useCallback(async () => {
@@ -845,15 +828,16 @@ function IntelligenceEditor({
     }
     setSaveState("saving");
     try {
-      previous.current = serializedPayload;
       await mutation.mutateAsync(payload);
+      setDraftState((current) =>
+        current?.key === draftKey ? { ...current, savedSerialized: serializedPayload } : current,
+      );
       setSaveState("saved");
     } catch (error) {
-      previous.current = "";
       setSaveState("error");
       throw error;
     }
-  }, [envErrors, mutation, payload, serializedPayload]);
+  }, [draftKey, envErrors, mutation, payload, serializedPayload]);
 
   useEffect(() => {
     if (!enabled || saveMode !== "auto" || !canSave) {
@@ -881,7 +865,11 @@ function IntelligenceEditor({
     );
   }
   if (query.isLoading || !draft) {
-    return <Text size="sm" c="dimmed">{t("setup.intelligence.loadingAdvanced")}</Text>;
+    return (
+      <Text size="sm" c="dimmed">
+        {t("setup.intelligence.loadingAdvanced")}
+      </Text>
+    );
   }
   if (query.error) {
     return (
@@ -908,7 +896,19 @@ function IntelligenceEditor({
   ) as Record<string, CliAgentDetection>;
 
   const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
-    setDraft((current) => (current ? recipe(current) : current));
+    setDraftState((current) => {
+      const currentConfig = current?.key === draftKey ? current.config : query.data;
+      if (!currentConfig) {
+        return current;
+      }
+      return {
+        key: draftKey,
+        config: recipe(currentConfig),
+        savedSerialized:
+          current?.key === draftKey ? current.savedSerialized : querySerializedPayload,
+      };
+    });
+    setSaveState("idle");
   };
 
   if (personId) {
@@ -990,7 +990,9 @@ function IntelligenceEditor({
               <div className="option-card-grid">
                 {CLI_AGENT_OPTIONS.map((option) => {
                   const agentPath = draft.cli_agent_mapping[option.value];
-                  const detected = Boolean(detections.find((entry) => entry.name === option.value)?.detected);
+                  const detected = Boolean(
+                    detections.find((entry) => entry.name === option.value)?.detected,
+                  );
                   const available = Boolean(agentPath && detected);
                   const active = defaultCliAgent === agentPath;
                   return (
@@ -1049,7 +1051,9 @@ function IntelligenceEditor({
         <>
           <Card withBorder radius="sm" p="md">
             <Stack gap="sm">
-              <Text fw={700} size="sm">{t("setup.intelligence.modelMapping")}</Text>
+              <Text fw={700} size="sm">
+                {t("setup.intelligence.modelMapping")}
+              </Text>
               {modelSlots.map((slot) => (
                 <Group key={slot} align="flex-end">
                   <TextInput value={slot} label={t("setup.intelligence.slot")} readOnly flex={1} />
@@ -1075,10 +1079,17 @@ function IntelligenceEditor({
 
           <Card withBorder radius="sm" p="md">
             <Stack gap="sm">
-              <Text fw={700} size="sm">{t("setup.intelligence.modelDefinitions")}</Text>
+              <Text fw={700} size="sm">
+                {t("setup.intelligence.modelDefinitions")}
+              </Text>
               {draft.models.map((model) => (
                 <Group key={model.path} align="flex-end">
-                  <TextInput label={t("setup.intelligence.path")} value={model.path} readOnly flex={1.3} />
+                  <TextInput
+                    label={t("setup.intelligence.path")}
+                    value={model.path}
+                    readOnly
+                    flex={1.3}
+                  />
                   <TextInput
                     label={t("setup.intelligence.modelClass")}
                     value={model.model_class}
@@ -1112,7 +1123,9 @@ function IntelligenceEditor({
 
           <Card withBorder radius="sm" p="md">
             <Stack gap="sm">
-              <Text fw={700} size="sm">{t("setup.intelligence.cliMapping")}</Text>
+              <Text fw={700} size="sm">
+                {t("setup.intelligence.cliMapping")}
+              </Text>
               {cliSlots.map((slot) => (
                 <Group key={slot} align="flex-end">
                   <TextInput value={slot} label={t("setup.intelligence.slot")} readOnly flex={1} />
@@ -1138,10 +1151,17 @@ function IntelligenceEditor({
 
           <Card withBorder radius="sm" p="md">
             <Stack gap="sm">
-              <Text fw={700} size="sm">{t("setup.intelligence.brainMapping")}</Text>
+              <Text fw={700} size="sm">
+                {t("setup.intelligence.brainMapping")}
+              </Text>
               {draft.brain_mapping.map((assignment) => (
                 <Group key={assignment.name} align="flex-end">
-                  <TextInput label={t("setup.intelligence.feature")} value={assignment.name} readOnly flex={1} />
+                  <TextInput
+                    label={t("setup.intelligence.feature")}
+                    value={assignment.name}
+                    readOnly
+                    flex={1}
+                  />
                   <Select
                     label={t("setup.intelligence.engine")}
                     data={[
@@ -1156,8 +1176,8 @@ function IntelligenceEditor({
                           engine: (value as "llm" | "cli") ?? assignment.engine,
                           target:
                             value === "cli"
-                              ? cliSlots[0] ?? "default"
-                              : modelSlots[0] ?? "default",
+                              ? (cliSlots[0] ?? "default")
+                              : (modelSlots[0] ?? "default"),
                         }),
                       }))
                     }
@@ -1184,15 +1204,22 @@ function IntelligenceEditor({
 
           <Card withBorder radius="sm" p="md">
             <Stack gap="md">
-              <Text fw={700} size="sm">{t("setup.intelligence.cliDefinitions")}</Text>
+              <Text fw={700} size="sm">
+                {t("setup.intelligence.cliDefinitions")}
+              </Text>
               {draft.cli_agents.map((agent) => {
                 const detection = detectedByPath[agent.path];
                 return (
                   <Card key={agent.path} withBorder radius="sm" p="sm">
                     <Stack gap="sm">
                       <Group justify="space-between">
-                        <Text fw={600} size="sm">{agent.name}</Text>
-                        <Badge color={detection?.detected || agent.detected ? "green" : "red"} variant="light">
+                        <Text fw={600} size="sm">
+                          {agent.name}
+                        </Text>
+                        <Badge
+                          color={detection?.detected || agent.detected ? "green" : "red"}
+                          variant="light"
+                        >
                           {detection?.detected || agent.detected
                             ? t("setup.intelligence.detected")
                             : t("setup.intelligence.notDetected")}
@@ -1363,24 +1390,19 @@ function MembersSection({
       ) as Record<string, string>,
     [rolesQuery.data?.roles],
   );
-  const commandCatalog = commandOptions.data?.options ?? [];
+  const commandCatalog = useMemo(
+    () => commandOptions.data?.options ?? [],
+    [commandOptions.data?.options],
+  );
   const commandOptionByValue = useMemo(
     () => new Map(commandCatalog.map((option) => [option.command, option])),
     [commandCatalog],
   );
-  const speakingStyleTemplates = useMemo(
-    () => getSpeakingStyleTemplates(t),
-    [t],
-  );
+  const speakingStyleTemplates = useMemo(() => getSpeakingStyleTemplates(t), [t]);
   const characterPresetExamples = useMemo(
     () => getCharacterPresetExamples(appLanguage),
     [appLanguage],
   );
-  useEffect(() => {
-    if (initialTab) {
-      setActiveTab(initialTab);
-    }
-  }, [initialTab]);
   const displayedMembers = useMemo(() => {
     const persistedIds = new Set(members.map((member) => member.person_id));
     return [
@@ -1398,19 +1420,19 @@ function MembersSection({
   const formVisible = mode !== "idle" || displayedMembers.length === 0;
   const formMode = mode === "edit" ? "edit" : "add";
 
-  useEffect(() => {
-    setIsActive(personType !== "human");
-  }, [personType]);
-  const applyPresetFields = (preset: SpeakingStylePreset) => {
-    const sample = characterPresetExamples[preset];
-    setSpeakingStyle(speakingStyleTemplates[preset]);
-    setCharacterArchetype(sample.archetype);
-    setCharacterTraits(sample.traits);
-    setCharacterInterests(sample.interests);
-    setCharacterJoinWhenText(sample.joinWhen.join("\n"));
-    setCharacterAvoidWhenText(sample.avoidWhen.join("\n"));
-    setCharacterContributionText(sample.contributionStyle.join("\n"));
-  };
+  const applyPresetFields = useCallback(
+    (preset: SpeakingStylePreset) => {
+      const sample = characterPresetExamples[preset];
+      setSpeakingStyle(speakingStyleTemplates[preset]);
+      setCharacterArchetype(sample.archetype);
+      setCharacterTraits(sample.traits);
+      setCharacterInterests(sample.interests);
+      setCharacterJoinWhenText(sample.joinWhen.join("\n"));
+      setCharacterAvoidWhenText(sample.avoidWhen.join("\n"));
+      setCharacterContributionText(sample.contributionStyle.join("\n"));
+    },
+    [characterPresetExamples, speakingStyleTemplates],
+  );
 
   const clearPresetFields = () => {
     setSpeakingStyle("");
@@ -1433,7 +1455,7 @@ function MembersSection({
       applyPresetFields("professional");
       emptyAddDefaultsAppliedRef.current = true;
     }
-  }, [characterPresetExamples, displayedMembers.length, mode, speakingStyleTemplates]);
+  }, [applyPresetFields, displayedMembers.length, mode]);
 
   const clearForm = ({ withDefaults = false }: { withDefaults?: boolean } = {}) => {
     setIdentity("");
@@ -1612,8 +1634,7 @@ function MembersSection({
   const usesGitHubMember = personType !== "";
   const configDir = resolveConfigDir(config, workspaceDir, configLocation);
   const envFilePath = joinPath(workspaceDir, ".env");
-  const requiresGitHubAuth =
-    personType === "machine_user" || personType === "proxy_agent";
+  const requiresGitHubAuth = personType === "machine_user" || personType === "proxy_agent";
   const requiresGitHubAppsAuth = personType === "github_apps";
   const authReady = requiresGitHubAuth
     ? githubAccessToken.trim().length > 0 || storedMemberSecrets.githubAccessToken
@@ -1623,8 +1644,7 @@ function MembersSection({
         githubPrivateKeyPath.trim().length > 0
       : true;
   const githubIdentityReady =
-    !usesGitHubMember ||
-    (githubUsername.trim().length > 0 && gitEmail.trim().length > 0);
+    !usesGitHubMember || (githubUsername.trim().length > 0 && gitEmail.trim().length > 0);
   const memberErrors = getMemberFieldErrors(
     {
       personType,
@@ -1664,9 +1684,7 @@ function MembersSection({
   const canResolveIdentity =
     usesGitHubMember &&
     getGitHubResolveInput(personType, identity, githubUsername).trim().length > 0 &&
-    (personType === "github_apps"
-      ? isGitHubAppsUrl(identity)
-      : isGitHubUsername(githubUsername));
+    (personType === "github_apps" ? isGitHubAppsUrl(identity) : isGitHubUsername(githubUsername));
   const canSubmit =
     configDir.trim().length > 0 &&
     workspaceDir.trim().length > 0 &&
@@ -1708,11 +1726,7 @@ function MembersSection({
     "githubPrivateKeyPath",
     "githubAccessToken",
   ]);
-  const slackTabHasError = hasMemberError([
-    "slackChannelsText",
-    "slackBotToken",
-    "slackAppToken",
-  ]);
+  const slackTabHasError = hasMemberError(["slackChannelsText", "slackBotToken", "slackAppToken"]);
   const githubResolveLabel =
     personType === "github_apps"
       ? t("setup.members.githubAppsUrl")
@@ -1894,10 +1908,7 @@ function MembersSection({
           </Group>
         </Stack>
       </Modal>
-      <PanelHeader
-        title={t("setup.members.title")}
-        subtitle={t("setup.members.subtitle")}
-      />
+      <PanelHeader title={t("setup.members.title")} subtitle={t("setup.members.subtitle")} />
       <Stack mt="md">
         <Group justify="space-between">
           <Text size="sm" fw={500}>
@@ -1916,12 +1927,20 @@ function MembersSection({
           <Stack gap={6}>
             {displayedMembers.map((member) => (
               <Group key={member.person_id} justify="space-between">
-                <Text size="sm">{member.name} ({member.person_id})</Text>
+                <Text size="sm">
+                  {member.name} ({member.person_id})
+                </Text>
                 <Group gap="xs">
                   <Badge color={member.is_active ? "green" : "gray"} variant="light">
-                    {member.is_active ? t("setup.members.memberActive") : t("setup.members.memberInactive")}
+                    {member.is_active
+                      ? t("setup.members.memberActive")
+                      : t("setup.members.memberInactive")}
                   </Badge>
-                  <Button size="xs" variant="default" onClick={() => startEditMode(member.person_id)}>
+                  <Button
+                    size="xs"
+                    variant="default"
+                    onClick={() => startEditMode(member.person_id)}
+                  >
                     {t("setup.members.editButton")}
                   </Button>
                 </Group>
@@ -1932,7 +1951,9 @@ function MembersSection({
         {displayedMembers.length > 0 ? (
           <Group justify="space-between">
             {mode === "edit" && editingPersonId ? (
-              <Badge variant="light">{t("setup.members.editingBadge", { id: editingPersonId })}</Badge>
+              <Badge variant="light">
+                {t("setup.members.editingBadge", { id: editingPersonId })}
+              </Badge>
             ) : (
               <span />
             )}
@@ -1948,438 +1969,460 @@ function MembersSection({
               {formMode === "edit" ? t("setup.members.editTitle") : t("setup.members.addTitle")}
             </Text>
             <Tabs value={activeTab} onChange={setActiveTab}>
-          <Tabs.List>
-            <Tabs.Tab
-              value="basic"
-              rightSection={basicTabHasError ? <TabErrorIcon label={t("setup.members.tabHasError")} /> : null}
-            >
-              {t("setup.members.tabs.basic")}
-            </Tabs.Tab>
-            <Tabs.Tab value="intelligence">{t("setup.members.tabs.intelligence")}</Tabs.Tab>
-            <Tabs.Tab value="patrol">{t("setup.members.tabs.patrol")}</Tabs.Tab>
-            <Tabs.Tab
-              value="github"
-              rightSection={githubTabHasError ? <TabErrorIcon label={t("setup.members.tabHasError")} /> : null}
-            >
-              {t("setup.members.tabs.github")}
-            </Tabs.Tab>
-            <Tabs.Tab
-              value="slack"
-              rightSection={slackTabHasError ? <TabErrorIcon label={t("setup.members.tabHasError")} /> : null}
-            >
-              {t("setup.members.tabs.slack")}
-            </Tabs.Tab>
-            <Tabs.Tab value="diagnostics">{t("setup.members.tabs.diagnostics")}</Tabs.Tab>
-          </Tabs.List>
-
-          <Tabs.Panel value="basic" pt="md">
-            <Stack>
-              <TextInput
-                label={t("setup.members.personId")}
-                value={personId}
-                onChange={(event) => setPersonId(event.currentTarget.value)}
-                error={memberErrors.personId}
-              />
-              <TextInput
-                label={t("setup.members.personName")}
-                value={personName}
-                onChange={(event) => setPersonName(event.currentTarget.value)}
-                error={memberErrors.personName}
-              />
-              <MultiSelect
-                label={t("setup.members.roles")}
-                placeholder={t("setup.members.rolesPlaceholder")}
-                data={roleOptions}
-                value={roles}
-                onChange={setRoles}
-                searchable
-                clearable
-                nothingFoundMessage={t("setup.members.rolesEmpty")}
-                error={
-                  rolesQuery.error
-                    ? t("setup.members.rolesLoadError")
-                    : memberErrors.roles
-                }
-                renderOption={({ option }) => {
-                  const summary = roleSummaries[option.value];
-                  return (
-                    <Stack gap={2}>
-                      <Text size="sm">{option.label}</Text>
-                      {summary ? (
-                        <Text size="xs" c="dimmed">
-                          {summary}
-                        </Text>
-                      ) : null}
-                    </Stack>
-                  );
-                }}
-              />
-              <SegmentedControl
-                fullWidth
-                data={SPEAKING_STYLE_OPTIONS.map((value) => ({
-                  value,
-                  label: t(`setup.members.speakingStyleOptions.${value}`),
-                }))}
-                value={speakingStylePreset}
-                onChange={(value) => {
-                  const preset = (value as SpeakingStylePreset) ?? "professional";
-                  setSpeakingStylePreset(preset);
-                  applyPresetFields(preset);
-                }}
-              />
-              <Group justify="flex-end" mt={-4}>
-                <Button
-                  size="xs"
-                  variant="default"
-                  leftSection={<Eraser size={14} />}
-                  onClick={clearPresetFields}
+              <Tabs.List>
+                <Tabs.Tab
+                  value="basic"
+                  rightSection={
+                    basicTabHasError ? (
+                      <TabErrorIcon label={t("setup.members.tabHasError")} />
+                    ) : null
+                  }
                 >
-                  {t("setup.members.clearDefaults")}
-                </Button>
-              </Group>
-              <TagsInput
-                label={
-                  <DefaultableLabel
-                    text={t("setup.members.characterTraits")}
-                    tooltip={t("setup.members.applyDefaultTooltip")}
-                    onApply={() => setCharacterTraits(activePresetSample.traits)}
+                  {t("setup.members.tabs.basic")}
+                </Tabs.Tab>
+                <Tabs.Tab value="intelligence">{t("setup.members.tabs.intelligence")}</Tabs.Tab>
+                <Tabs.Tab value="patrol">{t("setup.members.tabs.patrol")}</Tabs.Tab>
+                <Tabs.Tab
+                  value="github"
+                  rightSection={
+                    githubTabHasError ? (
+                      <TabErrorIcon label={t("setup.members.tabHasError")} />
+                    ) : null
+                  }
+                >
+                  {t("setup.members.tabs.github")}
+                </Tabs.Tab>
+                <Tabs.Tab
+                  value="slack"
+                  rightSection={
+                    slackTabHasError ? (
+                      <TabErrorIcon label={t("setup.members.tabHasError")} />
+                    ) : null
+                  }
+                >
+                  {t("setup.members.tabs.slack")}
+                </Tabs.Tab>
+                <Tabs.Tab value="diagnostics">{t("setup.members.tabs.diagnostics")}</Tabs.Tab>
+              </Tabs.List>
+
+              <Tabs.Panel value="basic" pt="md">
+                <Stack>
+                  <TextInput
+                    label={t("setup.members.personId")}
+                    value={personId}
+                    onChange={(event) => setPersonId(event.currentTarget.value)}
+                    error={memberErrors.personId}
                   />
-                }
-                value={characterTraits}
-                onChange={setCharacterTraits}
-                placeholder={activePresetSample.traits.join(", ")}
-                error={memberErrors.characterTraits}
-              />
-              <TagsInput
-                label={
-                  <DefaultableLabel
-                    text={t("setup.members.characterInterests")}
-                    tooltip={t("setup.members.applyDefaultTooltip")}
-                    onApply={() => setCharacterInterests(activePresetSample.interests)}
+                  <TextInput
+                    label={t("setup.members.personName")}
+                    value={personName}
+                    onChange={(event) => setPersonName(event.currentTarget.value)}
+                    error={memberErrors.personName}
                   />
-                }
-                value={characterInterests}
-                onChange={setCharacterInterests}
-                placeholder={activePresetSample.interests.join(", ")}
-                error={memberErrors.characterInterests}
-              />
-              <Textarea
-                label={
-                  <DefaultableLabel
-                    text={t("setup.members.speakingStyle")}
-                    tooltip={t("setup.members.applyDefaultTooltip")}
-                    onApply={() => setSpeakingStyle(speakingStyleTemplates[speakingStylePreset])}
-                  />
-                }
-                autosize
-                minRows={3}
-                value={speakingStyle}
-                onChange={(event) => setSpeakingStyle(event.currentTarget.value)}
-                placeholder={speakingStyleTemplates[speakingStylePreset]}
-                error={memberErrors.speakingStyle}
-              />
-              <TextInput
-                label={
-                  <DefaultableLabel
-                    text={t("setup.members.characterArchetype")}
-                    tooltip={t("setup.members.applyDefaultTooltip")}
-                    onApply={() => setCharacterArchetype(activePresetSample.archetype)}
-                  />
-                }
-                value={characterArchetype}
-                onChange={(event) => setCharacterArchetype(event.currentTarget.value)}
-                description={t("setup.members.characterArchetypeHint")}
-                placeholder={activePresetSample.archetype}
-                error={memberErrors.characterArchetype}
-              />
-              <Textarea
-                label={
-                  <DefaultableLabel
-                    text={t("setup.members.characterJoinWhen")}
-                    tooltip={t("setup.members.applyDefaultTooltip")}
-                    onApply={() => setCharacterJoinWhenText(activePresetSample.joinWhen.join("\n"))}
-                  />
-                }
-                autosize
-                minRows={3}
-                value={characterJoinWhenText}
-                onChange={(event) => setCharacterJoinWhenText(event.currentTarget.value)}
-                description={t("setup.members.characterListHint")}
-                placeholder={activePresetSample.joinWhen.join("\n")}
-                error={memberErrors.characterJoinWhenText}
-              />
-              <Textarea
-                label={
-                  <DefaultableLabel
-                    text={t("setup.members.characterAvoidWhen")}
-                    tooltip={t("setup.members.applyDefaultTooltip")}
-                    onApply={() => setCharacterAvoidWhenText(activePresetSample.avoidWhen.join("\n"))}
-                  />
-                }
-                autosize
-                minRows={3}
-                value={characterAvoidWhenText}
-                onChange={(event) => setCharacterAvoidWhenText(event.currentTarget.value)}
-                description={t("setup.members.characterListHint")}
-                placeholder={activePresetSample.avoidWhen.join("\n")}
-                error={memberErrors.characterAvoidWhenText}
-              />
-              <Textarea
-                label={
-                  <DefaultableLabel
-                    text={t("setup.members.characterContributionStyle")}
-                    tooltip={t("setup.members.applyDefaultTooltip")}
-                    onApply={() =>
-                      setCharacterContributionText(activePresetSample.contributionStyle.join("\n"))
+                  <MultiSelect
+                    label={t("setup.members.roles")}
+                    placeholder={t("setup.members.rolesPlaceholder")}
+                    data={roleOptions}
+                    value={roles}
+                    onChange={setRoles}
+                    searchable
+                    clearable
+                    nothingFoundMessage={t("setup.members.rolesEmpty")}
+                    error={
+                      rolesQuery.error ? t("setup.members.rolesLoadError") : memberErrors.roles
                     }
+                    renderOption={({ option }) => {
+                      const summary = roleSummaries[option.value];
+                      return (
+                        <Stack gap={2}>
+                          <Text size="sm">{option.label}</Text>
+                          {summary ? (
+                            <Text size="xs" c="dimmed">
+                              {summary}
+                            </Text>
+                          ) : null}
+                        </Stack>
+                      );
+                    }}
                   />
-                }
-                autosize
-                minRows={3}
-                value={characterContributionText}
-                onChange={(event) => setCharacterContributionText(event.currentTarget.value)}
-                description={t("setup.members.characterListHint")}
-                placeholder={activePresetSample.contributionStyle.join("\n")}
-                error={memberErrors.characterContributionText}
-              />
-              <Textarea
-                label={t("setup.members.relationships")}
-                autosize
-                minRows={2}
-                value={relationships}
-                onChange={(event) => setRelationships(event.currentTarget.value)}
-                placeholder={activePresetSample.relationships}
-              />
-              <Switch
-                label={t("setup.members.activeSwitch")}
-                checked={isActive}
-                onChange={(event) => setIsActive(event.currentTarget.checked)}
-              />
-            </Stack>
-          </Tabs.Panel>
-
-          <Tabs.Panel value="intelligence" pt="md">
-            {formMode === "edit" && editingPersonId ? (
-              <IntelligenceEditor
-                personId={editingPersonId}
-                savePersonId={personId.trim()}
-                enabled={Boolean(configDir)}
-                detections={cliDetections}
-                llmProviderAvailability={llmProviderAvailability}
-                saveMode="external"
-                onRegisterSave={(save) => {
-                  memberIntelligenceSaveRef.current = save;
-                }}
-              />
-            ) : (
-              <Text size="sm" c="dimmed">
-                {t("setup.members.saveBeforeIntelligence")}
-              </Text>
-            )}
-          </Tabs.Panel>
-
-          <Tabs.Panel value="patrol" pt="md">
-            <PatrolSettingsEditor
-              commandCatalog={commandCatalog}
-              commandOptionByValue={commandOptionByValue}
-              commandOptionsLoading={commandOptions.isLoading}
-              routineOverrideEnabled={routineOverrideEnabled}
-              routineCommands={routineCommands}
-              scheduledCommands={scheduledCommands}
-              onRoutineOverrideChange={setRoutineOverrideEnabled}
-              onRoutineCommandsChange={setRoutineCommands}
-              onScheduledCommandsChange={setScheduledCommands}
-            />
-          </Tabs.Panel>
-
-          <Tabs.Panel value="github" pt="md">
-            <Stack>
-              <Select
-                label={t("setup.members.githubMode")}
-                description={t("setup.members.githubModeHint")}
-                data={MEMBER_TYPE_OPTIONS.map((option) => ({
-                  value: option || "none",
-                  label: t(`setup.members.typeOptions.${option || "none"}`),
-                }))}
-                value={personType || "none"}
-                onChange={(value) => {
-                  setPersonType(value === "none" ? "" : ((value ?? "") as MemberType));
-                  setIdentityResolveError("");
-                }}
-              />
-              {!usesGitHubMember ? (
-                <Text size="sm" c="dimmed">
-                  {t("setup.members.githubDisabledMemberHint")}
-                </Text>
-              ) : (
-                <>
-                  <Stack gap={4}>
-                    <div>
-                      <Text fw={500} size="sm">
-                        {githubResolveLabel}
-                      </Text>
-                      <Text c="dimmed" size="xs">
-                        {githubResolveDescription}
-                      </Text>
-                    </div>
-                    <div className="field-action-row">
-                      <TextInput
-                        aria-label={githubResolveLabel}
-                        value={githubResolveValue}
-                        onChange={(event) => {
-                          if (personType === "github_apps") {
-                            setIdentity(event.currentTarget.value);
-                          } else {
-                            setGithubUsername(event.currentTarget.value);
-                          }
-                          setIdentityResolveError("");
-                        }}
-                        error={Boolean(githubResolveError)}
-                        flex={1}
+                  <SegmentedControl
+                    fullWidth
+                    data={SPEAKING_STYLE_OPTIONS.map((value) => ({
+                      value,
+                      label: t(`setup.members.speakingStyleOptions.${value}`),
+                    }))}
+                    value={speakingStylePreset}
+                    onChange={(value) => {
+                      const preset = (value as SpeakingStylePreset) ?? "professional";
+                      setSpeakingStylePreset(preset);
+                      applyPresetFields(preset);
+                    }}
+                  />
+                  <Group justify="flex-end" mt={-4}>
+                    <Button
+                      size="xs"
+                      variant="default"
+                      leftSection={<Eraser size={14} />}
+                      onClick={clearPresetFields}
+                    >
+                      {t("setup.members.clearDefaults")}
+                    </Button>
+                  </Group>
+                  <TagsInput
+                    label={
+                      <DefaultableLabel
+                        text={t("setup.members.characterTraits")}
+                        tooltip={t("setup.members.applyDefaultTooltip")}
+                        onApply={() => setCharacterTraits(activePresetSample.traits)}
                       />
-                      <Button
-                        variant="default"
-                        loading={resolveMutation.isPending}
-                        disabled={!canResolveIdentity}
-                        onClick={() => void handleResolve()}
-                      >
-                        {t("setup.members.resolve")}
-                      </Button>
-                    </div>
-                    {githubResolveError ? (
-                      <Text c="red" size="xs">
-                        {githubResolveError}
-                      </Text>
-                    ) : null}
-                  </Stack>
+                    }
+                    value={characterTraits}
+                    onChange={setCharacterTraits}
+                    placeholder={activePresetSample.traits.join(", ")}
+                    error={memberErrors.characterTraits}
+                  />
+                  <TagsInput
+                    label={
+                      <DefaultableLabel
+                        text={t("setup.members.characterInterests")}
+                        tooltip={t("setup.members.applyDefaultTooltip")}
+                        onApply={() => setCharacterInterests(activePresetSample.interests)}
+                      />
+                    }
+                    value={characterInterests}
+                    onChange={setCharacterInterests}
+                    placeholder={activePresetSample.interests.join(", ")}
+                    error={memberErrors.characterInterests}
+                  />
+                  <Textarea
+                    label={
+                      <DefaultableLabel
+                        text={t("setup.members.speakingStyle")}
+                        tooltip={t("setup.members.applyDefaultTooltip")}
+                        onApply={() =>
+                          setSpeakingStyle(speakingStyleTemplates[speakingStylePreset])
+                        }
+                      />
+                    }
+                    autosize
+                    minRows={3}
+                    value={speakingStyle}
+                    onChange={(event) => setSpeakingStyle(event.currentTarget.value)}
+                    placeholder={speakingStyleTemplates[speakingStylePreset]}
+                    error={memberErrors.speakingStyle}
+                  />
+                  <TextInput
+                    label={
+                      <DefaultableLabel
+                        text={t("setup.members.characterArchetype")}
+                        tooltip={t("setup.members.applyDefaultTooltip")}
+                        onApply={() => setCharacterArchetype(activePresetSample.archetype)}
+                      />
+                    }
+                    value={characterArchetype}
+                    onChange={(event) => setCharacterArchetype(event.currentTarget.value)}
+                    description={t("setup.members.characterArchetypeHint")}
+                    placeholder={activePresetSample.archetype}
+                    error={memberErrors.characterArchetype}
+                  />
+                  <Textarea
+                    label={
+                      <DefaultableLabel
+                        text={t("setup.members.characterJoinWhen")}
+                        tooltip={t("setup.members.applyDefaultTooltip")}
+                        onApply={() =>
+                          setCharacterJoinWhenText(activePresetSample.joinWhen.join("\n"))
+                        }
+                      />
+                    }
+                    autosize
+                    minRows={3}
+                    value={characterJoinWhenText}
+                    onChange={(event) => setCharacterJoinWhenText(event.currentTarget.value)}
+                    description={t("setup.members.characterListHint")}
+                    placeholder={activePresetSample.joinWhen.join("\n")}
+                    error={memberErrors.characterJoinWhenText}
+                  />
+                  <Textarea
+                    label={
+                      <DefaultableLabel
+                        text={t("setup.members.characterAvoidWhen")}
+                        tooltip={t("setup.members.applyDefaultTooltip")}
+                        onApply={() =>
+                          setCharacterAvoidWhenText(activePresetSample.avoidWhen.join("\n"))
+                        }
+                      />
+                    }
+                    autosize
+                    minRows={3}
+                    value={characterAvoidWhenText}
+                    onChange={(event) => setCharacterAvoidWhenText(event.currentTarget.value)}
+                    description={t("setup.members.characterListHint")}
+                    placeholder={activePresetSample.avoidWhen.join("\n")}
+                    error={memberErrors.characterAvoidWhenText}
+                  />
+                  <Textarea
+                    label={
+                      <DefaultableLabel
+                        text={t("setup.members.characterContributionStyle")}
+                        tooltip={t("setup.members.applyDefaultTooltip")}
+                        onApply={() =>
+                          setCharacterContributionText(
+                            activePresetSample.contributionStyle.join("\n"),
+                          )
+                        }
+                      />
+                    }
+                    autosize
+                    minRows={3}
+                    value={characterContributionText}
+                    onChange={(event) => setCharacterContributionText(event.currentTarget.value)}
+                    description={t("setup.members.characterListHint")}
+                    placeholder={activePresetSample.contributionStyle.join("\n")}
+                    error={memberErrors.characterContributionText}
+                  />
+                  <Textarea
+                    label={t("setup.members.relationships")}
+                    autosize
+                    minRows={2}
+                    value={relationships}
+                    onChange={(event) => setRelationships(event.currentTarget.value)}
+                    placeholder={activePresetSample.relationships}
+                  />
+                  <Switch
+                    label={t("setup.members.activeSwitch")}
+                    checked={isActive}
+                    onChange={(event) => setIsActive(event.currentTarget.checked)}
+                  />
+                </Stack>
+              </Tabs.Panel>
+
+              <Tabs.Panel value="intelligence" pt="md">
+                {formMode === "edit" && editingPersonId ? (
+                  <IntelligenceEditor
+                    personId={editingPersonId}
+                    savePersonId={personId.trim()}
+                    enabled={Boolean(configDir)}
+                    detections={cliDetections}
+                    llmProviderAvailability={llmProviderAvailability}
+                    saveMode="external"
+                    onRegisterSave={(save) => {
+                      memberIntelligenceSaveRef.current = save;
+                    }}
+                  />
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    {t("setup.members.saveBeforeIntelligence")}
+                  </Text>
+                )}
+              </Tabs.Panel>
+
+              <Tabs.Panel value="patrol" pt="md">
+                <PatrolSettingsEditor
+                  commandCatalog={commandCatalog}
+                  commandOptionByValue={commandOptionByValue}
+                  commandOptionsLoading={commandOptions.isLoading}
+                  routineOverrideEnabled={routineOverrideEnabled}
+                  routineCommands={routineCommands}
+                  scheduledCommands={scheduledCommands}
+                  onRoutineOverrideChange={setRoutineOverrideEnabled}
+                  onRoutineCommandsChange={setRoutineCommands}
+                  onScheduledCommandsChange={setScheduledCommands}
+                />
+              </Tabs.Panel>
+
+              <Tabs.Panel value="github" pt="md">
+                <Stack>
+                  <Select
+                    label={t("setup.members.githubMode")}
+                    description={t("setup.members.githubModeHint")}
+                    data={MEMBER_TYPE_OPTIONS.map((option) => ({
+                      value: option || "none",
+                      label: t(`setup.members.typeOptions.${option || "none"}`),
+                    }))}
+                    value={personType || "none"}
+                    onChange={(value) => {
+                      const nextType = value === "none" ? "" : ((value ?? "") as MemberType);
+                      setPersonType(nextType);
+                      setIsActive(nextType !== "human");
+                      setIdentityResolveError("");
+                    }}
+                  />
+                  {!usesGitHubMember ? (
+                    <Text size="sm" c="dimmed">
+                      {t("setup.members.githubDisabledMemberHint")}
+                    </Text>
+                  ) : (
+                    <>
+                      <Stack gap={4}>
+                        <div>
+                          <Text fw={500} size="sm">
+                            {githubResolveLabel}
+                          </Text>
+                          <Text c="dimmed" size="xs">
+                            {githubResolveDescription}
+                          </Text>
+                        </div>
+                        <div className="field-action-row">
+                          <TextInput
+                            aria-label={githubResolveLabel}
+                            value={githubResolveValue}
+                            onChange={(event) => {
+                              if (personType === "github_apps") {
+                                setIdentity(event.currentTarget.value);
+                              } else {
+                                setGithubUsername(event.currentTarget.value);
+                              }
+                              setIdentityResolveError("");
+                            }}
+                            error={Boolean(githubResolveError)}
+                            flex={1}
+                          />
+                          <Button
+                            variant="default"
+                            loading={resolveMutation.isPending}
+                            disabled={!canResolveIdentity}
+                            onClick={() => void handleResolve()}
+                          >
+                            {t("setup.members.resolve")}
+                          </Button>
+                        </div>
+                        {githubResolveError ? (
+                          <Text c="red" size="xs">
+                            {githubResolveError}
+                          </Text>
+                        ) : null}
+                      </Stack>
+                      {personType === "github_apps" ? (
+                        <TextInput
+                          label={t("setup.members.githubResolvedIdentity")}
+                          value={githubUsername}
+                          onChange={(event) => setGithubUsername(event.currentTarget.value)}
+                          error={memberErrors.githubUsername}
+                        />
+                      ) : null}
+                      <TextInput
+                        label={t("setup.members.gitEmail")}
+                        value={gitEmail}
+                        onChange={(event) => setGitEmail(event.currentTarget.value)}
+                        error={memberErrors.gitEmail}
+                      />
+                    </>
+                  )}
                   {personType === "github_apps" ? (
-                    <TextInput
-                      label={t("setup.members.githubResolvedIdentity")}
-                      value={githubUsername}
-                      onChange={(event) => setGithubUsername(event.currentTarget.value)}
-                      error={memberErrors.githubUsername}
+                    <>
+                      <TextInput
+                        label={t("setup.members.installationId")}
+                        value={githubInstallationId}
+                        onChange={(event) => setGithubInstallationId(event.currentTarget.value)}
+                        error={memberErrors.githubInstallationId}
+                      />
+                      <TextInput
+                        label={t("setup.members.appId")}
+                        value={githubAppId}
+                        onChange={(event) => setGithubAppId(event.currentTarget.value)}
+                        error={memberErrors.githubAppId}
+                      />
+                      <FilePicker
+                        label={t("setup.members.privateKeyPath")}
+                        value={githubPrivateKeyPath}
+                        onChange={setGithubPrivateKeyPath}
+                        error={memberErrors.githubPrivateKeyPath}
+                      />
+                    </>
+                  ) : null}
+                  {personType === "machine_user" || personType === "proxy_agent" ? (
+                    <PasswordInput
+                      label={t("setup.members.accessToken")}
+                      placeholder={
+                        storedMemberSecrets.githubAccessToken
+                          ? MASKED_SECRET_PLACEHOLDER
+                          : t("setup.members.accessTokenPlaceholder")
+                      }
+                      value={githubAccessToken}
+                      onChange={(event) => setGithubAccessToken(event.currentTarget.value)}
+                      error={memberErrors.githubAccessToken}
                     />
                   ) : null}
-                  <TextInput
-                    label={t("setup.members.gitEmail")}
-                    value={gitEmail}
-                    onChange={(event) => setGitEmail(event.currentTarget.value)}
-                    error={memberErrors.gitEmail}
-                  />
-                </>
-              )}
-              {personType === "github_apps" ? (
-                <>
-                  <TextInput
-                    label={t("setup.members.installationId")}
-                    value={githubInstallationId}
-                    onChange={(event) => setGithubInstallationId(event.currentTarget.value)}
-                    error={memberErrors.githubInstallationId}
-                  />
-                  <TextInput
-                    label={t("setup.members.appId")}
-                    value={githubAppId}
-                    onChange={(event) => setGithubAppId(event.currentTarget.value)}
-                    error={memberErrors.githubAppId}
-                  />
-                  <FilePicker
-                    label={t("setup.members.privateKeyPath")}
-                    value={githubPrivateKeyPath}
-                    onChange={setGithubPrivateKeyPath}
-                    error={memberErrors.githubPrivateKeyPath}
-                  />
-                </>
-              ) : null}
-              {personType === "machine_user" || personType === "proxy_agent" ? (
-                <PasswordInput
-                  label={t("setup.members.accessToken")}
-                  placeholder={
-                    storedMemberSecrets.githubAccessToken
-                      ? MASKED_SECRET_PLACEHOLDER
-                      : t("setup.members.accessTokenPlaceholder")
-                  }
-                  value={githubAccessToken}
-                  onChange={(event) => setGithubAccessToken(event.currentTarget.value)}
-                  error={memberErrors.githubAccessToken}
-                />
-              ) : null}
-              {personType === "human" ? (
-                <Text size="sm" c="dimmed">
-                  {t("setup.members.githubAuthNotRequired")}
-                </Text>
-              ) : null}
-            </Stack>
-          </Tabs.Panel>
+                  {personType === "human" ? (
+                    <Text size="sm" c="dimmed">
+                      {t("setup.members.githubAuthNotRequired")}
+                    </Text>
+                  ) : null}
+                </Stack>
+              </Tabs.Panel>
 
-          <Tabs.Panel value="slack" pt="md">
-            <Stack>
-              <TextInput
-                label={t("setup.members.slackChannels")}
-                value={slackChannelsText}
-                onChange={(event) => setSlackChannelsText(event.currentTarget.value)}
-                description={t("setup.members.slackChannelsHint")}
-                error={memberErrors.slackChannelsText}
-              />
-              <PasswordInput
-                label={t("setup.members.slackBotToken")}
-                  placeholder={
-                  storedMemberSecrets.slackBotToken
-                    ? MASKED_SECRET_PLACEHOLDER
-                    : t("setup.members.slackBotTokenPlaceholder")
-                }
-                value={slackBotToken}
-                onChange={(event) => setSlackBotToken(event.currentTarget.value)}
-                error={memberErrors.slackBotToken}
-              />
-              <PasswordInput
-                label={t("setup.members.slackAppToken")}
-                  placeholder={
-                  storedMemberSecrets.slackAppToken
-                    ? MASKED_SECRET_PLACEHOLDER
-                    : t("setup.members.slackAppTokenPlaceholder")
-                }
-                value={slackAppToken}
-                onChange={(event) => setSlackAppToken(event.currentTarget.value)}
-                error={memberErrors.slackAppToken}
-              />
-            </Stack>
-          </Tabs.Panel>
-          <Tabs.Panel value="diagnostics" pt="md">
-            <MemberDiagnosticsPanel
-              personId={editingPersonId}
-              formMode={formMode}
-              loading={memberDiagnosticsMutation.isPending}
-              error={memberDiagnosticsMutation.error}
-              checks={memberDiagnosticsMutation.data?.checks ?? []}
-              onRun={() => {
-                if (editingPersonId) {
-                  memberDiagnosticsMutation.mutate(editingPersonId);
-                }
-              }}
-            />
-          </Tabs.Panel>
+              <Tabs.Panel value="slack" pt="md">
+                <Stack>
+                  <TextInput
+                    label={t("setup.members.slackChannels")}
+                    value={slackChannelsText}
+                    onChange={(event) => setSlackChannelsText(event.currentTarget.value)}
+                    description={t("setup.members.slackChannelsHint")}
+                    error={memberErrors.slackChannelsText}
+                  />
+                  <PasswordInput
+                    label={t("setup.members.slackBotToken")}
+                    placeholder={
+                      storedMemberSecrets.slackBotToken
+                        ? MASKED_SECRET_PLACEHOLDER
+                        : t("setup.members.slackBotTokenPlaceholder")
+                    }
+                    value={slackBotToken}
+                    onChange={(event) => setSlackBotToken(event.currentTarget.value)}
+                    error={memberErrors.slackBotToken}
+                  />
+                  <PasswordInput
+                    label={t("setup.members.slackAppToken")}
+                    placeholder={
+                      storedMemberSecrets.slackAppToken
+                        ? MASKED_SECRET_PLACEHOLDER
+                        : t("setup.members.slackAppTokenPlaceholder")
+                    }
+                    value={slackAppToken}
+                    onChange={(event) => setSlackAppToken(event.currentTarget.value)}
+                    error={memberErrors.slackAppToken}
+                  />
+                </Stack>
+              </Tabs.Panel>
+              <Tabs.Panel value="diagnostics" pt="md">
+                <MemberDiagnosticsPanel
+                  personId={editingPersonId}
+                  formMode={formMode}
+                  loading={memberDiagnosticsMutation.isPending}
+                  error={memberDiagnosticsMutation.error}
+                  checks={memberDiagnosticsMutation.data?.checks ?? []}
+                  onRun={() => {
+                    if (editingPersonId) {
+                      memberDiagnosticsMutation.mutate(editingPersonId);
+                    }
+                  }}
+                />
+              </Tabs.Panel>
             </Tabs>
             <Divider />
             <Group justify="space-between" className="form-footer">
-          <Box>
-            {formMode === "edit" ? (
+              <Box>
+                {formMode === "edit" ? (
+                  <Button
+                    color="red"
+                    variant="default"
+                    loading={deleteMemberMutation.isPending}
+                    onClick={() => setDeleteConfirmOpen(true)}
+                  >
+                    {t("setup.members.deleteButton")}
+                  </Button>
+                ) : null}
+              </Box>
               <Button
-                color="red"
-                variant="default"
-                loading={deleteMemberMutation.isPending}
-                onClick={() => setDeleteConfirmOpen(true)}
+                loading={
+                  savingMember || addMemberMutation.isPending || updateMemberMutation.isPending
+                }
+                disabled={!canSubmit}
+                onClick={() => void handleSaveMember()}
               >
-                {t("setup.members.deleteButton")}
+                {formMode === "edit" ? t("setup.members.saveButton") : t("setup.members.addButton")}
               </Button>
-            ) : null}
-          </Box>
-          <Button
-            loading={savingMember || addMemberMutation.isPending || updateMemberMutation.isPending}
-            disabled={!canSubmit}
-            onClick={() => void handleSaveMember()}
-          >
-            {formMode === "edit" ? t("setup.members.saveButton") : t("setup.members.addButton")}
-          </Button>
             </Group>
           </>
         ) : null}
@@ -2468,9 +2511,7 @@ function PatrolSettingsEditor({
           searchable
           clearable
           error={
-            routineCommands.length === 0
-              ? t("setup.members.patrol.routineRequired")
-              : undefined
+            routineCommands.length === 0 ? t("setup.members.patrol.routineRequired") : undefined
           }
           nothingFoundMessage={t("commands.noCommandOptions")}
           renderOption={({ option }) => {
@@ -2520,7 +2561,7 @@ function PatrolSettingsEditor({
           {scheduledCommands.map((draft) => {
             const option =
               draft.commandMode === "catalog"
-                ? commandOptionByValue.get(draft.command) ?? null
+                ? (commandOptionByValue.get(draft.command) ?? null)
                 : null;
             const cron = draftToCron(draft);
             const cronError = isValidCron(cron) ? "" : t("setup.members.patrol.cronInvalid");
@@ -2724,13 +2765,7 @@ function PatrolSettingsEditor({
   );
 }
 
-function CommandOptionRow({
-  label,
-  option,
-}: {
-  label: string;
-  option: CommandOption | undefined;
-}) {
+function CommandOptionRow({ label, option }: { label: string; option: CommandOption | undefined }) {
   return (
     <Stack gap={2}>
       <Text size="sm">{label}</Text>
@@ -2794,19 +2829,12 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
   );
 }
 
-function GitHubIntegrationSection({
-  form,
-}: {
-  form: ProjectForm;
-}) {
+function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
   const { t } = useTranslation();
   const githubErrors = getGitHubFieldErrors(form.values, t);
   return (
     <Card withBorder radius="md" p="lg">
-      <PanelHeader
-        title={t("setup.github.title")}
-        subtitle={t("setup.github.subtitle")}
-      />
+      <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
       <Stack mt="md">
         <Select
           label={t("setup.github.decision")}
@@ -3021,13 +3049,7 @@ function AutosaveIndicator({ state }: { state: "idle" | "saving" | "saved" | "er
   );
 }
 
-function FolderPicker({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
+function FolderPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const { t } = useTranslation();
   const [picking, setPicking] = useState(false);
   const pickDirectory = async () => {
@@ -3194,7 +3216,7 @@ function isTauriRuntime() {
 function useAutosave(
   form: ProjectForm,
   config: ConfigStatus | undefined,
-  schema: typeof projectSchema,
+  schema: ReturnType<typeof createProjectSchema>,
   save: (values: ProjectFormValues) => Promise<unknown>,
   setSaveState: (state: "idle" | "saving" | "saved" | "error") => void,
   enabled: boolean,
@@ -3217,10 +3239,7 @@ function useAutosave(
       setSaveState("idle");
       return;
     }
-    if (
-      !config?.primary_project_file_exists
-      && !config?.home_project_file_exists
-    ) {
+    if (!config?.primary_project_file_exists && !config?.home_project_file_exists) {
       setSaveState("idle");
       return;
     }
@@ -3239,7 +3258,7 @@ function useAutosave(
       }
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [enabled, form.values, config, save, schema, setSaveState]);
+  }, [enabled, form, form.values, config, save, schema, setSaveState]);
 }
 
 function useSetupStatus(
@@ -3253,12 +3272,7 @@ function useSetupStatus(
   const githubReady = isGitHubDecisionComplete(values);
   const intelligenceReady = projectReady;
   const membersReady = activeMemberCount > 0;
-  const done = [
-    projectReady,
-    intelligenceReady,
-    githubReady,
-    membersReady,
-  ].filter(Boolean).length;
+  const done = [projectReady, intelligenceReady, githubReady, membersReady].filter(Boolean).length;
   return {
     projectReady,
     intelligenceReady,
@@ -3291,10 +3305,7 @@ type InitialProgress = {
   ready: boolean;
 };
 
-function isCoreSectionReady(
-  section: CoreSection,
-  status: SetupStatus | InitialProgress,
-): boolean {
+function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialProgress): boolean {
   if (section === "project") {
     return status.projectReady;
   }
@@ -3502,8 +3513,7 @@ function getMemberFieldErrors(
 
   const usesGitHubMember = values.personType !== "";
   if (values.personType === "github_apps") {
-    const missingGitHubReference =
-      !values.githubUsername.trim() || !values.gitEmail.trim();
+    const missingGitHubReference = !values.githubUsername.trim() || !values.gitEmail.trim();
     if (missingGitHubReference && !values.identity.trim()) {
       errors.identity = t("setup.validation.memberGithubAppsUrlRequired");
     } else if (values.identity.trim() && !isGitHubAppsUrl(values.identity)) {
@@ -3550,10 +3560,7 @@ function getMemberFieldErrors(
     !values.storedMemberSecrets.githubAccessToken
   ) {
     errors.githubAccessToken = t("setup.validation.githubAccessTokenRequired");
-  } else if (
-    values.githubAccessToken.trim() &&
-    !isGitHubAccessToken(values.githubAccessToken)
-  ) {
+  } else if (values.githubAccessToken.trim() && !isGitHubAccessToken(values.githubAccessToken)) {
     errors.githubAccessToken = t("setup.validation.githubAccessTokenInvalid");
   }
 
@@ -3583,9 +3590,7 @@ function getMemberFieldErrors(
     errors.slackAppToken = t("setup.validation.slackAppTokenRequired");
   }
 
-  const invalidSlackChannels = slackChannels.filter(
-    (channel) => !isSlackChannelReference(channel),
-  );
+  const invalidSlackChannels = slackChannels.filter((channel) => !isSlackChannelReference(channel));
   if (invalidSlackChannels.length > 0) {
     errors.slackChannelsText = t("setup.validation.slackChannelsInvalid");
   }
@@ -3598,10 +3603,7 @@ function getMemberResolveErrorMessage(
   t: TFunction | ((key: string) => string),
 ): string {
   if (error instanceof ApiRequestError) {
-    if (
-      error.code === "invalid_github_username" ||
-      error.code === "invalid_github_apps_url"
-    ) {
+    if (error.code === "invalid_github_username" || error.code === "invalid_github_apps_url") {
       return t("setup.validation.memberGithubIdentityNotFound");
     }
   }
@@ -3612,11 +3614,11 @@ function isGitHubAppsUrl(value: string): boolean {
   const parts = value.trim().split("/");
   return Boolean(
     value.trim().startsWith("https://github.com/") &&
-      parts[3] === "organizations" &&
-      parts[4] &&
-      parts[5] === "settings" &&
-      parts[6] === "apps" &&
-      parts[7],
+    parts[3] === "organizations" &&
+    parts[4] &&
+    parts[5] === "settings" &&
+    parts[6] === "apps" &&
+    parts[7],
   );
 }
 
@@ -3631,18 +3633,13 @@ function getGitHubResolveInput(
 function isGitHubUsername(value: string): boolean {
   const username = value.trim();
   return (
-    /^[A-Za-z0-9-]{1,39}$/.test(username) &&
-    !username.startsWith("-") &&
-    !username.endsWith("-")
+    /^[A-Za-z0-9-]{1,39}$/.test(username) && !username.startsWith("-") && !username.endsWith("-")
   );
 }
 
 function isSlackChannelReference(value: string): boolean {
   const channel = value.trim();
-  return (
-    /^[CGD][A-Z0-9]{8,}$/.test(channel) ||
-    /^#?[a-z0-9][a-z0-9_-]{0,79}$/.test(channel)
-  );
+  return /^[CGD][A-Z0-9]{8,}$/.test(channel) || /^#?[a-z0-9][a-z0-9_-]{0,79}$/.test(channel);
 }
 
 function isSlackBotToken(value: string): boolean {
@@ -3654,9 +3651,7 @@ function isSlackAppToken(value: string): boolean {
 }
 
 function isGitHubAccessToken(value: string): boolean {
-  return /^(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})$/.test(
-    value.trim(),
-  );
+  return /^(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})$/.test(value.trim());
 }
 
 function isProjectProviderKeyConfigured(
@@ -3692,7 +3687,10 @@ function getInitialEnvFileOption(
 }
 
 function toFormConfigLocation(
-  location: ConfigStatus["active_config_location"] | ConfigStatus["primary_config_location"] | undefined,
+  location:
+    | ConfigStatus["active_config_location"]
+    | ConfigStatus["primary_config_location"]
+    | undefined,
 ): ProjectFormValues["configLocation"] {
   return location === "workspace" ? "workspace" : "home";
 }
@@ -3727,7 +3725,7 @@ function initialProjectValues(
     workspaceDir: cwd,
     configLocation: toFormConfigLocation(config?.primary_config_location),
     envFileOption: getInitialEnvFileOption(config),
-    language: config?.primary_project_file_exists ? projectLanguage ?? appLanguage : appLanguage,
+    language: config?.primary_project_file_exists ? (projectLanguage ?? appLanguage) : appLanguage,
     description: "",
     llmApiType: "openai",
     cliAgent: "codex",
@@ -3749,9 +3747,10 @@ function toProjectSetupRequest(
 ): ProjectSetupRequest {
   const workspaceConfigDir = joinPath(values.workspaceDir, ".guildbotics/config");
   const homeConfigDir = config?.home_config_dir ?? workspaceConfigDir;
-  const github = values.githubDecision === "enabled"
-    ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
-    : null;
+  const github =
+    values.githubDecision === "enabled"
+      ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
+      : null;
   return {
     config_dir: values.configLocation === "home" ? homeConfigDir : workspaceConfigDir,
     env_file_path: joinPath(values.workspaceDir, ".env"),
@@ -3776,9 +3775,10 @@ function toProjectUpdateRequest(
   config: ConfigStatus | undefined,
   snapshot: ProjectConfig,
 ): ProjectConfigUpdateRequest {
-  const github = values.githubDecision === "enabled"
-    ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
-    : null;
+  const github =
+    values.githubDecision === "enabled"
+      ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
+      : null;
   return {
     config_dir: snapshot.config_dir || config?.primary_config_dir || "",
     env_file_path: snapshot.env_file_path || joinPath(values.workspaceDir, ".env"),
@@ -3798,9 +3798,7 @@ function toProjectUpdateRequest(
   };
 }
 
-function getSpeakingStyleTemplates(
-  t: TFunction,
-): Record<SpeakingStylePreset, string> {
+function getSpeakingStyleTemplates(t: TFunction): Record<SpeakingStylePreset, string> {
   return {
     friendly: t("setup.members.speakingStyleDescriptions.friendly"),
     professional: t("setup.members.speakingStyleDescriptions.professional"),
@@ -3851,10 +3849,7 @@ function getCharacterPresetExamples(
           "厳密な技術詳細だけで、自分の観点を足しにくいとき",
           "すでに結論が固まっていて、脱線しそうなとき",
         ],
-        contributionStyle: [
-          "ユーザーの気持ちや体験を言語化する",
-          "具体案をやわらかく提案する",
-        ],
+        contributionStyle: ["ユーザーの気持ちや体験を言語化する", "具体案をやわらかく提案する"],
         relationships:
           "例:\n他メンバーAに対して: 分析力を尊敬しつつ、必要ならユーザー視点を補う。\n他メンバーBに対して: 発想を歓迎し、実現に向けた具体化を一緒に進める。",
       },
@@ -3889,10 +3884,7 @@ function getCharacterPresetExamples(
           "感情的な雑談が中心で、判断材料が不足しているとき",
           "仮説だけで具体データがないとき",
         ],
-        contributionStyle: [
-          "根拠と前提を明示して提案する",
-          "手順と期待結果をセットで示す",
-        ],
+        contributionStyle: ["根拠と前提を明示して提案する", "手順と期待結果をセットで示す"],
         relationships:
           "例:\n他メンバーAに対して: 意思決定を実行手順へ落とし込む。\n他メンバーBに対して: アイデアを検証可能なタスクへ変換する。",
       },
@@ -3903,10 +3895,7 @@ function getCharacterPresetExamples(
       archetype: "friendly_idea_contributor",
       traits: ["friendly", "empathetic", "social"],
       interests: ["ux", "content", "community"],
-      joinWhen: [
-        "When the discussion needs user perspective",
-        "When brainstorming is needed",
-      ],
+      joinWhen: ["When the discussion needs user perspective", "When brainstorming is needed"],
       avoidWhen: [
         "When only deep technical details are discussed",
         "When adding comments would derail a settled decision",
@@ -4061,9 +4050,7 @@ function toStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .map((item) => String(item).trim())
-    .filter((item) => item.length > 0);
+  return value.map((item) => String(item).trim()).filter((item) => item.length > 0);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -4134,15 +4121,13 @@ function parseGitHub(projectUrl: string, repositoryUrl: string) {
   const repositoryName = repoParts[4] ?? "";
   const projectValid = Boolean(
     normalizedProjectUrl.startsWith("https://github.com/") &&
-      ["orgs", "users"].includes(projectType) &&
-      owner &&
-      projectParts[5] === "projects" &&
-      projectId,
+    ["orgs", "users"].includes(projectType) &&
+    owner &&
+    projectParts[5] === "projects" &&
+    projectId,
   );
   const repositoryValid = Boolean(
-    normalizedRepositoryUrl.startsWith("https://github.com/") &&
-      repositoryOwner &&
-      repositoryName,
+    normalizedRepositoryUrl.startsWith("https://github.com/") && repositoryOwner && repositoryName,
   );
   const ownerConsistent = projectValid && repositoryValid && repositoryOwner === owner;
   return {
@@ -4261,7 +4246,7 @@ function buildScheduledCommandExpression(
   commandOptionByValue: Map<string, CommandOption>,
 ): string {
   const option =
-    draft.commandMode === "catalog" ? commandOptionByValue.get(draft.command) ?? null : null;
+    draft.commandMode === "catalog" ? (commandOptionByValue.get(draft.command) ?? null) : null;
   const command = draft.commandMode === "catalog" ? draft.command : draft.customCommand.trim();
   if (!command) {
     return "";
@@ -4292,7 +4277,9 @@ function parseCommandExpression(expression: string, commandCatalog: CommandOptio
   const command = expression.trim();
   const option = [...commandCatalog]
     .sort((a, b) => b.command.length - a.command.length)
-    .find((candidate) => command === candidate.command || command.startsWith(`${candidate.command} `));
+    .find(
+      (candidate) => command === candidate.command || command.startsWith(`${candidate.command} `),
+    );
   if (option) {
     return {
       option,

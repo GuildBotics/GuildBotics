@@ -1,0 +1,14 @@
+{
+  "threshold": 0,
+  "minLines": 20,
+  "minTokens": 120,
+  "reporters": ["console"],
+  "ignore": [
+    "dist/**",
+    "node_modules/**",
+    "src-tauri/**",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/test/**"
+  ]
+}
