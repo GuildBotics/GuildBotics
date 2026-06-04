@@ -77,7 +77,13 @@ pub fn run() {
         .run(|app_handle, event| {
             if let RunEvent::Exit = event {
                 if let Some(state) = app_handle.try_state::<BackendState>() {
-                    if let Some(child) = state.child.lock().unwrap().take() {
+                    // Tolerate a poisoned mutex so the app can still exit cleanly;
+                    // recover the guard and kill the child if one is present.
+                    let mut guard = match state.child.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    if let Some(child) = guard.take() {
                         let _ = child.kill();
                     }
                 }

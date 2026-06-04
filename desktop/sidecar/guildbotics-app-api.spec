@@ -15,7 +15,15 @@
 #   so the sidecar stays buildable without GTK/Pango/Cairo. PDF conversion in
 #   the packaged GUI is a known v1 limitation; the CLI remains the fallback.
 
+import os
+
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+
+# `SPECPATH` is injected by PyInstaller and points at this spec file's directory,
+# so the entry point resolves correctly regardless of the working directory the
+# build is invoked from (the CI workflow runs PyInstaller from the repo root).
+REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, "..", ".."))
+ENTRY_POINT = os.path.join(REPO_ROOT, "guildbotics", "app_api", "__main__.py")
 
 datas = []
 binaries = []
@@ -42,7 +50,7 @@ for pkg in (
     hiddenimports += pkg_hiddenimports
 
 a = Analysis(
-    ["../../guildbotics/app_api/__main__.py"],
+    [ENTRY_POINT],
     pathex=[],
     binaries=binaries,
     datas=datas,
