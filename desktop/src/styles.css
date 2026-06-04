@@ -777,6 +777,11 @@ pre {
   margin: 24px;
 }
 
+.app-bootstrap {
+  min-height: 100vh;
+  padding: 24px;
+}
+
 .status {
   color: #7a4f00;
   font-weight: 700;

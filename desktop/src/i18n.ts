@@ -20,6 +20,12 @@ const resources = {
           english: "English",
           japanese: "Japanese",
         },
+        loading: {
+          title: "Starting GuildBotics",
+          body: "Connecting to the local backend. The first launch can take a little longer while it gets ready.",
+          failed: "GuildBotics could not start",
+          retry: "Retry",
+        },
       },
       service: {
         title: "Service Runtime",
@@ -799,6 +805,12 @@ const resources = {
           label: "表示言語",
           english: "English",
           japanese: "日本語",
+        },
+        loading: {
+          title: "GuildBotics を起動しています",
+          body: "ローカルバックエンドに接続しています。初回起動は準備のため少し時間がかかることがあります。",
+          failed: "GuildBotics を起動できませんでした",
+          retry: "再試行",
         },
       },
       setup: {

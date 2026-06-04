@@ -124,11 +124,24 @@ export function App() {
           <Route element={<CommandsPage />} path="/commands" />
           <Route element={<DiagnosticsPage />} path="/diagnostics" />
           <Route element={<SetupPage />} path="/setup" />
-          <Route element={<Navigate replace to="/service" />} path="*" />
+          <Route element={<IndexRedirect />} path="*" />
         </Routes>
       </section>
     </main>
   );
+}
+
+function IndexRedirect() {
+  // The landing route picks the first screen based on whether setup is done:
+  // a configured workspace opens the service screen, otherwise the setup screen.
+  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  if (config.isLoading) {
+    return null;
+  }
+  const configured = Boolean(
+    config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
+  );
+  return <Navigate replace to={configured ? "/service" : "/setup"} />;
 }
 
 function ServicePage() {
