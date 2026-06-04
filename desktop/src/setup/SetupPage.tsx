@@ -258,15 +258,21 @@ export function SetupPage() {
     initialValues,
     validate: zodResolver(validationSchema),
   });
+  const appliedInitialValues = useRef("");
+  const serializedInitialValues = useMemo(() => JSON.stringify(initialValues), [initialValues]);
   const selectedCliAgentDetected = cliDetections.isLoading
     ? true
     : detectedCliAgentNames.has(form.values.cliAgent);
-  const [section, setSection] = useState("project");
+  const [section, setSection] = useState<CoreSection>(
+    searchParams.get("section") === "members" ? "members" : "project",
+  );
+  const [focusMemberTab] = useState<MemberEditorTab | undefined>(
+    searchParams.get("tab") === "patrol" ? "patrol" : undefined,
+  );
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [setupCreated, setSetupCreated] = useState(false);
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
   const canAutosave = hasExistingProject && projectConfig.isSuccess;
-  const focusMemberTab = searchParams.get("tab") === "patrol" ? "patrol" : undefined;
   const llmProviderAvailability = useMemo(
     () => ({
       openai: Boolean(form.values.openaiApiKey.trim() || projectConfig.data?.has_openai_api_key),
@@ -294,11 +300,8 @@ export function SetupPage() {
     () => getInitialCoreStatus(form.values, effectiveActiveMemberCount, selectedCliAgentDetected),
     [effectiveActiveMemberCount, form.values, selectedCliAgentDetected],
   );
-  const requestedSection = searchParams.get("section") === "members" ? "members" : section;
-  const activeSection = coreSections.includes(requestedSection as CoreSection)
-    ? requestedSection
-    : coreSections[0];
-  const currentCoreSectionIndex = coreSections.indexOf(activeSection as CoreSection);
+  const activeSection = coreSections.includes(section) ? section : coreSections[0];
+  const currentCoreSectionIndex = coreSections.indexOf(activeSection);
   const currentCoreSection =
     currentCoreSectionIndex >= 0 ? coreSections[currentCoreSectionIndex] : null;
   const canGoBack = currentCoreSectionIndex > 0;
@@ -318,9 +321,13 @@ export function SetupPage() {
   };
 
   useEffect(() => {
+    if (appliedInitialValues.current === serializedInitialValues) {
+      return;
+    }
+    appliedInitialValues.current = serializedInitialValues;
     form.setValues(initialValues);
     form.resetDirty(initialValues);
-  }, [form, initialValues]);
+  }, [form, initialValues, serializedInitialValues]);
 
   useAutosave(
     form,
@@ -543,7 +550,7 @@ function SetupSectionNav({
   status,
 }: {
   active: string;
-  onChange: (value: string) => void;
+  onChange: (value: CoreSection) => void;
   status: SetupStatus;
 }) {
   const { t } = useTranslation();
