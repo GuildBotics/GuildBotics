@@ -135,12 +135,69 @@ uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
 uv sync --extra dev
 ```
 
+desktop frontend (`desktop/`) の品質確認:
+
+```bash
+cd desktop
+npm ci
+npm run format:check
+npm run lint
+npm run typecheck
+npm run duplicates
+npm run test
+```
+
+まとめて実行する場合:
+
+```bash
+cd desktop
+npm run quality
+```
+
 エージェント作業時の品質確認:
 
 - Python コードを変更したら、原則として `ruff` と `mypy` と関連 `pytest` を実行してから完了報告する
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
 - 最低限の確認コマンドは `uv run --no-sync ruff check guildbotics`、`uv run --no-sync mypy guildbotics`、`uv run --no-sync pylint guildbotics`、`uv run --no-sync python -m pytest ...`
 - 型エラーや lint エラーを回避するためだけの `# type: ignore` や noqa は、理由が明確でない限り追加しない
+
+desktop TypeScript 開発時の品質確認:
+
+- Node.js は CI と合わせて 24 系を前提にする
+- frontend の依存更新は `desktop/package-lock.json` も更新する
+- TypeScript / React コードを変更したら、原則として `npm run format:check`、`npm run lint`、`npm run typecheck`、`npm run duplicates`、関連する `npm run test` を実行してから完了報告する
+- 整形が必要な場合は `desktop` で `npm run format` を実行し、Prettier の結果を正とする
+- React コンポーネントの挙動変更時は React Testing Library によるコンポーネントテストを追加・更新する
+- 純粋関数、入力変換、API payload 生成、trace / scheduler 表示ロジックなどの分岐を変更した場合は Vitest のユニットテストを追加・更新する
+- 重複コード抑止は `npm run duplicates` (`jscpd`) を使う。重複検出を避けるためだけの不自然な分割ではなく、UI とロジックの責務が自然に分かれる形へ整理する
+- Tauri / Rust 側や生成物を frontend 品質チェックへ巻き込まない。対象は `desktop/src` と frontend 設定ファイルを基本とする
+
+## テスト実装の考え方
+
+このリポジトリでは、テストピラミッドに従ってテストを維持する。修正や機能追加の際には「既存テストが通ること」だけでは不十分で、変更した振る舞いを検出できるテストが追加・更新されていることを完了条件に含める。
+
+基本方針:
+
+- Unit test を最も厚くする。純粋関数、入力変換、validator、payload 生成、状態遷移、エラー変換、ファイル解決順はまず unit test で網羅する
+- Component / service integration test は、UI 操作、API endpoint、config 書き込み、runtime lifecycle など境界をまたぐ主要 workflow に限定して追加する
+- E2E / packaging smoke は少数に保つ。backend/frontend 接続、sidecar 起動、代表的 happy path と critical failure path を検証する
+- LLM、GitHub、Slack、外部 CLI などへの実通信は通常 CI のテストに入れない。既存抽象化、stub、mock、fixture を使い、送信 payload、判定結果、エラー処理を検証する
+- snapshot のみで品質を担保しない。ユーザーが観測する文言・状態、生成 request、保存 file/env、publish event、return value を具体的に assert する
+- テストコードも本体コードと同じ品質対象とする。重複 fixture や場当たり的 mock が増えた場合は helper / factory へ整理する
+
+変更種別ごとの必須確認:
+
+- 純粋関数、入力変換、validation、parser、serializer を変更したら、正常系・境界値・不正入力の unit test を追加・更新する
+- API endpoint、`AppRuntime`、setup service、config 書き込みを変更したら、service unit test と FastAPI `TestClient` integration test の両方を検討する
+- scheduler / event listener / websocket / lifecycle を変更したら、状態遷移、二重起動防止、停止、timeout、event/log publish を検証する
+- command runner / command spec / command discovery を変更したら、`Context.pipe`、`shared_state`、person-specific fallback、localized file precedence、child command failure を検証する
+- desktop の API client を変更したら、URL、method、header、body、query parameter、error response、websocket status を検証する
+- desktop の React component を変更したら、React Testing Library でユーザー操作と表示状態を検証する。implementation detail の state ではなく role/text/value/payload を assert する
+- desktop の setup / commands / diagnostics / service runtime の workflow を変更したら、component test または mock API integration test を追加・更新する
+- i18n 文言や翻訳キーを変更したら、キー経由の検証を行い、片方の言語だけ欠落しないことを確認する
+- bug fix では、先に再現テストまたは同等の failing assertion を追加し、そのテストが修正後に通ることを確認する
+
+テスト追加を省略してよいのは、コメント修正、内部ドキュメントだけの変更、format のみ、型だけの機械的変更など、実行時の振る舞いが変わらないと明確に説明できる場合に限る。その場合も完了報告で「テスト追加不要の理由」を明記する。
 
 ## 変更時の実務ルール
 

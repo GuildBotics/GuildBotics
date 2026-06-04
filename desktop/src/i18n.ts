@@ -32,8 +32,7 @@ const resources = {
         refresh: "Refresh",
         startTarget: "Start target",
         noTargetTitle: "No service selected",
-        noTargetBody:
-          "Select auto patrol, chat handling, or both before starting.",
+        noTargetBody: "Select auto patrol, chat handling, or both before starting.",
       },
       diagnostics: {
         title: "Diagnostics",
@@ -96,8 +95,7 @@ const resources = {
         },
         intelligence: {
           title: "LLM / CLI agent",
-          subtitle:
-            "Set default AI provider and CLI tool for your team.",
+          subtitle: "Set default AI provider and CLI tool for your team.",
           teamDefault: "Team default",
           defaultProvider: "Default LLM provider",
           providerDescription: "Choose one provider used by default.",
@@ -110,11 +108,9 @@ const resources = {
           apiKeyMissing: "API key missing",
           detected: "Detected",
           notDetected: "Not detected",
-          cliHint:
-            "CLI agents are not bundled. Only detected tools on PATH can be selected.",
+          cliHint: "CLI agents are not bundled. Only detected tools on PATH can be selected.",
           advanced: "Advanced settings",
-          createBeforeAdvanced:
-            "Create the initial settings before editing detailed AI behavior.",
+          createBeforeAdvanced: "Create the initial settings before editing detailed AI behavior.",
           loadingAdvanced: "Loading advanced settings...",
           loadAdvancedError: "Failed to load advanced settings",
           saveAdvancedError: "Failed to save advanced settings",
@@ -152,8 +148,7 @@ const resources = {
         },
         members: {
           title: "Members",
-          subtitle:
-            "Manage team members and their roles.",
+          subtitle: "Manage team members and their roles.",
           activeCountLabel: "Active members",
           activeCountValue: "{{count}} configured",
           requiredTitle: "At least one active member is required",
@@ -266,7 +261,8 @@ const resources = {
             overrideRoutineHint:
               "Turn this on only when this member should run different recurring work from the shared Service Runtime default.",
             routineCommands: "Patrol workflows",
-            routineRequired: "Select at least one workflow or turn off the member-specific setting.",
+            routineRequired:
+              "Select at least one workflow or turn off the member-specific setting.",
             usesServiceDefault:
               "This member uses the shared patrol workflow selected on Service Runtime.",
             scheduledCommands: "Scheduled commands",
@@ -315,8 +311,7 @@ const resources = {
         },
         github: {
           title: "GitHub",
-          subtitle:
-            "Choose whether this project uses GitHub Projects, Issues, and repositories.",
+          subtitle: "Choose whether this project uses GitHub Projects, Issues, and repositories.",
           decision: "GitHub integration",
           decisionPlaceholder: "Choose whether to use GitHub",
           disabled: "Do not use GitHub",
@@ -345,36 +340,29 @@ const resources = {
           githubRepositoryOwnerMismatch:
             "The repository owner must match the GitHub Project owner.",
           memberIdRequired: "Member ID is required.",
-          memberIdInvalid:
-            "Use only lowercase letters, digits, underscores, or hyphens.",
+          memberIdInvalid: "Use only lowercase letters, digits, underscores, or hyphens.",
           memberIdDuplicate: "This member ID is already in use.",
           memberNameRequired: "Display name is required.",
           memberRolesRequired: "Select at least one role.",
           memberSpeakingStyleRequired: "Speaking style is required.",
           memberCharacterArchetypeRequired: "Character archetype is required.",
-          memberCharacterTraitsRequired:
-            "Enter at least one personality trait.",
+          memberCharacterTraitsRequired: "Enter at least one personality trait.",
           memberCharacterInterestsRequired: "Enter at least one interest.",
           memberCharacterJoinWhenRequired: "Join-when guidance is required.",
           memberCharacterAvoidWhenRequired: "Avoid-when guidance is required.",
-          memberCharacterContributionRequired:
-            "Contribution style is required.",
-          memberGithubIdentityRequired:
-            "Enter the GitHub identity, then click Resolve.",
-          memberGithubAppsUrlRequired:
-            "Enter the GitHub Apps URL, then click Resolve.",
+          memberCharacterContributionRequired: "Contribution style is required.",
+          memberGithubIdentityRequired: "Enter the GitHub identity, then click Resolve.",
+          memberGithubAppsUrlRequired: "Enter the GitHub Apps URL, then click Resolve.",
           memberGithubIdentityNotFound:
             "Could not resolve this GitHub identity. Check the username, email, or GitHub Apps URL.",
           memberGithubIdentityResolveFailed:
             "Failed to resolve this GitHub identity. Check your network connection and try again.",
           memberGithubAppsUrlInvalid:
             "Enter a GitHub Apps settings URL such as https://github.com/organizations/<org>/settings/apps/<app>.",
-          memberGithubUsernameRequired:
-            "Resolve the GitHub identity or enter the GitHub username.",
+          memberGithubUsernameRequired: "Resolve the GitHub identity or enter the GitHub username.",
           memberGithubUsernameInvalid:
             "Enter a valid GitHub username. Email addresses are not supported here.",
-          memberGitEmailRequired:
-            "Resolve the GitHub identity or enter the Git email address.",
+          memberGitEmailRequired: "Resolve the GitHub identity or enter the Git email address.",
           memberGitEmailInvalid: "Enter a valid email address.",
           githubInstallationIdRequired: "GitHub Installation ID is required.",
           githubInstallationIdInvalid: "GitHub Installation ID must be digits only.",
@@ -384,11 +372,9 @@ const resources = {
           githubAccessTokenRequired: "GitHub access token is required.",
           githubAccessTokenInvalid:
             "Enter a GitHub access token starting with ghp_, gho_, ghu_, ghs_, ghr_, or github_pat_.",
-          slackBotTokenRequired:
-            "Slack Bot token is required when Slack channels are configured.",
+          slackBotTokenRequired: "Slack Bot token is required when Slack channels are configured.",
           slackBotTokenInvalid: "Enter a Slack Bot token starting with xoxb-.",
-          slackAppTokenRequired:
-            "Slack App token is required when Slack channels are configured.",
+          slackAppTokenRequired: "Slack App token is required when Slack channels are configured.",
           slackAppTokenInvalid: "Enter a Slack App token starting with xapp-.",
           slackChannelsInvalid:
             "Enter Slack channel names or IDs separated by commas. Use lowercase channel names such as general or Slack IDs such as C0123456789.",
@@ -406,8 +392,7 @@ const resources = {
           running: "Validating settings...",
           failed: "Validation failed",
           ok: "Settings validated",
-          okDescription:
-            "{{count}} checks passed. GitHub and Slack checks are read-only.",
+          okDescription: "{{count}} checks passed. GitHub and Slack checks are read-only.",
           target: "Target",
         },
         diagnosticSections: {
@@ -444,7 +429,8 @@ const resources = {
           },
           github_not_configured: {
             title: "GitHub is not configured",
-            description: "GitHub diagnostics were skipped because this project does not use GitHub.",
+            description:
+              "GitHub diagnostics were skipped because this project does not use GitHub.",
           },
           github_project_access: {
             title: "GitHub Project was readable",
@@ -479,8 +465,7 @@ const resources = {
         diagnosticChecks: {
           config_project_file: {
             title: "Project settings were not found",
-            description:
-              "Open Setup and create the initial settings for this workspace.",
+            description: "Open Setup and create the initial settings for this workspace.",
           },
           env_file: {
             title: ".env was not found",
@@ -489,13 +474,11 @@ const resources = {
           },
           team_load: {
             title: "Team settings could not be loaded",
-            description:
-              "Project or member settings may be incomplete or invalid.",
+            description: "Project or member settings may be incomplete or invalid.",
           },
           active_members: {
             title: "No active member is configured",
-            description:
-              "Add at least one active member before running GuildBotics.",
+            description: "Add at least one active member before running GuildBotics.",
           },
           llm_api_key: {
             title: "LLM API key is missing",
@@ -504,13 +487,11 @@ const resources = {
           },
           cli_agent_mapping: {
             title: "Default CLI agent could not be determined",
-            description:
-              "Review the LLM / CLI agent settings.",
+            description: "Review the LLM / CLI agent settings.",
           },
           cli_agent_executable: {
             title: "Default CLI agent was not found",
-            description:
-              "Install the selected CLI agent or choose another detected CLI agent.",
+            description: "Install the selected CLI agent or choose another detected CLI agent.",
           },
           cli_agent_brain: {
             title: "CLI agent check failed",
@@ -519,18 +500,15 @@ const resources = {
           },
           github_credential: {
             title: "Member GitHub credential is missing",
-            description:
-              "Configure the member's GitHub credentials before using GitHub workflows.",
+            description: "Configure the member's GitHub credentials before using GitHub workflows.",
           },
           llm_live_call: {
             title: "LLM check failed",
-            description:
-              "The selected LLM provider did not accept the minimal validation request.",
+            description: "The selected LLM provider did not accept the minimal validation request.",
           },
           github_project_access: {
             title: "GitHub project access failed",
-            description:
-              "The GitHub Project could not be read with this member's credentials.",
+            description: "The GitHub Project could not be read with this member's credentials.",
           },
           github_repository_access: {
             title: "GitHub repository access failed",
@@ -544,18 +522,15 @@ const resources = {
           },
           slack_app_token: {
             title: "Slack App token is missing",
-            description:
-              "Socket Mode runtime requires a Slack App token for this member.",
+            description: "Socket Mode runtime requires a Slack App token for this member.",
           },
           slack_bot_auth: {
             title: "Slack bot authentication failed",
-            description:
-              "Slack bot authentication failed. Check the member's Slack Bot token.",
+            description: "Slack bot authentication failed. Check the member's Slack Bot token.",
           },
           slack_channel: {
             title: "Slack channel could not be resolved",
-            description:
-              "The configured Slack channel name or ID could not be resolved.",
+            description: "The configured Slack channel name or ID could not be resolved.",
           },
           slack_channel_history: {
             title: "Slack channel history could not be read",
@@ -564,8 +539,7 @@ const resources = {
           },
           slack_access: {
             title: "Slack read-only check failed",
-            description:
-              "Slack read-only access failed. Check Slack tokens and channel settings.",
+            description: "Slack read-only access failed. Check Slack tokens and channel settings.",
           },
         },
         config: "Settings file",
@@ -579,8 +553,7 @@ const resources = {
         disabled: "Disabled",
         activeMembers: "Active members",
         setupRequiredTitle: "Setup is not complete",
-        setupRequiredBody:
-          "Create the workspace settings before starting automatic operation.",
+        setupRequiredBody: "Create the workspace settings before starting automatic operation.",
         openSetup: "Open setup",
         routine: "Routine command",
         routineIntervalMinutes: "Patrol interval (minutes)",
@@ -591,13 +564,11 @@ const resources = {
         openMemberPatrolSettings: "Edit member settings",
         requiresGithub: "GitHub required",
         startGuardTitle: "This routine requires GitHub integration",
-        startGuardBody:
-          "Enable GitHub integration in Setup before starting this routine.",
+        startGuardBody: "Enable GitHub integration in Setup before starting this routine.",
         startError: "Scheduler start failed",
         stopError: "Stop failed",
         runtimeError: "Runtime error",
-        runtimeFeedDescription:
-          "Recent runtime events and logs are shown in a readable form.",
+        runtimeFeedDescription: "Recent runtime events and logs are shown in a readable form.",
         emptyEvents: "No events yet.",
         emptyLogs: "No logs yet.",
         none: "None",
@@ -745,7 +716,7 @@ const resources = {
         command: "Command",
         noCommandOptions: "No commands found",
         rawArgs: "Additional args",
-        rawArgsPlaceholder: "arg1 key=value \"quoted value\"",
+        rawArgsPlaceholder: 'arg1 key=value "quoted value"',
         message: "Input text",
         messageDescription: "Text passed to the command for this run.",
         advanced: "Detailed settings",
@@ -830,8 +801,7 @@ const resources = {
         },
         status: {
           readyTitle: "必須設定 完了",
-          readyMessage:
-            "実行できます。GitHub などの連携は必要になったタイミングで追加できます。",
+          readyMessage: "実行できます。GitHub などの連携は必要になったタイミングで追加できます。",
           progressTitle: "必須設定: {{total}}項目中 {{done}}項目 設定済み",
           progressMessage:
             "不足項目を埋めると、GuildBoticsの実行に必要な初期設定が完了します。GitHub連携は後から追加できます。",
@@ -849,11 +819,9 @@ const resources = {
         },
         project: {
           title: "プロジェクト",
-          subtitle:
-            "作業ディレクトリと言語・保存先などの基本設定を指定します。",
+          subtitle: "作業ディレクトリと言語・保存先などの基本設定を指定します。",
           agentLanguage: "エージェントの既定言語",
-          agentLanguageDescription:
-            "コマンド、ロール定義、LLMへの指示で使う既定言語です。",
+          agentLanguageDescription: "コマンド、ロール定義、LLMへの指示で使う既定言語です。",
           configLocation: "設定ファイルの保存先",
           homeConfig: "ホーム共通",
           workspaceConfig: "作業ディレクトリ内",
@@ -864,8 +832,7 @@ const resources = {
         },
         intelligence: {
           title: "LLM・CLIエージェント",
-          subtitle:
-            "チーム全体で使うAIプロバイダとCLIツールの既定値を設定します。",
+          subtitle: "チーム全体で使うAIプロバイダとCLIツールの既定値を設定します。",
           teamDefault: "チーム既定",
           defaultProvider: "デフォルトの LLM プロバイダ",
           providerDescription: "利用する1つを選択します。",
@@ -878,11 +845,9 @@ const resources = {
           apiKeyMissing: "API key 未設定",
           detected: "検出済み",
           notDetected: "未検出",
-          cliHint:
-            "CLIエージェントは同梱しません。PATHで検出できたものだけ選択できます。",
+          cliHint: "CLIエージェントは同梱しません。PATHで検出できたものだけ選択できます。",
           advanced: "詳細設定",
-          createBeforeAdvanced:
-            "詳細なAI挙動を編集するには、先に初期設定を作成してください。",
+          createBeforeAdvanced: "詳細なAI挙動を編集するには、先に初期設定を作成してください。",
           loadingAdvanced: "詳細設定を読み込み中...",
           loadAdvancedError: "詳細設定の取得に失敗しました",
           saveAdvancedError: "詳細設定の保存に失敗しました",
@@ -920,8 +885,7 @@ const resources = {
         },
         members: {
           title: "メンバー",
-          subtitle:
-            "チームメンバーと役割を管理します。",
+          subtitle: "チームメンバーと役割を管理します。",
           activeCountLabel: "有効メンバー",
           activeCountValue: "{{count}}人 設定済み",
           requiredTitle: "有効メンバーを1人以上設定してください",
@@ -933,8 +897,7 @@ const resources = {
           editTitle: "メンバーを編集",
           type: "メンバー種別",
           githubMode: "このメンバーの GitHub 連携",
-          githubModeHint:
-            "GitHub のチケット、Issue、Pull Request を扱うメンバーだけ設定します。",
+          githubModeHint: "GitHub のチケット、Issue、Pull Request を扱うメンバーだけ設定します。",
           typeOptions: {
             none: "GitHub連携なし",
             machine_user: "マシンアカウント（マシンユーザー）",
@@ -983,8 +946,7 @@ const resources = {
               "機械的で正確な表現を重視し、感情的な要素は排除します。必要な情報を迅速かつ効率的に提供することを目指します。",
           },
           characterArchetype: "会話上の立ち位置",
-          characterArchetypeHint:
-            "このメンバーがどんな視点で会話に入るかを一言で表します。",
+          characterArchetypeHint: "このメンバーがどんな視点で会話に入るかを一言で表します。",
           characterTraits: "性格・ふるまい",
           characterInterests: "得意・関心領域",
           characterJoinWhen: "会話に参加する場面",
@@ -1084,14 +1046,12 @@ const resources = {
         },
         github: {
           title: "GitHub",
-          subtitle:
-            "このプロジェクトで GitHub Projects、Issue、リポジトリを使うかを選択します。",
+          subtitle: "このプロジェクトで GitHub Projects、Issue、リポジトリを使うかを選択します。",
           decision: "GitHub連携",
           decisionPlaceholder: "GitHubを使うか選択",
           disabled: "GitHubを使わない",
           enabled: "GitHubを使う",
-          disabledHint:
-            "GitHub が必要な routine は、この連携を設定するまで起動できません。",
+          disabledHint: "GitHub が必要な routine は、この連携を設定するまで起動できません。",
           projectUrl: "GitHub Project URL",
           repositoryUrl: "GitHub Repository URL",
         },
@@ -1114,25 +1074,19 @@ const resources = {
           githubRepositoryOwnerMismatch:
             "Repository URL の owner は GitHub Project の owner と一致している必要があります。",
           memberIdRequired: "メンバーIDは必須です。",
-          memberIdInvalid:
-            "メンバーIDは小文字英数字、アンダースコア、ハイフンのみ使えます。",
+          memberIdInvalid: "メンバーIDは小文字英数字、アンダースコア、ハイフンのみ使えます。",
           memberIdDuplicate: "このメンバーIDはすでに使われています。",
           memberNameRequired: "表示名は必須です。",
           memberRolesRequired: "ロールを1つ以上選択してください。",
           memberSpeakingStyleRequired: "会話スタイルは必須です。",
           memberCharacterArchetypeRequired: "会話上の立ち位置は必須です。",
-          memberCharacterTraitsRequired:
-            "性格・ふるまいを1つ以上入力してください。",
-          memberCharacterInterestsRequired:
-            "得意・関心領域を1つ以上入力してください。",
+          memberCharacterTraitsRequired: "性格・ふるまいを1つ以上入力してください。",
+          memberCharacterInterestsRequired: "得意・関心領域を1つ以上入力してください。",
           memberCharacterJoinWhenRequired: "会話に参加する場面は必須です。",
           memberCharacterAvoidWhenRequired: "参加を控える場面は必須です。",
-          memberCharacterContributionRequired:
-            "参加時の貢献スタイルは必須です。",
-          memberGithubIdentityRequired:
-            "GitHub識別子を入力し、「解決」を実行してください。",
-          memberGithubAppsUrlRequired:
-            "GitHub Apps URL を入力し、「解決」を実行してください。",
+          memberCharacterContributionRequired: "参加時の貢献スタイルは必須です。",
+          memberGithubIdentityRequired: "GitHub識別子を入力し、「解決」を実行してください。",
+          memberGithubAppsUrlRequired: "GitHub Apps URL を入力し、「解決」を実行してください。",
           memberGithubIdentityNotFound:
             "このGitHub識別子は解決できませんでした。ユーザー名、メール、GitHub Apps URL を確認してください。",
           memberGithubIdentityResolveFailed:
@@ -1143,8 +1097,7 @@ const resources = {
             "GitHub識別子を解決するか、GitHubユーザー名を入力してください。",
           memberGithubUsernameInvalid:
             "有効なGitHubユーザー名を入力してください。この欄ではメールアドレスは使えません。",
-          memberGitEmailRequired:
-            "GitHub識別子を解決するか、Gitメールアドレスを入力してください。",
+          memberGitEmailRequired: "GitHub識別子を解決するか、Gitメールアドレスを入力してください。",
           memberGitEmailInvalid: "有効なメールアドレスを入力してください。",
           githubInstallationIdRequired: "GitHub Installation ID は必須です。",
           githubInstallationIdInvalid: "GitHub Installation ID は数字のみで入力してください。",
@@ -1169,8 +1122,7 @@ const resources = {
         refresh: "更新",
         startTarget: "開始対象",
         noTargetTitle: "開始対象が選択されていません",
-        noTargetBody:
-          "自動巡回またはチャット対応を選択してから開始してください。",
+        noTargetBody: "自動巡回またはチャット対応を選択してから開始してください。",
       },
       diagnostics: {
         title: "診断",
@@ -1231,7 +1183,8 @@ const resources = {
           },
           github_not_configured: {
             title: "GitHub は未設定です",
-            description: "このプロジェクトは GitHub を使わないため、GitHub 検証をスキップしました。",
+            description:
+              "このプロジェクトは GitHub を使わないため、GitHub 検証をスキップしました。",
           },
           github_project_access: {
             title: "GitHub Project を読み取れました",
@@ -1243,7 +1196,8 @@ const resources = {
           },
           slack_not_configured: {
             title: "Slack チャンネルは未設定です",
-            description: "このメンバーには Slack チャンネルがないため、Slack 検証をスキップしました。",
+            description:
+              "このメンバーには Slack チャンネルがないため、Slack 検証をスキップしました。",
           },
           slack_bot_auth: {
             title: "Slack Bot 認証に成功しました",
@@ -1267,8 +1221,7 @@ const resources = {
         diagnosticChecks: {
           config_project_file: {
             title: "プロジェクト設定が見つかりません",
-            description:
-              "Setup でこの workspace の初期設定を作成してください。",
+            description: "Setup でこの workspace の初期設定を作成してください。",
           },
           env_file: {
             title: ".env が見つかりません",
@@ -1277,23 +1230,19 @@ const resources = {
           },
           team_load: {
             title: "チーム設定を読み込めません",
-            description:
-              "プロジェクトまたはメンバー設定が未完成、または不正な可能性があります。",
+            description: "プロジェクトまたはメンバー設定が未完成、または不正な可能性があります。",
           },
           active_members: {
             title: "有効メンバーがいません",
-            description:
-              "GuildBotics を実行するには、有効なメンバーを1人以上追加してください。",
+            description: "GuildBotics を実行するには、有効なメンバーを1人以上追加してください。",
           },
           llm_api_key: {
             title: "LLM API key が見つかりません",
-            description:
-              "選択中の provider key が見つかりません。この診断は存在確認のみです。",
+            description: "選択中の provider key が見つかりません。この診断は存在確認のみです。",
           },
           cli_agent_mapping: {
             title: "既定の CLI エージェントを判定できません",
-            description:
-              "LLM・CLIエージェント設定を確認してください。",
+            description: "LLM・CLIエージェント設定を確認してください。",
           },
           cli_agent_executable: {
             title: "既定の CLI エージェントが見つかりません",
@@ -1312,18 +1261,15 @@ const resources = {
           },
           llm_live_call: {
             title: "LLM の検証に失敗しました",
-            description:
-              "選択中の LLM provider が最小リクエストを受け付けませんでした。",
+            description: "選択中の LLM provider が最小リクエストを受け付けませんでした。",
           },
           github_project_access: {
             title: "GitHub Project にアクセスできません",
-            description:
-              "このメンバーの認証情報で GitHub Project を読み取れませんでした。",
+            description: "このメンバーの認証情報で GitHub Project を読み取れませんでした。",
           },
           github_repository_access: {
             title: "GitHub リポジトリにアクセスできません",
-            description:
-              "このメンバーの認証情報で GitHub リポジトリ情報を読み取れませんでした。",
+            description: "このメンバーの認証情報で GitHub リポジトリ情報を読み取れませんでした。",
           },
           github_access: {
             title: "GitHub の読み取り検証に失敗しました",
@@ -1332,8 +1278,7 @@ const resources = {
           },
           slack_app_token: {
             title: "Slack App トークンが不足しています",
-            description:
-              "Socket Mode runtime には、このメンバーの Slack App トークンが必要です。",
+            description: "Socket Mode runtime には、このメンバーの Slack App トークンが必要です。",
           },
           slack_bot_auth: {
             title: "Slack Bot 認証に失敗しました",
@@ -1342,8 +1287,7 @@ const resources = {
           },
           slack_channel: {
             title: "Slack チャンネルを解決できません",
-            description:
-              "設定された Slack チャンネル名または ID を解決できませんでした。",
+            description: "設定された Slack チャンネル名または ID を解決できませんでした。",
           },
           slack_channel_history: {
             title: "Slack チャンネル履歴を読み取れません",
@@ -1384,8 +1328,7 @@ const resources = {
         startError: "自動運用の開始に失敗しました",
         stopError: "停止に失敗しました",
         runtimeError: "実行エラー",
-        runtimeFeedDescription:
-          "最近の実行イベントとログを、運用確認しやすい形で表示します。",
+        runtimeFeedDescription: "最近の実行イベントとログを、運用確認しやすい形で表示します。",
         emptyEvents: "まだイベントはありません。",
         emptyLogs: "まだログはありません。",
         none: "なし",
@@ -1418,8 +1361,7 @@ const resources = {
         },
         eventsCard: {
           title: "チャット対応",
-          description:
-            "Slack などのチャットに反応し、会話ワークフローへ渡します。",
+          description: "Slack などのチャットに反応し、会話ワークフローへ渡します。",
           workflow: "応答ワークフロー",
           listeners: "リスナー",
           subscriptions: "購読チャンネル",
@@ -1441,8 +1383,7 @@ const resources = {
           chooseOutputPath: "記録先ファイルを選択",
           chooseReadPath: "表示するファイルを選択",
           resetDefaultPath: "既定値に戻す",
-          filePickerUnavailable:
-            "ファイル選択はデスクトップアプリで利用できます。",
+          filePickerUnavailable: "ファイル選択はデスクトップアプリで利用できます。",
           pathEdited: "Enter またはフォーカス移動で適用します。",
           pathApplying: "適用中...",
           eventCount: "記録件数",
@@ -1535,7 +1476,7 @@ const resources = {
         command: "コマンド",
         noCommandOptions: "コマンド候補がありません",
         rawArgs: "追加引数",
-        rawArgsPlaceholder: "arg1 key=value \"引用付きの値\"",
+        rawArgsPlaceholder: 'arg1 key=value "引用付きの値"',
         message: "入力文",
         messageDescription: "この実行でコマンドへ渡す入力文です。",
         advanced: "詳細設定",
@@ -1554,7 +1495,8 @@ const resources = {
         noRelatedLogs: "この request に関連するログはありません。",
         defaultPerson: "既定の選択",
         noMembersTitle: "有効なメンバーがいません",
-        noMembersBody: "コマンドを実行する前に、設定画面で少なくとも 1 人のメンバーを有効にしてください。",
+        noMembersBody:
+          "コマンドを実行する前に、設定画面で少なくとも 1 人のメンバーを有効にしてください。",
         requirementsBlockedTitle: "必要な設定が不足しています",
         failedWithCode: "失敗: {{code}}",
         githubRequiredTitle: "GitHub 連携が必要です",

@@ -1,0 +1,43 @@
+name: Desktop TypeScript CI
+
+on:
+  push:
+    branches:
+      - "**"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run TypeScript
+        run: npm run typecheck
+
+      - name: Check duplicate code
+        run: npm run duplicates
+
+      - name: Run tests
+        run: npm run test

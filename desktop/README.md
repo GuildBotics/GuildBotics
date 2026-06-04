@@ -13,7 +13,7 @@ GuildBotics の macOS 向けデスクトップ GUI です。Tauri v2 + TypeScrip
 | ツール | バージョン目安 | 用途 |
 |---|---|---|
 | [uv](https://docs.astral.sh/uv/) | 最新 | Python 依存解決・sidecar build |
-| Node.js | 20 以上（CI は 22） | frontend build / Tauri CLI |
+| Node.js | 24 以上（CI は 24） | frontend build / Tauri CLI |
 | Rust (rustup) | **stable 1.85 以上** | Tauri 本体の build |
 | Xcode Command Line Tools | — | macOS 向けリンク・署名 |
 

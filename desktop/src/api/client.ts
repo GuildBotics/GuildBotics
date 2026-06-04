@@ -472,10 +472,7 @@ export async function stopScheduler(): Promise<RuntimeStatus> {
   return request("/scheduler/stop", { method: "POST" });
 }
 
-export async function getPromptTrace(
-  limit = 20,
-  path?: string,
-): Promise<PromptTraceStatus> {
+export async function getPromptTrace(limit = 20, path?: string): Promise<PromptTraceStatus> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (path) {
     params.set("path", path);
@@ -586,7 +583,9 @@ export function subscribeEvents(
   onEvent: (event: RuntimeEvent) => void,
   onStatus?: (status: StreamStatus) => void,
 ): () => void {
-  const socket = new WebSocket(`${websocketBase()}/events?token=${encodeURIComponent(sessionToken)}`);
+  const socket = new WebSocket(
+    `${websocketBase()}/events?token=${encodeURIComponent(sessionToken)}`,
+  );
   onStatus?.("connecting");
   socket.onopen = () => onStatus?.("connected");
   socket.onmessage = (message) => {

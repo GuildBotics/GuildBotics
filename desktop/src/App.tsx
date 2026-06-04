@@ -64,20 +64,10 @@ import {
 } from "./api/client";
 import { type AppLanguage, normalizeLanguage, setAppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
+import { buildTraceGroups, type PromptTraceGroup } from "./trace";
 
 const TICKET_ROUTINE = "workflows/ticket_driven_workflow";
 const PROMPT_TRACE_LIMIT = 500;
-
-type PromptTraceGroup = {
-  id: string;
-  kind: string;
-  request: PromptTraceEntry | null;
-  response: PromptTraceEntry | null;
-  single: PromptTraceEntry | null;
-  timestamp: string;
-  personId: string;
-  brain: string;
-};
 
 export function App() {
   const { t, i18n } = useTranslation();
@@ -175,27 +165,26 @@ function ServicePage() {
   });
   const githubEnabled = projectConfig.data?.github_enabled ?? false;
 
-  useEffect(() => {
-    if (!routines.data?.routines.length) {
-      return;
-    }
-    if (!selectedRoutine) {
-      const preferred =
-        routines.data.routines.find((routine) => !routine.requires_github) ??
-        routines.data.routines[0];
-      setSelectedRoutine(preferred.command);
-      return;
-    }
-    const exists = routines.data.routines.some((routine) => routine.command === selectedRoutine);
-    if (!exists) {
-      setSelectedRoutine(routines.data.routines[0].command);
-    }
-  }, [routines.data?.routines, selectedRoutine]);
-
+  const routineOptions = useMemo(() => routines.data?.routines ?? [], [routines.data?.routines]);
   const selectedRoutineOption = useMemo(
     () =>
-      routines.data?.routines.find((routine) => routine.command === selectedRoutine) ?? null,
-    [routines.data?.routines, selectedRoutine],
+      routineOptions.find((routine) => routine.command === selectedRoutine) ??
+      routineOptions.find((routine) => !routine.requires_github) ??
+      routineOptions[0] ??
+      null,
+    [routineOptions, selectedRoutine],
+  );
+  const effectiveSelectedRoutine = selectedRoutineOption?.command ?? "";
+  const routineSelectValue = selectedRoutineOption ? effectiveSelectedRoutine : null;
+  const routineSelectOptions = useMemo(
+    () =>
+      routineOptions.map((routine: RoutineOption) => ({
+        value: routine.command,
+        label: routine.requires_github
+          ? `${routineLabel(t, routine.command)} (${t("overview.requiresGithub")})`
+          : routineLabel(t, routine.command),
+      })),
+    [routineOptions, t],
   );
   const routineRequiresGithub = selectedRoutineOption?.requires_github ?? false;
   const canStartRoutine = !routineRequiresGithub || githubEnabled;
@@ -212,8 +201,8 @@ function ServicePage() {
       if (!schedulerEnabled && eventsEnabled) {
         body.only = "events";
       }
-      if (schedulerEnabled && selectedRoutine) {
-        body.routine_commands = [selectedRoutine];
+      if (schedulerEnabled && effectiveSelectedRoutine) {
+        body.routine_commands = [effectiveSelectedRoutine];
       }
       return startScheduler(body);
     },
@@ -229,13 +218,13 @@ function ServicePage() {
   );
   const runtimeStarting = Boolean(
     startMutation.isPending ||
-      scheduler.data?.scheduler.state === "starting" ||
-      scheduler.data?.events.state === "starting",
+    scheduler.data?.scheduler.state === "starting" ||
+    scheduler.data?.events.state === "starting",
   );
   const runtimeStopping = Boolean(
     stopMutation.isPending ||
-      scheduler.data?.scheduler.state === "stopping" ||
-      scheduler.data?.events.state === "stopping",
+    scheduler.data?.scheduler.state === "stopping" ||
+    scheduler.data?.events.state === "stopping",
   );
   const runtimeBusy = Boolean(runtimeStarting || runtimeStopping);
   const runtimeActive = Boolean(runtimeRunning || runtimeBusy);
@@ -243,8 +232,7 @@ function ServicePage() {
   const noStartTarget = !schedulerEnabled && !eventsEnabled;
   const startNeedsRoutine = schedulerEnabled;
   const startBlockedByGithub = startNeedsRoutine && !canStartRoutine;
-  const startDisabled =
-    !hasProjectConfig || runtimeActive || startBlockedByGithub || noStartTarget;
+  const startDisabled = !hasProjectConfig || runtimeActive || startBlockedByGithub || noStartTarget;
   const stopDisabled = !runtimeActive;
 
   return (
@@ -314,14 +302,9 @@ function ServicePage() {
               <Select
                 label={t("overview.routine")}
                 disabled={!schedulerEnabled || runtimeActive}
-                value={selectedRoutine}
+                value={routineSelectValue}
                 onChange={(value) => setSelectedRoutine(value ?? "")}
-                data={(routines.data?.routines ?? []).map((routine: RoutineOption) => ({
-                  value: routine.command,
-                  label: routine.requires_github
-                    ? `${routineLabel(t, routine.command)} (${t("overview.requiresGithub")})`
-                    : routineLabel(t, routine.command),
-                }))}
+                data={routineSelectOptions}
               />
               <NumberInput
                 label={t("overview.routineIntervalMinutes")}
@@ -440,10 +423,12 @@ function DiagnosticsPage() {
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const promptTrace = useQuery({
     queryKey: ["prompt-trace", loadedTracePath],
-    queryFn: () =>
-      getPromptTrace(PROMPT_TRACE_LIMIT, loadedTracePath.trim() || undefined),
+    queryFn: () => getPromptTrace(PROMPT_TRACE_LIMIT, loadedTracePath.trim() || undefined),
     refetchInterval: 5000,
   });
+  const effectiveReadTracePath = readTracePathEdited
+    ? readTracePath
+    : (promptTrace.data?.trace_file ?? loadedTracePath);
   const hasProjectConfig = Boolean(
     config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
   );
@@ -458,7 +443,7 @@ function DiagnosticsPage() {
   const diagnosticsMutation = useMutation({
     mutationFn: () => runScenarioDiagnostics(),
   });
-  const applyReadTracePath = (tracePath: string = readTracePath) => {
+  const applyReadTracePath = (tracePath: string = effectiveReadTracePath) => {
     const normalizedPath = tracePath.trim();
     if (!readTracePathEdited && normalizedPath === loadedTracePath) {
       return;
@@ -478,7 +463,7 @@ function DiagnosticsPage() {
   const pickReadTracePath = async () => {
     const selected = await selectTraceFile(
       "open",
-      readTracePath || promptTrace.data?.default_trace_file || "",
+      effectiveReadTracePath || promptTrace.data?.default_trace_file || "",
     );
     if (!selected) {
       return;
@@ -488,34 +473,17 @@ function DiagnosticsPage() {
     setReadTracePathEdited(false);
   };
   useEffect(() => {
-    const stopEvents = subscribeEvents(
-      (event) => {
-        setRuntimeEvents((current) => [event, ...current].slice(0, 80));
-      },
-      setEventStreamStatus,
-    );
-    const stopLogs = subscribeLogs(
-      (log) => {
-        setRuntimeLogs((current) => [log, ...current].slice(0, 80));
-      },
-      setLogStreamStatus,
-    );
+    const stopEvents = subscribeEvents((event) => {
+      setRuntimeEvents((current) => [event, ...current].slice(0, 80));
+    }, setEventStreamStatus);
+    const stopLogs = subscribeLogs((log) => {
+      setRuntimeLogs((current) => [log, ...current].slice(0, 80));
+    }, setLogStreamStatus);
     return () => {
       stopEvents();
       stopLogs();
     };
   }, []);
-  useEffect(() => {
-    if (!promptTrace.data) {
-      return;
-    }
-    if (!readTracePathEdited) {
-      setReadTracePath(promptTrace.data.trace_file);
-    }
-    if (!loadedTracePath) {
-      setLoadedTracePath(promptTrace.data.trace_file);
-    }
-  }, [loadedTracePath, promptTrace.data, readTracePathEdited]);
   const filteredEvents = useMemo(
     () => runtimeEvents.filter((event) => matchesFeedFilter(event, feedFilter)),
     [feedFilter, runtimeEvents],
@@ -584,13 +552,15 @@ function DiagnosticsPage() {
             <Group justify="space-between" align="flex-start">
               <div>
                 <Title order={3}>{t("overview.promptTrace.title")}</Title>
-                <Text c="dimmed" size="sm">{t("overview.promptTrace.description")}</Text>
+                <Text c="dimmed" size="sm">
+                  {t("overview.promptTrace.description")}
+                </Text>
               </div>
             </Group>
             <div className="trace-settings">
               <TracePathField
                 label={t("overview.promptTrace.readPath")}
-                value={readTracePath}
+                value={effectiveReadTracePath}
                 edited={readTracePathEdited}
                 applying={promptTrace.isFetching}
                 canPickFile={canPickFile}
@@ -607,10 +577,11 @@ function DiagnosticsPage() {
             </div>
             <Group className="prompt-trace-counts" gap="xs">
               <Text size="sm">
-                <b>{t("overview.promptTrace.eventCount")}</b>{" "}
-                {promptTrace.data?.event_count ?? 0}
+                <b>{t("overview.promptTrace.eventCount")}</b> {promptTrace.data?.event_count ?? 0}
               </Text>
-              <Text c="dimmed" size="sm">/</Text>
+              <Text c="dimmed" size="sm">
+                /
+              </Text>
               <Text size="sm">
                 <b>{t("overview.promptTrace.displayedCount")}</b>{" "}
                 {t("overview.promptTrace.displayedCountValue", {
@@ -627,7 +598,9 @@ function DiagnosticsPage() {
             <Group justify="space-between" align="flex-start">
               <div>
                 <Title order={3}>{t("overview.runtimeFeed")}</Title>
-                <Text c="dimmed" size="sm">{t("overview.runtimeFeedDescription")}</Text>
+                <Text c="dimmed" size="sm">
+                  {t("overview.runtimeFeedDescription")}
+                </Text>
               </div>
               <SegmentedControl
                 value={feedFilter}
@@ -674,10 +647,15 @@ function DiagnosticsPage() {
               {streamView === "events" ? (
                 <>
                   {filteredEvents.length === 0 ? (
-                    <div className="empty-row runtime-stream-empty">{t("overview.emptyEvents")}</div>
+                    <div className="empty-row runtime-stream-empty">
+                      {t("overview.emptyEvents")}
+                    </div>
                   ) : null}
                   {filteredEvents.map((event, index) => (
-                    <div className="runtime-stream-row" key={`${event.timestamp}-${event.type}-${index}`}>
+                    <div
+                      className="runtime-stream-row"
+                      key={`${event.timestamp}-${event.type}-${index}`}
+                    >
                       <span>{formatTime(event.timestamp)}</span>
                       <span>
                         <Badge color={eventBadgeColor(event.type)} variant="light">
@@ -699,7 +677,10 @@ function DiagnosticsPage() {
                     <div className="empty-row runtime-stream-empty">{t("overview.emptyLogs")}</div>
                   ) : null}
                   {filteredLogs.map((log, index) => (
-                    <div className="runtime-stream-row" key={`${log.timestamp}-${log.level}-${index}`}>
+                    <div
+                      className="runtime-stream-row"
+                      key={`${log.timestamp}-${log.level}-${index}`}
+                    >
                       <span>{formatTime(log.timestamp)}</span>
                       <span>
                         <Badge color={logBadgeColor(log.level)} variant="light">
@@ -805,10 +786,7 @@ function PromptTraceOutputSettings() {
   });
   const promptTraceMutation = useMutation({
     mutationFn: (enabled: boolean) =>
-      updatePromptTrace(
-        { enabled, trace_path: outputTracePath.trim() },
-        PROMPT_TRACE_LIMIT,
-      ),
+      updatePromptTrace({ enabled, trace_path: outputTracePath.trim() }, PROMPT_TRACE_LIMIT),
     onSuccess: (data) => {
       setOutputTracePath(data.output_trace_file);
       setOutputTracePathEdited(false);
@@ -832,17 +810,12 @@ function PromptTraceOutputSettings() {
       queryClient.invalidateQueries({ queryKey: ["prompt-trace-output"] });
     },
   });
-  useEffect(() => {
-    if (promptTrace.data && !outputTracePathEdited) {
-      setOutputTracePath(promptTrace.data.output_trace_file);
-    }
-  }, [outputTracePathEdited, promptTrace.data]);
-  const applyOutputTracePath = (tracePath: string = outputTracePath) => {
+  const effectiveOutputTracePath = outputTracePathEdited
+    ? outputTracePath
+    : (promptTrace.data?.output_trace_file ?? "");
+  const applyOutputTracePath = (tracePath: string = effectiveOutputTracePath) => {
     const normalizedPath = tracePath.trim();
-    if (
-      !outputTracePathEdited &&
-      normalizedPath === (promptTrace.data?.output_trace_file ?? "")
-    ) {
+    if (!outputTracePathEdited && normalizedPath === (promptTrace.data?.output_trace_file ?? "")) {
       return;
     }
     promptTraceOutputPathMutation.mutate(normalizedPath);
@@ -859,7 +832,7 @@ function PromptTraceOutputSettings() {
   const pickOutputTracePath = async () => {
     const selected = await selectTraceFile(
       "save",
-      outputTracePath || promptTrace.data?.default_trace_file || "",
+      effectiveOutputTracePath || promptTrace.data?.default_trace_file || "",
     );
     if (!selected) {
       return;
@@ -887,15 +860,13 @@ function PromptTraceOutputSettings() {
               ? t("overview.promptTrace.enabled")
               : t("overview.promptTrace.disabled")
           }
-          onChange={(event) =>
-            promptTraceMutation.mutate(event.currentTarget.checked)
-          }
+          onChange={(event) => promptTraceMutation.mutate(event.currentTarget.checked)}
         />
       </Group>
       <div className="trace-settings">
         <TracePathField
           label={t("overview.promptTrace.outputPath")}
-          value={outputTracePath}
+          value={effectiveOutputTracePath}
           edited={outputTracePathEdited}
           applying={promptTraceOutputPathMutation.isPending}
           canPickFile={canPickFile}
@@ -910,13 +881,9 @@ function PromptTraceOutputSettings() {
           pickLabel={t("overview.promptTrace.chooseOutputPath")}
         />
       </div>
-      {promptTraceMutation.error ||
-      promptTraceOutputPathMutation.error ? (
+      {promptTraceMutation.error || promptTraceOutputPathMutation.error ? (
         <Alert color="red" title={t("overview.promptTrace.saveError")}>
-          {(
-            promptTraceMutation.error ??
-            promptTraceOutputPathMutation.error
-          )?.message}
+          {(promptTraceMutation.error ?? promptTraceOutputPathMutation.error)?.message}
         </Alert>
       ) : null}
     </div>
@@ -959,11 +926,7 @@ function TracePathField({
         rightSection={
           <Group gap={4} wrap="nowrap">
             <Tooltip
-              label={
-                canPickFile
-                  ? pickLabel
-                  : t("overview.promptTrace.filePickerUnavailable")
-              }
+              label={canPickFile ? pickLabel : t("overview.promptTrace.filePickerUnavailable")}
             >
               <ActionIcon
                 aria-label={pickLabel}
@@ -1001,9 +964,7 @@ function TracePathField({
       />
       {edited || applying ? (
         <Text c="dimmed" className="trace-path-status" size="xs">
-          {applying
-            ? t("overview.promptTrace.pathApplying")
-            : t("overview.promptTrace.pathEdited")}
+          {applying ? t("overview.promptTrace.pathApplying") : t("overview.promptTrace.pathEdited")}
         </Text>
       ) : null}
     </div>
@@ -1015,15 +976,6 @@ function PromptTraceList({ entries }: { entries: PromptTraceEntry[] }) {
   const groups = useMemo(() => buildTraceGroups(entries), [entries]);
   const [selectedId, setSelectedId] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  useEffect(() => {
-    if (groups.length === 0) {
-      setSelectedId("");
-      return;
-    }
-    if (!groups.some((group) => group.id === selectedId)) {
-      setSelectedId(groups[0].id);
-    }
-  }, [groups, selectedId]);
   if (entries.length === 0) {
     return <div className="empty-row">{t("overview.promptTrace.empty")}</div>;
   }
@@ -1086,7 +1038,9 @@ function PromptTraceDetails({ group }: { group: PromptTraceGroup }) {
   const descriptionText = request?.description ? decodeTraceText(request.description) : "";
   const transcriptText =
     request?.transcript || response?.transcript || group.single?.transcript
-      ? decodeTraceText(request?.transcript || response?.transcript || group.single?.transcript || "")
+      ? decodeTraceText(
+          request?.transcript || response?.transcript || group.single?.transcript || "",
+        )
       : "";
   const contextText = descriptionText || transcriptText;
   const contextLabel = descriptionText
@@ -1100,7 +1054,9 @@ function PromptTraceDetails({ group }: { group: PromptTraceGroup }) {
     <div className="trace-detail">
       <Group justify="space-between" align="flex-start">
         <div>
-          <Text fw={700}>{traceKindLabel(t, group.kind)} / {traceBrainLabel(group.brain)}</Text>
+          <Text fw={700}>
+            {traceKindLabel(t, group.kind)} / {traceBrainLabel(group.brain)}
+          </Text>
           <Text c="dimmed" size="xs">
             {group.personId || "-"} · {group.timestamp ? formatDateTime(group.timestamp) : "-"}
           </Text>
@@ -1121,16 +1077,22 @@ function PromptTraceDetails({ group }: { group: PromptTraceGroup }) {
       <div className={`trace-detail-grid ${contextText ? "with-context" : ""}`}>
         {contextText ? (
           <div className="trace-preview">
-            <Text fw={700} size="xs">{contextLabel}</Text>
+            <Text fw={700} size="xs">
+              {contextLabel}
+            </Text>
             <pre>{contextText}</pre>
           </div>
         ) : null}
         <div className="trace-preview">
-          <Text fw={700} size="xs">{t("overview.promptTrace.prompt")}</Text>
+          <Text fw={700} size="xs">
+            {t("overview.promptTrace.prompt")}
+          </Text>
           <pre>{requestText || t("overview.promptTrace.noRequest")}</pre>
         </div>
         <div className="trace-preview">
-          <Text fw={700} size="xs">{t("overview.promptTrace.response")}</Text>
+          <Text fw={700} size="xs">
+            {t("overview.promptTrace.response")}
+          </Text>
           <pre>{responseText || t("overview.promptTrace.noResponse")}</pre>
         </div>
       </div>
@@ -1154,7 +1116,14 @@ function FragmentRow({ label, value }: { label: string; value: string }) {
 
 function RuntimeStateBadge({ state }: { state: RuntimeUnitStatus["state"] }) {
   const { t } = useTranslation();
-  const color = state === "running" ? "teal" : state === "failed" ? "red" : state === "stopped" ? "gray" : "orange";
+  const color =
+    state === "running"
+      ? "teal"
+      : state === "failed"
+        ? "red"
+        : state === "stopped"
+          ? "gray"
+          : "orange";
   return (
     <Badge color={color} variant="light">
       {t(`overview.runtimeStates.${state}`)}
@@ -1164,9 +1133,7 @@ function RuntimeStateBadge({ state }: { state: RuntimeUnitStatus["state"] }) {
 
 function isStopTimeoutPending(unit: RuntimeUnitStatus | undefined) {
   return Boolean(
-    unit?.running &&
-      unit.state === "failed" &&
-      unit.error?.includes("did not stop before timeout"),
+    unit?.running && unit.state === "failed" && unit.error?.includes("did not stop before timeout"),
   );
 }
 
@@ -1233,9 +1200,7 @@ function ScenarioDiagnosticsSummary({
             {t(`overview.diagnosticSections.${check.section}`)}
             {check.person_id ? ` / ${check.person_id}` : ""}
           </Text>
-          <Text size="sm">
-            {diagnosticDescription(t, check)}
-          </Text>
+          <Text size="sm">{diagnosticDescription(t, check)}</Text>
           {diagnosticDetail(t, check) ? (
             <Text size="xs" c="dimmed" mt={6}>
               {diagnosticDetail(t, check)}
@@ -1323,113 +1288,6 @@ function traceEventLabel(t: TFunction, event: string) {
   });
 }
 
-function traceBadgeColor(event: string) {
-  if (event.endsWith(".response")) {
-    return "teal";
-  }
-  if (event.includes("parse_error")) {
-    return "red";
-  }
-  if (event.includes("chat")) {
-    return "indigo";
-  }
-  return "blue";
-}
-
-function buildTraceGroups(entries: PromptTraceEntry[]): PromptTraceGroup[] {
-  const used = new Set<number>();
-  const groups: PromptTraceGroup[] = [];
-  entries.forEach((entry, index) => {
-    if (used.has(index)) {
-      return;
-    }
-    if (isTraceResponse(entry)) {
-      const requestIndex = entries.findIndex(
-        (candidate, candidateIndex) =>
-          candidateIndex > index &&
-          !used.has(candidateIndex) &&
-          isTraceRequest(candidate) &&
-          tracePairKey(candidate) === tracePairKey(entry),
-      );
-      const request = requestIndex >= 0 ? entries[requestIndex] : null;
-      used.add(index);
-      if (requestIndex >= 0) {
-        used.add(requestIndex);
-      }
-      groups.push(traceGroup({ request, response: entry, single: null, index }));
-      return;
-    }
-    used.add(index);
-    groups.push(
-      traceGroup({
-        request: isTraceRequest(entry) ? entry : null,
-        response: null,
-        single: isTraceRequest(entry) ? null : entry,
-        index,
-      }),
-    );
-  });
-  return groups;
-}
-
-function traceGroup({
-  request,
-  response,
-  single,
-  index,
-}: {
-  request: PromptTraceEntry | null;
-  response: PromptTraceEntry | null;
-  single: PromptTraceEntry | null;
-  index: number;
-}): PromptTraceGroup {
-  const representative = response ?? request ?? single;
-  return {
-    id: `${representative?.timestamp ?? ""}-${representative?.event ?? ""}-${index}`,
-    kind: traceKind(representative),
-    request,
-    response,
-    single,
-    timestamp: representative?.timestamp ?? "",
-    personId: representative?.person_id ?? "",
-    brain: representative?.brain ?? "",
-  };
-}
-
-function isTraceRequest(entry: PromptTraceEntry) {
-  return entry.event.endsWith(".request");
-}
-
-function isTraceResponse(entry: PromptTraceEntry) {
-  return entry.event.endsWith(".response");
-}
-
-function tracePairKey(entry: PromptTraceEntry) {
-  return [
-    traceKind(entry),
-    entry.person_id,
-    entry.brain,
-    traceFieldValue(entry, "model"),
-    traceFieldValue(entry, "cli_agent"),
-  ].join("|");
-}
-
-function traceKind(entry: PromptTraceEntry | null | undefined) {
-  if (!entry) {
-    return "trace";
-  }
-  if (entry.event.startsWith("llm.")) {
-    return "llm";
-  }
-  if (entry.event.startsWith("cli_agent.")) {
-    return "cli";
-  }
-  if (entry.event.startsWith("chat.")) {
-    return "chat";
-  }
-  return "trace";
-}
-
 function traceKindLabel(t: TFunction, kind: string) {
   return t(`overview.promptTrace.kinds.${kind}`, { defaultValue: kind });
 }
@@ -1448,15 +1306,12 @@ function traceKindColor(kind: string) {
 }
 
 function traceBrainLabel(brain: string) {
-  return brain.split("/").pop()?.replace(/\.[^.]+$/, "") || "-";
-}
-
-function traceFieldValue(entry: PromptTraceEntry, key: string) {
-  const value = entry.fields[key];
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return "";
+  return (
+    brain
+      .split("/")
+      .pop()
+      ?.replace(/\.[^.]+$/, "") || "-"
+  );
 }
 
 function traceGroupMetadata(group: PromptTraceGroup): Array<[string, string]> {
@@ -1649,13 +1504,17 @@ async function selectTraceFile(mode: "open" | "save", currentPath: string) {
   }
   const selected =
     mode === "open"
-      ? await (await import("@tauri-apps/plugin-dialog")).open({
+      ? await (
+          await import("@tauri-apps/plugin-dialog")
+        ).open({
           defaultPath: currentPath || undefined,
           directory: false,
           multiple: false,
           title: "Prompt trace file",
         })
-      : await (await import("@tauri-apps/plugin-dialog")).save({
+      : await (
+          await import("@tauri-apps/plugin-dialog")
+        ).save({
           defaultPath: currentPath || undefined,
           title: "Prompt trace file",
         });
@@ -1688,28 +1547,27 @@ function CommandsPage() {
     enabled: hasProjectConfig,
     retry: false,
   });
-  const commandCatalog = commandOptions.data?.options ?? [];
-
-  useEffect(() => {
-    if (selectedCommand || !commandCatalog.length) {
-      return;
-    }
-    const runnable =
-      commandCatalog.find((option) =>
-        option.requirements.every((requirement) => requirement.satisfied),
-      ) ?? commandCatalog[0];
-    setSelectedCommand(runnable.command);
-  }, [commandCatalog, selectedCommand]);
+  const commandCatalog = useMemo(
+    () => commandOptions.data?.options ?? [],
+    [commandOptions.data?.options],
+  );
 
   const selectedOption = useMemo(
-    () => commandCatalog.find((option) => option.command === selectedCommand) ?? null,
+    () =>
+      commandCatalog.find((option) => option.command === selectedCommand) ??
+      commandCatalog.find((option) =>
+        option.requirements.every((requirement) => requirement.satisfied),
+      ) ??
+      commandCatalog[0] ??
+      null,
     [commandCatalog, selectedCommand],
   );
+  const effectiveSelectedCommand = selectedOption?.command ?? "";
   const commandOptionByValue = useMemo(
     () => new Map(commandCatalog.map((option) => [option.command, option])),
     [commandCatalog],
   );
-  const command = mode === "catalog" ? selectedCommand : customCommand.trim();
+  const command = mode === "catalog" ? effectiveSelectedCommand : customCommand.trim();
   const commandArgs = useMemo(
     () => buildCommandArgs(mode === "catalog" ? selectedOption : null, argValues, rawArgs),
     [argValues, mode, rawArgs, selectedOption],
@@ -1722,19 +1580,14 @@ function CommandsPage() {
     () => (team.data?.members ?? []).filter((member) => member.is_active),
     [team.data?.members],
   );
-  useEffect(() => {
-    if (!activeMembers.length) {
-      setPerson(null);
-      return;
-    }
-    if (!person || !activeMembers.some((member) => member.person_id === person)) {
-      setPerson(activeMembers[0].person_id);
-    }
-  }, [activeMembers, person]);
+  const effectivePerson =
+    activeMembers.find((member) => member.person_id === person)?.person_id ??
+    activeMembers[0]?.person_id ??
+    null;
   const runDisabled =
     !hasProjectConfig ||
     !command ||
-    !person ||
+    !effectivePerson ||
     activeMembers.length === 0 ||
     blockingRequirements.length > 0;
 
@@ -1744,9 +1597,9 @@ function CommandsPage() {
         command,
         args: commandArgs,
         message,
-        person: person ?? undefined,
+        person: effectivePerson ?? undefined,
         cwd: cwd.trim() || undefined,
-    }),
+      }),
     onMutate: () => {
       setActiveRequestId(null);
     },
@@ -1755,7 +1608,7 @@ function CommandsPage() {
       setHistory((current) =>
         upsertCommandRecord(current, {
           requestId: response.request_id,
-          person: person ?? "",
+          person: effectivePerson ?? "",
           command,
           startedAt: new Date().toISOString(),
           status: "success",
@@ -1769,7 +1622,7 @@ function CommandsPage() {
       setHistory((current) =>
         upsertCommandRecord(current, {
           requestId,
-          person: person || "",
+          person: effectivePerson || "",
           command,
           startedAt: new Date().toISOString(),
           status: "failed",
@@ -1837,10 +1690,7 @@ function CommandsPage() {
   }, [t]);
 
   const selectedRecord = useMemo(
-    () =>
-      history.find((record) => record.requestId === activeRequestId) ??
-      history[0] ??
-      null,
+    () => history.find((record) => record.requestId === activeRequestId) ?? history[0] ?? null,
     [activeRequestId, history],
   );
   const visibleRequestId = selectedRecord?.requestId ?? activeRequestId;
@@ -1891,7 +1741,9 @@ function CommandsPage() {
 
       {commandBlocked ? (
         <Alert color="yellow" title={t("commands.requirementsBlockedTitle")}>
-          {blockingRequirements.map((requirement) => requirementLabel(t, requirement.kind)).join(", ")}
+          {blockingRequirements
+            .map((requirement) => requirementLabel(t, requirement.kind))
+            .join(", ")}
         </Alert>
       ) : null}
 
@@ -1925,7 +1777,7 @@ function CommandsPage() {
                       aria-label={t("commands.command")}
                       searchable
                       nothingFoundMessage={t("commands.noCommandOptions")}
-                      value={selectedCommand}
+                      value={effectiveSelectedCommand}
                       onChange={(value) => {
                         setSelectedCommand(value ?? "");
                         setArgValues({});
@@ -2016,7 +1868,7 @@ function CommandsPage() {
                 <Select
                   label={t("commands.member")}
                   placeholder={t("commands.memberPlaceholder")}
-                  value={person}
+                  value={effectivePerson}
                   onChange={(value) => {
                     if (value) {
                       setPerson(value);
@@ -2102,7 +1954,6 @@ function CommandsPage() {
                   )}
                 </Stack>
               </div>
-
             </Stack>
           </div>
 
