@@ -30,7 +30,6 @@
 
 - インストール後 CLI: `guildbotics` (`pyproject.toml` の `project.scripts`)
 - モジュール側: `guildbotics/cli/__init__.py`
-- `main.py` は `start` コマンド呼び出し用の薄い起動ファイル
 
 ## 重要な実装ポイント
 
@@ -43,7 +42,6 @@
 - `guildbotics stop`
 - `guildbotics kill`
 - `guildbotics version`
-- `guildbotics config init|add|verify`
 
 補足:
 
@@ -107,14 +105,15 @@
 
 既定 routine コマンド（Simple edition）:
 
-- `workflows/ticket_driven_workflow` (`SimpleSetupTool.get_default_routines()`)
+- `workflows/ticket_driven_workflow` (`SimpleEdition.get_default_routines()`)
 
-## 5. SetupTool / Edition 切替
+## 5. Edition 切替
 
-`guildbotics/cli/__init__.py#get_setup_tool()` で `GUILDBOTICS_EDITION` を見て SetupTool を切り替えます。
+`guildbotics/editions/__init__.py#get_edition()` で `GUILDBOTICS_EDITION` を見て Edition を切り替えます。`Edition` は `get_context()` と `get_default_routines()` のみを提供する実行時の抽象です。
 
 - 既定: `simple`
-- 実体: `guildbotics/cli/simple/simple_setup_tool.py`
+- 実体: `guildbotics/editions/simple/simple_edition.py`
+- 設定書き込みロジック（GUI が再利用）: `guildbotics/editions/simple/setup_service.py`
 
 ## 開発時の基本コマンド（CI 準拠）
 

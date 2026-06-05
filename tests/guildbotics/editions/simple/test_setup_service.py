@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from guildbotics.cli.simple import setup_service
-from guildbotics.cli.simple.setup_service import (
+from guildbotics.editions.simple import setup_service
+from guildbotics.editions.simple.setup_service import (
     PersonConfigSnapshot,
     PersonSetupInput,
     PersonUpdateInput,

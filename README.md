@@ -93,17 +93,21 @@ GuildBotics enables you to:
 
 # 2. Quick Start
 
+GuildBotics is configured through the **GuildBotics Desktop app (GUI)**, and run through the
+**`guildbotics` CLI**. Setup writes plain config files (`.env` and `.guildbotics/config/...`),
+so once configured you can run the CLI on any machine, including headless servers, by copying
+those files over.
+
 ```bash
-# Install
+# 1. Configure with the GUI
+#    Launch the GuildBotics Desktop app and complete project + member setup.
+#    It writes .env and .guildbotics/config/... into your chosen workspace.
+#    See desktop/README.md for installation.
+
+# 2. Run with the CLI
 uv tool install guildbotics
 
-# Initialize configuration
-guildbotics config init
-
-# Add an AI agent member
-guildbotics config add
-
-# Run a custom command
+# Run a custom command (from the workspace that holds .env / .guildbotics)
 echo "Hello" | guildbotics run translate English Japanese
 
 # Or start scheduler (runs default workflow: ticket_driven_workflow)
@@ -138,6 +142,15 @@ Please install one of the following CLI agents and authenticate:
 
 # 4. Installation
 
+Setup is performed with the **GuildBotics Desktop app**; command execution uses the
+**`guildbotics` CLI**.
+
+**Desktop app (setup):** Build or install the GuildBotics Desktop app. See
+[desktop/README.md](desktop/README.md) for build and install instructions
+(currently macOS Apple Silicon).
+
+**CLI (execution):**
+
 ```bash
 uv tool install guildbotics
 ```
@@ -146,38 +159,34 @@ uv tool install guildbotics
 
 ## 5.1. Initial Setup
 
-Initialize configuration interactively:
+Project setup is done in the **GuildBotics Desktop app**. Launch the app, pick a workspace
+directory, and complete the project setup form. The GUI:
 
-```bash
-guildbotics config init
-```
+- Selects language (English/Japanese)
+- Chooses the configuration directory location (workspace or home)
+- Configures LLM API settings and the default CLI agent
+- Sets up the basic project structure
 
-This command will:
-- Select language (English/Japanese)
-- Choose configuration directory location
-- Configure LLM API settings
-- Set up basic project structure
-
-The following files are created:
+The following files are written:
 - `.env`: Environment variables
 - `.guildbotics/config/team/project.yml`: Project definition
 - `.guildbotics/config/intelligences/`: Brain and CLI agent settings
 
+> These are plain text files. Because all setup lands in config files, you can move them to a
+> GUI-less environment (e.g. a server) and drive everything with the `guildbotics` CLI.
+
 ## 5.2. Add Members
 
-Add AI agents or human team members:
+Add AI agents or human team members from the **Members** section of the Desktop app.
+For each member you provide:
 
-```bash
-guildbotics config add
-```
-
-This command prompts for:
 - Member type (human, AI agent, etc.)
 - Display name and person_id
 - Roles (e.g., programmer, architect, product_owner)
 - Speaking style (for AI agents)
+- GitHub / Slack credentials (stored in `.env`)
 
-Creates:
+This writes:
 - `.guildbotics/config/team/members/<person_id>/person.yml`
 - Environment variables in `.env` (for credentials)
 
@@ -667,18 +676,20 @@ If you use your own account as the AI agent, issue a **Classic** PAT. Select the
 
 ## 6.2. Setup for GitHub Integration
 
-After completing [Basic Usage](#5-basic-usage) steps, run the following to configure GitHub-specific settings:
+After completing [Basic Usage](#5-basic-usage) steps, verify the configuration from the
+**Diagnostics / Verify** view in the Desktop app. This checks that each active member's GitHub,
+LLM, and CLI agent settings are usable.
 
-```bash
-guildbotics config verify
-```
+**Custom fields** are created automatically the first time GuildBotics operates on a GitHub
+Project, so no explicit setup step is required. GuildBotics manages these fields:
+- `Mode`: Behavior mode (comment/edit/ticket)
+- `Role`: Role to use for the task
+- `Agent`: AI agent to execute the task
 
-This command:
-- Adds GuildBotics custom fields to GitHub Projects:
-  - `Mode`: Behavior mode (comment/edit/ticket)
-  - `Role`: Role to use for the task
-  - `Agent`: AI agent to execute the task
-- Maps GitHub Projects statuses to GuildBotics statuses (New/Ready/In Progress/In Review/Retrospective/Done)
+**Status mapping**: GuildBotics maps GitHub Projects statuses to its own statuses
+(New/Ready/In Progress/In Review/Retrospective/Done). If your GitHub Project uses custom status
+names, map them with the `services.ticket_manager.status_map` key in
+`team/project.yml` (see [Configuration Files](#72-configuration-files)).
 
 ## 6.3. Running the Ticket-Driven Workflow
 
@@ -756,6 +767,7 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 - `language`: Project language
 - `repositories`: Repository definitions
 - `services.ticket_manager`: GitHub Projects settings
+- `services.ticket_manager.status_map`: Maps GuildBotics statuses (New/Ready/In Progress/In Review/Retrospective/Done) to your GitHub Project's status names. Set this when your Project uses custom status names.
 - `services.code_hosting_service`: GitHub repository settings
 
 **Member Configuration** (`team/members/<person_id>/person.yml`):

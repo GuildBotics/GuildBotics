@@ -3,9 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
-
-CRON_FIELD_COUNT = 5
+from pydantic import BaseModel, Field
 
 
 class VerifyCheck(BaseModel):
@@ -66,70 +64,6 @@ class MemberSummary(BaseModel):
 class TeamSummary(BaseModel):
     project: ProjectSummary
     members: list[MemberSummary]
-
-
-class MemberTaskSchedule(BaseModel):
-    command: str = Field(min_length=1)
-    schedules: list[str] = Field(default_factory=list)
-
-    @field_validator("schedules")
-    @classmethod
-    def validate_schedules(cls, value: list[str]) -> list[str]:
-        schedules = [schedule.strip() for schedule in value if schedule.strip()]
-        for schedule in schedules:
-            if len(schedule.split()) != CRON_FIELD_COUNT:
-                raise ValueError("schedule must be a five-field cron expression")
-        return schedules
-
-
-class MemberConfigResponse(BaseModel):
-    person_id: str
-    person_name: str
-    person_type: Literal["", "human", "machine_user", "github_apps", "proxy_agent"]
-    is_active: bool
-    github_username: str
-    git_email: str
-    roles: list[str] = Field(default_factory=list)
-    speaking_style: str = ""
-    relationships: str = ""
-    character: dict[str, Any] = Field(default_factory=dict)
-    github_installation_id: int | None = None
-    github_app_id: int | None = None
-    github_private_key_path: str = ""
-    has_github_installation_id: bool = False
-    has_github_app_id: bool = False
-    has_github_private_key_path: bool = False
-    has_github_access_token: bool = False
-    has_slack_bot_token: bool = False
-    has_slack_app_token: bool = False
-    slack_channels: list[str] = Field(default_factory=list)
-    routine_commands: list[str] = Field(default_factory=list)
-    task_schedules: list[MemberTaskSchedule] = Field(default_factory=list)
-
-
-class MemberConfigUpdateRequest(BaseModel):
-    config_dir: Path
-    env_file_path: Path
-    original_person_id: str
-    person_type: Literal["", "human", "machine_user", "github_apps", "proxy_agent"]
-    person_id: str = Field(min_length=1)
-    person_name: str = Field(min_length=1)
-    is_active: bool
-    github_username: str = ""
-    git_email: str = ""
-    roles: list[str] = Field(default_factory=list)
-    speaking_style: str = ""
-    relationships: str = ""
-    character: dict[str, Any] = Field(default_factory=dict)
-    github_installation_id: int | None = None
-    github_app_id: int | None = None
-    github_private_key_path: Path | None = None
-    github_access_token: str = ""
-    slack_bot_token: str = ""
-    slack_app_token: str = ""
-    slack_channels: list[str] = Field(default_factory=list)
-    routine_commands: list[str] = Field(default_factory=list)
-    task_schedules: list[MemberTaskSchedule] = Field(default_factory=list)
 
 
 class MemberDeleteRequest(BaseModel):

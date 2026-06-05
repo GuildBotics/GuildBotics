@@ -26,8 +26,6 @@ from guildbotics.app_api.models import (
     HealthResponse,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
-    MemberConfigResponse,
-    MemberConfigUpdateRequest,
     MemberDeleteRequest,
     MemberResolveRequest,
     MemberResolveResponse,
@@ -47,7 +45,7 @@ from guildbotics.app_api.models import (
     WorkspaceChangeRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.cli.simple.setup_service import (
+from guildbotics.editions.simple.setup_service import (
     PersonConfigSnapshot,
     PersonSetupInput,
     PersonSetupResult,
@@ -430,13 +428,13 @@ def create_app(
 
     @app.get(
         "/config/members/{person_id}",
-        response_model=MemberConfigResponse,
+        response_model=PersonConfigSnapshot,
         responses=error_responses,
     )
     def config_member(
         person_id: str,
         _: None = Depends(require_token),
-    ) -> MemberConfigResponse:
+    ) -> PersonConfigSnapshot:
         status = app_runtime.get_config_status()
         config_dir = _get_existing_config_dir(status)
         if config_dir is None:
@@ -459,7 +457,7 @@ def create_app(
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return MemberConfigResponse.model_validate(snapshot.model_dump())
+        return snapshot
 
     @app.put(
         "/config/members/{person_id}",
@@ -468,7 +466,7 @@ def create_app(
     )
     def config_member_update(
         person_id: str,
-        request: MemberConfigUpdateRequest,
+        request: PersonUpdateInput,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         try:

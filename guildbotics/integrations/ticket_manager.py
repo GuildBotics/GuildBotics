@@ -75,16 +75,6 @@ class TicketManager(ABC):
         pass
 
     @abstractmethod
-    def get_board_url(self) -> str:
-        """
-        Get the URL for the board in the ticket management system.
-
-        Returns:
-            str: The URL for the board.
-        """
-        pass
-
-    @abstractmethod
     async def update_ticket(self, task: Task) -> None:
         """
         Update an existing ticket with the latest information from the task.

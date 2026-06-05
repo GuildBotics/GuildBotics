@@ -68,20 +68,12 @@ class DummyTicketManager(TicketManager):
         """No-op move ticket."""
         return None
 
-    async def add_comment_to_ticket(
-        self, task: Task, comment: str
-    ) -> None:  # noqa: D401
+    async def add_comment_to_ticket(self, task: Task, comment: str) -> None:  # noqa: D401
         """No-op add comment."""
         return None
 
-    async def get_ticket_url(
-        self, task: Task, markdown: bool = True
-    ) -> str:  # noqa: D401
+    async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:  # noqa: D401
         """No-op get URL."""
-        return ""
-
-    def get_board_url(self) -> str:  # noqa: D401 - test double
-        """No-op board URL."""
         return ""
 
     async def update_ticket(self, task: Task) -> None:  # noqa: D401 - test double
