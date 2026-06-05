@@ -46,17 +46,6 @@ class ChatEventPage:
 
 
 @dataclass(slots=True)
-class ChatMessage:
-    channel_id: str
-    message_ts: str
-    thread_ts: str
-    author_id: str | None
-    text: str
-    mentions: list[str] = field(default_factory=list)
-    is_bot_message: bool = False
-
-
-@dataclass(slots=True)
 class ChatPostResult:
     channel_id: str
     message_ts: str

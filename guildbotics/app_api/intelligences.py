@@ -11,8 +11,8 @@ from guildbotics.app_api.models import (
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
 )
-from guildbotics.cli.simple import simple_brain_factory
-from guildbotics.cli.simple.setup_service import CreatedFile
+from guildbotics.editions.simple import simple_brain_factory
+from guildbotics.editions.simple.setup_service import CreatedFile
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 

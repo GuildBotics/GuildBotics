@@ -49,8 +49,6 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.verify import VerifyService
-from guildbotics.cli import get_setup_tool
-from guildbotics.cli.simple.setup_service import SimpleProjectSetupService
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.registry import get_command_extensions
 from guildbotics.drivers import (
@@ -59,6 +57,8 @@ from guildbotics.drivers import (
     PersonSelectionRequiredError,
     run_command,
 )
+from guildbotics.editions import get_edition
+from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities import Service
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
@@ -104,7 +104,7 @@ class AppRuntime:
         self._lifecycle = RuntimeLifecycleService(
             event_bus=event_bus,
             context_factory=self._get_context,
-            default_routines_factory=lambda: get_setup_tool().get_default_routines(),
+            default_routines_factory=lambda: get_edition().get_default_routines(),
             stop_timeout_seconds=stop_timeout_seconds,
         )
 
@@ -316,7 +316,7 @@ class AppRuntime:
     def start_scheduler(self, request: SchedulerStartRequest) -> RuntimeStatus:
         if request.only != "events":
             routine_commands = (
-                request.routine_commands or get_setup_tool().get_default_routines()
+                request.routine_commands or get_edition().get_default_routines()
             )
             if not self.is_github_integration_enabled():
                 for command in routine_commands:
@@ -434,7 +434,7 @@ class AppRuntime:
         return CliAgentDetectionsResponse(agents=agents)
 
     def get_default_routines(self) -> list[str]:
-        return list(get_setup_tool().get_default_routines())
+        return list(get_edition().get_default_routines())
 
     def is_github_integration_enabled(self) -> bool:
         try:
@@ -460,7 +460,7 @@ class AppRuntime:
     def _get_context(self, message: str = "") -> Context:
         self._load_workspace_env()
         try:
-            return get_setup_tool().get_context(message)
+            return get_edition().get_context(message)
         except FileNotFoundError as exc:
             raise AppApiError(
                 "config_not_found",

@@ -1253,13 +1253,13 @@ def test_member_config_accepts_member_without_github_link(tmp_path: Path) -> Non
 
 
 def test_app_runtime_reports_missing_config(monkeypatch) -> None:
-    class MissingConfigSetupTool:
+    class MissingConfigEdition:
         def get_context(self, message: str = ""):
             raise FileNotFoundError(2, "No such file", "project.yml")
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_setup_tool",
-        lambda: MissingConfigSetupTool(),
+        "guildbotics.app_api.runtime.get_edition",
+        lambda: MissingConfigEdition(),
     )
 
     runtime = AppRuntime(EventBus())
@@ -1291,7 +1291,7 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
             },
         )()
 
-    class SetupToolStub:
+    class EditionStub:
         def get_context(self, message: str = "") -> object:
             assert os.environ["OPENAI_API_KEY"] == "new-key"
             return ContextStub()
@@ -1300,8 +1300,8 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
     monkeypatch.setenv("OPENAI_API_KEY", "old-key")
     (tmp_path / ".env").write_text("OPENAI_API_KEY=new-key\n")
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_setup_tool",
-        lambda: SetupToolStub(),
+        "guildbotics.app_api.runtime.get_edition",
+        lambda: EditionStub(),
     )
 
     runtime = AppRuntime(EventBus())
@@ -1384,7 +1384,7 @@ def test_app_runtime_formats_structured_prompt_trace_response(
 
 
 def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
-    class SetupToolStub:
+    class EditionStub:
         def get_context(self, message: str = "") -> object:
             return object()
 
@@ -1421,8 +1421,8 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             release.set()
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_setup_tool",
-        lambda: SetupToolStub(),
+        "guildbotics.app_api.runtime.get_edition",
+        lambda: EditionStub(),
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.TaskScheduler",
@@ -1457,7 +1457,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
 
 
 def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None:
-    class SetupToolStub:
+    class EditionStub:
         def get_context(self, message: str = "") -> object:
             return object()
 
@@ -1485,8 +1485,8 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
             self.shutdown_timeout = timeout
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_setup_tool",
-        lambda: SetupToolStub(),
+        "guildbotics.app_api.runtime.get_edition",
+        lambda: EditionStub(),
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.TaskScheduler",
@@ -1507,7 +1507,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
 
 
 def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
-    class SetupToolStub:
+    class EditionStub:
         def get_context(self, message: str = "") -> object:
             return object()
 
@@ -1536,8 +1536,8 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
             return self.alive
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_setup_tool",
-        lambda: SetupToolStub(),
+        "guildbotics.app_api.runtime.get_edition",
+        lambda: EditionStub(),
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.EventListenerRunner",
@@ -1563,7 +1563,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
 
 
 def test_app_runtime_marks_event_listener_failed_on_start_error(monkeypatch) -> None:
-    class MissingConfigSetupTool:
+    class MissingConfigEdition:
         def get_context(self, message: str = "") -> object:
             raise FileNotFoundError(2, "No such file", "project.yml")
 
@@ -1571,8 +1571,8 @@ def test_app_runtime_marks_event_listener_failed_on_start_error(monkeypatch) -> 
             return ["routine"]
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_setup_tool",
-        lambda: MissingConfigSetupTool(),
+        "guildbotics.app_api.runtime.get_edition",
+        lambda: MissingConfigEdition(),
     )
 
     runtime = AppRuntime(EventBus())
@@ -1585,7 +1585,7 @@ def test_app_runtime_marks_event_listener_failed_on_start_error(monkeypatch) -> 
 
 
 def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) -> None:
-    class SetupToolStub:
+    class EditionStub:
         def get_context(self, message: str = "") -> object:
             return object()
 
@@ -1612,8 +1612,8 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
             return self.alive
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_setup_tool",
-        lambda: SetupToolStub(),
+        "guildbotics.app_api.runtime.get_edition",
+        lambda: EditionStub(),
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.EventListenerRunner",

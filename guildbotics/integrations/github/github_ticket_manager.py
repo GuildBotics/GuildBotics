@@ -23,16 +23,6 @@ from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
 
 
-class InvalidStatusColumnsError(RuntimeError):
-    def __init__(self, missing: set[str], extra: set[str]) -> None:
-        details = []
-        if missing:
-            details.append(f"missing={sorted(missing)}")
-        if extra:
-            details.append(f"extra={sorted(extra)}")
-        super().__init__("Status columns mismatch: " + ", ".join(details))
-
-
 class GitHubTicketManager(TicketManager):
     """GitHub Projects V2 ticket manager using GraphQL and REST APIs."""
 
@@ -254,21 +244,6 @@ class GitHubTicketManager(TicketManager):
         """
         await self._sync_status_columns()
         return self.columns.get(column_name, None)
-
-    def _create_role_usernames(self) -> dict[str, list[str]]:
-        """
-        Create a mapping of roles to their corresponding GitHub user node IDs.
-        """
-        role_usernames: dict[str, list[str]] = {}
-        for role, members in self.team.get_role_members().items():
-            role_usernames[role] = []
-            for member in members:
-                user_name = get_github_username(member)
-                if not user_name:
-                    continue
-                role_usernames[role].append(user_name)
-
-        return role_usernames
 
     async def _get_issue_node_id(self, repo: str | None, issue_number: int) -> str:
         """Convert a REST issue number to the GraphQL global node_id.
@@ -910,15 +885,6 @@ class GitHubTicketManager(TicketManager):
         url = f"https://github.com/{self.owner}/{repo}/issues/{issue_id}"
         return f"[{task.title}]({url})" if markdown else url
 
-    def get_board_url(self) -> str:
-        """
-        Get the URL for the ProjectV2 board.
-
-        Returns:
-            str: The board URL.
-        """
-        return self.url
-
     async def update_ticket(self, task: Task) -> None:
         """
         Update an existing ticket's custom fields.
@@ -1206,25 +1172,3 @@ class GitHubTicketManager(TicketManager):
         """
 
         await self._graphql(query, variables)
-
-    async def create_label(self, label: str) -> None:
-        """
-        Create a new label in the default repository if it does not already exist.
-
-        Args:
-            label (str): The name of the label to create.
-        """
-        client = await self.login()
-        path = f"/repos/{self.owner}/{self.default_repo}/labels"
-
-        # Check if the label already exists
-        resp = await client.get(path)
-        existing_labels = resp.json()
-        for existing_label in existing_labels:
-            if existing_label["name"] == label:
-                return  # Label already exists, do nothing
-
-        # Create the label if it doesn't exist
-        payload = {"name": label}
-        resp = await client.post(path, json=payload)
-        resp.raise_for_status()

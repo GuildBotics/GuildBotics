@@ -103,7 +103,8 @@ GuildBotics follows a layered architecture with clear separation of concerns:
 
 ```
 guildbotics/
-├── cli/                    # CLI entry points
+├── cli/                    # CLI entry points (execution: start/run/stop/kill)
+├── editions/               # Runtime editions + setup services (shared by CLI and GUI)
 ├── runtime/                # Execution context and factories
 ├── entities/               # Domain models
 ├── drivers/                # Execution engine
@@ -119,18 +120,32 @@ guildbotics/
 
 #### CLI (`guildbotics/cli/`)
 
-**Responsibility**: User interface and entry points
+**Responsibility**: Command-line entry points for *execution* (not setup)
 
 **Key Files**:
 - `__init__.py`: Click-based CLI command definitions
-- `setup_tool.py`: Abstract base class for initialization
-- `simple/simple_setup_tool.py`: Default YAML-based implementation
 
 **Commands**:
-- `start`: Launch scheduler process
+- `start`: Launch scheduler / event listener runner
 - `run`: Execute custom commands
-- `config`: Configuration management (init, add, verify)
 - `stop`/`kill`: Process management
+- `version`: Print version
+
+Project and member *setup* is handled by the GUI (`app_api`); the CLI consumes the
+config files it produces. There is no `config` command group.
+
+#### Editions (`guildbotics/editions/`)
+
+**Responsibility**: Runtime edition selection and programmatic setup services
+(shared by both CLI and GUI)
+
+**Key Files**:
+- `edition.py`: `Edition` abstract base class (`get_context()` / `get_default_routines()`)
+- `__init__.py`: `get_edition()` resolves the edition from `GUILDBOTICS_EDITION`
+- `simple/simple_edition.py`: Default YAML-based edition (`SimpleEdition`)
+- `simple/simple_*_factory.py`: Loader / integration / brain factories
+- `simple/setup_service.py`: Programmatic project/member config writers used by the GUI
+- `simple/templates/`: Project / member / sample-command templates
 
 #### App API (`guildbotics/app_api/`)
 
@@ -265,14 +280,14 @@ Message
 sequenceDiagram
     participant User
     participant CLI
-    participant SetupTool
+    participant Edition
     participant Context
     participant TaskScheduler
     participant CommandRunner
 
     User->>CLI: guildbotics start
-    CLI->>SetupTool: get_context()
-    SetupTool->>Context: create with factories
+    CLI->>Edition: get_context()
+    Edition->>Context: create with factories
     CLI->>TaskScheduler: new(context, commands)
     CLI->>TaskScheduler: start()
 

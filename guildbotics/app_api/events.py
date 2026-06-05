@@ -92,10 +92,6 @@ class EventBus:
         with self._lock:
             return list(self._event_history)
 
-    def snapshot_logs(self) -> list[dict[str, Any]]:
-        with self._lock:
-            return list(self._log_history)
-
     def _publish(
         self,
         history: deque[dict[str, Any]],

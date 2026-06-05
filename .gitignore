@@ -182,3 +182,6 @@ memo/
 
 .guildbotics/
 guildbotics/_version.py
+
+# Claude Code per-developer local settings (machine-specific; not for the team)
+.claude/settings.local.json
