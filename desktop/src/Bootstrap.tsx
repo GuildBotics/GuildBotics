@@ -51,9 +51,6 @@ export function Bootstrap() {
         <Stack align="center" gap="md" maw={420}>
           <Loader size="lg" />
           <Title order={3}>{t("app.loading.title")}</Title>
-          <Text c="dimmed" ta="center">
-            {t("app.loading.body")}
-          </Text>
         </Stack>
       ) : (
         <Alert color="red" title={t("app.loading.failed")} maw={520}>

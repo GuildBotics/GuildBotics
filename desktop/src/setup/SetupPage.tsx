@@ -28,6 +28,7 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { useForm, type UseFormReturnType } from "@mantine/form";
+import { notifications } from "@mantine/notifications";
 import { zodResolver } from "mantine-form-zod-resolver";
 import {
   Check,
@@ -218,11 +219,7 @@ export function SetupPage() {
         }
         return updateProjectConfig(toProjectUpdateRequest(values, config.data, projectConfig.data));
       }
-      return initConfig(
-        toProjectSetupRequest(values, config.data, {
-          envFileOption: getInitialEnvFileOption(config.data),
-        }),
-      );
+      return initConfig(toInitialProjectSetupRequest(values, config.data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["config"] });
@@ -273,7 +270,6 @@ export function SetupPage() {
     searchParams.get("tab") === "patrol" ? "patrol" : undefined,
   );
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [setupCreated, setSetupCreated] = useState(false);
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
   const workspaceSwitchId = useRef(0);
@@ -354,6 +350,9 @@ export function SetupPage() {
       return;
     }
     const creatingInitialSetup = !hasExistingProject;
+    const initialSetupRequest = creatingInitialSetup
+      ? toInitialProjectSetupRequest(form.values, config.data)
+      : null;
     setSaveState("saving");
     try {
       await saveMutation.mutateAsync(form.values);
@@ -367,7 +366,22 @@ export function SetupPage() {
       }
       form.resetDirty(form.values);
       setSaveState("saved");
-      setSetupCreated(creatingInitialSetup);
+      if (initialSetupRequest) {
+        notifications.show({
+          autoClose: false,
+          color: "green",
+          icon: <Check size={18} />,
+          title: t("setup.initialCreated.title"),
+          message: (
+            <Text size="sm" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {t("setup.initialCreated.body", {
+                configDir: initialSetupRequest.config_dir,
+                envFilePath: initialSetupRequest.env_file_path,
+              })}
+            </Text>
+          ),
+        });
+      }
     } catch {
       setSaveState("error");
     }
@@ -438,12 +452,6 @@ export function SetupPage() {
         onGoBack={goBackSection}
         onGoNext={goNextSection}
       />
-
-      {setupCreated ? (
-        <Alert color="green" title={t("setup.initialCreated.title")}>
-          {t("setup.initialCreated.body")}
-        </Alert>
-      ) : null}
 
       <div className="setup-layout">
         <SetupSectionNav active={activeSection} onChange={setSection} status={visibleStatus} />
@@ -673,7 +681,10 @@ function ProjectSection({
           }
         />
         <Textarea
-          label={t("setup.project.description")}
+          label={<RequiredLabel text={t("setup.project.description")} />}
+          aria-label={t("setup.project.description")}
+          aria-required
+          description={t("setup.project.descriptionHint")}
           autosize
           minRows={2}
           {...form.getInputProps("description")}
@@ -756,7 +767,9 @@ function IntelligenceSection({
           })}
         </div>
         <PasswordInput
-          label={selectedProviderKeyLabel}
+          label={<RequiredLabel text={selectedProviderKeyLabel} />}
+          aria-label={selectedProviderKeyLabel}
+          aria-required
           description={
             selectedProviderKeyConfigured
               ? t("setup.intelligence.keyConfiguredDescription")
@@ -2054,19 +2067,25 @@ function MembersSection({
               <Tabs.Panel value="basic" pt="md">
                 <Stack>
                   <TextInput
-                    label={t("setup.members.personId")}
+                    label={<RequiredLabel text={t("setup.members.personId")} />}
+                    aria-label={t("setup.members.personId")}
+                    aria-required
                     value={personId}
                     onChange={(event) => setPersonId(event.currentTarget.value)}
                     error={memberErrors.personId}
                   />
                   <TextInput
-                    label={t("setup.members.personName")}
+                    label={<RequiredLabel text={t("setup.members.personName")} />}
+                    aria-label={t("setup.members.personName")}
+                    aria-required
                     value={personName}
                     onChange={(event) => setPersonName(event.currentTarget.value)}
                     error={memberErrors.personName}
                   />
                   <MultiSelect
-                    label={t("setup.members.roles")}
+                    label={<RequiredLabel text={t("setup.members.roles")} />}
+                    aria-label={t("setup.members.roles")}
+                    aria-required
                     placeholder={t("setup.members.rolesPlaceholder")}
                     data={roleOptions}
                     value={roles}
@@ -2120,8 +2139,10 @@ function MembersSection({
                         text={t("setup.members.characterTraits")}
                         tooltip={t("setup.members.applyDefaultTooltip")}
                         onApply={() => setCharacterTraits(activePresetSample.traits)}
+                        required
                       />
                     }
+                    aria-required
                     value={characterTraits}
                     onChange={setCharacterTraits}
                     placeholder={activePresetSample.traits.join(", ")}
@@ -2133,8 +2154,10 @@ function MembersSection({
                         text={t("setup.members.characterInterests")}
                         tooltip={t("setup.members.applyDefaultTooltip")}
                         onApply={() => setCharacterInterests(activePresetSample.interests)}
+                        required
                       />
                     }
+                    aria-required
                     value={characterInterests}
                     onChange={setCharacterInterests}
                     placeholder={activePresetSample.interests.join(", ")}
@@ -2148,8 +2171,10 @@ function MembersSection({
                         onApply={() =>
                           setSpeakingStyle(speakingStyleTemplates[speakingStylePreset])
                         }
+                        required
                       />
                     }
+                    aria-required
                     autosize
                     minRows={3}
                     value={speakingStyle}
@@ -2163,8 +2188,10 @@ function MembersSection({
                         text={t("setup.members.characterArchetype")}
                         tooltip={t("setup.members.applyDefaultTooltip")}
                         onApply={() => setCharacterArchetype(activePresetSample.archetype)}
+                        required
                       />
                     }
+                    aria-required
                     value={characterArchetype}
                     onChange={(event) => setCharacterArchetype(event.currentTarget.value)}
                     description={t("setup.members.characterArchetypeHint")}
@@ -2179,8 +2206,10 @@ function MembersSection({
                         onApply={() =>
                           setCharacterJoinWhenText(activePresetSample.joinWhen.join("\n"))
                         }
+                        required
                       />
                     }
+                    aria-required
                     autosize
                     minRows={3}
                     value={characterJoinWhenText}
@@ -2197,8 +2226,10 @@ function MembersSection({
                         onApply={() =>
                           setCharacterAvoidWhenText(activePresetSample.avoidWhen.join("\n"))
                         }
+                        required
                       />
                     }
+                    aria-required
                     autosize
                     minRows={3}
                     value={characterAvoidWhenText}
@@ -2217,8 +2248,10 @@ function MembersSection({
                             activePresetSample.contributionStyle.join("\n"),
                           )
                         }
+                        required
                       />
                     }
+                    aria-required
                     autosize
                     minRows={3}
                     value={characterContributionText}
@@ -2304,6 +2337,9 @@ function MembersSection({
                         <div>
                           <Text fw={500} size="sm">
                             {githubResolveLabel}
+                            <Text span c="red" inherit aria-hidden="true">
+                              {" *"}
+                            </Text>
                           </Text>
                           <Text c="dimmed" size="xs">
                             {githubResolveDescription}
@@ -2312,6 +2348,7 @@ function MembersSection({
                         <div className="field-action-row">
                           <TextInput
                             aria-label={githubResolveLabel}
+                            aria-required
                             value={githubResolveValue}
                             onChange={(event) => {
                               if (personType === "github_apps") {
@@ -2341,14 +2378,24 @@ function MembersSection({
                       </Stack>
                       {personType === "github_apps" ? (
                         <TextInput
-                          label={t("setup.members.githubResolvedIdentity")}
+                          label={<RequiredLabel text={t("setup.members.githubResolvedIdentity")} />}
+                          aria-label={t("setup.members.githubResolvedIdentity")}
+                          aria-required
                           value={githubUsername}
                           onChange={(event) => setGithubUsername(event.currentTarget.value)}
                           error={memberErrors.githubUsername}
                         />
                       ) : null}
                       <TextInput
-                        label={t("setup.members.gitEmail")}
+                        label={
+                          usesGitHubMember ? (
+                            <RequiredLabel text={t("setup.members.gitEmail")} />
+                          ) : (
+                            t("setup.members.gitEmail")
+                          )
+                        }
+                        aria-label={t("setup.members.gitEmail")}
+                        aria-required={usesGitHubMember}
                         value={gitEmail}
                         onChange={(event) => setGitEmail(event.currentTarget.value)}
                         error={memberErrors.gitEmail}
@@ -2358,19 +2405,24 @@ function MembersSection({
                   {personType === "github_apps" ? (
                     <>
                       <TextInput
-                        label={t("setup.members.installationId")}
+                        label={<RequiredLabel text={t("setup.members.installationId")} />}
+                        aria-label={t("setup.members.installationId")}
+                        aria-required
                         value={githubInstallationId}
                         onChange={(event) => setGithubInstallationId(event.currentTarget.value)}
                         error={memberErrors.githubInstallationId}
                       />
                       <TextInput
-                        label={t("setup.members.appId")}
+                        label={<RequiredLabel text={t("setup.members.appId")} />}
+                        aria-label={t("setup.members.appId")}
+                        aria-required
                         value={githubAppId}
                         onChange={(event) => setGithubAppId(event.currentTarget.value)}
                         error={memberErrors.githubAppId}
                       />
                       <FilePicker
                         label={t("setup.members.privateKeyPath")}
+                        withAsterisk
                         value={githubPrivateKeyPath}
                         onChange={setGithubPrivateKeyPath}
                         error={memberErrors.githubPrivateKeyPath}
@@ -2379,7 +2431,15 @@ function MembersSection({
                   ) : null}
                   {personType === "machine_user" || personType === "proxy_agent" ? (
                     <PasswordInput
-                      label={t("setup.members.accessToken")}
+                      label={
+                        storedMemberSecrets.githubAccessToken ? (
+                          t("setup.members.accessToken")
+                        ) : (
+                          <RequiredLabel text={t("setup.members.accessToken")} />
+                        )
+                      }
+                      aria-label={t("setup.members.accessToken")}
+                      aria-required={!storedMemberSecrets.githubAccessToken}
                       placeholder={
                         storedMemberSecrets.githubAccessToken
                           ? MASKED_SECRET_PLACEHOLDER
@@ -2408,7 +2468,17 @@ function MembersSection({
                     error={memberErrors.slackChannelsText}
                   />
                   <PasswordInput
-                    label={t("setup.members.slackBotToken")}
+                    label={
+                      slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackBotToken ? (
+                        <RequiredLabel text={t("setup.members.slackBotToken")} />
+                      ) : (
+                        t("setup.members.slackBotToken")
+                      )
+                    }
+                    aria-label={t("setup.members.slackBotToken")}
+                    aria-required={
+                      slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackBotToken
+                    }
                     placeholder={
                       storedMemberSecrets.slackBotToken
                         ? MASKED_SECRET_PLACEHOLDER
@@ -2419,7 +2489,17 @@ function MembersSection({
                     error={memberErrors.slackBotToken}
                   />
                   <PasswordInput
-                    label={t("setup.members.slackAppToken")}
+                    label={
+                      slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackAppToken ? (
+                        <RequiredLabel text={t("setup.members.slackAppToken")} />
+                      ) : (
+                        t("setup.members.slackAppToken")
+                      )
+                    }
+                    aria-label={t("setup.members.slackAppToken")}
+                    aria-required={
+                      slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackAppToken
+                    }
                     placeholder={
                       storedMemberSecrets.slackAppToken
                         ? MASKED_SECRET_PLACEHOLDER
@@ -2883,7 +2963,9 @@ function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
       <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
       <Stack mt="md">
         <Select
-          label={t("setup.github.decision")}
+          label={<RequiredLabel text={t("setup.github.decision")} />}
+          aria-label={t("setup.github.decision")}
+          aria-required
           placeholder={t("setup.github.decisionPlaceholder")}
           data={[
             { value: "disabled", label: t("setup.github.disabled") },
@@ -2903,13 +2985,29 @@ function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
           </Text>
         ) : null}
         <TextInput
-          label={t("setup.github.projectUrl")}
+          label={
+            form.values.githubDecision === "enabled" ? (
+              <RequiredLabel text={t("setup.github.projectUrl")} />
+            ) : (
+              t("setup.github.projectUrl")
+            )
+          }
+          aria-label={t("setup.github.projectUrl")}
+          aria-required={form.values.githubDecision === "enabled"}
           disabled={form.values.githubDecision !== "enabled"}
           {...form.getInputProps("githubProjectUrl")}
           error={githubErrors.githubProjectUrl || form.errors.githubProjectUrl}
         />
         <TextInput
-          label={t("setup.github.repositoryUrl")}
+          label={
+            form.values.githubDecision === "enabled" ? (
+              <RequiredLabel text={t("setup.github.repositoryUrl")} />
+            ) : (
+              t("setup.github.repositoryUrl")
+            )
+          }
+          aria-label={t("setup.github.repositoryUrl")}
+          aria-required={form.values.githubDecision === "enabled"}
           disabled={form.values.githubDecision !== "enabled"}
           {...form.getInputProps("githubRepositoryUrl")}
           error={githubErrors.githubRepositoryUrl || form.errors.githubRepositoryUrl}
@@ -3116,7 +3214,9 @@ function FolderPicker({ value, onChange }: { value: string; onChange: (value: st
   return (
     <Group align="flex-end" wrap="nowrap">
       <TextInput
-        label={t("setup.project.workspace")}
+        label={<RequiredLabel text={t("setup.project.workspace")} />}
+        aria-label={t("setup.project.workspace")}
+        aria-required
         leftSection={<Folder size={16} />}
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
@@ -3137,11 +3237,13 @@ function FolderPicker({ value, onChange }: { value: string; onChange: (value: st
 
 function FilePicker({
   label,
+  withAsterisk,
   value,
   onChange,
   error,
 }: {
   label: string;
+  withAsterisk?: boolean;
   value: string;
   onChange: (value: string) => void;
   error?: string;
@@ -3166,7 +3268,9 @@ function FilePicker({
   return (
     <div className="field-action-row">
       <TextInput
-        label={label}
+        label={withAsterisk ? <RequiredLabel text={label} /> : label}
+        aria-label={label}
+        aria-required={withAsterisk}
         leftSection={<FileKey size={16} />}
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
@@ -3214,19 +3318,37 @@ function LabeledSegmentedControl({
   );
 }
 
+function RequiredLabel({ text }: { text: string }) {
+  return (
+    <>
+      {text}
+      <Text span c="red" inherit aria-hidden="true">
+        {" *"}
+      </Text>
+    </>
+  );
+}
+
 function DefaultableLabel({
   text,
   tooltip,
   onApply,
+  required,
 }: {
   text: string;
   tooltip: string;
   onApply: () => void;
+  required?: boolean;
 }) {
   return (
     <Group justify="space-between" wrap="nowrap" gap="xs">
       <Text size="sm" fw={500}>
         {text}
+        {required ? (
+          <Text span c="red" inherit aria-hidden="true">
+            {" *"}
+          </Text>
+        ) : null}
       </Text>
       <Tooltip label={tooltip} withArrow>
         <ActionIcon variant="subtle" size="sm" onClick={onApply} aria-label={tooltip}>
@@ -3730,6 +3852,15 @@ function getInitialEnvFileOption(
   config: ConfigStatus | undefined,
 ): ProjectFormValues["envFileOption"] {
   return config?.env_file_exists ? "append" : "overwrite";
+}
+
+function toInitialProjectSetupRequest(
+  values: ProjectFormValues,
+  config: ConfigStatus | undefined,
+): ProjectSetupRequest {
+  return toProjectSetupRequest(values, config, {
+    envFileOption: getInitialEnvFileOption(config),
+  });
 }
 
 function toFormConfigLocation(

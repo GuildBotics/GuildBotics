@@ -48,7 +48,6 @@ describe("Bootstrap", () => {
     renderBootstrap();
 
     expect(screen.getByText(t("app.loading.title"))).toBeInTheDocument();
-    expect(screen.getByText(t("app.loading.body"))).toBeInTheDocument();
     expect(screen.queryByText("App Mock Loaded")).not.toBeInTheDocument();
 
     resolveStart();

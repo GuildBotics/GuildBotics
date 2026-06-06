@@ -1,4 +1,5 @@
 import { MantineProvider, createTheme } from "@mantine/core";
+import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -291,6 +292,7 @@ function renderApp(server: MockServer, path: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MantineProvider theme={theme}>
+      <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[path]}>
           <App />
@@ -308,6 +310,7 @@ function renderSetup(server: MockServer, path: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MantineProvider theme={theme}>
+      <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter
           future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
@@ -326,6 +329,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  notifications.clean();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
@@ -517,6 +521,8 @@ describe("Setup integration (real client + mock server)", () => {
     expect(server.lastBody("POST", "/workspace")).toEqual({ workspace_dir: "/workspace" });
     expect(localStorage.getItem("guildbotics.workspace")).toBe("/workspace");
     expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
+    expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
+    expect(screen.getByText(/\/workspace\/\.env/)).toBeInTheDocument();
   });
 });
 
