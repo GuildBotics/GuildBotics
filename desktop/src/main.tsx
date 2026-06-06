@@ -1,12 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MantineProvider, createTheme } from "@mantine/core";
+import { Notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { Bootstrap } from "./Bootstrap";
 import { stopBackend } from "./api/backend";
 import "./i18n";
 import "@mantine/core/styles.css";
+import "@mantine/notifications/styles.css";
 import "./styles.css";
 
 const queryClient = new QueryClient();
@@ -18,6 +20,7 @@ const theme = createTheme({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <MantineProvider theme={theme}>
+      <Notifications position="top-right" />
       <QueryClientProvider client={queryClient}>
         <Bootstrap />
       </QueryClientProvider>

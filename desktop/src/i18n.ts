@@ -22,7 +22,6 @@ const resources = {
         },
         loading: {
           title: "Starting GuildBotics",
-          body: "Connecting to the local backend. The first launch can take a little longer while it gets ready.",
           failed: "GuildBotics could not start",
           retry: "Retry",
         },
@@ -51,11 +50,11 @@ const resources = {
         saveErrorTitle: "Save failed",
         initialCreated: {
           title: "Initial settings created",
-          body: "The workspace settings were created. This screen is now in settings mode.",
+          body: "Settings directory:\n{{configDir}}\nEnvironment file:\n{{envFilePath}}",
         },
         saveMode: {
           manual:
-            "First-time setup: click Create to write settings files. .env is appended when it already exists, otherwise created.",
+            "Fill in the required items in each section, then click Create initial settings to save.",
           auto: "Changes are saved automatically.",
         },
         status: {
@@ -88,9 +87,9 @@ const resources = {
           homeConfig: "Shared home config",
           workspaceConfig: "Inside workspace",
           description: "Project description",
+          descriptionHint: "Describe the purpose and contents of this project.",
           workspace: "Working directory",
-          workspaceDescription:
-            "This folder is used as the base location for your project settings.",
+          workspaceDescription: "This folder is used as the project workspace.",
           choose: "Choose",
         },
         intelligence: {
@@ -124,10 +123,10 @@ const resources = {
             "This member does not have individual intelligence files. Team settings are used.",
           memberDefaultProvider: "Default LLM provider",
           memberDefaultProviderDescription:
-            "Overrides the default entry in this member's model_mapping.yml.",
+            "Use a different default LLM provider for this member instead of the team default.",
           memberDefaultCliAgent: "Default CLI agent",
           memberDefaultCliAgentDescription:
-            "Overrides the default entry in this member's cli_agent_mapping.yml.",
+            "Use a different default CLI agent for this member instead of the team default.",
           modelMapping: "Model slots",
           modelDefinitions: "Model definitions",
           cliMapping: "CLI agent slots",
@@ -779,7 +778,6 @@ const resources = {
         },
         loading: {
           title: "GuildBotics を起動しています",
-          body: "ローカルバックエンドに接続しています。初回起動は準備のため少し時間がかかることがあります。",
           failed: "GuildBotics を起動できませんでした",
           retry: "再試行",
         },
@@ -792,11 +790,10 @@ const resources = {
         saveErrorTitle: "保存に失敗しました",
         initialCreated: {
           title: "初期設定を作成しました",
-          body: "作業ディレクトリの設定ファイルを作成しました。この画面は設定済み状態に切り替わりました。",
+          body: "設定ディレクトリ:\n{{configDir}}\n環境変数ファイル:\n{{envFilePath}}",
         },
         saveMode: {
-          manual:
-            "初回は「初期設定を作成」を押して設定ファイルを作成します。.env は既存があれば追記、なければ新規作成します。",
+          manual: "各セクションの必須項目を入力し、「初期設定を作成」を押して設定を保存します。",
           auto: "変更は自動で保存されます。",
         },
         status: {
@@ -826,8 +823,9 @@ const resources = {
           homeConfig: "ホーム共通",
           workspaceConfig: "作業ディレクトリ内",
           description: "プロジェクトの説明",
+          descriptionHint: "このプロジェクトの目的や内容を入力します。",
           workspace: "作業ディレクトリ",
-          workspaceDescription: "このフォルダを基点にプロジェクト設定を保存します。",
+          workspaceDescription: "このフォルダをプロジェクトの作業場所として使います。",
           choose: "選択",
         },
         intelligence: {
@@ -861,10 +859,10 @@ const resources = {
             "このメンバー専用の intelligence 設定ファイルは作成せず、チーム設定を使います。",
           memberDefaultProvider: "デフォルトの LLM プロバイダ",
           memberDefaultProviderDescription:
-            "このメンバーの model_mapping.yml の default を上書きします。",
+            "チーム共通の既定値とは別に、このメンバーだけで使う既定の LLM プロバイダを設定します。",
           memberDefaultCliAgent: "デフォルトの CLI エージェント",
           memberDefaultCliAgentDescription:
-            "このメンバーの cli_agent_mapping.yml の default を上書きします。",
+            "チーム共通の既定値とは別に、このメンバーだけで使う既定の CLI エージェントを設定します。",
           modelMapping: "モデルスロット",
           modelDefinitions: "モデル定義",
           cliMapping: "CLIエージェントスロット",

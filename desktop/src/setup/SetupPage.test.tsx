@@ -1,4 +1,5 @@
 import { MantineProvider, createTheme } from "@mantine/core";
+import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -187,6 +188,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  notifications.clean();
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
 });
 
@@ -446,6 +448,8 @@ describe("SetupPage", () => {
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/workspace"));
     expect(localStorage.getItem("guildbotics.workspace")).toBe("/workspace");
     expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
+    expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
+    expect(screen.getByText(/\/workspace\/\.env/)).toBeInTheDocument();
   });
 
   it("autosaves an existing project through updateProjectConfig", async () => {
@@ -487,6 +491,7 @@ function renderSetupPage(path: string) {
   });
   return render(
     <MantineProvider theme={theme}>
+      <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter
           future={{ v7_relativeSplatPath: true, v7_startTransition: true }}

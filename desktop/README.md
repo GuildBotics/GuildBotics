@@ -37,20 +37,26 @@ DESKTOP_TARGET=aarch64-apple-darwin scripts/desktop-build-all.sh
 # Local API backend のみ（既定: http://127.0.0.1:8765 / token: dev-token）
 scripts/desktop-dev-backend.sh
 
-# Vite frontend のみ（backend は別途起動しておく）
+# ブラウザ preview 用 frontend（backend は別途起動しておく）
 scripts/desktop-dev-frontend.sh
 
-# backend と frontend をまとめて起動
-scripts/desktop-dev-all.sh
+# Tauri dev でデスクトップアプリを起動
+scripts/desktop-dev-tauri.sh
 ```
 
-backend の接続先は必要に応じて変更できます。
+ブラウザ preview で使う backend の接続先は必要に応じて変更できます。
 
 ```bash
 GUILDBOTICS_APP_API_PORT=8877 \
 GUILDBOTICS_APP_API_TOKEN=local-token \
-scripts/desktop-dev-all.sh
+scripts/desktop-dev-backend.sh
+
+GUILDBOTICS_APP_API_PORT=8877 \
+GUILDBOTICS_APP_API_TOKEN=local-token \
+scripts/desktop-dev-frontend.sh
 ```
+
+`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。`desktop/src-tauri/binaries/` に開発用 sidecar が必要です（後述の「3. 開発モード」を参照）。
 
 ---
 
