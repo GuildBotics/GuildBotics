@@ -169,6 +169,57 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert status.env_file_exists is True
 
 
+def test_set_workspace_clears_stale_dotenv_keys_from_previous_workspace(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
+
+    workspace_a = isolated_home / "workspace-a"
+    workspace_a.mkdir()
+    _write_project(workspace_a / ".guildbotics" / "config")
+    (workspace_a / ".env").write_text("OPENAI_API_KEY=secret-a\nWORKSPACE_MARKER=a\n")
+
+    workspace_b = isolated_home / "workspace-b"
+    workspace_b.mkdir()
+    _write_project(workspace_b / ".guildbotics" / "config")
+    (workspace_b / ".env").write_text("WORKSPACE_MARKER=b\n")
+
+    runtime.set_workspace(workspace_a)
+    assert os.environ["OPENAI_API_KEY"] == "secret-a"
+
+    runtime.set_workspace(workspace_b)
+    # Workspace B does not define OPENAI_API_KEY, so the credential injected by
+    # workspace A must not leak into workspace B.
+    assert "OPENAI_API_KEY" not in os.environ
+    assert os.environ["WORKSPACE_MARKER"] == "b"
+
+
+def test_set_workspace_clears_dotenv_keys_when_new_env_missing(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    workspace_a = isolated_home / "workspace-a"
+    workspace_a.mkdir()
+    _write_project(workspace_a / ".guildbotics" / "config")
+    (workspace_a / ".env").write_text("OPENAI_API_KEY=secret-a\n")
+
+    workspace_b = isolated_home / "workspace-b"
+    workspace_b.mkdir()
+    _write_project(workspace_b / ".guildbotics" / "config")
+
+    runtime.set_workspace(workspace_a)
+    assert os.environ["OPENAI_API_KEY"] == "secret-a"
+
+    runtime.set_workspace(workspace_b)
+    assert "OPENAI_API_KEY" not in os.environ
+
+
 # --- get_team_summary() -----------------------------------------------------
 
 

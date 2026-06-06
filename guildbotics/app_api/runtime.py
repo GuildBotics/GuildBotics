@@ -101,6 +101,7 @@ class AppRuntime:
         self._event_bus = event_bus
         self._lock = threading.Lock()
         self._running_command_id: str | None = None
+        self._loaded_dotenv_keys: set[str] = set()
         self._lifecycle = RuntimeLifecycleService(
             event_bus=event_bus,
             context_factory=self._get_context,
@@ -466,8 +467,15 @@ class AppRuntime:
 
     def _load_workspace_env(self) -> None:
         dotenv_path = Path.cwd() / ".env"
+        new_values = dotenv_values(dotenv_path) if dotenv_path.exists() else {}
+        # Remove keys that a previously selected workspace injected but the
+        # current one no longer defines, so stale credentials (OpenAI, GitHub,
+        # Slack, ...) do not leak across workspace switches.
+        for key in self._loaded_dotenv_keys - set(new_values):
+            os.environ.pop(key, None)
         if dotenv_path.exists():
             load_dotenv(dotenv_path=dotenv_path, override=True)
+        self._loaded_dotenv_keys = set(new_values)
 
     def _reserve_command(self, request_id: str) -> None:
         with self._lock:

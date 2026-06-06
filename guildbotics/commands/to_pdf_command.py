@@ -24,7 +24,7 @@ class ToPdfCommand(DocumentConversionCommand):
     async def run(self) -> CommandOutcome:
         try:
             from weasyprint import HTML  # type: ignore
-        except OSError as exc:
+        except (ImportError, OSError) as exc:
             raise CommandError(
                 "PDF conversion requires WeasyPrint native dependencies."
             ) from exc
