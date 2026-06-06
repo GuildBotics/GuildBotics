@@ -2,3 +2,12 @@ dist/
 node_modules/
 src-tauri/target/
 src-tauri/binaries/
+
+# Playwright E2E artifacts
+/test-results/
+/playwright-report/
+/e2e/.stack-context.json
+/e2e/.stack-context-configured.json
+/e2e/.stack-context-members.json
+/e2e/.stack-context-diagnostics.json
+/e2e/.stack-context-down.json

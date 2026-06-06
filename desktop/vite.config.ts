@@ -46,6 +46,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
+    // Vitest owns the `src/**` unit/component tests only. The Playwright
+    // real-browser journeys under `e2e/**` must never be collected by Vitest.
+    exclude: ["node_modules", "dist", ".idea", ".git", ".cache", "e2e/**"],
   },
 });
 
