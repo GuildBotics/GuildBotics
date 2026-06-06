@@ -16,6 +16,16 @@ def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
     assert get_cli_agent_search_path("") == ""
 
 
+def test_cli_agent_search_path_falls_back_for_ambient_empty_path(monkeypatch) -> None:
+    monkeypatch.setenv("PATH", "")
+
+    path = get_cli_agent_search_path()
+
+    entries = path.split(":")
+    assert "/usr/bin" in entries
+    assert "/opt/homebrew/bin" in entries
+
+
 def test_cli_agent_search_path_adds_gui_app_fallbacks() -> None:
     path = get_cli_agent_search_path("/usr/bin:/bin")
 

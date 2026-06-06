@@ -445,6 +445,7 @@ def test_verify_checks_env_keys_and_github_credentials(
             [
                 "OPENAI_API_KEY=openai-key",
                 "ALICE_GITHUB_ACCESS_TOKEN=github-token",
+                "PATH=",
             ]
         )
     )

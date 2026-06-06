@@ -30,7 +30,7 @@ GUI_APP_PATHS = (
 
 def get_cli_agent_search_path(path: str | None = None) -> str:
     current = os.environ.get("PATH") if path is None else path
-    if current == "":
+    if path is not None and current == "":
         return ""
     entries = [entry for entry in (current or os.defpath).split(os.pathsep) if entry]
     home = Path.home()
