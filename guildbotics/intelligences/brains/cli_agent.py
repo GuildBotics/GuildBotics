@@ -2,18 +2,21 @@ import asyncio
 import os
 import tempfile
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime
 from logging import Logger
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 
+from guildbotics.app_api.cli_agents import get_cli_agent_search_path
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.log_utils import get_log_output_dir
+from guildbotics.utils.prompt_trace import write_prompt_trace
 from guildbotics.utils.text_utils import replace_placeholders
 
 
@@ -35,6 +38,13 @@ class ExecutableInfo:
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
+
+
+@dataclass(frozen=True)
+class CliAgentExecutionResult:
+    stdout: str
+    stderr: str
+    returncode: int
 
 
 def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
@@ -150,6 +160,7 @@ class CliAgentBrain(Brain):
         self.logger.debug(
             f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
         )
+        self._write_request_trace(input, kwargs)
 
         response_file = ""
         log_file = ""
@@ -159,7 +170,9 @@ class CliAgentBrain(Brain):
             response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
             log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-        output = await self._execute_script(input, response_file, log_file, cwd)
+        result = await self._execute_script(input, response_file, log_file, cwd)
+        output: Any = result.stdout
+        self._write_response_trace(result)
 
         self.logger.debug(
             f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
@@ -173,9 +186,33 @@ class CliAgentBrain(Brain):
 
         return output
 
+    async def run_with_execution_details(
+        self, message: str, **kwargs
+    ) -> CliAgentExecutionResult:
+        cwd = kwargs["cwd"]
+        input = self.prompt_info.to_prompt(
+            message, kwargs.get("session_state", {}), self.template_engine
+        )
+        self.logger.debug(
+            f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
+        )
+        self._write_request_trace(input, kwargs)
+
+        response_file = ""
+        log_file = ""
+        output_dir = get_log_output_dir()
+        if output_dir:
+            current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
+            log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
+
+        result = await self._execute_script(input, response_file, log_file, cwd)
+        self._write_response_trace(result)
+        return result
+
     async def _execute_script(
         self, input: str, response_file: str, log_file: str, cwd: Path | str
-    ):
+    ) -> CliAgentExecutionResult:
         """
         Execute the script specified in the coding_agent.run configuration
         in a subprocess with the configured environment variables.
@@ -188,7 +225,7 @@ class CliAgentBrain(Brain):
         """
         # Merge provided env with current environment
         env = (self.executable_info.env or {}).copy()
-        env["PATH"] = os.environ.get("PATH", "")
+        env["PATH"] = get_cli_agent_search_path()
         xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
         if xdg_runtime_dir:
             env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
@@ -219,14 +256,14 @@ class CliAgentBrain(Brain):
             )
 
             # Log the outputs
-            if stderr:
-                stderr_output = stderr.decode()
+            stderr_output = stderr.decode(errors="replace")
+            if stderr_output:
                 self.logger.debug(stderr_output)
                 if log_file:
                     with open(log_file, "w") as f:
                         f.write(stderr_output)
 
-            response = stdout.decode()
+            response = stdout.decode(errors="replace")
             self.logger.info(f"CLI Agent '{self.cli_agent}' response:\n{response}")
             if response_file:
                 with open(response_file, "w") as f:
@@ -235,7 +272,11 @@ class CliAgentBrain(Brain):
             if process.returncode != 0:
                 self.logger.error(f"CLI Agent exited with code {process.returncode}")
 
-            return response.strip()
+            return CliAgentExecutionResult(
+                stdout=response.strip(),
+                stderr=stderr_output.strip(),
+                returncode=process.returncode or 0,
+            )
         finally:
             # Clean up temporary prompt file
             self.remove_temp_file(temp_file_name)
@@ -246,3 +287,31 @@ class CliAgentBrain(Brain):
         """
         with suppress(OSError):
             os.remove(file_name)
+
+    def _write_request_trace(self, prompt: str, kwargs: dict[str, Any]) -> None:
+        write_prompt_trace(
+            "cli_agent.request",
+            {
+                "person_id": self.person_id,
+                "brain": self.name,
+                "cli_agent": self.cli_agent,
+                "cwd": kwargs.get("cwd"),
+                "response_class": (
+                    self.response_class.__name__ if self.response_class else ""
+                ),
+                "prompt": prompt,
+            },
+        )
+
+    def _write_response_trace(self, result: CliAgentExecutionResult) -> None:
+        write_prompt_trace(
+            "cli_agent.response",
+            {
+                "person_id": self.person_id,
+                "brain": self.name,
+                "cli_agent": self.cli_agent,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            },
+        )

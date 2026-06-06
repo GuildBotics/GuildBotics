@@ -14,7 +14,6 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
-from guildbotics.cli.setup_tool import SetupTool
 from guildbotics.drivers import (
     CommandError,
     EventListenerRunner,
@@ -23,15 +22,8 @@ from guildbotics.drivers import (
     TaskScheduler,
     run_command,
 )
+from guildbotics.editions import get_edition
 from guildbotics.utils.fileio import get_storage_path
-from guildbotics.utils.import_utils import instantiate_class
-
-
-def get_setup_tool() -> SetupTool:
-    name = os.getenv("GUILDBOTICS_EDITION", "simple")
-    if "." not in name:
-        name = f"guildbotics.cli.{name}.{name}_setup_tool.{name.capitalize()}SetupTool"
-    return instantiate_class(name, expected_type=SetupTool)
 
 
 def _resolve_version() -> str:
@@ -137,27 +129,25 @@ def start(
 
     _write_pidfile(pid_path, os.getpid())
 
-    setup_tool = get_setup_tool()
+    edition = get_edition()
 
     routine_commands = list(default_routine_commands)
     if not routine_commands:
-        routine_commands = setup_tool.get_default_routines()
+        routine_commands = edition.get_default_routines()
 
     start_scheduler = only_target in (None, "scheduler")
     start_events = only_target in (None, "events")
 
     scheduler = (
         TaskScheduler(
-            setup_tool.get_context(),
+            edition.get_context(),
             routine_commands,
             consecutive_error_limit=max_consecutive_errors,
         )
         if start_scheduler
         else None
     )
-    event_runner = (
-        EventListenerRunner(setup_tool.get_context()) if start_events else None
-    )
+    event_runner = EventListenerRunner(edition.get_context()) if start_events else None
 
     def _handle_signal(signum, frame):  # type: ignore[no-untyped-def]
         click.echo(f"Received signal {signum}. Shutting down...")
@@ -232,8 +222,8 @@ async def _run_custom_command(
     cwd: Path | None = None,
 ) -> None:
     command_name, inline_person = _parse_command_spec(command_spec)
-    setup_tool = get_setup_tool()
-    context = setup_tool.get_context(message)
+    edition = get_edition()
+    context = edition.get_context(message)
     identifier = person_option or inline_person
 
     try:
@@ -275,39 +265,6 @@ def _parse_command_spec(command_spec: str) -> tuple[str, str | None]:
     if person == "":
         person = None
     return name, person
-
-
-@main.group()
-def config() -> None:
-    """Manage GuildBotics configuration."""
-    pass
-
-
-@config.command()
-def add() -> None:
-    """Add a new member to the GuildBotics project."""
-    _load_env_from_cwd()
-    get_setup_tool().add_member()
-
-
-@config.command()
-def init() -> None:
-    """Initialize the GuildBotics environment.
-
-    This function sets up the necessary environment for GuildBotics to run.
-    """
-    _load_env_from_cwd()
-    get_setup_tool().init_project()
-
-
-@config.command()
-def verify() -> None:
-    """Verify the GuildBotics environment.
-
-    This function checks the necessary environment for GuildBotics to run.
-    """
-    _load_env_from_cwd()
-    get_setup_tool().verify_environment()
 
 
 @main.command(name="version")

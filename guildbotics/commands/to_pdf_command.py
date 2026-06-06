@@ -4,9 +4,8 @@ import base64
 from pathlib import Path
 from typing import ClassVar
 
-from weasyprint import HTML  # type: ignore
-
 from guildbotics.commands.document_conversion_command import DocumentConversionCommand
+from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
 
 
@@ -23,6 +22,13 @@ class ToPdfCommand(DocumentConversionCommand):
     )
 
     async def run(self) -> CommandOutcome:
+        try:
+            from weasyprint import HTML  # type: ignore
+        except (ImportError, OSError) as exc:
+            raise CommandError(
+                "PDF conversion requires WeasyPrint native dependencies."
+            ) from exc
+
         inline_config = self._extract_inline_config()
         source_text = self._get_input_text(inline_config)
         css_text = self._load_css_text(inline_config)

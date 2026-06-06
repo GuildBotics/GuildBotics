@@ -31,6 +31,9 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# Keep the desktop sidecar build spec under version control (the macOS
+# packaging workflow builds the Local API sidecar from it).
+!desktop/sidecar/*.spec
 
 # Installer logs
 pip-log.txt
@@ -179,3 +182,6 @@ memo/
 
 .guildbotics/
 guildbotics/_version.py
+
+# Claude Code per-developer local settings (machine-specific; not for the team)
+.claude/settings.local.json

@@ -9,13 +9,6 @@ INCOMING_CHAT_EVENT_KEY = "incoming_event"
 
 
 @dataclass(slots=True)
-class ChatSubscriptionEvent:
-    service_name: str
-    channel_id: str
-    event: ChatEvent
-
-
-@dataclass(slots=True)
 class IncomingChatEvent:
     service_name: str
     channel_id: str

@@ -1,0 +1,20 @@
+[package]
+name = "guildbotics-desktop"
+version = "0.1.0"
+description = "GuildBotics desktop application"
+authors = ["Ototadana"]
+edition = "2021"
+
+[lib]
+name = "guildbotics_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.2", features = [] }
+
+[dependencies]
+serde_json = "1.0.150"
+tauri = { version = "=2.11.2", features = [] }
+tauri-plugin-dialog = "=2.2.0"
+tauri-plugin-shell = "=2.2.1"
+uuid = { version = "1", features = ["v4"] }

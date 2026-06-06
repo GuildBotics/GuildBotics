@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import builtins
 from pathlib import Path
 
 import pytest
 
+from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandSpec
 from guildbotics.commands.to_pdf_command import ToPdfCommand
 from guildbotics.entities.team import Person, Project, Team
@@ -105,6 +107,30 @@ async def test_to_pdf_handles_full_html_document(tmp_path: Path):
     outcome = await command.run()
 
     assert outcome.result.startswith(b"%PDF")
+
+
+@pytest.mark.parametrize("error", [ModuleNotFoundError, OSError])
+@pytest.mark.asyncio
+async def test_to_pdf_raises_command_error_when_weasyprint_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
+):
+    """Packaged sidecars exclude WeasyPrint; surface a friendly CommandError."""
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "weasyprint":
+            raise error("weasyprint unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    ctx = _make_context("# PDF Title")
+    spec = _make_spec(tmp_path)
+    command = ToPdfCommand(ctx, spec, tmp_path)
+
+    with pytest.raises(CommandError, match="WeasyPrint native dependencies"):
+        await command.run()
 
 
 @pytest.mark.asyncio

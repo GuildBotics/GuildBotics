@@ -20,6 +20,7 @@ GuildBotics is a multi-agent task scheduling and command execution framework. It
 - **Brain Abstraction**: Supports multiple LLM providers (Google Gemini, OpenAI, Anthropic Claude) and CLI agents
 - **Extensible Integrations**: Pluggable integration framework for external services
 - **Internationalization**: Multi-language support via i18n
+- **Desktop Boundary**: Local API daemon for the planned Tauri desktop application
 
 ### Example Use Cases
 
@@ -35,8 +36,14 @@ GuildBotics follows a layered architecture with clear separation of concerns:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ Layer 9: CLI (User Interface)                   │
-│  - start, run, config, stop commands            │
+│ Layer 9: User Interfaces                        │
+│  - CLI: start, run, config, stop commands       │
+│  - Desktop: Tauri frontend via Local API        │
+└─────────────────────────────────────────────────┘
+                      ↓
+┌─────────────────────────────────────────────────┐
+│ Layer 8.5: App API                              │
+│  - Local REST/WebSocket daemon for desktop UI   │
 └─────────────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────┐
@@ -96,7 +103,8 @@ GuildBotics follows a layered architecture with clear separation of concerns:
 
 ```
 guildbotics/
-├── cli/                    # CLI entry points
+├── cli/                    # CLI entry points (execution: start/run/stop/kill)
+├── editions/               # Runtime editions + setup services (shared by CLI and GUI)
 ├── runtime/                # Execution context and factories
 ├── entities/               # Domain models
 ├── drivers/                # Execution engine
@@ -112,18 +120,49 @@ guildbotics/
 
 #### CLI (`guildbotics/cli/`)
 
-**Responsibility**: User interface and entry points
+**Responsibility**: Command-line entry points for *execution* (not setup)
 
 **Key Files**:
 - `__init__.py`: Click-based CLI command definitions
-- `setup_tool.py`: Abstract base class for initialization
-- `simple/simple_setup_tool.py`: Default YAML-based implementation
 
 **Commands**:
-- `start`: Launch scheduler process
+- `start`: Launch scheduler / event listener runner
 - `run`: Execute custom commands
-- `config`: Configuration management (init, add, verify)
 - `stop`/`kill`: Process management
+- `version`: Print version
+
+Project and member *setup* is handled by the GUI (`app_api`); the CLI consumes the
+config files it produces. There is no `config` command group.
+
+#### Editions (`guildbotics/editions/`)
+
+**Responsibility**: Runtime edition selection and programmatic setup services
+(shared by both CLI and GUI)
+
+**Key Files**:
+- `edition.py`: `Edition` abstract base class (`get_context()` / `get_default_routines()`)
+- `__init__.py`: `get_edition()` resolves the edition from `GUILDBOTICS_EDITION`
+- `simple/simple_edition.py`: Default YAML-based edition (`SimpleEdition`)
+- `simple/simple_*_factory.py`: Loader / integration / brain factories
+- `simple/setup_service.py`: Programmatic project/member config writers used by the GUI
+- `simple/templates/`: Project / member / sample-command templates
+
+#### App API (`guildbotics/app_api/`)
+
+**Responsibility**: Local API boundary for desktop clients
+
+The desktop GUI does not reimplement the Python execution engine. It starts a local
+backend daemon and talks to it over `127.0.0.1` using REST and WebSocket endpoints.
+The API requires a per-process session token and keeps CLI fallback intact for
+unsupported GUI environments. See `docs/desktop_app_plan.ja.md` for packaging and
+support policy.
+
+Runtime lifecycle differs between CLI and desktop. `guildbotics start` owns the
+user-level daemon pidfile and starts the scheduler / event listener runner as a
+CLI process. The App API sidecar does not write that pidfile; it manages
+scheduler and event-listener lifecycles inside the sidecar process and reports
+`starting` / `running` / `stopping` / `stopped` / `failed` states to the desktop
+client.
 
 #### Runtime (`guildbotics/runtime/`)
 
@@ -241,14 +280,14 @@ Message
 sequenceDiagram
     participant User
     participant CLI
-    participant SetupTool
+    participant Edition
     participant Context
     participant TaskScheduler
     participant CommandRunner
 
     User->>CLI: guildbotics start
-    CLI->>SetupTool: get_context()
-    SetupTool->>Context: create with factories
+    CLI->>Edition: get_context()
+    Edition->>Context: create with factories
     CLI->>TaskScheduler: new(context, commands)
     CLI->>TaskScheduler: start()
 
