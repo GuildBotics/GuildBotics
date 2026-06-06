@@ -31,6 +31,134 @@ Desktop 側:
 - P1: 頻繁に変更される、または分岐が多い。早期に追加するべき。
 - P2: 重要だが変更頻度や影響範囲が限定的。P0/P1 の後で追加する。
 
+## セッション実施計画（TODO）
+
+このリストは、上記の不足テストを「1 セッション = 1 コンテキストウィンドウで完了できる単位」に分割したものである。分割方針:
+
+- 対象ソースの近さ（共有コンテキスト）でまとめる。`App.tsx`(約2150行) / `SetupPage.tsx`(約4400行) / `runtime.py`(約1060行) は巨大なため複数セッションに分ける。
+- Python track と Desktop track は独立しており、任意の順で（並行でも）進められる。
+- Phase 0 (P0) → Phase 1 (P1) → Phase 2 (P2) の順を推奨。各 track 内は番号順だと依存（基盤 → 応用）が自然。
+- 各セッションの完了条件は「該当テストの追加 + 関連品質チェックが green」。
+  - Python: `uv run --no-sync ruff check guildbotics` / `mypy guildbotics` / `pylint guildbotics` / 該当 `pytest`
+  - Desktop: `cd desktop && npm run format:check && npm run lint && npm run typecheck && npm run duplicates && npm run test`
+
+進め方: 各セッション開始時にこのファイルを読み、担当セッションのチェックを完了時に `[x]` へ更新する。
+
+### Phase 0 — P0（主要機能の regression 防止）
+
+Python track:
+
+- [x] **S1 — app_api models + events** ✅ `test_models.py`(24) + `test_events.py`(16) = 40 cases, green
+  - 対象: `guildbotics/app_api/models.py`, `events.py`
+  - 追加: `tests/guildbotics/app_api/test_models.py`, `test_events.py`
+  - 範囲: 「Python backend / CLI: Unit Test」の `models.py`, `events.py` 節
+- [x] **S2 — app_api lifecycle** ✅ `test_lifecycle.py` 20 cases, green
+  - 対象: `guildbotics/app_api/lifecycle.py`
+  - 追加: `tests/guildbotics/app_api/test_lifecycle.py`
+  - 範囲: 「Unit Test」の `lifecycle.py` 節（status transition / only 選択 / stop 順序 / timeout / metadata）
+- [x] **S3 — app_api runtime（設定・workspace 系）** ✅ `test_runtime_config.py` 19 cases, green
+  - 対象: `guildbotics/app_api/runtime.py`
+  - 追加: `tests/guildbotics/app_api/test_runtime_config.py`
+  - 範囲: `runtime.py` 節のうち `get_config_status` / `set_workspace` / `get_team_summary` / prompt trace / `detect_cli_agents`
+- [x] **S4 — app_api runtime（command 系）** ✅ `test_runtime_commands.py` 25 cases, green
+  - 対象: `guildbotics/app_api/runtime.py`
+  - 追加: `tests/guildbotics/app_api/test_runtime_commands.py`
+  - 範囲: `runtime.py` 節のうち `get_command_options` / `run_command` / `start_scheduler`
+- [x] **S5 — app_api intelligences** ✅ `test_intelligences.py` 16 cases, green
+  - 対象: `guildbotics/app_api/intelligences.py`
+  - 追加: `tests/guildbotics/app_api/test_intelligences.py`
+  - 範囲: 「Unit Test」の `intelligences.py` 節
+- [x] **S6 — api.py endpoint integration** ✅ `test_api.py` を 118 tests へ拡張（auth matrix / 500 / not-found / validation / conflict / POST /verify 等の不足ブランチを追加）, green
+  - 対象: `guildbotics/app_api/api.py`（`TestClient`）
+  - 追加/更新: `tests/guildbotics/app_api/test_api.py` を拡張
+  - 範囲: 「API Integration Test」の `api.py` 節（auth / config / members / intelligences / scheduler / prompt trace / commands / diagnostics endpoint）
+- [x] **S7 — websocket integration** ✅ 新規 `test_api_ws.py` 9 cases（success / invalid-token 1008 close / history replay / live delivery / disconnect cleanup, events+logs）, green
+  - 対象: `guildbotics/app_api/api.py` の `/events` `/logs`
+  - 追加: `tests/guildbotics/app_api/test_api_ws.py`
+  - 範囲: 「API Integration Test」の websocket 節
+
+Desktop track:
+
+- [x] **S8 — api/client.ts + api/backend.ts** ✅ `client.test.ts`(24) + `backend.test.ts`(10) = 34 cases, green
+  - 対象: `desktop/src/api/client.ts`, `backend.ts`
+  - 追加: `desktop/src/api/client.test.ts`, `backend.test.ts`
+  - 範囲: 「Desktop frontend: Unit Test」の `client.ts`, `backend.ts` 節
+- [x] **S9 — SetupPage.tsx 純粋関数** ✅ 純粋関数を `export` 化し `SetupPage.test.tsx` に 95 cases 追加, green
+  - 対象: `desktop/src/setup/SetupPage.tsx`（pure functions）
+  - 追加/更新: `desktop/src/setup/SetupPage.test.tsx` を拡張
+  - 範囲: 「Unit Test」の `SetupPage.tsx の純粋関数` 節（schema / parseGitHub / request 変換 / member errors / character / intelligence payload / patrol・schedule helpers）
+- [x] **S10 — App.tsx 純粋関数（+ trace.ts / i18n.ts 拡充）** ✅ App 47 + trace 13 + i18n 8 = 68 cases 追加, green
+  - 対象: `desktop/src/App.tsx`（pure functions）, `trace.ts`, `i18n.ts`
+  - 追加/更新: `desktop/src/App.test.tsx`, `trace.test.ts`(新規 or 既存), `i18n.test.ts` を拡張
+  - 範囲: 「Unit Test」の `App.tsx の純粋関数` 節 + `trace.ts`(P1) + `i18n.ts`(P1) 節
+- [x] **S11 — Bootstrap + App routing + Service Runtime（component）** ✅ `Bootstrap.test.tsx`(5) + `ServiceRuntime.test.tsx`(17) = 22 cases, green
+  - 対象: `desktop/src/Bootstrap.tsx`, `App.tsx`(routing / `ServiceRuntimeSection`)
+  - 追加: `desktop/src/Bootstrap.test.tsx` ほか component test
+  - 範囲: 「Component Test」の `Bootstrap` / `App routing` / `Service Runtime 画面` 節
+- [x] **S12 — Commands + Setup（component）** ✅ `Commands.test.tsx`(11) + `SetupPage.test.tsx` の SetupPage component 群, 全 203 desktop tests green
+  - 対象: `App.tsx`(`CommandsPage`), `setup/SetupPage.tsx`(`ProjectSection` ほか Setup 全体)
+  - 追加: component test
+  - 範囲: 「Component Test」の `Commands 画面` / `Setup 画面` 節
+- [x] **S13 — Members editor + Patrol settings（component）** ✅ `SetupPage.test.tsx` に Members 12 + Patrol 8 = 20 cases 追加, desktop 223 tests green
+  - 対象: `setup/SetupPage.tsx`(`MembersSection`, `PatrolSettingsEditor`)
+  - 追加: component test
+  - 範囲: 「Component Test」の `Members editor` / `Patrol settings` 節
+- [x] **S14 — API client + component integration（mock server, P0）** ✅ `integration/ApiIntegration.test.tsx` 7 cases（実 client.ts を fetch/WS 境界モックで検証）, desktop 230 tests green
+  - 対象: Service Runtime / Setup / Commands と mock API の結合
+  - 追加: integration test（mock server）
+  - 範囲: 「Integration / E2E」の `API client + component integration` 節
+
+### Phase 1 — P1（変更頻度・分岐が多い領域）
+
+Python track:
+
+- [x] **S15 — verify / diagnostics + cli_agents** ✅ `test_verify.py`(25) + `test_cli_agents.py`(25) + 新規 `test_diagnostics.py`(22) = 72 tests, green
+  - 対象: `guildbotics/app_api/verify.py`, `diagnostics.py`, `cli_agents.py`
+  - 追加/更新: `tests/guildbotics/app_api/test_verify.py` 拡張 + `test_diagnostics.py`, `test_cli_agents.py`
+  - 範囲: 「Unit Test」の `verify.py / diagnostics.py`, `cli_agents.py` 節
+- [x] **S16 — command runner / command specs 拡充** ✅ `test_command_chain.py` 22 cases, green
+  - 対象: `guildbotics/drivers/command_runner.py`, `guildbotics/commands/*`
+  - 追加/更新: `tests/guildbotics/...` の該当テスト
+  - 範囲: 「Unit Test」の `command runner / command specs` 節（pipe/shared_state 順序、child failure、localized fallback 等）
+- [x] **S17 — setup service / config write 拡充** ✅ `test_setup_service_config_write.py` 16 cases, green
+  - 対象: `guildbotics/editions/simple/setup_service.py`
+  - 追加/更新: 該当テスト
+  - 範囲: 「Unit Test」の `setup service / config write` 節
+- [x] **S18 — real temp project integration + Local API sidecar smoke** ✅ `test_api_integration.py`(4) + `test_sidecar_smoke.py`(4) = 8 cases, green
+  - 対象: `api.py` end-to-end（temp workspace） + `python -m guildbotics.app_api` 起動
+  - 追加: integration / smoke test
+  - 範囲: 「API Integration Test」の `real temporary project integration` 節 + 「E2E / packaging」の `Local API sidecar smoke` 節
+
+Desktop track:
+
+- [x] **S19 — Intelligence editor + Diagnostics（component）** ✅ `SetupPage.test.tsx` に Intelligence 9 + 新規 `Diagnostics.test.tsx` 12 = 21 cases, desktop 251 tests green
+  - 対象: `setup/SetupPage.tsx`(`IntelligenceEditor`), `App.tsx`(`DiagnosticsPage`)
+  - 追加: component test
+  - 範囲: 「Component Test」の `Intelligence editor` / `Diagnostics 画面` 節
+- [x] **S20 — Playwright E2E 基盤 + 初回 setup journey** ✅ `playwright.config.ts` + `e2e/start-stack.mjs`(実backend+vite harness) + `e2e/setup.spec.ts`(journey①, chromium green, `project.yml` 実書き込み検証), vitest 251 維持
+  - 対象: 実ブラウザ E2E 基盤（Playwright）+ journey① 初回 setup happy path
+  - 追加: `desktop/playwright.config.ts`, `desktop/e2e/` 雛形（`webServer` で Local API を temp workspace + token 付き起動 → `/health` 待ち → vite frontend、browser-preview token mode で接続）, 専用 CI ジョブ骨子, journey①（作成後に backend が `project.yml` を実書き込みしたことまで確認）
+  - 範囲: 「Integration / E2E」§`Playwright E2E（lean-but-real journeys）` の harness + journey①
+- [x] **S21 — Service Runtime + Commands journeys** ✅ `e2e/service.spec.ts`(journey③ start→running→stop + scheduler GitHub guard) + `e2e/commands.spec.ts`(journey④ 実 `/commands/run`+`/events` ストリーム→history Success), harness を setup/configured 2スタックに分離, e2e 5 specs green
+  - 対象: 実 backend + 実 websocket 相手の runtime / commands フロー
+  - 追加: journey③ scheduler start(scheduler/events/both)→running→stop, journey④ command 実行→`/events` ストリーム→history 表示
+  - 範囲: 同節 journey③④
+- [x] **S22 — member追加 + diagnostics + 起動失敗 journeys** ✅ `e2e/members.spec.ts`(journey② 追加→`person.yml` 実永続) + `e2e/diagnostics.spec.ts`(journey⑤ 実 scenario 実行→結果描画) + `e2e/failure.spec.ts`(journey⑥ backend down→Bootstrap error→control server で復帰→retry, 決定論的), e2e 全6 journey green×2
+  - 対象: member 反映 / diagnostics 描画 / backend ダウン時の回復
+  - 追加: journey② member 追加→team 反映, journey⑤ verify・scenario 実行→結果描画, journey⑥ backend down→Bootstrap error→retry
+  - 範囲: 同節 journey②⑤⑥
+
+### Phase 2 — P2（影響範囲が限定的・packaging 系）
+
+- [ ] **S23 — Tauri ネイティブ最小ティア（tauri-driver, workflow_dispatch 想定）** ⏸ 保留（実 OS + Tauri runtime が必要）
+  - 対象: Tauri sidecar `backend_info` / workspace restore / file picker（dialog/shell plugin）/ packaged sidecar の first health / app close 時の sidecar 終了
+  - 追加: tauri-driver/WebDriver smoke（通常 push CI ではなく workflow_dispatch / release workflow 側）
+  - 範囲: 「Integration / E2E」§`Tauri ネイティブ smoke（tauri-driver）` + 「E2E / packaging」§`macOS Tauri smoke`
+
+E2E 方針（lean-but-real）: ブラウザ E2E は「振る舞いパターン総当たり」ではなく、実 `client.ts ↔ FastAPI ↔ EventBus(ws)` を貫く **critical journey** に絞る。分岐網羅は S9〜S19 のコンポーネント/統合層に委ね、ピラミッドを維持する。E2E は push CI から隔離し専用ジョブで回す。
+
+合計 23 セッション（Phase 0: 14 / Phase 1: 8 / Phase 2: 1）。1 セッションが大きすぎると感じた場合は、対象節の小見出し単位でさらに分割してよい。
+
 ## Desktop frontend: Unit Test
 
 ### P0: `desktop/src/api/client.ts`
@@ -295,21 +423,34 @@ Desktop 側:
 - Setup: config/project/member/intelligence API を mock し、初回 setup から member 追加までを検証する。
 - Commands: command options / run / websocket event を mock し、history 更新まで検証する。
 
-### P1: Browser-level smoke test
+### P1: Playwright E2E（lean-but-real journeys）
 
-不足しているテスト:
+方針: Vitest + jsdom のコンポーネント/統合テスト（S9〜S19, S14）が分岐網羅を担うのに対し、ここでは **実ブラウザ engine + 実 Local API バックエンド**でしか検証できない領域に絞る。具体的には実 `client.ts ↔ FastAPI ↔ EventBus(websocket)` のワイヤ契約、実 setup がバックエンドで実ファイルを書く一気通貫、実 DOM のレイアウト/フォーカス/タイミング。振る舞いパターンの総当たりはしない（コンポーネント層に委譲しピラミッドを維持）。
 
-- `npm run dev` で `/service`, `/commands`, `/diagnostics`, `/setup` が表示できる。
-- mock API mode または dev token mode で backend 起動失敗画面と retry を確認する。
-- 主要 viewport で sidebar / workspace が重ならない。
+実行基盤（harness）:
 
-### P2: Tauri packaging smoke test
+- `desktop/playwright.config.ts` の `webServer` で `scripts/desktop-dev-all.sh` 相当（Python Local API を temp workspace + `--token` 付きで起動 → `/health` 待ち → vite frontend を起動）を立ち上げる。
+- frontend は `VITE_GUILDBOTICS_API_TOKEN`（browser-preview mode, Tauri 非依存）で実 backend に接続する。
+- 各テストは隔離した temp workspace を使い、終了時に backend/前面プロセスを確実に停止する。
+- 通常 push CI からは隔離し、専用ジョブ（workflow_dispatch / nightly / label gate）で実行する。
 
-不足しているテスト:
+カバーする critical journey（各 journey に必要最小の動作バリエーションのみ）:
+
+1. 初回 setup happy path: 空 temp workspace → project 入力 → 作成 → `/service` へ遷移。**backend が `project.yml` を実書き込み**したことを確認。
+2. member 追加: setup の members から追加 → `/team`（または members 一覧）に反映される。
+3. Service Runtime: scheduler / events / both で start → 実 websocket で running 状態が反映 → stop で stopped。
+4. Commands: sample command 実行 → 実 `/commands/run` + `/events` 経由で output が history にストリーム表示される。
+5. Diagnostics: verify / scenario diagnostics を実行 → 結果（ok/warning/error）が描画される。
+6. critical failure: backend ダウン状態 → Bootstrap の error 表示 → backend 復帰後の retry で起動できる。
+
+### P2: Tauri ネイティブ smoke（tauri-driver）
+
+不足しているテスト（packaged app / ネイティブ bridge 固有。実 OS + Tauri runtime が必要で workflow_dispatch / release workflow 側に隔離）:
 
 - sidecar から `backend_info` を取得し、frontend が health check に到達する。
 - workspace restore が packaged app で機能する。
 - Tauri dialog / shell plugin を使う file picker / open path の smoke test。
+- packaged sidecar の first health response、app close 時に sidecar が終了する。
 
 ## Python backend / CLI: Unit Test
 
@@ -317,12 +458,14 @@ Desktop 側:
 
 不足しているテスト:
 
-- `MemberTaskSchedule` が five-field cron だけを許可する。
+- `PersonTaskScheduleInput`（`guildbotics/editions/simple/setup_service.py`）が five-field cron だけを許可する。
 - blank schedule を除外する。
 - `SchedulerStartRequest.only` が `scheduler` / `events` 以外を拒否する。
 - `SchedulerStartRequest.max_consecutive_errors` / `routine_interval_minutes` が 1 以上である。
 - request/response model が Path を JSON へ安全に serialize する。
-- `MemberConfigUpdateRequest` / `ProjectConfigUpdateRequest` の optional secret fields の空文字扱い。
+- `ProjectConfigUpdateRequest` / `ProjectUpdateInput` の optional secret fields の空文字扱い（`""` と `None` を区別して既存 secret を保持する）。
+
+> 注: 旧版にあった `MemberTaskSchedule` / `MemberConfigUpdateRequest` は実装に存在しない。上記の実モデルで読み替える（S1 で確認済み）。
 
 ### P0: `guildbotics/app_api/events.py`
 
@@ -543,28 +686,18 @@ Desktop 側:
 - `/config/status` が working directory を返す。
 - process shutdown が clean。
 
-### P2: Desktop + backend smoke
+### P1: Desktop + backend journey（→「Playwright E2E」へ統合）
 
-不足しているテスト:
+frontend dev server + 実 Local API を起動して browser でユーザーフローを検証する内容（`/service` runtime status、初回 setup happy path、command 実行→history、verify 結果描画）は、上の「Desktop frontend: Integration / E2E」§「Playwright E2E（lean-but-real journeys）」の journey ①③④⑤ に統合した。本節は重複のためそちらを正とする。
 
-- frontend dev server + Local API を起動し、browser test で `/service` の runtime status を表示する。
-- setup page で temp workspace を入力して initial setup を作成する happy path。
-- commands page で sample command を実行し output が history に出る。
-- diagnostics page で verify result を表示する。
+### P2: macOS Tauri smoke（→「Tauri ネイティブ smoke」へ統合）
 
-### P2: macOS Tauri smoke
-
-不足しているテスト:
-
-- Tauri app が sidecar を起動し `backend_info` を返す。
-- packaged sidecar の first health response。
-- app close 時に sidecar が終了する。
-- file picker / open path の plugin integration。
+Tauri app の sidecar 起動・`backend_info`・packaged sidecar の first health・app close 時の sidecar 終了・file picker / open path plugin integration は、上の §「Tauri ネイティブ smoke（tauri-driver）」に統合した。実 OS + Tauri runtime が必要なため workflow_dispatch / release workflow に隔離する。
 
 ## CI 上の今後の検討
 
 - Python coverage threshold を module ごとに設定する。
 - Desktop coverage を導入する場合は、最初は threshold を低めに置き、P0 領域追加に合わせて段階的に上げる。
-- E2E は通常 push CI では最小 smoke のみにし、macOS/Tauri packaging smoke は workflow_dispatch または release workflow に寄せる。
+- Playwright E2E（lean-but-real journeys）は push CI の lint/test ジョブから隔離し、専用ジョブ（workflow_dispatch / nightly / label gate）で実 backend + frontend を起動して回す。Tauri ネイティブ smoke は workflow_dispatch / release workflow に寄せる。
 - external service が必要なテストは default CI では skip し、契約 test / stub test を default に置く。
 

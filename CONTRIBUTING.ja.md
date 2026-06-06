@@ -1,25 +1,39 @@
 # Contributing Guidelines
 
-## Project Structure & Module Organization
-- `guildbotics/`: コアパッケージ。キーとなるモジュールには `drivers/` (スケジューラー)、`workflows/` (タスクオーケストレーション)、`intelligences/` (ブレイン)、`integrations/`、`loader/`、`runtime/`、`entities/`、`utils/`、`templates/` が含まれます。
-- `tests/`: Pytestスイート。ユニットテストは `tests/guildbotics/` の下でパッケージパスをミラーリング；統合テストは `tests/it/` にあり、サンプル設定は `tests/it/config/` にあります。
-- `docs/`: アーキテクチャとデザイン (`docs/ARCHITECTURE.*.md`)。
-- `main.py`: スケジューラーを実行するためのエントリーポイント。
-- `.env`, `.env.example`: ローカル設定。
+本ドキュメントは**人間のコントリビューションプロセス**を扱います。リポジトリ構造・環境構築・CI 相当の build/test/lint コマンド・コーディング標準・テスト戦略については、以下を**正典（single source of truth）**とします。これらは CI と同期して常に最新化されるため、本ファイルでは重複保持しません（重複起因の陳腐化を防ぐため）。
 
-## Build, Test, and Development Commands
-- CI 相当の依存関係を同期: `uv sync --extra test --extra dev`
-- Lint 実行: `uv run --no-sync ruff check guildbotics`
-- 型チェック実行: `uv run --no-sync mypy guildbotics`
-- テスト実行とカバレッジレポート作成: `uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml`  (生成物: `coverage.xml`)。
-- ローカル確認の推奨順序: `ruff` -> `mypy` -> `pytest`
+- **`AGENTS.md`** — リポジトリ作業ガイド: モジュール構成、設定解決、CLI、CI 相当コマンド、テスト戦略。
+- **`desktop/README.md`** — desktop アプリの build / 開発 / テスト（Vitest unit/component + Playwright E2E）。
+- **`.github/workflows/ci.yml`** — CI が実際に実行するチェック。
 
-注: このリポジトリは固定された依存ファイル `pyproject.toml` を提供します。uv を使用して必要なライブラリを `uv sync` でインストールしてください。
+テストは `tests/guildbotics/` 配下にパッケージ構成をミラーして配置します（`tests/it/` という別ツリーは存在しません）。CLI のエントリーポイントは `guildbotics`（`guildbotics.cli:main`）で、`main.py` はありません。
+
+## PR を出す前に — CI 相当のチェックを実行する
+
+正典の一覧は `AGENTS.md`（「開発時の基本コマンド（CI 準拠）」）にあります。クイックリファレンス:
+
+```bash
+# Python（リポジトリルート）
+uv sync --extra test --extra dev
+uv run --no-sync ruff format --check guildbotics
+uv run --no-sync ruff check guildbotics
+uv run --no-sync mypy guildbotics
+uv run --no-sync pylint guildbotics
+uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
+
+# desktop frontend（desktop/ を触る場合）
+cd desktop && npm ci && npm run quality
+# desktop E2E（実ブラウザ + 実 Local API backend。`npm run quality` / push CI には含めない）:
+#   npm run e2e:install   # 初回のみ
+#   npm run e2e
+```
+
+`uv sync` で `pyproject.toml` に固定された依存をインストールします。
 
 ## Coding Style & Naming Conventions
-- Python 3.11+；4スペースインデント；完全な型ヒントを優先。
-- Blackでフォーマット (88列)。例: `python -m black .`
-- インポート: stdlib、サードパーティ、ローカル (グループ化およびソート)。
+- Python 3.12+（`requires-python = ">=3.12,<3.14"`）；4スペースインデント；完全な型ヒントを優先。
+- フォーマット/Lint は Ruff が正典。CI は `ruff format --check` と `ruff check` を実行。ローカル整形は `uv run --no-sync ruff format guildbotics`。
+- インポート: stdlib、サードパーティ、ローカル (グループ化およびソート；Ruff が処理)。
 - 命名: モジュール/関数/変数 `snake_case`、クラス `PascalCase`、定数 `UPPER_SNAKE_CASE`。
 - ログを構造化して保持: `%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s`。
 - ソースコード内のコメントを英語で記述。Googleスタイルのdocstringを使用。
@@ -29,14 +43,16 @@
 - シンプルさ優先: KISSを適用；投機的な抽象化を避ける (YAGNI)。
 - 実用的SOLID: 特にSingle Responsibility—肥大化した関数/モジュールを避ける。
 - DRY: コピー&ペーストの重複なし；共有ロジックを `utils/` または適切な共有モジュールにファクタリング。
-- 一方向依存: 循環インポート/アーキテクチャサイクルを防ぐ；低レベルモジュール (`entities/`、`utils/`) は高レベルオーケストレーションレイヤー (`workflows/`、`drivers/`) に依存しない。
+- 一方向依存: 循環インポート/アーキテクチャサイクルを防ぐ；低レベルモジュール (`entities/`、`utils/`) は高レベルオーケストレーションレイヤー (`templates/`、`commands/`、`drivers/`) に依存しない。
 - 既存アーキテクチャを尊重: 境界を変更する前に `docs/ARCHITECTURE.*.md` をレビュー。
 - パフォーマンスマインドセット: 時期尚早の最適化を避けるが、発見された明らかな非効率性 (N+1呼び出し、無駄なI/O、過度の複雑さ) を修正。
 
 ## Testing Guidelines
-- フレームワーク: pytest。テストを `tests/` の下に `test_*.py` という名前で配置。
-- ユニットテストのパッケージ構造をミラーリング；ワークフロー/統合シナリオには `tests/it/` を使用。
-- `monkeypatch` を時間、ランダム性、I/Oに使用；テストを決定論的に保つ。
+テスト戦略の全体（どの層をカバーするか、テストピラミッド、desktop の lean-but-real な E2E 方針）は `AGENTS.md`「テスト実装の考え方」が正典です。プロセス上の要点:
+
+- フレームワーク: pytest。`tests/guildbotics/` 配下にパッケージ構成をミラーして `test_*.py` で配置。統合テスト（FastAPI `TestClient`・temp workspace）も同じ配下（例: `tests/guildbotics/app_api/`）。`tests/it/` という別ツリーは存在しない。
+- desktop frontend: unit/component は Vitest + React Testing Library、加えて `desktop/e2e/` の実ブラウザ Playwright journey を少数（`desktop/README.md` 参照）。
+- `monkeypatch` / `tmp_path` を時間・ランダム性・env・cwd・HOME・I/O に使用し、決定論的かつ hermetic に保つ（実 home や外部サービスに触れない）。
 - カバレッジを維持または改善；ローカルで `coverage.xml` の更新を確認。
 - 結果を正直に報告；失敗が発生したときに成功を述べない。
 - 環境制限を早期に開示 (不足している資格情報、無効化されたサービス) し、重要なロジックを黙ってスキップしない。
@@ -45,7 +61,7 @@
 ## Commit & Pull Request Guidelines
 - Conventional Commitsを使用: `feat:`、`fix:`、`chore:`、`refactor:` など。短い、命令形の件名；詳細は本文に。英語または日本語で可。
 - PR: 明確な説明、リンクされたイシュー (`#123`)、関連するスクリーンショット/ログ、再現とテストステップ、環境/設定変更の注記。
-- レビューをリクエストする前に `uv run --no-sync ruff check guildbotics`、`uv run --no-sync mypy guildbotics`、`pytest` が合格することを確認。
+- レビューをリクエストする前に、CI 相当のチェック（「PR を出す前に」参照）が合格することを確認: Python は `ruff format --check`・`ruff check`・`mypy`・`pylint`・`pytest`、frontend を触る場合は `desktop/` で `npm run quality`（cross-boundary な journey を変える場合は `npm run e2e` も）。
 
 ## Code Review Etiquette
 - すべてのフィードバックに対処 (実装または明確化)；コメントを無視しない。
