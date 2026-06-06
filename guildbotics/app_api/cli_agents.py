@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -13,6 +15,39 @@ CLI_AGENT_EXECUTABLES: tuple[CliAgentName, ...] = (
     "claude",
     "copilot",
 )
+
+GUI_APP_PATHS = (
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+)
+
+
+def get_cli_agent_search_path(path: str | None = None) -> str:
+    current = os.environ.get("PATH") if path is None else path
+    if current == "":
+        return ""
+    entries = [entry for entry in (current or os.defpath).split(os.pathsep) if entry]
+    home = Path.home()
+    entries.extend(
+        [
+            str(home / ".local/bin"),
+            str(home / "bin"),
+            str(home / ".cargo/bin"),
+            str(home / ".volta/bin"),
+        ]
+    )
+    entries.extend(GUI_APP_PATHS)
+    return os.pathsep.join(dict.fromkeys(entries))
+
+
+def resolve_cli_agent_path(executable: str, path: str | None = None) -> str:
+    return shutil.which(executable, path=get_cli_agent_search_path(path)) or ""
 
 
 def load_cli_agent_script(config_root: Path, executable_info_file: str) -> str:

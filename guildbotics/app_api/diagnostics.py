@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import os
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from guildbotics.app_api.cli_agents import resolve_default_cli_executable
+from guildbotics.app_api.cli_agents import (
+    resolve_cli_agent_path,
+    resolve_default_cli_executable,
+)
 from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsResponse
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Service
@@ -176,8 +177,8 @@ class ScenarioDiagnosticsService:
                 )
             ]
 
-        path = shutil.which(executable, path=os.environ.get("PATH"))
-        if path is None:
+        path = resolve_cli_agent_path(executable)
+        if not path:
             return [
                 self._check(
                     "cli_agent",

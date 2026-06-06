@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
+from guildbotics.app_api.cli_agents import get_cli_agent_search_path
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
@@ -224,7 +225,7 @@ class CliAgentBrain(Brain):
         """
         # Merge provided env with current environment
         env = (self.executable_info.env or {}).copy()
-        env["PATH"] = os.environ.get("PATH", "")
+        env["PATH"] = get_cli_agent_search_path()
         xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
         if xdg_runtime_dir:
             env["XDG_RUNTIME_DIR"] = xdg_runtime_dir

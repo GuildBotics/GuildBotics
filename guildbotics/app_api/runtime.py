@@ -6,7 +6,6 @@ import logging
 import os
 import re
 import shlex
-import shutil
 import threading
 import uuid
 from collections.abc import Iterator
@@ -18,6 +17,7 @@ from dotenv import dotenv_values, load_dotenv
 from guildbotics.app_api.cli_agents import (
     CLI_AGENT_EXECUTABLES,
     load_cli_agent_script,
+    resolve_cli_agent_path,
     resolve_cli_executable,
 )
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
@@ -418,17 +418,13 @@ class AppRuntime:
             executable_info_file = str(mapping.get(name, ""))
             script = load_cli_agent_script(get_template_path(), executable_info_file)
             executable = resolve_cli_executable(script)
-            path = (
-                shutil.which(executable, path=os.environ.get("PATH"))
-                if executable
-                else None
-            )
+            path = resolve_cli_agent_path(executable) if executable else ""
             agents.append(
                 CliAgentDetection(
                     name=name,
                     executable=executable,
-                    detected=path is not None,
-                    path=path or "",
+                    detected=bool(path),
+                    path=path,
                 )
             )
         return CliAgentDetectionsResponse(agents=agents)
@@ -940,7 +936,9 @@ def _requirement_satisfied(kind: str, github_enabled: bool) -> bool:
             or os.getenv("ANTHROPIC_API_KEY")
         )
     if kind == "cli_agent":
-        return any(shutil.which(executable) for executable in CLI_AGENT_EXECUTABLES)
+        return any(
+            resolve_cli_agent_path(executable) for executable in CLI_AGENT_EXECUTABLES
+        )
     return True
 
 

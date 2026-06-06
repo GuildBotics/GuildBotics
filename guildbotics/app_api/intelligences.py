@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Any, cast
 
+from guildbotics.app_api.cli_agents import resolve_cli_agent_path
 from guildbotics.app_api.models import (
     BrainAssignment,
     CliAgentDefinition,
@@ -218,7 +219,7 @@ class IntelligenceConfigService:
                 env = {}
             name = agent_path.removesuffix(".yml")
             executable = name.removesuffix("-cli")
-            detected_path = shutil.which(executable) or ""
+            detected_path = resolve_cli_agent_path(executable)
             agents.append(
                 CliAgentDefinition(
                     path=agent_path,
