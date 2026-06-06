@@ -1,17 +1,52 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from typing import Any, cast
 
 from dotenv import dotenv_values
 
-from guildbotics.app_api.cli_agents import resolve_default_cli_executable
+from guildbotics.app_api.cli_agents import (
+    resolve_cli_agent_path,
+    resolve_default_cli_executable,
+)
 from guildbotics.app_api.models import ConfigStatus, VerifyCheck, VerifyResponse
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.github_utils import GitHubAppAuth
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
+
+PROVIDER_ENV_KEYS: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
+
+def resolve_default_model_provider() -> str:
+    """Return the default LLM provider name from the team's intelligence config.
+
+    Returns an empty string when the mapping cannot be parsed or the default
+    model does not match a known provider. Shared with the scenario diagnostics
+    service so missing-key short-circuits stay consistent with the static
+    verify checks.
+    """
+    try:
+        mapping = cast(
+            dict[str, Any],
+            load_yaml_file(get_config_path("intelligences/model_mapping.yml")),
+        )
+        default_model = str(mapping.get("default", ""))
+        if "openai" in default_model:
+            return "openai"
+        if "gemini" in default_model or "google" in default_model:
+            return "gemini"
+        if "anthropic" in default_model or "claude" in default_model:
+            return "anthropic"
+    except Exception:
+        pass
+
+    return ""
 
 
 class VerifyService:
@@ -121,12 +156,7 @@ class VerifyService:
         self, team: Team, env: dict[str, str | None]
     ) -> list[VerifyCheck]:
         provider = self._resolve_default_model_provider(team)
-        key = {
-            "openai": "OPENAI_API_KEY",
-            "gemini": "GOOGLE_API_KEY",
-            "google": "GOOGLE_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-        }.get(provider)
+        key = PROVIDER_ENV_KEYS.get(provider)
 
         if key is None:
             return [
@@ -160,11 +190,12 @@ class VerifyService:
                 )
             ]
 
-        path = shutil.which(executable, path=env.get("PATH") or os.environ.get("PATH"))
+        search_path = env.get("PATH")
+        path = resolve_cli_agent_path(executable, search_path)
         return [
             self._check(
                 "cli_agent_executable",
-                path is not None,
+                bool(path),
                 f"CLI agent executable '{executable}' was found.",
                 f"CLI agent executable '{executable}' was not found on PATH.",
                 target=executable,
@@ -213,22 +244,10 @@ class VerifyService:
         return []
 
     def _resolve_default_model_provider(self, team: Team) -> str:
-        try:
-            mapping = cast(
-                dict[str, Any],
-                load_yaml_file(get_config_path("intelligences/model_mapping.yml")),
-            )
-            default_model = str(mapping.get("default", ""))
-            if "openai" in default_model:
-                return "openai"
-            if "gemini" in default_model or "google" in default_model:
-                return "gemini"
-            if "anthropic" in default_model or "claude" in default_model:
-                return "anthropic"
-        except Exception:
-            pass
-
-        return ""
+        # The team parameter is retained for API stability; provider resolution
+        # only depends on the workspace intelligence mapping.
+        del team
+        return resolve_default_model_provider()
 
     def _resolve_default_cli_executable(self) -> str:
         return resolve_default_cli_executable()

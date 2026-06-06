@@ -89,7 +89,7 @@ import {
 import { restartBackend } from "../api/backend";
 import { normalizeLanguage } from "../i18n";
 
-function createProjectSchema(t: TFunction | ((key: string) => string)) {
+export function createProjectSchema(t: TFunction | ((key: string) => string)) {
   return z
     .object({
       workspaceDir: z.string().min(1, t("setup.validation.workspaceRequired")),
@@ -171,7 +171,7 @@ type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
 type GitHubMemberType = Exclude<MemberType, "">;
 type MemberEditorTab = "basic" | "intelligence" | "patrol" | "github" | "slack" | "diagnostics";
 type CronPreset = "hourly" | "daily" | "weekly" | "custom";
-type ScheduledCommandDraft = {
+export type ScheduledCommandDraft = {
   id: string;
   commandMode: "catalog" | "custom";
   command: string;
@@ -232,8 +232,11 @@ export function SetupPage() {
   });
 
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
-  const projectLanguage = normalizeLanguage(team.data?.project.language_code);
-  const activeMemberCount = (team.data?.members ?? []).filter((member) => member.is_active).length;
+  const persistedTeam = hasExistingProject ? team.data : undefined;
+  const projectLanguage = normalizeLanguage(persistedTeam?.project.language_code);
+  const activeMemberCount = (persistedTeam?.members ?? []).filter(
+    (member) => member.is_active,
+  ).length;
   const detectedCliAgentNames = useMemo(
     () =>
       new Set(
@@ -272,6 +275,8 @@ export function SetupPage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [setupCreated, setSetupCreated] = useState(false);
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
+  const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
+  const workspaceSwitchId = useRef(0);
   const canAutosave = hasExistingProject && projectConfig.isSuccess;
   const llmProviderAvailability = useMemo(
     () => ({
@@ -292,7 +297,7 @@ export function SetupPage() {
   );
   const effectiveActiveMemberCount = hasExistingProject
     ? activeMemberCount
-    : Math.max(activeMemberCount, draftActiveMemberCount);
+    : draftActiveMemberCount;
   const coreSections: readonly CoreSection[] = hasExistingProject
     ? CORE_SETUP_SECTIONS_CONFIGURED
     : CORE_SETUP_SECTIONS_INITIAL;
@@ -335,7 +340,7 @@ export function SetupPage() {
     validationSchema,
     saveMutation.mutateAsync,
     setSaveState,
-    canAutosave,
+    canAutosave && !workspaceSwitching,
   );
 
   const setupStatus = useSetupStatus(config.data, effectiveActiveMemberCount, form.values);
@@ -369,9 +374,43 @@ export function SetupPage() {
   };
   const changeWorkspace = (value: string) => {
     form.setFieldValue("workspaceDir", value);
-    if (value.trim()) {
-      localStorage.setItem("guildbotics.workspace", value);
+    const workspace = value.trim();
+    if (!workspace) {
+      return;
     }
+    const switchId = workspaceSwitchId.current + 1;
+    workspaceSwitchId.current = switchId;
+    setWorkspaceSwitching(true);
+    setSaveState("saving");
+    void restartBackend(workspace)
+      .then(async () => {
+        if (workspaceSwitchId.current !== switchId) {
+          return;
+        }
+        setDraftActiveMemberCount(0);
+        queryClient.setQueryData(["team"], undefined);
+        queryClient.setQueryData(["project-config"], undefined);
+        queryClient.invalidateQueries({ queryKey: ["project-config"] });
+        queryClient.invalidateQueries({ queryKey: ["intelligence-config"] });
+        queryClient.invalidateQueries({ queryKey: ["command-options"] });
+        queryClient.invalidateQueries({ queryKey: ["scheduler"] });
+        await Promise.all([
+          queryClient.refetchQueries({ queryKey: ["config"] }),
+          queryClient.refetchQueries({ queryKey: ["team"] }),
+        ]);
+        await queryClient.refetchQueries({ queryKey: ["project-config"] });
+        setSaveState("saved");
+      })
+      .catch(() => {
+        if (workspaceSwitchId.current === switchId) {
+          setSaveState("error");
+        }
+      })
+      .finally(() => {
+        if (workspaceSwitchId.current === switchId) {
+          setWorkspaceSwitching(false);
+        }
+      });
   };
 
   return (
@@ -431,7 +470,7 @@ export function SetupPage() {
           {activeSection === "members" ? (
             <MembersSection
               activeMemberCount={effectiveActiveMemberCount}
-              members={team.data?.members ?? []}
+              members={persistedTeam?.members ?? []}
               config={config.data}
               workspaceDir={form.values.workspaceDir}
               configLocation={form.values.configLocation}
@@ -3440,7 +3479,7 @@ type MemberFieldErrors = Partial<
   >
 >;
 
-function getMemberFieldErrors(
+export function getMemberFieldErrors(
   values: {
     personType: MemberType;
     identity: string;
@@ -3605,7 +3644,7 @@ function getMemberFieldErrors(
   return errors;
 }
 
-function getMemberResolveErrorMessage(
+export function getMemberResolveErrorMessage(
   error: unknown,
   t: TFunction | ((key: string) => string),
 ): string {
@@ -3702,7 +3741,7 @@ function toFormConfigLocation(
   return location === "workspace" ? "workspace" : "home";
 }
 
-function initialProjectValues(
+export function initialProjectValues(
   config: ConfigStatus | undefined,
   appLanguage: ProjectFormValues["language"],
   projectLanguage: ProjectFormValues["language"] | null,
@@ -3747,7 +3786,7 @@ function initialProjectValues(
   };
 }
 
-function toProjectSetupRequest(
+export function toProjectSetupRequest(
   values: ProjectFormValues,
   config: ConfigStatus | undefined,
   options: { envFileOption?: ProjectFormValues["envFileOption"] } = {},
@@ -3777,7 +3816,7 @@ function toProjectSetupRequest(
   };
 }
 
-function toProjectUpdateRequest(
+export function toProjectUpdateRequest(
   values: ProjectFormValues,
   config: ConfigStatus | undefined,
   snapshot: ProjectConfig,
@@ -3955,7 +3994,7 @@ function getCharacterPresetExamples(
   };
 }
 
-function parseCharacterFields(character: Record<string, unknown>): {
+export function parseCharacterFields(character: Record<string, unknown>): {
   archetype: string;
   traits: string[];
   interests: string[];
@@ -3992,7 +4031,7 @@ function parseCharacterFields(character: Record<string, unknown>): {
   };
 }
 
-function buildCharacterPayload({
+export function buildCharacterPayload({
   archetype,
   traits,
   interests,
@@ -4064,7 +4103,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePersonId?: string) {
+export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePersonId?: string) {
   const personId = savePersonId || config.person_id;
   if (config.person_id && config.inherited) {
     return {
@@ -4116,7 +4155,7 @@ function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function parseGitHub(projectUrl: string, repositoryUrl: string) {
+export function parseGitHub(projectUrl: string, repositoryUrl: string) {
   const normalizedProjectUrl = projectUrl.trim();
   const normalizedRepositoryUrl = repositoryUrl.trim();
   const projectParts = normalizedProjectUrl.split("/");
@@ -4213,7 +4252,7 @@ function scheduledCommandToDraft(
   };
 }
 
-function createScheduledCommandDraft(command = ""): ScheduledCommandDraft {
+export function createScheduledCommandDraft(command = ""): ScheduledCommandDraft {
   return {
     id: newDraftId(),
     commandMode: command ? "catalog" : "custom",
@@ -4229,7 +4268,7 @@ function createScheduledCommandDraft(command = ""): ScheduledCommandDraft {
   };
 }
 
-function buildTaskSchedules(
+export function buildTaskSchedules(
   drafts: ScheduledCommandDraft[],
   commandOptionByValue: Map<string, CommandOption>,
 ): MemberTaskSchedule[] {
@@ -4248,7 +4287,7 @@ function buildTaskSchedules(
   }));
 }
 
-function buildScheduledCommandExpression(
+export function buildScheduledCommandExpression(
   draft: ScheduledCommandDraft,
   commandOptionByValue: Map<string, CommandOption>,
 ): string {
@@ -4280,7 +4319,7 @@ function buildSetupCommandArgs(
   return [...args, ...splitCommandLine(rawArgs)];
 }
 
-function parseCommandExpression(expression: string, commandCatalog: CommandOption[]) {
+export function parseCommandExpression(expression: string, commandCatalog: CommandOption[]) {
   const command = expression.trim();
   const option = [...commandCatalog]
     .sort((a, b) => b.command.length - a.command.length)
@@ -4298,7 +4337,7 @@ function parseCommandExpression(expression: string, commandCatalog: CommandOptio
   return { option: null, command: first, args: rest.join(" ") };
 }
 
-function draftToCron(draft: ScheduledCommandDraft): string {
+export function draftToCron(draft: ScheduledCommandDraft): string {
   const minute = clampInteger(draft.minute, 0, 59);
   const hour = clampInteger(draft.hour, 0, 23);
   if (draft.scheduleMode === "hourly") {
@@ -4313,7 +4352,7 @@ function draftToCron(draft: ScheduledCommandDraft): string {
   return draft.cron.trim();
 }
 
-function parseCron(schedule: string): {
+export function parseCron(schedule: string): {
   mode: CronPreset;
   minute: number;
   hour: number;
@@ -4350,7 +4389,7 @@ function parseCron(schedule: string): {
   return { mode: "custom", minute: toCronNumber(minute, 0), hour: 9, weekday: "1" };
 }
 
-function isValidCron(schedule: string): boolean {
+export function isValidCron(schedule: string): boolean {
   return schedule.trim().split(/\s+/).length === 5;
 }
 
@@ -4362,7 +4401,7 @@ function clampInteger(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
-function splitCommandLine(value: string): string[] {
+export function splitCommandLine(value: string): string[] {
   const args: string[] = [];
   const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
   for (const match of value.matchAll(pattern)) {
@@ -4371,7 +4410,7 @@ function splitCommandLine(value: string): string[] {
   return args.filter(Boolean);
 }
 
-function quoteCommandArg(value: string): string {
+export function quoteCommandArg(value: string): string {
   if (!/\s/.test(value)) {
     return value;
   }

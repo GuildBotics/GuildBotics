@@ -29,15 +29,30 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.editions.simple.setup_service import (
+    GitHubUserReference,
+    SetupServiceError,
+    SimplePersonSetupService,
+    SimpleProjectSetupService,
+)
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_UNPROCESSABLE_ENTITY = 422
+HTTP_INTERNAL_SERVER_ERROR = 500
 HTTP_CONFLICT = 409
 THREAD_WAIT_SECONDS = 2.0
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
+GITHUB_APPS_USER_ID = 42
+
+AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
+
+
+def _client(runtime: "RuntimeStub") -> TestClient:
+    """Build a TestClient bound to a stubbed runtime with a fixed token."""
+    return TestClient(create_app(session_token="secret", runtime=runtime))
 
 
 def _runtime_status(
@@ -1693,3 +1708,520 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
         "command.finished",
     ]
     assert all(event["request_id"] == response.request_id for event in events)
+
+
+# --- auth coverage -------------------------------------------------------
+
+
+PROTECTED_ENDPOINTS = [
+    ("GET", "/health"),
+    ("GET", "/config/status"),
+    ("POST", "/workspace"),
+    ("GET", "/team"),
+    ("GET", "/commands/options"),
+    ("POST", "/commands/run"),
+    ("GET", "/config/roles"),
+    ("GET", "/scheduler/routines"),
+    ("GET", "/scheduler/status"),
+    ("POST", "/scheduler/start"),
+    ("POST", "/scheduler/stop"),
+    ("GET", "/prompt-trace"),
+    ("PUT", "/prompt-trace"),
+    ("POST", "/verify"),
+    ("POST", "/diagnostics/scenario"),
+    ("GET", "/intelligences/cli-agents/detection"),
+    ("GET", "/config/intelligences"),
+    ("PUT", "/config/intelligences"),
+    ("POST", "/config/init"),
+    ("GET", "/config/project"),
+    ("PUT", "/config/project"),
+    ("POST", "/config/members"),
+    ("GET", "/config/members/alice"),
+    ("PUT", "/config/members/alice"),
+    ("DELETE", "/config/members/alice"),
+    ("POST", "/config/members/resolve"),
+]
+
+
+@pytest.mark.parametrize("method,path", PROTECTED_ENDPOINTS)
+@pytest.mark.parametrize("headers", [None, {"X-GuildBotics-Session-Token": "wrong"}])
+def test_every_endpoint_rejects_missing_or_invalid_token(
+    tmp_path: Path, method: str, path: str, headers: dict[str, str] | None
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.request(method, path, headers=headers, json={})
+
+    assert response.status_code == HTTP_UNAUTHORIZED
+    assert response.json() == {
+        "code": "invalid_session_token",
+        "message": "Invalid session token.",
+        "context": {},
+    }
+
+
+def test_unexpected_error_maps_to_internal_error(tmp_path: Path) -> None:
+    class BoomStub(RuntimeStub):
+        def get_team_summary(self) -> TeamSummary:
+            raise RuntimeError("boom")
+
+    client = TestClient(
+        create_app(session_token="secret", runtime=BoomStub(tmp_path)),
+        raise_server_exceptions=False,
+    )
+
+    response = client.get("/team", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_INTERNAL_SERVER_ERROR
+    assert response.json() == {
+        "code": "internal_error",
+        "message": "An unexpected app API error occurred.",
+        "context": {"error_type": "RuntimeError"},
+    }
+
+
+# --- config / workspace --------------------------------------------------
+
+
+def test_workspace_change_rejects_missing_directory(tmp_path: Path) -> None:
+    missing = tmp_path / "nope"
+    client = TestClient(
+        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
+    )
+
+    response = client.post(
+        "/workspace",
+        headers=AUTH_HEADERS,
+        json={"workspace_dir": str(missing)},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    payload = response.json()
+    assert payload["code"] == "workspace_not_found"
+    assert payload["context"]["workspace_dir"] == str(missing.resolve())
+
+
+def test_workspace_change_rejects_non_directory(tmp_path: Path) -> None:
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("hello")
+    client = TestClient(
+        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
+    )
+
+    response = client.post(
+        "/workspace",
+        headers=AUTH_HEADERS,
+        json={"workspace_dir": str(file_path)},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    payload = response.json()
+    assert payload["code"] == "workspace_not_directory"
+    assert payload["context"]["workspace_dir"] == str(file_path.resolve())
+
+
+def test_config_roles_rejects_invalid_language(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get("/config/roles?language=fr", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    payload = response.json()
+    assert payload["code"] == "validation_error"
+    assert isinstance(payload["context"]["errors"], list)
+
+
+def test_config_init_maps_setup_service_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    def _boom(self: SimpleProjectSetupService, request: Any) -> Any:
+        raise SetupServiceError("project_invalid", "Project config is invalid.")
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.api.SimpleProjectSetupService.write_project", _boom
+    )
+
+    response = client.post(
+        "/config/init",
+        headers=AUTH_HEADERS,
+        json={
+            "config_dir": str(tmp_path / ".guildbotics/config"),
+            "env_file_path": str(tmp_path / ".env"),
+            "env_file_option": "overwrite",
+            "language": "en",
+            "description": "desc",
+            "llm_api_type": "openai",
+            "cli_agent": "codex",
+            "openai_api_key": "k",
+        },
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json() == {
+        "code": "project_invalid",
+        "message": "Project config is invalid.",
+        "context": {},
+    }
+
+
+def test_config_project_get_reports_project_not_found(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get("/config/project", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    payload = response.json()
+    assert payload["code"] == "project_not_found"
+    assert "primary" in payload["context"]
+    assert "home" in payload["context"]
+
+
+def test_config_project_update_maps_setup_service_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    def _boom(self: SimpleProjectSetupService, request: Any) -> Any:
+        raise SetupServiceError("project_invalid", "Project config is invalid.")
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.api.SimpleProjectSetupService.update_project", _boom
+    )
+
+    response = client.put(
+        "/config/project",
+        headers=AUTH_HEADERS,
+        json={
+            "config_dir": str(tmp_path / ".guildbotics/config"),
+            "env_file_path": str(tmp_path / ".env"),
+            "language": "en",
+            "description": "desc",
+            "llm_api_type": "openai",
+            "cli_agent": "codex",
+            "github_enabled": False,
+        },
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "project_invalid"
+
+
+# --- members -------------------------------------------------------------
+
+
+def test_member_config_get_reports_project_not_found(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get("/config/members/alice", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "project_not_found"
+
+
+def test_member_update_rejects_person_id_mismatch(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.put(
+        "/config/members/alice",
+        headers=AUTH_HEADERS,
+        json={
+            "config_dir": str(tmp_path / ".guildbotics/config"),
+            "env_file_path": str(tmp_path / ".env"),
+            "original_person_id": "bob",
+            "person_type": "machine_user",
+            "person_id": "alice",
+            "person_name": "Alice",
+            "is_active": True,
+            "github_username": "alice",
+            "git_email": "1+alice@users.noreply.github.com",
+            "roles": ["architect"],
+        },
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json() == {
+        "code": "person_id_mismatch",
+        "message": "original_person_id must match the path parameter.",
+        "context": {},
+    }
+
+
+def test_members_resolve_github_apps_url_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+    captured: dict[str, Any] = {}
+
+    def _parse(self: SimplePersonSetupService, url: str) -> str:
+        captured["url"] = url
+        return "my-app"
+
+    def _resolve(
+        self: SimplePersonSetupService, identity: str, is_github_apps: bool = False
+    ) -> GitHubUserReference:
+        captured["identity"] = identity
+        captured["is_github_apps"] = is_github_apps
+        return GitHubUserReference(
+            person_id="my-app",
+            github_username="my-app[bot]",
+            github_user_id=GITHUB_APPS_USER_ID,
+            git_email="42+my-app[bot]@users.noreply.github.com",
+        )
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.api.SimplePersonSetupService.parse_github_apps_url",
+        _parse,
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.api.SimplePersonSetupService.resolve_github_user",
+        _resolve,
+    )
+
+    response = client.post(
+        "/config/members/resolve",
+        headers=AUTH_HEADERS,
+        json={
+            "person_type": "github_apps",
+            "identity": "https://github.com/apps/my-app",
+        },
+    )
+
+    assert response.status_code == HTTP_OK
+    assert captured == {
+        "url": "https://github.com/apps/my-app",
+        "identity": "my-app",
+        "is_github_apps": True,
+    }
+    assert response.json()["github_username"] == "my-app[bot]"
+    assert response.json()["github_user_id"] == GITHUB_APPS_USER_ID
+
+
+def test_members_resolve_maps_setup_service_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    def _boom(
+        self: SimplePersonSetupService, identity: str, is_github_apps: bool = False
+    ) -> GitHubUserReference:
+        raise SetupServiceError("github_user_not_found", "GitHub user not found.")
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.api.SimplePersonSetupService.resolve_github_user",
+        _boom,
+    )
+
+    response = client.post(
+        "/config/members/resolve",
+        headers=AUTH_HEADERS,
+        json={"person_type": "machine_user", "identity": "ghost"},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json() == {
+        "code": "github_user_not_found",
+        "message": "GitHub user not found.",
+        "context": {},
+    }
+
+
+# --- intelligences -------------------------------------------------------
+
+
+def test_config_intelligences_reports_project_not_found(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get("/config/intelligences", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "project_not_found"
+
+
+def test_config_intelligences_update_maps_setup_service_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    def _boom(self: Any, request: Any) -> Any:
+        raise SetupServiceError("intelligence_invalid", "Intelligence config invalid.")
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.api.IntelligenceConfigService.update_config", _boom
+    )
+
+    response = client.put(
+        "/config/intelligences",
+        headers=AUTH_HEADERS,
+        json={"config_dir": str(tmp_path / ".guildbotics/config")},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json() == {
+        "code": "intelligence_invalid",
+        "message": "Intelligence config invalid.",
+        "context": {},
+    }
+
+
+# --- scheduler -----------------------------------------------------------
+
+
+def test_scheduler_start_only_scheduler_endpoint(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post(
+        "/scheduler/start",
+        headers=AUTH_HEADERS,
+        json={"only": "scheduler"},
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["scheduler"]["state"] == "running"
+    assert response.json()["events"]["state"] == "running"
+
+
+def test_scheduler_start_both_endpoint(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post("/scheduler/start", headers=AUTH_HEADERS, json={})
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["scheduler"]["state"] == "running"
+    assert response.json()["events"]["state"] == "running"
+
+
+def test_scheduler_start_rejects_github_required_routine(tmp_path: Path) -> None:
+    class RejectingStub(RuntimeStub):
+        def start_scheduler(self, request: Any) -> RuntimeStatus:
+            raise AppApiError(
+                "github_integration_required_for_routine",
+                "GitHub integration is required for this routine.",
+                context={"routine_commands": list(request.routine_commands)},
+            )
+
+    client = _client(RejectingStub(tmp_path))
+
+    response = client.post(
+        "/scheduler/start",
+        headers=AUTH_HEADERS,
+        json={"routine_commands": ["workflows/ticket_driven_workflow"]},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    payload = response.json()
+    assert payload["code"] == "github_integration_required_for_routine"
+    assert payload["context"]["routine_commands"] == [
+        "workflows/ticket_driven_workflow"
+    ]
+
+
+def test_scheduler_stop_endpoint(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post("/scheduler/stop", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["scheduler"]["state"] == "stopped"
+    assert response.json()["events"]["state"] == "stopped"
+
+
+# --- prompt trace --------------------------------------------------------
+
+
+@pytest.mark.parametrize("limit", [0, 1001])
+def test_prompt_trace_get_rejects_out_of_range_limit(
+    tmp_path: Path, limit: int
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get(
+        "/prompt-trace", headers=AUTH_HEADERS, params={"limit": limit}
+    )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert response.json()["code"] == "validation_error"
+
+
+@pytest.mark.parametrize("limit", [0, 1001])
+def test_prompt_trace_put_rejects_out_of_range_limit(
+    tmp_path: Path, limit: int
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.put(
+        "/prompt-trace",
+        headers=AUTH_HEADERS,
+        params={"limit": limit},
+        json={"enabled": True},
+    )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert response.json()["code"] == "validation_error"
+
+
+# --- commands ------------------------------------------------------------
+
+
+def test_command_options_reports_person_not_found(tmp_path: Path) -> None:
+    class PersonStub(RuntimeStub):
+        def get_command_options(
+            self, person: str | None = None
+        ) -> CommandOptionsResponse:
+            raise AppApiError(
+                "person_not_found",
+                "Member not found.",
+                context={"person": person},
+            )
+
+    client = _client(PersonStub(tmp_path))
+
+    response = client.get(
+        "/commands/options", headers=AUTH_HEADERS, params={"person": "ghost"}
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json() == {
+        "code": "person_not_found",
+        "message": "Member not found.",
+        "context": {"person": "ghost"},
+    }
+
+
+def test_command_run_conflict_returns_409(tmp_path: Path) -> None:
+    class ConflictStub(RuntimeStub):
+        async def run_command(self, request: Any) -> Any:
+            raise AppApiError(
+                "command_already_running",
+                "A command is already running.",
+                status_code=HTTP_CONFLICT,
+            )
+
+    client = _client(ConflictStub(tmp_path))
+
+    response = client.post(
+        "/commands/run", headers=AUTH_HEADERS, json={"command": "hello"}
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json() == {
+        "code": "command_already_running",
+        "message": "A command is already running.",
+        "context": {},
+    }
+
+
+# --- diagnostics ---------------------------------------------------------
+
+
+def test_verify_endpoint_uses_runtime(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post("/verify", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_OK
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["errors"][0]["code"] == "active_members"
+    assert payload["checks"][0]["status"] == "error"

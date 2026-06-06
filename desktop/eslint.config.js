@@ -31,4 +31,14 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
     },
   },
+  {
+    // The Playwright E2E harness runs in Node (launcher script + specs that touch
+    // the filesystem), so give those files Node globals instead of browser ones.
+    files: ["e2e/**/*.{ts,mjs}", "playwright.config.ts"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: { ...globals.node, fetch: "readonly" },
+    },
+  },
 );

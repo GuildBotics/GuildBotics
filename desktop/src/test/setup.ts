@@ -30,3 +30,10 @@ Object.defineProperty(window, "ResizeObserver", {
   writable: true,
   value: ResizeObserverMock,
 });
+
+// jsdom does not implement scrollIntoView, which Mantine's Combobox calls on a
+// timer after an option is selected. Provide a no-op so it does not surface as
+// an unhandled error during tests.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}

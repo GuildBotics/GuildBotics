@@ -8,6 +8,110 @@ GuildBotics の macOS 向けデスクトップ GUI です。Tauri v2 + TypeScrip
 
 ---
 
+## クイック操作スクリプト
+
+リポジトリルートから以下を実行できます。通常の再テストではこちらを使うと、§2 / §3 の手順を直接打たずに済みます。
+
+### ビルド
+
+```bash
+# Python sidecar のみ
+scripts/desktop-build-backend.sh
+
+# Tauri / DMG のみ（事前に sidecar が必要）
+scripts/desktop-build-frontend.sh
+
+# sidecar と Tauri / DMG をまとめて build
+scripts/desktop-build-all.sh
+```
+
+`desktop-build-frontend.sh` は `desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` を使って DMG を作ります。別ターゲットを使う場合は `DESKTOP_TARGET` を指定してください。
+
+```bash
+DESKTOP_TARGET=aarch64-apple-darwin scripts/desktop-build-all.sh
+```
+
+### 開発モード起動
+
+```bash
+# Local API backend のみ（既定: http://127.0.0.1:8765 / token: dev-token）
+scripts/desktop-dev-backend.sh
+
+# Vite frontend のみ（backend は別途起動しておく）
+scripts/desktop-dev-frontend.sh
+
+# backend と frontend をまとめて起動
+scripts/desktop-dev-all.sh
+```
+
+backend の接続先は必要に応じて変更できます。
+
+```bash
+GUILDBOTICS_APP_API_PORT=8877 \
+GUILDBOTICS_APP_API_TOKEN=local-token \
+scripts/desktop-dev-all.sh
+```
+
+---
+
+## テスト
+
+### frontend unit / component（Vitest + React Testing Library）
+
+```bash
+cd desktop
+npm ci
+npm run test          # 一括実行
+npm run test:watch    # ウォッチ
+npm run quality       # format:check + lint + typecheck + duplicates + test（E2E は含まない）
+```
+
+### E2E（Playwright・実ブラウザ + 実 Local API backend）
+
+jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ FastAPI ↔ EventBus(websocket)` + 実ファイル書き込み」を貫く critical user journey を検証します。Tauri は使わず browser-preview mode で実 backend に接続し、各 journey を専用の temp workspace と backend / frontend ポートで隔離して起動します。
+
+前提:
+
+- リポジトリルートで Python 依存を解決済みであること（harness が `uv run python -m guildbotics.app_api` を起動するため）。
+
+  ```bash
+  uv sync --extra test --extra dev
+  ```
+
+- 初回のみ chromium を取得する。
+
+  ```bash
+  cd desktop
+  npm run e2e:install
+  ```
+
+実行:
+
+```bash
+cd desktop
+npm run e2e
+```
+
+`npm run e2e` は backend（temp workspace）と Vite を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。
+
+| spec | journey |
+|---|---|
+| `e2e/setup.spec.ts` | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み |
+| `e2e/service.spec.ts` | ③ scheduler / events を start → running → stop |
+| `e2e/commands.spec.ts` | ④ command 実行 → `/commands/run` + `/events` ストリーム → history 反映 |
+| `e2e/members.spec.ts` | ② member 追加 → `person.yml` 実永続 |
+| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画 |
+| `e2e/failure.spec.ts` | ⑥ backend down → Bootstrap error → 復帰 → retry |
+
+補足:
+
+- レポート / 成果物は `desktop/playwright-report/` と `desktop/test-results/`（いずれも `.gitignore` 済み）。
+- E2E は `npm run quality` と通常 push CI には含めず、専用ジョブ（workflow_dispatch / nightly）で回す方針（`docs/test_gap_analysis.ja.md` 参照）。
+- 接続先 host / ポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。
+- Tauri ネイティブ（packaged app / sidecar 起動 / file picker）の smoke は別ティアで、実 macOS + Tauri runtime が必要（§2〜§3 のビルド手順を参照）。
+
+---
+
 ## 1. 前提ツール
 
 | ツール | バージョン目安 | 用途 |

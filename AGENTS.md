@@ -153,6 +153,18 @@ cd desktop
 npm run quality
 ```
 
+Playwright E2E（実ブラウザ + 実 Local API backend。`npm run quality` / 通常 push CI には含めない）:
+
+```bash
+cd desktop
+npm ci
+npm run e2e:install   # 初回のみ: chromium を取得
+npm run e2e           # desktop/e2e/*.spec.ts を headless chromium で実行
+```
+
+- harness（`desktop/e2e/start-stack.mjs`）が backend を `uv run python -m guildbotics.app_api` で temp workspace 起動するため、事前にリポジトリルートで `uv sync --extra test --extra dev` 済みであること。
+- 詳細・journey 一覧は `desktop/README.md` の「テスト」節と `docs/test_gap_analysis.ja.md` を参照。
+
 エージェント作業時の品質確認:
 
 - Python コードを変更したら、原則として `ruff` と `mypy` と関連 `pytest` を実行してから完了報告する
@@ -170,6 +182,8 @@ desktop TypeScript 開発時の品質確認:
 - 純粋関数、入力変換、API payload 生成、trace / scheduler 表示ロジックなどの分岐を変更した場合は Vitest のユニットテストを追加・更新する
 - 重複コード抑止は `npm run duplicates` (`jscpd`) を使う。重複検出を避けるためだけの不自然な分割ではなく、UI とロジックの責務が自然に分かれる形へ整理する
 - Tauri / Rust 側や生成物を frontend 品質チェックへ巻き込まない。対象は `desktop/src` と frontend 設定ファイルを基本とする
+- 実ブラウザ + 実 backend を貫く critical user journey（setup→作成 / scheduler start-stop / command 実行+ストリーム / diagnostics / backend down→retry）を変更したら、`desktop/e2e/*.spec.ts` の該当 Playwright journey を更新する。E2E は `npm run quality` / push CI には含めず、`npm run e2e` で実行する
+- E2E に振る舞いパターンを総当たりで持ち込まない。分岐網羅は Vitest の unit / component（mock 境界）に置き、Playwright は jsdom では検証できない実ブラウザ + 実ワイヤ契約（`client.ts ↔ FastAPI ↔ EventBus`）+ 実ファイル書き込みに絞る
 
 ## テスト実装の考え方
 
@@ -179,7 +193,8 @@ desktop TypeScript 開発時の品質確認:
 
 - Unit test を最も厚くする。純粋関数、入力変換、validator、payload 生成、状態遷移、エラー変換、ファイル解決順はまず unit test で網羅する
 - Component / service integration test は、UI 操作、API endpoint、config 書き込み、runtime lifecycle など境界をまたぐ主要 workflow に限定して追加する
-- E2E / packaging smoke は少数に保つ。backend/frontend 接続、sidecar 起動、代表的 happy path と critical failure path を検証する
+- ブラウザ E2E（Playwright, `desktop/e2e/`）は lean-but-real。実ブラウザ engine + 実 Local API backend でしか検証できない critical user journey（setup→実ファイル書き込み、scheduler start/stop、command 実行+`/events` ストリーム、diagnostics、backend down→retry）に絞り、振る舞いパターンの総当たりはしない（分岐網羅は unit / component に委譲）。push CI からは隔離し専用ジョブで回す
+- Tauri ネイティブ / packaging smoke は最小限に保ち、実 OS + Tauri runtime が要るもの（sidecar 起動 / `backend_info` / file picker など）は workflow_dispatch / release workflow に隔離する
 - LLM、GitHub、Slack、外部 CLI などへの実通信は通常 CI のテストに入れない。既存抽象化、stub、mock、fixture を使い、送信 payload、判定結果、エラー処理を検証する
 - snapshot のみで品質を担保しない。ユーザーが観測する文言・状態、生成 request、保存 file/env、publish event、return value を具体的に assert する
 - テストコードも本体コードと同じ品質対象とする。重複 fixture や場当たり的 mock が増えた場合は helper / factory へ整理する
@@ -193,6 +208,7 @@ desktop TypeScript 開発時の品質確認:
 - desktop の API client を変更したら、URL、method、header、body、query parameter、error response、websocket status を検証する
 - desktop の React component を変更したら、React Testing Library でユーザー操作と表示状態を検証する。implementation detail の state ではなく role/text/value/payload を assert する
 - desktop の setup / commands / diagnostics / service runtime の workflow を変更したら、component test または mock API integration test を追加・更新する
+- desktop の cross-boundary user journey（実 backend を貫く setup / runtime / commands / diagnostics / 起動失敗）を変更したら、`desktop/e2e/` の該当 Playwright spec を追加・更新する（実ブラウザ + 実 backend で検証。総当たりはせず代表 journey に絞る）
 - i18n 文言や翻訳キーを変更したら、キー経由の検証を行い、片方の言語だけ欠落しないことを確認する
 - bug fix では、先に再現テストまたは同等の failing assertion を追加し、そのテストが修正後に通ることを確認する
 

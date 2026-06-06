@@ -1,0 +1,473 @@
+"""Direct unit tests for the config / workspace / team / prompt-trace /
+cli-agent-detection behaviors of :class:`guildbotics.app_api.runtime.AppRuntime`.
+
+These exercise finer branch granularity than the API-level tests in
+``test_api.py``: each method is driven directly with ``tmp_path`` and
+``monkeypatch`` so that env, cwd, HOME, and scheduler interactions are isolated
+and never touch the real home directory or network.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+from guildbotics.app_api.errors import AppApiError
+from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.models import PromptTraceUpdateRequest
+from guildbotics.app_api.runtime import AppRuntime
+
+HTTP_BAD_REQUEST = 400
+TRACE_EVENT_TOTAL = 5
+TRACE_EVENT_LIMIT = 2
+
+
+@pytest.fixture
+def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point cwd and HOME at the tmp tree and clear config overrides."""
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _restore_cwd() -> object:
+    """Restore the working directory even if a test calls ``os.chdir``."""
+    original = Path.cwd()
+    yield
+    os.chdir(original)
+
+
+def _write_project(config_dir: Path, body: str = "language: en\n") -> Path:
+    project_file = config_dir / "team" / "project.yml"
+    project_file.parent.mkdir(parents=True, exist_ok=True)
+    project_file.write_text(body)
+    return project_file
+
+
+# --- get_config_status() ----------------------------------------------------
+
+
+def test_config_status_reports_workspace_when_workspace_config_present(
+    isolated_home: Path,
+) -> None:
+    _write_project(isolated_home / ".guildbotics" / "config")
+
+    status = AppRuntime(EventBus()).get_config_status()
+
+    assert status.cwd == isolated_home
+    assert status.primary_config_dir == isolated_home / ".guildbotics" / "config"
+    assert status.primary_config_location == "workspace"
+    assert status.primary_project_file_exists is True
+    assert status.active_config_dir == isolated_home / ".guildbotics" / "config"
+    assert status.active_config_location == "workspace"
+
+
+def test_config_status_falls_back_to_home_config(isolated_home: Path) -> None:
+    home_config = isolated_home / "home" / ".guildbotics" / "config"
+    _write_project(home_config)
+
+    status = AppRuntime(EventBus()).get_config_status()
+
+    assert status.home_project_file_exists is True
+    assert status.primary_project_file_exists is False
+    assert status.active_config_dir == home_config
+    assert status.active_config_location == "home"
+
+
+def test_config_status_uses_custom_config_dir_env(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custom_config = isolated_home / "custom-config"
+    _write_project(custom_config)
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(custom_config))
+
+    status = AppRuntime(EventBus()).get_config_status()
+
+    assert status.primary_config_dir == custom_config
+    assert status.primary_config_location == "custom"
+    assert status.active_config_dir == custom_config
+    assert status.active_config_location == "custom"
+
+
+def test_config_status_reports_missing_when_no_project_file(
+    isolated_home: Path,
+) -> None:
+    status = AppRuntime(EventBus()).get_config_status()
+
+    assert status.primary_project_file_exists is False
+    assert status.home_project_file_exists is False
+    assert status.active_config_dir is None
+    assert status.active_config_location == "missing"
+    assert status.env_file == isolated_home / ".env"
+    assert status.env_file_exists is False
+
+
+def test_config_status_detects_existing_env_file(isolated_home: Path) -> None:
+    (isolated_home / ".env").write_text("OPENAI_API_KEY=value\n")
+
+    status = AppRuntime(EventBus()).get_config_status()
+
+    assert status.env_file_exists is True
+
+
+# --- set_workspace() --------------------------------------------------------
+
+
+def test_set_workspace_raises_for_missing_path(isolated_home: Path) -> None:
+    runtime = AppRuntime(EventBus())
+    missing = isolated_home / "does-not-exist"
+
+    with pytest.raises(AppApiError) as exc_info:
+        runtime.set_workspace(missing)
+
+    assert exc_info.value.code == "workspace_not_found"
+    assert exc_info.value.status_code == HTTP_BAD_REQUEST
+    assert exc_info.value.context == {"workspace_dir": str(missing.resolve())}
+
+
+def test_set_workspace_raises_for_file_path(isolated_home: Path) -> None:
+    runtime = AppRuntime(EventBus())
+    file_path = isolated_home / "workspace-file"
+    file_path.write_text("not a dir")
+
+    with pytest.raises(AppApiError) as exc_info:
+        runtime.set_workspace(file_path)
+
+    assert exc_info.value.code == "workspace_not_directory"
+    assert exc_info.value.status_code == HTTP_BAD_REQUEST
+
+
+def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = AppRuntime(EventBus())
+    stop_calls: list[bool] = []
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda: stop_calls.append(True) or None
+    )
+    monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
+
+    workspace = isolated_home / "workspace"
+    workspace.mkdir()
+    _write_project(workspace / ".guildbotics" / "config")
+    (workspace / ".env").write_text("WORKSPACE_MARKER=loaded\n")
+
+    status = runtime.set_workspace(workspace)
+
+    assert stop_calls == [True]
+    assert Path.cwd() == workspace.resolve()
+    assert os.environ["WORKSPACE_MARKER"] == "loaded"
+    assert status.cwd == workspace.resolve()
+    assert status.primary_config_location == "workspace"
+    assert status.active_config_location == "workspace"
+    assert status.env_file_exists is True
+
+
+# --- get_team_summary() -----------------------------------------------------
+
+
+class _ProjectStub:
+    name = "GuildBotics"
+
+    def get_language_code(self) -> str:
+        return "ja"
+
+    def get_language_name(self) -> str:
+        return "日本語"
+
+
+class _MemberStub:
+    def __init__(
+        self, person_id: str, name: str, is_active: bool, roles: dict[str, object]
+    ) -> None:
+        self.person_id = person_id
+        self.name = name
+        self.is_active = is_active
+        self.roles = roles
+
+
+def _context_with_members(members: list[_MemberStub]) -> object:
+    team = type("TeamStub", (), {"project": _ProjectStub(), "members": members})()
+    return type("ContextStub", (), {"team": team})()
+
+
+def test_team_summary_reports_project_language_and_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    context = _context_with_members([])
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    summary = runtime.get_team_summary()
+
+    assert summary.project.name == "GuildBotics"
+    assert summary.project.language_code == "ja"
+    assert summary.project.language_name == "日本語"
+    assert summary.members == []
+
+
+def test_team_summary_sorts_member_roles(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = AppRuntime(EventBus())
+    member = _MemberStub(
+        "alice",
+        "Alice",
+        True,
+        {"reviewer": {}, "architect": {}, "developer": {}},
+    )
+    context = _context_with_members([member])
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    summary = runtime.get_team_summary()
+
+    assert [member.roles for member in summary.members] == [
+        ["architect", "developer", "reviewer"]
+    ]
+
+
+def test_team_summary_includes_inactive_members(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    members = [
+        _MemberStub("active", "Active", True, {"architect": {}}),
+        _MemberStub("inactive", "Inactive", False, {}),
+    ]
+    context = _context_with_members(members)
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    summary = runtime.get_team_summary()
+
+    by_id = {member.person_id: member for member in summary.members}
+    assert by_id["active"].is_active is True
+    assert by_id["inactive"].is_active is False
+    assert by_id["inactive"].roles == []
+
+
+# --- prompt trace -----------------------------------------------------------
+
+
+def test_prompt_trace_status_reflects_limit_and_read_path(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
+    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE_PATH", raising=False)
+    output_trace = isolated_home / "output.jsonl"
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(output_trace))
+    read_trace = isolated_home / "history.jsonl"
+    read_trace.write_text(
+        "\n".join(
+            f'{{"event":"llm.request","timestamp":"t{index}",'
+            f'"person_id":"p{index}","message":"m{index}"}}'
+            for index in range(5)
+        )
+        + "\n"
+    )
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.get_prompt_trace_status(limit=2, read_path=str(read_trace))
+
+    assert status.enabled is True
+    assert status.trace_file == read_trace
+    assert status.output_trace_file == output_trace
+    assert status.trace_file_exists is True
+    assert status.event_count == TRACE_EVENT_TOTAL
+    assert len(status.events) == TRACE_EVENT_LIMIT
+    # The reader returns the most recent ``limit`` events, newest first.
+    assert [event.person_id for event in status.events] == ["p4", "p3"]
+
+
+def test_prompt_trace_status_uses_output_path_when_read_path_blank(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_trace = isolated_home / "output.jsonl"
+    output_trace.write_text(
+        '{"event":"llm.request","timestamp":"t","person_id":"p","message":"m"}\n'
+    )
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "0")
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(output_trace))
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.get_prompt_trace_status(read_path="   ")
+
+    assert status.enabled is False
+    assert status.trace_file == output_trace
+    assert status.event_count == 1
+
+
+def test_update_prompt_trace_writes_env_and_environ(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE_PATH", raising=False)
+    trace_path = isolated_home / "trace.jsonl"
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.update_prompt_trace(
+        PromptTraceUpdateRequest(enabled=True, trace_path=f"  {trace_path}  ")
+    )
+
+    assert os.environ["GUILDBOTICS_PROMPT_TRACE"] == "1"
+    assert os.environ["GUILDBOTICS_PROMPT_TRACE_PATH"] == str(trace_path)
+    env_text = (isolated_home / ".env").read_text()
+    assert "GUILDBOTICS_PROMPT_TRACE=1" in env_text
+    assert f"GUILDBOTICS_PROMPT_TRACE_PATH={trace_path}" in env_text
+    assert status.enabled is True
+    assert status.trace_file == trace_path
+
+
+def test_update_prompt_trace_empty_path_removes_env_key(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", "/old/trace.jsonl")
+    (isolated_home / ".env").write_text(
+        "GUILDBOTICS_PROMPT_TRACE=1\nGUILDBOTICS_PROMPT_TRACE_PATH=/old/trace.jsonl\n"
+    )
+    runtime = AppRuntime(EventBus())
+
+    runtime.update_prompt_trace(PromptTraceUpdateRequest(enabled=False, trace_path=""))
+
+    assert "GUILDBOTICS_PROMPT_TRACE_PATH" not in os.environ
+    env_text = (isolated_home / ".env").read_text()
+    assert "GUILDBOTICS_PROMPT_TRACE=0" in env_text
+    assert "GUILDBOTICS_PROMPT_TRACE_PATH" not in env_text
+
+
+def test_update_prompt_trace_preserves_existing_keys_and_order(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE", raising=False)
+    (isolated_home / ".env").write_text(
+        "\n".join(
+            [
+                "# leading comment",
+                "OPENAI_API_KEY=first",
+                "GUILDBOTICS_PROMPT_TRACE=0",
+                "EXTRA=keep",
+            ]
+        )
+        + "\n"
+    )
+    trace_path = isolated_home / "trace.jsonl"
+    runtime = AppRuntime(EventBus())
+
+    runtime.update_prompt_trace(
+        PromptTraceUpdateRequest(enabled=True, trace_path=str(trace_path))
+    )
+
+    lines = (isolated_home / ".env").read_text().splitlines()
+    keys = [line.split("=", 1)[0] for line in lines if "=" in line]
+    # Existing keys retain their original relative order; the toggled key is
+    # updated in place and the new path key is appended after them.
+    assert keys == [
+        "OPENAI_API_KEY",
+        "GUILDBOTICS_PROMPT_TRACE",
+        "EXTRA",
+        "GUILDBOTICS_PROMPT_TRACE_PATH",
+    ]
+    env_map = dict(line.split("=", 1) for line in lines if "=" in line)
+    assert env_map["OPENAI_API_KEY"] == "first"
+    assert env_map["GUILDBOTICS_PROMPT_TRACE"] == "1"
+    assert env_map["EXTRA"] == "keep"
+    assert env_map["GUILDBOTICS_PROMPT_TRACE_PATH"] == str(trace_path)
+
+
+# --- detect_cli_agents() ----------------------------------------------------
+
+
+def test_detect_cli_agents_falls_back_when_mapping_load_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(_path: object) -> object:
+        raise RuntimeError("broken mapping")
+
+    monkeypatch.setattr("guildbotics.app_api.runtime.load_yaml_file", _raise)
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.load_cli_agent_script",
+        lambda root, info: "",
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.resolve_cli_executable", lambda script: ""
+    )
+    runtime = AppRuntime(EventBus())
+
+    response = runtime.detect_cli_agents()
+
+    assert [agent.name for agent in response.agents] == [
+        "codex",
+        "gemini",
+        "claude",
+        "copilot",
+    ]
+    assert all(agent.executable == "" for agent in response.agents)
+    assert all(agent.detected is False for agent in response.agents)
+    assert all(agent.path == "" for agent in response.agents)
+
+
+def test_detect_cli_agents_resolves_executable_and_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.load_yaml_file",
+        lambda path: {
+            "codex": "codex-cli.yml",
+            "gemini": "gemini-cli.yml",
+            "claude": "claude-cli.yml",
+            "copilot": "copilot-cli.yml",
+        },
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.load_cli_agent_script",
+        lambda root, info: f"run {info.split('-', 1)[0]} now",
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.resolve_cli_executable",
+        lambda script: script.split(" ")[1],
+    )
+
+    def _resolve_path(executable: str) -> str:
+        return f"/usr/local/bin/{executable}" if executable == "codex" else ""
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.resolve_cli_agent_path", _resolve_path
+    )
+    runtime = AppRuntime(EventBus())
+
+    agents = {agent.name: agent for agent in runtime.detect_cli_agents().agents}
+
+    assert agents["codex"].executable == "codex"
+    assert agents["codex"].detected is True
+    assert agents["codex"].path == "/usr/local/bin/codex"
+    assert agents["gemini"].executable == "gemini"
+    assert agents["gemini"].detected is False
+    assert agents["gemini"].path == ""
+
+
+def test_detect_cli_agents_marks_undetected_when_executable_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("guildbotics.app_api.runtime.load_yaml_file", lambda path: {})
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.load_cli_agent_script",
+        lambda root, info: "",
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.resolve_cli_executable", lambda script: ""
+    )
+    resolve_calls: list[str] = []
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.resolve_cli_agent_path",
+        lambda executable: resolve_calls.append(executable) or "",
+    )
+    runtime = AppRuntime(EventBus())
+
+    response = runtime.detect_cli_agents()
+
+    # With no executable resolved, path resolution is skipped entirely.
+    assert resolve_calls == []
+    assert all(agent.detected is False for agent in response.agents)
