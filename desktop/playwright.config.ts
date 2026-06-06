@@ -157,6 +157,11 @@ export default defineConfig({
       env: {
         GUILDBOTICS_E2E_STACK: "diagnostics",
         GUILDBOTICS_E2E_SEED: "1",
+        // Seed without an LLM API key so the diagnostics journey can verify
+        // the backend's missing-key short-circuit deterministically, with NO
+        // live OpenAI round-trip. Keeps `npm run e2e` offline-safe and avoids
+        // flakiness from external network / provider latency.
+        GUILDBOTICS_E2E_OFFLINE_LLM: "1",
         GUILDBOTICS_E2E_HOST: HOST,
         GUILDBOTICS_E2E_BACKEND_PORT: String(DIAGNOSTICS_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(DIAGNOSTICS_FRONTEND_PORT),

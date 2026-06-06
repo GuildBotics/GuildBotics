@@ -51,6 +51,11 @@ const backendPort = Number(process.env.GUILDBOTICS_E2E_BACKEND_PORT ?? "8766");
 const frontendPort = Number(process.env.GUILDBOTICS_E2E_FRONTEND_PORT ?? "1421");
 const token = process.env.GUILDBOTICS_E2E_TOKEN ?? "e2e-token";
 const shouldSeed = process.env.GUILDBOTICS_E2E_SEED === "1";
+// Seed with an empty OpenAI API key so the diagnostics journey can verify the
+// missing-key short-circuit WITHOUT firing a live LLM call. Keeps `npm run e2e`
+// fully offline and deterministic (no dependency on api.openai.com latency or
+// availability).
+const seedWithoutLlmKey = process.env.GUILDBOTICS_E2E_OFFLINE_LLM === "1";
 // "down" mode does not start the backend at boot; the spec brings it up later
 // through the control server on GUILDBOTICS_E2E_CONTROL_PORT.
 const deferBackend = process.env.GUILDBOTICS_E2E_DEFER_BACKEND === "1";
@@ -83,6 +88,7 @@ writeFileSync(
       token,
       host,
       seeded: shouldSeed,
+      seededWithoutLlmKey: shouldSeed && seedWithoutLlmKey,
       deferBackend,
       memberId: shouldSeed ? seededMemberId : null,
     },
@@ -95,6 +101,14 @@ const backendEnv = { ...process.env, HOME: homeDir };
 // Force the workspace config layout (`<cwd>/.guildbotics/config`) by removing any
 // inherited override; this yields config-status `primary_config_location=workspace`.
 delete backendEnv.GUILDBOTICS_CONFIG_DIR;
+// Offline-LLM stacks must NOT inherit a developer's real LLM key from the
+// shell; otherwise the diagnostics missing-key short-circuit cannot be
+// asserted deterministically.
+if (seedWithoutLlmKey) {
+  delete backendEnv.OPENAI_API_KEY;
+  delete backendEnv.GOOGLE_API_KEY;
+  delete backendEnv.ANTHROPIC_API_KEY;
+}
 
 let backend;
 let frontend;
@@ -200,7 +214,7 @@ async function seedWorkspace() {
     description: "E2E configured workspace",
     llm_api_type: "openai",
     cli_agent: "codex",
-    openai_api_key: "sk-e2e-test-key",
+    openai_api_key: seedWithoutLlmKey ? "" : "sk-e2e-test-key",
   });
   await postJson("/config/members", {
     config_dir: configDir,

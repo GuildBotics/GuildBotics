@@ -6,20 +6,23 @@ import { expect, test } from "@playwright/test";
 
 // Journey ⑤: Diagnostics against the REAL backend.
 //
-// The "diagnostics" stack is seeded like the configured one: a project with a
-// fake OpenAI key (`sk-e2e-test-key`) and CLI agent `codex`, GitHub/Slack
-// disabled. This journey:
+// The "diagnostics" stack is seeded WITHOUT an LLM API key (offline mode), so
+// the backend's missing-key short-circuit in `_check_llm` returns a fast error
+// WITHOUT firing a live LLM call. This keeps `npm run e2e` fully offline and
+// deterministic — no dependency on api.openai.com latency or availability —
+// while still exercising the real backend-frontend wiring end-to-end. This
+// journey:
 //   * asserts the readiness tab renders backend-derived status badges (config
-//     Ready, env Found, GitHub Disabled) for the seeded workspace;
+//     Configured, env Detected, GitHub Disabled) for the seeded workspace;
 //   * runs the real scenario diagnostics (`POST /diagnostics/scenario`) and
-//     asserts the LLM check FAILS — the fake key cannot satisfy a live LLM call,
-//     so the backend deterministically returns an error check that surfaces as a
-//     red "LLM check failed" alert.
+//     asserts the missing-key check renders the i18n-mapped "LLM API key is
+//     missing" alert, plus a context line naming the env var (OPENAI_API_KEY).
 
 const here = dirname(fileURLToPath(import.meta.url));
 
 type StackContext = {
   seeded: boolean;
+  seededWithoutLlmKey: boolean;
   memberId: string | null;
 };
 
@@ -28,11 +31,12 @@ function readDiagnosticsContext(): StackContext {
   return JSON.parse(raw) as StackContext;
 }
 
-test("renders readiness badges and reports the real LLM failure from scenario diagnostics", async ({
+test("renders readiness badges and reports the missing-key LLM check from scenario diagnostics", async ({
   page,
 }) => {
   const ctx = readDiagnosticsContext();
   expect(ctx.seeded).toBe(true);
+  expect(ctx.seededWithoutLlmKey).toBe(true);
 
   await page.goto("/#/diagnostics");
   await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible();
@@ -44,18 +48,19 @@ test("renders readiness badges and reports the real LLM failure from scenario di
   await expect(page.getByText("Detected", { exact: true })).toBeVisible();
   await expect(page.getByText("Disabled", { exact: true })).toBeVisible();
 
-  // Run the real read-only scenario diagnostics.
+  // Run the real read-only scenario diagnostics. With no OpenAI key configured
+  // the backend short-circuits BEFORE any network call, so this resolves in
+  // milliseconds rather than waiting for a live HTTPS round-trip.
   const runButton = page.getByRole("button", { name: "Validate settings" });
   await expect(runButton).toBeEnabled();
   await runButton.click();
 
-  // The seeded fake OpenAI key cannot complete a live LLM call, so the backend
-  // returns an error check that the UI renders as a red "LLM check failed" alert.
-  // Use a generous timeout: the real provider call must round-trip and fail.
-  await expect(page.getByText("LLM check failed")).toBeVisible({ timeout: 45_000 });
-  await expect(
-    page.getByText("The selected LLM provider did not accept the minimal validation request."),
-  ).toBeVisible();
+  // The missing-key check uses the existing `llm_api_key` i18n entry shared
+  // with the static verify checks: title "LLM API key is missing" + the
+  // env-var detail "OPENAI_API_KEY is not configured" surfaced from the
+  // backend's check message.
+  await expect(page.getByText("LLM API key is missing")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/OPENAI_API_KEY is not configured/)).toBeVisible();
 
   // The all-ok summary must NOT appear when a check failed.
   await expect(page.getByText("Settings validated")).toHaveCount(0);

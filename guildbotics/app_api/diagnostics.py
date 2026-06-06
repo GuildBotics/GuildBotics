@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -9,6 +10,10 @@ from guildbotics.app_api.cli_agents import (
     resolve_default_cli_executable,
 )
 from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsResponse
+from guildbotics.app_api.verify import (
+    PROVIDER_ENV_KEYS,
+    resolve_default_model_provider,
+)
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
@@ -129,6 +134,25 @@ class ScenarioDiagnosticsService:
     async def _check_llm(
         self, context: Context, member: Person
     ) -> list[DiagnosticCheck]:
+        # Short-circuit BEFORE firing a live LLM call when the provider's API
+        # key is not configured. Without this gate the diagnostics journey
+        # depends on external network availability and provider latency, which
+        # conflicts with the repo's "no external service calls in tests"
+        # policy. The static verify check has long behaved this way; the
+        # scenario diagnostics now match.
+        provider = resolve_default_model_provider()
+        env_key = PROVIDER_ENV_KEYS.get(provider)
+        if env_key is not None and not os.environ.get(env_key):
+            return [
+                self._check(
+                    "llm",
+                    "llm_api_key",
+                    "error",
+                    f"{env_key} is not configured; skipping live LLM call.",
+                    person_id=member.person_id,
+                    context={"provider": provider, "env_key": env_key},
+                )
+            ]
         c = context.clone_for(member)
         try:
             messages = [

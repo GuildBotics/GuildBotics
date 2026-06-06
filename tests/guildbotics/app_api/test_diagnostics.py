@@ -136,6 +136,18 @@ def _patch_talk(monkeypatch: pytest.MonkeyPatch, result: Any = "OK") -> None:
     monkeypatch.setattr(diagnostics_module, "talk_as", _talk)
 
 
+def _patch_provider(monkeypatch: pytest.MonkeyPatch, provider: str = "openai") -> None:
+    """Pin the resolved LLM provider so the missing-key gate is exercised.
+
+    The provider resolver normally reads ``intelligences/model_mapping.yml``
+    from the configured workspace; tests run in a tmp tree where that file is
+    not seeded, so we set the value explicitly to make behavior deterministic.
+    """
+    monkeypatch.setattr(
+        diagnostics_module, "resolve_default_model_provider", lambda: provider
+    )
+
+
 def _by_code(response: Any) -> dict:
     return {check.code: check for check in response.checks}
 
@@ -240,6 +252,8 @@ async def test_multiple_active_members_listed(
 @pytest.mark.asyncio
 async def test_llm_live_call_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_cli(monkeypatch)
+    _patch_provider(monkeypatch, "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     _patch_talk(monkeypatch, "OK")
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
@@ -256,6 +270,8 @@ async def test_llm_live_call_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_llm_live_call_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_cli(monkeypatch)
+    _patch_provider(monkeypatch, "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     _patch_talk(monkeypatch, RuntimeError("invalid api key"))
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
@@ -269,6 +285,68 @@ async def test_llm_live_call_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "invalid api key" in check.message
     assert check.context["error_type"] == "RuntimeError"
     assert not response.ok
+
+
+@pytest.mark.asyncio
+async def test_llm_check_skipped_when_api_key_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing provider key short-circuits the LLM check WITHOUT firing talk_as.
+
+    This keeps the scenario diagnostics offline-deterministic so the desktop
+    E2E does not depend on a live OpenAI round-trip (and so CI runners and
+    offline dev environments do not produce false negatives).
+    """
+    _patch_cli(monkeypatch)
+    _patch_provider(monkeypatch, "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    talk_calls: list[Any] = []
+
+    async def _talk(*args: Any, **kwargs: Any) -> str:  # pragma: no cover
+        talk_calls.append((args, kwargs))
+        return "OK"
+
+    monkeypatch.setattr(diagnostics_module, "talk_as", _talk)
+    context = _StubContext(
+        team=_team([_person("alice", is_active=True)]),
+        brain=_StubBrain(_CliResult()),
+    )
+
+    response = await _run(context)
+    checks = _by_code(response)
+
+    assert "llm_live_call" not in checks
+    fast_error = checks["llm_api_key"]
+    assert fast_error.status == "error"
+    assert "OPENAI_API_KEY is not configured" in fast_error.message
+    assert fast_error.context["provider"] == "openai"
+    assert fast_error.context["env_key"] == "OPENAI_API_KEY"
+    assert fast_error.person_id == "alice"
+    assert talk_calls == []
+
+
+@pytest.mark.asyncio
+async def test_llm_check_falls_through_when_provider_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unmappable provider does not short-circuit; the live path still runs.
+
+    Preserves backwards-compatible behavior for configurations whose default
+    model name does not match a known provider.
+    """
+    _patch_cli(monkeypatch)
+    _patch_provider(monkeypatch, "")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _patch_talk(monkeypatch, "OK")
+    context = _StubContext(
+        team=_team([_person("alice", is_active=True)]),
+        brain=_StubBrain(_CliResult()),
+    )
+
+    response = await _run(context)
+
+    check = _by_code(response)["llm_live_call"]
+    assert check.status == "ok"
 
 
 @pytest.mark.asyncio
@@ -550,6 +628,8 @@ async def test_person_id_targets_single_member(
 ) -> None:
     _patch_talk(monkeypatch)
     _patch_cli(monkeypatch)
+    _patch_provider(monkeypatch, "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     context = _StubContext(
         team=_team(
             [
