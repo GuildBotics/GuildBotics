@@ -1131,7 +1131,7 @@ function RuntimeStateBadge({ state }: { state: RuntimeUnitStatus["state"] }) {
   );
 }
 
-function isStopTimeoutPending(unit: RuntimeUnitStatus | undefined) {
+export function isStopTimeoutPending(unit: RuntimeUnitStatus | undefined) {
   return Boolean(
     unit?.running && unit.state === "failed" && unit.error?.includes("did not stop before timeout"),
   );
@@ -1305,7 +1305,7 @@ function traceKindColor(kind: string) {
   return "gray";
 }
 
-function traceBrainLabel(brain: string) {
+export function traceBrainLabel(brain: string) {
   return (
     brain
       .split("/")
@@ -1314,7 +1314,7 @@ function traceBrainLabel(brain: string) {
   );
 }
 
-function traceGroupMetadata(group: PromptTraceGroup): Array<[string, string]> {
+export function traceGroupMetadata(group: PromptTraceGroup): Array<[string, string]> {
   const rows = new Map<string, string>();
   for (const entry of [group.request, group.response, group.single]) {
     if (!entry) {
@@ -1330,7 +1330,7 @@ function traceGroupMetadata(group: PromptTraceGroup): Array<[string, string]> {
   return Array.from(rows.entries()).slice(0, 10);
 }
 
-function traceFieldRows(entry: PromptTraceEntry): Array<[string, string]> {
+export function traceFieldRows(entry: PromptTraceEntry): Array<[string, string]> {
   const rows: Array<[string, string]> = [];
   for (const [label, value] of [
     ["brain", entry.brain],
@@ -1353,7 +1353,7 @@ function traceFieldRows(entry: PromptTraceEntry): Array<[string, string]> {
   return rows.slice(0, 8);
 }
 
-function decodeTraceText(value: string) {
+export function decodeTraceText(value: string) {
   return value
     .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
       String.fromCharCode(Number.parseInt(hex, 16)),
@@ -1380,7 +1380,7 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-function matchesFeedFilter(event: RuntimeEvent, filter: string) {
+export function matchesFeedFilter(event: RuntimeEvent, filter: string) {
   if (filter === "all") {
     return true;
   }
@@ -1399,7 +1399,7 @@ function matchesFeedFilter(event: RuntimeEvent, filter: string) {
   return true;
 }
 
-function matchesLogFilter(log: RuntimeLog, filter: string) {
+export function matchesLogFilter(log: RuntimeLog, filter: string) {
   if (filter === "all") {
     return true;
   }
@@ -1412,7 +1412,7 @@ function matchesLogFilter(log: RuntimeLog, filter: string) {
   return log.message.toLowerCase().includes(filter);
 }
 
-function eventTypeLabel(t: TFunction, type: string) {
+export function eventTypeLabel(t: TFunction, type: string) {
   if (type.startsWith("command.")) {
     return t(`overview.eventTypes.${type.replace("command.", "command_")}`, {
       defaultValue: type.replace("command.", ""),
@@ -1427,7 +1427,7 @@ function eventTypeLabel(t: TFunction, type: string) {
   return type;
 }
 
-function eventBadgeColor(type: string) {
+export function eventBadgeColor(type: string) {
   if (type.endsWith(".failed")) {
     return "red";
   }
@@ -1440,7 +1440,7 @@ function eventBadgeColor(type: string) {
   return "gray";
 }
 
-function logBadgeColor(level: string) {
+export function logBadgeColor(level: string) {
   const upper = level.toUpperCase();
   if (upper === "ERROR" || upper === "CRITICAL") {
     return "red";
@@ -1451,7 +1451,7 @@ function logBadgeColor(level: string) {
   return "gray";
 }
 
-function formatRuntimeEvent(t: TFunction, event: RuntimeEvent): string {
+export function formatRuntimeEvent(t: TFunction, event: RuntimeEvent): string {
   const { payload } = event;
   if (typeof payload.message === "string") {
     return payload.message;
@@ -1484,7 +1484,7 @@ function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-async function openLocalFile(path: string) {
+export async function openLocalFile(path: string) {
   if (!isTauriRuntime()) {
     return;
   }
@@ -1492,13 +1492,13 @@ async function openLocalFile(path: string) {
   await open(path);
 }
 
-function localFileHref(path: string) {
+export function localFileHref(path: string) {
   const normalizedPath = path.replace(/\\/g, "/");
   const prefix = normalizedPath.startsWith("/") ? "file://" : "file:///";
   return encodeURI(`${prefix}${normalizedPath}`);
 }
 
-async function selectTraceFile(mode: "open" | "save", currentPath: string) {
+export async function selectTraceFile(mode: "open" | "save", currentPath: string) {
   if (!isTauriRuntime()) {
     return null;
   }
@@ -1964,7 +1964,7 @@ function CommandsPage() {
   );
 }
 
-type CommandRunRecord = {
+export type CommandRunRecord = {
   requestId: string;
   person: string;
   command: string;
@@ -2053,7 +2053,7 @@ function CommandLogList({ logs }: { logs: RuntimeLog[] }) {
   );
 }
 
-function buildCommandArgs(
+export function buildCommandArgs(
   option: CommandOption | null,
   values: Record<string, string>,
   rawArgs: string,
@@ -2075,7 +2075,7 @@ function buildCommandArgs(
   return [...args, ...splitCommandLine(rawArgs)];
 }
 
-function splitCommandLine(value: string): string[] {
+export function splitCommandLine(value: string): string[] {
   const args: string[] = [];
   const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
   for (const match of value.matchAll(pattern)) {
@@ -2091,7 +2091,7 @@ function requirementLabel(
   return t(`commands.requirements.${kind}`);
 }
 
-function upsertCommandRecord(
+export function upsertCommandRecord(
   records: CommandRunRecord[],
   next: CommandRunRecord,
 ): CommandRunRecord[] {
@@ -2125,7 +2125,7 @@ function stringPayload(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function commandFailureDetail(event: RuntimeEvent): string {
+export function commandFailureDetail(event: RuntimeEvent): string {
   return JSON.stringify(
     {
       request_id: event.request_id,
@@ -2137,7 +2137,7 @@ function commandFailureDetail(event: RuntimeEvent): string {
   );
 }
 
-function formatCommandEvent(event: RuntimeEvent): string {
+export function formatCommandEvent(event: RuntimeEvent): string {
   const { payload } = event;
   if (typeof payload.message === "string") {
     return payload.message;
