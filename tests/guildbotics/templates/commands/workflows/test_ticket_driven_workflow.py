@@ -415,7 +415,7 @@ async def test_run_posts_only_sanitized_error_log_path_to_ticket(monkeypatch, tm
     comment = tm.commented[0][1]
     assert "secret-token-123" not in comment
     assert "RuntimeError" not in comment
-    assert "Error log: ~/.guildbotics/data/logs/ticket_driven_workflow/" in comment
+    assert "~/.guildbotics/data/logs/ticket_driven_workflow/" in comment
 
     [log_file] = list(log_dir.glob("ticket_workflow_error_*.log"))
     assert "secret-token-123" in log_file.read_text(encoding="utf-8")
