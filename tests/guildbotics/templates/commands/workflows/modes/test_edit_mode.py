@@ -19,10 +19,7 @@ from guildbotics.intelligences.common import (
     RootCauseAnalysis,
     RootCauseItem,
 )
-from guildbotics.templates.commands.workflows import (
-    retrospective,
-    ticket_driven_workflow,
-)
+from guildbotics.templates.commands.workflows import retrospective
 from guildbotics.templates.commands.workflows.modes import edit_mode
 from tests.conftest import FakeContext
 
@@ -246,24 +243,13 @@ async def test_retrospective_flow_creates_up_to_five_tickets_and_returns_asking(
         fake_talk_eval,
     )
 
-    invoked = {}
-
-    async def fake_invoke(name, **kwargs):
-        # Be permissive about the invoked name but capture it
-        invoked["name"] = name
-        invoked["called"] = kwargs
-        # Delegate to the real retrospective main
-        return await retrospective.main(fake_context, **kwargs)
-
-    fake_context.invoke = fake_invoke  # type: ignore[attr-defined]
-
     # Act
-    await ticket_driven_workflow._main(fake_context, stub_ticket_manager)
+    response = await retrospective.main(fake_context, code_hosting_service=ch)
 
     # Assert: asking with combined message and only 5 tickets created
-    assert invoked
-    assert len(added_comments) == 1
-    assert "DISCUSS" in added_comments[0][1]
+    assert not added_comments
+    assert response.status == AgentResponse.ASKING
+    assert "DISCUSS" in response.message
     assert len(created.get("titles", [])) == 5
 
 

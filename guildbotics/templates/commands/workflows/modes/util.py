@@ -1,3 +1,4 @@
+from guildbotics.integrations.github.github_utils import get_person_github_token
 from guildbotics.runtime.context import Context
 from guildbotics.utils.fileio import get_workspace_path
 from guildbotics.utils.git_tool import GitTool
@@ -15,6 +16,11 @@ async def get_git_tool(context: Context) -> GitTool:
     code_hosting_service = context.get_code_hosting_service(context.task.repository)
     git_user = context.person.account_info.get("git_user", "Default User")
     git_email = context.person.account_info.get("git_email", "default@example.com")
+    base_url = str(getattr(code_hosting_service, "base_url", "https://api.github.com"))
+    git_auth_token = await get_person_github_token(
+        context.person,
+        base_url,
+    )
 
     return GitTool(
         workspace_path,
@@ -23,6 +29,7 @@ async def get_git_tool(context: Context) -> GitTool:
         git_user,
         git_email,
         await code_hosting_service.get_default_branch(),
+        auth_token=git_auth_token,
     )
 
 

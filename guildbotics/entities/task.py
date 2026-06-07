@@ -83,6 +83,14 @@ class Task(BaseModel):
         default=None,
         description="The person_id of the agent currently assigned to the task, if any.",
     )
+    pull_request_url: str | None = Field(
+        default=None,
+        description="The related pull request URL when the task is triggered by PR review state.",
+    )
+    trigger_reason: str | None = Field(
+        default=None,
+        description="Short reason why the task was selected for the workflow.",
+    )
 
     def __lt__(self, other: "Task") -> bool:
         """

@@ -324,3 +324,15 @@ class CodeHostingService(ABC):
             PullRequest: The pull request object.
         """
         pass
+
+    async def get_pull_request_head_branch(self, html_url: str) -> str:
+        """
+        Get the source branch name for a pull request.
+
+        Args:
+            html_url (str): The HTML URL of the pull request.
+
+        Returns:
+            str: The pull request head branch name.
+        """
+        raise NotImplementedError

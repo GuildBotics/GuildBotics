@@ -68,6 +68,70 @@ async def test_cli_agent_run_passes_cwd_without_mutating_mapping(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_cli_agent_run_inherits_environment_and_overlays_config(
+    monkeypatch, tmp_path
+):
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(
+            script="echo test",
+            env={
+                "CONFIG_ONLY": "configured",
+                "GUILDBOTICS_PARENT_ENV": "overridden",
+            },
+        )
+    }
+
+    captured = {}
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        captured["env"] = env
+        return StubProcess()
+
+    monkeypatch.setenv("GUILDBOTICS_PARENT_ENV", "parent")
+    monkeypatch.setenv("GUILDBOTICS_PARENT_ONLY", "inherited")
+    monkeypatch.setenv("GH_TOKEN", "host-gh-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "host-github-token")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock")
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        await brain.run("hello", cwd=tmp_path)
+        assert captured["env"]["GUILDBOTICS_PARENT_ONLY"] == "inherited"
+        assert captured["env"]["GUILDBOTICS_PARENT_ENV"] == "overridden"
+        assert captured["env"]["CONFIG_ONLY"] == "configured"
+        assert "PROMPT_FILE" in captured["env"]
+        assert "GH_TOKEN" not in captured["env"]
+        assert "GITHUB_TOKEN" not in captured["env"]
+        assert "SSH_AUTH_SOCK" not in captured["env"]
+        assert captured["env"]["GH_CONFIG_DIR"]
+        assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
+        assert captured["env"]["GIT_CONFIG_GLOBAL"]
+        assert "IdentityFile=/dev/null" in captured["env"]["GIT_SSH_COMMAND"]
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+
+@pytest.mark.asyncio
 async def test_cli_agent_execution_details_include_stderr_and_returncode(
     monkeypatch, tmp_path
 ):
@@ -106,6 +170,82 @@ async def test_cli_agent_execution_details_include_stderr_and_returncode(
         assert result.stdout == ""
         assert result.stderr == "login required"
         assert result.returncode == returncode
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_run_raises_when_script_fails(monkeypatch, tmp_path):
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        return StubProcess(stdout=b"", stderr=b"bad option", returncode=2)
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        with pytest.raises(RuntimeError, match="bad option"):
+            await brain.run("hello", cwd=tmp_path)
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_run_raises_when_response_is_empty(monkeypatch, tmp_path):
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        return StubProcess(stdout=b"", stderr=b"usage error", returncode=0)
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        with pytest.raises(RuntimeError, match="produced no response"):
+            await brain.run("hello", cwd=tmp_path)
     finally:
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)

@@ -2,10 +2,14 @@ env:
 script: |
   res=$(mktemp)
   log=$(mktemp)
+  status=0
   DEBUG=true codex exec \
     --skip-git-repo-check \
-    --full-auto --output-last-message "$res" \
-    < "$PROMPT_FILE" >"$log" 2>&1
+    --dangerously-bypass-approvals-and-sandbox \
+    -c shell_environment_policy.inherit=all \
+    --output-last-message "$res" \
+    < "$PROMPT_FILE" >"$log" 2>&1 || status=$?
   cat "$log" >&2
   cat "$res"
   rm -f "$res" "$log"
+  exit "$status"

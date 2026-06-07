@@ -5,3 +5,4 @@ en:
   comments: "\n\n## Comments\n%{comments}"
   comment_notify: "I have added a comment to the task. Please check it."
   completed_notify: "The task has been completed. Please check it."
+  ticket_drafts_created: "I created the following tickets:%{task_labels}"

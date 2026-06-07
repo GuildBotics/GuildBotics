@@ -22,6 +22,8 @@ from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
 
+HTTP_BAD_REQUEST = 400
+
 
 class GitHubTicketManager(TicketManager):
     """GitHub Projects V2 ticket manager using GraphQL and REST APIs."""
@@ -29,9 +31,14 @@ class GitHubTicketManager(TicketManager):
     FIELD_AGENT: ClassVar[str] = "Agent"
     FIELD_DUE_DATE: ClassVar[str] = "Due Date"
     FIELD_PRIORITY: ClassVar[str] = "Priority"
-    FIELD_MODE: ClassVar[str] = "Mode"
-    FIELD_ROLE: ClassVar[str] = "Role"
-    FIELD_OWNER: ClassVar[str] = "Owner"
+    LANE_READY: ClassVar[str] = "ready"
+    LANE_DONE: ClassVar[str] = "done"
+    LANE_WORKING: ClassVar[str] = "working"
+    DEFAULT_LANE_MAP: ClassVar[dict[str, str]] = {
+        LANE_READY: "Todo",
+        LANE_DONE: "Done",
+        LANE_WORKING: "In Progress",
+    }
 
     def __init__(self, logger: Logger, person: Person, team: Team):
         """
@@ -53,23 +60,12 @@ class GitHubTicketManager(TicketManager):
         self._username_lower = self.username.lower() if self.username else ""
         self._mention_token = f"⚙{self.person.person_id}"
 
-        self.default_status_map = {
-            Task.NEW: "New",
-            Task.READY: "Ready",
-            Task.IN_PROGRESS: "In Progress",
-            Task.IN_REVIEW: "In Review",
-            Task.RETROSPECTIVE: "Retrospective",
-            Task.DONE: "Done",
-        }
-        status_map: dict = cast(dict, config.get("status_map", self.default_status_map))
-        self.status_map = {
-            status_map.get(k, v): k for k, v in self.default_status_map.items()
-        }
+        self.lane_map = self._load_lane_map(cast(dict | None, config.get("lane_map")))
 
         # caches populated in get_board()
         self._project_node_id: str | None = None
         self._status_field_id: str | None = None
-        self.columns: dict[str, str] = {}  # column_name -> option_id
+        self.columns: dict[str, str] = {}  # Task status -> option_id
         self.custom_fields: dict[str, dict[str, Any]] = {}  # field_name -> field_info
         self.role_usernames: dict[
             str, list[str]
@@ -87,30 +83,26 @@ class GitHubTicketManager(TicketManager):
                 )
 
         self._custom_field_definitions: dict[str, dict] = {
-            GitHubTicketManager.FIELD_MODE: {
-                "dataType": "SINGLE_SELECT",
-                "options": [
-                    {
-                        "name": name,
-                        "description": mode or "",
-                    }
-                    for name, mode in Labels(Task.get_available_modes()).items()
-                ],
-            },
-            GitHubTicketManager.FIELD_ROLE: {
-                "dataType": "SINGLE_SELECT",
-                "options": [
-                    {
-                        "name": id,
-                        "description": role.summary,
-                    }
-                    for id, role in Person.DEFINED_ROLES.items()
-                ],
-            },
             GitHubTicketManager.FIELD_AGENT: {
                 "dataType": "SINGLE_SELECT",
                 "options": agents,
             },
+        }
+
+    def _load_lane_map(self, raw: dict | None) -> dict[str, str | None]:
+        if raw is None:
+            return dict(self.DEFAULT_LANE_MAP)
+
+        ready = str(raw.get(self.LANE_READY) or self.DEFAULT_LANE_MAP[self.LANE_READY])
+        done = str(raw.get(self.LANE_DONE) or self.DEFAULT_LANE_MAP[self.LANE_DONE])
+        working_value = raw.get(
+            self.LANE_WORKING, self.DEFAULT_LANE_MAP[self.LANE_WORKING]
+        )
+        working = str(working_value).strip() if working_value is not None else ""
+        return {
+            self.LANE_READY: ready.strip(),
+            self.LANE_DONE: done.strip(),
+            self.LANE_WORKING: working or None,
         }
 
     async def login(self) -> AsyncClient:
@@ -212,7 +204,11 @@ class GitHubTicketManager(TicketManager):
         raise RuntimeError("Status field not found (after paginating all fields)")
 
     def _cache_is_complete(self) -> bool:
-        return len(self.columns) == len(self.status_map)
+        required = {Task.READY, Task.DONE}
+        working = self.lane_map.get(self.LANE_WORKING)
+        if working:
+            required.add(Task.IN_PROGRESS)
+        return required.issubset(self.columns)
 
     async def _sync_status_columns(self) -> None:
         if self._cache_is_complete():
@@ -222,10 +218,14 @@ class GitHubTicketManager(TicketManager):
 
         current_set = set(columns_local)
         self.columns = {}
-        for n in current_set:
-            k = self.status_map.get(n, None)
-            if k:
-                self.columns[k] = columns_local[n]["id"]
+        status_by_lane = {
+            self.LANE_READY: Task.READY,
+            self.LANE_DONE: Task.DONE,
+            self.LANE_WORKING: Task.IN_PROGRESS,
+        }
+        for lane, option_name in self.lane_map.items():
+            if option_name in current_set:
+                self.columns[status_by_lane[lane]] = columns_local[option_name]["id"]
 
     async def get_statuses(self) -> list[str]:
         """
@@ -244,6 +244,15 @@ class GitHubTicketManager(TicketManager):
         """
         await self._sync_status_columns()
         return self.columns.get(column_name, None)
+
+    def _status_from_option(self, option_name: str | None) -> str | None:
+        if not option_name:
+            return None
+        if option_name == self.lane_map[self.LANE_READY]:
+            return Task.READY
+        if option_name == self.lane_map[self.LANE_DONE]:
+            return Task.DONE
+        return Task.IN_PROGRESS
 
     async def _get_issue_node_id(self, repo: str | None, issue_number: int) -> str:
         """Convert a REST issue number to the GraphQL global node_id.
@@ -408,12 +417,6 @@ class GitHubTicketManager(TicketManager):
                 data[self._to_task_field(GitHubTicketManager.FIELD_PRIORITY)] = int(
                     value
                 )
-            elif field_name == GitHubTicketManager.FIELD_MODE and value:
-                data[self._to_task_field(GitHubTicketManager.FIELD_MODE)] = value
-            elif field_name == GitHubTicketManager.FIELD_ROLE and value:
-                data[self._to_task_field(GitHubTicketManager.FIELD_ROLE)] = value
-            elif field_name == GitHubTicketManager.FIELD_OWNER and value:
-                data[self._to_task_field(GitHubTicketManager.FIELD_OWNER)] = value
 
         return Task(**data)
 
@@ -559,6 +562,21 @@ class GitHubTicketManager(TicketManager):
         comments = await hosting_service.get_pull_request_comments(url)
         return not comments.is_replied
 
+    def _is_my_response(self, username: str, content: str) -> bool:
+        return get_author_type(self.person, username, content) == Message.ASSISTANT
+
+    def _is_my_reaction(self, reaction: dict[str, Any]) -> bool:
+        user = reaction.get("user") or {}
+        login = str(user.get("login") or "").lower()
+        return bool(login and login == self._username_lower)
+
+    def _has_my_reaction(self, comment: dict[str, Any]) -> bool:
+        reactions = comment.get("reactions") or {}
+        for reaction in reactions.get("nodes") or []:
+            if self._is_my_reaction(reaction):
+                return True
+        return False
+
     def _strip_signature_line(self, text: str, signature: str) -> str:
         """
         Remove the trailing signature line if it matches the provided signature.
@@ -608,25 +626,261 @@ class GitHubTicketManager(TicketManager):
 
         return False
 
-    async def get_ticket(self, column_name: str, all_items: list[dict]) -> Task | None:
-        """
-        Retrieve a ticket from a specific column by name, fetching all pages of items.
+    async def _load_issue_comments(
+        self, client: AsyncClient, task: Task, issue_number: int
+    ) -> tuple[list[Message], bool]:
+        comments_resp = await client.get(
+            f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
+        )
+        comments_data = comments_resp.json()
+        comments_data.sort(key=lambda c: c.get("created_at") or "")
 
-        Args:
-            column_name (str): The column to pull tasks from.
+        comments = []
+        mention_pending = self._text_mentions_me(task.description)
+        for c in comments_data:
+            author_type = get_author_type(self.person, c["user"]["login"], c["body"])
+            author = (
+                get_person_name(self.team.members, c["user"]["login"], c["body"])
+                or author_type
+            )
+            comments.append(
+                Message(
+                    content=c["body"],
+                    author=author,
+                    author_type=author_type,
+                    timestamp=c["created_at"],
+                )
+            )
+            if self._text_mentions_me(c.get("body"), ignore_signature=True):
+                mention_pending = True
+            if author_type == Message.ASSISTANT:
+                mention_pending = False
 
-        Returns:
-            Task | None: A Task or None if no task available.
-        """
+        return comments, mention_pending
 
+    def _parse_pull_request_url(self, url: str) -> tuple[str, str, int] | None:
+        match = re.search(r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
+        if not match:
+            return None
+        owner, repo, number = match.groups()
+        return owner, repo, int(number)
+
+    async def _get_pull_request_from_url(self, url: str) -> dict[str, Any] | None:
+        parsed = self._parse_pull_request_url(url)
+        if parsed is None:
+            return None
+        owner, repo, number = parsed
         client = await self.login()
+        resp = await client.get(f"/repos/{owner}/{repo}/pulls/{number}")
+        if resp.status_code >= HTTP_BAD_REQUEST:
+            return None
+        pull = resp.json()
+        state = "merged" if pull.get("merged_at") else pull.get("state")
+        return {
+            "url": pull.get("html_url", url),
+            "owner": owner,
+            "repo": repo,
+            "number": number,
+            "state": state,
+            "updated_at": pull.get("updated_at") or "",
+        }
 
-        # process each item in the specified column
+    async def _get_related_pull_requests(
+        self, task: Task, issue_number: int
+    ) -> list[dict[str, Any]]:
+        client = await self.login()
+        repo = task.repository or self.default_repo
+        resp = await client.get(
+            f"/repos/{self.owner}/{repo}/issues/{issue_number}/timeline",
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        if resp.status_code >= HTTP_BAD_REQUEST:
+            return []
+
+        urls: list[str] = []
+        for event in resp.json():
+            source = event.get("source", {})
+            issue = source.get("issue", {}) if isinstance(source, dict) else {}
+            if issue.get("pull_request") and issue.get("html_url"):
+                urls.append(issue["html_url"])
+
+        pulls = []
+        for url in dict.fromkeys(urls):
+            pull = await self._get_pull_request_from_url(url)
+            if pull:
+                pulls.append(pull)
+        return pulls
+
+    def _fallback_pull_request_urls(self, task: Task) -> list[str]:
+        urls: list[str] = []
+        for comment in task.comments:
+            if comment.author_type != Message.ASSISTANT:
+                continue
+            for line in comment.content.splitlines():
+                if not line.strip().startswith(Task.OUTPUT_PREFIX):
+                    continue
+                urls.extend(
+                    match.group(0)
+                    for match in re.finditer(
+                        r"https://github\.com/[^/\s)]+/[^/\s)]+/pull/\d+",
+                        line,
+                    )
+                )
+        return list(dict.fromkeys(urls))
+
+    async def _select_related_pull_request(
+        self, task: Task, issue_number: int
+    ) -> dict[str, Any] | None:
+        pulls = await self._get_related_pull_requests(task, issue_number)
+        if not pulls:
+            for url in self._fallback_pull_request_urls(task):
+                pull = await self._get_pull_request_from_url(url)
+                if pull:
+                    pulls.append(pull)
+
+        if not pulls:
+            return None
+
+        open_pulls = [pull for pull in pulls if pull.get("state") == "open"]
+        candidates = open_pulls or pulls
+        return max(candidates, key=lambda pull: str(pull.get("updated_at") or ""))
+
+    async def _has_unhandled_pull_request_review(self, pull: dict[str, Any]) -> bool:
+        review_threads = await self._get_pull_request_review_threads(pull)
+        for thread in review_threads:
+            if await self._is_unhandled_review_thread(thread):
+                return True
+        return False
+
+    async def _get_pull_request_review_threads(
+        self, pull: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        owner = pull["owner"]
+        repo = pull["repo"]
+        number = pull["number"]
+        query = """
+        query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviewThreads(first: 50, after: $after) {
+                nodes {
+                  isResolved
+                  comments(last: 1) {
+                    nodes {
+                      id
+                      body
+                      createdAt
+                      author { login }
+                    }
+                  }
+                }
+                pageInfo {
+                  endCursor
+                  hasNextPage
+                }
+              }
+            }
+          }
+        }
+        """
+
+        threads: list[dict[str, Any]] = []
+        after: str | None = None
+        while True:
+            data = await self._graphql(
+                query,
+                {
+                    "owner": owner,
+                    "repo": repo,
+                    "number": number,
+                    "after": after,
+                },
+            )
+
+            pull_request = (data.get("repository") or {}).get("pullRequest")
+            if not pull_request:
+                raise RuntimeError(
+                    f"Pull request review threads unavailable for {owner}/{repo}#{number}"
+                )
+            review_threads = pull_request["reviewThreads"]
+            threads.extend(review_threads.get("nodes") or [])
+            page_info = review_threads["pageInfo"]
+            if not page_info["hasNextPage"]:
+                return threads
+            after = page_info["endCursor"]
+
+    async def _get_comment_reactions(self, comment_id: str) -> list[dict[str, Any]]:
+        query = """
+        query($id: ID!, $after: String) {
+          node(id: $id) {
+            ... on PullRequestReviewComment {
+              reactions(first: 100, after: $after) {
+                nodes {
+                  content
+                  user { login }
+                }
+                pageInfo {
+                  endCursor
+                  hasNextPage
+                }
+              }
+            }
+          }
+        }
+        """
+
+        reactions: list[dict[str, Any]] = []
+        after: str | None = None
+        while True:
+            data = await self._graphql(query, {"id": comment_id, "after": after})
+            node = data.get("node")
+            if not node:
+                raise RuntimeError(
+                    f"Pull request review comment reactions unavailable for {comment_id}"
+                )
+            reaction_connection = node["reactions"]
+            reactions.extend(reaction_connection.get("nodes") or [])
+            page_info = reaction_connection["pageInfo"]
+            if not page_info["hasNextPage"]:
+                return reactions
+            after = page_info["endCursor"]
+
+    async def _comment_has_my_reaction(self, comment: dict[str, Any]) -> bool:
+        reactions = comment.get("reactions")
+        if reactions is not None:
+            return self._has_my_reaction(comment)
+        comment_id = str(comment.get("id") or "")
+        if not comment_id:
+            return False
+        return any(
+            self._is_my_reaction(r)
+            for r in await self._get_comment_reactions(comment_id)
+        )
+
+    async def _is_unhandled_review_thread(self, thread: dict[str, Any]) -> bool:
+        if thread.get("isResolved"):
+            return False
+
+        comments = (thread.get("comments") or {}).get("nodes") or []
+        if not comments:
+            return False
+
+        comments = sorted(comments, key=lambda c: c.get("createdAt") or "")
+        last_comment = comments[-1]
+        author = last_comment.get("author") or {}
+        login = str(author.get("login") or "")
+        body = str(last_comment.get("body") or "")
+        if login and self._is_my_response(login, body):
+            return False
+        return not await self._comment_has_my_reaction(last_comment)
+
+    def _build_project_tasks(
+        self, all_items: list[dict]
+    ) -> tuple[list[Task], dict[str, dict[str, Any]]]:
         tasks: list[Task] = []
         task_metadata: dict[str, dict[str, Any]] = {}
         for it in all_items:
-            # extract status and custom field values
-            status = None
+            status: str | None = None
             field_values = {}
 
             for fv in it["fieldValues"]["nodes"]:
@@ -635,9 +889,8 @@ class GitHubTicketManager(TicketManager):
                 field_id = field.get("id")
 
                 if field_name == "Status":
-                    status = self.status_map.get(fv["name"])
+                    status = self._status_from_option(fv["name"])
                 elif field_id in [info["id"] for info in self.custom_fields.values()]:
-                    # Find field name by ID
                     custom_field_name = next(
                         (
                             name
@@ -656,7 +909,7 @@ class GitHubTicketManager(TicketManager):
                         elif "text" in fv:  # TEXT
                             field_values[custom_field_name] = fv["text"]
 
-            if status != column_name:
+            if status is None or status == Task.DONE:
                 continue
 
             issue = it["content"]
@@ -685,68 +938,81 @@ class GitHubTicketManager(TicketManager):
                         assignee = self.person.person_id
                         break
 
-            issue_mentions_me = self._text_mentions_me(issue.get("body"))
             task = self._issue_to_task(issue, status, field_values, assignee)
             tasks.append(task)
             assert task.id, "Task ID must be set"
             task_metadata[task.id] = {
                 "issue_number": issue["number"],
                 "assigned": is_assigned,
-                "issue_mentions_me": issue_mentions_me,
             }
 
         tasks = sorted(tasks)
+        return tasks, task_metadata
+
+    async def get_ticket(self, column_name: str, all_items: list[dict]) -> Task | None:
+        """
+        Retrieve a ticket from a specific internal lane.
+
+        get_task_to_work_on() is the primary entrypoint for the simplified workflow;
+        this method remains as a narrow compatibility helper for direct callers.
+        """
+        tasks, task_metadata = self._build_project_tasks(all_items)
 
         for task in tasks:
+            if task.status != column_name:
+                continue
             assert task.id, "Task ID must be set"
-            metadata = task_metadata[task.id]
-            issue_number = metadata["issue_number"]
-            assigned = bool(metadata.get("assigned"))
-            mention_pending = bool(metadata.get("issue_mentions_me"))
+            selected = await self._select_actionable_task(task, task_metadata[task.id])
+            if selected:
+                return selected
+        return None
 
-            # fetch comments via REST and attach to Task
-            comments_resp = await client.get(
-                f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
-            )
-            comments_data = comments_resp.json()
-            comments_data.sort(key=lambda c: c.get("created_at") or "")
-            comments = []
-            for c in comments_data:
-                author_type = get_author_type(
-                    self.person, c["user"]["login"], c["body"]
-                )
-                author = (
-                    get_person_name(self.team.members, c["user"]["login"], c["body"])
-                    or author_type
-                )
-                comments.append(
-                    Message(
-                        content=c["body"],
-                        author=author,
-                        author_type=author_type,
-                        timestamp=c["created_at"],
-                    )
-                )
-                if self._text_mentions_me(c.get("body"), ignore_signature=True):
-                    mention_pending = True
-                if author_type == Message.ASSISTANT:
-                    mention_pending = False
-            if comments:
-                # sort comments by creation timestamp ascending
-                comments.sort(key=lambda m: m.timestamp)
-                task.comments = comments
-                # If the last comment was made by the person, we skip this task.
-                author_type = comments[-1].author_type
-                if (
-                    author_type == Message.ASSISTANT
-                    and not await self.has_pr_review_comments(task)
-                    and not mention_pending
-                ):
-                    continue
+    async def _select_actionable_task(
+        self, task: Task, metadata: dict[str, Any]
+    ) -> Task | None:
+        client = await self.login()
+        issue_number = int(metadata["issue_number"])
+        assigned = bool(metadata.get("assigned"))
 
-            eligible = assigned or mention_pending
-            if eligible:
+        comments, mention_pending = await self._load_issue_comments(
+            client, task, issue_number
+        )
+        task.comments = sorted(comments, key=lambda m: m.timestamp)
+        last_comment_is_mine = (
+            bool(task.comments) and task.comments[-1].author_type == Message.ASSISTANT
+        )
+
+        if task.status == Task.READY:
+            if last_comment_is_mine and not mention_pending:
+                return None
+            if assigned or mention_pending:
+                task.trigger_reason = "ready_lane"
                 return task
+            return None
+
+        pull = await self._select_related_pull_request(task, issue_number)
+        if pull:
+            if pull.get("state") == "merged":
+                await self.move_ticket(task, Task.DONE)
+                return None
+            if pull.get("state") != "open":
+                return None
+            if await self._has_unhandled_pull_request_review(pull):
+                task.pull_request_url = str(pull["url"])
+                task.trigger_reason = "pull_request_review"
+                return task
+            return None
+
+        if (
+            task.comments
+            and task.comments[-1].author_type != Message.ASSISTANT
+            and (assigned or mention_pending)
+        ):
+            task.trigger_reason = "issue_comment"
+            return task
+        if not task.comments and (assigned or mention_pending):
+            task.trigger_reason = "issue_mention" if mention_pending else "working_lane"
+            return task
         return None
 
     async def get_task_to_work_on(self) -> Task | None:
@@ -758,15 +1024,15 @@ class GitHubTicketManager(TicketManager):
         """
 
         all_items = await self.get_all_tickets()
+        tasks, task_metadata = self._build_project_tasks(all_items)
 
-        all_cols = [Task.RETROSPECTIVE, Task.IN_REVIEW, Task.IN_PROGRESS, Task.READY]
-        available_cols = set(self.columns.keys())
-
-        for col in all_cols:
-            if col in available_cols:
-                t = await self.get_ticket(col, all_items)
-                if t:
-                    return t
+        ready_tasks = [task for task in tasks if task.status == Task.READY]
+        working_tasks = [task for task in tasks if task.status != Task.READY]
+        for task in [*ready_tasks, *working_tasks]:
+            assert task.id, "Task ID must be set"
+            selected = await self._select_actionable_task(task, task_metadata[task.id])
+            if selected:
+                return selected
         return None
 
     async def _get_project_item_id(self, issue_node_id: str) -> str:
@@ -1090,34 +1356,15 @@ class GitHubTicketManager(TicketManager):
         Returns:
             The field value formatted for GraphQL.
         """
-        field_info = self.custom_fields[field_name]
-
         if field_name == GitHubTicketManager.FIELD_DUE_DATE:
             if task.due_date:
                 return {"date": task.due_date.isoformat().split("T")[0]}
 
-        elif field_name == GitHubTicketManager.FIELD_PRIORITY:
-            if task.priority is not None:
-                return {"number": float(task.priority)}
-
-        elif field_name in (
-            GitHubTicketManager.FIELD_MODE,
-            GitHubTicketManager.FIELD_ROLE,
+        elif (
+            field_name == GitHubTicketManager.FIELD_PRIORITY
+            and task.priority is not None
         ):
-            # Handle SINGLE_SELECT fields dynamically
-            value_attr = (
-                task.mode if field_name == GitHubTicketManager.FIELD_MODE else task.role
-            )
-            if value_attr:
-                # Ensure options dict exists
-                options = field_info.setdefault("options", {})
-                # If the option does not exist yet, create it via GraphQL
-                if value_attr not in options:
-                    return None  # Skip if option not found
-                return {"singleSelectOptionId": options[value_attr]}
-
-        elif field_name == GitHubTicketManager.FIELD_OWNER and task.owner:
-            return {"text": task.owner}
+            return {"number": float(task.priority)}
 
         return None
 

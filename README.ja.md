@@ -618,6 +618,14 @@ guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat 
 - リポジトリへの Git アクセス方式を設定してください:
   - HTTPS: GCM (Git Credential Manager) をインストールし、サインイン
   - または SSH: SSH 鍵を設定し、`known_hosts` を登録
+- 各 AI メンバーの GitHub 認証情報を GuildBotics に設定してください。チケット駆動ワークフローの
+  書き込み（branch push、PR 作成、issue comment、review reply）は、ローカルの `gh auth`
+  ユーザーではなく、割り当てられたメンバーの machine user token または GitHub App installation
+  を使って行われます。
+- Codex CLI を CLI エージェントとして使う場合は、Codex CLI の認証とネットワーク到達性を確認してください:
+  ```bash
+  codex doctor
+  ```
 
 ### 6.1.2. GitHub プロジェクトの作成
 GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステータス）をあらかじめ追加しておきます。

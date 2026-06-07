@@ -622,6 +622,14 @@ This section describes how to use the default `ticket_driven_workflow` which int
 - Configure Git access for repositories:
   - HTTPS: Install GCM (Git Credential Manager) and sign in
   - or SSH: Set up SSH keys and `known_hosts`
+- Configure each AI member's GitHub credentials in GuildBotics. Ticket-driven workflow
+  writes (branch push, PR creation, issue comments, and review replies) use the assigned
+  member's configured machine-user token or GitHub App installation, not the local
+  `gh auth` user.
+- When using Codex CLI as the CLI agent, verify its authentication and network reachability:
+  ```bash
+  codex doctor
+  ```
 
 ### 6.1.2. Create a GitHub Project
 Create a GitHub Projects (v2) project and add the following columns (statuses) in advance:
