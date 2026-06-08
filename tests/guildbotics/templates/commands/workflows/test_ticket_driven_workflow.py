@@ -11,17 +11,19 @@ from guildbotics.templates.commands.workflows import ticket_driven_workflow
 class StubTicketManager:
     """Simple async stub for ticket manager to record calls."""
 
-    def __init__(self, task=None):
+    def __init__(self, task=None, move_succeeds=True):
         self.task = task
         self.moved = []
         self.commented = []
         self.created = []
+        self.move_succeeds = move_succeeds
 
     async def get_task_to_work_on(self):
         return self.task
 
-    async def move_ticket(self, task: Task, status: str):
+    async def move_ticket(self, task: Task, status: str) -> bool:
         self.moved.append((task, status))
+        return self.move_succeeds
 
     async def add_comment_to_ticket(self, task: Task, message: str):
         self.commented.append((task, message))
@@ -205,6 +207,31 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
     assert "available_modes" not in kwargs
     assert kwargs["language"] == "English"
     assert kwargs["cwd"] == Path("/tmp/guildbotics-test-repo")
+
+
+@pytest.mark.asyncio
+async def test_move_to_working_keeps_status_when_move_is_noop():
+    task = Task(id="1", title="T", description="D", status=Task.READY)
+    tm = StubTicketManager(task, move_succeeds=False)
+    ctx = StubContext(task, tm)
+
+    await ticket_driven_workflow._move_task_to_working_if_ready(ctx, tm)
+
+    # The move was attempted but did not take effect (no working lane), so the
+    # in-memory status must stay aligned with the authoritative board state.
+    assert tm.moved == [(task, Task.IN_PROGRESS)]
+    assert ctx.task.status == Task.READY
+
+
+@pytest.mark.asyncio
+async def test_move_to_working_updates_status_when_move_succeeds():
+    task = Task(id="1", title="T", description="D", status=Task.READY)
+    tm = StubTicketManager(task, move_succeeds=True)
+    ctx = StubContext(task, tm)
+
+    await ticket_driven_workflow._move_task_to_working_if_ready(ctx, tm)
+
+    assert ctx.task.status == Task.IN_PROGRESS
 
 
 @pytest.mark.asyncio

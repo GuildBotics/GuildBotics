@@ -56,7 +56,7 @@ GUILDBOTICS_APP_API_TOKEN=local-token \
 scripts/desktop-dev-frontend.sh
 ```
 
-`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。`desktop/src-tauri/binaries/` に開発用 sidecar が必要です（後述の「3. 開発モード」を参照）。
+`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。起動前に `desktop/src-tauri/binaries/` へソース版 backend を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。
 
 ---
 
@@ -213,25 +213,10 @@ DMG 内の `GuildBotics.app/Contents/MacOS/` に desktop 本体と sidecar `guil
 
 ## 3. 開発モード（`tauri dev`）
 
-毎回 PyInstaller を build せずに開発したい場合は、sidecar の配置先に「ソースを直接実行する薄いシェルスクリプト」を置くと高速に反復できます。
-
-`desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` を以下の内容で作成し、実行権限を付与します。
-
-```sh
-#!/bin/sh
-set -eu
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)"
-cd "$REPO_ROOT"
-if command -v uv >/dev/null 2>&1; then
-  exec uv run --no-sync python -m guildbotics.app_api "$@"
-fi
-exec python3 -m guildbotics.app_api "$@"
-```
+毎回 PyInstaller を build せずに開発したい場合は、`scripts/desktop-dev-tauri.sh` を使います。このスクリプトは Tauri sidecar の配置先に「ソースを直接実行する薄いシェルスクリプト」を自動生成します。
 
 ```bash
-chmod +x desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
-cd desktop && npm run tauri dev
+scripts/desktop-dev-tauri.sh
 ```
 
 > `desktop/src-tauri/binaries/` は `.gitignore` 対象です。配布物を作る前には、必ず 2.1 の手順で本物の PyInstaller バイナリへ置き換えてください。

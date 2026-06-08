@@ -41,7 +41,7 @@ Create comprehensive improvement recommendations that address the identified pro
        • Establish review policies and governance.
     8. Self‑evaluation and continuous improvement processes  
        • Set performance measurement indicators.  
-       • Describe regular retrospectives and adjustment procedures.
+       • Describe regular review and adjustment procedures.
 - Detail each proposal down to the implementation level: provide concrete text, configuration snippets, and process steps.
 - Ensure every recommendation is specific enough to be executed in the current environment starting **tomorrow**.
 - Return an `ImprovementRecommendations` object containing:

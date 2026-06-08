@@ -633,16 +633,12 @@ This section describes how to use the default `ticket_driven_workflow` which int
 
 ### 6.1.2. Create a GitHub Project
 Create a GitHub Projects (v2) project and add the following columns (statuses) in advance:
-  - New
-  - Ready
+  - Todo
   - In Progress
-  - In Review
-  - Retrospective
   - Done
 
 Note:
-- For existing projects, you can map already-existing statuses to the above ones with the settings described later.
-- If you do not use retrospectives, the Retrospective column is not required.
+- For existing projects, you can map already-existing statuses to the above lanes with the settings described later.
 
 ### 6.1.3. Prepare a GitHub Account for the AI Agent
 Prepare an account the AI agent will use to access GitHub. You can choose one of the following:
@@ -689,15 +685,19 @@ After completing [Basic Usage](#5-basic-usage) steps, verify the configuration f
 LLM, and CLI agent settings are usable.
 
 **Custom fields** are created automatically the first time GuildBotics operates on a GitHub
-Project, so no explicit setup step is required. GuildBotics manages these fields:
-- `Mode`: Behavior mode (comment/edit/ticket)
-- `Role`: Role to use for the task
-- `Agent`: AI agent to execute the task
+Project, so no explicit setup step is required. GuildBotics manages the `Agent` field to select
+the AI agent when GitHub assignees are not enough.
 
-**Status mapping**: GuildBotics maps GitHub Projects statuses to its own statuses
-(New/Ready/In Progress/In Review/Retrospective/Done). If your GitHub Project uses custom status
-names, map them with the `services.ticket_manager.status_map` key in
-`team/project.yml` (see [Configuration Files](#72-configuration-files)).
+**Lane mapping**: GuildBotics uses GitHub Projects statuses as lightweight workflow lanes.
+By default it treats `Todo` as ready, `In Progress` as working, and `Done` as done.
+The ready and done lanes also act as the boundaries of the work window: statuses positioned
+**between** them on the board (for example `In Review`) are automatically treated as working
+lanes, while statuses placed **before** ready (for example `Backlog`) or **at/after** done
+(for example `Icebox`) are ignored. This means you can add intermediate or parked lanes by
+ordering board columns alone, without touching `lane_map`.
+If your GitHub Project uses custom status names for the ready/working/done lanes, map them with
+the `services.ticket_manager.lane_map` key in `team/project.yml`
+(see [Configuration Files](#72-configuration-files)).
 
 ## 6.3. Running the Ticket-Driven Workflow
 
@@ -715,36 +715,29 @@ To request a task from the AI agent, operate the GitHub Projects ticket as follo
 1. Create a ticket, select the target Git repository, and save it as an Issue
 2. Describe instructions to the AI agent in the ticket
    - This becomes the prompt to the agent, so be as specific as possible
-3. Set the `Agent` field to select the AI agent that will execute the task
-4. Set the `Mode` field
-   - `comment`: Ask the agent to reply via ticket comments
-   - `edit`: Ask the agent to edit files and open a Pull Request
-   - `ticket`: Ask the agent to create tickets
-5. Optionally set the `Role` field to specify the role to use when performing the task
-6. Change the ticket status to `Ready`
+3. Assign the target AI agent, or set the `Agent` field when GitHub assignees are not enough
+4. Move the ticket to the ready lane
 
 Note:
 The AI agent clones the specified Git repository under `~/.guildbotics/data/workspaces/<person_id>` and works there.
 
 ### 6.3.3. Interacting with the AI Agent
 - If the AI agent has questions during work, it posts questions as ticket comments. Please respond in ticket comments. The agent periodically checks ticket comments and proceeds accordingly once answers are provided.
-- When the AI agent completes a task, it changes the ticket status to `In Review` and posts the results and the created Pull Request URL as a comment.
-- In `edit` mode, the AI agent creates a Pull Request. Please write review results as comments on the PR. When there are tickets in `In Review`, the agent checks for PR comments and responds accordingly if they exist.
+- When the AI agent completes a task, it posts the result and any created Pull Request URL as a comment.
+- For Pull Requests created from a ticket, write review results on the PR. GuildBotics checks unresolved review threads and delegates them back to the assigned agent.
 
 ## 6.4. Capabilities
 
 With the ticket-driven workflow, you can:
 
 - **Request tasks for AI agents on a task board**
-  - Assign an AI agent to a ticket and move it to the **Ready** column to have the AI agent execute the task
+  - Assign an AI agent to a ticket and move it to the ready lane to have the AI agent execute the task
 - **Review AI agent results on the task board**
-  - When the agent completes a task, the ticket moves to **In Review** and the results are posted as ticket comments
+  - When the agent completes a task, the results are posted as ticket comments
 - **Create Pull Requests by AI agents**
-  - When a task is completed, the AI agent creates a Pull Request
+  - When a task requires code changes, GuildBotics creates a Pull Request from the agent's workspace changes
 - **Create tickets**
-  - If you instruct the AI agent to create tickets, it automatically creates them on the task board
-- **Retrospective**
-  - Move completed-task tickets to the **Retrospective** column and request a retrospective in a comment; the AI agent analyzes the interaction with reviewers on the created PR, extracts issues, and creates improvement tickets
+  - If you instruct the AI agent to create tickets, GuildBotics creates them on the task board from the agent's structured result
 
 # 7. Reference
 
@@ -775,7 +768,7 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 - `language`: Project language
 - `repositories`: Repository definitions
 - `services.ticket_manager`: GitHub Projects settings
-- `services.ticket_manager.status_map`: Maps GuildBotics statuses (New/Ready/In Progress/In Review/Retrospective/Done) to your GitHub Project's status names. Set this when your Project uses custom status names.
+- `services.ticket_manager.lane_map`: Maps ready, working, and done lanes to your GitHub Project's status names. Set this when your Project uses custom status names.
 - `services.code_hosting_service`: GitHub repository settings
 
 **Member Configuration** (`team/members/<person_id>/person.yml`):

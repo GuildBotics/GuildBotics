@@ -121,6 +121,29 @@ def test_checkout_branch_creates_new_branch_from_default(tmp_path: Path):
     assert tool.repo.head.commit.hexsha == base_commit
 
 
+def test_checkout_branch_uses_remote_branch_when_available(tmp_path: Path):
+    tool, _, remote = _init_git_tool(tmp_path)
+
+    seed = tmp_path / "seed"
+    seed_repo = git.Repo.clone_from(str(remote), seed)
+    with seed_repo.config_writer() as cw:
+        cw.set_value("user", "name", "Seed User")
+        cw.set_value("user", "email", "seed@example.com")
+    seed_repo.git.checkout("-b", "feature/remote-only")
+    (seed / "remote.txt").write_text("remote branch content\n", encoding="utf-8")
+    seed_repo.git.add(A=True)
+    remote_commit = seed_repo.index.commit("remote branch commit").hexsha
+    seed_repo.git.push("--set-upstream", "origin", "feature/remote-only")
+
+    tool.checkout_branch("feature/remote-only")
+
+    assert tool.repo.active_branch.name == "feature/remote-only"
+    assert tool.repo.head.commit.hexsha == remote_commit
+    assert (tool.repo_path / "remote.txt").read_text(encoding="utf-8") == (
+        "remote branch content\n"
+    )
+
+
 def test_commit_changes_commits_and_pushes(tmp_path: Path):
     tool, _, remote = _init_git_tool(tmp_path)
 

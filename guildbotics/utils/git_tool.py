@@ -163,6 +163,7 @@ class GitTool:
                 self.repo.git.reset("--hard")
 
             local_branches = {b.name for b in self.repo.branches}
+            remote_branches = {ref.remote_head for ref in origin.refs}
             if branch_name in local_branches:
                 # If branch exists locally: checkout
                 self.logger.info(
@@ -170,7 +171,6 @@ class GitTool:
                 )
                 self.repo.git.checkout(branch_name)
                 # If exists remotely, pull and set upstream
-                remote_branches = {ref.remote_head for ref in origin.refs}
                 if branch_name in remote_branches:
                     self.logger.info(
                         f"Setting upstream and pulling '{branch_name}' from origin."
@@ -190,6 +190,14 @@ class GitTool:
                         with self._git_auth_environment():
                             origin.fetch(f"{branch_name}:{branch_name}")
                         self.repo.git.checkout(branch_name)
+            elif branch_name in remote_branches:
+                self.logger.info(
+                    f"Creating local branch '{branch_name}' from 'origin/{branch_name}'."
+                )
+                self.repo.git.checkout("-b", branch_name, f"origin/{branch_name}")
+                self.repo.git.branch(
+                    "--set-upstream-to", f"origin/{branch_name}", branch_name
+                )
             else:
                 # Create new branch locally from default
                 self.logger.info(

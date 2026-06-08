@@ -32,6 +32,7 @@ class _Manager(GitHubTicketManager):
         items: list[dict],
         responses: dict[str, Any] | None = None,
         lane_map: dict[str, str] | None = None,
+        statuses: list[str] | None = None,
     ):
         person = Person(
             person_id="aiko",
@@ -57,6 +58,12 @@ class _Manager(GitHubTicketManager):
             members=[person],
         )
         super().__init__(logging.getLogger("test"), person, team)
+        # Board column order (left -> right). Status options before the ready
+        # lane or at/after the done lane are ignored; options between them are
+        # treated as working lanes. Mirrors what _sync_status_columns() caches
+        # from _get_status_field() in production.
+        board = statuses if statuses is not None else ["Todo", "In Progress", "Done"]
+        self._status_positions = {name: index for index, name in enumerate(board)}
         self.items = items
         self.client_stub = _Client(responses or {})
         self.custom_fields = {
@@ -80,8 +87,9 @@ class _Manager(GitHubTicketManager):
     async def get_all_tickets(self):
         return self.items
 
-    async def move_ticket(self, task: Task, new_status: str) -> None:
+    async def move_ticket(self, task: Task, new_status: str) -> bool:
         self.moved.append((task, new_status))
+        return True
 
     async def _get_related_pull_requests(
         self, task: Task, issue_number: int
@@ -276,6 +284,63 @@ async def test_assigned_working_ticket_without_comments_is_selected():
 
     assert task is not None
     assert task.trigger_reason == "working_lane"
+
+
+@pytest.mark.asyncio
+async def test_assigned_backlog_ticket_before_ready_lane_is_ignored():
+    manager = _Manager(
+        items=[_item(number=1, status="Backlog")],
+        statuses=["Backlog", "Todo", "In Progress", "Done"],
+    )
+
+    assert await manager.get_task_to_work_on() is None
+
+
+@pytest.mark.asyncio
+async def test_assigned_icebox_ticket_after_done_lane_is_ignored():
+    manager = _Manager(
+        items=[_item(number=1, status="Icebox")],
+        statuses=["Todo", "In Progress", "Done", "Icebox"],
+    )
+
+    assert await manager.get_task_to_work_on() is None
+
+
+@pytest.mark.asyncio
+async def test_intermediate_review_lane_is_treated_as_working_without_config():
+    manager = _Manager(
+        items=[_item(number=1, status="In Review")],
+        statuses=["Todo", "In Progress", "In Review", "Done"],
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.status == Task.IN_PROGRESS
+    assert task.trigger_reason == "working_lane"
+
+
+@pytest.mark.asyncio
+async def test_backlog_ticket_with_mention_is_ignored():
+    # Position wins outright: a lane before the ready lane is out of the work
+    # window, so even an explicit mention does not pull it in.
+    manager = _Manager(
+        items=[_item(number=1, status="Backlog", assignee=None, body="Please ⚙aiko")],
+        statuses=["Backlog", "Todo", "In Progress", "Done"],
+    )
+
+    assert await manager.get_task_to_work_on() is None
+
+
+@pytest.mark.asyncio
+async def test_backlog_ticket_with_unhandled_comment_is_ignored():
+    manager = _Manager(
+        items=[_item(number=1, status="Backlog")],
+        responses=_comments(1, [{"user": "reviewer", "body": "Please update"}]),
+        statuses=["Backlog", "Todo", "In Progress", "Done"],
+    )
+
+    assert await manager.get_task_to_work_on() is None
 
 
 @pytest.mark.asyncio

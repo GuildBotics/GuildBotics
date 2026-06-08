@@ -43,7 +43,6 @@ class Task(BaseModel):
     READY: ClassVar[str] = "ready"
     IN_PROGRESS: ClassVar[str] = "in_progress"
     IN_REVIEW: ClassVar[str] = "in_review"
-    RETROSPECTIVE: ClassVar[str] = "retrospective"
     DONE: ClassVar[str] = "done"
 
     OUTPUT_PREFIX: ClassVar[str] = "Output: "

@@ -39,13 +39,19 @@ class TicketManager(ABC):
         pass
 
     @abstractmethod
-    async def move_ticket(self, task: Task, new_status: str) -> None:
+    async def move_ticket(self, task: Task, new_status: str) -> bool:
         """
         Move a ticket to a new status.
 
         Args:
             task (Task): The task representing the ticket to move.
             new_status (str): The new status to assign to the ticket.
+
+        Returns:
+            bool: True if the ticket was actually moved, False if the move was a
+                no-op (e.g. the target lane is not configured or cannot be
+                resolved). Callers should not assume the new status took effect
+                when this returns False.
         """
         pass
 

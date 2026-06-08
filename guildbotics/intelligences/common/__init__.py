@@ -789,7 +789,7 @@ class ImprovementSuggestion(BaseModel):
         return Task(
             title=self.proposal,
             description=description,
-            status=Task.RETROSPECTIVE,
+            status=Task.READY,
         )
 
 

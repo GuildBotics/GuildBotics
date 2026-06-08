@@ -5,6 +5,7 @@ from typing import Any
 
 from guildbotics.entities.task import Task
 from guildbotics.integrations.code_hosting_service import CodeHostingService
+from guildbotics.integrations.github.github_utils import get_person_github_token
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.common import (
     AgentResponse,
@@ -12,14 +13,32 @@ from guildbotics.intelligences.common import (
     Labels,
 )
 from guildbotics.runtime import Context
-from guildbotics.templates.commands.workflows.modes.util import (
-    get_branch_name,
-    get_git_tool,
-)
-from guildbotics.utils.fileio import get_storage_path
+from guildbotics.utils.fileio import get_storage_path, get_workspace_path
 from guildbotics.utils.git_tool import GitTool
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_log_output_dir
+
+
+async def get_git_tool(context: Context) -> GitTool:
+    workspace_path = get_workspace_path(context.person.person_id)
+    code_hosting_service = context.get_code_hosting_service(context.task.repository)
+    git_user = context.person.account_info.get("git_user", "Default User")
+    git_email = context.person.account_info.get("git_email", "default@example.com")
+    base_url = str(getattr(code_hosting_service, "base_url", "https://api.github.com"))
+    git_auth_token = await get_person_github_token(context.person, base_url)
+    return GitTool(
+        workspace_path,
+        await code_hosting_service.get_repository_url(),
+        context.logger,
+        git_user,
+        git_email,
+        await code_hosting_service.get_default_branch(),
+        auth_token=git_auth_token,
+    )
+
+
+def get_branch_name(context: Context) -> str:
+    return f"ticket/{context.task.id}"
 
 
 async def _move_task_to_working_if_ready(
@@ -27,8 +46,9 @@ async def _move_task_to_working_if_ready(
 ) -> None:
     """Move a newly selected task to the working lane when one is available."""
     if context.task.status == Task.READY and context.task.id is not None:
-        await ticket_manager.move_ticket(context.task, Task.IN_PROGRESS)
-        context.task.status = Task.IN_PROGRESS
+        moved = await ticket_manager.move_ticket(context.task, Task.IN_PROGRESS)
+        if moved:
+            context.task.status = Task.IN_PROGRESS
 
 
 def _safe_display_path(path: Path) -> str:

@@ -66,6 +66,7 @@ class GitHubTicketManager(TicketManager):
         self._project_node_id: str | None = None
         self._status_field_id: str | None = None
         self.columns: dict[str, str] = {}  # Task status -> option_id
+        self._status_positions: dict[str, int] = {}  # Status option name -> position
         self.custom_fields: dict[str, dict[str, Any]] = {}  # field_name -> field_info
         self.role_usernames: dict[
             str, list[str]
@@ -216,6 +217,10 @@ class GitHubTicketManager(TicketManager):
 
         _, columns_local = await self._get_status_field()
 
+        self._status_positions = {
+            name: info["position"] for name, info in columns_local.items()
+        }
+
         current_set = set(columns_local)
         self.columns = {}
         status_by_lane = {
@@ -246,13 +251,32 @@ class GitHubTicketManager(TicketManager):
         return self.columns.get(column_name, None)
 
     def _status_from_option(self, option_name: str | None) -> str | None:
+        """Map a board Status option to an internal lane by its board position.
+
+        The ready and done lanes act as the boundaries of the work window:
+        options positioned strictly between them are treated as working lanes,
+        while options before ready (e.g. ``Backlog``) or at/after done (e.g.
+        ``Icebox``) are ignored. This keeps configuration minimal—custom
+        intermediate lanes such as ``In Review`` become actionable without any
+        ``lane_map`` change, and pre/post lanes are skipped without one either.
+        """
         if not option_name:
             return None
-        if option_name == self.lane_map[self.LANE_READY]:
+        ready_name = self.lane_map[self.LANE_READY]
+        done_name = self.lane_map[self.LANE_DONE]
+        if option_name == ready_name:
             return Task.READY
-        if option_name == self.lane_map[self.LANE_DONE]:
+        if option_name == done_name:
             return Task.DONE
-        return Task.IN_PROGRESS
+
+        ready_pos = self._status_positions.get(ready_name) if ready_name else None
+        done_pos = self._status_positions.get(done_name) if done_name else None
+        option_pos = self._status_positions.get(option_name)
+        if ready_pos is None or done_pos is None or option_pos is None:
+            return None
+        if ready_pos < option_pos < done_pos:
+            return Task.IN_PROGRESS
+        return None
 
     async def _get_issue_node_id(self, repo: str | None, issue_number: int) -> str:
         """Convert a REST issue number to the GraphQL global node_id.
@@ -1055,13 +1079,18 @@ class GitHubTicketManager(TicketManager):
         )
         return data["addProjectV2ItemById"]["item"]["id"]
 
-    async def move_ticket(self, task: Task, new_status: str) -> None:
+    async def move_ticket(self, task: Task, new_status: str) -> bool:
         """
         Move an existing ticket to a new Status column.
 
         Args:
             task (Task): The Task to move.
             new_status (str): The target column name.
+
+        Returns:
+            bool: True if the Status column was updated, False when the target
+                lane has no resolvable option (e.g. the working lane is not
+                configured or absent from the board).
         """
         proj_node = await self._project_node()
         # update ProjectV2 item field value
@@ -1070,7 +1099,7 @@ class GitHubTicketManager(TicketManager):
         status_field_id, _ = await self._get_status_field()
         option_id = await self.get_column_id(new_status)
         if not option_id:
-            return
+            return False
 
         mutation = """
         mutation($proj:ID!,$item:ID!,$field:ID!,$opt:String!){
@@ -1093,6 +1122,7 @@ class GitHubTicketManager(TicketManager):
                 "opt": option_id,
             },
         )
+        return True
 
     async def add_comment_to_ticket(self, task: Task, comment: str) -> None:
         """
