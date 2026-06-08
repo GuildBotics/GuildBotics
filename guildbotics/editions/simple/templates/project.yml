@@ -7,12 +7,9 @@ services:
     owner: {owner}
     project_id: '{project_id}'
     url: {project_url}
-    status_map:
-      new: 'New'
-      ready: 'Ready'
-      in_progress: 'In Progress'
-      in_review: 'In Review'
-      retrospective: 'Retrospective'
+    lane_map:
+      ready: 'Todo'
+      working: 'In Progress'
       done: 'Done'
   code_hosting_service: 
     name: GitHub

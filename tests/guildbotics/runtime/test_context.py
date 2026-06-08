@@ -64,9 +64,9 @@ class DummyTicketManager(TicketManager):
         """No-op fetch task."""
         return None
 
-    async def move_ticket(self, task: Task, new_status: str) -> None:  # noqa: D401
+    async def move_ticket(self, task: Task, new_status: str) -> bool:  # noqa: D401
         """No-op move ticket."""
-        return None
+        return False
 
     async def add_comment_to_ticket(self, task: Task, comment: str) -> None:  # noqa: D401
         """No-op add comment."""

@@ -473,6 +473,54 @@ class NextTasksResponse(BaseModel):
         return Labels(labels, indent=indent)
 
 
+class GitHubTicketDraft(BaseModel):
+    """GitHub issue draft that GuildBotics can create as a workflow result."""
+
+    title: str = Field(..., description="Title of the GitHub issue to create.")
+    description: str = Field(
+        ..., description="Issue body describing the requested work."
+    )
+    priority: int | None = Field(
+        default=None,
+        description="Optional priority. Smaller values indicate higher priority.",
+    )
+    inputs: list[str] = Field(
+        default_factory=list,
+        description="Optional concrete inputs or references needed to start the work.",
+    )
+    output: str = Field(
+        default="",
+        description="Optional expected output or completion condition.",
+    )
+
+    def to_task(self) -> Task:
+        description = self.description
+        if self.inputs:
+            description += "\n\n**Inputs:**\n" + "\n".join(
+                f"- {input_}" for input_ in self.inputs
+            )
+        if self.output:
+            description += f"\n\n**Output:**\n- {self.output}"
+        return Task(
+            title=self.title,
+            description=description,
+            priority=self.priority,
+        )
+
+
+class GitHubReviewReply(BaseModel):
+    """Reply draft for one pull request review thread."""
+
+    comment_id: int = Field(
+        ...,
+        description="The target review comment ID to reply to.",
+    )
+    reply: str = Field(
+        ...,
+        description="Reply body for the target review thread.",
+    )
+
+
 class FileInfoResponse(BaseModel):
     file_name: str = Field(
         ...,
@@ -525,6 +573,64 @@ class AgentResponse(BaseModel):
             "Whether to skip posting an ticket comment by the caller. "
             "When True, additional comments will not be posted, "
             "as comments have already been submitted to the code hosting service."
+        ),
+    )
+
+
+class GitHubTicketAgentResult(BaseModel):
+    """Structured result returned by a CLI agent for ticket-driven GitHub work."""
+
+    DONE: ClassVar[Literal["done"]] = "done"
+    ASKING: ClassVar[Literal["asking"]] = "asking"
+
+    status: Literal["done", "asking"] = Field(
+        ...,
+        description=(
+            "'done' when the local repository edits are complete, or 'asking' when "
+            "the agent needs user input and no GitHub write should be performed "
+            "other than posting the question."
+        ),
+    )
+    summary: str = Field(
+        default="",
+        description="Short summary of what the agent did or concluded.",
+    )
+    question: str = Field(
+        default="",
+        description="Question to ask on the issue or PR when status is 'asking'.",
+    )
+    commit_message: str = Field(
+        default="",
+        description="Commit message to use if repository changes were made.",
+    )
+    pr_title: str = Field(
+        default="",
+        description="Pull request title to use when opening a new PR.",
+    )
+    pr_body: str = Field(
+        default="",
+        description="Pull request body to use when opening a new PR.",
+    )
+    ticket_comment: str = Field(
+        default="",
+        description="Issue or PR conversation comment that GuildBotics should post.",
+    )
+    review_reply: str = Field(
+        default="",
+        description=(
+            "General pull request conversation comment. Do not use this for inline "
+            "review thread replies; use review_replies instead."
+        ),
+    )
+    review_replies: list[GitHubReviewReply] = Field(
+        default_factory=list,
+        description="Per-thread pull request review replies keyed by target comment ID.",
+    )
+    new_tickets: list[GitHubTicketDraft] = Field(
+        default_factory=list,
+        description=(
+            "GitHub issue drafts GuildBotics should create as this work's "
+            "deliverable or as separately tracked follow-up tasks."
         ),
     )
 
@@ -683,7 +789,7 @@ class ImprovementSuggestion(BaseModel):
         return Task(
             title=self.proposal,
             description=description,
-            status=Task.RETROSPECTIVE,
+            status=Task.READY,
         )
 
 

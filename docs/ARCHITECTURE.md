@@ -58,8 +58,7 @@ GuildBotics follows a layered architecture with clear separation of concerns:
                       ↓
 ┌─────────────────────────────────────────────────┐
 │ Layer 6: Templates (Workflow Implementations)   │
-│  - ticket_driven_workflow, retrospective        │
-│  - Modes: ticket/comment/edit                   │
+│  - ticket_driven_workflow                       │
 └─────────────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────┐
@@ -191,7 +190,7 @@ Person
 
 Task
   ├── id, title, description
-  ├── status: READY | IN_PROGRESS | IN_REVIEW | DONE | RETROSPECTIVE
+  ├── status: READY | IN_PROGRESS | IN_REVIEW | DONE
   └── comments: Message[]
 
 Message
@@ -263,12 +262,6 @@ Message
 
 **Key Workflows**:
 - `ticket_driven_workflow.py`: Main workflow
-- `retrospective.py`: Retrospective analysis workflow
-
-**Modes**:
-- `ticket_mode.py`: Create sub-tasks
-- `comment_mode.py`: Add comments
-- `edit_mode.py`: Edit code and create PRs
 
 ---
 
@@ -302,25 +295,12 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[GitHub Projects] -->|get_task_to_work_on| B[Task: READY]
-    B -->|identify_role| C[Brain Inference]
-    B -->|identify_mode| D[Brain Inference]
-    C --> E{Mode?}
-    D --> E
-
-    E -->|ticket| F[ticket_mode.main]
-    E -->|comment| G[comment_mode.main]
-    E -->|edit| H[edit_mode.main]
-
-    F -->|identify_next_tasks| I[Create Tickets]
-    G -->|add_comment| J[Post Comment]
-    H -->|commit + PR| K[Create Pull Request]
-
-    I --> L[Task: IN_REVIEW]
-    J --> L
-    K --> L
-
-    L -->|update| A
+    A[GitHub Projects] -->|get_task_to_work_on| B[Issue or PR Review Task]
+    B -->|checkout work branch| C[Repository Workspace]
+    C -->|delegate URL and context| D[CLI Agent]
+    D -->|structured result| E[GuildBotics]
+    E -->|member credential| F[GitHub writes]
+    F -->|comments / PR / tickets / lane update| A
 ```
 
 ### 4.3 Command Execution Flow

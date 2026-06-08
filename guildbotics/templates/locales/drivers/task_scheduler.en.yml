@@ -1,2 +1,3 @@
 en:
   task_error: "An error occurred while executing the task. Please check the error log for details."
+  task_error_log_path: "Error log: %{path}"

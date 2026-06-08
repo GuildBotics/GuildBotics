@@ -5,3 +5,4 @@ ja:
   comments: "\n\n## コメント\n%{comments}"
   comment_notify: "タスクにコメントを追加しました。ご確認ください。"
   completed_notify: "タスクが完了しました。ご確認ください。"
+  ticket_drafts_created: "以下のチケットを作成しました。%{task_labels}"

@@ -2,10 +2,30 @@ env:
 script: |
   res=$(mktemp)
   log=$(mktemp)
+  status=0
+  # Run non-interactively inside Codex's workspace-write sandbox instead of
+  # fully bypassing approvals + sandbox. File writes stay confined to the repo
+  # checkout (the subprocess cwd) and temp dirs, while network access is kept
+  # enabled for dependency installation / test execution. Dropping the previous
+  # `-c shell_environment_policy.inherit=all` lets Codex apply its default env
+  # policy, which strips secret-looking variables (*KEY*/*TOKEN*/*SECRET*) from
+  # the environment handed to model-run shell commands, shrinking the blast
+  # radius if the agent prompt is compromised.
+  #
+  # Tuning knobs:
+  #   - A tool needs to write outside the repo (e.g. ~/.cache): add
+  #       --add-dir "$HOME/.cache"
+  #   - The deployment is already externally sandboxed and wants the previous
+  #     unrestricted behavior: replace the two sandbox lines below with
+  #       --dangerously-bypass-approvals-and-sandbox \
+  #       -c shell_environment_policy.inherit=all \
   DEBUG=true codex exec \
     --skip-git-repo-check \
-    --full-auto --output-last-message "$res" \
-    < "$PROMPT_FILE" >"$log" 2>&1
+    --sandbox workspace-write \
+    -c sandbox_workspace_write.network_access=true \
+    --output-last-message "$res" \
+    < "$PROMPT_FILE" >"$log" 2>&1 || status=$?
   cat "$log" >&2
   cat "$res"
   rm -f "$res" "$log"
+  exit "$status"

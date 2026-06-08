@@ -503,12 +503,9 @@ class SimpleProjectSetupService:
                 "owner": config.owner,
                 "project_id": str(config.project_id),
                 "url": config.github_project_url,
-                "status_map": {
-                    "new": "New",
-                    "ready": "Ready",
-                    "in_progress": "In Progress",
-                    "in_review": "In Review",
-                    "retrospective": "Retrospective",
+                "lane_map": {
+                    "ready": "Todo",
+                    "working": "In Progress",
                     "done": "Done",
                 },
             }
@@ -595,12 +592,9 @@ class SimpleProjectSetupService:
                     "owner": config.owner,
                     "project_id": str(config.project_id),
                     "url": config.github_project_url,
-                    "status_map": {
-                        "new": "New",
-                        "ready": "Ready",
-                        "in_progress": "In Progress",
-                        "in_review": "In Review",
-                        "retrospective": "Retrospective",
+                    "lane_map": {
+                        "ready": "Todo",
+                        "working": "In Progress",
                         "done": "Done",
                     },
                 },

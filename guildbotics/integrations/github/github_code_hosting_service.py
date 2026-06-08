@@ -392,3 +392,22 @@ class GitHubCodeHostingService(CodeHostingService):
                 html_url, include_all_comments=True
             ),
         )
+
+    async def get_pull_request_head_branch(self, html_url: str) -> str:
+        """Return the head branch for a same-repository pull request."""
+        pr_number = self.get_pr_number_from_url(html_url)
+        client = await self.get_client()
+        resp = await client.get(f"/repos/{self.owner}/{self.repo}/pulls/{pr_number}")
+        pr = resp.json()
+        head = pr.get("head") or {}
+        head_repo = head.get("repo") or {}
+        full_name = str(head_repo.get("full_name") or "")
+        expected = f"{self.owner}/{self.repo}"
+        if full_name and full_name != expected:
+            raise RuntimeError(
+                f"Pull request head repository '{full_name}' differs from '{expected}'."
+            )
+        branch = str(head.get("ref") or "")
+        if not branch:
+            raise RuntimeError(f"Pull request head branch not found for {html_url}")
+        return branch
