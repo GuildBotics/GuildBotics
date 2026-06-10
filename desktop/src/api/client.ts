@@ -194,6 +194,24 @@ export type CommandOptionsResponse = {
   options: CommandOption[];
 };
 
+export type LaneMap = {
+  ready: string;
+  working: string;
+  done: string;
+};
+
+export type ProjectStatusOptions = {
+  available: boolean;
+  statuses: string[];
+};
+
+export type ProjectStatusOptionsRequest = {
+  owner: string;
+  project_id: string;
+  github_project_url: string;
+  repository_name?: string;
+};
+
 export type ProjectSetupRequest = {
   config_dir: string;
   env_file_path: string;
@@ -204,6 +222,7 @@ export type ProjectSetupRequest = {
   owner?: string;
   project_id?: string;
   github_project_url?: string;
+  lane_map?: LaneMap;
   repo_base_url?: "https://github.com" | "ssh://git@github.com";
   llm_api_type: "openai" | "gemini" | "anthropic";
   cli_agent: "codex" | "gemini" | "claude" | "copilot";
@@ -222,6 +241,7 @@ export type ProjectConfig = {
   github_enabled: boolean;
   github_project_url: string;
   github_repository_url: string;
+  lane_map: LaneMap;
   repo_base_url: "https://github.com" | "ssh://git@github.com";
   has_google_api_key: boolean;
   has_openai_api_key: boolean;
@@ -240,6 +260,7 @@ export type ProjectConfigUpdateRequest = {
   owner?: string;
   project_id?: string;
   github_project_url?: string;
+  lane_map?: LaneMap;
   repo_base_url: "https://github.com" | "ssh://git@github.com";
   google_api_key?: string;
   openai_api_key?: string;
@@ -537,6 +558,12 @@ export async function initConfig(body: ProjectSetupRequest): Promise<ConfigWrite
 
 export async function getProjectConfig(): Promise<ProjectConfig> {
   return request("/config/project");
+}
+
+export async function getProjectStatusOptions(
+  body: ProjectStatusOptionsRequest,
+): Promise<ProjectStatusOptions> {
+  return request("/config/project/status-options", { method: "POST", body });
 }
 
 export async function updateProjectConfig(

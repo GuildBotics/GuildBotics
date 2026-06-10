@@ -697,7 +697,10 @@ lanes, while statuses placed **before** ready (for example `Backlog`) or **at/af
 ordering board columns alone, without touching `lane_map`.
 If your GitHub Project uses custom status names for the ready/working/done lanes, map them with
 the `services.ticket_manager.lane_map` key in `team/project.yml`
-(see [Configuration Files](#72-configuration-files)).
+(see [Configuration Files](#72-configuration-files)). The desktop setup app also exposes these
+lanes in the GitHub section: it offers your Project's status options when they can be read, and
+otherwise falls back to manual entry. Defaults work for a standard `Todo` / `In Progress` / `Done`
+board, so no lane configuration is required there.
 
 ## 6.3. Running the Ticket-Driven Workflow
 

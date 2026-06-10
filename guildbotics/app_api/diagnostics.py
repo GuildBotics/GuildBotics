@@ -18,6 +18,11 @@ from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.integrations.github.github_utils import (
+    get_github_username,
+    get_proxy_agent_signature,
+    is_proxy_agent,
+)
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.functions import talk_as
 from guildbotics.runtime import Context
@@ -353,6 +358,7 @@ class ScenarioDiagnosticsService:
             ]
 
         checks: list[DiagnosticCheck] = []
+        lane_checked = False
         for member in members:
             c = context.clone_for(member)
             try:
@@ -368,6 +374,14 @@ class ScenarioDiagnosticsService:
                             person_id=member.person_id,
                             context={"status_count": len(statuses)},
                         )
+                    )
+                    if not lane_checked:
+                        checks.extend(
+                            self._check_lane_mapping(ticket_manager, statuses)
+                        )
+                        lane_checked = True
+                    checks.append(
+                        await self._check_agent_assignment(ticket_manager, member)
                     )
                 if project.is_available_service(Service.CODE_HOSTING_SERVICE):
                     default_branch = (
@@ -397,6 +411,102 @@ class ScenarioDiagnosticsService:
             finally:
                 await c.aclose()
         return checks
+
+    def _check_lane_mapping(
+        self, ticket_manager: GitHubTicketManager, statuses: list[str]
+    ) -> list[DiagnosticCheck]:
+        """Validate that the configured ready/done lanes exist on the board.
+
+        The working lane is optional: a missing working lane is reported as a
+        warning (tickets simply are not moved on start), never an error.
+        """
+        status_set = set(statuses)
+        lane_map = ticket_manager.lane_map
+        ready = lane_map.get(GitHubTicketManager.LANE_READY)
+        done = lane_map.get(GitHubTicketManager.LANE_DONE)
+        working = lane_map.get(GitHubTicketManager.LANE_WORKING)
+
+        checks: list[DiagnosticCheck] = []
+        missing = [name for name in (ready, done) if name and name not in status_set]
+        if missing:
+            checks.append(
+                self._check(
+                    "github",
+                    "github_lane_missing",
+                    "error",
+                    "Required workflow lanes are missing from the GitHub Project "
+                    f"status options: {', '.join(missing)}.",
+                    context={"missing": missing, "available": sorted(status_set)},
+                )
+            )
+        else:
+            checks.append(
+                self._check(
+                    "github",
+                    "github_lane_mapping",
+                    "ok",
+                    "Ready and done lanes exist in the GitHub Project.",
+                    context={"ready": ready, "done": done},
+                )
+            )
+        if working and working not in status_set:
+            checks.append(
+                self._check(
+                    "github",
+                    "github_working_lane_missing",
+                    "warning",
+                    f"Configured working lane '{working}' is not a GitHub Project "
+                    "status; tickets will not be moved to a working lane on start.",
+                    context={"working": working},
+                )
+            )
+        return checks
+
+    async def _check_agent_assignment(
+        self, ticket_manager: GitHubTicketManager, member: Person
+    ) -> DiagnosticCheck:
+        """Verify each member can receive ticket assignments.
+
+        Members that are assignable GitHub users do not need the project's
+        ``Agent`` field. Proxy agents, GitHub Apps, and other non-assignable
+        identities must have a matching ``Agent`` field option; otherwise the
+        member can never be assigned a ticket.
+        """
+        username = get_github_username(member)
+        if (
+            not is_proxy_agent(member)
+            and username
+            and await ticket_manager.is_assignable_user(username)
+        ):
+            return self._check(
+                "github",
+                "github_agent_assignment",
+                "ok",
+                "Member is an assignable GitHub user; the Agent field is not required.",
+                person_id=member.person_id,
+                context={"github_username": username},
+            )
+
+        signature = get_proxy_agent_signature(member)
+        options = await ticket_manager.get_agent_field_options()
+        if signature in options:
+            return self._check(
+                "github",
+                "github_agent_assignment",
+                "ok",
+                "Member is assigned through the project's Agent field option.",
+                person_id=member.person_id,
+                context={"agent_option": signature},
+            )
+        return self._check(
+            "github",
+            "github_agent_field_required",
+            "error",
+            "Member cannot be assigned as a GitHub user and has no Agent field "
+            "option; set the Agent field for this member.",
+            person_id=member.person_id,
+            context={"agent_option": signature},
+        )
 
     async def _check_slack(
         self, context: Context, members: list[Person]

@@ -38,6 +38,8 @@ from guildbotics.app_api.models import (
     ConfigLocation,
     ConfigStatus,
     MemberSummary,
+    ProjectStatusOptionsRequest,
+    ProjectStatusOptionsResponse,
     ProjectSummary,
     PromptTraceEntry,
     PromptTraceStatus,
@@ -59,7 +61,9 @@ from guildbotics.drivers import (
 )
 from guildbotics.editions import get_edition
 from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
-from guildbotics.entities import Service
+from guildbotics.entities import Project, Service, Team
+from guildbotics.entities.team import Repository
+from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
     get_home_config_path,
@@ -406,6 +410,58 @@ class AppRuntime:
         finally:
             if context is not None:
                 await context.aclose()
+
+    async def fetch_project_status_options(
+        self, request: ProjectStatusOptionsRequest
+    ) -> ProjectStatusOptionsResponse:
+        """Read the Status options of the GitHub Project identified by *request*.
+
+        Reads live (no writes) using a configured member's GitHub credentials,
+        so the setup form can list lanes for the project URL being entered
+        before it is saved. Returns ``available=False`` (instead of raising)
+        whenever options cannot be read—incomplete identity, no member token,
+        or a GitHub error—so the form falls back to manual lane entry.
+        """
+        if not (request.owner and request.project_id and request.github_project_url):
+            return ProjectStatusOptionsResponse(available=False)
+        try:
+            context = self._get_context()
+        except Exception:
+            return ProjectStatusOptionsResponse(available=False)
+        try:
+            members = [m for m in context.team.members if m.is_active]
+            members = members or list(context.team.members)
+            project = Project(
+                name=context.team.project.name or "setup",
+                repositories=[
+                    Repository(name=request.repository_name or "repo", is_default=True)
+                ],
+                services={
+                    "ticket_manager": {
+                        "name": "GitHub",
+                        "owner": request.owner,
+                        "project_id": request.project_id,
+                        "url": request.github_project_url,
+                    }
+                },
+            )
+            team = Team(project=project, members=context.team.members)
+            logger = logging.getLogger("guildbotics.app_api.status_options")
+            for member in members:
+                ticket_manager = GitHubTicketManager(logger, member, team)
+                try:
+                    statuses = await ticket_manager.get_statuses()
+                    return ProjectStatusOptionsResponse(
+                        available=True, statuses=statuses
+                    )
+                except Exception:
+                    continue
+                finally:
+                    if ticket_manager.client is not None:
+                        await ticket_manager.client.aclose()
+            return ProjectStatusOptionsResponse(available=False)
+        finally:
+            await context.aclose()
 
     def detect_cli_agents(self) -> CliAgentDetectionsResponse:
         mapping: dict[str, Any] = {}

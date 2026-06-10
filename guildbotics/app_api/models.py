@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from guildbotics.editions.simple.setup_service import LaneMapInput
+
 
 class VerifyCheck(BaseModel):
     code: str
@@ -293,12 +295,39 @@ class ProjectConfigResponse(BaseModel):
     github_enabled: bool
     github_project_url: str = ""
     github_repository_url: str = ""
+    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
     repo_base_url: Literal["https://github.com", "ssh://git@github.com"] = (
         "https://github.com"
     )
     has_google_api_key: bool
     has_openai_api_key: bool
     has_anthropic_api_key: bool
+
+
+class ProjectStatusOptionsRequest(BaseModel):
+    """Identify the GitHub Project to read Status options from.
+
+    The form supplies the project being edited (which may not be saved yet);
+    the backend reads its Status options live using a configured member's
+    credentials, without writing anything to GitHub.
+    """
+
+    owner: str = ""
+    project_id: str = ""
+    github_project_url: str = ""
+    repository_name: str = ""
+
+
+class ProjectStatusOptionsResponse(BaseModel):
+    """Status (lane) option names read from a GitHub Project.
+
+    ``available`` is False when options could not be read (incomplete project
+    identity, no member credentials, or a GitHub error); the frontend then
+    falls back to manual lane-name entry.
+    """
+
+    available: bool
+    statuses: list[str] = Field(default_factory=list)
 
 
 class ProjectConfigUpdateRequest(BaseModel):
@@ -313,6 +342,7 @@ class ProjectConfigUpdateRequest(BaseModel):
     owner: str = ""
     project_id: str = ""
     github_project_url: str = ""
+    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
     repo_base_url: Literal["https://github.com", "ssh://git@github.com"] = (
         "https://github.com"
     )
