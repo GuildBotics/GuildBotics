@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from guildbotics.editions.simple.setup_service import LaneMapInput
+from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
 
 
 class VerifyCheck(BaseModel):
@@ -330,7 +330,7 @@ class ProjectStatusOptionsResponse(BaseModel):
     statuses: list[str] = Field(default_factory=list)
 
 
-class ProjectConfigUpdateRequest(BaseModel):
+class ProjectConfigUpdateRequest(GitHubProjectInput):
     config_dir: Path
     env_file_path: Path
     language: Literal["en", "ja"]
@@ -338,11 +338,6 @@ class ProjectConfigUpdateRequest(BaseModel):
     llm_api_type: Literal["openai", "gemini", "anthropic"]
     cli_agent: Literal["codex", "gemini", "claude", "copilot"]
     github_enabled: bool
-    repository_name: str = ""
-    owner: str = ""
-    project_id: str = ""
-    github_project_url: str = ""
-    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
     repo_base_url: Literal["https://github.com", "ssh://git@github.com"] = (
         "https://github.com"
     )

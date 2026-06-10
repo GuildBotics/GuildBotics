@@ -113,17 +113,22 @@ class LaneMapInput(BaseModel):
         return cls(**values)
 
 
-class ProjectSetupInput(BaseModel):
-    config_dir: Path
-    env_file_path: Path
-    env_file_option: str = Field(pattern="^(skip|append|overwrite)$")
-    language: str
-    description: str = ""
+class GitHubProjectInput(BaseModel):
+    """GitHub Project identity fields shared by project setup / update inputs."""
+
     repository_name: str = ""
     owner: str = ""
     project_id: str = ""
     github_project_url: str = ""
     lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
+
+
+class ProjectSetupInput(GitHubProjectInput):
+    config_dir: Path
+    env_file_path: Path
+    env_file_option: str = Field(pattern="^(skip|append|overwrite)$")
+    language: str
+    description: str = ""
     repo_base_url: str = Field(
         default="https://github.com",
         pattern="^(https://github.com|ssh://git@github.com)$",
@@ -188,7 +193,7 @@ class ProjectConfigSnapshot(BaseModel):
     has_anthropic_api_key: bool = False
 
 
-class ProjectUpdateInput(BaseModel):
+class ProjectUpdateInput(GitHubProjectInput):
     config_dir: Path
     env_file_path: Path
     language: str
@@ -196,11 +201,6 @@ class ProjectUpdateInput(BaseModel):
     llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
     cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
     github_enabled: bool = False
-    repository_name: str = ""
-    owner: str = ""
-    project_id: str = ""
-    github_project_url: str = ""
-    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
     repo_base_url: str = Field(
         default="https://github.com",
         pattern="^(https://github.com|ssh://git@github.com)$",
