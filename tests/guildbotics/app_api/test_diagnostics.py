@@ -605,6 +605,37 @@ async def test_github_missing_working_lane_is_warning_not_error(
 
 
 @pytest.mark.asyncio
+async def test_github_non_assignable_human_advises_repo_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    # A human member with a GitHub username who is not a repo collaborator: the
+    # Agent field does not apply, so the remediation is repo permissions.
+    ticket_manager.assignable = False
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "alice", is_active=True, account_info={"github_username": "alice"}
+                )
+            ],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_member_not_assignable"].status == "error"
+    assert "github_agent_field_required" not in checks
+    assert not response.ok
+
+
+@pytest.mark.asyncio
 async def test_github_proxy_agent_without_agent_field_option_is_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

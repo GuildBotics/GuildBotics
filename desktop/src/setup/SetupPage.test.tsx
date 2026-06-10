@@ -447,6 +447,41 @@ describe("SetupPage", () => {
     expect(screen.getByRole("option", { name: "Done" })).toBeInTheDocument();
   });
 
+  it("clears fetched lane options when the Project URL becomes invalid", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({
+        github_enabled: true,
+        github_project_url: "https://github.com/orgs/acme/projects/9",
+        github_repository_url: "https://github.com/acme/repo",
+        lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
+      }),
+    );
+    vi.mocked(getProjectStatusOptions).mockResolvedValue({
+      available: true,
+      statuses: ["Backlog", "Todo", "In Progress", "Done"],
+    });
+    renderSetupPage("/setup");
+
+    await screen.findByLabelText("Project description");
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
+
+    // Options load for the configured URL.
+    await screen.findByRole("textbox", { name: t("setup.github.laneReady") });
+    expect(screen.getByText(t("setup.github.laneMappingHint"))).toBeInTheDocument();
+
+    // Editing the Project URL into an invalid value must drop the stale options
+    // (the lanes fall back to manual entry rather than showing another
+    // project's lanes).
+    const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
+    await user.clear(projectUrl);
+    await user.type(projectUrl, "not-a-valid-url");
+    await user.tab();
+
+    expect(await screen.findByText(t("setup.github.laneMappingManualHint"))).toBeInTheDocument();
+    expect(screen.queryByText(t("setup.github.laneMappingHint"))).not.toBeInTheDocument();
+  });
+
   it("navigates between sections with the next and back buttons", async () => {
     const user = userEvent.setup();
     vi.mocked(getConfigStatus).mockResolvedValue(

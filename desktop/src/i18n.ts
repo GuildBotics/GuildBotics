@@ -546,6 +546,11 @@ const resources = {
             description:
               "The configured working lane is not a GitHub Project status; tickets will not be moved to a working lane on start.",
           },
+          github_member_not_assignable: {
+            title: "Member cannot be assigned tickets",
+            description:
+              "The member is not an assignable GitHub user; grant it repository / collaborator permissions so it can be assigned to issues.",
+          },
           github_agent_field_required: {
             title: "Member cannot be assigned tickets",
             description:
@@ -1344,6 +1349,11 @@ const resources = {
             title: "作業中レーンが見つかりません",
             description:
               "設定した作業中レーンが GitHub Project の status に存在しないため、着手時にチケットを移動しません。",
+          },
+          github_member_not_assignable: {
+            title: "メンバーにチケットを割り当てられません",
+            description:
+              "assignable な GitHub ユーザーではありません。issue に割り当てられるよう、このメンバーに repository / collaborator 権限を付与してください。",
           },
           github_agent_field_required: {
             title: "メンバーにチケットを割り当てられません",

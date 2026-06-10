@@ -467,10 +467,12 @@ class ScenarioDiagnosticsService:
     ) -> DiagnosticCheck:
         """Verify each member can receive ticket assignments.
 
-        Members that are assignable GitHub users do not need the project's
-        ``Agent`` field. Proxy agents, GitHub Apps, and other non-assignable
-        identities must have a matching ``Agent`` field option; otherwise the
-        member can never be assigned a ticket.
+        A member that is an assignable GitHub user needs nothing else. Otherwise
+        the remediation depends on the member type: human members are assigned
+        only through GitHub assignees, so a non-assignable human needs repository
+        / collaborator permissions (the ``Agent`` field does not apply to them).
+        Non-human identities (proxy agents, GitHub Apps, machine users) are
+        assigned through the project's ``Agent`` field and need a matching option.
         """
         username = get_github_username(member)
         if (
@@ -483,6 +485,17 @@ class ScenarioDiagnosticsService:
                 "github_agent_assignment",
                 "ok",
                 "Member is an assignable GitHub user; the Agent field is not required.",
+                person_id=member.person_id,
+                context={"github_username": username},
+            )
+
+        if member.person_type in ("", "human"):
+            return self._check(
+                "github",
+                "github_member_not_assignable",
+                "error",
+                "Member is not an assignable GitHub user; grant this member "
+                "repository / collaborator permissions so it can be assigned.",
                 person_id=member.person_id,
                 context={"github_username": username},
             )

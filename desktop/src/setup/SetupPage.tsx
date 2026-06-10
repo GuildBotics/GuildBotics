@@ -3070,13 +3070,14 @@ function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
     enabled: githubEnabled && laneFetchTarget !== null,
   });
   const laneChoices =
-    githubEnabled && statusOptions.data?.available ? statusOptions.data.statuses : [];
+    githubEnabled && laneFetchTarget !== null && statusOptions.data?.available
+      ? statusOptions.data.statuses
+      : [];
 
+  // Always update the target (to null for an invalid/cleared URL) so the lane
+  // Selects never keep showing options fetched for a different project.
   const refreshLaneOptions = () => {
-    const target = buildLaneFetchTarget(form.values);
-    if (target) {
-      setLaneFetchTarget(target);
-    }
+    setLaneFetchTarget(buildLaneFetchTarget(form.values));
   };
 
   const projectUrlProps = form.getInputProps("githubProjectUrl");
