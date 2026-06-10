@@ -23,6 +23,7 @@ from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
 
 HTTP_BAD_REQUEST = 400
+HTTP_NO_CONTENT = 204
 
 
 class GitHubTicketManager(TicketManager):
@@ -240,6 +241,33 @@ class GitHubTicketManager(TicketManager):
         """
         _, columns_local = await self._get_status_field()
         return list(columns_local)
+
+    async def is_assignable_user(self, username: str) -> bool:
+        """
+        Return True if *username* can be assigned to issues in the default repo.
+
+        Uses the read-only REST assignee check
+        (``GET /repos/{owner}/{repo}/assignees/{username}`` returns 204 when the
+        user is assignable, 404 otherwise). No data is written to GitHub.
+        """
+        if not username:
+            return False
+        client = await self.login()
+        resp = await client.get(
+            f"/repos/{self.owner}/{self.default_repo}/assignees/{username}"
+        )
+        return resp.status_code == HTTP_NO_CONTENT
+
+    async def get_agent_field_options(self) -> list[str]:
+        """Return the option names of the project's ``Agent`` custom field.
+
+        Read-only: unlike :meth:`ensure_custom_fields`, this does not create the
+        field if it is missing (an empty list is returned in that case).
+        """
+        fields = await self._get_custom_fields()
+        agent_field = fields.get(GitHubTicketManager.FIELD_AGENT, {})
+        options = agent_field.get("options", {})
+        return list(options) if isinstance(options, dict) else []
 
     async def get_column_id(self, column_name: str) -> str | None:
         """

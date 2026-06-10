@@ -414,6 +414,7 @@ function projectConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
     github_enabled: true,
     github_project_url: "",
     github_repository_url: "",
+    lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
     repo_base_url: "https://github.com",
     has_google_api_key: false,
     has_openai_api_key: true,

@@ -475,11 +475,11 @@ describe("Setup integration (real client + mock server)", () => {
     );
 
     await user.type(screen.getByLabelText("Project description"), "Demo project");
-    await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
-    await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    // The GitHub use/don't decision now lives in the Project section.
     await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
+    await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     await user.click(screen.getByRole("button", { name: "Members" }));
     await user.type(await screen.findByLabelText("Member ID"), "alice");

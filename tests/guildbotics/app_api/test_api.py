@@ -18,6 +18,8 @@ from guildbotics.app_api.models import (
     CommandRunRequest,
     ConfigStatus,
     DiagnosticCheck,
+    ProjectStatusOptionsRequest,
+    ProjectStatusOptionsResponse,
     PromptTraceStatus,
     PromptTraceUpdateRequest,
     RuntimeStatus,
@@ -94,6 +96,14 @@ class RuntimeStub:
 
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
+
+    async def fetch_project_status_options(
+        self, request: ProjectStatusOptionsRequest
+    ) -> ProjectStatusOptionsResponse:
+        self.status_options_request = request
+        return getattr(
+            self, "status_options", ProjectStatusOptionsResponse(available=False)
+        )
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
         project_file = workspace_dir / ".guildbotics/config/team/project.yml"
@@ -1876,6 +1886,46 @@ def test_config_project_get_reports_project_not_found(tmp_path: Path) -> None:
     assert payload["code"] == "project_not_found"
     assert "primary" in payload["context"]
     assert "home" in payload["context"]
+
+
+def test_config_project_status_options_returns_payload(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    runtime.status_options = ProjectStatusOptionsResponse(
+        available=True, statuses=["Todo", "In Progress", "Done"]
+    )
+    client = _client(runtime)
+
+    response = client.post(
+        "/config/project/status-options",
+        headers=AUTH_HEADERS,
+        json={
+            "owner": "acme",
+            "project_id": "9",
+            "github_project_url": "https://github.com/orgs/acme/projects/9",
+            "repository_name": "repo",
+        },
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "available": True,
+        "statuses": ["Todo", "In Progress", "Done"],
+    }
+    assert runtime.status_options_request.owner == "acme"
+    assert runtime.status_options_request.project_id == "9"
+
+
+def test_config_project_status_options_unavailable_falls_back(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post(
+        "/config/project/status-options",
+        headers=AUTH_HEADERS,
+        json={"owner": "", "project_id": "", "github_project_url": ""},
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {"available": False, "statuses": []}
 
 
 def test_config_project_update_maps_setup_service_error(

@@ -31,6 +31,8 @@ from guildbotics.app_api.models import (
     MemberResolveResponse,
     ProjectConfigResponse,
     ProjectConfigUpdateRequest,
+    ProjectStatusOptionsRequest,
+    ProjectStatusOptionsResponse,
     PromptTraceStatus,
     PromptTraceUpdateRequest,
     RoleOption,
@@ -386,6 +388,17 @@ def create_app(
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
         return ProjectConfigResponse.model_validate(snapshot.model_dump())
+
+    @app.post(
+        "/config/project/status-options",
+        response_model=ProjectStatusOptionsResponse,
+        responses=error_responses,
+    )
+    async def config_project_status_options(
+        request: ProjectStatusOptionsRequest,
+        _: None = Depends(require_token),
+    ) -> ProjectStatusOptionsResponse:
+        return await app_runtime.fetch_project_status_options(request)
 
     @app.put(
         "/config/project",

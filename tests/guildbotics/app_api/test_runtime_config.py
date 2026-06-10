@@ -16,12 +16,73 @@ import pytest
 
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.models import PromptTraceUpdateRequest
+from guildbotics.app_api.models import (
+    ProjectStatusOptionsRequest,
+    PromptTraceUpdateRequest,
+)
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.entities import Person, Project, Team
 
 HTTP_BAD_REQUEST = 400
 TRACE_EVENT_TOTAL = 5
 TRACE_EVENT_LIMIT = 2
+
+
+class _FakeContext:
+    def __init__(self, members: list[Person]) -> None:
+        self.team = Team(project=Project(name="demo"), members=members)
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_fetch_status_options_incomplete_identity_is_unavailable() -> None:
+    runtime = AppRuntime(EventBus())
+    result = await runtime.fetch_project_status_options(
+        ProjectStatusOptionsRequest(owner="", project_id="", github_project_url="")
+    )
+    assert result.available is False
+    assert result.statuses == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_status_options_reads_live_with_member_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    member = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        account_info={"github_username": "alice"},
+    )
+    monkeypatch.setattr(
+        AppRuntime, "_get_context", lambda self, message="": _FakeContext([member])
+    )
+
+    class _FakeTicketManager:
+        def __init__(self, logger: object, person: Person, team: Team) -> None:
+            self.client = None
+            self.person = person
+
+        async def get_statuses(self) -> list[str]:
+            return ["Todo", "In Progress", "Done"]
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.GitHubTicketManager", _FakeTicketManager
+    )
+
+    runtime = AppRuntime(EventBus())
+    result = await runtime.fetch_project_status_options(
+        ProjectStatusOptionsRequest(
+            owner="acme",
+            project_id="9",
+            github_project_url="https://github.com/orgs/acme/projects/9",
+            repository_name="repo",
+        )
+    )
+    assert result.available is True
+    assert result.statuses == ["Todo", "In Progress", "Done"]
 
 
 @pytest.fixture

@@ -52,8 +52,23 @@ class _StubChatService:
 
 
 class _StubTicketManager:
+    def __init__(self) -> None:
+        self.lane_map: dict[str, str | None] = {
+            "ready": "Todo",
+            "working": "Doing",
+            "done": "Done",
+        }
+        self.assignable: bool = True
+        self.agent_field_options: list[str] = []
+
     async def get_statuses(self) -> list[str]:
         return list(TICKET_STATUSES)
+
+    async def is_assignable_user(self, username: str) -> bool:
+        return self.assignable
+
+    async def get_agent_field_options(self) -> list[str]:
+        return list(self.agent_field_options)
 
 
 class _StubCodeHostingService:
@@ -490,7 +505,16 @@ async def test_github_enabled_project_and_repository_access(
         "code_hosting_service": {"name": "GitHub"},
     }
     context = _StubContext(
-        team=_team([_person("alice", is_active=True)], services=services),
+        team=_team(
+            [
+                _person(
+                    "alice",
+                    is_active=True,
+                    account_info={"github_username": "alice"},
+                )
+            ],
+            services=services,
+        ),
         brain=_StubBrain(_CliResult()),
     )
 
@@ -498,6 +522,8 @@ async def test_github_enabled_project_and_repository_access(
 
     checks = _by_code(response)
     assert checks["github_project_access"].status == "ok"
+    assert checks["github_lane_mapping"].status == "ok"
+    assert checks["github_agent_assignment"].status == "ok"
     assert checks["github_project_access"].context["status_count"] == len(
         TICKET_STATUSES
     )
@@ -506,6 +532,158 @@ async def test_github_enabled_project_and_repository_access(
     assert repo_check.section == "git"
     assert repo_check.status == "ok"
     assert repo_check.context["default_branch"] == "main"
+
+
+def _github_services() -> dict:
+    return {
+        "ticket_manager": {"name": "GitHub"},
+        "code_hosting_service": {"name": "GitHub"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_github_missing_ready_lane_is_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    # "Backlog" is not among TICKET_STATUSES, so the ready lane is missing.
+    ticket_manager.lane_map = {"ready": "Backlog", "working": "Doing", "done": "Done"}
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "alice", is_active=True, account_info={"github_username": "alice"}
+                )
+            ],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_lane_missing"].status == "error"
+    assert "Backlog" in checks["github_lane_missing"].message
+    assert not response.ok
+
+
+@pytest.mark.asyncio
+async def test_github_missing_working_lane_is_warning_not_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    ticket_manager.lane_map = {
+        "ready": "Todo",
+        "working": "Nowhere",
+        "done": "Done",
+    }
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "alice", is_active=True, account_info={"github_username": "alice"}
+                )
+            ],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert "github_lane_missing" not in checks
+    assert checks["github_working_lane_missing"].status == "warning"
+    assert all(check.code != "github_working_lane_missing" for check in response.errors)
+
+
+@pytest.mark.asyncio
+async def test_github_non_assignable_human_advises_repo_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    # A human member with a GitHub username who is not a repo collaborator: the
+    # Agent field does not apply, so the remediation is repo permissions.
+    ticket_manager.assignable = False
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "alice", is_active=True, account_info={"github_username": "alice"}
+                )
+            ],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_member_not_assignable"].status == "error"
+    assert "github_agent_field_required" not in checks
+    assert not response.ok
+
+
+@pytest.mark.asyncio
+async def test_github_proxy_agent_without_agent_field_option_is_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    ticket_manager.assignable = False
+    ticket_manager.agent_field_options = []
+    context = _StubContext(
+        team=_team(
+            [_person("bot", is_active=True, person_type="proxy_agent")],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_agent_field_required"].status == "error"
+    assert checks["github_agent_field_required"].context["agent_option"] == "⚙bot"
+    assert not response.ok
+
+
+@pytest.mark.asyncio
+async def test_github_proxy_agent_with_agent_field_option_is_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    ticket_manager.assignable = False
+    ticket_manager.agent_field_options = ["⚙bot"]
+    context = _StubContext(
+        team=_team(
+            [_person("bot", is_active=True, person_type="proxy_agent")],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_agent_assignment"].status == "ok"
+    assert "github_agent_field_required" not in checks
 
 
 @pytest.mark.asyncio

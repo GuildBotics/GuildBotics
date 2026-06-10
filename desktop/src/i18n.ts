@@ -312,13 +312,30 @@ const resources = {
           title: "GitHub",
           subtitle: "Choose whether this project uses GitHub Projects, Issues, and repositories.",
           decision: "GitHub integration",
+          decisionHint:
+            "Decides whether members need a GitHub identity and whether the GitHub connection section applies.",
           decisionPlaceholder: "Choose whether to use GitHub",
           disabled: "Do not use GitHub",
           enabled: "Use GitHub",
+          disabledTitle: "GitHub is not used",
           disabledHint:
-            "GitHub-dependent routines stay disabled until you configure this integration.",
+            "GitHub-dependent routines stay disabled until you enable GitHub in the Project section.",
+          repoAccess: "Repository access scheme",
+          projectAndLanes: "Project & lane mapping",
           projectUrl: "GitHub Project URL",
+          projectUrlHint:
+            "The lanes below are read from this Project; they refresh when the URL loses focus.",
           repositoryUrl: "GitHub Repository URL",
+          laneMapping: "Lane mapping",
+          laneMappingHint:
+            "Map workflow lanes to your GitHub Project status options. Defaults work with a standard Todo / In Progress / Done board.",
+          laneMappingManualHint:
+            "Status options could not be read automatically; enter the status names used by your GitHub Project (defaults assume Todo / In Progress / Done).",
+          laneReady: "Ready lane",
+          laneWorking: "Working lane",
+          laneWorkingHint:
+            "Tickets are moved here when work starts. If this lane does not exist on the board, tickets are simply not moved.",
+          laneDone: "Done lane",
         },
         autosave: {
           idle: "Autosave",
@@ -331,6 +348,7 @@ const resources = {
           descriptionRequired: "Project description is required.",
           githubDecisionRequired: "Choose whether to use GitHub.",
           githubProjectRequired: "GitHub project URL is required.",
+          laneReadyDoneSame: "Ready and done lanes must be different.",
           githubProjectInvalid:
             "Enter a GitHub Project URL such as https://github.com/orgs/<org>/projects/<number> or https://github.com/users/<user>/projects/<number>.",
           githubRepositoryRequired: "GitHub repository URL is required.",
@@ -435,6 +453,15 @@ const resources = {
             title: "GitHub Project was readable",
             description: "Project status options were fetched without updating GitHub.",
           },
+          github_lane_mapping: {
+            title: "Workflow lanes are valid",
+            description: "The ready and done lanes exist in the GitHub Project.",
+          },
+          github_agent_assignment: {
+            title: "Member can be assigned tickets",
+            description:
+              "The member is an assignable GitHub user or has a matching Agent field option.",
+          },
           github_repository_access: {
             title: "GitHub repository was readable",
             description: "Repository metadata was fetched without updating GitHub.",
@@ -508,6 +535,26 @@ const resources = {
           github_project_access: {
             title: "GitHub project access failed",
             description: "The GitHub Project could not be read with this member's credentials.",
+          },
+          github_lane_missing: {
+            title: "Workflow lanes are missing",
+            description:
+              "The configured ready or done lane was not found among the GitHub Project status options.",
+          },
+          github_working_lane_missing: {
+            title: "Working lane was not found",
+            description:
+              "The configured working lane is not a GitHub Project status; tickets will not be moved to a working lane on start.",
+          },
+          github_member_not_assignable: {
+            title: "Member cannot be assigned tickets",
+            description:
+              "The member is not an assignable GitHub user; grant it repository / collaborator permissions so it can be assigned to issues.",
+          },
+          github_agent_field_required: {
+            title: "Member cannot be assigned tickets",
+            description:
+              "The member is not an assignable GitHub user and has no Agent field option; set the Agent field for this member.",
           },
           github_repository_access: {
             title: "GitHub repository access failed",
@@ -1046,12 +1093,30 @@ const resources = {
           title: "GitHub",
           subtitle: "このプロジェクトで GitHub Projects、Issue、リポジトリを使うかを選択します。",
           decision: "GitHub連携",
+          decisionHint:
+            "メンバーに GitHub アイデンティティが必要か、GitHub 接続セクションを使うかを決めます。",
           decisionPlaceholder: "GitHubを使うか選択",
           disabled: "GitHubを使わない",
           enabled: "GitHubを使う",
-          disabledHint: "GitHub が必要な routine は、この連携を設定するまで起動できません。",
+          disabledTitle: "GitHub を使用しません",
+          disabledHint:
+            "GitHub が必要な routine は、プロジェクト画面で GitHub を有効にするまで起動できません。",
+          repoAccess: "リポジトリアクセス方式",
+          projectAndLanes: "プロジェクトとレーンマッピング",
           projectUrl: "GitHub Project URL",
+          projectUrlHint:
+            "下のレーンはこの Project から取得します。URL のフォーカスが外れると更新されます。",
           repositoryUrl: "GitHub Repository URL",
+          laneMapping: "レーンマッピング",
+          laneMappingHint:
+            "ワークフローのレーンを GitHub Project の status option に対応付けます。標準的な Todo / In Progress / Done のボードなら既定値のままで動作します。",
+          laneMappingManualHint:
+            "status options を自動取得できませんでした。GitHub Project で使っている status 名を入力してください（既定は Todo / In Progress / Done）。",
+          laneReady: "着手可能レーン",
+          laneWorking: "作業中レーン",
+          laneWorkingHint:
+            "着手時にチケットをここへ移動します。このレーンがボード上に存在しない場合は移動を行いません。",
+          laneDone: "完了レーン",
         },
         autosave: {
           idle: "自動保存",
@@ -1064,6 +1129,7 @@ const resources = {
           descriptionRequired: "プロジェクトの説明は必須です。",
           githubDecisionRequired: "GitHubを使うか選択してください。",
           githubProjectRequired: "GitHub Project URL が必要です。",
+          laneReadyDoneSame: "着手可能レーンと完了レーンは異なる必要があります。",
           githubProjectInvalid:
             "GitHub Project URL は https://github.com/orgs/<org>/projects/<number> または https://github.com/users/<user>/projects/<number> の形式で入力してください。",
           githubRepositoryRequired: "GitHub Repository URL が必要です。",
@@ -1188,6 +1254,15 @@ const resources = {
             title: "GitHub Project を読み取れました",
             description: "GitHub を更新せず、Project の status options を取得できました。",
           },
+          github_lane_mapping: {
+            title: "ワークフローのレーンが有効です",
+            description: "着手可能レーンと完了レーンが GitHub Project に存在します。",
+          },
+          github_agent_assignment: {
+            title: "メンバーにチケットを割り当て可能です",
+            description:
+              "assignable な GitHub ユーザーであるか、対応する Agent field option が存在します。",
+          },
           github_repository_access: {
             title: "GitHub リポジトリを読み取れました",
             description: "GitHub を更新せず、リポジトリ情報を取得できました。",
@@ -1264,6 +1339,26 @@ const resources = {
           github_project_access: {
             title: "GitHub Project にアクセスできません",
             description: "このメンバーの認証情報で GitHub Project を読み取れませんでした。",
+          },
+          github_lane_missing: {
+            title: "ワークフローのレーンが不足しています",
+            description:
+              "設定した着手可能レーンまたは完了レーンが GitHub Project の status options に見つかりません。",
+          },
+          github_working_lane_missing: {
+            title: "作業中レーンが見つかりません",
+            description:
+              "設定した作業中レーンが GitHub Project の status に存在しないため、着手時にチケットを移動しません。",
+          },
+          github_member_not_assignable: {
+            title: "メンバーにチケットを割り当てられません",
+            description:
+              "assignable な GitHub ユーザーではありません。issue に割り当てられるよう、このメンバーに repository / collaborator 権限を付与してください。",
+          },
+          github_agent_field_required: {
+            title: "メンバーにチケットを割り当てられません",
+            description:
+              "assignable な GitHub ユーザーでなく、Agent field option もありません。このメンバーの Agent field を設定してください。",
           },
           github_repository_access: {
             title: "GitHub リポジトリにアクセスできません",

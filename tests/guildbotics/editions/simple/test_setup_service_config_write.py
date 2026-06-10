@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from guildbotics.editions.simple.setup_service import (
+    LaneMapInput,
     PersonSetupInput,
     PersonUpdateInput,
     ProjectSetupInput,
@@ -301,6 +302,106 @@ def test_update_project_round_trips_repo_access_scheme(
     )
     assert snapshot.repo_base_url == repo_base_url
     assert snapshot.github_enabled is True
+
+
+# --------------------------------------------------------------------------- #
+# lane_map: persist, defaults, custom values, round-trip, github-disabled
+# --------------------------------------------------------------------------- #
+
+
+def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    SimpleProjectSetupService().write_project(
+        _github_project_input(config_dir, env_file_path)
+    )
+
+    stored = load_yaml_file(config_dir / "team/project.yml")
+    assert stored["services"]["ticket_manager"]["lane_map"] == {
+        "ready": "Todo",
+        "working": "In Progress",
+        "done": "Done",
+    }
+
+
+def test_write_project_persists_custom_lane_map(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    SimpleProjectSetupService().write_project(
+        _github_project_input(
+            config_dir,
+            env_file_path,
+            lane_map=LaneMapInput(ready="Ready", working="Doing", done="Shipped"),
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/project.yml")
+    assert stored["services"]["ticket_manager"]["lane_map"] == {
+        "ready": "Ready",
+        "working": "Doing",
+        "done": "Shipped",
+    }
+
+
+def test_blank_working_lane_falls_back_to_default(tmp_path: Path) -> None:
+    # The YAML layer strips empty strings, so a blank working lane cannot be
+    # persisted; it falls back to the default "In Progress".
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    SimpleProjectSetupService().write_project(
+        _github_project_input(
+            config_dir,
+            env_file_path,
+            lane_map=LaneMapInput(ready="Todo", working="", done="Done"),
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/project.yml")
+    assert stored["services"]["ticket_manager"]["lane_map"]["working"] == "In Progress"
+
+
+def test_lane_map_rejects_identical_ready_and_done() -> None:
+    with pytest.raises(ValueError):
+        LaneMapInput(ready="Same", done="Same")
+
+
+def test_read_project_config_round_trips_lane_map(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    service = SimpleProjectSetupService()
+    service.write_project(
+        _github_project_input(
+            config_dir,
+            env_file_path,
+            lane_map=LaneMapInput(ready="Ready", working="Doing", done="Shipped"),
+        )
+    )
+
+    snapshot = service.read_project_config(
+        config_dir=config_dir, env_file_path=env_file_path
+    )
+    assert snapshot.lane_map.ready == "Ready"
+    assert snapshot.lane_map.working == "Doing"
+    assert snapshot.lane_map.done == "Shipped"
+
+
+def test_update_project_github_disabled_writes_no_lane_map(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    _seed_project(config_dir, env_file_path)
+    SimpleProjectSetupService().update_project(
+        ProjectUpdateInput(
+            config_dir=config_dir,
+            env_file_path=env_file_path,
+            language="en",
+            llm_api_type="openai",
+            cli_agent="codex",
+            github_enabled=False,
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/project.yml")
+    assert "services" not in stored
 
 
 # --------------------------------------------------------------------------- #

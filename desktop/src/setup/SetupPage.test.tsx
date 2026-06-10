@@ -16,6 +16,7 @@ import {
   getIntelligenceConfig,
   getMemberConfig,
   getProjectConfig,
+  getProjectStatusOptions,
   getRoleOptions,
   getTeam,
   initConfig,
@@ -128,6 +129,7 @@ vi.mock("../api/client", async (importOriginal) => {
       brain_mapping: [],
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
+    getProjectStatusOptions: vi.fn(async () => ({ available: false, statuses: [] })),
     getProjectConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
       env_file_path: "/workspace/.env",
@@ -138,6 +140,7 @@ vi.mock("../api/client", async (importOriginal) => {
       github_enabled: false,
       github_project_url: "",
       github_repository_url: "",
+      lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
       repo_base_url: "https://github.com",
       has_google_api_key: false,
       has_openai_api_key: true,
@@ -351,18 +354,132 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
 
-    // The decision control is a Mantine Select; its hidden listbox shares the
-    // accessible label, so target the input via its textbox role.
+    // The GitHub use/don't decision now lives in the Project section (default).
+    // The control is a Mantine Select; its hidden listbox shares the accessible
+    // label, so target the input via its textbox role.
     const decision = await screen.findByRole("textbox", { name: "GitHub integration" });
     await user.click(decision);
     await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
+
+    // GitHub connection details (incl. the project URL) live in the GitHub
+    // section, which now comes last.
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
     expect(screen.getByLabelText(t("setup.github.projectUrl"))).toBeEnabled();
 
-    await user.click(decision);
+    // Switch the decision off from the Project section: the GitHub section then
+    // shows the disabled hint instead of connection fields.
+    await user.click(screen.getByRole("button", { name: "Project" }));
+    await user.click(screen.getByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
     expect(screen.getByText(t("setup.github.disabledHint"))).toBeInTheDocument();
+  });
+
+  it("offers fetched status options for lane mapping when GitHub is enabled", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getConfigStatus).mockResolvedValue(
+      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
+    );
+    vi.mocked(getTeam).mockRejectedValue(
+      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
+    );
+    vi.mocked(getProjectStatusOptions).mockResolvedValue({
+      available: true,
+      statuses: ["Backlog", "Todo", "In Progress", "Done"],
+    });
+    renderSetupPage("/setup");
+
+    await screen.findByRole("heading", { name: "First setup" });
+
+    // Enable GitHub in the Project section, then open the GitHub section.
+    const decision = await screen.findByRole("textbox", { name: "GitHub integration" });
+    await user.click(decision);
+    await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
+
+    // Lane options are fetched when the Project URL loses focus.
+    const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
+    await user.type(projectUrl, "https://github.com/orgs/acme/projects/9");
+    await user.tab();
+
+    const readyInput = screen.getByRole("textbox", { name: t("setup.github.laneReady") });
+    expect(readyInput).toHaveValue("Todo");
+    // Opening the lane Select shows every fetched option, with no filtering by
+    // the current value ("Todo").
+    await user.click(readyInput);
+    expect(await screen.findByRole("option", { name: "Backlog" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Todo" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "In Progress" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Done" })).toBeInTheDocument();
+
+    // Selection is strict: a board lane is chosen from the list.
+    await user.click(screen.getByRole("option", { name: "Backlog" }));
+    expect(readyInput).toHaveValue("Backlog");
+  });
+
+  it("loads lane options on open when the Project URL is already configured", async () => {
+    const user = userEvent.setup();
+    // Configured project (the default getConfigStatus mock reports an existing
+    // project file) with GitHub already enabled and a Project URL set.
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({
+        github_enabled: true,
+        github_project_url: "https://github.com/orgs/acme/projects/9",
+        github_repository_url: "https://github.com/acme/repo",
+        lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
+      }),
+    );
+    vi.mocked(getProjectStatusOptions).mockResolvedValue({
+      available: true,
+      statuses: ["Backlog", "Todo", "In Progress", "Done"],
+    });
+    renderSetupPage("/setup");
+
+    await screen.findByLabelText("Project description");
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
+
+    // No blur is performed: opening the section with a pre-filled Project URL
+    // must fetch the lane options on mount, so the strict Select is populated.
+    const readyInput = await screen.findByRole("textbox", { name: t("setup.github.laneReady") });
+    await user.click(readyInput);
+    expect(await screen.findByRole("option", { name: "Backlog" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Done" })).toBeInTheDocument();
+  });
+
+  it("clears fetched lane options when the Project URL becomes invalid", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({
+        github_enabled: true,
+        github_project_url: "https://github.com/orgs/acme/projects/9",
+        github_repository_url: "https://github.com/acme/repo",
+        lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
+      }),
+    );
+    vi.mocked(getProjectStatusOptions).mockResolvedValue({
+      available: true,
+      statuses: ["Backlog", "Todo", "In Progress", "Done"],
+    });
+    renderSetupPage("/setup");
+
+    await screen.findByLabelText("Project description");
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
+
+    // Options load for the configured URL.
+    await screen.findByRole("textbox", { name: t("setup.github.laneReady") });
+    expect(screen.getByText(t("setup.github.laneMappingHint"))).toBeInTheDocument();
+
+    // Editing the Project URL into an invalid value must drop the stale options
+    // (the lanes fall back to manual entry rather than showing another
+    // project's lanes).
+    const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
+    await user.clear(projectUrl);
+    await user.type(projectUrl, "not-a-valid-url");
+    await user.tab();
+
+    expect(await screen.findByText(t("setup.github.laneMappingManualHint"))).toBeInTheDocument();
+    expect(screen.queryByText(t("setup.github.laneMappingHint"))).not.toBeInTheDocument();
   });
 
   it("navigates between sections with the next and back buttons", async () => {
@@ -381,8 +498,11 @@ describe("SetupPage", () => {
     );
 
     // The Next button stays disabled until the current section is complete, so
-    // fill in the required project description first.
+    // fill in the required project description and make the GitHub decision
+    // (which now lives in the Project section).
     await user.type(screen.getByLabelText("Project description"), "Demo project");
+    await user.click(screen.getByRole("textbox", { name: "GitHub integration" }));
+    await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     const nextButton = screen.getByRole("button", { name: t("setup.status.next") });
     await waitFor(() => expect(nextButton).toBeEnabled());
 
@@ -417,11 +537,11 @@ describe("SetupPage", () => {
       expect(screen.getByLabelText("Working directory")).toHaveValue("/workspace"),
     );
     await user.type(screen.getByLabelText("Project description"), "Demo project");
-    await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
-    await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    // The GitHub decision now lives in the Project section.
     await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
+    await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     // Add one active member so the members section is complete; the add form is
     // shown by default and pre-filled with character defaults.
@@ -558,6 +678,9 @@ function baseProjectValues(overrides: Partial<ProjectFormValues> = {}): ProjectF
     githubEnabled: false,
     githubProjectUrl: "",
     githubRepositoryUrl: "",
+    laneReady: "Todo",
+    laneWorking: "In Progress",
+    laneDone: "Done",
     repoAccess: "https",
     ...overrides,
   };
@@ -632,6 +755,7 @@ function projectConfig(overrides: Record<string, unknown> = {}): ProjectConfigVa
     github_enabled: false,
     github_project_url: "",
     github_repository_url: "",
+    lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
     repo_base_url: "https://github.com",
     has_google_api_key: false,
     has_openai_api_key: true,
@@ -731,6 +855,19 @@ describe("createProjectSchema", () => {
       }),
     );
     expect(result.success).toBe(true);
+  });
+
+  it("rejects identical ready and done lanes", () => {
+    const result = schema.safeParse(
+      baseProjectValues({
+        githubDecision: "enabled",
+        githubProjectUrl: "https://github.com/orgs/acme/projects/7",
+        githubRepositoryUrl: "https://github.com/acme/repo",
+        laneReady: "Done",
+        laneDone: "Done",
+      }),
+    );
+    expect(firstError(result, "laneDone")).toBe(t("setup.validation.laneReadyDoneSame"));
   });
 });
 
@@ -906,6 +1043,52 @@ describe("toProjectSetupRequest", () => {
       configStatus({ home_config_dir: "/home/.guildbotics/config" }),
     );
     expect(request.config_dir).toBe("/home/.guildbotics/config");
+  });
+
+  it("includes a trimmed lane_map when GitHub is enabled", () => {
+    const request = toProjectSetupRequest(
+      baseProjectValues({
+        githubDecision: "enabled",
+        githubProjectUrl: "https://github.com/orgs/acme/projects/9",
+        githubRepositoryUrl: "https://github.com/acme/repo",
+        laneReady: " Ready ",
+        laneWorking: " Doing ",
+        laneDone: " Shipped ",
+      }),
+      configStatus(),
+    );
+    expect(request.lane_map).toEqual({
+      ready: "Ready",
+      working: "Doing",
+      done: "Shipped",
+    });
+  });
+
+  it("falls back to default lane names when fields are blank", () => {
+    const request = toProjectSetupRequest(
+      baseProjectValues({
+        githubDecision: "enabled",
+        githubProjectUrl: "https://github.com/orgs/acme/projects/9",
+        githubRepositoryUrl: "https://github.com/acme/repo",
+        laneReady: "",
+        laneWorking: "",
+        laneDone: "",
+      }),
+      configStatus(),
+    );
+    expect(request.lane_map).toEqual({
+      ready: "Todo",
+      working: "In Progress",
+      done: "Done",
+    });
+  });
+
+  it("omits lane_map when GitHub is disabled", () => {
+    const request = toProjectSetupRequest(
+      baseProjectValues({ githubDecision: "disabled" }),
+      configStatus(),
+    );
+    expect(request.lane_map).toBeUndefined();
   });
 });
 

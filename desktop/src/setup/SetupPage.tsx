@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   Divider,
+  Fieldset,
   Group,
   Modal,
   MultiSelect,
@@ -63,6 +64,7 @@ import {
   type IntelligenceConfig,
   type MemberSetupRequest,
   type MemberConfig,
+  type LaneMap,
   type MemberConfigUpdateRequest,
   type MemberTaskSchedule,
   type RoleOption,
@@ -78,6 +80,8 @@ import {
   getIntelligenceConfig,
   getMemberConfig,
   getProjectConfig,
+  getProjectStatusOptions,
+  type ProjectStatusOptionsRequest,
   getRoleOptions,
   getTeam,
   initConfig,
@@ -107,6 +111,9 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
       githubEnabled: z.boolean(),
       githubProjectUrl: z.string(),
       githubRepositoryUrl: z.string(),
+      laneReady: z.string(),
+      laneWorking: z.string(),
+      laneDone: z.string(),
       repoAccess: z.enum(["https", "ssh"]),
     })
     .superRefine((values, ctx) => {
@@ -136,8 +143,21 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
           message: githubErrors.githubRepositoryUrl,
         });
       }
+      const ready = (values.laneReady || DEFAULT_LANE_READY).trim();
+      const done = (values.laneDone || DEFAULT_LANE_DONE).trim();
+      if (ready === done) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["laneDone"],
+          message: t("setup.validation.laneReadyDoneSame"),
+        });
+      }
     });
 }
+
+export const DEFAULT_LANE_READY = "Todo";
+export const DEFAULT_LANE_WORKING = "In Progress";
+export const DEFAULT_LANE_DONE = "Done";
 
 type ProjectFormValues = z.infer<ReturnType<typeof createProjectSchema>>;
 type ProjectForm = UseFormReturnType<ProjectFormValues>;
@@ -147,8 +167,8 @@ type IntelligenceDraftState = {
   config: IntelligenceConfig;
   savedSerialized: string;
 };
-const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "github", "members"] as const;
-const CORE_SETUP_SECTIONS_CONFIGURED = ["project", "intelligence", "github", "members"] as const;
+const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "members", "github"] as const;
+const CORE_SETUP_SECTIONS_CONFIGURED = ["project", "intelligence", "members", "github"] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
 const LLM_PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI", family: "GPT" },
@@ -604,8 +624,8 @@ function SetupSectionNav({
   const items: Array<readonly [CoreSection, string, boolean]> = [
     ["project", t("setup.nav.project"), status.projectReady],
     ["intelligence", t("setup.nav.intelligence"), status.intelligenceReady],
-    ["github", t("setup.nav.github"), status.githubReady],
     ["members", t("setup.nav.members"), status.membersReady],
+    ["github", t("setup.nav.github"), status.githubReady],
   ];
   return (
     <Card withBorder radius="md" p="xs" className="setup-nav">
@@ -688,6 +708,24 @@ function ProjectSection({
           autosize
           minRows={2}
           {...form.getInputProps("description")}
+        />
+        <Select
+          label={<RequiredLabel text={t("setup.github.decision")} />}
+          aria-label={t("setup.github.decision")}
+          aria-required
+          description={t("setup.github.decisionHint")}
+          placeholder={t("setup.github.decisionPlaceholder")}
+          data={[
+            { value: "disabled", label: t("setup.github.disabled") },
+            { value: "enabled", label: t("setup.github.enabled") },
+          ]}
+          value={form.values.githubDecision || null}
+          onChange={(value) => {
+            const decision = (value ?? "") as ProjectFormValues["githubDecision"];
+            form.setFieldValue("githubDecision", decision);
+            form.setFieldValue("githubEnabled", decision === "enabled");
+          }}
+          error={form.errors.githubDecision}
         />
       </Stack>
     </Card>
@@ -2955,71 +2993,171 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
   );
 }
 
+function LaneField({
+  label,
+  placeholder,
+  description,
+  choices,
+  inputProps,
+  error,
+}: {
+  label: string;
+  placeholder: string;
+  description?: string;
+  choices: string[];
+  inputProps: ReturnType<ProjectForm["getInputProps"]>;
+  error?: ReactNode;
+}) {
+  // When status options were read from the Project, pick strictly from them: a
+  // non-searchable Select shows every option (no filtering) and disallows
+  // values that are not real board lanes. Only fall back to free text when no
+  // options could be read.
+  if (choices.length > 0) {
+    return (
+      <Select
+        label={label}
+        aria-label={label}
+        placeholder={placeholder}
+        description={description}
+        data={choices}
+        searchable={false}
+        allowDeselect={false}
+        {...inputProps}
+        error={error}
+      />
+    );
+  }
+  return (
+    <TextInput
+      label={label}
+      aria-label={label}
+      placeholder={placeholder}
+      description={description}
+      {...inputProps}
+      error={error}
+    />
+  );
+}
+
+function buildLaneFetchTarget(values: ProjectFormValues): ProjectStatusOptionsRequest | null {
+  const parsed = parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl);
+  if (!parsed.projectValid) {
+    return null;
+  }
+  return {
+    owner: parsed.owner,
+    project_id: parsed.projectId,
+    github_project_url: parsed.projectUrl,
+    repository_name: parsed.repositoryName,
+  };
+}
+
 function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
   const { t } = useTranslation();
   const githubErrors = getGitHubFieldErrors(form.values, t);
+  const githubEnabled = form.values.githubDecision === "enabled";
+
+  // Lane status options are fetched live for the entered Project URL (not the
+  // saved project) so they appear before saving. The fetch target is seeded
+  // from the current form values so an already-configured Project URL loads its
+  // lanes as soon as the section opens, and is refreshed when the URL changes.
+  const [laneFetchTarget, setLaneFetchTarget] = useState<ProjectStatusOptionsRequest | null>(() =>
+    buildLaneFetchTarget(form.values),
+  );
+  const statusOptions = useQuery({
+    queryKey: ["projectStatusOptions", laneFetchTarget],
+    queryFn: () => getProjectStatusOptions(laneFetchTarget as ProjectStatusOptionsRequest),
+    enabled: githubEnabled && laneFetchTarget !== null,
+  });
+  const laneChoices =
+    githubEnabled && laneFetchTarget !== null && statusOptions.data?.available
+      ? statusOptions.data.statuses
+      : [];
+
+  // Always update the target (to null for an invalid/cleared URL) so the lane
+  // Selects never keep showing options fetched for a different project.
+  const refreshLaneOptions = () => {
+    setLaneFetchTarget(buildLaneFetchTarget(form.values));
+  };
+
+  const projectUrlProps = form.getInputProps("githubProjectUrl");
+
+  if (!githubEnabled) {
+    return (
+      <Card withBorder radius="md" p="lg">
+        <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
+        <Box mt="md">
+          <InfoCallout title={t("setup.github.disabledTitle")}>
+            {t("setup.github.disabledHint")}
+          </InfoCallout>
+        </Box>
+      </Card>
+    );
+  }
+
   return (
     <Card withBorder radius="md" p="lg">
       <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
       <Stack mt="md">
-        <Select
-          label={<RequiredLabel text={t("setup.github.decision")} />}
-          aria-label={t("setup.github.decision")}
-          aria-required
-          placeholder={t("setup.github.decisionPlaceholder")}
-          data={[
-            { value: "disabled", label: t("setup.github.disabled") },
-            { value: "enabled", label: t("setup.github.enabled") },
-          ]}
-          value={form.values.githubDecision || null}
-          onChange={(value) => {
-            const decision = (value ?? "") as ProjectFormValues["githubDecision"];
-            form.setFieldValue("githubDecision", decision);
-            form.setFieldValue("githubEnabled", decision === "enabled");
-          }}
-          error={form.errors.githubDecision}
-        />
-        {form.values.githubDecision === "disabled" ? (
-          <Text size="sm" c="dimmed">
-            {t("setup.github.disabledHint")}
-          </Text>
-        ) : null}
-        <TextInput
-          label={
-            form.values.githubDecision === "enabled" ? (
-              <RequiredLabel text={t("setup.github.projectUrl")} />
-            ) : (
-              t("setup.github.projectUrl")
-            )
-          }
-          aria-label={t("setup.github.projectUrl")}
-          aria-required={form.values.githubDecision === "enabled"}
-          disabled={form.values.githubDecision !== "enabled"}
-          {...form.getInputProps("githubProjectUrl")}
-          error={githubErrors.githubProjectUrl || form.errors.githubProjectUrl}
-        />
-        <TextInput
-          label={
-            form.values.githubDecision === "enabled" ? (
-              <RequiredLabel text={t("setup.github.repositoryUrl")} />
-            ) : (
-              t("setup.github.repositoryUrl")
-            )
-          }
-          aria-label={t("setup.github.repositoryUrl")}
-          aria-required={form.values.githubDecision === "enabled"}
-          disabled={form.values.githubDecision !== "enabled"}
-          {...form.getInputProps("githubRepositoryUrl")}
-          error={githubErrors.githubRepositoryUrl || form.errors.githubRepositoryUrl}
-        />
-        <SegmentedControl
-          disabled={form.values.githubDecision !== "enabled"}
-          data={[
-            { label: "HTTPS", value: "https" },
-            { label: "SSH", value: "ssh" },
-          ]}
-          {...form.getInputProps("repoAccess")}
-        />
+        <Group align="flex-end" gap="sm" wrap="nowrap">
+          <TextInput
+            style={{ flex: 1 }}
+            label={<RequiredLabel text={t("setup.github.repositoryUrl")} />}
+            aria-label={t("setup.github.repositoryUrl")}
+            aria-required
+            {...form.getInputProps("githubRepositoryUrl")}
+            error={githubErrors.githubRepositoryUrl || form.errors.githubRepositoryUrl}
+          />
+          <SegmentedControl
+            aria-label={t("setup.github.repoAccess")}
+            data={[
+              { label: "HTTPS", value: "https" },
+              { label: "SSH", value: "ssh" },
+            ]}
+            {...form.getInputProps("repoAccess")}
+          />
+        </Group>
+        <Fieldset legend={t("setup.github.projectAndLanes")} radius="md">
+          <Stack>
+            <TextInput
+              label={<RequiredLabel text={t("setup.github.projectUrl")} />}
+              aria-label={t("setup.github.projectUrl")}
+              aria-required
+              description={t("setup.github.projectUrlHint")}
+              {...projectUrlProps}
+              onBlur={(event) => {
+                projectUrlProps.onBlur?.(event);
+                refreshLaneOptions();
+              }}
+              error={githubErrors.githubProjectUrl || form.errors.githubProjectUrl}
+            />
+            <Text size="sm" c="dimmed">
+              {laneChoices.length > 0
+                ? t("setup.github.laneMappingHint")
+                : t("setup.github.laneMappingManualHint")}
+            </Text>
+            <LaneField
+              label={t("setup.github.laneReady")}
+              placeholder={DEFAULT_LANE_READY}
+              choices={laneChoices}
+              inputProps={form.getInputProps("laneReady")}
+            />
+            <LaneField
+              label={t("setup.github.laneWorking")}
+              placeholder={DEFAULT_LANE_WORKING}
+              description={t("setup.github.laneWorkingHint")}
+              choices={laneChoices}
+              inputProps={form.getInputProps("laneWorking")}
+            />
+            <LaneField
+              label={t("setup.github.laneDone")}
+              placeholder={DEFAULT_LANE_DONE}
+              choices={laneChoices}
+              inputProps={form.getInputProps("laneDone")}
+              error={form.errors.laneDone}
+            />
+          </Stack>
+        </Fieldset>
       </Stack>
     </Card>
   );
@@ -3517,7 +3655,9 @@ function getInitialCoreStatus(
   selectedCliAgentDetected: boolean,
 ): InitialProgress {
   const projectReady =
-    values.workspaceDir.trim().length > 0 && values.description.trim().length > 0;
+    values.workspaceDir.trim().length > 0 &&
+    values.description.trim().length > 0 &&
+    Boolean(values.githubDecision);
   const intelligenceReady =
     Boolean(values.llmApiType) &&
     Boolean(values.cliAgent) &&
@@ -3894,6 +4034,9 @@ export function initialProjectValues(
       githubEnabled: projectConfig.github_enabled,
       githubProjectUrl: projectConfig.github_project_url ?? "",
       githubRepositoryUrl: projectConfig.github_repository_url ?? "",
+      laneReady: projectConfig.lane_map?.ready ?? DEFAULT_LANE_READY,
+      laneWorking: projectConfig.lane_map?.working ?? DEFAULT_LANE_WORKING,
+      laneDone: projectConfig.lane_map?.done ?? DEFAULT_LANE_DONE,
       repoAccess: projectConfig.repo_base_url === "ssh://git@github.com" ? "ssh" : "https",
     };
   }
@@ -3913,6 +4056,9 @@ export function initialProjectValues(
     githubEnabled: false,
     githubProjectUrl: "",
     githubRepositoryUrl: "",
+    laneReady: DEFAULT_LANE_READY,
+    laneWorking: DEFAULT_LANE_WORKING,
+    laneDone: DEFAULT_LANE_DONE,
     repoAccess: "https",
   };
 }
@@ -3938,12 +4084,21 @@ export function toProjectSetupRequest(
     owner: github?.owner ?? "",
     project_id: github?.projectId ?? "",
     github_project_url: github?.projectUrl ?? "",
+    lane_map: github ? toLaneMap(values) : undefined,
     repo_base_url: values.repoAccess === "ssh" ? "ssh://git@github.com" : "https://github.com",
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
     google_api_key: values.googleApiKey,
     openai_api_key: values.openaiApiKey,
     anthropic_api_key: values.anthropicApiKey,
+  };
+}
+
+function toLaneMap(values: ProjectFormValues): LaneMap {
+  return {
+    ready: values.laneReady.trim() || DEFAULT_LANE_READY,
+    working: values.laneWorking.trim() || DEFAULT_LANE_WORKING,
+    done: values.laneDone.trim() || DEFAULT_LANE_DONE,
   };
 }
 
@@ -3968,6 +4123,7 @@ export function toProjectUpdateRequest(
     owner: github?.owner ?? "",
     project_id: github?.projectId ?? "",
     github_project_url: github?.projectUrl ?? "",
+    lane_map: github ? toLaneMap(values) : undefined,
     repo_base_url: values.repoAccess === "ssh" ? "ssh://git@github.com" : "https://github.com",
     google_api_key: values.googleApiKey.trim() ? values.googleApiKey : undefined,
     openai_api_key: values.openaiApiKey.trim() ? values.openaiApiKey : undefined,
