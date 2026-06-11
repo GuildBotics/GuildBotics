@@ -106,8 +106,6 @@ vi.mock("./api/client", async (importOriginal) => {
       cli_agent: "codex",
       github_enabled: false,
       github_project_url: "",
-      github_repository_url: "",
-      repo_base_url: "https://github.com",
       has_google_api_key: false,
       has_openai_api_key: true,
       has_anthropic_api_key: false,

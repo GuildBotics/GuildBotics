@@ -7,7 +7,6 @@ from guildbotics.entities.team import (
     CommandSchedule,
     Person,
     Project,
-    Repository,
     Role,
     Service,
     Team,
@@ -16,37 +15,6 @@ from guildbotics.entities.team import (
 # -----------------------------
 # Project tests
 # -----------------------------
-
-
-def test_project_get_default_repository_prefers_flagged_default():
-    repos = [
-        Repository(name="alpha", description="A", is_default=False),
-        Repository(name="beta", description="B", is_default=True),
-        Repository(name="gamma", description="C", is_default=False),
-    ]
-    project = Project(repositories=repos)
-
-    repo = project.get_default_repository()
-
-    assert repo.name == "beta"
-
-
-def test_project_get_default_repository_falls_back_to_first_when_no_default():
-    repos = [
-        Repository(name="alpha"),
-        Repository(name="beta"),
-    ]
-    project = Project(name="p", repositories=repos)
-
-    repo = project.get_default_repository()
-
-    assert repo.name == "alpha"
-
-
-def test_project_get_default_repository_raises_when_empty():
-    project = Project(name="p", repositories=[])
-    with pytest.raises(ValueError):
-        _ = project.get_default_repository()
 
 
 def test_project_get_available_services_and_names():

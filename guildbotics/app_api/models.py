@@ -294,11 +294,7 @@ class ProjectConfigResponse(BaseModel):
     cli_agent: Literal["codex", "gemini", "claude", "copilot"]
     github_enabled: bool
     github_project_url: str = ""
-    github_repository_url: str = ""
     lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
-    repo_base_url: Literal["https://github.com", "ssh://git@github.com"] = (
-        "https://github.com"
-    )
     has_google_api_key: bool
     has_openai_api_key: bool
     has_anthropic_api_key: bool
@@ -315,7 +311,6 @@ class ProjectStatusOptionsRequest(BaseModel):
     owner: str = ""
     project_id: str = ""
     github_project_url: str = ""
-    repository_name: str = ""
 
 
 class ProjectStatusOptionsResponse(BaseModel):
@@ -330,6 +325,28 @@ class ProjectStatusOptionsResponse(BaseModel):
     statuses: list[str] = Field(default_factory=list)
 
 
+class AgentFieldOption(BaseModel):
+    """A single ``Agent`` field option, keyed by a member's proxy signature."""
+
+    name: str
+    description: str = ""
+
+
+class AgentFieldStateResponse(BaseModel):
+    """State of a GitHub Project's ``Agent`` single-select field.
+
+    ``available`` is False when the field state could not be read (incomplete
+    project identity, no member credentials, or a GitHub error). ``options`` are
+    the members currently registered as field options; ``missing`` are
+    configured non-human members not yet registered (what an ensure call adds).
+    """
+
+    available: bool
+    exists: bool = False
+    options: list[AgentFieldOption] = Field(default_factory=list)
+    missing: list[AgentFieldOption] = Field(default_factory=list)
+
+
 class ProjectConfigUpdateRequest(GitHubProjectInput):
     config_dir: Path
     env_file_path: Path
@@ -338,9 +355,6 @@ class ProjectConfigUpdateRequest(GitHubProjectInput):
     llm_api_type: Literal["openai", "gemini", "anthropic"]
     cli_agent: Literal["codex", "gemini", "claude", "copilot"]
     github_enabled: bool
-    repo_base_url: Literal["https://github.com", "ssh://git@github.com"] = (
-        "https://github.com"
-    )
     google_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

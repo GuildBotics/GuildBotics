@@ -401,7 +401,9 @@ async def test_run_creates_ticket_drafts_from_agent_result(monkeypatch):
     created = tm.created[0]
     assert created.title == "Implement API"
     assert created.status == Task.READY
-    assert created.repository == "repo"
+    # Drafts are not bound to a repository; otherwise get_ticket_url would try to
+    # resolve a non-existent issue number from the draft's project-item id.
+    assert created.repository is None
     assert created.owner == "alice"
     assert created.role is None
     assert created.mode is None

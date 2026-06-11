@@ -193,7 +193,9 @@ def _build_ticket_draft_tasks(
     for item in result.new_tickets:
         task = item.to_task()
         task.status = Task.READY
-        task.repository = source_task.repository
+        # New tickets are created as Project draft issues, which are not bound to
+        # a repository; leaving ``repository`` unset keeps get_ticket_url on the
+        # draft (project board) path instead of resolving a non-existent issue.
         task.owner = source_task.owner
         tasks.append(task)
     return tasks

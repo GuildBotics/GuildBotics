@@ -18,7 +18,6 @@ SAMPLE_COMMANDS_PATH = TEMPLATE_PATH / "sample_commands"
 GITHUB_URL = "https://github.com/"
 GITHUB_APPS_URL_MIN_PARTS = 8
 GITHUB_PROJECT_URL_MIN_PARTS = 7
-GITHUB_REPOSITORY_URL_MIN_PARTS = 5
 CRON_FIELD_COUNT = 5
 HTTP_OK = 200
 GITHUB_USER_LOOKUP_TIMEOUT_SECONDS = 10.0
@@ -50,12 +49,6 @@ class GitHubProjectReference(BaseModel):
     project_type: str
     owner: str
     project_id: str
-    url: str
-
-
-class GitHubRepositoryReference(BaseModel):
-    owner: str
-    repository_name: str
     url: str
 
 
@@ -116,7 +109,6 @@ class LaneMapInput(BaseModel):
 class GitHubProjectInput(BaseModel):
     """GitHub Project identity fields shared by project setup / update inputs."""
 
-    repository_name: str = ""
     owner: str = ""
     project_id: str = ""
     github_project_url: str = ""
@@ -129,10 +121,6 @@ class ProjectSetupInput(GitHubProjectInput):
     env_file_option: str = Field(pattern="^(skip|append|overwrite)$")
     language: str
     description: str = ""
-    repo_base_url: str = Field(
-        default="https://github.com",
-        pattern="^(https://github.com|ssh://git@github.com)$",
-    )
     llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
     cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
     google_api_key: str = ""
@@ -151,14 +139,13 @@ class ProjectSetupInput(GitHubProjectInput):
         if self.env_file_option == "append" and not self.env_file_path.exists():
             raise ValueError("env_file_option=append requires an existing env file")
         github_fields = [
-            self.repository_name,
             self.owner,
             self.project_id,
             self.github_project_url,
         ]
         if any(github_fields) and not all(github_fields):
             raise ValueError(
-                "repository_name, owner, project_id and github_project_url "
+                "owner, project_id and github_project_url "
                 "are required when GitHub integration is enabled"
             )
         return self
@@ -182,12 +169,7 @@ class ProjectConfigSnapshot(BaseModel):
     cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
     github_enabled: bool
     github_project_url: str = ""
-    github_repository_url: str = ""
     lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
-    repo_base_url: str = Field(
-        default="https://github.com",
-        pattern="^(https://github.com|ssh://git@github.com)$",
-    )
     has_google_api_key: bool = False
     has_openai_api_key: bool = False
     has_anthropic_api_key: bool = False
@@ -201,10 +183,6 @@ class ProjectUpdateInput(GitHubProjectInput):
     llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
     cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
     github_enabled: bool = False
-    repo_base_url: str = Field(
-        default="https://github.com",
-        pattern="^(https://github.com|ssh://git@github.com)$",
-    )
     google_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
@@ -219,14 +197,13 @@ class ProjectUpdateInput(GitHubProjectInput):
     @model_validator(mode="after")
     def validate_github_fields(self) -> ProjectUpdateInput:
         github_fields = [
-            self.repository_name,
             self.owner,
             self.project_id,
             self.github_project_url,
         ]
         if self.github_enabled and not all(github_fields):
             raise ValueError(
-                "repository_name, owner, project_id and github_project_url "
+                "owner, project_id and github_project_url "
                 "are required when GitHub integration is enabled"
             )
         return self
@@ -373,22 +350,11 @@ class SimpleProjectSetupService:
 
         services = project_data.get("services", {})
         ticket_manager = services.get("ticket_manager", {}) if services else {}
-        repositories = project_data.get("repositories", [])
-        repository_name = (
-            repositories[0].get("name", "")
-            if isinstance(repositories, list) and repositories
-            else ""
-        )
         owner = str(ticket_manager.get("owner", ""))
         project_id = str(ticket_manager.get("project_id", ""))
         github_project_url = str(ticket_manager.get("url", ""))
-        github_enabled = bool(
-            owner and project_id and github_project_url and repository_name
-        )
+        github_enabled = bool(owner and project_id and github_project_url)
         lane_map = LaneMapInput.from_config(ticket_manager.get("lane_map"))
-
-        code_hosting = services.get("code_hosting_service", {}) if services else {}
-        repo_base_url = str(code_hosting.get("repo_base_url", "https://github.com"))
 
         env_values = (
             dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
@@ -402,13 +368,7 @@ class SimpleProjectSetupService:
             cli_agent=self._infer_cli_agent(cli_mapping),
             github_enabled=github_enabled,
             github_project_url=github_project_url,
-            github_repository_url=(
-                f"https://github.com/{owner}/{repository_name}"
-                if github_enabled
-                else ""
-            ),
             lane_map=lane_map,
-            repo_base_url=repo_base_url,
             has_google_api_key=bool(env_values.get("GOOGLE_API_KEY")),
             has_openai_api_key=bool(env_values.get("OPENAI_API_KEY")),
             has_anthropic_api_key=bool(env_values.get("ANTHROPIC_API_KEY")),
@@ -435,30 +395,6 @@ class SimpleProjectSetupService:
             owner=owner,
             project_id=project_id,
             url=f"{GITHUB_URL}{project_type}/{owner}/projects/{project_id}",
-        )
-
-    def parse_github_repository_url(
-        self, url: str, *, owner: str
-    ) -> GitHubRepositoryReference:
-        url_parts = url.split("/")
-        if (
-            len(url_parts) < GITHUB_REPOSITORY_URL_MIN_PARTS
-            or not url.startswith(GITHUB_URL)
-            or url_parts[4] == ""
-        ):
-            raise SetupServiceError(
-                "invalid_github_repository_url", "Invalid GitHub repository URL."
-            )
-        if url_parts[3] != owner:
-            raise SetupServiceError(
-                "inconsistent_github_url", "GitHub repository owner is inconsistent."
-            )
-
-        repository_name = url_parts[4]
-        return GitHubRepositoryReference(
-            owner=owner,
-            repository_name=repository_name,
-            url=f"{GITHUB_URL}{owner}/{repository_name}",
         )
 
     def write_project(self, config: ProjectSetupInput) -> ProjectSetupResult:
@@ -565,9 +501,7 @@ class SimpleProjectSetupService:
             services["code_hosting_service"] = {
                 "name": "GitHub",
                 "owner": config.owner,
-                "repo_base_url": config.repo_base_url,
             }
-            project_data["repositories"] = [{"name": config.repository_name}]
         else:
             services.pop("ticket_manager", None)
             services.pop("code_hosting_service", None)
@@ -576,6 +510,10 @@ class SimpleProjectSetupService:
             project_data["services"] = services
         else:
             project_data.pop("services", None)
+
+        # ``repositories`` is no longer part of the schema; drop any stale entry
+        # left by older configurations.
+        project_data.pop("repositories", None)
 
         project_config_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(project_config_file, project_data)
@@ -637,8 +575,7 @@ class SimpleProjectSetupService:
         if config.description:
             project["description"] = config.description
 
-        if config.repository_name:
-            project["repositories"] = [{"name": config.repository_name}]
+        if config.github_project_url:
             project["services"] = {
                 "ticket_manager": {
                     "name": "GitHub",
@@ -650,7 +587,6 @@ class SimpleProjectSetupService:
                 "code_hosting_service": {
                     "name": "GitHub",
                     "owner": config.owner,
-                    "repo_base_url": config.repo_base_url,
                 },
             }
         return project

@@ -310,7 +310,7 @@ const resources = {
         },
         github: {
           title: "GitHub",
-          subtitle: "Choose whether this project uses GitHub Projects, Issues, and repositories.",
+          subtitle: "Configure this project's GitHub Projects integration.",
           decision: "GitHub integration",
           decisionHint:
             "Decides whether members need a GitHub identity and whether the GitHub connection section applies.",
@@ -320,12 +320,8 @@ const resources = {
           disabledTitle: "GitHub is not used",
           disabledHint:
             "GitHub-dependent routines stay disabled until you enable GitHub in the Project section.",
-          repoAccess: "Repository access scheme",
-          projectAndLanes: "Project & lane mapping",
           projectUrl: "GitHub Project URL",
-          projectUrlHint:
-            "The lanes below are read from this Project; they refresh when the URL loses focus.",
-          repositoryUrl: "GitHub Repository URL",
+          projectUrlHint: "The lanes below are read from this Project.",
           laneMapping: "Lane mapping",
           laneMappingHint:
             "Map workflow lanes to your GitHub Project status options. Defaults work with a standard Todo / In Progress / Done board.",
@@ -336,6 +332,25 @@ const resources = {
           laneWorkingHint:
             "Tickets are moved here when work starts. If this lane does not exist on the board, tickets are simply not moved.",
           laneDone: "Done lane",
+          agentField: "Agent field (for agent assignment)",
+          agentFieldHint:
+            "Non-human members are assigned tickets through the Project's Agent single-select field. Create the field and register members here so they can be assigned.",
+          agentFieldNeedsProject: "Enter a valid GitHub Project URL above first.",
+          agentFieldLoading: "Reading the Agent field state...",
+          agentFieldUnavailableTitle: "Agent field state could not be read",
+          agentFieldUnavailableHint:
+            "This needs a saved active member with GitHub credentials and a reachable Project. Save members first, then reopen this section.",
+          agentFieldStatus: "Agent field:",
+          agentFieldExists: "Exists",
+          agentFieldMissing: "Not created",
+          agentFieldRegistered: "Registered members",
+          agentFieldNoMembers: "No members are registered as options yet.",
+          agentFieldMissingMembers: "Not yet registered",
+          agentFieldCreate: "Create Agent field",
+          agentFieldAddMembers: "Add members ({{count}})",
+          agentFieldUpToDate: "Up to date",
+          agentFieldError:
+            "Could not update the Agent field. Check member credentials and the Project URL.",
         },
         autosave: {
           idle: "Autosave",
@@ -351,11 +366,6 @@ const resources = {
           laneReadyDoneSame: "Ready and done lanes must be different.",
           githubProjectInvalid:
             "Enter a GitHub Project URL such as https://github.com/orgs/<org>/projects/<number> or https://github.com/users/<user>/projects/<number>.",
-          githubRepositoryRequired: "GitHub repository URL is required.",
-          githubRepositoryInvalid:
-            "Enter a GitHub Repository URL such as https://github.com/<owner>/<repository>.",
-          githubRepositoryOwnerMismatch:
-            "The repository owner must match the GitHub Project owner.",
           memberIdRequired: "Member ID is required.",
           memberIdInvalid: "Use only lowercase letters, digits, underscores, or hyphens.",
           memberIdDuplicate: "This member ID is already in use.",
@@ -460,11 +470,7 @@ const resources = {
           github_agent_assignment: {
             title: "Member can be assigned tickets",
             description:
-              "The member is an assignable GitHub user or has a matching Agent field option.",
-          },
-          github_repository_access: {
-            title: "GitHub repository was readable",
-            description: "Repository metadata was fetched without updating GitHub.",
+              "The member resolves to a GitHub user account or has a matching Agent field option.",
           },
           slack_not_configured: {
             title: "Slack channels are not configured",
@@ -549,17 +555,12 @@ const resources = {
           github_member_not_assignable: {
             title: "Member cannot be assigned tickets",
             description:
-              "The member is not an assignable GitHub user; grant it repository / collaborator permissions so it can be assigned to issues.",
+              "The member's GitHub username could not be resolved to a user account; check the member's GitHub username.",
           },
           github_agent_field_required: {
             title: "Member cannot be assigned tickets",
             description:
-              "The member is not an assignable GitHub user and has no Agent field option; set the Agent field for this member.",
-          },
-          github_repository_access: {
-            title: "GitHub repository access failed",
-            description:
-              "The GitHub repository metadata could not be read with this member's credentials.",
+              "The member is not a resolvable GitHub user and has no Agent field option; set the Agent field for this member.",
           },
           github_access: {
             title: "GitHub read-only check failed",
@@ -1091,7 +1092,7 @@ const resources = {
         },
         github: {
           title: "GitHub",
-          subtitle: "このプロジェクトで GitHub Projects、Issue、リポジトリを使うかを選択します。",
+          subtitle: "このプロジェクトの GitHub Projects 連携を設定します。",
           decision: "GitHub連携",
           decisionHint:
             "メンバーに GitHub アイデンティティが必要か、GitHub 接続セクションを使うかを決めます。",
@@ -1101,12 +1102,8 @@ const resources = {
           disabledTitle: "GitHub を使用しません",
           disabledHint:
             "GitHub が必要な routine は、プロジェクト画面で GitHub を有効にするまで起動できません。",
-          repoAccess: "リポジトリアクセス方式",
-          projectAndLanes: "プロジェクトとレーンマッピング",
           projectUrl: "GitHub Project URL",
-          projectUrlHint:
-            "下のレーンはこの Project から取得します。URL のフォーカスが外れると更新されます。",
-          repositoryUrl: "GitHub Repository URL",
+          projectUrlHint: "下のレーンはこの Project から取得します。",
           laneMapping: "レーンマッピング",
           laneMappingHint:
             "ワークフローのレーンを GitHub Project の status option に対応付けます。標準的な Todo / In Progress / Done のボードなら既定値のままで動作します。",
@@ -1117,6 +1114,25 @@ const resources = {
           laneWorkingHint:
             "着手時にチケットをここへ移動します。このレーンがボード上に存在しない場合は移動を行いません。",
           laneDone: "完了レーン",
+          agentField: "Agent (エージェント割り当て用) フィールド設定",
+          agentFieldHint:
+            "非人間メンバーは Project の Agent 単一選択フィールド経由でチケットを割り当てます。ここでフィールドを作成し、メンバーを選択肢として登録してください。",
+          agentFieldNeedsProject: "先に上の GitHub Project URL を正しく入力してください。",
+          agentFieldLoading: "Agent フィールドの状態を取得しています...",
+          agentFieldUnavailableTitle: "Agent フィールドの状態を取得できません",
+          agentFieldUnavailableHint:
+            "GitHub 認証情報を持つ有効メンバーの保存と、到達可能な Project が必要です。先にメンバーを保存してから、このセクションを開き直してください。",
+          agentFieldStatus: "Agent フィールド:",
+          agentFieldExists: "あり",
+          agentFieldMissing: "未作成",
+          agentFieldRegistered: "登録済みメンバー",
+          agentFieldNoMembers: "選択肢として登録されたメンバーはまだありません。",
+          agentFieldMissingMembers: "未登録",
+          agentFieldCreate: "Agent フィールドを作成",
+          agentFieldAddMembers: "メンバーを追加（{{count}}）",
+          agentFieldUpToDate: "設定済み",
+          agentFieldError:
+            "Agent フィールドを更新できませんでした。メンバーの認証情報と Project URL を確認してください。",
         },
         autosave: {
           idle: "自動保存",
@@ -1132,11 +1148,6 @@ const resources = {
           laneReadyDoneSame: "着手可能レーンと完了レーンは異なる必要があります。",
           githubProjectInvalid:
             "GitHub Project URL は https://github.com/orgs/<org>/projects/<number> または https://github.com/users/<user>/projects/<number> の形式で入力してください。",
-          githubRepositoryRequired: "GitHub Repository URL が必要です。",
-          githubRepositoryInvalid:
-            "GitHub Repository URL は https://github.com/<owner>/<repository> の形式で入力してください。",
-          githubRepositoryOwnerMismatch:
-            "Repository URL の owner は GitHub Project の owner と一致している必要があります。",
           memberIdRequired: "メンバーIDは必須です。",
           memberIdInvalid: "メンバーIDは小文字英数字、アンダースコア、ハイフンのみ使えます。",
           memberIdDuplicate: "このメンバーIDはすでに使われています。",
@@ -1261,11 +1272,7 @@ const resources = {
           github_agent_assignment: {
             title: "メンバーにチケットを割り当て可能です",
             description:
-              "assignable な GitHub ユーザーであるか、対応する Agent field option が存在します。",
-          },
-          github_repository_access: {
-            title: "GitHub リポジトリを読み取れました",
-            description: "GitHub を更新せず、リポジトリ情報を取得できました。",
+              "GitHub ユーザーアカウントとして解決できるか、対応する Agent field option が存在します。",
           },
           slack_not_configured: {
             title: "Slack チャンネルは未設定です",
@@ -1353,16 +1360,12 @@ const resources = {
           github_member_not_assignable: {
             title: "メンバーにチケットを割り当てられません",
             description:
-              "assignable な GitHub ユーザーではありません。issue に割り当てられるよう、このメンバーに repository / collaborator 権限を付与してください。",
+              "メンバーの GitHub ユーザー名を GitHub ユーザーアカウントとして解決できませんでした。GitHub ユーザー名を確認してください。",
           },
           github_agent_field_required: {
             title: "メンバーにチケットを割り当てられません",
             description:
-              "assignable な GitHub ユーザーでなく、Agent field option もありません。このメンバーの Agent field を設定してください。",
-          },
-          github_repository_access: {
-            title: "GitHub リポジトリにアクセスできません",
-            description: "このメンバーの認証情報で GitHub リポジトリ情報を読み取れませんでした。",
+              "GitHub ユーザーとして解決できず、Agent field option もありません。このメンバーの Agent field を設定してください。",
           },
           github_access: {
             title: "GitHub の読み取り検証に失敗しました",

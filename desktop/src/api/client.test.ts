@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
   configureApi,
+  ensureAgentField,
+  getAgentFieldState,
   getApiBase,
   getCommandOptions,
   getConfigStatus,
@@ -106,6 +108,38 @@ describe("request headers and body", () => {
     expect(calls[0].url).toBe("http://127.0.0.1:8765/verify");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBeUndefined();
+  });
+
+  it("POSTs the project identity for getAgentFieldState", async () => {
+    const { calls } = captureFetch(
+      jsonResponse({ available: true, exists: false, options: [], missing: [] }),
+    );
+    const body = {
+      owner: "acme",
+      project_id: "9",
+      github_project_url: "https://github.com/orgs/acme/projects/9",
+    };
+    await getAgentFieldState(body);
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/project/agent-field");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify(body));
+  });
+
+  it("POSTs to the ensure endpoint for ensureAgentField", async () => {
+    const { calls } = captureFetch(
+      jsonResponse({ available: true, exists: true, options: [], missing: [] }),
+    );
+    const body = {
+      owner: "acme",
+      project_id: "9",
+      github_project_url: "https://github.com/orgs/acme/projects/9",
+    };
+    await ensureAgentField(body);
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/project/agent-field/ensure");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify(body));
   });
 });
 

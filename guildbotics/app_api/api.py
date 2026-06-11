@@ -17,6 +17,7 @@ from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.intelligences import IntelligenceConfigService
 from guildbotics.app_api.models import (
+    AgentFieldStateResponse,
     ApiError,
     CliAgentDetectionsResponse,
     CommandOptionsResponse,
@@ -399,6 +400,28 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ProjectStatusOptionsResponse:
         return await app_runtime.fetch_project_status_options(request)
+
+    @app.post(
+        "/config/project/agent-field",
+        response_model=AgentFieldStateResponse,
+        responses=error_responses,
+    )
+    async def config_project_agent_field(
+        request: ProjectStatusOptionsRequest,
+        _: None = Depends(require_token),
+    ) -> AgentFieldStateResponse:
+        return await app_runtime.fetch_agent_field_state(request)
+
+    @app.post(
+        "/config/project/agent-field/ensure",
+        response_model=AgentFieldStateResponse,
+        responses=error_responses,
+    )
+    async def config_project_agent_field_ensure(
+        request: ProjectStatusOptionsRequest,
+        _: None = Depends(require_token),
+    ) -> AgentFieldStateResponse:
+        return await app_runtime.ensure_agent_field(request)
 
     @app.put(
         "/config/project",

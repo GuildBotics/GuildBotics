@@ -619,9 +619,9 @@ This section describes how to use the default `ticket_driven_workflow` which int
 ## 6.1. Prerequisites
 
 ### 6.1.1. Git Environment
-- Configure Git access for repositories:
-  - HTTPS: Install GCM (Git Credential Manager) and sign in
-  - or SSH: Set up SSH keys and `known_hosts`
+- The ticket-driven workflow always clones and pushes over HTTPS, authenticating with
+  the assigned member's configured token (see below); no local GCM (Git Credential
+  Manager) or SSH key setup is required for the bot's git operations.
 - Configure each AI member's GitHub credentials in GuildBotics. Ticket-driven workflow
   writes (branch push, PR creation, issue comments, and review replies) use the assigned
   member's configured machine-user token or GitHub App installation, not the local

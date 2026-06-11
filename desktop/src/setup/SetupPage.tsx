@@ -73,7 +73,10 @@ import {
   type ProjectSetupRequest,
   ApiRequestError,
   addMemberConfig,
+  type AgentFieldState,
   deleteMemberConfig,
+  ensureAgentField,
+  getAgentFieldState,
   getCliAgentDetections,
   getCommandOptions,
   getConfigStatus,
@@ -110,11 +113,9 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
       githubDecision: z.enum(["", "disabled", "enabled"]),
       githubEnabled: z.boolean(),
       githubProjectUrl: z.string(),
-      githubRepositoryUrl: z.string(),
       laneReady: z.string(),
       laneWorking: z.string(),
       laneDone: z.string(),
-      repoAccess: z.enum(["https", "ssh"]),
     })
     .superRefine((values, ctx) => {
       if (!values.githubDecision) {
@@ -134,13 +135,6 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
           code: z.ZodIssueCode.custom,
           path: ["githubProjectUrl"],
           message: githubErrors.githubProjectUrl,
-        });
-      }
-      if (githubErrors.githubRepositoryUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["githubRepositoryUrl"],
-          message: githubErrors.githubRepositoryUrl,
         });
       }
       const ready = (values.laneReady || DEFAULT_LANE_READY).trim();
@@ -3040,7 +3034,7 @@ function LaneField({
 }
 
 function buildLaneFetchTarget(values: ProjectFormValues): ProjectStatusOptionsRequest | null {
-  const parsed = parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl);
+  const parsed = parseGitHub(values.githubProjectUrl);
   if (!parsed.projectValid) {
     return null;
   }
@@ -3048,7 +3042,6 @@ function buildLaneFetchTarget(values: ProjectFormValues): ProjectStatusOptionsRe
     owner: parsed.owner,
     project_id: parsed.projectId,
     github_project_url: parsed.projectUrl,
-    repository_name: parsed.repositoryName,
   };
 }
 
@@ -3099,38 +3092,20 @@ function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
     <Card withBorder radius="md" p="lg">
       <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
       <Stack mt="md">
-        <Group align="flex-end" gap="sm" wrap="nowrap">
-          <TextInput
-            style={{ flex: 1 }}
-            label={<RequiredLabel text={t("setup.github.repositoryUrl")} />}
-            aria-label={t("setup.github.repositoryUrl")}
-            aria-required
-            {...form.getInputProps("githubRepositoryUrl")}
-            error={githubErrors.githubRepositoryUrl || form.errors.githubRepositoryUrl}
-          />
-          <SegmentedControl
-            aria-label={t("setup.github.repoAccess")}
-            data={[
-              { label: "HTTPS", value: "https" },
-              { label: "SSH", value: "ssh" },
-            ]}
-            {...form.getInputProps("repoAccess")}
-          />
-        </Group>
-        <Fieldset legend={t("setup.github.projectAndLanes")} radius="md">
+        <TextInput
+          label={<RequiredLabel text={t("setup.github.projectUrl")} />}
+          aria-label={t("setup.github.projectUrl")}
+          aria-required
+          description={t("setup.github.projectUrlHint")}
+          {...projectUrlProps}
+          onBlur={(event) => {
+            projectUrlProps.onBlur?.(event);
+            refreshLaneOptions();
+          }}
+          error={githubErrors.githubProjectUrl || form.errors.githubProjectUrl}
+        />
+        <Fieldset legend={t("setup.github.laneMapping")} radius="md">
           <Stack>
-            <TextInput
-              label={<RequiredLabel text={t("setup.github.projectUrl")} />}
-              aria-label={t("setup.github.projectUrl")}
-              aria-required
-              description={t("setup.github.projectUrlHint")}
-              {...projectUrlProps}
-              onBlur={(event) => {
-                projectUrlProps.onBlur?.(event);
-                refreshLaneOptions();
-              }}
-              error={githubErrors.githubProjectUrl || form.errors.githubProjectUrl}
-            />
             <Text size="sm" c="dimmed">
               {laneChoices.length > 0
                 ? t("setup.github.laneMappingHint")
@@ -3158,8 +3133,129 @@ function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
             />
           </Stack>
         </Fieldset>
+        <AgentFieldPanel target={laneFetchTarget} />
       </Stack>
     </Card>
+  );
+}
+
+function AgentFieldMemberBadges({
+  options,
+  color,
+  variant,
+}: {
+  options: AgentFieldState["options"];
+  color: string;
+  variant: "light" | "outline";
+}) {
+  return (
+    <Group gap="xs">
+      {options.map((option) => (
+        <Badge key={option.name} color={color} variant={variant}>
+          {option.description || option.name}
+        </Badge>
+      ))}
+    </Group>
+  );
+}
+
+function AgentFieldActionLabel({ state }: { state: AgentFieldState }) {
+  const { t } = useTranslation();
+  if (!state.exists) {
+    return <>{t("setup.github.agentFieldCreate")}</>;
+  }
+  if (state.missing.length > 0) {
+    return <>{t("setup.github.agentFieldAddMembers", { count: state.missing.length })}</>;
+  }
+  return <>{t("setup.github.agentFieldUpToDate")}</>;
+}
+
+function AgentFieldPanel({ target }: { target: ProjectStatusOptionsRequest | null }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const stateQuery = useQuery({
+    queryKey: ["agentFieldState", target],
+    queryFn: () => getAgentFieldState(target as ProjectStatusOptionsRequest),
+    enabled: target !== null,
+  });
+  const ensureMutation = useMutation({
+    mutationFn: () => ensureAgentField(target as ProjectStatusOptionsRequest),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["agentFieldState", target], data);
+    },
+  });
+  const state = stateQuery.data;
+
+  return (
+    <Fieldset legend={t("setup.github.agentField")} radius="md">
+      <Stack>
+        <Text size="sm" c="dimmed">
+          {t("setup.github.agentFieldHint")}
+        </Text>
+        {target === null ? (
+          <Text size="sm" c="dimmed">
+            {t("setup.github.agentFieldNeedsProject")}
+          </Text>
+        ) : stateQuery.isLoading ? (
+          <Text size="sm" c="dimmed">
+            {t("setup.github.agentFieldLoading")}
+          </Text>
+        ) : !state?.available ? (
+          <InfoCallout title={t("setup.github.agentFieldUnavailableTitle")}>
+            {t("setup.github.agentFieldUnavailableHint")}
+          </InfoCallout>
+        ) : (
+          <>
+            <Group gap="xs">
+              <Text size="sm" fw={500}>
+                {t("setup.github.agentFieldStatus")}
+              </Text>
+              <Badge color={state.exists ? "green" : "gray"} variant="light">
+                {state.exists
+                  ? t("setup.github.agentFieldExists")
+                  : t("setup.github.agentFieldMissing")}
+              </Badge>
+            </Group>
+            {state.exists && (
+              <div>
+                <Text size="sm" fw={500} mb={4}>
+                  {t("setup.github.agentFieldRegistered")}
+                </Text>
+                {state.options.length > 0 ? (
+                  <AgentFieldMemberBadges options={state.options} color="blue" variant="light" />
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    {t("setup.github.agentFieldNoMembers")}
+                  </Text>
+                )}
+              </div>
+            )}
+            {state.missing.length > 0 && (
+              <div>
+                <Text size="sm" fw={500} mb={4}>
+                  {t("setup.github.agentFieldMissingMembers")}
+                </Text>
+                <AgentFieldMemberBadges options={state.missing} color="orange" variant="outline" />
+              </div>
+            )}
+            <Group>
+              <Button
+                onClick={() => ensureMutation.mutate()}
+                loading={ensureMutation.isPending}
+                disabled={state.exists && state.missing.length === 0}
+              >
+                <AgentFieldActionLabel state={state} />
+              </Button>
+            </Group>
+            {ensureMutation.isError && (
+              <Text size="sm" c="red">
+                {t("setup.github.agentFieldError")}
+              </Text>
+            )}
+          </>
+        )}
+      </Stack>
+    </Fieldset>
   );
 }
 
@@ -3687,30 +3783,23 @@ function isGitHubDecisionComplete(values: ProjectFormValues): boolean {
   if (values.githubDecision !== "enabled") {
     return false;
   }
-  const parsed = parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl);
-  return parsed.projectValid && parsed.repositoryValid && parsed.ownerConsistent;
+  const parsed = parseGitHub(values.githubProjectUrl);
+  return parsed.projectValid;
 }
 
 function getGitHubFieldErrors(
   values: ProjectFormValues,
   t: TFunction | ((key: string) => string),
-): { githubProjectUrl?: string; githubRepositoryUrl?: string } {
+): { githubProjectUrl?: string } {
   if (values.githubDecision !== "enabled") {
     return {};
   }
-  const parsed = parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl);
-  const errors: { githubProjectUrl?: string; githubRepositoryUrl?: string } = {};
+  const parsed = parseGitHub(values.githubProjectUrl);
+  const errors: { githubProjectUrl?: string } = {};
   if (!values.githubProjectUrl.trim()) {
     errors.githubProjectUrl = t("setup.validation.githubProjectRequired");
   } else if (!parsed.projectValid) {
     errors.githubProjectUrl = t("setup.validation.githubProjectInvalid");
-  }
-  if (!values.githubRepositoryUrl.trim()) {
-    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryRequired");
-  } else if (!parsed.repositoryValid) {
-    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryInvalid");
-  } else if (parsed.projectValid && !parsed.ownerConsistent) {
-    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryOwnerMismatch");
   }
   return errors;
 }
@@ -4033,11 +4122,9 @@ export function initialProjectValues(
       githubDecision: projectConfig.github_enabled ? "enabled" : "disabled",
       githubEnabled: projectConfig.github_enabled,
       githubProjectUrl: projectConfig.github_project_url ?? "",
-      githubRepositoryUrl: projectConfig.github_repository_url ?? "",
       laneReady: projectConfig.lane_map?.ready ?? DEFAULT_LANE_READY,
       laneWorking: projectConfig.lane_map?.working ?? DEFAULT_LANE_WORKING,
       laneDone: projectConfig.lane_map?.done ?? DEFAULT_LANE_DONE,
-      repoAccess: projectConfig.repo_base_url === "ssh://git@github.com" ? "ssh" : "https",
     };
   }
   const cwd = config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "";
@@ -4055,11 +4142,9 @@ export function initialProjectValues(
     githubDecision: "",
     githubEnabled: false,
     githubProjectUrl: "",
-    githubRepositoryUrl: "",
     laneReady: DEFAULT_LANE_READY,
     laneWorking: DEFAULT_LANE_WORKING,
     laneDone: DEFAULT_LANE_DONE,
-    repoAccess: "https",
   };
 }
 
@@ -4070,22 +4155,17 @@ export function toProjectSetupRequest(
 ): ProjectSetupRequest {
   const workspaceConfigDir = joinPath(values.workspaceDir, ".guildbotics/config");
   const homeConfigDir = config?.home_config_dir ?? workspaceConfigDir;
-  const github =
-    values.githubDecision === "enabled"
-      ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
-      : null;
+  const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: values.configLocation === "home" ? homeConfigDir : workspaceConfigDir,
     env_file_path: joinPath(values.workspaceDir, ".env"),
     env_file_option: options.envFileOption ?? values.envFileOption,
     language: values.language,
     description: values.description,
-    repository_name: github?.repositoryName ?? "",
     owner: github?.owner ?? "",
     project_id: github?.projectId ?? "",
     github_project_url: github?.projectUrl ?? "",
     lane_map: github ? toLaneMap(values) : undefined,
-    repo_base_url: values.repoAccess === "ssh" ? "ssh://git@github.com" : "https://github.com",
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
     google_api_key: values.googleApiKey,
@@ -4107,10 +4187,7 @@ export function toProjectUpdateRequest(
   config: ConfigStatus | undefined,
   snapshot: ProjectConfig,
 ): ProjectConfigUpdateRequest {
-  const github =
-    values.githubDecision === "enabled"
-      ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
-      : null;
+  const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: snapshot.config_dir || config?.primary_config_dir || "",
     env_file_path: snapshot.env_file_path || joinPath(values.workspaceDir, ".env"),
@@ -4119,12 +4196,10 @@ export function toProjectUpdateRequest(
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
     github_enabled: values.githubDecision === "enabled",
-    repository_name: github?.repositoryName ?? "",
     owner: github?.owner ?? "",
     project_id: github?.projectId ?? "",
     github_project_url: github?.projectUrl ?? "",
     lane_map: github ? toLaneMap(values) : undefined,
-    repo_base_url: values.repoAccess === "ssh" ? "ssh://git@github.com" : "https://github.com",
     google_api_key: values.googleApiKey.trim() ? values.googleApiKey : undefined,
     openai_api_key: values.openaiApiKey.trim() ? values.openaiApiKey : undefined,
     anthropic_api_key: values.anthropicApiKey.trim() ? values.anthropicApiKey : undefined,
@@ -4442,16 +4517,12 @@ function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-export function parseGitHub(projectUrl: string, repositoryUrl: string) {
+export function parseGitHub(projectUrl: string) {
   const normalizedProjectUrl = projectUrl.trim();
-  const normalizedRepositoryUrl = repositoryUrl.trim();
   const projectParts = normalizedProjectUrl.split("/");
-  const repoParts = normalizedRepositoryUrl.split("/");
   const projectType = projectParts[3] ?? "";
   const owner = projectParts[4] ?? "";
   const projectId = projectParts[6]?.split("?")[0] ?? "";
-  const repositoryOwner = repoParts[3] ?? "";
-  const repositoryName = repoParts[4] ?? "";
   const projectValid = Boolean(
     normalizedProjectUrl.startsWith("https://github.com/") &&
     ["orgs", "users"].includes(projectType) &&
@@ -4459,20 +4530,13 @@ export function parseGitHub(projectUrl: string, repositoryUrl: string) {
     projectParts[5] === "projects" &&
     projectId,
   );
-  const repositoryValid = Boolean(
-    normalizedRepositoryUrl.startsWith("https://github.com/") && repositoryOwner && repositoryName,
-  );
-  const ownerConsistent = projectValid && repositoryValid && repositoryOwner === owner;
   return {
     owner: projectValid ? owner : "",
     projectId: projectValid ? projectId : "",
-    repositoryName: repositoryValid && ownerConsistent ? repositoryName : "",
     projectUrl: projectValid
       ? `https://github.com/${projectType}/${owner}/projects/${projectId}`
       : normalizedProjectUrl,
     projectValid,
-    repositoryValid,
-    ownerConsistent,
   };
 }
 

@@ -12,6 +12,8 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
+    AgentFieldOption,
+    AgentFieldStateResponse,
     CliAgentDetectionsResponse,
     CommandOption,
     CommandOptionsResponse,
@@ -103,6 +105,22 @@ class RuntimeStub:
         self.status_options_request = request
         return getattr(
             self, "status_options", ProjectStatusOptionsResponse(available=False)
+        )
+
+    async def fetch_agent_field_state(
+        self, request: ProjectStatusOptionsRequest
+    ) -> AgentFieldStateResponse:
+        self.agent_field_request = request
+        return getattr(
+            self, "agent_field_state", AgentFieldStateResponse(available=False)
+        )
+
+    async def ensure_agent_field(
+        self, request: ProjectStatusOptionsRequest
+    ) -> AgentFieldStateResponse:
+        self.agent_field_ensure_request = request
+        return getattr(
+            self, "agent_field_state", AgentFieldStateResponse(available=False)
         )
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
@@ -887,11 +905,9 @@ def test_config_project_endpoints_read_and_update_non_destructively(
                 "llm_api_type": "gemini",
                 "cli_agent": "codex",
                 "github_enabled": True,
-                "repository_name": "GuildBotics",
                 "owner": "GuildBotics",
                 "project_id": "7",
                 "github_project_url": "https://github.com/orgs/GuildBotics/projects/7",
-                "repo_base_url": "ssh://git@github.com",
             },
         )
         assert put_response.status_code == HTTP_OK
@@ -899,10 +915,14 @@ def test_config_project_endpoints_read_and_update_non_destructively(
     updated_project = safe_load((team_dir / "project.yml").read_text())
     assert updated_project["language"] == "ja"
     assert updated_project["description"] == "Updated description"
-    assert (
-        updated_project["services"]["code_hosting_service"]["repo_base_url"]
-        == "ssh://git@github.com"
-    )
+    code_hosting = updated_project["services"]["code_hosting_service"]
+    assert code_hosting["owner"] == "GuildBotics"
+    # Clone access is always HTTPS now, so the stale repo_base_url seeded in the
+    # original file is dropped on update.
+    assert "repo_base_url" not in code_hosting
+    # ``repositories`` is no longer part of the schema; a stale entry seeded in
+    # the original file is dropped on update.
+    assert "repositories" not in updated_project
 
     env_text = env_file.read_text()
     assert "OPENAI_API_KEY=existing-openai" in env_text
@@ -1902,7 +1922,6 @@ def test_config_project_status_options_returns_payload(tmp_path: Path) -> None:
             "owner": "acme",
             "project_id": "9",
             "github_project_url": "https://github.com/orgs/acme/projects/9",
-            "repository_name": "repo",
         },
     )
 
@@ -1913,6 +1932,57 @@ def test_config_project_status_options_returns_payload(tmp_path: Path) -> None:
     }
     assert runtime.status_options_request.owner == "acme"
     assert runtime.status_options_request.project_id == "9"
+
+
+def test_config_project_agent_field_returns_state(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    runtime.agent_field_state = AgentFieldStateResponse(
+        available=True,
+        exists=True,
+        options=[AgentFieldOption(name="⚙bot1", description="Bot One")],
+        missing=[AgentFieldOption(name="⚙bot2", description="Bot Two")],
+    )
+    client = _client(runtime)
+
+    response = client.post(
+        "/config/project/agent-field",
+        headers=AUTH_HEADERS,
+        json={
+            "owner": "acme",
+            "project_id": "9",
+            "github_project_url": "https://github.com/orgs/acme/projects/9",
+        },
+    )
+
+    assert response.status_code == HTTP_OK
+    body = response.json()
+    assert body["available"] is True
+    assert body["exists"] is True
+    assert body["options"] == [{"name": "⚙bot1", "description": "Bot One"}]
+    assert body["missing"] == [{"name": "⚙bot2", "description": "Bot Two"}]
+    assert runtime.agent_field_request.owner == "acme"
+
+
+def test_config_project_agent_field_ensure_applies(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    runtime.agent_field_state = AgentFieldStateResponse(
+        available=True, exists=True, options=[], missing=[]
+    )
+    client = _client(runtime)
+
+    response = client.post(
+        "/config/project/agent-field/ensure",
+        headers=AUTH_HEADERS,
+        json={
+            "owner": "acme",
+            "project_id": "9",
+            "github_project_url": "https://github.com/orgs/acme/projects/9",
+        },
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["available"] is True
+    assert runtime.agent_field_ensure_request.project_id == "9"
 
 
 def test_config_project_status_options_unavailable_falls_back(tmp_path: Path) -> None:

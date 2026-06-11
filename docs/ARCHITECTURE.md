@@ -406,9 +406,6 @@ async def _run_with_children(spec):
 # team/project.yml
 name: MyProject
 language: ja
-repositories:
-  - name: main
-    is_default: true
 services:
   ticket_manager:
     name: github

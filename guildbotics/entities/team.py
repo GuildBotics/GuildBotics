@@ -19,28 +19,6 @@ class Service(Enum):
     CODE_HOSTING_SERVICE = "code_hosting_service"
 
 
-class Repository(BaseModel):
-    """
-    A class representing a repository.
-
-    Attributes:
-        name (str): The name of the repository.
-        description (str): A brief description of the repository.
-        is_default (bool): Indicates if this is the default repository.
-    """
-
-    name: str = Field(..., description="The name of the repository.")
-    description: str = Field(
-        default="", description="A brief description of the repository."
-    )
-    is_default: bool = Field(
-        default=False, description="Indicates if this is the default repository."
-    )
-
-    def __str__(self):
-        return f"Repository(name={self.name})"
-
-
 class Project(BaseModel):
     """
     A class representing a project.
@@ -49,7 +27,6 @@ class Project(BaseModel):
         name (str): The name of the project.
         description (str): A brief description of the project.
         language (str): The default language for the project, represented as a language tag.
-        repositories (list[Repository]): A list of repositories used in the project.
         services (dict[str, dict[str, str]]): A dictionary of services used in the project.
     """
 
@@ -61,10 +38,6 @@ class Project(BaseModel):
         default="en",
         description="The default language for the project, represented as a language tag.",
     )
-    repositories: list[Repository] = Field(
-        default_factory=list,
-        description="A list of repositories used in the project.",
-    )
     # A dictionary of services used in the project, where keys are service names and values are
     services: dict[str, dict[str, str | dict[str, str]]] = Field(
         default_factory=dict,
@@ -72,22 +45,6 @@ class Project(BaseModel):
     )
 
     _language: Language | None = PrivateAttr(default=None)
-
-    def get_default_repository(self) -> Repository:
-        """
-        Get the default repository for the project.
-
-        Returns:
-            Repository: The default repository object.
-        """
-        for repo in self.repositories:
-            if repo.is_default:
-                return repo
-
-        if self.repositories:
-            return self.repositories[0]
-        else:
-            raise ValueError("No default repository found in the project.")
 
     def __str__(self):
         return f"Project(name={self.name})"

@@ -25,10 +25,6 @@ class YamlTeamLoader(TeamLoader):
         """
         project_data = load_yaml_file(self.dir / "project.yml")
         project = Project.model_validate(project_data)
-        if project.repositories:
-            has_default_repo = any(repo.is_default for repo in project.repositories)
-            if not has_default_repo:
-                project.repositories[0].is_default = True
 
         members: list[Person] = []
         members_dir = self.dir / "members"

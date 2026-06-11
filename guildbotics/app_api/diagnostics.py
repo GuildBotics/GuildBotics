@@ -383,20 +383,6 @@ class ScenarioDiagnosticsService:
                     checks.append(
                         await self._check_agent_assignment(ticket_manager, member)
                     )
-                if project.is_available_service(Service.CODE_HOSTING_SERVICE):
-                    default_branch = (
-                        await c.get_code_hosting_service().get_default_branch()
-                    )
-                    checks.append(
-                        self._check(
-                            "git",
-                            "github_repository_access",
-                            "ok",
-                            "GitHub repository metadata was fetched.",
-                            person_id=member.person_id,
-                            context={"default_branch": default_branch},
-                        )
-                    )
             except Exception as exc:
                 checks.append(
                     self._check(
@@ -467,12 +453,13 @@ class ScenarioDiagnosticsService:
     ) -> DiagnosticCheck:
         """Verify each member can receive ticket assignments.
 
-        A member that is an assignable GitHub user needs nothing else. Otherwise
-        the remediation depends on the member type: human members are assigned
-        only through GitHub assignees, so a non-assignable human needs repository
-        / collaborator permissions (the ``Agent`` field does not apply to them).
-        Non-human identities (proxy agents, GitHub Apps, machine users) are
-        assigned through the project's ``Agent`` field and need a matching option.
+        A member whose GitHub username resolves to a real user account needs
+        nothing else. Otherwise the remediation depends on the member type: human
+        members are assigned through GitHub assignees, so a human whose username
+        does not resolve has a misconfigured username (the ``Agent`` field does
+        not apply to them). Non-human identities (proxy agents, GitHub Apps,
+        machine users) are assigned through the project's ``Agent`` field and need
+        a matching option.
         """
         username = get_github_username(member)
         if (
@@ -484,7 +471,7 @@ class ScenarioDiagnosticsService:
                 "github",
                 "github_agent_assignment",
                 "ok",
-                "Member is an assignable GitHub user; the Agent field is not required.",
+                "Member resolves to a GitHub user account; the Agent field is not required.",
                 person_id=member.person_id,
                 context={"github_username": username},
             )
@@ -494,8 +481,8 @@ class ScenarioDiagnosticsService:
                 "github",
                 "github_member_not_assignable",
                 "error",
-                "Member is not an assignable GitHub user; grant this member "
-                "repository / collaborator permissions so it can be assigned.",
+                "Member's GitHub username could not be resolved to a user "
+                "account; check the configured GitHub username.",
                 person_id=member.person_id,
                 context={"github_username": username},
             )
@@ -515,7 +502,7 @@ class ScenarioDiagnosticsService:
             "github",
             "github_agent_field_required",
             "error",
-            "Member cannot be assigned as a GitHub user and has no Agent field "
+            "Member does not resolve to a GitHub user and has no Agent field "
             "option; set the Agent field for this member.",
             person_id=member.person_id,
             context={"agent_option": signature},
