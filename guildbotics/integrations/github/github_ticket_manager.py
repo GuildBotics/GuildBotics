@@ -337,9 +337,7 @@ class GitHubTicketManager(TicketManager):
         else:
             current = await self._fetch_single_select_options(agent_field["id"])
             current_names = {opt["name"] for opt in current}
-            additions = [
-                opt for opt in desired if opt["name"] not in current_names
-            ]
+            additions = [opt for opt in desired if opt["name"] not in current_names]
             if additions:
                 merged: list[dict[str, str]] = [
                     {
