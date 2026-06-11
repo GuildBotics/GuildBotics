@@ -1,6 +1,4 @@
 language: {language}
-repositories:
-  - name: {repository_name}
 services:
   ticket_manager: 
     name: GitHub
@@ -11,7 +9,6 @@ services:
       ready: 'Todo'
       working: 'In Progress'
       done: 'Done'
-  code_hosting_service: 
+  code_hosting_service:
     name: GitHub
     owner: {owner}
-    repo_base_url: {repo_base_url}

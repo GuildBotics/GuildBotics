@@ -39,11 +39,13 @@ class GitHubCodeHostingService(CodeHostingService):
         # Get GitHub-specific config
         config = team.project.get_service_config(Service.CODE_HOSTING_SERVICE)
         self.base_url = str(config.get("api_base_url", "https://api.github.com"))
-        self.repo_base_url = str(config.get("repo_base_url", "https://github.com"))
         self.owner = str(config["owner"])
-        self.repo = (
-            repository if repository else team.project.get_default_repository().name
-        )
+        if not repository:
+            raise ValueError(
+                "A repository is required for code hosting operations; "
+                "it is resolved from the task/issue being worked on."
+            )
+        self.repo = repository
         self.client: AsyncClient | None = None
 
         self.username = person.account_info["github_username"]
@@ -360,8 +362,29 @@ class GitHubCodeHostingService(CodeHostingService):
         await client.post(endpoint, json={"content": reaction}, headers=headers)
 
     async def get_repository_url(self) -> str:
-        """Get the repository URL for the current code hosting service."""
-        return f"{self.repo_base_url}/{self.owner}/{self.repo}.git"
+        """Get the HTTPS clone URL for the current code hosting service.
+
+        Cloning always uses HTTPS so the managed GitHub token (supplied via
+        git askpass) authenticates the operation. The web host is derived from
+        the configured API host so clone and API operations target the same
+        GitHub instance (github.com or a GitHub Enterprise server).
+        """
+        return f"{self._web_base_url()}/{self.owner}/{self.repo}.git"
+
+    def _web_base_url(self) -> str:
+        """Derive the web/clone base URL from the configured API base URL.
+
+        ``https://api.github.com`` maps to ``https://github.com``; a GitHub
+        Enterprise API host such as ``https://ghe.example.com/api/v3`` maps to
+        ``https://ghe.example.com``.
+        """
+        base = self.base_url.rstrip("/")
+        if base in ("https://api.github.com", "http://api.github.com"):
+            return "https://github.com"
+        for suffix in ("/api/v3", "/api"):
+            if base.endswith(suffix):
+                return base[: -len(suffix)]
+        return base
 
     async def get_default_branch(self) -> str:
         """Get the default branch of the repository."""

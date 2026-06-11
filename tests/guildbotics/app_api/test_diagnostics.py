@@ -495,7 +495,7 @@ async def test_github_not_configured_skipped(
 
 
 @pytest.mark.asyncio
-async def test_github_enabled_project_and_repository_access(
+async def test_github_enabled_project_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
@@ -527,11 +527,9 @@ async def test_github_enabled_project_and_repository_access(
     assert checks["github_project_access"].context["status_count"] == len(
         TICKET_STATUSES
     )
-    # Repository / branch metadata is reported under the git section.
-    repo_check = checks["github_repository_access"]
-    assert repo_check.section == "git"
-    assert repo_check.status == "ok"
-    assert repo_check.context["default_branch"] == "main"
+    # The repository is derived from each issue at runtime, so there is no
+    # repository pre-flight check (and no default repository to validate).
+    assert "github_repository_access" not in checks
 
 
 def _github_services() -> dict:

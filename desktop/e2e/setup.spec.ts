@@ -65,12 +65,11 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByLabel("Display name").fill("Local Agent");
   await page.getByRole("button", { name: "Add member" }).click();
 
-  // GitHub section (now last): provide matching repository / project URLs and
-  // override the lane mapping with custom status names. The backend cannot reach
-  // GitHub in CI, so the status-options fetch reports unavailable and the lane
-  // fields behave as free text; the typed names must still persist.
+  // GitHub section (now last): provide the Project URL and override the lane
+  // mapping with custom status names. The backend cannot reach GitHub in CI, so
+  // the status-options fetch reports unavailable and the lane fields behave as
+  // free text; the typed names must still persist.
   await page.getByRole("button", { name: "GitHub", exact: true }).click();
-  await page.getByLabel("GitHub Repository URL").fill("https://github.com/acme/repo");
   await page.getByLabel("GitHub Project URL").fill("https://github.com/orgs/acme/projects/9");
   await page.getByRole("textbox", { name: "Ready lane" }).fill("Ready");
   await page.getByRole("textbox", { name: "Working lane" }).fill("Doing");

@@ -615,9 +615,9 @@ guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat 
 
 ## 6.1. 事前準備
 ### 6.1.1. Git環境
-- リポジトリへの Git アクセス方式を設定してください:
-  - HTTPS: GCM (Git Credential Manager) をインストールし、サインイン
-  - または SSH: SSH 鍵を設定し、`known_hosts` を登録
+- チケット駆動ワークフローは常に HTTPS でクローン／プッシュし、割り当てられたメンバーの
+  トークン（下記）で認証します。ボットの Git 操作にローカルの GCM (Git Credential Manager)
+  や SSH 鍵の設定は不要です。
 - 各 AI メンバーの GitHub 認証情報を GuildBotics に設定してください。チケット駆動ワークフローの
   書き込み（branch push、PR 作成、issue comment、review reply）は、ローカルの `gh auth`
   ユーザーではなく、割り当てられたメンバーの machine user token または GitHub App installation

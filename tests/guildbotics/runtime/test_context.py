@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from guildbotics.entities.task import Task
-from guildbotics.entities.team import Person, Project, Repository, Role, Team
+from guildbotics.entities.team import Person, Project, Role, Team
 from guildbotics.integrations.chat_service import ChatIdentity
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.brains.brain import Brain
@@ -153,7 +153,6 @@ def _make_team(language: str = "en") -> Team:
     project = Project(
         name="demo",
         language=language,
-        repositories=[Repository(name="repo", description="demo", is_default=True)],
         services={},
     )
     return Team(project=project, members=[])

@@ -23,7 +23,6 @@ from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
 
 HTTP_BAD_REQUEST = 400
-HTTP_NO_CONTENT = 204
 
 
 class GitHubTicketManager(TicketManager):
@@ -53,7 +52,6 @@ class GitHubTicketManager(TicketManager):
         config = team.project.get_service_config(Service.TICKET_MANAGER)
         self.base_url = str(config.get("base_url", "https://api.github.com"))
         self.owner = config["owner"]
-        self.default_repo = team.project.get_default_repository().name
         self.project_id = str(config["project_id"])
         self.url = str(config["url"])
         self.client: AsyncClient | None = None
@@ -244,19 +242,29 @@ class GitHubTicketManager(TicketManager):
 
     async def is_assignable_user(self, username: str) -> bool:
         """
-        Return True if *username* can be assigned to issues in the default repo.
+        Return True if *username* resolves to an existing GitHub user account.
 
-        Uses the read-only REST assignee check
-        (``GET /repos/{owner}/{repo}/assignees/{username}`` returns 204 when the
-        user is assignable, 404 otherwise). No data is written to GitHub.
+        Tickets are managed on the GitHub Project board (issues are promoted from
+        drafts that humans triage), so assignability is not gated by a single
+        repository's collaborator list. The only account-type-neutral check that
+        works for both organization and user projects is resolving the login to a
+        ``User`` node via GraphQL. No data is written to GitHub.
         """
         if not username:
             return False
-        client = await self.login()
-        resp = await client.get(
-            f"/repos/{self.owner}/{self.default_repo}/assignees/{username}"
-        )
-        return resp.status_code == HTTP_NO_CONTENT
+        query = """
+        query($login: String!) {
+          user(login: $login) {
+            id
+          }
+        }
+        """
+        try:
+            resp = await self._graphql(query, {"login": username})
+        except Exception:
+            return False
+        user = resp.get("user") if isinstance(resp, dict) else None
+        return bool(user and user.get("id"))
 
     async def get_agent_field_options(self) -> list[str]:
         """Return the option names of the project's ``Agent`` custom field.
@@ -268,6 +276,120 @@ class GitHubTicketManager(TicketManager):
         agent_field = fields.get(GitHubTicketManager.FIELD_AGENT, {})
         options = agent_field.get("options", {})
         return list(options) if isinstance(options, dict) else []
+
+    def _desired_agent_options(self) -> list[dict[str, str]]:
+        """The Agent options expected from configured non-human members."""
+        config = self._custom_field_definitions[GitHubTicketManager.FIELD_AGENT]
+        return list(config.get("options", []))
+
+    async def get_agent_field_state(self) -> dict[str, Any]:
+        """Return the current state of the project's ``Agent`` custom field.
+
+        Read-only. ``options`` are the members currently registered as field
+        options; ``missing`` are configured non-human members not yet registered
+        (what :meth:`sync_agent_field` would add). Each entry is
+        ``{"name": <signature>, "description": <member name>}``.
+        """
+        self.custom_fields = {}  # force a fresh read
+        fields = await self._get_custom_fields()
+        agent_field = fields.get(GitHubTicketManager.FIELD_AGENT)
+        desired = self._desired_agent_options()
+        desired_by_name = {opt["name"]: opt.get("description", "") for opt in desired}
+        if agent_field is None:
+            return {
+                "exists": False,
+                "options": [],
+                "missing": [
+                    {"name": opt["name"], "description": opt.get("description", "")}
+                    for opt in desired
+                ],
+            }
+        current_names = list(agent_field.get("options", {}).keys())
+        options = [
+            {"name": name, "description": desired_by_name.get(name, "")}
+            for name in current_names
+        ]
+        missing = [
+            {"name": opt["name"], "description": opt.get("description", "")}
+            for opt in desired
+            if opt["name"] not in current_names
+        ]
+        return {"exists": True, "options": options, "missing": missing}
+
+    async def sync_agent_field(self) -> dict[str, Any]:
+        """Create the ``Agent`` field (with options) or add missing options.
+
+        When the field already exists, existing options are resubmitted *with
+        their ids* so GitHub preserves them and does not clear ticket
+        assignments; only the missing configured members are appended. Returns
+        the refreshed state (same shape as :meth:`get_agent_field_state`).
+        """
+        self.custom_fields = {}  # force a fresh read
+        fields = await self._get_custom_fields()
+        agent_field = fields.get(GitHubTicketManager.FIELD_AGENT)
+        desired = self._desired_agent_options()
+
+        if agent_field is None:
+            await self._create_custom_field(
+                GitHubTicketManager.FIELD_AGENT,
+                self._custom_field_definitions[GitHubTicketManager.FIELD_AGENT],
+            )
+        else:
+            current = await self._fetch_single_select_options(agent_field["id"])
+            current_names = {opt["name"] for opt in current}
+            additions = [opt for opt in desired if opt["name"] not in current_names]
+            if additions:
+                merged: list[dict[str, str]] = [
+                    {
+                        "id": opt["id"],
+                        "name": opt["name"],
+                        "description": opt.get("description", ""),
+                        "color": opt.get("color", "GRAY"),
+                    }
+                    for opt in current
+                ] + [
+                    {
+                        "name": opt["name"],
+                        "description": opt.get("description", ""),
+                        "color": "GRAY",
+                    }
+                    for opt in additions
+                ]
+                await self._update_single_select_options(agent_field["id"], merged)
+
+        return await self.get_agent_field_state()
+
+    async def _fetch_single_select_options(self, field_id: str) -> list[dict[str, str]]:
+        """Return the full option records (id/name/description/color) of a field."""
+        query = """
+        query($id: ID!) {
+          node(id: $id) {
+            ... on ProjectV2SingleSelectField {
+              options { id name description color }
+            }
+          }
+        }
+        """
+        data = await self._graphql(query, {"id": field_id})
+        node = data.get("node") or {}
+        return [opt for opt in (node.get("options") or []) if opt]
+
+    async def _update_single_select_options(
+        self, field_id: str, options: list[dict[str, str]]
+    ) -> None:
+        """Overwrite a single-select field's option set (must include existing ids)."""
+        mutation = """
+        mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]) {
+          updateProjectV2Field(
+            input: {fieldId: $field, singleSelectOptions: $options}
+          ) {
+            projectV2Field {
+              ... on ProjectV2SingleSelectField { id }
+            }
+          }
+        }
+        """
+        await self._graphql(mutation, {"field": field_id, "options": options})
 
     async def get_column_id(self, column_name: str) -> str | None:
         """
@@ -306,30 +428,6 @@ class GitHubTicketManager(TicketManager):
             return Task.IN_PROGRESS
         return None
 
-    async def _get_issue_node_id(self, repo: str | None, issue_number: int) -> str:
-        """Convert a REST issue number to the GraphQL global node_id.
-
-        Args:
-            repo (str): The repository name.
-            issue_number (int): The numeric issue identifier in the repo.
-
-        Returns:
-            str: The GraphQL global node ID of the issue.
-        """
-        query = """
-        query($owner: String!, $repo: String!, $number: Int!) {
-          repository(owner: $owner, name: $repo) {
-            issue(number: $number) {
-              id
-            }
-          }
-        }
-        """
-        r = repo if repo else self.default_repo
-        variables = {"owner": self.owner, "repo": r, "number": issue_number}
-        resp = await self._graphql(query, variables)
-        return resp["repository"]["issue"]["id"]
-
     async def _get_issue_number(self, issue_node_id: str) -> int:
         """Convert a GraphQL issue node_id to its numeric REST issue number.
 
@@ -352,72 +450,51 @@ class GitHubTicketManager(TicketManager):
         return resp["node"]["number"]
 
     def _get_issue_path(self, repo: str | None) -> str:
-        """Return the REST API path for issues in the configured repository."""
-        r = repo if repo else self.default_repo
-        return f"/repos/{self.owner}/{r}/issues"
+        """Return the REST API path for issues in the task's repository."""
+        if not repo:
+            raise ValueError("Task repository is required for issue operations.")
+        return f"/repos/{self.owner}/{repo}/issues"
 
     async def create_tickets(self, tasks: list[Task]) -> None:
         """
-        Create GitHub issues for the given tasks and assign columns, labels, roles.
+        Create draft tickets on the GitHub Project board for the given tasks.
+
+        Tickets are created as GitHub Projects V2 *draft issues* rather than
+        repository issues. Drafts act as proposals that a human triages and
+        promotes to a real issue (in the repository of their choice) before the
+        workflow picks them up. We do not set a Status (the project's built-in
+        workflow may still assign one, e.g. Todo); drafts are skipped by the
+        workflow regardless. They are not bound to a repository, so no
+        ``GitHub Repository URL`` configuration is required.
 
         Args:
             tasks (list[Task]): List of Task instances to create.
         """
-        await self._sync_status_columns()
         await self.ensure_custom_fields()
 
-        client = await self.login()
         proj_node = await self._project_node()
 
         for task in sorted(tasks):
-            payload: dict = {"title": task.title, "body": task.description or ""}
-
-            # create issue
-            issue_path = self._get_issue_path(task.repository)
-            resp = await client.post(issue_path, json=payload)
-            issue = resp.json()
-            num = issue["number"]
-
-            # add to project
-            node_id = await self._get_issue_node_id(task.repository, num)
-            task.id = node_id
+            # create a draft issue (already added to the project)
             mutation = """
-            mutation($proj: ID!, $cid: ID!) {
-                addProjectV2ItemById(input: {projectId: $proj, contentId: $cid}) {
-                    item { id }
+            mutation($proj: ID!, $title: String!, $body: String!) {
+                addProjectV2DraftIssue(
+                    input: {projectId: $proj, title: $title, body: $body}
+                ) {
+                    projectItem { id }
                 }
             }
             """
             data = await self._graphql(
                 mutation,
-                {"proj": proj_node, "cid": node_id},
-            )
-            item_id = data["addProjectV2ItemById"]["item"]["id"]
-
-            # Set Status
-            status_field_id, _ = await self._get_status_field()
-            new_status_option_id = await self.get_column_id(task.status)
-            set_status_mutation = """
-            mutation($proj:ID!, $item:ID!, $field:ID!, $opt:String!){
-                updateProjectV2ItemFieldValue(
-                    input:{
-                        projectId:$proj,
-                        itemId:$item,
-                        fieldId:$field,
-                        value:{ singleSelectOptionId:$opt }
-                    }
-                ){ projectV2Item { id } }
-            }
-            """
-            await self._graphql(
-                set_status_mutation,
                 {
                     "proj": proj_node,
-                    "item": item_id,
-                    "field": status_field_id,
-                    "opt": new_status_option_id,
+                    "title": task.title,
+                    "body": task.description or "",
                 },
             )
+            item_id = data["addProjectV2DraftIssue"]["projectItem"]["id"]
+            task.id = item_id
 
             # Set custom field values
             field_values = {}
@@ -741,7 +818,7 @@ class GitHubTicketManager(TicketManager):
         self, task: Task, issue_number: int
     ) -> list[dict[str, Any]]:
         client = await self.login()
-        repo = task.repository or self.default_repo
+        repo = task.repository
         resp = await client.get(
             f"/repos/{self.owner}/{repo}/issues/{issue_number}/timeline",
             headers={"Accept": "application/vnd.github+json"},
@@ -1194,19 +1271,25 @@ class GitHubTicketManager(TicketManager):
 
     async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:
         """
-        Get the URL for a specific issue.
+        Get the URL for a specific ticket.
+
+        Promoted issues link to their issue page; draft tickets are not bound to a
+        repository and have no standalone issue URL, so they link to the Project
+        board instead.
 
         Args:
             task (Task): The Task instance.
             markdown (bool): Wrap in Markdown link if True.
 
         Returns:
-            str: The issue URL.
+            str: The ticket URL.
         """
         assert task.id, "Task ID must be set before getting URL"
-        issue_id = await self._get_issue_number(task.id)
-        repo = task.repository or self.default_repo
-        url = f"https://github.com/{self.owner}/{repo}/issues/{issue_id}"
+        if not task.repository:
+            url = self.url
+        else:
+            issue_id = await self._get_issue_number(task.id)
+            url = f"https://github.com/{self.owner}/{task.repository}/issues/{issue_id}"
         return f"[{task.title}]({url})" if markdown else url
 
     async def update_ticket(self, task: Task) -> None:

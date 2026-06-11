@@ -180,8 +180,6 @@ function projectConfig(overrides: Record<string, unknown> = {}) {
     cli_agent: "codex",
     github_enabled: false,
     github_project_url: "",
-    github_repository_url: "",
-    repo_base_url: "https://github.com",
     has_google_api_key: false,
     has_openai_api_key: true,
     has_anthropic_api_key: false,
@@ -511,7 +509,6 @@ describe("Setup integration (real client + mock server)", () => {
       llm_api_type: "openai",
       cli_agent: "codex",
       owner: "",
-      repository_name: "",
       github_project_url: "",
       openai_api_key: "sk-test",
     });

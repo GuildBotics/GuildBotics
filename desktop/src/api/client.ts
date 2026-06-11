@@ -205,11 +205,22 @@ export type ProjectStatusOptions = {
   statuses: string[];
 };
 
+export type AgentFieldOption = {
+  name: string;
+  description: string;
+};
+
+export type AgentFieldState = {
+  available: boolean;
+  exists: boolean;
+  options: AgentFieldOption[];
+  missing: AgentFieldOption[];
+};
+
 export type ProjectStatusOptionsRequest = {
   owner: string;
   project_id: string;
   github_project_url: string;
-  repository_name?: string;
 };
 
 export type ProjectSetupRequest = {
@@ -218,12 +229,10 @@ export type ProjectSetupRequest = {
   env_file_option: "skip" | "append" | "overwrite";
   language: "en" | "ja";
   description?: string;
-  repository_name?: string;
   owner?: string;
   project_id?: string;
   github_project_url?: string;
   lane_map?: LaneMap;
-  repo_base_url?: "https://github.com" | "ssh://git@github.com";
   llm_api_type: "openai" | "gemini" | "anthropic";
   cli_agent: "codex" | "gemini" | "claude" | "copilot";
   google_api_key?: string;
@@ -240,9 +249,7 @@ export type ProjectConfig = {
   cli_agent: "codex" | "gemini" | "claude" | "copilot";
   github_enabled: boolean;
   github_project_url: string;
-  github_repository_url: string;
   lane_map: LaneMap;
-  repo_base_url: "https://github.com" | "ssh://git@github.com";
   has_google_api_key: boolean;
   has_openai_api_key: boolean;
   has_anthropic_api_key: boolean;
@@ -256,12 +263,10 @@ export type ProjectConfigUpdateRequest = {
   llm_api_type: "openai" | "gemini" | "anthropic";
   cli_agent: "codex" | "gemini" | "claude" | "copilot";
   github_enabled: boolean;
-  repository_name?: string;
   owner?: string;
   project_id?: string;
   github_project_url?: string;
   lane_map?: LaneMap;
-  repo_base_url: "https://github.com" | "ssh://git@github.com";
   google_api_key?: string;
   openai_api_key?: string;
   anthropic_api_key?: string;
@@ -564,6 +569,18 @@ export async function getProjectStatusOptions(
   body: ProjectStatusOptionsRequest,
 ): Promise<ProjectStatusOptions> {
   return request("/config/project/status-options", { method: "POST", body });
+}
+
+export async function getAgentFieldState(
+  body: ProjectStatusOptionsRequest,
+): Promise<AgentFieldState> {
+  return request("/config/project/agent-field", { method: "POST", body });
+}
+
+export async function ensureAgentField(
+  body: ProjectStatusOptionsRequest,
+): Promise<AgentFieldState> {
+  return request("/config/project/agent-field/ensure", { method: "POST", body });
 }
 
 export async function updateProjectConfig(

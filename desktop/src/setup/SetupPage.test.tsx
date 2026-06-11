@@ -11,6 +11,8 @@ import {
   ApiRequestError,
   deleteMemberConfig,
   getCliAgentDetections,
+  ensureAgentField,
+  getAgentFieldState,
   getCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
@@ -130,6 +132,18 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
     getProjectStatusOptions: vi.fn(async () => ({ available: false, statuses: [] })),
+    getAgentFieldState: vi.fn(async () => ({
+      available: false,
+      exists: false,
+      options: [],
+      missing: [],
+    })),
+    ensureAgentField: vi.fn(async () => ({
+      available: true,
+      exists: true,
+      options: [],
+      missing: [],
+    })),
     getProjectConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
       env_file_path: "/workspace/.env",
@@ -139,9 +153,7 @@ vi.mock("../api/client", async (importOriginal) => {
       cli_agent: "codex",
       github_enabled: false,
       github_project_url: "",
-      github_repository_url: "",
       lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-      repo_base_url: "https://github.com",
       has_google_api_key: false,
       has_openai_api_key: true,
       has_anthropic_api_key: false,
@@ -426,7 +438,6 @@ describe("SetupPage", () => {
       projectConfig({
         github_enabled: true,
         github_project_url: "https://github.com/orgs/acme/projects/9",
-        github_repository_url: "https://github.com/acme/repo",
         lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
       }),
     );
@@ -447,13 +458,58 @@ describe("SetupPage", () => {
     expect(screen.getByRole("option", { name: "Done" })).toBeInTheDocument();
   });
 
+  it("shows Agent field state and adds missing members", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({
+        github_enabled: true,
+        github_project_url: "https://github.com/orgs/acme/projects/9",
+        lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
+      }),
+    );
+    vi.mocked(getAgentFieldState).mockResolvedValue({
+      available: true,
+      exists: true,
+      options: [{ name: "⚙bot1", description: "Bot One" }],
+      missing: [{ name: "⚙bot2", description: "Bot Two" }],
+    });
+    vi.mocked(ensureAgentField).mockResolvedValue({
+      available: true,
+      exists: true,
+      options: [
+        { name: "⚙bot1", description: "Bot One" },
+        { name: "⚙bot2", description: "Bot Two" },
+      ],
+      missing: [],
+    });
+    renderSetupPage("/setup");
+
+    await screen.findByLabelText("Project description");
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
+
+    // Registered and not-yet-registered members are both surfaced.
+    expect(await screen.findByText("Bot One")).toBeInTheDocument();
+    expect(screen.getByText("Bot Two")).toBeInTheDocument();
+
+    // The state-driven button offers to add the one missing member.
+    const addButton = await screen.findByRole("button", {
+      name: t("setup.github.agentFieldAddMembers", { count: 1 }),
+    });
+    await user.click(addButton);
+
+    await waitFor(() => expect(vi.mocked(ensureAgentField)).toHaveBeenCalledTimes(1));
+    // After syncing nothing is missing, so the action reports it is up to date.
+    expect(
+      await screen.findByRole("button", { name: t("setup.github.agentFieldUpToDate") }),
+    ).toBeInTheDocument();
+  });
+
   it("clears fetched lane options when the Project URL becomes invalid", async () => {
     const user = userEvent.setup();
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({
         github_enabled: true,
         github_project_url: "https://github.com/orgs/acme/projects/9",
-        github_repository_url: "https://github.com/acme/repo",
         lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
       }),
     );
@@ -555,13 +611,12 @@ describe("SetupPage", () => {
 
     await waitFor(() => expect(initConfig).toHaveBeenCalledTimes(1));
     // The init payload conveys "GitHub disabled" by leaving the owner /
-    // repository / project URL fields empty (there is no github_enabled flag).
+    // project URL fields empty (there is no github_enabled flag).
     expect(vi.mocked(initConfig).mock.calls[0][0]).toMatchObject({
       description: "Demo project",
       llm_api_type: "openai",
       cli_agent: "codex",
       owner: "",
-      repository_name: "",
       github_project_url: "",
       openai_api_key: "sk-test",
     });
@@ -677,11 +732,9 @@ function baseProjectValues(overrides: Partial<ProjectFormValues> = {}): ProjectF
     githubDecision: "disabled",
     githubEnabled: false,
     githubProjectUrl: "",
-    githubRepositoryUrl: "",
     laneReady: "Todo",
     laneWorking: "In Progress",
     laneDone: "Done",
-    repoAccess: "https",
     ...overrides,
   };
 }
@@ -754,9 +807,7 @@ function projectConfig(overrides: Record<string, unknown> = {}): ProjectConfigVa
     cli_agent: "codex",
     github_enabled: false,
     github_project_url: "",
-    github_repository_url: "",
     lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-    repo_base_url: "https://github.com",
     has_google_api_key: false,
     has_openai_api_key: true,
     has_anthropic_api_key: false,
@@ -808,42 +859,24 @@ describe("createProjectSchema", () => {
     expect(firstError(result, "githubDecision")).toBe(t("setup.validation.githubDecisionRequired"));
   });
 
-  it("does not validate GitHub URLs when GitHub is disabled", () => {
+  it("does not validate the GitHub Project URL when GitHub is disabled", () => {
     const result = schema.safeParse(
       baseProjectValues({
         githubDecision: "disabled",
         githubProjectUrl: "",
-        githubRepositoryUrl: "",
       }),
     );
     expect(result.success).toBe(true);
   });
 
-  it("validates GitHub project and repository URLs when enabled", () => {
+  it("validates the GitHub Project URL when enabled", () => {
     const result = schema.safeParse(
       baseProjectValues({
         githubDecision: "enabled",
         githubProjectUrl: "not-a-url",
-        githubRepositoryUrl: "",
       }),
     );
     expect(firstError(result, "githubProjectUrl")).toBe(t("setup.validation.githubProjectInvalid"));
-    expect(firstError(result, "githubRepositoryUrl")).toBe(
-      t("setup.validation.githubRepositoryRequired"),
-    );
-  });
-
-  it("flags repository owner / project owner mismatch", () => {
-    const result = schema.safeParse(
-      baseProjectValues({
-        githubDecision: "enabled",
-        githubProjectUrl: "https://github.com/orgs/acme/projects/7",
-        githubRepositoryUrl: "https://github.com/other/repo",
-      }),
-    );
-    expect(firstError(result, "githubRepositoryUrl")).toBe(
-      t("setup.validation.githubRepositoryOwnerMismatch"),
-    );
   });
 
   it("accepts a fully valid GitHub-enabled project", () => {
@@ -851,7 +884,6 @@ describe("createProjectSchema", () => {
       baseProjectValues({
         githubDecision: "enabled",
         githubProjectUrl: "https://github.com/orgs/acme/projects/7",
-        githubRepositoryUrl: "https://github.com/acme/repo",
       }),
     );
     expect(result.success).toBe(true);
@@ -862,7 +894,6 @@ describe("createProjectSchema", () => {
       baseProjectValues({
         githubDecision: "enabled",
         githubProjectUrl: "https://github.com/orgs/acme/projects/7",
-        githubRepositoryUrl: "https://github.com/acme/repo",
         laneReady: "Done",
         laneDone: "Done",
       }),
@@ -873,47 +904,28 @@ describe("createProjectSchema", () => {
 
 describe("parseGitHub", () => {
   it("parses an organization project URL", () => {
-    const parsed = parseGitHub(
-      "https://github.com/orgs/acme/projects/12",
-      "https://github.com/acme/repo",
-    );
+    const parsed = parseGitHub("https://github.com/orgs/acme/projects/12");
     expect(parsed).toMatchObject({
       owner: "acme",
       projectId: "12",
-      repositoryName: "repo",
       projectUrl: "https://github.com/orgs/acme/projects/12",
       projectValid: true,
-      repositoryValid: true,
-      ownerConsistent: true,
     });
   });
 
   it("parses a user project URL", () => {
-    const parsed = parseGitHub(
-      "https://github.com/users/alice/projects/3?query=1",
-      "https://github.com/alice/repo",
-    );
+    const parsed = parseGitHub("https://github.com/users/alice/projects/3?query=1");
     expect(parsed.owner).toBe("alice");
     expect(parsed.projectId).toBe("3");
     expect(parsed.projectUrl).toBe("https://github.com/users/alice/projects/3");
-    expect(parsed.ownerConsistent).toBe(true);
+    expect(parsed.projectValid).toBe(true);
   });
 
   it("invalidates non-github project URLs", () => {
-    const parsed = parseGitHub("https://example.com/orgs/acme/projects/1", "");
+    const parsed = parseGitHub("https://example.com/orgs/acme/projects/1");
     expect(parsed.projectValid).toBe(false);
     expect(parsed.owner).toBe("");
     expect(parsed.projectId).toBe("");
-  });
-
-  it("does not return a repository name when owners differ", () => {
-    const parsed = parseGitHub(
-      "https://github.com/orgs/acme/projects/12",
-      "https://github.com/other/repo",
-    );
-    expect(parsed.repositoryValid).toBe(true);
-    expect(parsed.ownerConsistent).toBe(false);
-    expect(parsed.repositoryName).toBe("");
   });
 });
 
@@ -931,7 +943,6 @@ describe("initialProjectValues", () => {
       cliAgent: "codex",
       githubDecision: "",
       githubEnabled: false,
-      repoAccess: "https",
     });
   });
 
@@ -988,15 +999,12 @@ describe("initialProjectValues", () => {
         description: "Existing",
         github_enabled: true,
         github_project_url: "https://github.com/orgs/acme/projects/1",
-        github_repository_url: "https://github.com/acme/repo",
-        repo_base_url: "ssh://git@github.com",
       }),
     );
     expect(values.language).toBe("ja");
     expect(values.description).toBe("Existing");
     expect(values.githubDecision).toBe("enabled");
     expect(values.githubEnabled).toBe(true);
-    expect(values.repoAccess).toBe("ssh");
     expect(values.googleApiKey).toBe("");
     expect(values.openaiApiKey).toBe("");
     expect(values.anthropicApiKey).toBe("");
@@ -1014,27 +1022,21 @@ describe("toProjectSetupRequest", () => {
     expect(request.env_file_path).toBe("/workspace/.env");
     expect(request.config_dir).toBe("/workspace/.guildbotics/config");
     expect(request.owner).toBe("");
-    expect(request.repository_name).toBe("");
     expect(request.project_id).toBe("");
     expect(request.github_project_url).toBe("");
-    expect(request.repo_base_url).toBe("https://github.com");
   });
 
-  it("populates GitHub fields and ssh repo access when enabled", () => {
+  it("populates GitHub fields when enabled", () => {
     const request = toProjectSetupRequest(
       baseProjectValues({
         githubDecision: "enabled",
         githubProjectUrl: "https://github.com/orgs/acme/projects/9",
-        githubRepositoryUrl: "https://github.com/acme/repo",
-        repoAccess: "ssh",
       }),
       configStatus(),
     );
     expect(request.owner).toBe("acme");
     expect(request.project_id).toBe("9");
-    expect(request.repository_name).toBe("repo");
     expect(request.github_project_url).toBe("https://github.com/orgs/acme/projects/9");
-    expect(request.repo_base_url).toBe("ssh://git@github.com");
   });
 
   it("uses the home config dir when home location is selected", () => {
@@ -1050,7 +1052,6 @@ describe("toProjectSetupRequest", () => {
       baseProjectValues({
         githubDecision: "enabled",
         githubProjectUrl: "https://github.com/orgs/acme/projects/9",
-        githubRepositoryUrl: "https://github.com/acme/repo",
         laneReady: " Ready ",
         laneWorking: " Doing ",
         laneDone: " Shipped ",
@@ -1069,7 +1070,6 @@ describe("toProjectSetupRequest", () => {
       baseProjectValues({
         githubDecision: "enabled",
         githubProjectUrl: "https://github.com/orgs/acme/projects/9",
-        githubRepositoryUrl: "https://github.com/acme/repo",
         laneReady: "",
         laneWorking: "",
         laneDone: "",
@@ -1117,23 +1117,19 @@ describe("toProjectUpdateRequest", () => {
 
   it("disables GitHub and clears related fields", () => {
     const request = toProjectUpdateRequest(
-      baseProjectValues({ githubDecision: "disabled", repoAccess: "ssh" }),
+      baseProjectValues({ githubDecision: "disabled" }),
       configStatus(),
       snapshot,
     );
     expect(request.github_enabled).toBe(false);
     expect(request.owner).toBe("");
-    expect(request.repository_name).toBe("");
-    expect(request.repo_base_url).toBe("ssh://git@github.com");
   });
 
-  it("enables GitHub and converts https repo access", () => {
+  it("enables GitHub from the Project URL", () => {
     const request = toProjectUpdateRequest(
       baseProjectValues({
         githubDecision: "enabled",
         githubProjectUrl: "https://github.com/orgs/acme/projects/5",
-        githubRepositoryUrl: "https://github.com/acme/repo",
-        repoAccess: "https",
       }),
       configStatus(),
       snapshot,
@@ -1141,7 +1137,6 @@ describe("toProjectUpdateRequest", () => {
     expect(request.github_enabled).toBe(true);
     expect(request.owner).toBe("acme");
     expect(request.project_id).toBe("5");
-    expect(request.repo_base_url).toBe("https://github.com");
   });
 });
 

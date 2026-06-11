@@ -8,7 +8,7 @@ import re
 import shlex
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -27,6 +27,8 @@ from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     ActiveConfigLocation,
+    AgentFieldOption,
+    AgentFieldStateResponse,
     CliAgentDetection,
     CliAgentDetectionsResponse,
     CommandArgumentOption,
@@ -62,7 +64,6 @@ from guildbotics.drivers import (
 from guildbotics.editions import get_edition
 from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities import Project, Service, Team
-from guildbotics.entities.team import Repository
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
@@ -422,20 +423,77 @@ class AppRuntime:
         whenever options cannot be read—incomplete identity, no member token,
         or a GitHub error—so the form falls back to manual lane entry.
         """
-        if not (request.owner and request.project_id and request.github_project_url):
+        result = await self._with_setup_ticket_manager(
+            request, lambda tm: tm.get_statuses()
+        )
+        if result is None:
             return ProjectStatusOptionsResponse(available=False)
+        return ProjectStatusOptionsResponse(available=True, statuses=result)
+
+    async def fetch_agent_field_state(
+        self, request: ProjectStatusOptionsRequest
+    ) -> AgentFieldStateResponse:
+        """Read the ``Agent`` field state of the GitHub Project in *request*.
+
+        Read-only. Uses a configured member's credentials (like
+        :meth:`fetch_project_status_options`) and reports the registered and
+        still-missing non-human members so the setup form can show them.
+        """
+        result = await self._with_setup_ticket_manager(
+            request, lambda tm: tm.get_agent_field_state()
+        )
+        return self._to_agent_field_response(result)
+
+    async def ensure_agent_field(
+        self, request: ProjectStatusOptionsRequest
+    ) -> AgentFieldStateResponse:
+        """Create the ``Agent`` field or add missing non-human-member options.
+
+        Existing options are preserved (resubmitted with their ids) so ticket
+        assignments are never cleared. Returns the refreshed field state.
+        """
+        result = await self._with_setup_ticket_manager(
+            request, lambda tm: tm.sync_agent_field()
+        )
+        return self._to_agent_field_response(result)
+
+    @staticmethod
+    def _to_agent_field_response(
+        result: dict[str, Any] | None,
+    ) -> AgentFieldStateResponse:
+        if result is None:
+            return AgentFieldStateResponse(available=False)
+        return AgentFieldStateResponse(
+            available=True,
+            exists=bool(result["exists"]),
+            options=[AgentFieldOption(**opt) for opt in result["options"]],
+            missing=[AgentFieldOption(**opt) for opt in result["missing"]],
+        )
+
+    async def _with_setup_ticket_manager(
+        self,
+        request: ProjectStatusOptionsRequest,
+        action: Callable[[GitHubTicketManager], Awaitable[Any]],
+    ) -> Any:
+        """Run *action* against a GitHubTicketManager built from form identity.
+
+        The project identity comes from the (possibly unsaved) form, while the
+        member roster and credentials come from the saved team config. Tries
+        each member's credentials until one succeeds; returns the action result,
+        or ``None`` when the project identity is incomplete, no context/member is
+        available, or every attempt fails (so callers degrade gracefully).
+        """
+        if not (request.owner and request.project_id and request.github_project_url):
+            return None
         try:
             context = self._get_context()
         except Exception:
-            return ProjectStatusOptionsResponse(available=False)
+            return None
         try:
             members = [m for m in context.team.members if m.is_active]
             members = members or list(context.team.members)
             project = Project(
                 name=context.team.project.name or "setup",
-                repositories=[
-                    Repository(name=request.repository_name or "repo", is_default=True)
-                ],
                 services={
                     "ticket_manager": {
                         "name": "GitHub",
@@ -446,20 +504,22 @@ class AppRuntime:
                 },
             )
             team = Team(project=project, members=context.team.members)
-            logger = logging.getLogger("guildbotics.app_api.status_options")
+            logger = logging.getLogger("guildbotics.app_api.setup_github")
             for member in members:
-                ticket_manager = GitHubTicketManager(logger, member, team)
+                # Construct inside the try: GitHubTicketManager.__init__ raises for
+                # a member without a GitHub username, and such members must be
+                # skipped (not surfaced as a 500) so a later credentialed member
+                # is still tried.
+                ticket_manager: GitHubTicketManager | None = None
                 try:
-                    statuses = await ticket_manager.get_statuses()
-                    return ProjectStatusOptionsResponse(
-                        available=True, statuses=statuses
-                    )
+                    ticket_manager = GitHubTicketManager(logger, member, team)
+                    return await action(ticket_manager)
                 except Exception:
                     continue
                 finally:
-                    if ticket_manager.client is not None:
+                    if ticket_manager is not None and ticket_manager.client is not None:
                         await ticket_manager.client.aclose()
-            return ProjectStatusOptionsResponse(available=False)
+            return None
         finally:
             await context.aclose()
 
