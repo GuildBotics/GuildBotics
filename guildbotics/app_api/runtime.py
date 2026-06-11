@@ -506,13 +506,18 @@ class AppRuntime:
             team = Team(project=project, members=context.team.members)
             logger = logging.getLogger("guildbotics.app_api.setup_github")
             for member in members:
-                ticket_manager = GitHubTicketManager(logger, member, team)
+                # Construct inside the try: GitHubTicketManager.__init__ raises for
+                # a member without a GitHub username, and such members must be
+                # skipped (not surfaced as a 500) so a later credentialed member
+                # is still tried.
+                ticket_manager: GitHubTicketManager | None = None
                 try:
+                    ticket_manager = GitHubTicketManager(logger, member, team)
                     return await action(ticket_manager)
                 except Exception:
                     continue
                 finally:
-                    if ticket_manager.client is not None:
+                    if ticket_manager is not None and ticket_manager.client is not None:
                         await ticket_manager.client.aclose()
             return None
         finally:

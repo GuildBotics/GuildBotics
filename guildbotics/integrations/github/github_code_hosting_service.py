@@ -365,9 +365,26 @@ class GitHubCodeHostingService(CodeHostingService):
         """Get the HTTPS clone URL for the current code hosting service.
 
         Cloning always uses HTTPS so the managed GitHub token (supplied via
-        git askpass) authenticates the operation.
+        git askpass) authenticates the operation. The web host is derived from
+        the configured API host so clone and API operations target the same
+        GitHub instance (github.com or a GitHub Enterprise server).
         """
-        return f"https://github.com/{self.owner}/{self.repo}.git"
+        return f"{self._web_base_url()}/{self.owner}/{self.repo}.git"
+
+    def _web_base_url(self) -> str:
+        """Derive the web/clone base URL from the configured API base URL.
+
+        ``https://api.github.com`` maps to ``https://github.com``; a GitHub
+        Enterprise API host such as ``https://ghe.example.com/api/v3`` maps to
+        ``https://ghe.example.com``.
+        """
+        base = self.base_url.rstrip("/")
+        if base in ("https://api.github.com", "http://api.github.com"):
+            return "https://github.com"
+        for suffix in ("/api/v3", "/api"):
+            if base.endswith(suffix):
+                return base[: -len(suffix)]
+        return base
 
     async def get_default_branch(self) -> str:
         """Get the default branch of the repository."""

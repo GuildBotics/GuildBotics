@@ -156,13 +156,55 @@ async def test_fetch_agent_field_state_maps_live_state(
 
 
 @pytest.mark.asyncio
+async def test_agent_field_skips_member_without_github_username(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An active member without a GitHub username makes GitHubTicketManager.__init__
+    # raise; the helper must skip it and try the next credentialed member instead
+    # of surfacing a 500.
+    bad = Person(person_id="bot", name="Bot", is_active=True, account_info={})
+    good = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        account_info={"github_username": "alice"},
+    )
+    monkeypatch.setattr(
+        AppRuntime, "_get_context", lambda self, message="": _FakeContext([bad, good])
+    )
+
+    class _FakeTicketManager:
+        def __init__(self, logger: object, person: Person, team: Team) -> None:
+            self.client = None
+            if not person.account_info.get("github_username"):
+                raise ValueError("github username required")
+
+        async def get_agent_field_state(self) -> dict:
+            return {"exists": True, "options": [], "missing": []}
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.GitHubTicketManager", _FakeTicketManager
+    )
+
+    runtime = AppRuntime(EventBus())
+    result = await runtime.fetch_agent_field_state(_agent_request())
+
+    assert result.available is True
+    assert result.exists is True
+
+
+@pytest.mark.asyncio
 async def test_ensure_agent_field_syncs_and_returns_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     record: dict = {}
     _patch_agent_ticket_manager(
         monkeypatch,
-        state={"exists": True, "options": [{"name": "⚙bot1", "description": "Bot One"}], "missing": []},
+        state={
+            "exists": True,
+            "options": [{"name": "⚙bot1", "description": "Bot One"}],
+            "missing": [],
+        },
         record=record,
     )
     runtime = AppRuntime(EventBus())
