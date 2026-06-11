@@ -167,9 +167,9 @@ npm run e2e           # desktop/e2e/*.spec.ts を headless chromium で実行
 
 エージェント作業時の品質確認:
 
-- Python コードを変更したら、原則として `ruff` と `mypy` と関連 `pytest` を実行してから完了報告する
+- Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics` を実行）
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
-- 最低限の確認コマンドは `uv run --no-sync ruff check guildbotics`、`uv run --no-sync mypy guildbotics`、`uv run --no-sync pylint guildbotics`、`uv run --no-sync python -m pytest ...`
+- 最低限の確認コマンドは `uv run --no-sync ruff format --check guildbotics`、`uv run --no-sync ruff check guildbotics`、`uv run --no-sync mypy guildbotics`、`uv run --no-sync pylint guildbotics`、`uv run --no-sync python -m pytest ...`
 - 型エラーや lint エラーを回避するためだけの `# type: ignore` や noqa は、理由が明確でない限り追加しない
 
 desktop TypeScript 開発時の品質確認:
