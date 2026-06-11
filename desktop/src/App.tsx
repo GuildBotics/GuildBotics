@@ -2010,6 +2010,33 @@ export type CustomCommandHistory = {
   lastRunWasCustom: boolean;
 };
 
+// Keep a newest-first command list well-formed: drop non-strings/blanks, trim,
+// de-duplicate (first occurrence wins), and cap at the history limit. Shared by
+// both the in-memory push and the persisted load so stored values cannot grow
+// unbounded or contain blank entries.
+function normalizeCustomCommands(values: unknown, limit = CUSTOM_COMMAND_HISTORY_LIMIT): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of values) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    result.push(trimmed);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
 // Newest-first history of free-input commands: a re-run moves the existing entry
 // to the top instead of duplicating it.
 export function pushCustomCommand(
@@ -2017,11 +2044,7 @@ export function pushCustomCommand(
   command: string,
   limit = CUSTOM_COMMAND_HISTORY_LIMIT,
 ): string[] {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return commands;
-  }
-  return [trimmed, ...commands.filter((entry) => entry !== trimmed)].slice(0, limit);
+  return normalizeCustomCommands([command, ...commands], limit);
 }
 
 export function loadCustomCommandHistory(): CustomCommandHistory {
@@ -2032,10 +2055,10 @@ export function loadCustomCommandHistory(): CustomCommandHistory {
       return empty;
     }
     const parsed = JSON.parse(raw) as Partial<CustomCommandHistory>;
-    const commands = Array.isArray(parsed.commands)
-      ? parsed.commands.filter((entry): entry is string => typeof entry === "string")
-      : [];
-    return { commands, lastRunWasCustom: Boolean(parsed.lastRunWasCustom) };
+    return {
+      commands: normalizeCustomCommands(parsed.commands),
+      lastRunWasCustom: Boolean(parsed.lastRunWasCustom),
+    };
   } catch {
     return empty;
   }

@@ -473,6 +473,26 @@ describe("custom command history persistence", () => {
     window.localStorage.setItem(CUSTOM_COMMAND_HISTORY_KEY, "{not json");
     expect(loadCustomCommandHistory()).toEqual({ commands: [], lastRunWasCustom: false });
   });
+
+  it("sanitizes a stored history with blanks, duplicates, whitespace and non-strings", () => {
+    window.localStorage.setItem(
+      CUSTOM_COMMAND_HISTORY_KEY,
+      JSON.stringify({ commands: ["  a ", "a", "", "b", 5, "a"], lastRunWasCustom: true }),
+    );
+    expect(loadCustomCommandHistory()).toEqual({ commands: ["a", "b"], lastRunWasCustom: true });
+  });
+
+  it("caps an oversized stored history at the limit, keeping the newest entries", () => {
+    const stored = Array.from({ length: 50 }, (_, index) => `cmd-${index}`);
+    window.localStorage.setItem(
+      CUSTOM_COMMAND_HISTORY_KEY,
+      JSON.stringify({ commands: stored, lastRunWasCustom: false }),
+    );
+    const loaded = loadCustomCommandHistory().commands;
+    expect(loaded).toHaveLength(30);
+    expect(loaded[0]).toBe("cmd-0");
+    expect(loaded[29]).toBe("cmd-29");
+  });
 });
 
 function act(callback: () => void): Promise<void> {
