@@ -2,6 +2,7 @@ import {
   ActionIcon,
   Alert,
   Anchor,
+  Autocomplete,
   Badge,
   Button,
   Card,
@@ -1528,9 +1529,15 @@ function CommandsPage() {
   const hasProjectConfig = Boolean(
     config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
   );
-  const [mode, setMode] = useState("catalog");
+  const [initialHistory] = useState(loadCustomCommandHistory);
+  const restoreCustom = initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
+  const [mode, setMode] = useState(restoreCustom ? "custom" : "catalog");
   const [selectedCommand, setSelectedCommand] = useState("");
-  const [customCommand, setCustomCommand] = useState("");
+  const [customCommand, setCustomCommand] = useState(
+    restoreCustom ? initialHistory.commands[0] : "",
+  );
+  const [customHistory, setCustomHistory] = useState<string[]>(initialHistory.commands);
+  const [lastRunWasCustom, setLastRunWasCustom] = useState(initialHistory.lastRunWasCustom);
   const [rawArgs, setRawArgs] = useState("");
   const [argValues, setArgValues] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
@@ -1538,9 +1545,9 @@ function CommandsPage() {
   const [cwd, setCwd] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([]);
-  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLog[]>([]);
   const [history, setHistory] = useState<CommandRunRecord[]>([]);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<string | null>("events");
   const commandOptions = useQuery({
     queryKey: ["command-options", person],
     queryFn: () => getCommandOptions(person || undefined),
@@ -1602,9 +1609,16 @@ function CommandsPage() {
       }),
     onMutate: () => {
       setActiveRequestId(null);
+      setActiveTab("events");
+      const ranCustom = mode === "custom";
+      setLastRunWasCustom(ranCustom);
+      if (ranCustom) {
+        setCustomHistory((current) => pushCustomCommand(current, command));
+      }
     },
     onSuccess: (response) => {
       setActiveRequestId(response.request_id);
+      setActiveTab("output");
       setHistory((current) =>
         upsertCommandRecord(current, {
           requestId: response.request_id,
@@ -1619,6 +1633,7 @@ function CommandsPage() {
     onError: (error) => {
       const requestId = activeRequestId ?? `local-${Date.now()}`;
       setActiveRequestId(requestId);
+      setActiveTab("output");
       setHistory((current) =>
         upsertCommandRecord(current, {
           requestId,
@@ -1634,6 +1649,10 @@ function CommandsPage() {
   const runBusy = runMutation.isPending;
   const commandBlocked = blockingRequirements.length > 0;
   const canRun = !runBusy && !runDisabled && !commandBlocked;
+
+  useEffect(() => {
+    saveCustomCommandHistory({ commands: customHistory, lastRunWasCustom });
+  }, [customHistory, lastRunWasCustom]);
 
   useEffect(() => {
     const stopEvents = subscribeEvents((event) => {
@@ -1680,12 +1699,8 @@ function CommandsPage() {
         );
       }
     });
-    const stopLogs = subscribeLogs((log) => {
-      setRuntimeLogs((current) => [log, ...current].slice(0, 80));
-    });
     return () => {
       stopEvents();
-      stopLogs();
     };
   }, [t]);
 
@@ -1700,10 +1715,6 @@ function CommandsPage() {
         (event) => event.type.startsWith("command.") && event.request_id === visibleRequestId,
       ),
     [runtimeEvents, visibleRequestId],
-  );
-  const commandLogs = useMemo(
-    () => runtimeLogs.filter((log) => log.request_id === visibleRequestId),
-    [runtimeLogs, visibleRequestId],
   );
 
   return (
@@ -1802,10 +1813,18 @@ function CommandsPage() {
                       }}
                     />
                   ) : (
-                    <TextInput
+                    <Autocomplete
                       aria-label={t("commands.command")}
+                      placeholder={t("commands.customCommandPlaceholder")}
+                      description={
+                        customHistory.length ? t("commands.customCommandHistoryHint") : undefined
+                      }
+                      data={customHistory}
                       value={customCommand}
-                      onChange={(event) => setCustomCommand(event.currentTarget.value)}
+                      onChange={setCustomCommand}
+                      // Always show the full history (newest first) instead of
+                      // narrowing it to entries matching the current input.
+                      filter={({ options }) => options}
                     />
                   )}
                   {selectedOption && mode === "catalog" ? (
@@ -1947,7 +1966,8 @@ function CommandsPage() {
                     <CommandRunDetails
                       record={selectedRecord}
                       events={commandEvents}
-                      logs={commandLogs}
+                      activeTab={activeTab}
+                      onTabChange={setActiveTab}
                     />
                   ) : (
                     <div className="empty-row">{t("commands.noRunsYet")}</div>
@@ -1974,14 +1994,71 @@ export type CommandRunRecord = {
   error?: string;
 };
 
+export function commandOutputText(record: CommandRunRecord): string {
+  if (record.status === "failed") {
+    const detail = record.error || JSON.stringify({ request_id: record.requestId }, null, 2);
+    return record.output?.trim() ? `${detail}\n---\n${record.output}` : detail;
+  }
+  return record.output ?? "";
+}
+
+export const CUSTOM_COMMAND_HISTORY_KEY = "guildbotics.commands.customHistory";
+const CUSTOM_COMMAND_HISTORY_LIMIT = 30;
+
+export type CustomCommandHistory = {
+  commands: string[];
+  lastRunWasCustom: boolean;
+};
+
+// Newest-first history of free-input commands: a re-run moves the existing entry
+// to the top instead of duplicating it.
+export function pushCustomCommand(
+  commands: string[],
+  command: string,
+  limit = CUSTOM_COMMAND_HISTORY_LIMIT,
+): string[] {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return commands;
+  }
+  return [trimmed, ...commands.filter((entry) => entry !== trimmed)].slice(0, limit);
+}
+
+export function loadCustomCommandHistory(): CustomCommandHistory {
+  const empty: CustomCommandHistory = { commands: [], lastRunWasCustom: false };
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_COMMAND_HISTORY_KEY);
+    if (!raw) {
+      return empty;
+    }
+    const parsed = JSON.parse(raw) as Partial<CustomCommandHistory>;
+    const commands = Array.isArray(parsed.commands)
+      ? parsed.commands.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    return { commands, lastRunWasCustom: Boolean(parsed.lastRunWasCustom) };
+  } catch {
+    return empty;
+  }
+}
+
+export function saveCustomCommandHistory(value: CustomCommandHistory): void {
+  try {
+    window.localStorage.setItem(CUSTOM_COMMAND_HISTORY_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore persistence failures (e.g. storage disabled or full).
+  }
+}
+
 function CommandRunDetails({
   record,
   events,
-  logs,
+  activeTab,
+  onTabChange,
 }: {
   record: CommandRunRecord;
   events: RuntimeEvent[];
-  logs: RuntimeLog[];
+  activeTab: string | null;
+  onTabChange: (value: string | null) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -1993,25 +2070,17 @@ function CommandRunDetails({
         <span>{record.command}</span>
         <span>{record.person || t("commands.defaultPerson")}</span>
       </div>
-      <Tabs defaultValue="output">
+      <Tabs value={activeTab} onChange={onTabChange}>
         <Tabs.List>
-          <Tabs.Tab value="output">{t("commands.output")}</Tabs.Tab>
           <Tabs.Tab value="events">{t("commands.events")}</Tabs.Tab>
-          <Tabs.Tab value="logs">{t("commands.logs")}</Tabs.Tab>
-          <Tabs.Tab value="details">{t("commands.details")}</Tabs.Tab>
+          <Tabs.Tab value="output">{t("commands.output")}</Tabs.Tab>
         </Tabs.List>
-        <Tabs.Panel value="output" pt="md">
-          <pre className="command-output">{record.output || t("commands.noOutput")}</pre>
-        </Tabs.Panel>
         <Tabs.Panel value="events" pt="md">
           <CommandEventList events={events} />
         </Tabs.Panel>
-        <Tabs.Panel value="logs" pt="md">
-          <CommandLogList logs={logs} />
-        </Tabs.Panel>
-        <Tabs.Panel value="details" pt="md">
+        <Tabs.Panel value="output" pt="md">
           <pre className="command-output">
-            {record.error || JSON.stringify({ request_id: record.requestId }, null, 2)}
+            {commandOutputText(record) || t("commands.noOutput")}
           </pre>
         </Tabs.Panel>
       </Tabs>
@@ -2030,23 +2099,6 @@ function CommandEventList({ events }: { events: RuntimeEvent[] }) {
         <div className="event-row" key={`${event.timestamp}-${event.type}-${index}`}>
           <span>{event.type.replace("command.", "")}</span>
           <p>{formatCommandEvent(event)}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function CommandLogList({ logs }: { logs: RuntimeLog[] }) {
-  const { t } = useTranslation();
-  if (!logs.length) {
-    return <div className="empty-row">{t("commands.noRelatedLogs")}</div>;
-  }
-  return (
-    <div className="event-list">
-      {logs.map((log, index) => (
-        <div className="event-row" key={`${log.timestamp}-${log.level}-${index}`}>
-          <span>{log.level}</span>
-          <p>{log.message}</p>
         </div>
       ))}
     </div>

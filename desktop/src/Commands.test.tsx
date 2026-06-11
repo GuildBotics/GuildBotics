@@ -5,7 +5,15 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { App } from "./App";
+import {
+  App,
+  CUSTOM_COMMAND_HISTORY_KEY,
+  commandOutputText,
+  loadCustomCommandHistory,
+  pushCustomCommand,
+  saveCustomCommandHistory,
+  type CommandRunRecord,
+} from "./App";
 import {
   getCommandOptions,
   getConfigStatus,
@@ -16,7 +24,6 @@ import {
   type CommandOption,
   type ConfigStatus,
   type RuntimeEvent,
-  type RuntimeLog,
 } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
@@ -32,7 +39,6 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("./setup/SetupPage", () => ({ SetupPage: () => <div>Setup Mock</div> }));
 
 let eventListener: ((event: RuntimeEvent) => void) | null = null;
-let logListener: ((log: RuntimeLog) => void) | null = null;
 
 vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
@@ -57,7 +63,7 @@ const subscribeLogsMock = vi.mocked(subscribeLogs);
 
 beforeEach(() => {
   eventListener = null;
-  logListener = null;
+  window.localStorage.clear();
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getTeamMock.mockReset().mockResolvedValue(team());
   getCommandOptionsMock.mockReset().mockResolvedValue({ options: [catalogCommand()] });
@@ -68,12 +74,7 @@ beforeEach(() => {
       eventListener = null;
     };
   });
-  subscribeLogsMock.mockReset().mockImplementation((listener) => {
-    logListener = listener;
-    return () => {
-      logListener = null;
-    };
-  });
+  subscribeLogsMock.mockReset().mockReturnValue(() => {});
 });
 
 describe("Commands screen", () => {
@@ -222,7 +223,7 @@ describe("Commands screen", () => {
     expect(await screen.findByText(t("commands.status.failed"))).toBeInTheDocument();
   });
 
-  it("ties command logs to the active request id", async () => {
+  it("scopes command.log events to the active request id in the events tab", async () => {
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
     await waitFor(() => expect(eventListener).not.toBeNull());
@@ -236,27 +237,134 @@ describe("Commands screen", () => {
       }),
     );
     await act(() =>
-      logListener?.({
-        level: "INFO",
-        message: "log for this request",
+      eventListener?.({
+        type: "command.log",
         request_id: "evt-9",
+        payload: { level: "INFO", message: "log for this request" },
         timestamp: "2026-06-04T01:00:01Z",
       }),
     );
     await act(() =>
-      logListener?.({
-        level: "INFO",
-        message: "log for another request",
+      eventListener?.({
+        type: "command.log",
         request_id: "other",
+        payload: { level: "INFO", message: "log for another request" },
         timestamp: "2026-06-04T01:00:02Z",
       }),
     );
 
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole("tab", { name: t("commands.logs") }));
-
+    // The events tab is selected by default, so the scoped log shows without a click.
     expect(await screen.findByText("log for this request")).toBeInTheDocument();
     expect(screen.queryByText("log for another request")).not.toBeInTheDocument();
+  });
+
+  it("switches to the output tab and shows the output after a successful run", async () => {
+    const user = userEvent.setup();
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("hello output")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: t("commands.output") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("switches to the output tab and shows the error detail when a run fails", async () => {
+    runCommandMock.mockRejectedValueOnce(new Error("boom failure"));
+    const user = userEvent.setup();
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("boom failure")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: t("commands.output") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("offers every recorded free-input command, newest first and unfiltered by input", async () => {
+    const user = userEvent.setup();
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    await screen.findByRole("textbox", { name: "topic *" });
+
+    await user.click(screen.getByRole("radio", { name: t("commands.modeCustom") }));
+    const field = screen.getByRole("textbox", { name: t("commands.command") });
+
+    await user.type(field, "scripts/alpha.sh");
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
+
+    await user.clear(field);
+    await user.type(field, "scripts/beta.sh");
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(2));
+
+    // Typing a string that matches neither entry still shows both, newest first.
+    await user.clear(field);
+    await user.type(field, "zzz");
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "scripts/beta.sh",
+      "scripts/alpha.sh",
+    ]);
+  });
+
+  it("restores free-input mode and the last command after a restart", async () => {
+    const user = userEvent.setup();
+    const first = renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    await screen.findByRole("textbox", { name: "topic *" });
+
+    await user.click(screen.getByRole("radio", { name: t("commands.modeCustom") }));
+    await user.type(
+      screen.getByRole("textbox", { name: t("commands.command") }),
+      "scripts/restart.sh",
+    );
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
+
+    first.unmount();
+
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    expect(await screen.findByRole("radio", { name: t("commands.modeCustom") })).toBeChecked();
+    expect(screen.getByRole("textbox", { name: t("commands.command") })).toHaveValue(
+      "scripts/restart.sh",
+    );
+  });
+
+  it("keeps the catalog selected after a restart when the last run was a catalog command", async () => {
+    const user = userEvent.setup();
+    const first = renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    await screen.findByRole("textbox", { name: "topic *" });
+
+    // Record a free-input command first, then run a catalog command last.
+    await user.click(screen.getByRole("radio", { name: t("commands.modeCustom") }));
+    await user.type(
+      screen.getByRole("textbox", { name: t("commands.command") }),
+      "scripts/custom.sh",
+    );
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole("radio", { name: t("commands.modeCatalog") }));
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(2));
+
+    first.unmount();
+
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    expect(await screen.findByRole("radio", { name: t("commands.modeCatalog") })).toBeChecked();
   });
 
   it("copies the script path via the clipboard outside Tauri", async () => {
@@ -292,6 +400,78 @@ describe("Commands screen", () => {
 
     await waitFor(() => expect(openMock).toHaveBeenCalledWith("/workspace/commands/sample.py"));
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+});
+
+describe("commandOutputText", () => {
+  const record = (overrides: Partial<CommandRunRecord> = {}): CommandRunRecord => ({
+    requestId: "req-1",
+    person: "alice",
+    command: "workflows/sample",
+    startedAt: "2026-06-04T01:00:00Z",
+    status: "success",
+    ...overrides,
+  });
+
+  it("returns the raw output on success", () => {
+    expect(commandOutputText(record({ status: "success", output: "done" }))).toBe("done");
+  });
+
+  it("returns an empty string when a successful run has no output", () => {
+    expect(commandOutputText(record({ status: "success" }))).toBe("");
+  });
+
+  it("returns the error detail when a run fails without output", () => {
+    expect(commandOutputText(record({ status: "failed", error: "boom" }))).toBe("boom");
+  });
+
+  it("appends the output below a separator when a failed run still produced output", () => {
+    expect(commandOutputText(record({ status: "failed", error: "boom", output: "partial" }))).toBe(
+      "boom\n---\npartial",
+    );
+  });
+
+  it("falls back to the request id when a failed run has no error detail", () => {
+    expect(commandOutputText(record({ status: "failed" }))).toBe(
+      JSON.stringify({ request_id: "req-1" }, null, 2),
+    );
+  });
+});
+
+describe("pushCustomCommand", () => {
+  it("prepends a new command as the newest entry", () => {
+    expect(pushCustomCommand(["b"], "a")).toEqual(["a", "b"]);
+  });
+
+  it("moves an existing command to the top without duplicating it", () => {
+    expect(pushCustomCommand(["a", "b", "c"], "c")).toEqual(["c", "a", "b"]);
+  });
+
+  it("trims whitespace and ignores empty commands", () => {
+    expect(pushCustomCommand(["a"], "  b  ")).toEqual(["b", "a"]);
+    expect(pushCustomCommand(["a"], "   ")).toEqual(["a"]);
+  });
+
+  it("caps the history at the given limit", () => {
+    expect(pushCustomCommand(["a", "b", "c"], "d", 3)).toEqual(["d", "a", "b"]);
+  });
+});
+
+describe("custom command history persistence", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("round-trips the history and last-run mode through localStorage", () => {
+    saveCustomCommandHistory({ commands: ["a", "b"], lastRunWasCustom: true });
+    expect(loadCustomCommandHistory()).toEqual({ commands: ["a", "b"], lastRunWasCustom: true });
+  });
+
+  it("returns an empty history when nothing is stored", () => {
+    expect(loadCustomCommandHistory()).toEqual({ commands: [], lastRunWasCustom: false });
+  });
+
+  it("falls back to an empty history when the stored value is corrupt", () => {
+    window.localStorage.setItem(CUSTOM_COMMAND_HISTORY_KEY, "{not json");
+    expect(loadCustomCommandHistory()).toEqual({ commands: [], lastRunWasCustom: false });
   });
 });
 
