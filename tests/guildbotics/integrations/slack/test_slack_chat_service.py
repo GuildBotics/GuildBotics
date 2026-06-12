@@ -20,7 +20,9 @@ async def test_get_bot_identity_uses_auth_test():
         return httpx.Response(200, json={"ok": True, "user_id": "U1", "user": "bot"})
 
     client = _client_for(handler)
-    svc = SlackChatService(logging.getLogger("test"), client=client, base_url="https://x.test")
+    svc = SlackChatService(
+        logging.getLogger("test"), client=client, base_url="https://x.test"
+    )
     ident = await svc.get_bot_identity()
     assert ident.user_id == "U1"
     assert ident.display_name == "bot"
@@ -34,7 +36,12 @@ async def test_list_channel_events_normalizes_messages():
         body = {
             "ok": True,
             "messages": [
-                {"type": "message", "user": "UUSER1", "text": "<@UBOT123> hi", "ts": "100.1"},
+                {
+                    "type": "message",
+                    "user": "UUSER1",
+                    "text": "<@UBOT123> hi",
+                    "ts": "100.1",
+                },
                 {
                     "type": "message",
                     "subtype": "message_changed",
@@ -59,7 +66,9 @@ async def test_list_channel_events_normalizes_messages():
         return httpx.Response(200, json=body)
 
     client = _client_for(handler)
-    svc = SlackChatService(logging.getLogger("test"), client=client, base_url="https://x.test")
+    svc = SlackChatService(
+        logging.getLogger("test"), client=client, base_url="https://x.test"
+    )
     page = await svc.list_channel_events("C1")
     assert page.cursor == "abc"
     assert len(page.events) == 2
@@ -92,13 +101,17 @@ async def test_resolve_channel_id_uses_conversations_list_and_caches():
             200,
             json={
                 "ok": True,
-                "channels": [{"id": "C2", "name": "dev-chat", "name_normalized": "dev-chat"}],
+                "channels": [
+                    {"id": "C2", "name": "dev-chat", "name_normalized": "dev-chat"}
+                ],
                 "response_metadata": {"next_cursor": ""},
             },
         )
 
     client = _client_for(handler)
-    svc = SlackChatService(logging.getLogger("test"), client=client, base_url="https://x.test")
+    svc = SlackChatService(
+        logging.getLogger("test"), client=client, base_url="https://x.test"
+    )
     cid = await svc.resolve_channel_id("dev-chat")
     cid2 = await svc.resolve_channel_id("#dev-chat")
     assert cid == "C2"
@@ -121,12 +134,17 @@ async def test_post_message_and_add_reaction_send_expected_payloads():
         return httpx.Response(404, json={"ok": False, "error": "not_found"})
 
     client = _client_for(handler)
-    svc = SlackChatService(logging.getLogger("test"), client=client, base_url="https://x.test")
+    svc = SlackChatService(
+        logging.getLogger("test"), client=client, base_url="https://x.test"
+    )
     res = await svc.post_message("C1", "hello", thread_ts="100.1")
     await svc.add_reaction("C1", "100.1", "ack")
     assert res.message_ts == "200.1"
     assert res.thread_ts == "100.1"
-    assert any(path.endswith("/chat.postMessage") and "thread_ts=100.1" in body for path, body in seen)
+    assert any(
+        path.endswith("/chat.postMessage") and "thread_ts=100.1" in body
+        for path, body in seen
+    )
     assert any(
         path.endswith("/reactions.add") and "name=white_check_mark" in body
         for path, body in seen
@@ -137,7 +155,9 @@ async def test_post_message_and_add_reaction_send_expected_payloads():
 @pytest.mark.asyncio
 async def test_add_reaction_raises_for_unknown_semantic_reaction():
     client = _client_for(lambda request: httpx.Response(200, json={"ok": True}))
-    svc = SlackChatService(logging.getLogger("test"), client=client, base_url="https://x.test")
+    svc = SlackChatService(
+        logging.getLogger("test"), client=client, base_url="https://x.test"
+    )
     with pytest.raises(RuntimeError, match="Unsupported semantic reaction"):
         await svc.add_reaction("C1", "100.1", "eyes")
     await client.aclose()
@@ -151,7 +171,9 @@ def test_normalize_and_render_participant_text_for_slack_mentions():
     )
     participant_labels = {"UALICE": "alice", "UBOB": "bob"}
 
-    normalized = svc.normalize_participant_text("<@UALICE> hi <@UBOB>", participant_labels)
+    normalized = svc.normalize_participant_text(
+        "<@UALICE> hi <@UBOB>", participant_labels
+    )
     rendered = svc.render_participant_text("@alice hi @bob", participant_labels)
 
     assert normalized == "@alice hi @bob"
@@ -170,7 +192,9 @@ def test_render_participant_text_does_not_convert_ephemeral_labels():
         "UAGENT1": "agent_1",
     }
 
-    rendered = svc.render_participant_text("@alice @user_1 @agent_1", participant_labels)
+    rendered = svc.render_participant_text(
+        "@alice @user_1 @agent_1", participant_labels
+    )
 
     assert rendered == "<@UALICE> user_1 agent_1"
 
@@ -203,7 +227,9 @@ async def test_slack_api_error_raises_runtime_error():
         return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
 
     client = _client_for(handler)
-    svc = SlackChatService(logging.getLogger("test"), client=client, base_url="https://x.test")
+    svc = SlackChatService(
+        logging.getLogger("test"), client=client, base_url="https://x.test"
+    )
     with pytest.raises(RuntimeError, match="invalid_auth"):
         await svc.get_bot_identity()
     await client.aclose()

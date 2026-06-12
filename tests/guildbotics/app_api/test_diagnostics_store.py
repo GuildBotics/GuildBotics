@@ -1,0 +1,162 @@
+"""Unit tests for ``guildbotics.app_api.diagnostics_store``."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from guildbotics.app_api.diagnostics_store import DiagnosticsStore
+
+
+def _event(trace_id: str, event_type: str, **fields: object) -> dict[str, object]:
+    return {
+        "kind": "event",
+        "type": event_type,
+        "trace_id": trace_id,
+        "timestamp": fields.pop("timestamp", "2026-06-12T00:00:00+09:00"),
+        "source": fields.pop("source", "manual"),
+        "person_id": fields.pop("person_id", ""),
+        "command": fields.pop("command", ""),
+        "attributes": fields.pop("attributes", {}),
+        "payload": fields.pop("payload", {}),
+    }
+
+
+def _log(trace_id: str | None, level: str, message: str, ts: str) -> dict[str, object]:
+    return {
+        "kind": "log",
+        "level": level,
+        "message": message,
+        "trace_id": trace_id,
+        "timestamp": ts,
+    }
+
+
+def test_list_traces_aggregates_records(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(
+        _event(
+            "t1",
+            "command.started",
+            command="demo",
+            person_id="alice",
+            timestamp="2026-06-12T00:00:01+09:00",
+            attributes={"service_run_id": "svc-1"},
+        )
+    )
+    store.record(_log("t1", "INFO", "working", "2026-06-12T00:00:02+09:00"))
+    store.record(
+        _event("t1", "command.finished", timestamp="2026-06-12T00:00:03+09:00")
+    )
+
+    traces = store.list_traces()
+    assert len(traces) == 1
+    summary = traces[0]
+    assert summary["trace_id"] == "t1"
+    assert summary["source"] == "manual"
+    assert summary["command"] == "demo"
+    assert summary["person_id"] == "alice"
+    assert summary["status"] == "success"
+    assert summary["event_count"] == 2
+    assert summary["log_count"] == 1
+    assert summary["started_at"] == "2026-06-12T00:00:01+09:00"
+    assert summary["updated_at"] == "2026-06-12T00:00:03+09:00"
+    assert summary["attributes"] == {"service_run_id": "svc-1"}
+
+
+def test_failed_event_sets_failed_status_and_error_count(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started"))
+    store.record(_event("t1", "command.failed"))
+    store.record(_log("t1", "ERROR", "boom", "2026-06-12T00:00:05+09:00"))
+
+    summary = store.list_traces()[0]
+    assert summary["status"] == "failed"
+    assert summary["error_count"] == 2  # failed event + ERROR log
+
+
+def test_list_traces_filters_by_source_person_and_query(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started", source="manual", person_id="alice"))
+    store.record(
+        _event(
+            "t2",
+            "scheduler.running",
+            source="routine",
+            person_id="bob",
+            command="workflows/ticket",
+        )
+    )
+
+    assert {s["trace_id"] for s in store.list_traces(source="routine")} == {"t2"}
+    assert {s["trace_id"] for s in store.list_traces(person_id="alice")} == {"t1"}
+    assert {s["trace_id"] for s in store.list_traces(query="ticket")} == {"t2"}
+    assert store.list_traces(source="nope") == []
+
+
+def test_list_traces_filters_by_exact_attribute(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started", attributes={"github.number": "42"}))
+    store.record(_event("t2", "command.started", attributes={"github.number": "7"}))
+
+    matched = store.list_traces(attr_key="github.number", attr_value="42")
+    assert {s["trace_id"] for s in matched} == {"t1"}
+    # A bare number does not fuzzy-match other traces.
+    assert store.list_traces(attr_key="github.number", attr_value="1") == []
+
+
+def test_global_records_returns_unscoped_events_and_logs(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_log(None, "INFO", "global", "2026-06-12T00:00:01+09:00"))
+    store.record(
+        _event(
+            "",
+            "scheduler.running",
+            source="scheduler",
+            timestamp="2026-06-12T00:00:02+09:00",
+        )
+    )
+    store.record(_log("t1", "INFO", "scoped", "2026-06-12T00:00:03+09:00"))
+
+    records = store.global_records()
+    # Unscoped service events and global logs are returned (oldest-first);
+    # records tied to a trace are excluded.
+    assert [record.get("type") or record.get("message") for record in records] == [
+        "global",
+        "scheduler.running",
+    ]
+
+
+def test_get_records_returns_sorted_records_for_trace(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_log("t1", "INFO", "second", "2026-06-12T00:00:02+09:00"))
+    store.record(_event("t1", "command.started", timestamp="2026-06-12T00:00:01+09:00"))
+    records = store.get_records("t1")
+    assert [r.get("timestamp") for r in records] == [
+        "2026-06-12T00:00:01+09:00",
+        "2026-06-12T00:00:02+09:00",
+    ]
+
+
+def test_delete_trace_removes_records_and_rewrites_file(tmp_path: Path) -> None:
+    path = tmp_path / "diag.jsonl"
+    store = DiagnosticsStore(path)
+    store.record(_event("t1", "command.started"))
+    store.record(_event("t2", "command.started"))
+
+    removed = store.delete_trace("t1")
+    assert removed == 1
+    assert {s["trace_id"] for s in store.list_traces()} == {"t2"}
+    # A fresh store loading the rewritten file must not see the deleted trace.
+    reloaded = DiagnosticsStore(path)
+    assert {s["trace_id"] for s in reloaded.list_traces()} == {"t2"}
+
+
+def test_records_persist_across_restart(tmp_path: Path) -> None:
+    path = tmp_path / "diag.jsonl"
+    store = DiagnosticsStore(path)
+    store.record(_event("t1", "command.started", command="demo"))
+
+    reloaded = DiagnosticsStore(path)
+    summary = reloaded.list_traces()[0]
+    assert summary["trace_id"] == "t1"
+    assert summary["command"] == "demo"

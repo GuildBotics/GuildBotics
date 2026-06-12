@@ -113,8 +113,6 @@ async def test_write_commit_message_and_pr_description(
     ) == "message"
 
 
-
-
 @pytest.mark.asyncio
 async def test_identify_tasks(monkeypatch, fake_context, stub_brain):
     ctx = fake_context

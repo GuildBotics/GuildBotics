@@ -20,7 +20,9 @@ class FakeChatService:
         self, channel_id: str, text: str, *, thread_ts: str | None = None
     ) -> ChatPostResult:
         self.posts.append((channel_id, text, thread_ts))
-        return ChatPostResult(channel_id=channel_id, message_ts="200.1", thread_ts="200.1")
+        return ChatPostResult(
+            channel_id=channel_id, message_ts="200.1", thread_ts="200.1"
+        )
 
 
 class StubLogger:

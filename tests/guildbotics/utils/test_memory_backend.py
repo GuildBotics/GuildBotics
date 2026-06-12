@@ -194,7 +194,9 @@ def test_file_memory_backend_remember_marks_changed_false_on_idempotent_write(
     assert second.reference == ""
 
 
-def test_file_memory_backend_recall_skips_expired_temporary_topic(tmp_path, monkeypatch):
+def test_file_memory_backend_recall_skips_expired_temporary_topic(
+    tmp_path, monkeypatch
+):
     backend = _backend(tmp_path, monkeypatch)
     backend.remember(
         MemoryUpdate(
@@ -581,7 +583,9 @@ def test_cognee_memory_backend_prefers_structured_header_when_content_is_mixed()
     assert context.items[0].id == "focusflow-onboarding-policy-transition-1"
     assert context.items[0].title == "FocusFlow onboarding policy Change"
     assert context.items[0].retention["kind"] == "transition"
-    assert context.items[0].retention["subject_item_id"] == "focusflow-onboarding-policy"
+    assert (
+        context.items[0].retention["subject_item_id"] == "focusflow-onboarding-policy"
+    )
 
 
 def test_cognee_memory_backend_handles_multi_node_single_result_and_picks_latest():

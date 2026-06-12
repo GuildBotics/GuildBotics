@@ -23,12 +23,12 @@ def test_get_chat_profile_returns_empty_for_non_dict():
 def test_get_chat_profile_and_collections_normalize():
     person = _Person(
         profile={
-                "chat": {
-                    "subscriptions": [{"channel_id": "C1"}, "bad"],
-                    "scheduled_posts": [{"name": "a"}, 1],
-                    "slack_base_url": " https://slack.local/api ",
-                }
+            "chat": {
+                "subscriptions": [{"channel_id": "C1"}, "bad"],
+                "scheduled_posts": [{"name": "a"}, 1],
+                "slack_base_url": " https://slack.local/api ",
             }
+        }
     )
 
     assert get_chat_profile(person) == person.profile["chat"]

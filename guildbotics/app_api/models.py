@@ -131,8 +131,53 @@ class CommandRunRequest(BaseModel):
 
 
 class CommandRunResponse(BaseModel):
-    request_id: str
+    trace_id: str
     output: str
+
+
+class TraceSummary(BaseModel):
+    trace_id: str
+    source: str = ""
+    person_id: str = ""
+    command: str = ""
+    workflow: str = ""
+    started_at: str = ""
+    updated_at: str = ""
+    status: str = "info"
+    event_count: int = 0
+    log_count: int = 0
+    error_count: int = 0
+    span_count: int = 0
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class TraceRecord(BaseModel):
+    kind: str
+    timestamp: str = ""
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_id: str | None = None
+    call_id: str | None = None
+    span: str = ""
+    source: str = ""
+    person_id: str = ""
+    command: str = ""
+    workflow: str = ""
+    type: str = ""
+    level: str = ""
+    message: str = ""
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class TracesResponse(BaseModel):
+    traces: list[TraceSummary] = Field(default_factory=list)
+
+
+class TraceDetailResponse(BaseModel):
+    trace_id: str
+    summary: TraceSummary | None = None
+    records: list[TraceRecord] = Field(default_factory=list)
 
 
 class SchedulerStartRequest(BaseModel):
@@ -172,6 +217,18 @@ class RuntimeStatus(BaseModel):
 class PromptTraceUpdateRequest(BaseModel):
     enabled: bool
     trace_path: str = ""
+
+
+class RuntimeDebugUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class RuntimeDebugStatus(BaseModel):
+    enabled: bool
+    log_level: str
+    agno_debug: bool
+    env_file: Path
+    env_file_exists: bool
 
 
 class PromptTraceEntry(BaseModel):

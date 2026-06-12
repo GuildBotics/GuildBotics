@@ -562,7 +562,9 @@ async def test_is_assignable_user_resolves_existing_account():
     _script_graphql(
         manager,
         lambda query, variables: (
-            {"user": {"id": "U1"}} if variables["login"] == "aiko-gh" else {"user": None}
+            {"user": {"id": "U1"}}
+            if variables["login"] == "aiko-gh"
+            else {"user": None}
         ),
     )
 
@@ -775,7 +777,9 @@ async def test_sync_agent_field_adds_missing_option_preserving_existing():
         if "updateProjectV2Field" in query:
             submitted["options"] = variables["options"]
             added["done"] = True
-            return {"updateProjectV2Field": {"projectV2Field": {"id": "agent-field-id"}}}
+            return {
+                "updateProjectV2Field": {"projectV2Field": {"id": "agent-field-id"}}
+            }
         if "ProjectV2SingleSelectField" in query and "fields(" not in query:
             return {
                 "node": {

@@ -7,7 +7,6 @@ import os
 import re
 import shlex
 import threading
-import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -21,8 +20,9 @@ from guildbotics.app_api.cli_agents import (
     resolve_cli_executable,
 )
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
+from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.app_api.events import CommandEventLogHandler, EventBus
+from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
@@ -46,10 +46,16 @@ from guildbotics.app_api.models import (
     PromptTraceEntry,
     PromptTraceStatus,
     PromptTraceUpdateRequest,
+    RuntimeDebugStatus,
+    RuntimeDebugUpdateRequest,
     RuntimeStatus,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     TeamSummary,
+    TraceDetailResponse,
+    TraceRecord,
+    TracesResponse,
+    TraceSummary,
     VerifyResponse,
 )
 from guildbotics.app_api.verify import VerifyService
@@ -65,6 +71,7 @@ from guildbotics.editions import get_edition
 from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities import Project, Service, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.observability import new_id, trace_scope
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
     get_home_config_path,
@@ -101,9 +108,14 @@ def _classify_config_dir(
 
 class AppRuntime:
     def __init__(
-        self, event_bus: EventBus, *, stop_timeout_seconds: float = 10.0
+        self,
+        event_bus: EventBus,
+        *,
+        stop_timeout_seconds: float = 10.0,
+        diagnostics_store: DiagnosticsStore | None = None,
     ) -> None:
         self._event_bus = event_bus
+        self._diagnostics_store = diagnostics_store
         self._lock = threading.Lock()
         self._running_command_id: str | None = None
         self._loaded_dotenv_keys: set[str] = set()
@@ -236,17 +248,25 @@ class AppRuntime:
         )
 
     async def run_command(self, request: CommandRunRequest) -> CommandRunResponse:
-        request_id = uuid.uuid4().hex
-        self._reserve_command(request_id)
+        trace_id = new_id()
+        self._reserve_command(trace_id)
+        try:
+            with trace_scope(
+                "manual",
+                command=request.command,
+                person_id=request.person or "",
+                trace_id=trace_id,
+            ):
+                output = await self._run_command_traced(request)
+        finally:
+            self._release_command(trace_id)
+        return CommandRunResponse(trace_id=trace_id, output=output)
+
+    async def _run_command_traced(self, request: CommandRunRequest) -> str:
         self._event_bus.publish_event(
             "command.started",
             {"command": request.command, "person": request.person},
-            request_id=request_id,
         )
-        logger = logging.getLogger("guildbotics")
-        log_handler = CommandEventLogHandler(self._event_bus, request_id)
-        log_handler.setFormatter(logging.Formatter("%(message)s"))
-        logger.addHandler(log_handler)
         try:
             context = self._get_context(request.message)
             output = await run_command(
@@ -265,7 +285,6 @@ class AppRuntime:
                     "code": "person_selection_required",
                     "available": available,
                 },
-                request_id=request_id,
             )
             raise AppApiError(
                 "person_selection_required",
@@ -283,7 +302,6 @@ class AppRuntime:
                     "identifier": exc.identifier,
                     "available": available,
                 },
-                request_id=request_id,
             )
             raise AppApiError(
                 "person_not_found",
@@ -299,25 +317,19 @@ class AppRuntime:
                     "code": "command_error",
                     "message": str(exc),
                 },
-                request_id=request_id,
             )
             raise AppApiError("command_error", str(exc)) from exc
         except Exception as exc:
             self._event_bus.publish_event(
                 "command.failed",
                 {"command": request.command, "error_type": type(exc).__name__},
-                request_id=request_id,
             )
             raise
-        finally:
-            logger.removeHandler(log_handler)
-            self._release_command(request_id)
         self._event_bus.publish_event(
             "command.finished",
             {"command": request.command, "output_length": len(output)},
-            request_id=request_id,
         )
-        return CommandRunResponse(request_id=request_id, output=output)
+        return output
 
     def start_scheduler(self, request: SchedulerStartRequest) -> RuntimeStatus:
         if request.only != "events":
@@ -382,6 +394,38 @@ class AppRuntime:
         _write_env_values(status.env_file, env_values)
         return self.get_prompt_trace_status(limit=limit)
 
+    def get_runtime_debug_status(self) -> RuntimeDebugStatus:
+        status = self.get_config_status()
+        env_values = _read_env_values(status.env_file)
+        log_level = str(env_values.get("LOG_LEVEL") or os.getenv("LOG_LEVEL") or "INFO")
+        agno_debug = _env_truthy(
+            str(env_values.get("AGNO_DEBUG") or os.getenv("AGNO_DEBUG") or "")
+        )
+        normalized_log_level = log_level.strip().upper() or "INFO"
+        return RuntimeDebugStatus(
+            enabled=normalized_log_level == "DEBUG" or agno_debug,
+            log_level=normalized_log_level,
+            agno_debug=agno_debug,
+            env_file=status.env_file,
+            env_file_exists=status.env_file.exists(),
+        )
+
+    def update_runtime_debug(
+        self, request: RuntimeDebugUpdateRequest
+    ) -> RuntimeDebugStatus:
+        status = self.get_config_status()
+        env_values = _read_env_values(status.env_file)
+        log_level = "DEBUG" if request.enabled else "INFO"
+        agno_debug = "true" if request.enabled else "false"
+        env_values["LOG_LEVEL"] = log_level
+        env_values["AGNO_DEBUG"] = agno_debug
+        os.environ["LOG_LEVEL"] = log_level
+        os.environ["AGNO_DEBUG"] = agno_debug
+        _apply_runtime_log_level(log_level)
+        _write_env_values(status.env_file, env_values)
+        self._loaded_dotenv_keys.update(env_values)
+        return self.get_runtime_debug_status()
+
     def verify(self) -> VerifyResponse:
         status = self.get_config_status()
         team = None
@@ -411,6 +455,92 @@ class AppRuntime:
         finally:
             if context is not None:
                 await context.aclose()
+
+    def list_traces(
+        self,
+        *,
+        source: str | None = None,
+        person_id: str | None = None,
+        query: str | None = None,
+        attr_key: str | None = None,
+        attr_value: str | None = None,
+        limit: int = 200,
+    ) -> TracesResponse:
+        if self._diagnostics_store is None:
+            return TracesResponse(traces=[])
+        summaries = self._diagnostics_store.list_traces(
+            source=source,
+            person_id=person_id,
+            query=query,
+            attr_key=attr_key,
+            attr_value=attr_value,
+            limit=limit,
+        )
+        traces = [TraceSummary.model_validate(summary) for summary in summaries]
+        # Surface traces that exist only as prompt-trace records (e.g. an LLM
+        # call whose enclosing events were rotated out) so they remain findable.
+        # Their source/person are unknown, so only include them in the
+        # unfiltered ("all") view — otherwise they leak across source filters.
+        if source is None and person_id is None and not query and not attr_key:
+            known = {summary["trace_id"] for summary in summaries}
+            traces += [
+                TraceSummary(trace_id=trace_id, source="", status="info")
+                for trace_id in sorted(self._prompt_trace_trace_ids() - known)
+            ]
+        return TracesResponse(traces=traces)
+
+    def get_trace_detail(self, trace_id: str) -> TraceDetailResponse:
+        records: list[TraceRecord] = []
+        summary = None
+        if self._diagnostics_store is not None:
+            raw_summary = self._diagnostics_store.get_summary(trace_id)
+            summary = (
+                TraceSummary.model_validate(raw_summary)
+                if raw_summary is not None
+                else None
+            )
+            records.extend(
+                _to_trace_record(item)
+                for item in self._diagnostics_store.get_records(trace_id)
+            )
+        records.extend(self._prompt_trace_records(trace_id))
+        records.sort(key=lambda record: record.timestamp)
+        return TraceDetailResponse(trace_id=trace_id, summary=summary, records=records)
+
+    def get_global_records(self, limit: int = 200) -> TraceDetailResponse:
+        records: list[TraceRecord] = []
+        if self._diagnostics_store is not None:
+            records.extend(
+                _to_trace_record(item)
+                for item in self._diagnostics_store.global_records(limit=limit)
+            )
+        return TraceDetailResponse(trace_id="", summary=None, records=records)
+
+    def delete_trace(self, trace_id: str) -> int:
+        if self._diagnostics_store is None:
+            return 0
+        return self._diagnostics_store.delete_trace(trace_id)
+
+    def _prompt_trace_records(self, trace_id: str) -> list[TraceRecord]:
+        records: list[TraceRecord] = []
+        for item in self._read_all_prompt_trace_events():
+            if str(item.get("trace_id") or "") != trace_id:
+                continue
+            records.append(_prompt_trace_record(item))
+        return records
+
+    def _prompt_trace_trace_ids(self) -> set[str]:
+        return {
+            str(item.get("trace_id"))
+            for item in self._read_all_prompt_trace_events()
+            if item.get("trace_id")
+        }
+
+    def _read_all_prompt_trace_events(self) -> list[dict[str, Any]]:
+        if not prompt_trace_enabled() and not prompt_trace_path().exists():
+            return []
+        _, events = read_prompt_trace_events(10000, prompt_trace_path())
+        return events
 
     async def fetch_project_status_options(
         self, request: ProjectStatusOptionsRequest
@@ -593,20 +723,20 @@ class AppRuntime:
             load_dotenv(dotenv_path=dotenv_path, override=True)
         self._loaded_dotenv_keys = set(new_values)
 
-    def _reserve_command(self, request_id: str) -> None:
+    def _reserve_command(self, trace_id: str) -> None:
         with self._lock:
             if self._running_command_id is not None:
                 raise AppApiError(
                     "command_already_running",
                     "Another command is already running.",
                     status_code=409,
-                    context={"request_id": self._running_command_id},
+                    context={"trace_id": self._running_command_id},
                 )
-            self._running_command_id = request_id
+            self._running_command_id = trace_id
 
-    def _release_command(self, request_id: str) -> None:
+    def _release_command(self, trace_id: str) -> None:
         with self._lock:
-            if self._running_command_id == request_id:
+            if self._running_command_id == trace_id:
                 self._running_command_id = None
 
 
@@ -1090,6 +1220,75 @@ def _write_env_values(env_file_path: Path, env_values: dict[str, str]) -> None:
     env_file_path.parent.mkdir(parents=True, exist_ok=True)
     env_file_path.write_text(
         "\n".join(f"{key}={value}" for key, value in env_values.items())
+    )
+
+
+def _env_truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_runtime_log_level(log_level: str) -> None:
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    logger = logging.getLogger("guildbotics")
+    logger.setLevel(level)
+    for handler in logger.handlers:
+        handler.setLevel(level)
+
+    try:
+        from agno.utils import log as agno_log
+    except Exception:
+        return
+
+    agno_log.logger.setLevel(level)
+    for handler in agno_log.logger.handlers:
+        handler.setLevel(level)
+
+
+def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
+    attributes = item.get("attributes")
+    payload = item.get("payload")
+    return TraceRecord(
+        kind=str(item.get("kind", "")),
+        timestamp=str(item.get("timestamp", "")),
+        trace_id=item.get("trace_id"),
+        span_id=item.get("span_id"),
+        parent_id=item.get("parent_id"),
+        span=str(item.get("span") or ""),
+        source=str(item.get("source") or ""),
+        person_id=str(item.get("person_id") or ""),
+        command=str(item.get("command") or ""),
+        workflow=str(item.get("workflow") or ""),
+        type=str(item.get("type") or ""),
+        level=str(item.get("level") or ""),
+        message=str(item.get("message") or ""),
+        attributes=attributes if isinstance(attributes, dict) else {},
+        payload=payload if isinstance(payload, dict) else {},
+    )
+
+
+def _prompt_trace_record(item: dict[str, Any]) -> TraceRecord:
+    entry = _prompt_trace_entry(item)
+    return TraceRecord(
+        kind="prompt_trace",
+        timestamp=str(item.get("timestamp", "")),
+        trace_id=item.get("trace_id"),
+        span_id=item.get("span_id"),
+        parent_id=item.get("parent_id"),
+        call_id=item.get("call_id"),
+        span=str(item.get("span") or ""),
+        source=str(item.get("source") or ""),
+        person_id=entry.person_id,
+        command=entry.command,
+        type=entry.event,
+        message=entry.description or entry.event,
+        payload={
+            "prompt": entry.prompt,
+            "response": entry.response,
+            "transcript": entry.transcript,
+            "error": entry.error,
+            "brain": entry.brain,
+            "fields": entry.fields,
+        },
     )
 
 

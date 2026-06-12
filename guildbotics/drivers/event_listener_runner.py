@@ -16,6 +16,7 @@ from guildbotics.integrations.file_chat_state_store import FileConversationState
 from guildbotics.integrations.slack.slack_socket_listener import (
     SlackSocketEventListener,
 )
+from guildbotics.observability import trace_scope
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
@@ -46,9 +47,11 @@ class EventListenerRunner:
         context: Context,
         workflow_command: str = "workflows/chat_conversation_workflow",
         poll_interval_seconds: float = 5.0,
+        service_run_id: str | None = None,
     ) -> None:
         self.context = context
         self.workflow_command = workflow_command
+        self.service_run_id = service_run_id
         self.poll_interval_seconds = max(0.1, float(poll_interval_seconds))
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -112,13 +115,26 @@ class EventListenerRunner:
         self, person: Person, item: IncomingChatEvent
     ) -> str:
         """Dispatch a single incoming event to the workflow for one person."""
-        context = self.context.clone_for(person)
-        context.shared_state[INCOMING_CHAT_EVENT_KEY] = item.to_shared_state()
-        runner = CommandRunner(context, self.workflow_command, [])
-        try:
-            return await runner.run()
-        finally:
-            await context.aclose()
+        with trace_scope(
+            "event_listener",
+            person_id=person.person_id,
+            command=self.workflow_command,
+            attributes={
+                "service_run_id": self.service_run_id,
+                "event.provider": item.service_name,
+                "slack.channel": item.channel_id,
+                "slack.thread_ts": item.event.thread_ts,
+                "slack.ts": item.event.message_ts,
+                "event_id": item.event.event_id,
+            },
+        ):
+            context = self.context.clone_for(person)
+            context.shared_state[INCOMING_CHAT_EVENT_KEY] = item.to_shared_state()
+            runner = CommandRunner(context, self.workflow_command, [])
+            try:
+                return await runner.run()
+            finally:
+                await context.aclose()
 
     def _thread_main(self) -> None:
         loop = asyncio.new_event_loop()

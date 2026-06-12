@@ -1,16 +1,20 @@
 import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import {
+  deleteTrace,
   getConfigStatus,
+  getGlobalRecords,
   getProjectConfig,
   getPromptTrace,
   getTeam,
+  getTraceDetail,
+  getTraces,
   runScenarioDiagnostics,
   subscribeEvents,
   subscribeLogs,
@@ -20,14 +24,12 @@ import {
   type ProjectConfig,
   type PromptTraceEntry,
   type PromptTraceStatus,
-  type RuntimeEvent,
-  type RuntimeLog,
   type RuntimeStatus,
   type RuntimeUnitStatus,
   type ScenarioDiagnosticsResponse,
-  type StreamStatus,
 } from "./api/client";
 import i18n from "./i18n";
+import { makeTraceRecord } from "./test/factories";
 import "./i18n";
 
 const t = i18n.getFixedT("en");
@@ -55,27 +57,32 @@ vi.mock("./api/client", async (importOriginal) => {
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getPromptTrace: vi.fn(),
     updatePromptTrace: vi.fn(),
+    getRuntimeDebug: vi.fn(async () => ({
+      enabled: false,
+      log_level: "INFO",
+      agno_debug: false,
+      env_file: "/workspace/.env",
+      env_file_exists: true,
+    })),
+    updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => ({
+      enabled: body.enabled,
+      log_level: body.enabled ? "DEBUG" : "INFO",
+      agno_debug: body.enabled,
+      env_file: "/workspace/.env",
+      env_file_exists: true,
+    })),
     verify: vi.fn(),
     runScenarioDiagnostics: vi.fn(),
+    getTraces: vi.fn(),
+    getTraceDetail: vi.fn(),
+    getGlobalRecords: vi.fn(),
+    deleteTrace: vi.fn(),
     subscribeEvents: vi.fn(),
     subscribeLogs: vi.fn(),
   };
 });
 
-// Drivers captured from the mocked websocket subscriptions, so tests can push
-// events/logs and toggle stream status exactly like the backend would.
-let eventStreams: Array<{
-  onEvent: (event: RuntimeEvent) => void;
-  onStatus?: (status: StreamStatus) => void;
-}>;
-let logStreams: Array<{
-  onLog: (log: RuntimeLog) => void;
-  onStatus?: (status: StreamStatus) => void;
-}>;
-
 beforeEach(() => {
-  eventStreams = [];
-  logStreams = [];
   vi.mocked(getConfigStatus).mockReset().mockResolvedValue(configStatus());
   vi.mocked(getTeam)
     .mockReset()
@@ -92,45 +99,23 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue(promptTrace({ enabled: true, output_trace_file: "/workspace/trace.jsonl" }));
   vi.mocked(runScenarioDiagnostics).mockReset().mockResolvedValue(scenarioResponse());
+  vi.mocked(getTraces).mockReset().mockResolvedValue({ traces: [] });
+  vi.mocked(getTraceDetail)
+    .mockReset()
+    .mockResolvedValue({ trace_id: "", summary: null, records: [] });
+  vi.mocked(deleteTrace)
+    .mockReset()
+    .mockResolvedValue({ trace_id: "", summary: null, records: [] });
+  vi.mocked(getGlobalRecords)
+    .mockReset()
+    .mockResolvedValue({ trace_id: "", summary: null, records: [] });
   vi.mocked(subscribeEvents)
     .mockReset()
-    .mockImplementation((onEvent, onStatus) => {
-      eventStreams.push({ onEvent, onStatus });
-      onStatus?.("connecting");
-      return () => {};
-    });
+    .mockReturnValue(() => {});
   vi.mocked(subscribeLogs)
     .mockReset()
-    .mockImplementation((onLog, onStatus) => {
-      logStreams.push({ onLog, onStatus });
-      onStatus?.("connecting");
-      return () => {};
-    });
+    .mockReturnValue(() => {});
 });
-
-function emitEvent(event: RuntimeEvent) {
-  act(() => {
-    for (const stream of eventStreams) {
-      stream.onEvent(event);
-    }
-  });
-}
-
-function emitLog(log: RuntimeLog) {
-  act(() => {
-    for (const stream of logStreams) {
-      stream.onLog(log);
-    }
-  });
-}
-
-function setEventStreamStatus(status: StreamStatus) {
-  act(() => {
-    for (const stream of eventStreams) {
-      stream.onStatus?.(status);
-    }
-  });
-}
 
 describe("Diagnostics readiness tab", () => {
   it("renders the config / env / member / github readiness badges", async () => {
@@ -139,7 +124,9 @@ describe("Diagnostics readiness tab", () => {
 
     expect(await screen.findByText(t("overview.ready"))).toBeInTheDocument();
     expect(screen.getByText(t("overview.found"))).toBeInTheDocument();
-    expect(screen.getByText(t("overview.enabled"))).toBeInTheDocument();
+    // The GitHub badge depends on the project-config query, which resolves after
+    // the config query, so await it rather than asserting synchronously.
+    expect(await screen.findByText(t("overview.enabled"))).toBeInTheDocument();
     // Only the active member is counted.
     expect(screen.getByText("1")).toBeInTheDocument();
   });
@@ -313,55 +300,378 @@ describe("Diagnostics prompt trace tab", () => {
   });
 });
 
-describe("Diagnostics runtime stream tab", () => {
-  it("renders streamed events and switches to the logs view", async () => {
+describe("Diagnostics executions tab", () => {
+  it("lists traces and shows the selected trace timeline", async () => {
     const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-1",
+          source: "manual",
+          person_id: "alice",
+          command: "workflows/demo",
+          workflow: "",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "success",
+          event_count: 2,
+          log_count: 1,
+          error_count: 0,
+          span_count: 0,
+          attributes: {},
+        },
+      ],
+    });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-1",
+      summary: null,
+      records: [
+        makeTraceRecord({
+          kind: "event",
+          type: "command.started",
+          message: "command started",
+          timestamp: "2026-06-12T00:00:01Z",
+        }),
+        makeTraceRecord({
+          kind: "log",
+          level: "INFO",
+          message: "working on it",
+          timestamp: "2026-06-12T00:00:02Z",
+        }),
+      ],
+    });
+
     renderApp();
-    await openTab(user, t("diagnostics.tabs.runtimeStream"));
+    await openTab(user, t("diagnostics.tabs.executions"));
 
-    emitEvent(runtimeEvent({ type: "scheduler.running" }));
-    expect(
-      await screen.findByText(t("overview.eventSummaries.schedulerRunning")),
-    ).toBeInTheDocument();
+    const traceButton = await screen.findByText("workflows/demo");
+    await user.click(traceButton);
 
-    emitLog(runtimeLog({ message: "worker started", level: "INFO" }));
-    // Logs are not shown while the events view is active.
-    expect(screen.queryByText("worker started")).not.toBeInTheDocument();
+    expect(await screen.findByText("working on it")).toBeInTheDocument();
+    expect(vi.mocked(getTraceDetail)).toHaveBeenCalledWith("trace-1");
 
-    // The events/logs view switcher is a SegmentedControl; its "Logs" segment
-    // label is unique on the runtime stream tab.
-    await user.click(screen.getByText(t("overview.logs")));
-    expect(await screen.findByText("worker started")).toBeInTheDocument();
+    // The summary header shows the selected trace's id and computed duration.
+    expect(screen.getByText("trace-1")).toBeInTheDocument();
+    expect(screen.getByText(/2\.0s/)).toBeInTheDocument();
+
+    // The timeline is newest-first: the later log appears before the earlier
+    // started event so live updates surface at the top without scrolling.
+    const live = screen.getByText("working on it");
+    const started = screen.getByText("command.started");
+    expect(live.compareDocumentPosition(started) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("filters the event feed by the selected category", async () => {
+  it("filters the timeline to logs only", async () => {
     const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-1",
+          source: "routine",
+          person_id: "alice",
+          command: "workflows/demo",
+          workflow: "",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "failed",
+          event_count: 1,
+          log_count: 1,
+          error_count: 1,
+          span_count: 0,
+          attributes: {},
+        },
+      ],
+    });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-1",
+      summary: null,
+      records: [
+        makeTraceRecord({
+          kind: "event",
+          type: "command.failed",
+          message: "",
+          payload: { code: "command_error", message: "ticket lookup failed" },
+          timestamp: "2026-06-12T00:00:01Z",
+        }),
+        makeTraceRecord({
+          kind: "log",
+          level: "ERROR",
+          message: "boom happened",
+          timestamp: "2026-06-12T00:00:02Z",
+        }),
+      ],
+    });
+
     renderApp();
-    await openTab(user, t("diagnostics.tabs.runtimeStream"));
+    await openTab(user, t("diagnostics.tabs.executions"));
+    await user.click(await screen.findByText("workflows/demo"));
+    expect(await screen.findByText("boom happened")).toBeInTheDocument();
+    // The failed event surfaces its payload reason on the timeline.
+    expect(screen.getByText("ticket lookup failed")).toBeInTheDocument();
 
-    emitEvent(runtimeEvent({ type: "command.failed", payload: { message: "boom" } }));
-    emitEvent(runtimeEvent({ type: "scheduler.running" }));
-    expect(await screen.findByText("boom")).toBeInTheDocument();
+    await user.click(screen.getByText(t("diagnostics.executions.recordFilters.log")));
 
-    await user.click(screen.getByText(t("overview.feedFilters.error")));
+    expect(screen.getByText("boom happened")).toBeInTheDocument();
+    expect(screen.queryByText("ticket lookup failed")).not.toBeInTheDocument();
+  });
 
-    expect(screen.getByText("boom")).toBeInTheDocument();
+  it("shows the full record message in the drawer and filters by span", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const longMessage =
+      "This is a long CLI agent log message that must be readable in the detail drawer even when the timeline row truncates it.";
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-1",
+          source: "manual",
+          person_id: "alice",
+          command: "workflows/demo",
+          workflow: "",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "failed",
+          event_count: 1,
+          log_count: 2,
+          error_count: 1,
+          span_count: 2,
+          attributes: {},
+        },
+      ],
+    });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-1",
+      summary: null,
+      records: [
+        makeTraceRecord({
+          kind: "log",
+          level: "INFO",
+          message: "different span log",
+          span_id: "span-other",
+          timestamp: "2026-06-12T00:00:01Z",
+        }),
+        makeTraceRecord({
+          kind: "log",
+          level: "ERROR",
+          message: longMessage,
+          source: "manual",
+          span_id: "span-cli",
+          parent_id: "span-parent",
+          call_id: "call-1",
+          timestamp: "2026-06-12T00:00:02Z",
+        }),
+      ],
+    });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.executions"));
+    await user.click(await screen.findByText("workflows/demo"));
+    await user.click(await screen.findByText(longMessage));
+
+    await waitFor(() => expect(screen.getAllByText(longMessage).length).toBeGreaterThan(1));
+    expect(screen.getAllByText(t("diagnostics.executions.sources.manual")).length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.getByText(t("diagnostics.executions.developer.title"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("diagnostics.executions.copyMessage") }));
+    expect(writeText).toHaveBeenCalledWith(longMessage);
+
+    await user.click(
+      screen.getByRole("button", { name: t("diagnostics.executions.recordScope.span") }),
+    );
+
+    expect(screen.getByText(t("diagnostics.executions.recordScope.span"))).toBeInTheDocument();
+    expect(screen.getByText(longMessage)).toBeInTheDocument();
+    expect(screen.queryByText("different span log")).not.toBeInTheDocument();
+  });
+
+  it("requires a confirmation step before deleting a trace", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-1",
+          source: "manual",
+          person_id: "alice",
+          command: "workflows/demo",
+          workflow: "",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "success",
+          event_count: 1,
+          log_count: 0,
+          error_count: 0,
+          span_count: 0,
+          attributes: {},
+        },
+      ],
+    });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.executions"));
+    await user.click(await screen.findByText("workflows/demo"));
+
+    // First click only arms the confirmation; nothing is deleted yet.
+    await user.click(
+      await screen.findByRole("button", { name: t("diagnostics.executions.delete") }),
+    );
+    expect(vi.mocked(deleteTrace)).not.toHaveBeenCalled();
+    expect(screen.getByText(t("diagnostics.executions.confirmDelete"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("diagnostics.executions.confirmYes") }));
+    expect(vi.mocked(deleteTrace)).toHaveBeenCalledWith("trace-1");
+  });
+
+  it("looks up a ticket number from the unified search field with an exact attribute filter", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({ traces: [] });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.executions"));
+
+    const field = await screen.findByLabelText(t("diagnostics.executions.search"));
+    await user.type(field, "42{Enter}");
+
+    // The list refetches scoped to the exact github.number attribute (not q).
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(getTraces)
+          .mock.calls.some(
+            (call) => call[0]?.attrKey === "github.number" && call[0]?.attrValue === "42",
+          ),
+      ).toBe(true),
+    );
+    // An active-filter pill appears.
+    expect(screen.getByText("#42")).toBeInTheDocument();
+  });
+
+  it("shows source filters as execution launch methods", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({ traces: [] });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.executions"));
+
+    expect(screen.getByText(t("diagnostics.executions.sources.manual"))).toBeInTheDocument();
+    expect(screen.getByText(t("diagnostics.executions.sources.routine"))).toBeInTheDocument();
+    expect(screen.getByText(t("diagnostics.executions.sources.scheduled"))).toBeInTheDocument();
     expect(
-      screen.queryByText(t("overview.eventSummaries.schedulerRunning")),
+      screen.getByText(t("diagnostics.executions.sources.event_listener")),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("radio", { name: t("diagnostics.executions.sources.diagnostics") }),
     ).not.toBeInTheDocument();
   });
 
-  it("reflects the websocket connection status in the stream badge", async () => {
+  it("clears the unified search input and active filters", async () => {
     const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({ traces: [] });
+
     renderApp();
-    await openTab(user, t("diagnostics.tabs.runtimeStream"));
+    await openTab(user, t("diagnostics.tabs.executions"));
 
-    expect(
-      (await screen.findAllByText(t("overview.streamStates.connecting"))).length,
-    ).toBeGreaterThan(0);
+    const field = await screen.findByLabelText(t("diagnostics.executions.search"));
+    await user.type(field, "#42 timeout{Enter}");
 
-    setEventStreamStatus("connected");
-    expect(await screen.findByText(t("overview.streamStates.connected"))).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        vi.mocked(getTraces).mock.calls.some((call) => {
+          const params = call[0];
+          return (
+            params?.attrKey === "github.number" &&
+            params.attrValue === "42" &&
+            params.query === "timeout"
+          );
+        }),
+      ).toBe(true),
+    );
+
+    await user.click(screen.getByRole("button", { name: t("diagnostics.executions.searchClear") }));
+
+    expect(field).toHaveValue("");
+    await waitFor(() =>
+      expect(
+        vi.mocked(getTraces).mock.calls.some((call) => {
+          const params = call[0];
+          return !params?.attrKey && !params?.attrValue && !params?.query;
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("renders a trace with empty timestamps without crashing", async () => {
+    const user = userEvent.setup();
+    // A prompt-only trace has empty started_at/updated_at; formatting these must
+    // not throw (which previously blanked the whole screen).
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "p1",
+          source: "",
+          person_id: "",
+          command: "",
+          workflow: "",
+          started_at: "",
+          updated_at: "",
+          status: "info",
+          event_count: 0,
+          log_count: 0,
+          error_count: 0,
+          span_count: 0,
+          attributes: {},
+        },
+      ],
+    });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.executions"));
+
+    // The row falls back to the trace id and renders (no crash).
+    expect(await screen.findByText("p1")).toBeInTheDocument();
+  });
+
+  it("shows unscoped service events and global logs in the Global view", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({ traces: [] });
+    vi.mocked(getGlobalRecords).mockResolvedValue({
+      trace_id: "",
+      summary: null,
+      records: [
+        makeTraceRecord({
+          kind: "event",
+          type: "scheduler.running",
+          source: "scheduler",
+          trace_id: null,
+          timestamp: "2026-06-12T00:00:01Z",
+        }),
+        makeTraceRecord({
+          kind: "log",
+          level: "INFO",
+          message: "application started",
+          trace_id: null,
+          timestamp: "2026-06-12T00:00:02Z",
+        }),
+      ],
+    });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.executions"));
+    await user.click(await screen.findByText(t("diagnostics.executions.global.title")));
+
+    expect(await screen.findByText("application started")).toBeInTheDocument();
+    expect(screen.getByText("scheduler.running")).toBeInTheDocument();
+    expect(vi.mocked(getGlobalRecords)).toHaveBeenCalled();
+
+    // The Global entry belongs only to the "all" source filter: narrowing to a
+    // specific source hides it.
+    await user.click(screen.getByText(t("diagnostics.executions.sources.manual")));
+    expect(screen.queryByText(t("diagnostics.executions.global.title"))).not.toBeInTheDocument();
   });
 });
 
@@ -477,26 +787,6 @@ function diagnosticCheck(overrides: Partial<DiagnosticCheck> = {}): DiagnosticCh
     target: "",
     person_id: "",
     context: {},
-    ...overrides,
-  };
-}
-
-function runtimeEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
-  return {
-    type: "scheduler.running",
-    request_id: null,
-    payload: {},
-    timestamp: "2026-01-01T00:00:00Z",
-    ...overrides,
-  };
-}
-
-function runtimeLog(overrides: Partial<RuntimeLog> = {}): RuntimeLog {
-  return {
-    level: "INFO",
-    message: "log line",
-    request_id: null,
-    timestamp: "2026-01-01T00:00:00Z",
     ...overrides,
   };
 }

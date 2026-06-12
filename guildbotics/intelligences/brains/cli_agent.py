@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
+from guildbotics.observability import span_scope
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.log_utils import get_log_output_dir
 from guildbotics.utils.prompt_trace import write_prompt_trace
@@ -157,33 +158,38 @@ class CliAgentBrain(Brain):
         input = self.prompt_info.to_prompt(
             message, kwargs.get("session_state", {}), self.template_engine
         )
-        self.logger.debug(
-            f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
-        )
-        self._write_request_trace(input, kwargs)
+        # The span wraps the whole call (including this brain's own logging) so
+        # logs emitted here are attributed to the "cli_agent" span in diagnostics.
+        with span_scope("cli_agent"):
+            self.logger.debug(
+                f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
+            )
+            self._write_request_trace(input, kwargs)
 
-        response_file = ""
-        log_file = ""
-        output_dir = get_log_output_dir()
-        if output_dir:
-            current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
-            log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
+            response_file = ""
+            log_file = ""
+            output_dir = get_log_output_dir()
+            if output_dir:
+                current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                response_file = str(
+                    output_dir / f"cli_agent_response_{current_time}.log"
+                )
+                log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-        result = await self._execute_script(input, response_file, log_file, cwd)
-        output: Any = result.stdout
-        self._write_response_trace(result)
-        self._raise_if_execution_failed(result)
+            result = await self._execute_script(input, response_file, log_file, cwd)
+            output: Any = result.stdout
+            self._write_response_trace(result)
+            self._raise_if_execution_failed(result)
 
-        self.logger.debug(
-            f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
-        )
-        if self.response_class:
-            output = to_response_class(output, self.response_class)
-        if isinstance(output, AgentResponse):
-            log_file_path = Path(log_file)
-            if output.status == AgentResponse.ASKING and log_file_path.exists():
-                output.message = f"{output.message}\n\nSee: {log_file_path.name}"
+            self.logger.debug(
+                f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
+            )
+            if self.response_class:
+                output = to_response_class(output, self.response_class)
+            if isinstance(output, AgentResponse):
+                log_file_path = Path(log_file)
+                if output.status == AgentResponse.ASKING and log_file_path.exists():
+                    output.message = f"{output.message}\n\nSee: {log_file_path.name}"
 
         return output
 
@@ -194,21 +200,24 @@ class CliAgentBrain(Brain):
         input = self.prompt_info.to_prompt(
             message, kwargs.get("session_state", {}), self.template_engine
         )
-        self.logger.debug(
-            f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
-        )
-        self._write_request_trace(input, kwargs)
+        with span_scope("cli_agent"):
+            self.logger.debug(
+                f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
+            )
+            self._write_request_trace(input, kwargs)
 
-        response_file = ""
-        log_file = ""
-        output_dir = get_log_output_dir()
-        if output_dir:
-            current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
-            log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
+            response_file = ""
+            log_file = ""
+            output_dir = get_log_output_dir()
+            if output_dir:
+                current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                response_file = str(
+                    output_dir / f"cli_agent_response_{current_time}.log"
+                )
+                log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-        result = await self._execute_script(input, response_file, log_file, cwd)
-        self._write_response_trace(result)
+            result = await self._execute_script(input, response_file, log_file, cwd)
+            self._write_response_trace(result)
         return result
 
     def _raise_if_execution_failed(self, result: CliAgentExecutionResult) -> None:
