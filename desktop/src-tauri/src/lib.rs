@@ -1,4 +1,7 @@
+use std::fs;
+use std::io;
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use tauri::{Manager, RunEvent};
@@ -18,6 +21,8 @@ struct BackendState {
     child: Mutex<Option<CommandChild>>,
 }
 
+const GUILDBOTICS_SKILL: &str = include_str!("../../../skills/guildbotics/SKILL.md");
+
 #[tauri::command]
 fn backend_info(state: tauri::State<'_, BackendState>) -> serde_json::Value {
     serde_json::json!({
@@ -36,6 +41,116 @@ fn pick_free_port() -> u16 {
         .unwrap_or(8765)
 }
 
+fn home_dir() -> io::Result<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))
+}
+
+fn desktop_target_triple() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        _ => "aarch64-apple-darwin",
+    }
+}
+
+fn bundled_cli_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            candidates.push(dir.join("guildbotics-cli"));
+            candidates.push(dir.join(format!("guildbotics-cli-{}", desktop_target_triple())));
+        }
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(format!("guildbotics-cli-{}", desktop_target_triple())),
+    );
+    candidates
+}
+
+fn find_bundled_cli() -> io::Result<PathBuf> {
+    bundled_cli_candidates()
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "bundled guildbotics-cli binary was not found",
+            )
+        })
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+fn install_member_cli(home: &Path) -> io::Result<()> {
+    let source = find_bundled_cli()?;
+    let managed_dir = home.join(".guildbotics").join("bin");
+    let managed_cli = managed_dir.join("guildbotics");
+    fs::create_dir_all(&managed_dir)?;
+    fs::copy(source, &managed_cli)?;
+    make_executable(&managed_cli)?;
+
+    let local_bin = home.join(".local").join("bin");
+    let local_cli = local_bin.join("guildbotics");
+    fs::create_dir_all(&local_bin)?;
+    if should_write_managed_shim(&local_cli) {
+        fs::write(
+            &local_cli,
+            "#!/bin/sh\n# Managed by GuildBotics desktop.\nexec \"$HOME/.guildbotics/bin/guildbotics\" \"$@\"\n",
+        )?;
+        make_executable(&local_cli)?;
+    }
+    Ok(())
+}
+
+fn should_write_managed_shim(path: &Path) -> bool {
+    if !path.exists() {
+        return true;
+    }
+    fs::read_to_string(path)
+        .map(|content| content.contains("Managed by GuildBotics desktop."))
+        .unwrap_or(false)
+}
+
+fn install_skill_file(root: PathBuf) -> io::Result<()> {
+    let skill_dir = root.join("skills").join("guildbotics");
+    fs::create_dir_all(&skill_dir)?;
+    fs::write(skill_dir.join("SKILL.md"), GUILDBOTICS_SKILL)
+}
+
+fn install_cli_agent_assets() -> io::Result<()> {
+    let home = home_dir()?;
+    install_member_cli(&home)?;
+
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    install_skill_file(codex_home)?;
+
+    let claude_home = std::env::var_os("CLAUDE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    install_skill_file(claude_home)?;
+
+    Ok(())
+}
+
 pub fn run() {
     let token = uuid::Uuid::new_v4().to_string();
     let port = pick_free_port();
@@ -45,6 +160,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![backend_info])
         .setup(move |app| {
+            if let Err(error) = install_cli_agent_assets() {
+                eprintln!("failed to install GuildBotics CLI agent assets: {error}");
+            }
+
             let port_arg = port.to_string();
             let (mut rx, child) = app
                 .shell()
@@ -52,8 +171,18 @@ pub fn run() {
                 // The sidecar is a PyInstaller one-file binary whose worker can
                 // outlive a killed bootloader. Hand it our PID so it can exit on
                 // its own if this app ever dies without a clean teardown.
-                .env("GUILDBOTICS_APP_API_PARENT_PID", std::process::id().to_string())
-                .args(["--host", "127.0.0.1", "--port", &port_arg, "--token", &token])
+                .env(
+                    "GUILDBOTICS_APP_API_PARENT_PID",
+                    std::process::id().to_string(),
+                )
+                .args([
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    &port_arg,
+                    "--token",
+                    &token,
+                ])
                 .spawn()?;
 
             // Keep the child's stdout/stderr pipe drained so it never blocks.

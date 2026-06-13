@@ -5,15 +5,15 @@ from pathlib import Path
 from typing import Any
 
 from guildbotics.commands.discovery import resolve_named_command
+from guildbotics.commands.errors import CommandError
+from guildbotics.commands.errors import PersonNotFoundError as PersonNotFoundError
 from guildbotics.commands.errors import (
-    CommandError,
-    PersonNotFoundError,
-    PersonSelectionRequiredError,
+    PersonSelectionRequiredError as PersonSelectionRequiredError,
 )
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.spec_factory import CommandSpecFactory
-from guildbotics.entities.team import Person
 from guildbotics.runtime.context import Context
+from guildbotics.runtime.member_context import resolve_person
 
 
 class CommandRunner:
@@ -113,43 +113,15 @@ async def run_command(
     cwd: Path | None = None,
 ) -> str:
     """Execute a command within the given context."""
-    person = _resolve_person(base_context.team.members, person_identifier)
+    person = resolve_person(
+        base_context.team.members,
+        person_identifier,
+        default_to_single_active=True,
+    )
     context = base_context.clone_for(person)
     runner = CommandRunner(context, command_name, command_args, cwd)
     return await runner.run()
 
 
-def _resolve_person(members: Sequence[Person], identifier: str | None) -> Person:
-    if identifier is None:
-        active_members = [member for member in members if member.is_active]
-        if len(active_members) == 1:
-            return active_members[0]
-        available = _list_person_labels(members)
-        raise PersonSelectionRequiredError(available)
-
-    person = _find_person(members, identifier)
-    if person is None:
-        available = _list_person_labels(members)
-        raise PersonNotFoundError(identifier, available)
-    return person
-
-
-def _find_person(members: Sequence[Person], identifier: str) -> Person | None:
-    lower_identifier = identifier.casefold()
-    for member in members:
-        if member.person_id.casefold() == lower_identifier:
-            return member
-    for member in members:
-        if member.name.casefold() == lower_identifier:
-            return member
-    return None
-
-
-def _list_person_labels(members: Sequence[Person]) -> list[str]:
-    labels: list[str] = []
-    for member in members:
-        label = member.person_id
-        if member.name and member.name.casefold() != member.person_id.casefold():
-            label = f"{label} ({member.name})"
-        labels.append(label)
-    return sorted(labels)
+def _resolve_person(members: Sequence, identifier: str | None):
+    return resolve_person(members, identifier, default_to_single_active=True)

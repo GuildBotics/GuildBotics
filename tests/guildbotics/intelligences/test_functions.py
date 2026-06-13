@@ -12,6 +12,7 @@ from guildbotics.intelligences.common import (
     MessageResponse,
     NextTasksResponse,
 )
+from guildbotics.utils.fileio import load_markdown_with_frontmatter
 
 
 def test_to_text_with_model_and_list():
@@ -32,6 +33,25 @@ def test_messages_to_json_basic():
     s = f.messages_to_json(msgs)
     data = json.loads(s)
     assert data[0]["content"] == "hi" and data[1]["author_type"] == "Assistant"
+
+
+def test_handle_github_ticket_prompt_uses_member_capability_contract():
+    prompt = load_markdown_with_frontmatter(
+        Path("guildbotics/templates/commands/functions/handle_github_ticket.en.md")
+    )
+
+    assert prompt["response_class"] == "guildbotics.intelligences.common.AgentResponse"
+    assert "guildbotics member" in prompt["body"]
+    assert "member task complete" in prompt["body"]
+    assert "GitHubTicketAgentResult" not in prompt["body"]
+    assert "git push" in prompt["body"]
+    # The workflow no longer injects issue content; the agent inspects it.
+    assert "{issue_title}" not in prompt["body"]
+    assert "{issue_description}" not in prompt["body"]
+    # PR-review safety: the agent runs the workflow-provided prepare command,
+    # which carries --pr-url for PR review.
+    assert "{prepare_command}" in prompt["body"]
+    assert "--pr-url" in prompt["body"]
 
 
 @pytest.mark.asyncio

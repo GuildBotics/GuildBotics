@@ -24,6 +24,11 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities import Person, Project, Team
+from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
+from guildbotics.utils.workspace_state import (
+    GUILDBOTICS_CONFIG_DIR,
+    active_workspace_file,
+)
 
 HTTP_BAD_REQUEST = 400
 TRACE_EVENT_TOTAL = 5
@@ -356,6 +361,11 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert stop_calls == [True]
     assert Path.cwd() == workspace.resolve()
     assert os.environ["WORKSPACE_MARKER"] == "loaded"
+    assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
+        workspace.resolve() / ".guildbotics" / "config"
+    )
+    assert os.environ[GUILDBOTICS_ENV_FILE] == str(workspace.resolve() / ".env")
+    assert active_workspace_file().exists()
     assert status.cwd == workspace.resolve()
     assert status.primary_config_location == "workspace"
     assert status.active_config_location == "workspace"

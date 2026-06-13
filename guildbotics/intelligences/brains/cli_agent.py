@@ -48,6 +48,20 @@ class CliAgentExecutionResult:
     returncode: int
 
 
+def _extra_env(kwargs: dict[str, Any]) -> dict[str, str]:
+    """Per-invocation environment overlay passed via ``session_state``.
+
+    Callers (e.g. ticket workflow) put a ``cli_agent_env`` mapping into the
+    invoke params so values like the workflow run id reach this single agent
+    subprocess only, instead of mutating the process-global ``os.environ``
+    (which would race across the scheduler's per-member worker threads).
+    """
+    overlay = (kwargs.get("session_state") or {}).get("cli_agent_env")
+    if not isinstance(overlay, dict):
+        return {}
+    return {str(key): str(value) for key, value in overlay.items()}
+
+
 def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
     if person_id in person_cli_agent_mapping:
         return person_cli_agent_mapping[person_id]
@@ -176,7 +190,9 @@ class CliAgentBrain(Brain):
                 )
                 log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-            result = await self._execute_script(input, response_file, log_file, cwd)
+            result = await self._execute_script(
+                input, response_file, log_file, cwd, _extra_env(kwargs)
+            )
             output: Any = result.stdout
             self._write_response_trace(result)
             self._raise_if_execution_failed(result)
@@ -220,7 +236,9 @@ class CliAgentBrain(Brain):
                 )
                 log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-            result = await self._execute_script(input, response_file, log_file, cwd)
+            result = await self._execute_script(
+                input, response_file, log_file, cwd, _extra_env(kwargs)
+            )
             self._write_response_trace(result)
         return result
 
@@ -237,7 +255,12 @@ class CliAgentBrain(Brain):
             )
 
     async def _execute_script(
-        self, input: str, response_file: str, log_file: str, cwd: Path | str
+        self,
+        input: str,
+        response_file: str,
+        log_file: str,
+        cwd: Path | str,
+        extra_env: dict[str, str] | None = None,
     ) -> CliAgentExecutionResult:
         """
         Execute the script specified in the coding_agent.run configuration
@@ -256,6 +279,11 @@ class CliAgentBrain(Brain):
         env["PATH"] = get_cli_agent_search_path(env.get("PATH"))
         gh_config_dir = tempfile.mkdtemp(prefix="guildbotics-gh-config-")
         self._isolate_github_write_credentials(env, gh_config_dir)
+        # Per-invocation overlay (e.g. the workflow run id) is applied after
+        # credential isolation so callers can scope values to this single
+        # subprocess without mutating the shared process environment.
+        if extra_env:
+            env.update(extra_env)
 
         # Create temporary file for the prompt input
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:

@@ -9,6 +9,26 @@ import git
 from git import GitCommandError
 
 
+def create_git_askpass_script() -> Path:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        prefix="guildbotics-git-askpass-",
+        suffix=".sh",
+    ) as askpass:
+        askpass.write(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            '*Username*) printf "%s\\n" "${GIT_USERNAME:-x-access-token}" ;;\n'
+            '*Password*) printf "%s\\n" "$GIT_PASSWORD" ;;\n'
+            '*) printf "\\n" ;;\n'
+            "esac\n"
+        )
+    os.chmod(askpass.name, 0o700)
+    return Path(askpass.name)
+
+
 class GitTool:
     """
     A robust Git tool for managing Git operations within a specified workspace.
@@ -87,25 +107,9 @@ class GitTool:
         if not self._auth_token:
             return {}
 
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            delete=False,
-            prefix="guildbotics-git-askpass-",
-            suffix=".sh",
-        ) as askpass:
-            askpass.write(
-                "#!/bin/sh\n"
-                'case "$1" in\n'
-                '*Username*) printf "%s\\n" "${GIT_USERNAME:-x-access-token}" ;;\n'
-                '*Password*) printf "%s\\n" "$GIT_PASSWORD" ;;\n'
-                '*) printf "\\n" ;;\n'
-                "esac\n"
-            )
-        os.chmod(askpass.name, 0o700)
-        self._askpass_path = Path(askpass.name)
+        self._askpass_path = create_git_askpass_script()
         return {
-            "GIT_ASKPASS": askpass.name,
+            "GIT_ASKPASS": str(self._askpass_path),
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_USERNAME": "x-access-token",
             "GIT_PASSWORD": self._auth_token,

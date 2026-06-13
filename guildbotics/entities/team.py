@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from guildbotics.entities.task import ScheduledCommand
 
+KNOWN_LANGUAGE_NAMES = {
+    "en": "English",
+    "ja": "日本語",
+}
+
 
 class Service(Enum):
     """
@@ -127,7 +132,10 @@ class Project(BaseModel):
             str: The name of the project's default language.
         """
         lang = self._get_language()
-        return lang.display_name(lang.language or "en")
+        language_code = lang.language or "en"
+        if language_code in KNOWN_LANGUAGE_NAMES:
+            return KNOWN_LANGUAGE_NAMES[language_code]
+        return lang.display_name(language_code)
 
 
 class CommandSchedule(BaseModel):

@@ -8,6 +8,7 @@ from guildbotics.utils.fileio import (
     get_config_path,
     get_memory_repo_path,
     get_primary_config_path,
+    get_storage_path,
     load_markdown_with_frontmatter,
     load_yaml_file,
     save_yaml_file,
@@ -108,6 +109,16 @@ def test_get_memory_repo_path_uses_storage_root(tmp_path, monkeypatch):
         get_memory_repo_path("alice")
         == tmp_path / ".guildbotics" / "data" / "memory" / "alice"
     )
+
+
+def test_get_storage_path_prefers_data_dir_env_when_home_changes(tmp_path, monkeypatch):
+    data_dir = tmp_path / "stable-data"
+    changed_home = tmp_path / "agent-home"
+    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("HOME", str(changed_home))
+
+    assert get_storage_path() == data_dir
+    assert get_memory_repo_path("alice") == data_dir / "memory" / "alice"
 
 
 def test_clean_data_removes_none_and_empty_keys():

@@ -12,8 +12,9 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 import click
-from dotenv import load_dotenv
 
+from guildbotics.cli.member import member
+from guildbotics.cli.workspace import workspace
 from guildbotics.drivers import (
     CommandError,
     EventListenerRunner,
@@ -23,6 +24,7 @@ from guildbotics.drivers import (
     run_command,
 )
 from guildbotics.editions import get_edition
+from guildbotics.utils.env_loader import load_guildbotics_env
 from guildbotics.utils.fileio import get_storage_path
 
 
@@ -39,9 +41,7 @@ def _resolve_version() -> str:
 
 
 def _load_env_from_cwd() -> None:
-    dotenv_path = Path.cwd() / ".env"
-    if dotenv_path.exists():
-        load_dotenv(dotenv_path=dotenv_path, override=False)
+    load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=False)
 
 
 def _pid_file_path() -> Path:
@@ -89,6 +89,10 @@ def _remove_pidfile(path: Path) -> None:
 def main() -> None:
     """GuildBotics CLI entrypoint."""
     pass
+
+
+main.add_command(member)
+main.add_command(workspace)
 
 
 @main.command()
