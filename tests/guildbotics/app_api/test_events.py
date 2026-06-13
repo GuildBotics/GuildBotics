@@ -9,10 +9,10 @@ import threading
 import pytest
 
 from guildbotics.app_api.events import (
-    CommandEventLogHandler,
     EventBus,
     EventBusLogHandler,
 )
+from guildbotics.observability import trace_scope
 
 EXPECTED_HISTORY_LEN = 3
 
@@ -92,17 +92,24 @@ async def test_event_and_log_history_are_separate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_event_payload_shape() -> None:
+async def test_live_event_payload_shape_inside_trace() -> None:
     bus = EventBus()
     subscription = bus.subscribe_events()
     try:
-        bus.publish_event("command.done", {"ok": True}, request_id="req-1")
+        with trace_scope(
+            "manual", command="hello", trace_id="trace-1", person_id="alice"
+        ):
+            bus.publish_event("command.done", {"ok": True})
         item = await _get_with_timeout(subscription)
     finally:
         subscription.close()
 
+    assert item["kind"] == "event"
     assert item["type"] == "command.done"
-    assert item["request_id"] == "req-1"
+    assert item["trace_id"] == "trace-1"
+    assert item["source"] == "manual"
+    assert item["command"] == "hello"
+    assert item["person_id"] == "alice"
     assert item["payload"] == {"ok": True}
     assert item["timestamp"]
 
@@ -118,7 +125,27 @@ async def test_publish_event_defaults_payload_to_empty_dict() -> None:
         subscription.close()
 
     assert item["payload"] == {}
-    assert item["request_id"] is None
+    assert item["trace_id"] is None
+    assert item["source"] is None
+
+
+@pytest.mark.asyncio
+async def test_publish_event_merges_source_and_attributes() -> None:
+    bus = EventBus()
+    subscription = bus.subscribe_events()
+    try:
+        bus.publish_event(
+            "scheduler.running",
+            {"state": "running"},
+            source="scheduler",
+            attributes={"service_run_id": "svc-1"},
+        )
+        item = await _get_with_timeout(subscription)
+    finally:
+        subscription.close()
+
+    assert item["source"] == "scheduler"
+    assert item["attributes"] == {"service_run_id": "svc-1"}
 
 
 @pytest.mark.asyncio
@@ -166,36 +193,35 @@ async def test_event_bus_log_handler_publishes_formatted_log() -> None:
         log_sub.close()
         event_sub.close()
 
+    assert item["kind"] == "log"
     assert item["level"] == "WARNING"
     assert item["message"] == "disk almost full"
-    assert item["request_id"] is None
+    assert item["trace_id"] is None
 
 
 @pytest.mark.asyncio
-async def test_command_event_log_handler_publishes_command_log_event() -> None:
+async def test_log_handler_attaches_current_trace_to_log_records() -> None:
     bus = EventBus()
-    event_sub = bus.subscribe_events()
     log_sub = bus.subscribe_logs()
 
-    logger = logging.getLogger("test_command_event_log_handler")
+    logger = logging.getLogger("test_log_handler_trace")
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    handler = CommandEventLogHandler(bus, request_id="req-42")
+    handler = EventBusLogHandler(bus)
     handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(handler)
 
     try:
-        logger.error("command failed")
-        item = await _get_with_timeout(event_sub)
-
-        # The command log handler emits on the event channel, not the log one.
-        with pytest.raises(asyncio.TimeoutError):
-            await _get_with_timeout(log_sub, timeout=0.2)
+        with trace_scope("manual", trace_id="trace-42"):
+            logger.error("command failed")
+        item = await _get_with_timeout(log_sub)
     finally:
         logger.removeHandler(handler)
-        event_sub.close()
         log_sub.close()
 
-    assert item["type"] == "command.log"
-    assert item["request_id"] == "req-42"
-    assert item["payload"] == {"level": "ERROR", "message": "command failed"}
+    # Logs emitted within a trace carry that trace id (the single log path that
+    # replaced the old command.log events).
+    assert item["kind"] == "log"
+    assert item["level"] == "ERROR"
+    assert item["message"] == "command failed"
+    assert item["trace_id"] == "trace-42"

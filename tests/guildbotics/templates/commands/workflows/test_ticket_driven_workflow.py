@@ -415,13 +415,13 @@ async def test_run_creates_ticket_drafts_from_agent_result(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_posts_only_sanitized_error_log_path_to_ticket(monkeypatch, tmp_path):
+async def test_run_posts_safe_error_message_without_leaking_details(
+    monkeypatch, tmp_path
+):
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
     ctx.invoke_response = RuntimeError("codex failed: secret-token-123")
-    fake_home = tmp_path / "home"
-    log_dir = fake_home / ".guildbotics" / "data" / "logs" / "ticket_driven_workflow"
 
     async def fake_get_git_tool(context):
         return StubGitTool()
@@ -434,17 +434,47 @@ async def test_run_posts_only_sanitized_error_log_path_to_ticket(monkeypatch, tm
         fake_get_git_tool,
     )
     monkeypatch.setattr("guildbotics.intelligences.functions.talk_as", fake_talk_as)
-    monkeypatch.setattr(ticket_driven_workflow.Path, "home", lambda: fake_home)
-    monkeypatch.setattr(ticket_driven_workflow, "_error_log_dir", lambda: log_dir)
 
+    # The exception is re-raised so the command runner logs the trace-scoped
+    # traceback; the ticket comment must not leak the error/secret or a path.
     with pytest.raises(RuntimeError, match="secret-token-123"):
         await ticket_driven_workflow.main(ctx)
 
     assert len(tm.commented) == 1
     comment = tm.commented[0][1]
+    assert comment.strip()
     assert "secret-token-123" not in comment
     assert "RuntimeError" not in comment
-    assert "~/.guildbotics/data/logs/ticket_driven_workflow/" in comment
+    assert "/logs/" not in comment
+    assert ".log" not in comment
 
-    [log_file] = list(log_dir.glob("ticket_workflow_error_*.log"))
-    assert "secret-token-123" in log_file.read_text(encoding="utf-8")
+
+def test_ticket_trace_attributes_for_issue_and_pull_request():
+    issue = Task(
+        id="1",
+        title="T",
+        description="D",
+        repository="repo",
+        number=42,
+        url="https://github.com/owner/repo/issues/42",
+    )
+    assert ticket_driven_workflow._ticket_trace_attributes(issue) == {
+        "github.repo": "repo",
+        "github.kind": "issue",
+        "github.url": "https://github.com/owner/repo/issues/42",
+        "github.number": "42",
+    }
+
+    pr = Task(
+        id="2",
+        title="T",
+        description="D",
+        repository="repo",
+        pull_request_url="https://github.com/owner/repo/pull/7",
+    )
+    assert ticket_driven_workflow._ticket_trace_attributes(pr) == {
+        "github.repo": "repo",
+        "github.kind": "pull_request",
+        "github.url": "https://github.com/owner/repo/pull/7",
+        "github.number": "7",
+    }

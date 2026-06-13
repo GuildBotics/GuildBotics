@@ -7,14 +7,25 @@ import uuid
 
 import pytest
 
-from guildbotics.drivers.event_listener_runner import EventListenerRunner, SlackConnectionKey
+from guildbotics.drivers.event_listener_runner import (
+    EventListenerRunner,
+    SlackConnectionKey,
+)
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_service import ChatIdentity, ChatPostResult
+from guildbotics.observability import correlation_fields
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.event_listener import INCOMING_CHAT_EVENT_KEY, IncomingChatEvent
-from tests.guildbotics.runtime.test_context import DummyBrainFactory, DummyLoaderFactory, _make_team
+from guildbotics.runtime.event_listener import (
+    INCOMING_CHAT_EVENT_KEY,
+    IncomingChatEvent,
+)
+from tests.guildbotics.runtime.test_context import (
+    DummyBrainFactory,
+    DummyLoaderFactory,
+    _make_team,
+)
 from guildbotics.runtime.integration_factory import IntegrationFactory
 
 
@@ -65,9 +76,13 @@ class _WorkflowChatService:
     ) -> ChatPostResult:
         self.posts.append((channel_id, text, thread_ts))
         ts = "999.1"
-        return ChatPostResult(channel_id=channel_id, message_ts=ts, thread_ts=thread_ts or ts)
+        return ChatPostResult(
+            channel_id=channel_id, message_ts=ts, thread_ts=thread_ts or ts
+        )
 
-    async def add_reaction(self, channel_id: str, message_ts: str, reaction: str) -> None:
+    async def add_reaction(
+        self, channel_id: str, message_ts: str, reaction: str
+    ) -> None:
         self.reactions.append((channel_id, message_ts, reaction))
 
     def normalize_participant_text(
@@ -113,6 +128,7 @@ async def test_dispatch_incoming_event_sets_shared_state_and_runs_workflow(monke
             captured["command_args"] = list(command_args)
 
         async def run(self):
+            captured["correlation"] = correlation_fields()
             return "ok"
 
     monkeypatch.setattr(
@@ -141,6 +157,9 @@ async def test_dispatch_incoming_event_sets_shared_state_and_runs_workflow(monke
     assert out == "ok"
     assert captured["command_name"] == "workflows/chat_conversation_workflow"
     assert captured["command_args"] == []
+    assert captured["correlation"]["source"] == "event_listener"
+    assert captured["correlation"]["attributes"]["event.provider"] == "slack"
+    assert captured["correlation"]["attributes"]["slack.channel"] == "C1"
     ctx = captured["context"]
     payload = ctx.shared_state[INCOMING_CHAT_EVENT_KEY]
     assert payload["service_name"] == "slack"
@@ -150,7 +169,9 @@ async def test_dispatch_incoming_event_sets_shared_state_and_runs_workflow(monke
 
 
 @pytest.mark.asyncio
-async def test_dispatch_incoming_event_runs_real_workflow_via_command_runner(monkeypatch, tmp_path):
+async def test_dispatch_incoming_event_runs_real_workflow_via_command_runner(
+    monkeypatch, tmp_path
+):
     from guildbotics.templates.commands.workflows import chat_conversation_workflow
 
     chat_service = _WorkflowChatService()
@@ -169,7 +190,9 @@ async def test_dispatch_incoming_event_runs_real_workflow_via_command_runner(mon
     runner = EventListenerRunner(context)
 
     # Force workflow fallback path to use a temp state store rather than user storage.
-    from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+    from guildbotics.integrations.file_chat_state_store import (
+        FileConversationStateStore,
+    )
 
     monkeypatch.setattr(
         chat_conversation_workflow,
@@ -364,8 +387,16 @@ async def test_run_once_dispatches_events_and_marks_processed(monkeypatch):
     monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: fake_listener)
     monkeypatch.setattr(runner, "dispatch_incoming_event", _fake_dispatch)
     mark_calls = []
-    monkeypatch.setattr(runner, "_mark_processed_for_person", lambda person, incoming: mark_calls.append((person.person_id, incoming.event.event_id)))
-    monkeypatch.setattr(runner, "_is_processed_for_person", lambda person, incoming: False)
+    monkeypatch.setattr(
+        runner,
+        "_mark_processed_for_person",
+        lambda person, incoming: mark_calls.append(
+            (person.person_id, incoming.event.event_id)
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "_is_processed_for_person", lambda person, incoming: False
+    )
 
     await runner._run_once()
 
@@ -442,11 +473,15 @@ async def test_run_once_broadcasts_same_event_to_multiple_people(monkeypatch):
     )
     monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
     monkeypatch.setattr(runner, "dispatch_incoming_event", _fake_dispatch)
-    monkeypatch.setattr(runner, "_is_processed_for_person", lambda person, incoming: False)
+    monkeypatch.setattr(
+        runner, "_is_processed_for_person", lambda person, incoming: False
+    )
     monkeypatch.setattr(
         runner,
         "_mark_processed_for_person",
-        lambda person, incoming: marked.append((person.person_id, incoming.event.event_id)),
+        lambda person, incoming: marked.append(
+            (person.person_id, incoming.event.event_id)
+        ),
     )
 
     await runner._run_once()
@@ -526,7 +561,9 @@ async def test_run_once_skips_person_when_already_processed(monkeypatch):
         "_is_processed_for_person",
         lambda person, incoming: person.person_id == "bob",
     )
-    monkeypatch.setattr(runner, "_mark_processed_for_person", lambda person, incoming: None)
+    monkeypatch.setattr(
+        runner, "_mark_processed_for_person", lambda person, incoming: None
+    )
 
     await runner._run_once()
 
@@ -542,7 +579,11 @@ async def test_build_person_subscriptions_uses_cached_channel_resolution(monkeyp
         profile={
             "chat": {
                 "subscriptions": [
-                    {"service": "slack", "channel_name": "dev-chat", "event_source": "socket_mode"}
+                    {
+                        "service": "slack",
+                        "channel_name": "dev-chat",
+                        "event_source": "socket_mode",
+                    }
                 ]
             }
         },
@@ -620,7 +661,9 @@ async def test_aclose_sources_stops_listeners_and_clears_caches():
 
 
 @pytest.mark.asyncio
-async def test_build_person_subscriptions_skips_person_with_missing_app_token(monkeypatch):
+async def test_build_person_subscriptions_skips_person_with_missing_app_token(
+    monkeypatch,
+):
     alice = Person(
         person_id="alice",
         name="Alice",

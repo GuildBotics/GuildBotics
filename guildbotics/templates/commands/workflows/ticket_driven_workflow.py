@@ -1,6 +1,4 @@
-import datetime
-import traceback
-from pathlib import Path
+import re
 from typing import Any
 
 from guildbotics.entities.task import Task
@@ -12,11 +10,11 @@ from guildbotics.intelligences.common import (
     GitHubTicketAgentResult,
     Labels,
 )
+from guildbotics.observability import set_attributes
 from guildbotics.runtime import Context
-from guildbotics.utils.fileio import get_storage_path, get_workspace_path
+from guildbotics.utils.fileio import get_workspace_path
 from guildbotics.utils.git_tool import GitTool
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.log_utils import get_log_output_dir
 
 
 async def get_git_tool(context: Context) -> GitTool:
@@ -51,45 +49,39 @@ async def _move_task_to_working_if_ready(
             context.task.status = Task.IN_PROGRESS
 
 
-def _safe_display_path(path: Path) -> str:
-    expanded_home = Path.home().expanduser()
-    resolved_path = path.expanduser()
-    try:
-        relative_path = resolved_path.relative_to(expanded_home)
-        return str(Path("~") / relative_path)
-    except ValueError:
-        return str(resolved_path)
+def _ticket_trace_attributes(task: Task) -> dict[str, str]:
+    """Correlation attributes that make a ticket run findable in diagnostics.
 
-
-def _error_log_dir() -> Path:
-    return get_log_output_dir("ticket_driven_workflow") or (
-        get_storage_path() / "logs" / "ticket_driven_workflow"
-    )
-
-
-def _write_task_error_log(context: Context, error: Exception) -> Path:
-    log_dir = _error_log_dir()
-    log_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
-    log_file_path = log_dir / f"ticket_workflow_error_{timestamp}.log"
-    error_text = "".join(
-        traceback.format_exception(type(error), error, error.__traceback__)
-    )
-    log_file_path.write_text(error_text, encoding="utf-8")
-    context.logger.error("Ticket workflow error log: %s", log_file_path)
-    return log_file_path
+    The full traceback is already captured as a trace-scoped ERROR log on a
+    failed cycle; tagging the trace with the ticket (number / url / repo) lets an
+    operator jump from a GitHub ticket number to that run (and cross-search by
+    ``github.*``) instead of relying on a local error-log file.
+    """
+    attributes: dict[str, str] = {}
+    if task.repository:
+        attributes["github.repo"] = task.repository
+    if task.pull_request_url:
+        attributes["github.kind"] = "pull_request"
+        attributes["github.url"] = task.pull_request_url
+        match = re.search(r"/pull/(\d+)", task.pull_request_url)
+        if match:
+            attributes["github.number"] = match.group(1)
+    else:
+        attributes["github.kind"] = "issue"
+        if task.url:
+            attributes["github.url"] = task.url
+        if task.number is not None:
+            attributes["github.number"] = str(task.number)
+    return attributes
 
 
 async def _build_task_error_message(
     context: Context, error: Exception | None = None
 ) -> str:
+    # The traceback is logged (trace-scoped ERROR) by the command runner on
+    # re-raise; the ticket comment stays a safe, reader-facing message with no
+    # local paths or internal details.
     error_text = t("drivers.task_scheduler.task_error")
-    if error is not None:
-        log_file_path = _write_task_error_log(context, error)
-        error_text = (
-            f"{error_text}\n\n"
-            f"{t('drivers.task_scheduler.task_error_log_path', path=_safe_display_path(log_file_path))}"
-        )
     try:
         from guildbotics.intelligences.functions import talk_as
 
@@ -394,6 +386,7 @@ async def main(context: Context) -> AgentResponse | None:
         return None
 
     context.update_task(task)
+    set_attributes(**_ticket_trace_attributes(task))
     try:
         response = await _main(context, ticket_manager)
         if (

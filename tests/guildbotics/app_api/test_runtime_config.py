@@ -9,6 +9,7 @@ and never touch the real home directory or network.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
     ProjectStatusOptionsRequest,
     PromptTraceUpdateRequest,
+    RuntimeDebugUpdateRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities import Person, Project, Team
@@ -617,6 +619,83 @@ def test_update_prompt_trace_preserves_existing_keys_and_order(
     assert env_map["GUILDBOTICS_PROMPT_TRACE"] == "1"
     assert env_map["EXTRA"] == "keep"
     assert env_map["GUILDBOTICS_PROMPT_TRACE_PATH"] == str(trace_path)
+
+
+# --- runtime debug ----------------------------------------------------------
+
+
+def test_runtime_debug_status_reads_env_file(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("AGNO_DEBUG", raising=False)
+    (isolated_home / ".env").write_text("LOG_LEVEL=DEBUG\nAGNO_DEBUG=false\n")
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.get_runtime_debug_status()
+
+    assert status.enabled is True
+    assert status.log_level == "DEBUG"
+    assert status.agno_debug is False
+    assert status.env_file == isolated_home / ".env"
+    assert status.env_file_exists is True
+
+
+def test_update_runtime_debug_writes_env_environ_and_logger_level(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("AGNO_DEBUG", raising=False)
+    (isolated_home / ".env").write_text("OPENAI_API_KEY=keep\nLOG_LEVEL=INFO\n")
+    runtime = AppRuntime(EventBus())
+    logger = logging.getLogger("guildbotics")
+    original_level = logger.level
+    handler = logging.StreamHandler()
+    logger.addHandler(handler)
+
+    try:
+        status = runtime.update_runtime_debug(RuntimeDebugUpdateRequest(enabled=True))
+
+        assert os.environ["LOG_LEVEL"] == "DEBUG"
+        assert os.environ["AGNO_DEBUG"] == "true"
+        assert logger.level == logging.DEBUG
+        assert handler.level == logging.DEBUG
+        env_map = dict(
+            line.split("=", 1)
+            for line in (isolated_home / ".env").read_text().splitlines()
+            if "=" in line
+        )
+        assert env_map == {
+            "OPENAI_API_KEY": "keep",
+            "LOG_LEVEL": "DEBUG",
+            "AGNO_DEBUG": "true",
+        }
+        assert status.enabled is True
+        assert status.log_level == "DEBUG"
+        assert status.agno_debug is True
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(original_level)
+
+
+def test_update_runtime_debug_disables_both_debug_flags(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("AGNO_DEBUG", "true")
+    (isolated_home / ".env").write_text("LOG_LEVEL=DEBUG\nAGNO_DEBUG=true\n")
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.update_runtime_debug(RuntimeDebugUpdateRequest(enabled=False))
+
+    assert os.environ["LOG_LEVEL"] == "INFO"
+    assert os.environ["AGNO_DEBUG"] == "false"
+    env_text = (isolated_home / ".env").read_text()
+    assert "LOG_LEVEL=INFO" in env_text
+    assert "AGNO_DEBUG=false" in env_text
+    assert status.enabled is False
+    assert status.log_level == "INFO"
+    assert status.agno_debug is False
 
 
 # --- detect_cli_agents() ----------------------------------------------------

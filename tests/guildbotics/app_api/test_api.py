@@ -24,6 +24,8 @@ from guildbotics.app_api.models import (
     ProjectStatusOptionsResponse,
     PromptTraceStatus,
     PromptTraceUpdateRequest,
+    RuntimeDebugStatus,
+    RuntimeDebugUpdateRequest,
     RuntimeStatus,
     RuntimeUnitStatus,
     ScenarioDiagnosticsResponse,
@@ -39,6 +41,7 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
+from guildbotics.observability import trace_scope
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
@@ -161,7 +164,7 @@ class RuntimeStub:
                 "Unable to locate command 'missing'.",
                 context={"command": request.command},
             )
-        return {"request_id": "stub-request", "output": f"ran {request.command}"}
+        return {"trace_id": "stub-request", "output": f"ran {request.command}"}
 
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
         return CommandOptionsResponse(
@@ -221,6 +224,26 @@ class RuntimeStub:
             trace_file_exists=False,
             event_count=0,
             events=[],
+        )
+
+    def get_runtime_debug_status(self) -> RuntimeDebugStatus:
+        return RuntimeDebugStatus(
+            enabled=False,
+            log_level="INFO",
+            agno_debug=False,
+            env_file=self.config_status.env_file,
+            env_file_exists=self.config_status.env_file.exists(),
+        )
+
+    def update_runtime_debug(
+        self, request: RuntimeDebugUpdateRequest
+    ) -> RuntimeDebugStatus:
+        return RuntimeDebugStatus(
+            enabled=request.enabled,
+            log_level="DEBUG" if request.enabled else "INFO",
+            agno_debug=request.enabled,
+            env_file=self.config_status.env_file,
+            env_file_exists=True,
         )
 
     def get_default_routines(self) -> list[str]:
@@ -621,7 +644,7 @@ def test_command_run_uses_runtime(tmp_path: Path) -> None:
 
     assert response.status_code == HTTP_OK
     assert response.json() == {
-        "request_id": "stub-request",
+        "trace_id": "stub-request",
         "output": "ran hello",
     }
 
@@ -640,18 +663,18 @@ def test_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
     assert response.json()["options"][0]["label"] == "Hello"
 
 
-def test_event_stream_replays_request_id(tmp_path: Path) -> None:
+def test_event_stream_replays_trace_id(tmp_path: Path) -> None:
     event_bus = EventBus()
     app = create_app(
         session_token="secret",
         runtime=RuntimeStub(tmp_path),
         event_bus=event_bus,
     )
-    event_bus.publish_event(
-        "command.started",
-        {"command": "hello"},
-        request_id="request-1",
-    )
+    with trace_scope("manual", trace_id="request-1"):
+        event_bus.publish_event(
+            "command.started",
+            {"command": "hello"},
+        )
 
     with (
         TestClient(app) as client,
@@ -660,7 +683,7 @@ def test_event_stream_replays_request_id(tmp_path: Path) -> None:
         event = websocket.receive_json()
 
     assert event["type"] == "command.started"
-    assert event["request_id"] == "request-1"
+    assert event["trace_id"] == "request-1"
     assert event["payload"] == {"command": "hello"}
     assert event["timestamp"]
 
@@ -1449,6 +1472,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             routine_commands: list[str],
             consecutive_error_limit: int,
             routine_interval_minutes: int,
+            service_run_id: str | None = None,
         ) -> None:
             self.shutdown_calls = 0
             self.routine_commands = routine_commands
@@ -1519,6 +1543,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
             routine_commands: list[str],
             consecutive_error_limit: int,
             routine_interval_minutes: int,
+            service_run_id: str | None = None,
         ) -> None:
             self.shutdown_timeout: float | None = None
 
@@ -1562,7 +1587,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
     class RunningEventListener:
         instances: ClassVar[list["RunningEventListener"]] = []
 
-        def __init__(self, context: object) -> None:
+        def __init__(self, context: object, service_run_id: str | None = None) -> None:
             self.alive = False
             self.stop_calls = 0
             RunningEventListener.instances.append(self)
@@ -1640,7 +1665,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
     class StuckEventListener:
         instances: ClassVar[list["StuckEventListener"]] = []
 
-        def __init__(self, context: object) -> None:
+        def __init__(self, context: object, service_run_id: str | None = None) -> None:
             self.alive = False
             StuckEventListener.instances.append(self)
 
@@ -1737,7 +1762,7 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
         "command.started",
         "command.finished",
     ]
-    assert all(event["request_id"] == response.request_id for event in events)
+    assert all(event["trace_id"] == response.trace_id for event in events)
 
 
 # --- auth coverage -------------------------------------------------------
@@ -1757,6 +1782,8 @@ PROTECTED_ENDPOINTS = [
     ("POST", "/scheduler/stop"),
     ("GET", "/prompt-trace"),
     ("PUT", "/prompt-trace"),
+    ("GET", "/runtime/debug"),
+    ("PUT", "/runtime/debug"),
     ("POST", "/verify"),
     ("POST", "/diagnostics/scenario"),
     ("GET", "/intelligences/cli-agents/detection"),
@@ -2279,6 +2306,34 @@ def test_prompt_trace_put_rejects_out_of_range_limit(
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert response.json()["code"] == "validation_error"
+
+
+def test_runtime_debug_status_endpoint(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get("/runtime/debug", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_OK
+    body = response.json()
+    assert body["enabled"] is False
+    assert body["log_level"] == "INFO"
+    assert body["agno_debug"] is False
+
+
+def test_runtime_debug_update_endpoint(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.put(
+        "/runtime/debug",
+        headers=AUTH_HEADERS,
+        json={"enabled": True},
+    )
+
+    assert response.status_code == HTTP_OK
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["log_level"] == "DEBUG"
+    assert body["agno_debug"] is True
 
 
 # --- commands ------------------------------------------------------------

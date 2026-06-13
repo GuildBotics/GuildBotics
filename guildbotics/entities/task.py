@@ -86,6 +86,14 @@ class Task(BaseModel):
         default=None,
         description="The related pull request URL when the task is triggered by PR review state.",
     )
+    number: int | None = Field(
+        default=None,
+        description="The GitHub issue/PR number, when the task originates from one.",
+    )
+    url: str | None = Field(
+        default=None,
+        description="The GitHub issue/PR html URL, when the task originates from one.",
+    )
     trigger_reason: str | None = Field(
         default=None,
         description="Short reason why the task was selected for the workflow.",

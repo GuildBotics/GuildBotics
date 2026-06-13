@@ -6,7 +6,9 @@ import time
 
 import httpx
 
-from guildbotics.integrations.slack.slack_socket_listener import SlackSocketEventListener
+from guildbotics.integrations.slack.slack_socket_listener import (
+    SlackSocketEventListener,
+)
 
 
 class _FakeSocket:
@@ -119,7 +121,9 @@ def test_to_incoming_event_ignores_message_changed_and_deleted():
     listener = SlackSocketEventListener(
         logger=_dummy_logger(),
         app_token="xapp-test",
-        http_client=httpx.Client(transport=httpx.MockTransport(lambda _req: httpx.Response(500))),
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(lambda _req: httpx.Response(500))
+        ),
         ws_connect=lambda _url: _FakeSocket([]),
     )
 

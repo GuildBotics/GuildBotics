@@ -8,23 +8,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   App,
   buildCommandArgs,
+  buildCommandTimeline,
   commandFailureDetail,
   decodeTraceText,
   eventBadgeColor,
   eventTypeLabel,
   formatCommandEvent,
-  formatRuntimeEvent,
   isStopTimeoutPending,
   localFileHref,
   logBadgeColor,
-  matchesFeedFilter,
-  matchesLogFilter,
+  matchesRecordFilter,
+  matchesRecordScopeFilter,
+  parseTraceSearch,
   openLocalFile,
+  parseTicketQuery,
+  recordBadgeColor,
+  recordBadgeLabel,
+  recordAttributeRows,
+  recordDisplayMessage,
+  ticketChipInfo,
   selectTraceFile,
   splitCommandLine,
   traceBrainLabel,
   traceFieldRows,
   traceGroupMetadata,
+  traceStatusColor,
+  traceDuration,
+  shortTraceId,
   upsertCommandRecord,
   type CommandRunRecord,
 } from "./App";
@@ -32,11 +42,11 @@ import type {
   CommandOption,
   PromptTraceEntry,
   RuntimeEvent,
-  RuntimeLog,
   RuntimeUnitStatus,
 } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
+import { makeRuntimeEvent, makeRuntimeLog, makeTraceRecord } from "./test/factories";
 import { buildTraceGroups, type PromptTraceGroup } from "./trace";
 
 const openShell = vi.fn();
@@ -121,6 +131,20 @@ vi.mock("./api/client", async (importOriginal) => {
       trace_file_exists: false,
       event_count: 0,
       events: [],
+    })),
+    getRuntimeDebug: vi.fn(async () => ({
+      enabled: false,
+      log_level: "INFO",
+      agno_debug: false,
+      env_file: "/workspace/.env",
+      env_file_exists: true,
+    })),
+    updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => ({
+      enabled: body.enabled,
+      log_level: body.enabled ? "DEBUG" : "INFO",
+      agno_debug: body.enabled,
+      env_file: "/workspace/.env",
+      env_file_exists: true,
     })),
     runScenarioDiagnostics: vi.fn(async () => ({
       ok: true,
@@ -263,7 +287,7 @@ describe("splitCommandLine", () => {
 describe("upsertCommandRecord", () => {
   function record(overrides: Partial<CommandRunRecord>): CommandRunRecord {
     return {
-      requestId: "req-1",
+      traceId: "req-1",
       person: "alice",
       command: "demo",
       startedAt: "2026-06-04T01:00:00Z",
@@ -273,17 +297,17 @@ describe("upsertCommandRecord", () => {
   }
 
   it("prepends a new request", () => {
-    const existing = [record({ requestId: "req-0", startedAt: "2026-06-04T00:00:00Z" })];
+    const existing = [record({ traceId: "req-0", startedAt: "2026-06-04T00:00:00Z" })];
 
-    const next = upsertCommandRecord(existing, record({ requestId: "req-1" }));
+    const next = upsertCommandRecord(existing, record({ traceId: "req-1" }));
 
-    expect(next.map((entry) => entry.requestId)).toEqual(["req-1", "req-0"]);
+    expect(next.map((entry) => entry.traceId)).toEqual(["req-1", "req-0"]);
   });
 
   it("updates an existing request and keeps prior output when not provided", () => {
-    const existing = [record({ requestId: "req-1", status: "running", output: "partial" })];
+    const existing = [record({ traceId: "req-1", status: "running", output: "partial" })];
 
-    const next = upsertCommandRecord(existing, record({ requestId: "req-1", status: "success" }));
+    const next = upsertCommandRecord(existing, record({ traceId: "req-1", status: "success" }));
 
     expect(next).toHaveLength(1);
     expect(next[0]).toMatchObject({ status: "success", output: "partial" });
@@ -292,7 +316,7 @@ describe("upsertCommandRecord", () => {
   it("sorts records by startedAt descending and caps at 20", () => {
     const many = Array.from({ length: 25 }, (_, index) =>
       record({
-        requestId: `req-${index}`,
+        traceId: `req-${index}`,
         startedAt: `2026-06-04T00:${String(index).padStart(2, "0")}:00Z`,
       }),
     );
@@ -301,7 +325,7 @@ describe("upsertCommandRecord", () => {
     const filled = many.slice(1).reduce((acc, item) => upsertCommandRecord(acc, item), next);
 
     expect(filled).toHaveLength(20);
-    expect(filled[0]?.requestId).toBe("req-24");
+    expect(filled[0]?.traceId).toBe("req-24");
   });
 });
 
@@ -310,13 +334,13 @@ describe("commandFailureDetail", () => {
     const detail = commandFailureDetail(
       runtimeEvent({
         type: "command.failed",
-        request_id: "req-9",
+        trace_id: "req-9",
         payload: { code: "boom", message: "oops" },
       }),
     );
 
     expect(JSON.parse(detail)).toEqual({
-      request_id: "req-9",
+      trace_id: "req-9",
       type: "command.failed",
       payload: { code: "boom", message: "oops" },
     });
@@ -336,61 +360,349 @@ describe("formatCommandEvent", () => {
   });
 
   it("falls back to request id then type", () => {
-    expect(formatCommandEvent(runtimeEvent({ request_id: "req-7", payload: {} }))).toBe("req-7");
+    expect(formatCommandEvent(runtimeEvent({ trace_id: "req-7", payload: {} }))).toBe("req-7");
     expect(
-      formatCommandEvent(runtimeEvent({ type: "command.failed", request_id: null, payload: {} })),
+      formatCommandEvent(runtimeEvent({ type: "command.failed", trace_id: null, payload: {} })),
     ).toBe("command.failed");
   });
 });
 
-describe("matchesFeedFilter", () => {
+describe("matchesRecordFilter", () => {
   it("passes everything for all", () => {
-    expect(matchesFeedFilter(runtimeEvent({ type: "scheduler.running" }), "all")).toBe(true);
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "event" }), "all")).toBe(true);
   });
 
-  it("matches failed or error events for the error filter", () => {
-    expect(matchesFeedFilter(runtimeEvent({ type: "command.failed" }), "error")).toBe(true);
-    expect(matchesFeedFilter(runtimeEvent({ type: "runtime.error" }), "error")).toBe(true);
-    expect(matchesFeedFilter(runtimeEvent({ type: "command.finished" }), "error")).toBe(false);
+  it("matches error logs and failed events for the error filter", () => {
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "log", level: "ERROR" }), "error")).toBe(
+      true,
+    );
+    expect(
+      matchesRecordFilter(makeTraceRecord({ kind: "event", type: "command.failed" }), "error"),
+    ).toBe(true);
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "log", level: "INFO" }), "error")).toBe(
+      false,
+    );
   });
 
-  it("matches by event prefix for command/scheduler/events filters", () => {
-    expect(matchesFeedFilter(runtimeEvent({ type: "command.started" }), "command")).toBe(true);
-    expect(matchesFeedFilter(runtimeEvent({ type: "scheduler.running" }), "scheduler")).toBe(true);
-    expect(matchesFeedFilter(runtimeEvent({ type: "events.running" }), "events")).toBe(true);
-    expect(matchesFeedFilter(runtimeEvent({ type: "scheduler.running" }), "command")).toBe(false);
+  it("matches llm and cli_agent prompt traces by type prefix", () => {
+    expect(
+      matchesRecordFilter(makeTraceRecord({ kind: "prompt_trace", type: "llm.request" }), "llm"),
+    ).toBe(true);
+    expect(
+      matchesRecordFilter(
+        makeTraceRecord({ kind: "prompt_trace", type: "cli_agent.response" }),
+        "cli_agent",
+      ),
+    ).toBe(true);
+    expect(
+      matchesRecordFilter(
+        makeTraceRecord({ kind: "prompt_trace", type: "llm.request" }),
+        "cli_agent",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches logs emitted within the agent span for llm/cli_agent filters", () => {
+    expect(
+      matchesRecordFilter(makeTraceRecord({ kind: "log", span: "cli_agent" }), "cli_agent"),
+    ).toBe(true);
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "log", span: "llm" }), "llm")).toBe(true);
+    // A log without the matching span is not pulled into the agent filter.
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "log", span: "" }), "cli_agent")).toBe(
+      false,
+    );
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "log", span: "cli_agent" }), "llm")).toBe(
+      false,
+    );
+  });
+
+  it("matches by kind for event and log filters", () => {
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "event" }), "event")).toBe(true);
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "log" }), "log")).toBe(true);
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "event" }), "log")).toBe(false);
   });
 });
 
-describe("matchesLogFilter", () => {
-  function log(overrides: Partial<RuntimeLog>): RuntimeLog {
-    return {
-      level: "INFO",
-      message: "hello world",
-      request_id: null,
-      timestamp: "2026-06-04T01:00:00Z",
-      ...overrides,
-    };
-  }
-
-  it("passes everything for all", () => {
-    expect(matchesLogFilter(log({}), "all")).toBe(true);
+describe("matchesRecordScopeFilter", () => {
+  it("matches an exact span", () => {
+    expect(
+      matchesRecordScopeFilter(makeTraceRecord({ span_id: "s1" }), {
+        kind: "span",
+        value: "s1",
+        label: "This step only",
+      }),
+    ).toBe(true);
+    expect(
+      matchesRecordScopeFilter(makeTraceRecord({ span_id: "s2" }), {
+        kind: "span",
+        value: "s1",
+        label: "This step only",
+      }),
+    ).toBe(false);
   });
 
-  it("matches error-level logs for the error filter", () => {
-    expect(matchesLogFilter(log({ level: "error" }), "error")).toBe(true);
-    expect(matchesLogFilter(log({ level: "WARNING" }), "error")).toBe(true);
-    expect(matchesLogFilter(log({ level: "INFO" }), "error")).toBe(false);
+  it("matches a call id", () => {
+    expect(
+      matchesRecordScopeFilter(makeTraceRecord({ call_id: "c1" }), {
+        kind: "call",
+        value: "c1",
+        label: "This call only",
+      }),
+    ).toBe(true);
   });
 
-  it("matches logs with a request id for the command filter", () => {
-    expect(matchesLogFilter(log({ request_id: "req-1" }), "command")).toBe(true);
-    expect(matchesLogFilter(log({ request_id: null }), "command")).toBe(false);
+  it("matches a span and its direct children for subtree filters", () => {
+    const filter = { kind: "subtree" as const, value: "parent", label: "This step and children" };
+    expect(matchesRecordScopeFilter(makeTraceRecord({ span_id: "parent" }), filter)).toBe(true);
+    expect(matchesRecordScopeFilter(makeTraceRecord({ parent_id: "parent" }), filter)).toBe(true);
+    expect(matchesRecordScopeFilter(makeTraceRecord({ span_id: "other" }), filter)).toBe(false);
+  });
+});
+
+describe("buildCommandTimeline", () => {
+  it("merges command events and logs scoped to the trace, newest-first", () => {
+    const events = [
+      makeRuntimeEvent({
+        type: "command.started",
+        trace_id: "t1",
+        payload: { command: "demo" },
+        timestamp: "2026-06-04T01:00:00Z",
+      }),
+      makeRuntimeEvent({
+        type: "command.finished",
+        trace_id: "t1",
+        payload: { command: "demo" },
+        timestamp: "2026-06-04T01:00:03Z",
+      }),
+      // Different trace and non-command events are excluded.
+      makeRuntimeEvent({ type: "command.started", trace_id: "other" }),
+      makeRuntimeEvent({ type: "scheduler.running", trace_id: "t1" }),
+    ];
+    const logs = [
+      makeRuntimeLog({
+        trace_id: "t1",
+        level: "INFO",
+        message: "working",
+        timestamp: "2026-06-04T01:00:01Z",
+      }),
+      makeRuntimeLog({ trace_id: "other", level: "INFO", message: "elsewhere" }),
+    ];
+
+    const timeline = buildCommandTimeline(events, logs, "t1");
+
+    // Newest-first, merged across events + logs, scoped to t1.
+    expect(timeline.map((item) => item.label)).toEqual(["finished", "INFO", "started"]);
+    expect(timeline.some((item) => item.message === "working")).toBe(true);
+    expect(timeline.some((item) => item.message === "elsewhere")).toBe(false);
   });
 
-  it("falls back to a message substring match", () => {
-    expect(matchesLogFilter(log({ message: "Hello World" }), "world")).toBe(true);
-    expect(matchesLogFilter(log({ message: "nope" }), "world")).toBe(false);
+  it("returns nothing without an active trace", () => {
+    expect(buildCommandTimeline([makeRuntimeEvent({ type: "command.started" })], [], null)).toEqual(
+      [],
+    );
+  });
+});
+
+describe("parseTicketQuery", () => {
+  it("matches a GitHub issue/PR URL exactly on github.url", () => {
+    expect(parseTicketQuery("https://github.com/owner/repo/issues/42")).toEqual({
+      key: "github.url",
+      value: "https://github.com/owner/repo/issues/42",
+      label: "#42",
+    });
+    // A trailing comment fragment is stripped so it matches the stored url.
+    expect(parseTicketQuery("https://github.com/o/r/pull/7#issuecomment-1")).toEqual({
+      key: "github.url",
+      value: "https://github.com/o/r/pull/7",
+      label: "#7",
+    });
+  });
+
+  it("matches a number / #number / owner/repo#number on github.number", () => {
+    expect(parseTicketQuery("42")).toEqual({
+      key: "github.number",
+      value: "42",
+      label: "#42",
+    });
+    expect(parseTicketQuery("#42")).toEqual({
+      key: "github.number",
+      value: "42",
+      label: "#42",
+    });
+    expect(parseTicketQuery("owner/repo#42")).toEqual({
+      key: "github.number",
+      value: "42",
+      label: "#42",
+    });
+  });
+
+  it("returns null for empty or non-ticket input", () => {
+    expect(parseTicketQuery("")).toBeNull();
+    expect(parseTicketQuery("   ")).toBeNull();
+    expect(parseTicketQuery("not a ticket")).toBeNull();
+  });
+});
+
+describe("parseTraceSearch", () => {
+  it("keeps ordinary text as a fuzzy query", () => {
+    expect(parseTraceSearch("timeout failed")).toEqual({
+      query: "timeout failed",
+      attrFilter: null,
+    });
+  });
+
+  it("splits an explicit ticket token from the fuzzy query", () => {
+    expect(parseTraceSearch("#42 timeout failed")).toEqual({
+      query: "timeout failed",
+      attrFilter: { key: "github.number", value: "42", label: "#42" },
+    });
+  });
+
+  it("keeps a bare number as a ticket lookup only when it is the whole input", () => {
+    expect(parseTraceSearch("42")).toEqual({
+      query: "",
+      attrFilter: { key: "github.number", value: "42", label: "#42" },
+    });
+    expect(parseTraceSearch("42 timeout")).toEqual({
+      query: "42 timeout",
+      attrFilter: null,
+    });
+  });
+});
+
+describe("ticketChipInfo", () => {
+  it("prefers the url for filtering and labels issues/PRs", () => {
+    expect(
+      ticketChipInfo({
+        "github.number": "42",
+        "github.url": "https://github.com/o/r/issues/42",
+        "github.kind": "issue",
+      }),
+    ).toEqual({
+      label: "#42",
+      key: "github.url",
+      value: "https://github.com/o/r/issues/42",
+      url: "https://github.com/o/r/issues/42",
+    });
+    expect(ticketChipInfo({ "github.number": "7", "github.kind": "pull_request" })).toEqual({
+      label: "PR #7",
+      key: "github.number",
+      value: "7",
+      url: "",
+    });
+  });
+
+  it("returns null when there is no github attribute", () => {
+    expect(ticketChipInfo({})).toBeNull();
+    expect(ticketChipInfo({ service_run_id: "x" })).toBeNull();
+  });
+});
+
+describe("traceStatusColor", () => {
+  it("maps statuses to colors", () => {
+    expect(traceStatusColor("success")).toBe("green");
+    expect(traceStatusColor("failed")).toBe("red");
+    expect(traceStatusColor("running")).toBe("blue");
+    expect(traceStatusColor("info")).toBe("gray");
+  });
+});
+
+describe("recordDisplayMessage", () => {
+  it("uses the log message for log records", () => {
+    expect(recordDisplayMessage(makeTraceRecord({ kind: "log", message: "disk full" }))).toBe(
+      "disk full",
+    );
+  });
+
+  it("surfaces the payload failure reason for failed events", () => {
+    expect(
+      recordDisplayMessage(
+        makeTraceRecord({
+          kind: "event",
+          type: "command.failed",
+          message: "",
+          payload: { code: "command_error", message: "boom" },
+        }),
+      ),
+    ).toBe("boom");
+  });
+
+  it("falls back to the event type when there is no payload detail", () => {
+    expect(
+      recordDisplayMessage(
+        makeTraceRecord({ kind: "event", type: "command.started", message: "", payload: {} }),
+      ),
+    ).toBe("command.started");
+  });
+
+  it("uses description or type for prompt traces", () => {
+    expect(
+      recordDisplayMessage(
+        makeTraceRecord({ kind: "prompt_trace", type: "llm.request", message: "" }),
+      ),
+    ).toBe("llm.request");
+  });
+});
+
+describe("shortTraceId", () => {
+  it("keeps short ids unchanged", () => {
+    expect(shortTraceId("trace-1")).toBe("trace-1");
+  });
+
+  it("abbreviates long ids keeping the head and tail", () => {
+    expect(shortTraceId("9926d6da8a844dd8a39a2fc686ba9d36")).toBe("9926d6da…ba9d36");
+  });
+});
+
+describe("traceDuration", () => {
+  it("formats sub-second durations in milliseconds", () => {
+    expect(
+      traceDuration({
+        started_at: "2026-06-12T00:00:00.000Z",
+        updated_at: "2026-06-12T00:00:00.250Z",
+      }),
+    ).toBe("250ms");
+  });
+
+  it("formats durations of a second or more in seconds", () => {
+    expect(
+      traceDuration({
+        started_at: "2026-06-12T00:00:00.000Z",
+        updated_at: "2026-06-12T00:00:02.500Z",
+      }),
+    ).toBe("2.5s");
+  });
+
+  it("returns a dash for missing or invalid timestamps", () => {
+    expect(traceDuration({ started_at: "", updated_at: "" })).toBe("—");
+  });
+});
+
+describe("recordBadgeColor and recordBadgeLabel", () => {
+  it("colors prompt traces violet and labels them by type", () => {
+    const record = makeTraceRecord({ kind: "prompt_trace", type: "llm.request" });
+    expect(recordBadgeColor(record)).toBe("violet");
+    expect(recordBadgeLabel(t(), record)).toBe("llm.request");
+  });
+
+  it("labels logs by level", () => {
+    const record = makeTraceRecord({ kind: "log", level: "WARNING" });
+    expect(recordBadgeLabel(t(), record)).toBe("WARNING");
+  });
+});
+
+describe("recordAttributeRows", () => {
+  it("labels known diagnostic attributes for display", () => {
+    expect(
+      recordAttributeRows(t(), {
+        "github.repo": "owner/repo",
+        "github.number": "42",
+        unknown: "kept in raw json only",
+      }),
+    ).toEqual([
+      ["GitHub repository", "owner/repo"],
+      ["Ticket / PR number", "42"],
+    ]);
   });
 });
 
@@ -433,42 +745,6 @@ describe("badge colors", () => {
     expect(logBadgeColor("CRITICAL")).toBe("red");
     expect(logBadgeColor("warning")).toBe("orange");
     expect(logBadgeColor("info")).toBe("gray");
-  });
-});
-
-describe("formatRuntimeEvent", () => {
-  it("prefers payload message", () => {
-    expect(formatRuntimeEvent(t(), runtimeEvent({ payload: { message: "hi" } }))).toBe("hi");
-  });
-
-  it("formats a command summary from payload.command", () => {
-    expect(formatRuntimeEvent(t(), runtimeEvent({ payload: { command: "demo" } }))).toBe(
-      i18n.t("overview.eventSummaries.command", { command: "demo", lng: "en" }),
-    );
-  });
-
-  it("prefers payload.error over family summaries", () => {
-    expect(
-      formatRuntimeEvent(t(), runtimeEvent({ type: "scheduler.running", payload: { error: "x" } })),
-    ).toBe("x");
-  });
-
-  it("returns family summaries when payload is empty", () => {
-    expect(formatRuntimeEvent(t(), runtimeEvent({ type: "scheduler.running", payload: {} }))).toBe(
-      i18n.t("overview.eventSummaries.schedulerRunning", { lng: "en" }),
-    );
-    expect(formatRuntimeEvent(t(), runtimeEvent({ type: "events.stopped", payload: {} }))).toBe(
-      i18n.t("overview.eventSummaries.eventsStopped", { lng: "en" }),
-    );
-    expect(formatRuntimeEvent(t(), runtimeEvent({ type: "scheduler.failed", payload: {} }))).toBe(
-      i18n.t("overview.eventSummaries.failed", { lng: "en" }),
-    );
-  });
-
-  it("returns the raw type when nothing else matches", () => {
-    expect(formatRuntimeEvent(t(), runtimeEvent({ type: "weird.thing", payload: {} }))).toBe(
-      "weird.thing",
-    );
   });
 });
 
@@ -671,13 +947,7 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
 }
 
 function runtimeEvent(overrides: Partial<RuntimeEvent>): RuntimeEvent {
-  return {
-    type: "command.started",
-    request_id: "req-1",
-    payload: {},
-    timestamp: "2026-06-04T01:00:00Z",
-    ...overrides,
-  };
+  return makeRuntimeEvent({ trace_id: "req-1", ...overrides });
 }
 
 function traceEntry(overrides: Partial<PromptTraceEntry>): PromptTraceEntry {

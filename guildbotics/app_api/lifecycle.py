@@ -13,6 +13,7 @@ from guildbotics.app_api.models import (
     SchedulerStartRequest,
 )
 from guildbotics.drivers import EventListenerRunner, TaskScheduler
+from guildbotics.observability import new_id
 from guildbotics.runtime import Context
 
 RuntimeTarget = Literal["scheduler", "events"]
@@ -79,6 +80,7 @@ class _RuntimeLifecycle:
         self._event_bus = event_bus
         self._stop_timeout_seconds = stop_timeout_seconds
         self._lock = threading.Lock()
+        self._service_run_id: str | None = None
         self._status = RuntimeUnitStatus(
             target=target,
             state="stopped",
@@ -124,7 +126,14 @@ class _RuntimeLifecycle:
             }
         )
         self._event_bus.publish_event(
-            f"{self._target}.{state}", self._status.model_dump()
+            f"{self._target}.{state}",
+            self._status.model_dump(),
+            source=self._target,
+            attributes=(
+                {"service_run_id": self._service_run_id}
+                if self._service_run_id
+                else None
+            ),
         )
         return self._status
 
@@ -173,6 +182,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
             self._refresh_locked()
             if self._is_active_locked():
                 return self._status.model_copy()
+            self._service_run_id = new_id()
             self._transition_locked("starting", running=True)
 
         try:
@@ -181,6 +191,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
                 routine_commands,
                 consecutive_error_limit=max_consecutive_errors,
                 routine_interval_minutes=routine_interval_minutes,
+                service_run_id=self._service_run_id,
             )
         except Exception as exc:
             self._mark_failed(exc)
@@ -287,10 +298,13 @@ class EventListenerLifecycle(_RuntimeLifecycle):
             self._refresh_locked()
             if self._is_active_locked():
                 return self._status.model_copy()
+            self._service_run_id = new_id()
             self._transition_locked("starting", running=True)
 
         try:
-            runner = EventListenerRunner(self._context_factory())
+            runner = EventListenerRunner(
+                self._context_factory(), service_run_id=self._service_run_id
+            )
             runner.start()
         except Exception as exc:
             self._mark_failed(exc)

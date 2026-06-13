@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from guildbotics.observability import correlation_fields
 from guildbotics.utils.fileio import get_storage_path
 
 JsonMap = dict[str, Any]
@@ -34,6 +35,13 @@ def write_prompt_trace(event: str, payload: JsonMap) -> None:
         "event": event,
         "timestamp": _timestamp(),
     }
+    # Attach the current correlation ids so prompt traces can be aggregated with
+    # events/logs under the same trace (and request/response paired via call_id).
+    correlation = correlation_fields()
+    for key in ("trace_id", "span_id", "parent_id", "call_id", "source"):
+        value = correlation.get(key)
+        if value:
+            item.setdefault(key, value)
     path = prompt_trace_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with _trace_lock, path.open("a", encoding="utf-8") as fh:

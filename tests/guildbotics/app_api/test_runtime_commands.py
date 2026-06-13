@@ -15,6 +15,7 @@ no real LLM / GitHub / subprocess I/O runs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from typing import Any
 import pytest
 
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.models import (
     CommandRunRequest,
     SchedulerStartRequest,
@@ -416,7 +417,8 @@ async def test_run_command_publishes_started_and_finished_events(
         "command": "demo",
         "output_length": len("output-value"),
     }
-    assert {event["request_id"] for event in events} == {response.request_id}
+    assert {event["trace_id"] for event in events} == {response.trace_id}
+    assert {event["source"] for event in events} == {"manual"}
 
 
 @pytest.mark.asyncio
@@ -452,13 +454,20 @@ async def test_run_command_passes_cwd_and_args_into_execution(
 
 
 @pytest.mark.asyncio
-async def test_run_command_log_handler_publishes_request_tagged_events(
+async def test_logs_during_run_command_carry_the_trace_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Logs emitted while a manual command runs flow through the single log path
+    # (EventBusLogHandler) and carry the run's trace id — replacing the old
+    # duplicate command.log events.
     event_bus = EventBus()
     runtime = AppRuntime(event_bus)
     guildbotics_logger = logging.getLogger("guildbotics")
-    monkeypatch.setattr(guildbotics_logger, "level", logging.INFO)
+    guildbotics_logger.setLevel(logging.INFO)
+    log_handler = EventBusLogHandler(event_bus)
+    log_handler.setFormatter(logging.Formatter("%(message)s"))
+    guildbotics_logger.addHandler(log_handler)
+    log_sub = event_bus.subscribe_logs()
 
     async def fake_run_command(*_: Any, **__: Any) -> str:
         guildbotics_logger.info("progress message")
@@ -467,19 +476,21 @@ async def test_run_command_log_handler_publishes_request_tagged_events(
     monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
-    response = await runtime.run_command(CommandRunRequest(command="demo"))
+    try:
+        response = await runtime.run_command(CommandRunRequest(command="demo"))
+        item = await asyncio.wait_for(log_sub.get(), timeout=2.0)
+    finally:
+        guildbotics_logger.removeHandler(log_handler)
+        log_sub.close()
 
-    events = event_bus.snapshot_events()
-    log_events = [event for event in events if event["type"] == "command.log"]
-    assert len(log_events) == 1
-    assert log_events[0]["payload"] == {
-        "level": "INFO",
-        "message": "progress message",
+    assert item["kind"] == "log"
+    assert item["message"] == "progress message"
+    assert item["trace_id"] == response.trace_id
+    # No command.log events are produced anymore; only state-change events.
+    assert {event["type"] for event in event_bus.snapshot_events()} == {
+        "command.started",
+        "command.finished",
     }
-    assert log_events[0]["request_id"] == response.request_id
-    # The handler is removed afterwards: a later log produces no new event.
-    guildbotics_logger.info("after run")
-    assert event_bus.snapshot_events() == events
 
 
 @pytest.mark.asyncio
@@ -663,7 +674,7 @@ async def test_run_command_rejects_concurrent_run_with_conflict(
 
     assert exc_info.value.code == "command_already_running"
     assert exc_info.value.status_code == HTTP_CONFLICT
-    assert exc_info.value.context == {"request_id": "inflight-id"}
+    assert exc_info.value.context == {"trace_id": "inflight-id"}
 
 
 # ---------------------------------------------------------------------------

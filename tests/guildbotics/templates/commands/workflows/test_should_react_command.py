@@ -129,7 +129,11 @@ async def test_should_react_chat_uses_llm_decision_for_participating_thread():
         captured["name"] = name
         captured["shared_state"] = dict(ctx.shared_state)
         captured["pipe"] = ctx.pipe
-        return {"label": "ignore", "reason": "already handled by another agent", "confidence": 0.9}
+        return {
+            "label": "ignore",
+            "reason": "already handled by another agent",
+            "confidence": 0.9,
+        }
 
     ctx = types.SimpleNamespace(shared_state={}, pipe="", invoke=invoke)
     reaction_input = _reaction_input()
@@ -144,8 +148,14 @@ async def test_should_react_chat_uses_llm_decision_for_participating_thread():
     assert result["reason"] == "already handled by another agent"
     assert captured["name"] == "workflows/chat/chat_followup_should_reply"
     assert "chat_should_reply_input" in captured["shared_state"]
-    assert captured["shared_state"]["chat_should_reply_input"]["latest_message"]["content"] == "hello"
-    assert captured["shared_state"]["chat_should_reply_input"]["is_thread_participant"] is True
+    assert (
+        captured["shared_state"]["chat_should_reply_input"]["latest_message"]["content"]
+        == "hello"
+    )
+    assert (
+        captured["shared_state"]["chat_should_reply_input"]["is_thread_participant"]
+        is True
+    )
     assert "[user_1] hello" in str(captured["pipe"])
     assert ctx.shared_state == {}
     assert ctx.pipe == ""

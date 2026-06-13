@@ -57,11 +57,13 @@ class FakeScheduler:
         *,
         consecutive_error_limit: int,
         routine_interval_minutes: int,
+        service_run_id: str | None = None,
     ) -> None:
         self.context = context
         self.routine_commands = routine_commands
         self.consecutive_error_limit = consecutive_error_limit
         self.routine_interval_minutes = routine_interval_minutes
+        self.service_run_id = service_run_id
         self._stop = threading.Event()
         self.shutdown_calls: list[dict[str, Any]] = []
         self.start_error: Exception | None = None
@@ -93,8 +95,9 @@ class FakeRunner:
 
     instances: ClassVar[list[FakeRunner]] = []
 
-    def __init__(self, context: Any) -> None:
+    def __init__(self, context: Any, service_run_id: str | None = None) -> None:
         self.context = context
+        self.service_run_id = service_run_id
         self._alive = True
         self.start_calls = 0
         self.stop_calls = 0

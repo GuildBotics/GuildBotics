@@ -106,6 +106,18 @@ export type PromptTraceUpdateRequest = {
   trace_path?: string;
 };
 
+export type RuntimeDebugStatus = {
+  enabled: boolean;
+  log_level: string;
+  agno_debug: boolean;
+  env_file: string;
+  env_file_exists: boolean;
+};
+
+export type RuntimeDebugUpdateRequest = {
+  enabled: boolean;
+};
+
 export type VerifyCheck = {
   code: string;
   status: "ok" | "warning" | "error";
@@ -152,16 +164,72 @@ export type CliAgentDetectionsResponse = {
   agents: CliAgentDetection[];
 };
 
-export type RuntimeEvent = {
+export type Correlation = {
+  trace_id: string | null;
+  span_id: string | null;
+  parent_id: string | null;
+  source: string | null;
+  person_id: string;
+  command: string;
+  workflow: string;
+  attributes: Record<string, unknown>;
+};
+
+export type RuntimeEvent = Correlation & {
+  kind: "event";
   type: string;
-  request_id: string | null;
   payload: Record<string, unknown>;
   timestamp: string;
 };
 
 export type CommandRunResponse = {
-  request_id: string;
+  trace_id: string;
   output: string;
+};
+
+export type TraceSummary = {
+  trace_id: string;
+  source: string;
+  person_id: string;
+  command: string;
+  workflow: string;
+  started_at: string;
+  updated_at: string;
+  status: string;
+  event_count: number;
+  log_count: number;
+  error_count: number;
+  span_count: number;
+  attributes: Record<string, unknown>;
+};
+
+export type TraceRecord = {
+  kind: "event" | "log" | "prompt_trace";
+  timestamp: string;
+  trace_id: string | null;
+  span_id: string | null;
+  parent_id: string | null;
+  call_id: string | null;
+  span: string;
+  source: string;
+  person_id: string;
+  command: string;
+  workflow: string;
+  type: string;
+  level: string;
+  message: string;
+  attributes: Record<string, unknown>;
+  payload: Record<string, unknown>;
+};
+
+export type TracesResponse = {
+  traces: TraceSummary[];
+};
+
+export type TraceDetailResponse = {
+  trace_id: string;
+  summary: TraceSummary | null;
+  records: TraceRecord[];
 };
 
 export type CommandArgumentOption = {
@@ -369,10 +437,10 @@ export type MemberDeleteRequest = {
   env_file_path: string;
 };
 
-export type RuntimeLog = {
+export type RuntimeLog = Correlation & {
+  kind: "log";
   level: string;
   message: string;
-  request_id: string | null;
   timestamp: string;
 };
 
@@ -516,6 +584,16 @@ export async function updatePromptTrace(
   });
 }
 
+export async function getRuntimeDebug(): Promise<RuntimeDebugStatus> {
+  return request("/runtime/debug");
+}
+
+export async function updateRuntimeDebug(
+  body: RuntimeDebugUpdateRequest,
+): Promise<RuntimeDebugStatus> {
+  return request("/runtime/debug", { method: "PUT", body });
+}
+
 export async function verify(): Promise<VerifyResponse> {
   return request("/verify", { method: "POST" });
 }
@@ -525,6 +603,43 @@ export async function runScenarioDiagnostics(
 ): Promise<ScenarioDiagnosticsResponse> {
   const query = personId ? `?person_id=${encodeURIComponent(personId)}` : "";
   return request(`/diagnostics/scenario${query}`, { method: "POST" });
+}
+
+export async function getTraces(params?: {
+  source?: string;
+  personId?: string;
+  query?: string;
+  attrKey?: string;
+  attrValue?: string;
+  limit?: number;
+}): Promise<TracesResponse> {
+  const search = new URLSearchParams();
+  if (params?.source) {
+    search.set("source", params.source);
+  }
+  if (params?.personId) {
+    search.set("person_id", params.personId);
+  }
+  if (params?.query) {
+    search.set("q", params.query);
+  }
+  if (params?.attrKey && params?.attrValue) {
+    search.set("attr_key", params.attrKey);
+    search.set("attr_value", params.attrValue);
+  }
+  if (params?.limit) {
+    search.set("limit", String(params.limit));
+  }
+  const suffix = search.toString();
+  return request(`/diagnostics/traces${suffix ? `?${suffix}` : ""}`);
+}
+
+export async function getTraceDetail(traceId: string): Promise<TraceDetailResponse> {
+  return request(`/diagnostics/traces/${encodeURIComponent(traceId)}`);
+}
+
+export async function getGlobalRecords(limit = 200): Promise<TraceDetailResponse> {
+  return request(`/diagnostics/global?limit=${encodeURIComponent(String(limit))}`);
 }
 
 export async function getCliAgentDetections(): Promise<CliAgentDetectionsResponse> {

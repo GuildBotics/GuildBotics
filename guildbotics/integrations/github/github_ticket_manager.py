@@ -530,6 +530,8 @@ class GitHubTicketManager(TicketManager):
         """
         data = {
             "id": issue["id"],
+            "number": issue.get("number"),
+            "url": issue.get("url"),
             "title": issue["title"],
             "description": issue.get("body", "") or "",
             "status": status,
@@ -634,6 +636,7 @@ class GitHubTicketManager(TicketManager):
                         ... on Issue {{
                           id
                           number
+                          url
                           title
                           body
                           createdAt

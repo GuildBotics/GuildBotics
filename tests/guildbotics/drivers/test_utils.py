@@ -65,7 +65,6 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_command_exception_logs_and_returns_false(monkeypatch):
     class FakeCommandRunnerError:
-
         def __init__(
             self,
             context,

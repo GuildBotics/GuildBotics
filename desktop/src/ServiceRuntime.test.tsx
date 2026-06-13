@@ -9,11 +9,13 @@ import { App } from "./App";
 import {
   getConfigStatus,
   getProjectConfig,
+  getRuntimeDebug,
   getSchedulerRoutines,
   getSchedulerStatus,
   getTeam,
   startScheduler,
   stopScheduler,
+  updateRuntimeDebug,
   type ConfigStatus,
   type ProjectConfig,
   type RoutineOption,
@@ -45,8 +47,10 @@ vi.mock("./api/client", async (importOriginal) => {
     getProjectConfig: vi.fn(),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getPromptTrace: vi.fn(async () => promptTrace()),
+    getRuntimeDebug: vi.fn(async () => runtimeDebug()),
     startScheduler: vi.fn(),
     stopScheduler: vi.fn(),
+    updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => runtimeDebug(body)),
     subscribeEvents: vi.fn(() => () => {}),
     subscribeLogs: vi.fn(() => () => {}),
   };
@@ -59,6 +63,8 @@ const getSchedulerStatusMock = vi.mocked(getSchedulerStatus);
 const getProjectConfigMock = vi.mocked(getProjectConfig);
 const startSchedulerMock = vi.mocked(startScheduler);
 const stopSchedulerMock = vi.mocked(stopScheduler);
+const getRuntimeDebugMock = vi.mocked(getRuntimeDebug);
+const updateRuntimeDebugMock = vi.mocked(updateRuntimeDebug);
 
 beforeEach(() => {
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
@@ -71,6 +77,8 @@ beforeEach(() => {
   getProjectConfigMock.mockReset().mockResolvedValue(projectConfig());
   startSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   stopSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
+  getRuntimeDebugMock.mockReset().mockResolvedValue(runtimeDebug());
+  updateRuntimeDebugMock.mockReset().mockImplementation(async (body) => runtimeDebug(body));
 });
 
 describe("Service Runtime screen", () => {
@@ -97,6 +105,19 @@ describe("Service Runtime screen", () => {
     expect(startSchedulerMock.mock.calls[0][0]).toMatchObject({
       routine_commands: ["workflows/ticket_driven_workflow"],
     });
+  });
+
+  it("toggles runtime debug from the service screen", async () => {
+    const user = userEvent.setup();
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    await user.click(
+      await screen.findByRole("switch", { name: t("overview.runtimeDebug.disabled") }),
+    );
+
+    await waitFor(() => expect(updateRuntimeDebugMock).toHaveBeenCalledTimes(1));
+    expect(updateRuntimeDebugMock.mock.calls[0][0]).toEqual({ enabled: true });
   });
 
   it("omits routine_commands and sends only=events when events-only is selected", async () => {
@@ -425,5 +446,16 @@ function promptTrace() {
     trace_file_exists: false,
     event_count: 0,
     events: [],
+  };
+}
+
+function runtimeDebug(overrides: { enabled?: boolean } = {}) {
+  const enabled = overrides.enabled ?? false;
+  return {
+    enabled,
+    log_level: enabled ? "DEBUG" : "INFO",
+    agno_debug: enabled,
+    env_file: "/workspace/.env",
+    env_file_exists: true,
   };
 }

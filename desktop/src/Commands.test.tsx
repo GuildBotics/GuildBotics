@@ -17,16 +17,20 @@ import {
 import {
   getCommandOptions,
   getConfigStatus,
+  getRuntimeDebug,
   getTeam,
   runCommand,
   subscribeEvents,
   subscribeLogs,
+  updateRuntimeDebug,
   type CommandOption,
   type ConfigStatus,
   type RuntimeEvent,
+  type RuntimeLog,
 } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
+import { makeRuntimeEvent, makeRuntimeLog } from "./test/factories";
 
 const t = i18n.getFixedT("en");
 
@@ -39,6 +43,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("./setup/SetupPage", () => ({ SetupPage: () => <div>Setup Mock</div> }));
 
 let eventListener: ((event: RuntimeEvent) => void) | null = null;
+let logListener: ((log: RuntimeLog) => void) | null = null;
 
 vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
@@ -48,7 +53,9 @@ vi.mock("./api/client", async (importOriginal) => {
     getTeam: vi.fn(),
     getCommandOptions: vi.fn(),
     getPromptTrace: vi.fn(async () => promptTrace()),
+    getRuntimeDebug: vi.fn(async () => runtimeDebug()),
     runCommand: vi.fn(),
+    updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => runtimeDebug(body)),
     subscribeEvents: vi.fn(),
     subscribeLogs: vi.fn(),
   };
@@ -57,9 +64,11 @@ vi.mock("./api/client", async (importOriginal) => {
 const getConfigStatusMock = vi.mocked(getConfigStatus);
 const getTeamMock = vi.mocked(getTeam);
 const getCommandOptionsMock = vi.mocked(getCommandOptions);
+const getRuntimeDebugMock = vi.mocked(getRuntimeDebug);
 const runCommandMock = vi.mocked(runCommand);
 const subscribeEventsMock = vi.mocked(subscribeEvents);
 const subscribeLogsMock = vi.mocked(subscribeLogs);
+const updateRuntimeDebugMock = vi.mocked(updateRuntimeDebug);
 
 beforeEach(() => {
   eventListener = null;
@@ -67,17 +76,38 @@ beforeEach(() => {
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getTeamMock.mockReset().mockResolvedValue(team());
   getCommandOptionsMock.mockReset().mockResolvedValue({ options: [catalogCommand()] });
-  runCommandMock.mockReset().mockResolvedValue({ request_id: "req-1", output: "hello output" });
+  getRuntimeDebugMock.mockReset().mockResolvedValue(runtimeDebug());
+  runCommandMock.mockReset().mockResolvedValue({ trace_id: "req-1", output: "hello output" });
+  updateRuntimeDebugMock.mockReset().mockImplementation(async (body) => runtimeDebug(body));
   subscribeEventsMock.mockReset().mockImplementation((listener) => {
     eventListener = listener;
     return () => {
       eventListener = null;
     };
   });
-  subscribeLogsMock.mockReset().mockReturnValue(() => {});
+  logListener = null;
+  subscribeLogsMock.mockReset().mockImplementation((listener) => {
+    logListener = listener;
+    return () => {
+      logListener = null;
+    };
+  });
 });
 
 describe("Commands screen", () => {
+  it("toggles runtime debug from the command screen", async () => {
+    const user = userEvent.setup();
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+
+    await user.click(
+      await screen.findByRole("switch", { name: t("overview.runtimeDebug.disabled") }),
+    );
+
+    await waitFor(() => expect(updateRuntimeDebugMock).toHaveBeenCalledTimes(1));
+    expect(updateRuntimeDebugMock.mock.calls[0][0]).toEqual({ enabled: true });
+  });
+
   it("shows the no-active-member blocked alert and disables run", async () => {
     getTeamMock.mockResolvedValue(team({ members: [member({ is_active: false })] }));
     renderCommands();
@@ -193,64 +223,78 @@ describe("Commands screen", () => {
     await waitFor(() => expect(eventListener).not.toBeNull());
 
     await act(() =>
-      eventListener?.({
-        type: "command.started",
-        request_id: "evt-1",
-        payload: { command: "workflows/sample", person: "alice" },
-        timestamp: "2026-06-04T01:00:00Z",
-      }),
+      eventListener?.(
+        makeRuntimeEvent({
+          type: "command.started",
+          trace_id: "evt-1",
+          payload: { command: "workflows/sample", person: "alice" },
+          timestamp: "2026-06-04T01:00:00Z",
+        }),
+      ),
     );
     expect(await screen.findByText(t("commands.status.running"))).toBeInTheDocument();
 
     await act(() =>
-      eventListener?.({
-        type: "command.finished",
-        request_id: "evt-1",
-        payload: { command: "workflows/sample", person: "alice" },
-        timestamp: "2026-06-04T01:00:01Z",
-      }),
+      eventListener?.(
+        makeRuntimeEvent({
+          type: "command.finished",
+          trace_id: "evt-1",
+          payload: { command: "workflows/sample", person: "alice" },
+          timestamp: "2026-06-04T01:00:01Z",
+        }),
+      ),
     );
     expect(await screen.findByText(t("commands.status.success"))).toBeInTheDocument();
 
     await act(() =>
-      eventListener?.({
-        type: "command.failed",
-        request_id: "evt-1",
-        payload: { command: "workflows/sample", person: "alice", code: "boom" },
-        timestamp: "2026-06-04T01:00:02Z",
-      }),
+      eventListener?.(
+        makeRuntimeEvent({
+          type: "command.failed",
+          trace_id: "evt-1",
+          payload: { command: "workflows/sample", person: "alice", code: "boom" },
+          timestamp: "2026-06-04T01:00:02Z",
+        }),
+      ),
     );
     expect(await screen.findByText(t("commands.status.failed"))).toBeInTheDocument();
   });
 
-  it("scopes command.log events to the active request id in the events tab", async () => {
+  it("scopes the run's logs to the active trace id in the events tab", async () => {
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
     await waitFor(() => expect(eventListener).not.toBeNull());
+    await waitFor(() => expect(logListener).not.toBeNull());
 
     await act(() =>
-      eventListener?.({
-        type: "command.started",
-        request_id: "evt-9",
-        payload: { command: "workflows/sample", person: "alice" },
-        timestamp: "2026-06-04T01:00:00Z",
-      }),
+      eventListener?.(
+        makeRuntimeEvent({
+          type: "command.started",
+          trace_id: "evt-9",
+          payload: { command: "workflows/sample", person: "alice" },
+          timestamp: "2026-06-04T01:00:00Z",
+        }),
+      ),
+    );
+    // Logs now arrive on the single /logs path, carrying their trace id.
+    await act(() =>
+      logListener?.(
+        makeRuntimeLog({
+          trace_id: "evt-9",
+          level: "INFO",
+          message: "log for this request",
+          timestamp: "2026-06-04T01:00:01Z",
+        }),
+      ),
     );
     await act(() =>
-      eventListener?.({
-        type: "command.log",
-        request_id: "evt-9",
-        payload: { level: "INFO", message: "log for this request" },
-        timestamp: "2026-06-04T01:00:01Z",
-      }),
-    );
-    await act(() =>
-      eventListener?.({
-        type: "command.log",
-        request_id: "other",
-        payload: { level: "INFO", message: "log for another request" },
-        timestamp: "2026-06-04T01:00:02Z",
-      }),
+      logListener?.(
+        makeRuntimeLog({
+          trace_id: "other",
+          level: "INFO",
+          message: "log for another request",
+          timestamp: "2026-06-04T01:00:02Z",
+        }),
+      ),
     );
 
     // The events tab is selected by default, so the scoped log shows without a click.
@@ -405,7 +449,7 @@ describe("Commands screen", () => {
 
 describe("commandOutputText", () => {
   const record = (overrides: Partial<CommandRunRecord> = {}): CommandRunRecord => ({
-    requestId: "req-1",
+    traceId: "req-1",
     person: "alice",
     command: "workflows/sample",
     startedAt: "2026-06-04T01:00:00Z",
@@ -431,9 +475,9 @@ describe("commandOutputText", () => {
     );
   });
 
-  it("falls back to the request id when a failed run has no error detail", () => {
+  it("falls back to the trace id when a failed run has no error detail", () => {
     expect(commandOutputText(record({ status: "failed" }))).toBe(
-      JSON.stringify({ request_id: "req-1" }, null, 2),
+      JSON.stringify({ trace_id: "req-1" }, null, 2),
     );
   });
 });
@@ -585,5 +629,16 @@ function promptTrace() {
     trace_file_exists: false,
     event_count: 0,
     events: [],
+  };
+}
+
+function runtimeDebug(overrides: { enabled?: boolean } = {}) {
+  const enabled = overrides.enabled ?? false;
+  return {
+    enabled,
+    log_level: enabled ? "DEBUG" : "INFO",
+    agno_debug: enabled,
+    env_file: "/workspace/.env",
+    env_file_exists: true,
   };
 }

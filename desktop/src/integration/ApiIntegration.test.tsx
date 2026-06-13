@@ -242,6 +242,17 @@ function promptTrace() {
   };
 }
 
+function runtimeDebug(overrides: { enabled?: boolean } = {}) {
+  const enabled = overrides.enabled ?? false;
+  return {
+    enabled,
+    log_level: enabled ? "DEBUG" : "INFO",
+    agno_debug: enabled,
+    env_file: "/workspace/.env",
+    env_file_exists: true,
+  };
+}
+
 function catalogCommand(overrides: Record<string, unknown> = {}) {
   return {
     command: "workflows/sample",
@@ -278,6 +289,8 @@ function serviceServer(): MockServer {
     .json("GET", "/config/project", projectConfig())
     .json("GET", "/commands/options", { options: [] })
     .json("GET", "/prompt-trace", promptTrace())
+    .json("GET", "/runtime/debug", runtimeDebug())
+    .json("PUT", "/runtime/debug", runtimeDebug({ enabled: true }))
     .json("POST", "/scheduler/start", runtimeStatus())
     .json("POST", "/scheduler/stop", runtimeStatus());
 }
@@ -529,7 +542,9 @@ describe("Commands integration (real client + mock server)", () => {
       .json("GET", "/config/status", configStatus())
       .json("GET", "/team", team())
       .json("GET", "/prompt-trace", promptTrace())
-      .json("POST", "/commands/run", { request_id: "req-1", output: "hello output" })
+      .json("GET", "/runtime/debug", runtimeDebug())
+      .json("PUT", "/runtime/debug", runtimeDebug({ enabled: true }))
+      .json("POST", "/commands/run", { trace_id: "req-1", output: "hello output" })
       .on("GET", "/commands/options", () => ({ body: { options: [catalogCommand()] } }));
     const user = userEvent.setup();
     renderApp(server, "/commands");
@@ -567,7 +582,7 @@ describe("Commands integration (real client + mock server)", () => {
 
     socket.emit({
       type: "command.started",
-      request_id: "evt-1",
+      trace_id: "evt-1",
       payload: { command: "workflows/sample", person: "alice" },
       timestamp: "2026-06-04T01:00:00Z",
     });
@@ -575,7 +590,7 @@ describe("Commands integration (real client + mock server)", () => {
 
     socket.emit({
       type: "command.finished",
-      request_id: "evt-1",
+      trace_id: "evt-1",
       payload: { command: "workflows/sample", person: "alice" },
       timestamp: "2026-06-04T01:00:01Z",
     });

@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.intelligences import IntelligenceConfigService
@@ -40,10 +41,14 @@ from guildbotics.app_api.models import (
     RoleOptionsResponse,
     RoutineOption,
     RoutineOptionsResponse,
+    RuntimeDebugStatus,
+    RuntimeDebugUpdateRequest,
     RuntimeStatus,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     TeamSummary,
+    TraceDetailResponse,
+    TracesResponse,
     VerifyResponse,
     WorkspaceChangeRequest,
 )
@@ -77,10 +82,12 @@ def create_app(
     session_token: str | None = None,
     runtime: AppRuntime | None = None,
     event_bus: EventBus | None = None,
+    diagnostics_store: DiagnosticsStore | None = None,
 ) -> FastAPI:
     token = session_token or secrets.token_urlsafe(32)
-    bus = event_bus or EventBus()
-    app_runtime = runtime or AppRuntime(bus)
+    store = diagnostics_store or DiagnosticsStore()
+    bus = event_bus or EventBus(store=store)
+    app_runtime = runtime or AppRuntime(bus, diagnostics_store=store)
     log_handler = EventBusLogHandler(bus)
 
     @asynccontextmanager
@@ -286,6 +293,25 @@ def create_app(
     ) -> PromptTraceStatus:
         return app_runtime.update_prompt_trace(request, limit=limit)
 
+    @app.get(
+        "/runtime/debug",
+        response_model=RuntimeDebugStatus,
+        responses=error_responses,
+    )
+    def runtime_debug_status(_: None = Depends(require_token)) -> RuntimeDebugStatus:
+        return app_runtime.get_runtime_debug_status()
+
+    @app.put(
+        "/runtime/debug",
+        response_model=RuntimeDebugStatus,
+        responses=error_responses,
+    )
+    def runtime_debug_update(
+        request: RuntimeDebugUpdateRequest,
+        _: None = Depends(require_token),
+    ) -> RuntimeDebugStatus:
+        return app_runtime.update_runtime_debug(request)
+
     @app.post("/verify", response_model=VerifyResponse, responses=error_responses)
     def verify(_: None = Depends(require_token)) -> VerifyResponse:
         return app_runtime.verify()
@@ -300,6 +326,51 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ScenarioDiagnosticsResponse:
         return await app_runtime.run_scenario_diagnostics(person_id=person_id)
+
+    @app.get(
+        "/diagnostics/traces",
+        response_model=TracesResponse,
+        responses=error_responses,
+    )
+    def diagnostics_traces(
+        source: str | None = None,
+        person_id: str | None = None,
+        q: str | None = None,
+        attr_key: str | None = None,
+        attr_value: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+        _: None = Depends(require_token),
+    ) -> TracesResponse:
+        return app_runtime.list_traces(
+            source=source,
+            person_id=person_id,
+            query=q,
+            attr_key=attr_key,
+            attr_value=attr_value,
+            limit=limit,
+        )
+
+    @app.get(
+        "/diagnostics/traces/{trace_id}",
+        response_model=TraceDetailResponse,
+        responses=error_responses,
+    )
+    def diagnostics_trace_detail(
+        trace_id: str,
+        _: None = Depends(require_token),
+    ) -> TraceDetailResponse:
+        return app_runtime.get_trace_detail(trace_id)
+
+    @app.get(
+        "/diagnostics/global",
+        response_model=TraceDetailResponse,
+        responses=error_responses,
+    )
+    def diagnostics_global_records(
+        limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+        _: None = Depends(require_token),
+    ) -> TraceDetailResponse:
+        return app_runtime.get_global_records(limit=limit)
 
     @app.get(
         "/intelligences/cli-agents/detection",
