@@ -160,3 +160,30 @@ def test_records_persist_across_restart(tmp_path: Path) -> None:
     summary = reloaded.list_traces()[0]
     assert summary["trace_id"] == "t1"
     assert summary["command"] == "demo"
+
+
+def test_rotation_does_not_duplicate_the_record_on_disk(tmp_path: Path) -> None:
+    path = tmp_path / "diag.jsonl"
+    # Tiny budget so the next write triggers a rewrite-based rotation.
+    store = DiagnosticsStore(path, max_file_bytes=1)
+    store.record(_event("t1", "command.started", command="demo"))
+    store.record(_event("t1", "command.finished"))
+
+    # The rewrite already persists the in-memory window, so the rotated record
+    # must appear exactly once — a fresh store must not double-count it.
+    reloaded = DiagnosticsStore(path)
+    summary = reloaded.list_traces()[0]
+    assert summary["event_count"] == 2
+    assert path.read_text(encoding="utf-8").count('"command.finished"') == 1
+
+
+def test_record_with_non_serializable_attribute_does_not_raise(tmp_path: Path) -> None:
+    path = tmp_path / "diag.jsonl"
+    store = DiagnosticsStore(path)
+    # Path / set are not natively JSON-serializable; recording and querying must
+    # coerce them (default=str) rather than crash the runtime.
+    store.record(_event("t1", "command.started", attributes={"cwd": tmp_path}))
+
+    traces = store.list_traces(query=tmp_path.name)
+    assert [s["trace_id"] for s in traces] == ["t1"]
+    assert DiagnosticsStore(path).list_traces()[0]["trace_id"] == "t1"

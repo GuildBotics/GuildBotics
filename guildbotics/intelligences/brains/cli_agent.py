@@ -188,7 +188,11 @@ class CliAgentBrain(Brain):
                 output = to_response_class(output, self.response_class)
             if isinstance(output, AgentResponse):
                 log_file_path = Path(log_file)
-                if output.status == AgentResponse.ASKING and log_file_path.exists():
+                if (
+                    output.status == AgentResponse.ASKING
+                    and log_file
+                    and log_file_path.exists()
+                ):
                     output.message = f"{output.message}\n\nSee: {log_file_path.name}"
 
         return output

@@ -140,9 +140,13 @@ class DiagnosticsStore:
                 self._path.exists()
                 and self._path.stat().st_size >= self._max_file_bytes
             ):
+                # ``item`` is already in ``self._records`` (appended by
+                # ``record()`` before this call), so the rewrite persists it —
+                # appending again would duplicate the row after a restart.
                 self._rewrite_file()
+                return
             with self._path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+                handle.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
         except OSError:
             return
 
@@ -151,7 +155,9 @@ class DiagnosticsStore:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("w", encoding="utf-8") as handle:
                 for item in self._records:
-                    handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+                    handle.write(
+                        json.dumps(item, ensure_ascii=False, default=str) + "\n"
+                    )
         except OSError:
             return
 
@@ -254,7 +260,7 @@ def _summary_matches(
                 summary["person_id"],
                 summary["command"],
                 summary["workflow"],
-                json.dumps(summary["attributes"], ensure_ascii=False),
+                json.dumps(summary["attributes"], ensure_ascii=False, default=str),
                 " ".join(str(text) for text in summary.get("_text", [])),
             ]
         ).lower()

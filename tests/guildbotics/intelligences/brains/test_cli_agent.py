@@ -314,3 +314,55 @@ async def test_cli_agent_prompt_trace_records_request_and_response(
     assert "Reply as Alice." in events[0]["prompt"]
     assert events[1]["stdout"] == "done"
     assert events[1]["stderr"] == "debug output"
+
+
+@pytest.mark.asyncio
+async def test_asking_response_omits_log_reference_when_output_dir_unset(
+    monkeypatch, tmp_path
+):
+    from guildbotics.intelligences.common import AgentResponse
+
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        return StubProcess(
+            stdout=b'{"status": "asking", "message": "need input"}', returncode=0
+        )
+
+    # LOG_OUTPUT_DIR unset -> no per-call log file is created, so the ASKING
+    # message must not gain a misleading empty "See:" reference.
+    monkeypatch.setattr(cli_agent, "get_log_output_dir", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+            response_class=AgentResponse,
+        )
+        output = await brain.run("hello", cwd=tmp_path)
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert isinstance(output, AgentResponse)
+    assert output.status == AgentResponse.ASKING
+    assert output.message == "need input"
+    assert "See:" not in output.message
