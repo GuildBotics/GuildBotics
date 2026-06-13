@@ -71,11 +71,6 @@ class _StubTicketManager:
         return list(self.agent_field_options)
 
 
-class _StubCodeHostingService:
-    async def get_default_branch(self) -> str:
-        return "main"
-
-
 @dataclass
 class _StubContext:
     """Configurable Context stub shared across diagnostics test cases."""
@@ -84,7 +79,6 @@ class _StubContext:
     person: Person | None = None
     brain: Any = None
     ticket_manager: Any = field(default_factory=_StubTicketManager)
-    code_hosting_service: Any = field(default_factory=_StubCodeHostingService)
     chat_service: Any = field(default_factory=_StubChatService)
     talk_result: str = "OK"
     logger: logging.Logger = field(
@@ -97,7 +91,6 @@ class _StubContext:
             person=member,
             brain=self.brain,
             ticket_manager=self.ticket_manager,
-            code_hosting_service=self.code_hosting_service,
             chat_service=self.chat_service,
             talk_result=self.talk_result,
             logger=self.logger,
@@ -112,9 +105,6 @@ class _StubContext:
 
     def get_ticket_manager(self) -> Any:
         return self.ticket_manager
-
-    def get_code_hosting_service(self) -> Any:
-        return self.code_hosting_service
 
     def get_chat_service(self) -> Any:
         return self.chat_service

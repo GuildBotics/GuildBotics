@@ -142,38 +142,3 @@ def test_checkout_branch_uses_remote_branch_when_available(tmp_path: Path):
     assert (tool.repo_path / "remote.txt").read_text(encoding="utf-8") == (
         "remote branch content\n"
     )
-
-
-def test_commit_changes_commits_and_pushes(tmp_path: Path):
-    tool, _, remote = _init_git_tool(tmp_path)
-
-    # Create a new file to commit
-    new_file = tool.repo_path / "new.txt"
-    new_file.write_text("content\n", encoding="utf-8")
-
-    sha = tool.commit_changes("add new file")
-    assert isinstance(sha, str) and len(sha) > 0
-
-    # Verify the bare remote received the new commit on 'main'
-    remote_repo = git.Repo(remote)
-    assert remote_repo.commit("main").hexsha == sha
-
-
-def test_commit_changes_noop_when_clean(tmp_path: Path):
-    tool, _, _ = _init_git_tool(tmp_path)
-
-    sha = tool.commit_changes("no changes")
-    assert sha is None
-
-
-def test_get_diff_includes_status_and_diff(tmp_path: Path):
-    tool, _, _ = _init_git_tool(tmp_path)
-
-    # Modify tracked file without staging
-    readme = tool.repo_path / "README.md"
-    readme.write_text(readme.read_text(encoding="utf-8") + "more\n", encoding="utf-8")
-
-    diff_output = tool.get_diff()
-    # Should mention the file in status and include a diff header
-    assert "README.md" in diff_output
-    assert "diff --git" in diff_output or " M " in diff_output

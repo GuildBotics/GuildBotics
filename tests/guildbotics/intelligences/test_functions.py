@@ -8,9 +8,7 @@ from guildbotics.intelligences import functions as f
 from guildbotics.intelligences.common import (
     AgentResponse,
     DecisionResponse,
-    Labels,
     MessageResponse,
-    NextTasksResponse,
 )
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 
@@ -100,7 +98,7 @@ async def test_talk_as_and_reply_as_build_session_state(monkeypatch, fake_contex
 
 
 @pytest.mark.asyncio
-async def test_identify_role_and_mode(monkeypatch, fake_context, stub_brain):
+async def test_identify_role(monkeypatch, fake_context, stub_brain):
     ctx = fake_context
 
     async def fake_get_content(context, name, message, **kwargs):
@@ -109,55 +107,6 @@ async def test_identify_role_and_mode(monkeypatch, fake_context, stub_brain):
     monkeypatch.setattr(f, "get_content", fake_get_content)
 
     assert await f.identify_role(ctx, "who") == "dev"
-    assert await f.identify_mode(ctx, Labels({"build": "b"}), input="mode?") == "dev"
-
-
-@pytest.mark.asyncio
-async def test_write_commit_message_and_pr_description(
-    monkeypatch, fake_context, stub_brain
-):
-    ctx = fake_context
-
-    async def fake_get_content(context, name, message, **kwargs):
-        return "message"
-
-    monkeypatch.setattr(f, "get_content", fake_get_content)
-    assert (
-        await f.write_commit_message(ctx, task_title="t", changes="diff")
-    ) == "message"
-
-    assert (
-        await f.write_pull_request_description(
-            ctx, changes="d", commit_message="c", ticket_url="u", pr_template="tmp"
-        )
-    ) == "message"
-
-
-@pytest.mark.asyncio
-async def test_identify_tasks(monkeypatch, fake_context, stub_brain):
-    ctx = fake_context
-    nxt = NextTasksResponse(tasks=[])
-
-    captured = {"called": False, "session_state": None}
-
-    async def fake_get_content(context, name, message, params=None, cwd=None):
-        captured["called"] = True
-        captured["params"] = params
-        captured["message"] = message
-        return nxt
-
-    monkeypatch.setattr(f, "get_content", fake_get_content)
-
-    modes = Labels({"build": "desc"})
-    messages = [Message(content="d", author="user", author_type="user")]
-    out = await f.identify_next_tasks(
-        ctx, role_id="dev", cwd=Path("."), messages=messages, available_modes=modes
-    )
-    assert out is nxt and captured["called"]
-    assert "available_modes" in captured["params"]
-    assert (
-        str(captured["message"]).replace(" ", "").replace("\n", "") == '[{"user":"d"}]'
-    )
 
 
 @pytest.mark.asyncio

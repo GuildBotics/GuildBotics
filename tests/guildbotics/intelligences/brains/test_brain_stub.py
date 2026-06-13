@@ -18,7 +18,6 @@ from guildbotics.intelligences.common import (
     IssueTreeResponse,
     MessageResponse,
     MissingInfoResponse,
-    NextTasksResponse,
 )
 
 
@@ -116,23 +115,4 @@ async def test_brain_stub_with_issue_tree_response(mock_logger):
     assert len(response.branches) == 1
     assert response.branches[0].label == f"Stubbed response for: {message}"
     assert response.branches[0].status == "provided"
-    mock_logger.info.assert_called_with(f"BrainStub received message: {message}")
-
-
-@pytest.mark.asyncio
-async def test_brain_stub_with_next_tasks_response(mock_logger):
-    brain_stub = BrainStub(
-        person_id="test_person",
-        name="test_brain",
-        logger=mock_logger,
-        template_engine="default",
-        response_class=NextTasksResponse,
-    )
-    message = "Test message for next tasks"
-    response = await brain_stub.run(message)
-
-    assert isinstance(response, NextTasksResponse)
-    assert len(response.tasks) == 1
-    assert response.tasks[0].title == f"Stubbed response for: {message}"
-    assert response.tasks[0].description == f"Stubbed response for: {message}"
     mock_logger.info.assert_called_with(f"BrainStub received message: {message}")

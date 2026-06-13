@@ -17,7 +17,6 @@ from guildbotics.intelligences.common import (
     DecisionResponse,
     Labels,
     MessageResponse,
-    NextTasksResponse,
 )
 from guildbotics.runtime import Context
 from guildbotics.utils.i18n_tool import t
@@ -231,97 +230,6 @@ async def identify_role(context: Context, input: str) -> str:
         params=session_state,
     )
     return response.label
-
-
-async def identify_mode(context: Context, available_modes: Labels, input: str) -> str:
-    """Identify the mode based on the input text."""
-    session_state = {"item_type": "mode", "candidates": str(available_modes)}
-    response: DecisionResponse = await get_content(
-        context,
-        "functions/identify_item",
-        message=input,
-        params=session_state,
-    )
-    return response.label
-
-
-async def write_commit_message(context: Context, task_title: str, changes: str) -> str:
-    params = {"task_title": task_title, "changes": changes}
-
-    return await get_content(
-        context,
-        "functions/write_commit_message",
-        message="",
-        params=params,
-    )
-
-
-async def write_pull_request_description(
-    context: Context,
-    changes: str,
-    commit_message: str,
-    ticket_url: str,
-    pr_template: str,
-) -> str:
-    task = context.task
-    ticket_title = task.title
-    ticket_description = task.description
-    git_diff = changes
-    commit_comments = commit_message
-
-    params = {
-        "ticket_url": ticket_url,
-        "ticket_title": ticket_title,
-        "ticket_description": ticket_description,
-        "git_diff": git_diff,
-        "commit_comments": commit_comments,
-        "pr_template": pr_template,
-    }
-
-    return await get_content(
-        context,
-        "functions/write_pull_request_description",
-        message="",
-        params=params,
-    )
-
-
-async def identify_next_tasks(
-    context: Context,
-    role_id: str,
-    cwd: Path,
-    messages: list[Message],
-    available_modes: Labels,
-) -> NextTasksResponse:
-    """
-    Identify and list the next tasks for a given role.
-
-    Args:
-        role_id (str): The ID of the role to identify tasks for.
-        cwd (Path): The current working directory.
-        messages (list[Message]): The conversation messages to analyze.
-        available_modes (Labels): The available modes for task identification.
-
-    Returns:
-        NextTasksResponse: Structured list of next tasks with explanations.
-    """
-    conversation = json.dumps(
-        messages_to_simple_dicts(messages), ensure_ascii=False, indent=2
-    )
-    available_modes.indent = 4
-    session_state = {
-        "role": str(context.person.get_role(role_id)),
-        "available_modes": str(available_modes),
-        "language": context.team.project.get_language_name(),
-    }
-
-    return await get_content(
-        context,
-        "functions/identify_next_tasks",
-        message=conversation,
-        params=session_state,
-        cwd=cwd,
-    )
 
 
 async def identify_output_type(context: Context, input: str) -> str:

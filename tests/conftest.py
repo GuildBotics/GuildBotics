@@ -21,14 +21,6 @@ class FakeProject:
         return "English"
 
 
-class FakeCodeHostingService:
-    """
-    Fake code hosting service for testing.
-    """
-
-    pass
-
-
 class FakeContext:
     """
     Fake context that holds team, person, task, logger, and a brain registry.
@@ -64,12 +56,6 @@ class FakeContext:
         self, name: str, config: dict | None, class_resolver: ClassResolver | None
     ):
         return self._brains[name]
-
-    def get_code_hosting_service(self, repository: str | None = None):
-        """
-        Get a fake code hosting service.
-        """
-        return FakeCodeHostingService()
 
 
 class FakeBrain:

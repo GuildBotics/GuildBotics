@@ -7,9 +7,6 @@ from httpx import AsyncClient
 from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
-from guildbotics.integrations.github.github_code_hosting_service import (
-    GitHubCodeHostingService,
-)
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_author_type,
@@ -455,57 +452,6 @@ class GitHubTicketManager(TicketManager):
             raise ValueError("Task repository is required for issue operations.")
         return f"/repos/{self.owner}/{repo}/issues"
 
-    async def create_tickets(self, tasks: list[Task]) -> None:
-        """
-        Create draft tickets on the GitHub Project board for the given tasks.
-
-        Tickets are created as GitHub Projects V2 *draft issues* rather than
-        repository issues. Drafts act as proposals that a human triages and
-        promotes to a real issue (in the repository of their choice) before the
-        workflow picks them up. We do not set a Status (the project's built-in
-        workflow may still assign one, e.g. Todo); drafts are skipped by the
-        workflow regardless. They are not bound to a repository, so no
-        ``GitHub Repository URL`` configuration is required.
-
-        Args:
-            tasks (list[Task]): List of Task instances to create.
-        """
-        await self.ensure_custom_fields()
-
-        proj_node = await self._project_node()
-
-        for task in sorted(tasks):
-            # create a draft issue (already added to the project)
-            mutation = """
-            mutation($proj: ID!, $title: String!, $body: String!) {
-                addProjectV2DraftIssue(
-                    input: {projectId: $proj, title: $title, body: $body}
-                ) {
-                    projectItem { id }
-                }
-            }
-            """
-            data = await self._graphql(
-                mutation,
-                {
-                    "proj": proj_node,
-                    "title": task.title,
-                    "body": task.description or "",
-                },
-            )
-            item_id = data["addProjectV2DraftIssue"]["projectItem"]["id"]
-            task.id = item_id
-
-            # Set custom field values
-            field_values = {}
-            for field_name in self._custom_field_definitions:
-                value = await self._get_field_value_for_task(task, field_name)
-                if value:
-                    field_values[field_name] = value
-
-            if field_values:
-                await self._set_multiple_custom_field_values(item_id, field_values)
-
     def _to_task_field(self, name: str) -> str:
         return name.lower().replace(" ", "_")  # e.g., "Due Date" -> "due_date"
 
@@ -667,33 +613,6 @@ class GitHubTicketManager(TicketManager):
             cursor = payload["pageInfo"]["endCursor"]
         return all_items
 
-    async def has_pr_review_comments(self, task: Task) -> bool:
-        """
-        Check if a pull request has review comments.
-
-        Args:
-            task (Task): The Task instance representing the pull request.
-
-        Returns:
-            bool: True if there are review comments, False otherwise.
-        """
-        if task.status != Task.IN_REVIEW:
-            return False
-
-        url = task.find_output_title_and_url_from_comments(strict=False)[1]
-        if not url:
-            return False
-
-        hosting_service = GitHubCodeHostingService(
-            self.person, self.team, task.repository
-        )
-        # Check PR URL against GitHub web base, independent of clone scheme
-        if not url.startswith("https://github.com/"):
-            return False  # Not a PR URL
-
-        comments = await hosting_service.get_pull_request_comments(url)
-        return not comments.is_replied
-
     def _is_my_response(self, username: str, content: str) -> bool:
         return get_author_type(self.person, username, content) == Message.ASSISTANT
 
@@ -843,33 +762,10 @@ class GitHubTicketManager(TicketManager):
                 pulls.append(pull)
         return pulls
 
-    def _fallback_pull_request_urls(self, task: Task) -> list[str]:
-        urls: list[str] = []
-        for comment in task.comments:
-            if comment.author_type != Message.ASSISTANT:
-                continue
-            for line in comment.content.splitlines():
-                if not line.strip().startswith(Task.OUTPUT_PREFIX):
-                    continue
-                urls.extend(
-                    match.group(0)
-                    for match in re.finditer(
-                        r"https://github\.com/[^/\s)]+/[^/\s)]+/pull/\d+",
-                        line,
-                    )
-                )
-        return list(dict.fromkeys(urls))
-
     async def _select_related_pull_request(
         self, task: Task, issue_number: int
     ) -> dict[str, Any] | None:
         pulls = await self._get_related_pull_requests(task, issue_number)
-        if not pulls:
-            for url in self._fallback_pull_request_urls(task):
-                pull = await self._get_pull_request_from_url(url)
-                if pull:
-                    pulls.append(pull)
-
         if not pulls:
             return None
 

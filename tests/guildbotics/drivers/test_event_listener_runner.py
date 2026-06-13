@@ -13,20 +13,26 @@ from guildbotics.drivers.event_listener_runner import (
 )
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatEvent
-from guildbotics.integrations.chat_service import ChatIdentity, ChatPostResult
+from guildbotics.integrations.chat_service import (
+    ChatEvent,
+    ChatIdentity,
+    ChatPostResult,
+)
 from guildbotics.observability import correlation_fields
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
 )
+from guildbotics.runtime.integration_factory import IntegrationFactory
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyLoaderFactory,
     _make_team,
 )
-from guildbotics.runtime.integration_factory import IntegrationFactory
+
+EXPECTED_LISTENER_COUNT = 2
+WARNING_ARG_COUNT = 2
 
 
 class _FakeContext:
@@ -108,9 +114,6 @@ class _WorkflowIntegrationFactory(IntegrationFactory):
         self.chat_service = chat_service
 
     def create_ticket_manager(self, logger, person, team):
-        raise AssertionError("unused in this test")
-
-    def create_code_hosting_service(self, person, team, repository=None):
         raise AssertionError("unused in this test")
 
     def create_chat_service(self, logger, person, team):
@@ -319,7 +322,7 @@ def test_get_or_create_listener_splits_when_base_url_differs(monkeypatch):
     s2 = runner._get_or_create_listener(key2)
 
     assert s1 is not s2
-    assert len(created) == 2
+    assert len(created) == EXPECTED_LISTENER_COUNT
 
 
 @pytest.mark.asyncio
@@ -648,7 +651,7 @@ async def test_aclose_sources_stops_listeners_and_clears_caches():
     )
     runner._listeners[key] = _FakeListener("l1")
     runner._listener_tokens[key] = "xapp"
-    runner._subscription_channel_cache["alice"] = (tuple(), {"C1"})
+    runner._subscription_channel_cache["alice"] = ((), {"C1"})
     runner._last_group_log_state = (1, 1)
 
     await runner._aclose_sources()
@@ -693,6 +696,8 @@ async def test_build_person_subscriptions_skips_person_with_missing_app_token(
     only_group = next(iter(grouped.values()))
     assert [person.person_id for person, _channel_ids in only_group] == ["alice"]
     assert any(
-        "skipped person=%s" in str(args[0]) and len(args) >= 2 and args[1] == "bob"
+        "skipped person=%s" in str(args[0])
+        and len(args) >= WARNING_ARG_COUNT
+        and args[1] == "bob"
         for args in ctx.warnings
     )
