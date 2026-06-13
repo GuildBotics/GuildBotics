@@ -105,14 +105,6 @@ class DiagnosticsStore:
         records.sort(key=lambda item: item.get("timestamp", ""))
         return records[-max(1, limit) :]
 
-    def delete_trace(self, trace_id: str) -> int:
-        with self._lock:
-            kept = [item for item in self._records if item.get("trace_id") != trace_id]
-            removed = len(self._records) - len(kept)
-            self._records = deque(kept, maxlen=self._memory_limit)
-            self._rewrite_file()
-        return removed
-
     # -- persistence ---------------------------------------------------------
 
     def _load(self) -> None:

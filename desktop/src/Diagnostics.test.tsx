@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import {
-  deleteTrace,
   getConfigStatus,
   getGlobalRecords,
   getProjectConfig,
@@ -76,7 +75,6 @@ vi.mock("./api/client", async (importOriginal) => {
     getTraces: vi.fn(),
     getTraceDetail: vi.fn(),
     getGlobalRecords: vi.fn(),
-    deleteTrace: vi.fn(),
     subscribeEvents: vi.fn(),
     subscribeLogs: vi.fn(),
   };
@@ -101,9 +99,6 @@ beforeEach(() => {
   vi.mocked(runScenarioDiagnostics).mockReset().mockResolvedValue(scenarioResponse());
   vi.mocked(getTraces).mockReset().mockResolvedValue({ traces: [] });
   vi.mocked(getTraceDetail)
-    .mockReset()
-    .mockResolvedValue({ trace_id: "", summary: null, records: [] });
-  vi.mocked(deleteTrace)
     .mockReset()
     .mockResolvedValue({ trace_id: "", summary: null, records: [] });
   vi.mocked(getGlobalRecords)
@@ -488,43 +483,6 @@ describe("Diagnostics executions tab", () => {
     expect(screen.getByText(t("diagnostics.executions.recordScope.span"))).toBeInTheDocument();
     expect(screen.getByText(longMessage)).toBeInTheDocument();
     expect(screen.queryByText("different span log")).not.toBeInTheDocument();
-  });
-
-  it("requires a confirmation step before deleting a trace", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getTraces).mockResolvedValue({
-      traces: [
-        {
-          trace_id: "trace-1",
-          source: "manual",
-          person_id: "alice",
-          command: "workflows/demo",
-          workflow: "",
-          started_at: "2026-06-12T00:00:01Z",
-          updated_at: "2026-06-12T00:00:03Z",
-          status: "success",
-          event_count: 1,
-          log_count: 0,
-          error_count: 0,
-          span_count: 0,
-          attributes: {},
-        },
-      ],
-    });
-
-    renderApp();
-    await openTab(user, t("diagnostics.tabs.executions"));
-    await user.click(await screen.findByText("workflows/demo"));
-
-    // First click only arms the confirmation; nothing is deleted yet.
-    await user.click(
-      await screen.findByRole("button", { name: t("diagnostics.executions.delete") }),
-    );
-    expect(vi.mocked(deleteTrace)).not.toHaveBeenCalled();
-    expect(screen.getByText(t("diagnostics.executions.confirmDelete"))).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: t("diagnostics.executions.confirmYes") }));
-    expect(vi.mocked(deleteTrace)).toHaveBeenCalledWith("trace-1");
   });
 
   it("looks up a ticket number from the unified search field with an exact attribute filter", async () => {

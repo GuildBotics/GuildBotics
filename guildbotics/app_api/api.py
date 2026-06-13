@@ -361,18 +361,6 @@ def create_app(
     ) -> TraceDetailResponse:
         return app_runtime.get_trace_detail(trace_id)
 
-    @app.delete(
-        "/diagnostics/traces/{trace_id}",
-        response_model=TraceDetailResponse,
-        responses=error_responses,
-    )
-    def diagnostics_trace_delete(
-        trace_id: str,
-        _: None = Depends(require_token),
-    ) -> TraceDetailResponse:
-        app_runtime.delete_trace(trace_id)
-        return TraceDetailResponse(trace_id=trace_id, summary=None, records=[])
-
     @app.get(
         "/diagnostics/global",
         response_model=TraceDetailResponse,

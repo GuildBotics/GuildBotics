@@ -102,19 +102,6 @@ def test_trace_detail_returns_ordered_records(tmp_path: Path) -> None:
     assert kinds == ["event", "log", "event"]
 
 
-def test_trace_delete_removes_trace(tmp_path: Path) -> None:
-    client, bus = _app(tmp_path)
-    with trace_scope("manual", trace_id="t1"):
-        bus.publish_event("command.started", {})
-
-    with client:
-        delete = client.delete("/diagnostics/traces/t1", headers=HEADERS)
-        listing = client.get("/diagnostics/traces", headers=HEADERS)
-
-    assert delete.status_code == 200
-    assert listing.json()["traces"] == []
-
-
 def test_prompt_only_traces_only_appear_under_all_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

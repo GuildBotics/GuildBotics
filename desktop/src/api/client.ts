@@ -638,12 +638,6 @@ export async function getTraceDetail(traceId: string): Promise<TraceDetailRespon
   return request(`/diagnostics/traces/${encodeURIComponent(traceId)}`);
 }
 
-export async function deleteTrace(traceId: string): Promise<TraceDetailResponse> {
-  return request(`/diagnostics/traces/${encodeURIComponent(traceId)}`, {
-    method: "DELETE",
-  });
-}
-
 export async function getGlobalRecords(limit = 200): Promise<TraceDetailResponse> {
   return request(`/diagnostics/global?limit=${encodeURIComponent(String(limit))}`);
 }

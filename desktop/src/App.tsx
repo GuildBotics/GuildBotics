@@ -52,7 +52,6 @@ import {
   type RuntimeLog,
   type RuntimeUnitStatus,
   type TraceRecord,
-  deleteTrace,
   getConfigStatus,
   getCommandOptions,
   getGlobalRecords,
@@ -615,7 +614,6 @@ function TraceExplorer() {
   const [recordFilter, setRecordFilter] = useState("all");
   const [recordScopeFilter, setRecordScopeFilter] = useState<RecordScopeFilter | null>(null);
   const [drawerRecord, setDrawerRecord] = useState<TraceRecord | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [attrFilter, setAttrFilter] = useState<AttrFilter | null>(null);
   const isGlobal = selectedTraceId === GLOBAL_TRACE_ID;
 
@@ -637,14 +635,6 @@ function TraceExplorer() {
     enabled: Boolean(selectedTraceId),
     refetchInterval: selectedTraceId ? 5000 : false,
   });
-  const removeMutation = useMutation({
-    mutationFn: (traceId: string) => deleteTrace(traceId),
-    onSuccess: () => {
-      setSelectedTraceId(null);
-      void traces.refetch();
-    },
-  });
-
   const traceItems = useMemo(() => traces.data?.traces ?? [], [traces.data]);
   const selectedSummary = useMemo(
     () =>
@@ -661,13 +651,12 @@ function TraceExplorer() {
     .filter((record) => matchesRecordScopeFilter(record, recordScopeFilter))
     .reverse();
 
-  // Selecting a different execution resets its per-trace UI state (filter +
-  // pending delete confirmation) at the event source rather than in an effect.
+  // Selecting a different execution resets its per-trace UI state (record
+  // filter) at the event source rather than in an effect.
   const selectTrace = (traceId: string) => {
     setSelectedTraceId(traceId);
     setRecordFilter("all");
     setRecordScopeFilter(null);
-    setConfirmDelete(false);
   };
 
   // The pinned Global view only belongs under "all"; narrowing to a specific
@@ -676,7 +665,6 @@ function TraceExplorer() {
     setSource(value);
     if (value !== "all" && selectedTraceId === GLOBAL_TRACE_ID) {
       setSelectedTraceId(null);
-      setConfirmDelete(false);
     }
   };
 
@@ -923,33 +911,6 @@ function TraceExplorer() {
                       );
                     })()}
                   </Group>
-                  {confirmDelete ? (
-                    <Group gap="xs" wrap="nowrap">
-                      <Text size="xs" c="dimmed">
-                        {t("diagnostics.executions.confirmDelete")}
-                      </Text>
-                      <Button
-                        size="xs"
-                        color="red"
-                        loading={removeMutation.isPending}
-                        onClick={() => removeMutation.mutate(selectedTraceId)}
-                      >
-                        {t("diagnostics.executions.confirmYes")}
-                      </Button>
-                      <Button size="xs" variant="default" onClick={() => setConfirmDelete(false)}>
-                        {t("diagnostics.executions.confirmNo")}
-                      </Button>
-                    </Group>
-                  ) : (
-                    <Button
-                      size="xs"
-                      color="red"
-                      variant="light"
-                      onClick={() => setConfirmDelete(true)}
-                    >
-                      {t("diagnostics.executions.delete")}
-                    </Button>
-                  )}
                 </div>
                 <Tooltip
                   label={selectedSummary.command || selectedSummary.trace_id}

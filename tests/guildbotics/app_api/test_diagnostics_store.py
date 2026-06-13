@@ -137,20 +137,6 @@ def test_get_records_returns_sorted_records_for_trace(tmp_path: Path) -> None:
     ]
 
 
-def test_delete_trace_removes_records_and_rewrites_file(tmp_path: Path) -> None:
-    path = tmp_path / "diag.jsonl"
-    store = DiagnosticsStore(path)
-    store.record(_event("t1", "command.started"))
-    store.record(_event("t2", "command.started"))
-
-    removed = store.delete_trace("t1")
-    assert removed == 1
-    assert {s["trace_id"] for s in store.list_traces()} == {"t2"}
-    # A fresh store loading the rewritten file must not see the deleted trace.
-    reloaded = DiagnosticsStore(path)
-    assert {s["trace_id"] for s in reloaded.list_traces()} == {"t2"}
-
-
 def test_records_persist_across_restart(tmp_path: Path) -> None:
     path = tmp_path / "diag.jsonl"
     store = DiagnosticsStore(path)

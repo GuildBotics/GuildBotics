@@ -516,11 +516,6 @@ class AppRuntime:
             )
         return TraceDetailResponse(trace_id="", summary=None, records=records)
 
-    def delete_trace(self, trace_id: str) -> int:
-        if self._diagnostics_store is None:
-            return 0
-        return self._diagnostics_store.delete_trace(trace_id)
-
     def _prompt_trace_records(self, trace_id: str) -> list[TraceRecord]:
         records: list[TraceRecord] = []
         for item in self._read_all_prompt_trace_events():
