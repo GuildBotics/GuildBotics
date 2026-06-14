@@ -94,7 +94,13 @@ import {
   updateIntelligenceConfig,
   updateProjectConfig,
 } from "../api/client";
-import { restartBackend } from "../api/backend";
+import {
+  type CliAgentSkillState,
+  type CliAgentSkillStatusesResponse,
+  forceUpdateCliAgentSkill,
+  getCliAgentSkillStatuses,
+  restartBackend,
+} from "../api/backend";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -742,6 +748,7 @@ function IntelligenceSection({
   projectConfig: ProjectConfig | undefined;
 }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const selectedProviderKeyField = getProviderKeyField(form.values.llmApiType);
   const selectedProviderKeyLabel = getProviderKeyLabel(form.values.llmApiType);
   const selectedProviderKey = form.values[selectedProviderKeyField];
@@ -752,6 +759,35 @@ function IntelligenceSection({
     () => new Set(detections.filter((agent) => agent.detected).map((agent) => agent.name)),
     [detections],
   );
+  const skillStatuses = useQuery({
+    queryKey: ["cli-agent-skill-statuses"],
+    queryFn: getCliAgentSkillStatuses,
+  });
+  const forceSkillUpdate = useMutation({
+    mutationFn: forceUpdateCliAgentSkill,
+    onSuccess: (updated) => {
+      queryClient.setQueryData<CliAgentSkillStatusesResponse>(
+        ["cli-agent-skill-statuses"],
+        (current) => ({
+          agents: upsertByAgent(current?.agents ?? [], updated),
+          error: current?.error,
+        }),
+      );
+      notifications.show({
+        color: "green",
+        title: t("setup.intelligence.skillUpdatedTitle"),
+        message: t("setup.intelligence.skillUpdatedBody"),
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        color: "red",
+        title: t("setup.intelligence.skillUpdateFailedTitle"),
+        message:
+          error instanceof Error ? error.message : t("setup.intelligence.skillUpdateFailedBody"),
+      });
+    },
+  });
   useEffect(() => {
     if (detectionLoading) {
       return;
@@ -851,6 +887,13 @@ function IntelligenceSection({
         <Text size="sm" c="dimmed">
           {t("setup.intelligence.cliHint")}
         </Text>
+        <CliAgentSkillStatusList
+          detections={detections}
+          statuses={skillStatuses.data?.agents ?? []}
+          loading={skillStatuses.isLoading}
+          onForceUpdate={(agent) => forceSkillUpdate.mutate(agent)}
+          updatingAgent={forceSkillUpdate.isPending ? forceSkillUpdate.variables : undefined}
+        />
         {autosaveEnabled ? (
           <Accordion variant="contained">
             <Accordion.Item value="advanced-intelligence">
@@ -864,6 +907,134 @@ function IntelligenceSection({
       </Stack>
     </Card>
   );
+}
+
+function CliAgentSkillStatusList({
+  detections,
+  statuses,
+  loading,
+  updatingAgent,
+  onForceUpdate,
+}: {
+  detections: CliAgentDetection[];
+  statuses: CliAgentSkillState[];
+  loading: boolean;
+  updatingAgent?: CliAgentSkillState["agent"];
+  onForceUpdate: (agent: CliAgentSkillState["agent"]) => void;
+}) {
+  const { t } = useTranslation();
+  const statusByAgent = useMemo(
+    () => new Map(statuses.map((status) => [status.agent, status])),
+    [statuses],
+  );
+  const detectedByAgent = useMemo(
+    () => new Map(detections.map((detection) => [detection.name, detection])),
+    [detections],
+  );
+
+  return (
+    <Card withBorder radius="sm" p="md">
+      <Stack gap="sm">
+        <Group justify="space-between" align="flex-start">
+          <Box>
+            <Text fw={700} size="sm">
+              {t("setup.intelligence.skillStatusTitle")}
+            </Text>
+            <Text size="sm" c="dimmed">
+              {t("setup.intelligence.skillStatusDescription")}
+            </Text>
+          </Box>
+          {loading ? (
+            <Badge color="gray" variant="light">
+              {t("setup.intelligence.skillStatusLoading")}
+            </Badge>
+          ) : null}
+        </Group>
+        <Stack gap="xs">
+          {CLI_AGENT_OPTIONS.map((option) => {
+            const status = statusByAgent.get(option.value);
+            const detected = Boolean(detectedByAgent.get(option.value)?.detected);
+            const statusKey = status?.status ?? "agent_home_missing";
+            const canForceUpdate = Boolean(status?.can_force_update);
+            return (
+              <Group
+                key={option.value}
+                justify="space-between"
+                align="flex-start"
+                gap="sm"
+                wrap="nowrap"
+                className="skill-status-row"
+              >
+                <Box>
+                  <Group gap="xs">
+                    <Text fw={600} size="sm">
+                      {option.label}
+                    </Text>
+                    <Badge color={detected ? "green" : "gray"} variant="light" size="sm">
+                      {detected
+                        ? t("setup.intelligence.detected")
+                        : t("setup.intelligence.notDetected")}
+                    </Badge>
+                    <Badge color={skillStatusColor(statusKey)} variant="light" size="sm">
+                      {t(`setup.intelligence.skillStatusLabels.${statusKey}`)}
+                    </Badge>
+                  </Group>
+                  <Text size="sm" c={statusKey === "up_to_date" ? "dimmed" : undefined}>
+                    {t(`setup.intelligence.skillStatusMessages.${statusKey}`)}
+                  </Text>
+                  {status?.skill_path ? (
+                    <Text size="xs" c="dimmed" className="mono-text">
+                      {status.skill_path}
+                    </Text>
+                  ) : null}
+                  {status?.error ? (
+                    <Text size="xs" c="red">
+                      {status.error}
+                    </Text>
+                  ) : null}
+                </Box>
+                {canForceUpdate ? (
+                  <Button
+                    size="xs"
+                    variant="light"
+                    leftSection={<WandSparkles size={14} />}
+                    loading={updatingAgent === option.value}
+                    onClick={() => onForceUpdate(option.value)}
+                  >
+                    {t("setup.intelligence.skillOverwrite")}
+                  </Button>
+                ) : null}
+              </Group>
+            );
+          })}
+        </Stack>
+      </Stack>
+    </Card>
+  );
+}
+
+function skillStatusColor(status: CliAgentSkillState["status"]) {
+  if (status === "up_to_date") {
+    return "green";
+  }
+  if (status === "user_modified" || status === "unmanaged" || status === "outdated") {
+    return "yellow";
+  }
+  if (status === "error") {
+    return "red";
+  }
+  return "gray";
+}
+
+function upsertByAgent(
+  statuses: CliAgentSkillState[],
+  updated: CliAgentSkillState,
+): CliAgentSkillState[] {
+  const exists = statuses.some((status) => status.agent === updated.agent);
+  if (!exists) {
+    return [...statuses, updated];
+  }
+  return statuses.map((status) => (status.agent === updated.agent ? updated : status));
 }
 
 function IntelligenceEditor({

@@ -459,38 +459,6 @@ async def test_review_thread_query_failure_is_not_silently_downgraded():
 
 
 @pytest.mark.asyncio
-async def test_output_pull_request_url_is_used_as_fallback():
-    manager = _Manager(
-        items=[_item(number=1, status="In Progress")],
-        responses={
-            **_comments(
-                1,
-                [
-                    {
-                        "user": "aiko-gh",
-                        "body": "Output: [PR](https://github.com/GuildBotics/repo/pull/2)",
-                    }
-                ],
-            ),
-            "/repos/GuildBotics/repo/pulls/2": {
-                "html_url": "https://github.com/GuildBotics/repo/pull/2",
-                "state": "open",
-                "merged_at": None,
-                "updated_at": "2026-01-02T00:00:00Z",
-            },
-        },
-    )
-    manager.review_threads = [
-        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
-    ]
-
-    task = await manager.get_task_to_work_on()
-
-    assert task is not None
-    assert task.pull_request_url == "https://github.com/GuildBotics/repo/pull/2"
-
-
-@pytest.mark.asyncio
 async def test_closed_unmerged_pr_does_not_move_ticket_to_done():
     manager = _Manager(items=[_item(number=1, status="In Progress")])
     manager.related_pulls = [
@@ -584,40 +552,6 @@ async def test_is_assignable_user_returns_false_on_graphql_error():
     manager._graphql = boom  # type: ignore[method-assign]
 
     assert await manager.is_assignable_user("aiko-gh") is False
-
-
-@pytest.mark.asyncio
-async def test_create_tickets_creates_draft_issues_without_repository():
-    manager = _Manager(items=[])
-
-    async def noop(*args: Any, **kwargs: Any) -> None:
-        return None
-
-    manager.ensure_custom_fields = noop  # type: ignore[method-assign]
-    manager._project_node = lambda: _coro("PROJ")  # type: ignore[assignment]
-    manager._get_field_value_for_task = (  # type: ignore[method-assign]
-        lambda task, field_name: _coro("")
-    )
-
-    def handler(query: str, variables: dict) -> dict:
-        if "addProjectV2DraftIssue" in query:
-            return {"addProjectV2DraftIssue": {"projectItem": {"id": "ITEM1"}}}
-        raise AssertionError(f"unexpected mutation: {query}")
-
-    calls = _script_graphql(manager, handler)
-
-    task = Task(title="Proposal", description="Body", status=Task.READY)
-    await manager.create_tickets([task])
-
-    # The draft mutation was used (no repository issue POST), and the new task is
-    # identified by the returned project item id.
-    draft_calls = [c for c in calls if "addProjectV2DraftIssue" in c[0]]
-    assert len(draft_calls) == 1
-    assert draft_calls[0][1] == {"proj": "PROJ", "title": "Proposal", "body": "Body"}
-    assert task.id == "ITEM1"
-    assert task.repository is None
-    # We do not set a Status on the draft ourselves.
-    assert not [c for c in calls if "updateProjectV2ItemFieldValue" in c[0]]
 
 
 @pytest.mark.asyncio

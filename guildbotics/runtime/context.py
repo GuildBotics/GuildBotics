@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatService
-from guildbotics.integrations.code_hosting_service import CodeHostingService
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.runtime.brain_factory import BrainFactory
@@ -157,21 +156,6 @@ class Context:
                 self.logger, self.person, self.team
             )
         return self.ticket_manager
-
-    def get_code_hosting_service(
-        self, repository: str | None = None
-    ) -> CodeHostingService:
-        """
-        Get a code hosting service for the given person and optional repository.
-        Args:
-            person (Person): The person for whom to get the code hosting service.
-            repository (str | None): The git repository associated with the code hosting service.
-        Returns:
-            CodeHostingService: An instance of the code hosting service for the person and team.
-        """
-        return self.integration_factory.create_code_hosting_service(
-            self.person, self.team, repository
-        )
 
     def get_chat_service(self) -> ChatService:
         """Get a chat service for the current person/team."""

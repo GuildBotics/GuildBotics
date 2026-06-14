@@ -1,42 +1,25 @@
 import re
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from guildbotics.entities.task import Task
-from guildbotics.integrations.code_hosting_service import CodeHostingService
-from guildbotics.integrations.github.github_utils import get_person_github_token
-from guildbotics.integrations.ticket_manager import TicketManager
-from guildbotics.intelligences.common import (
-    AgentResponse,
-    GitHubTicketAgentResult,
-    Labels,
+from guildbotics.capabilities.task_runs import (
+    TASK_RUN_ENV,
+    TaskRunError,
+    TaskRunStatus,
+    TaskRunStore,
 )
+from guildbotics.entities.task import Task
+from guildbotics.integrations.ticket_manager import TicketManager
+from guildbotics.intelligences.common import AgentResponse
 from guildbotics.observability import set_attributes
 from guildbotics.runtime import Context
-from guildbotics.utils.fileio import get_workspace_path
-from guildbotics.utils.git_tool import GitTool
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
+    get_storage_path,
+    get_workspace_path,
+)
 from guildbotics.utils.i18n_tool import t
-
-
-async def get_git_tool(context: Context) -> GitTool:
-    workspace_path = get_workspace_path(context.person.person_id)
-    code_hosting_service = context.get_code_hosting_service(context.task.repository)
-    git_user = context.person.account_info.get("git_user", "Default User")
-    git_email = context.person.account_info.get("git_email", "default@example.com")
-    base_url = str(getattr(code_hosting_service, "base_url", "https://api.github.com"))
-    git_auth_token = await get_person_github_token(context.person, base_url)
-    return GitTool(
-        workspace_path,
-        await code_hosting_service.get_repository_url(),
-        context.logger,
-        git_user,
-        git_email,
-        await code_hosting_service.get_default_branch(),
-        auth_token=git_auth_token,
-    )
-
-
-def get_branch_name(context: Context) -> str:
-    return f"ticket/{context.task.id}"
 
 
 async def _move_task_to_working_if_ready(
@@ -50,13 +33,7 @@ async def _move_task_to_working_if_ready(
 
 
 def _ticket_trace_attributes(task: Task) -> dict[str, str]:
-    """Correlation attributes that make a ticket run findable in diagnostics.
-
-    The full traceback is already captured as a trace-scoped ERROR log on a
-    failed cycle; tagging the trace with the ticket (number / url / repo) lets an
-    operator jump from a GitHub ticket number to that run (and cross-search by
-    ``github.*``) instead of relying on a local error-log file.
-    """
+    """Correlation attributes that make a ticket run findable in diagnostics."""
     attributes: dict[str, str] = {}
     if task.repository:
         attributes["github.repo"] = task.repository
@@ -91,287 +68,114 @@ async def _build_task_error_message(
         return error_text
 
 
-def _normalize_agent_result(response: Any) -> GitHubTicketAgentResult:
-    if isinstance(response, GitHubTicketAgentResult):
-        return response
-    if isinstance(response, AgentResponse):
-        return GitHubTicketAgentResult(
-            status=response.status,
-            summary=response.message,
-            question=response.message
-            if response.status == AgentResponse.ASKING
-            else "",
-            ticket_comment=response.message,
-        )
-    return GitHubTicketAgentResult(
-        status=GitHubTicketAgentResult.DONE,
-        summary=str(response) if response is not None else "",
-    )
-
-
 def _work_type(task: Task) -> str:
     if task.pull_request_url:
         return "pull_request_review"
     return "issue"
 
 
-def _format_issue_comments(task: Task) -> str:
-    if not task.comments:
-        return "(none)"
-    return "\n\n".join(
-        f"[{comment.author_type}] {comment.author}: {comment.content}"
-        for comment in task.comments
-    )
-
-
-def _format_review_context(review_comments: object) -> str:
-    inline_threads = getattr(review_comments, "inline_comment_threads", [])
-    body = str(review_comments).strip()
-    thread_text = "\n\n".join(
-        f"{thread!s}\n**Reply target comment_id:** {_thread_reply_target_comment_id(thread)}"
-        for thread in inline_threads
-    )
-    return "\n\n".join(part for part in [body, thread_text] if part) or "(none)"
-
-
-async def _checkout_work_branch(
-    context: Context,
-    git_tool: GitTool,
-    code_hosting_service: CodeHostingService,
-) -> None:
-    if context.task.pull_request_url:
-        branch = await code_hosting_service.get_pull_request_head_branch(
-            context.task.pull_request_url
-        )
-    else:
-        branch = get_branch_name(context)
-    git_tool.checkout_branch(branch)
-
-
-async def _load_review_context(
-    context: Context, code_hosting_service: CodeHostingService
-) -> tuple[Any | None, str]:
-    if not context.task.pull_request_url:
-        return None, ""
-    review_comments = await code_hosting_service.get_pull_request_comments(
-        context.task.pull_request_url
-    )
-    return review_comments, _format_review_context(review_comments)
-
-
-def _done_message(result: GitHubTicketAgentResult, fallback: str = "") -> str:
-    return result.ticket_comment or result.summary or fallback
-
-
-async def _post_agent_question(
-    result: GitHubTicketAgentResult,
-    ticket_manager: TicketManager,
-    task: Task,
-) -> AgentResponse:
-    message = result.ticket_comment or result.question or result.summary
-    if message:
-        await ticket_manager.add_comment_to_ticket(task, message)
-    return AgentResponse(
-        status=AgentResponse.ASKING,
-        message=message,
-        skip_ticket_comment=True,
-    )
-
-
-def _build_ticket_draft_tasks(
-    result: GitHubTicketAgentResult, source_task: Task
-) -> list[Task]:
-    tasks = []
-    for item in result.new_tickets:
-        task = item.to_task()
-        task.status = Task.READY
-        # New tickets are created as Project draft issues, which are not bound to
-        # a repository; leaving ``repository`` unset keeps get_ticket_url on the
-        # draft (project board) path instead of resolving a non-existent issue.
-        task.owner = source_task.owner
-        tasks.append(task)
-    return tasks
-
-
-async def _create_ticket_drafts(
-    result: GitHubTicketAgentResult,
-    ticket_manager: TicketManager,
-    source_task: Task,
-) -> list[str]:
-    tasks = _build_ticket_draft_tasks(result, source_task)
-    if not tasks:
-        return []
-    await ticket_manager.create_tickets(tasks)
-    return [await ticket_manager.get_ticket_url(task) for task in tasks]
-
-
-def _format_created_ticket_message(ticket_urls: list[str]) -> str:
-    if not ticket_urls:
-        return ""
-    return t(
-        "commands.workflows.ticket_driven_workflow.ticket_drafts_created",
-        task_labels=Labels(ticket_urls),
-    )
-
-
-def _append_created_ticket_message(message: str, ticket_urls: list[str]) -> str:
-    created_ticket_message = _format_created_ticket_message(ticket_urls)
-    if not created_ticket_message:
-        return message
-    if not message:
-        return created_ticket_message
-    return f"{message}\n\n{created_ticket_message}"
-
-
-def _thread_reply_target_comment_id(thread: Any) -> int | None:
-    comments = getattr(thread, "comments", [])
-    if not comments:
-        return None
-    return getattr(comments[-1], "comment_id", None)
-
-
-def _apply_pull_request_review_replies(
-    context: Context,
-    review_comments: Any,
-    result: GitHubTicketAgentResult,
-    fallback_reply: str,
-) -> None:
-    inline_threads = getattr(review_comments, "inline_comment_threads", [])
-    reply_by_comment_id = {
-        reply.comment_id: reply.reply.strip()
-        for reply in result.review_replies
-        if reply.reply.strip()
-    }
-    for thread in inline_threads:
-        comment_id = _thread_reply_target_comment_id(thread)
-        if comment_id is None:
-            continue
-        reply = reply_by_comment_id.get(comment_id)
-        if not reply:
-            continue
-        if hasattr(thread, "add_reply"):
-            thread.add_reply(reply)
-        else:
-            thread.reply = reply
-
-    if result.review_reply:
-        if inline_threads:
-            context.logger.warning(
-                "CLI agent returned general review_reply while inline review "
-                "threads are present; posting it as a PR conversation comment."
-            )
-        review_comments.reply = fallback_reply
-    elif not inline_threads and fallback_reply:
-        review_comments.reply = fallback_reply
-
-
-async def _publish_result(
-    context: Context,
-    ticket_manager: TicketManager,
-    code_hosting_service: CodeHostingService,
-    git_tool: GitTool,
-    result: GitHubTicketAgentResult,
-    review_comments: Any | None,
-) -> AgentResponse:
-    if result.status == GitHubTicketAgentResult.ASKING:
-        return await _post_agent_question(result, ticket_manager, context.task)
-
-    created_ticket_urls = await _create_ticket_drafts(
-        result, ticket_manager, context.task
-    )
-
-    diff = git_tool.get_diff()
-    commit_sha = None
-    if diff:
-        commit_sha = git_tool.commit_changes(
-            result.commit_message or context.task.title or "Update from ticket"
-        )
-
-    if context.task.pull_request_url:
-        message = _append_created_ticket_message(
-            result.review_reply or result.ticket_comment or result.summary,
-            created_ticket_urls,
-        )
-        if review_comments is not None:
-            reply = f"{message}\n{commit_sha}" if commit_sha and message else message
-            _apply_pull_request_review_replies(context, review_comments, result, reply)
-            await code_hosting_service.respond_to_comments(
-                context.task.pull_request_url, review_comments
-            )
-        return AgentResponse(
-            status=AgentResponse.DONE,
-            message=message or context.task.pull_request_url,
-            skip_ticket_comment=True,
-        )
-
-    if commit_sha:
-        ticket_url = await ticket_manager.get_ticket_url(context.task, markdown=False)
-        pull_request_url = await code_hosting_service.create_pull_request(
-            branch_name=get_branch_name(context),
-            title=result.pr_title or context.task.title,
-            description=result.pr_body or result.summary,
-            ticket_url=ticket_url,
-        )
-        message = _done_message(
-            result,
-            fallback=f"Completed the work. Please review {pull_request_url}",
-        )
-        message = _append_created_ticket_message(message, created_ticket_urls)
-        ticket_comment = f"{message}\n\n{Task.OUTPUT_PREFIX}[{context.task.title}]({pull_request_url})"
-        await ticket_manager.add_comment_to_ticket(context.task, ticket_comment)
-        return AgentResponse(
-            status=AgentResponse.DONE,
-            message=ticket_comment,
-            skip_ticket_comment=True,
-        )
-
-    message = _append_created_ticket_message(_done_message(result), created_ticket_urls)
-    if message:
-        await ticket_manager.add_comment_to_ticket(context.task, message)
+def _normalize_agent_response(response: Any) -> AgentResponse:
+    if isinstance(response, AgentResponse):
+        return response
     return AgentResponse(
         status=AgentResponse.DONE,
-        message=message,
+        message=str(response) if response is not None else "",
         skip_ticket_comment=True,
     )
+
+
+def _task_run_status(run_id: str, member_workspace: Path) -> TaskRunStatus:
+    first_error: TaskRunError | None = None
+    stores = [
+        TaskRunStore(),
+        TaskRunStore(member_workspace / ".guildbotics-data" / "task-runs"),
+        TaskRunStore(member_workspace / ".guildbotics" / "data" / "task-runs"),
+    ]
+    for store in stores:
+        try:
+            return store.status(run_id)
+        except TaskRunError as exc:
+            first_error = first_error or exc
+    if first_error is not None:
+        raise first_error
+    raise TaskRunError(f"Task run '{run_id}' was not found.")
 
 
 async def _main(context: Context, ticket_manager: TicketManager) -> AgentResponse:
     await _move_task_to_working_if_ready(context, ticket_manager)
 
-    git_tool = await get_git_tool(context)
-    code_hosting_service = context.get_code_hosting_service(context.task.repository)
-    await _checkout_work_branch(context, git_tool, code_hosting_service)
-    review_comments, review_context = await _load_review_context(
-        context, code_hosting_service
-    )
     ticket_url = await ticket_manager.get_ticket_url(context.task, markdown=False)
-    initial_head = git_tool.repo.head.commit.hexsha
+    workflow_run_id = uuid4().hex
+    member_workspace = get_workspace_path(context.person.person_id)
+    member_workspace.mkdir(parents=True, exist_ok=True)
     response = await context.invoke(
         "functions/handle_github_ticket",
+        person_id=context.person.person_id,
         ticket_url=ticket_url,
         pull_request_url=context.task.pull_request_url or "",
         work_type=_work_type(context.task),
         trigger_reason=context.task.trigger_reason or "",
-        issue_title=context.task.title,
-        issue_description=context.task.description or "",
-        issue_comments=_format_issue_comments(context.task),
-        review_context=review_context,
         language=context.language_name,
-        cwd=git_tool.repo_path,
+        member_workspace=str(member_workspace),
+        workflow_run_id=workflow_run_id,
+        prepare_command=_prepare_command(context, ticket_url),
+        github_capability_help=_github_capability_help(),
+        # Scope the run id to this agent subprocess only. Mutating the
+        # process-global os.environ would race across the scheduler's
+        # per-member worker threads; the brain merges this overlay into the
+        # subprocess env so child ``guildbotics member`` calls record evidence
+        # under the correct run id.
+        cli_agent_env={
+            TASK_RUN_ENV: workflow_run_id,
+            GUILDBOTICS_DATA_DIR: str(get_storage_path()),
+        },
+        cwd=member_workspace,
     )
-    if git_tool.repo.head.commit.hexsha != initial_head:
-        raise RuntimeError(
-            "CLI agent created a git commit directly. "
-            "GitHub and git write operations must be performed by GuildBotics."
-        )
-    result = _normalize_agent_result(response)
-    return await _publish_result(
-        context,
-        ticket_manager,
-        code_hosting_service,
-        git_tool,
-        result,
-        review_comments,
+    agent_response = _normalize_agent_response(response)
+    completion = _task_run_status(workflow_run_id, member_workspace)
+    return AgentResponse(
+        status=(
+            AgentResponse.ASKING
+            if completion.status == AgentResponse.ASKING
+            else AgentResponse.DONE
+        ),
+        message=agent_response.message or completion.summary,
+        skip_ticket_comment=True,
+    )
+
+
+def _prepare_command(context: Context, ticket_url: str) -> str:
+    """Build the exact ``git prepare`` command for this run.
+
+    The workflow already knows whether this is a PR review (``pull_request_url``
+    is set), so it hands the agent a ready-to-run command. For PR review this
+    includes ``--pr-url`` so the PR head branch is checked out; without it
+    ``prepare`` would fall back to issue mode and silently work on a new
+    ``ticket/<n>`` branch instead of the PR under review.
+    """
+    person_id = context.person.person_id
+    command = (
+        f"guildbotics member git prepare --person {person_id} --issue-url {ticket_url}"
+    )
+    if context.task.pull_request_url:
+        command += f" --pr-url {context.task.pull_request_url}"
+    return command
+
+
+def _github_capability_help() -> str:
+    return "\n".join(
+        [
+            "guildbotics member context --person <person> --check-credentials",
+            "guildbotics member github issue inspect --person <person> --url <issue_url>",
+            "guildbotics member github pr inspect --person <person> --url <pr_url> --include-comments",
+            "guildbotics member git prepare --person <person> --issue-url <issue_url> [--pr-url <pr_url>]",
+            "guildbotics member git publish --person <person> --repo-path <path> --message-file <file>",
+            "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> [--base <branch>] (--title-file <file> --body-file <file> | --content-stdin) --issue-url <issue_url>",
+            "guildbotics member github issue comment --person <person> --url <issue_url> --body-file <file>",
+            "guildbotics member github pr reply --person <person> --url <pr_url> --reply-target-id <id> --body-file <file>",
+            "guildbotics member github reaction add --person <person> --repo <owner/repo> --target issue-comment|pr-review-comment --comment-id <id> --reaction +1",
+            "guildbotics member task complete --person <person> --run-id <run_id> --ticket-url <issue_url> --status done|asking|blocked --summary-file <file>",
+        ]
     )
 
 
@@ -388,15 +192,7 @@ async def main(context: Context) -> AgentResponse | None:
     context.update_task(task)
     set_attributes(**_ticket_trace_attributes(task))
     try:
-        response = await _main(context, ticket_manager)
-        if (
-            response.status == AgentResponse.ASKING
-            and not response.skip_ticket_comment
-            and response.message
-        ):
-            await ticket_manager.add_comment_to_ticket(task, response.message)
-            response.skip_ticket_comment = True
-        return response
+        return await _main(context, ticket_manager)
     except Exception as error:
         message = await _build_task_error_message(context, error)
         await ticket_manager.add_comment_to_ticket(task, message)

@@ -38,15 +38,21 @@ jobs:
       - name: Sync Python dependencies
         run: uv sync --extra test --extra dev
 
-      - name: Build Python app API sidecar
+      - name: Build Python desktop binaries
         run: |
           uv run --with pyinstaller python -m PyInstaller \
             desktop/sidecar/guildbotics-app-api.spec \
             --noconfirm --clean \
             --distpath dist --workpath build/sidecar
+          uv run --with pyinstaller python -m PyInstaller \
+            desktop/sidecar/guildbotics-cli.spec \
+            --noconfirm --clean \
+            --distpath dist --workpath build/cli
           mkdir -p desktop/src-tauri/binaries
           cp dist/guildbotics-app-api \
             desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
+          cp dist/guildbotics-cli \
+            desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin
 
       - name: Smoke-test sidecar binary
         run: |
@@ -65,6 +71,13 @@ jobs:
           done
           echo "sidecar did not become healthy in time" >&2
           exit 1
+
+      - name: Smoke-test bundled CLI
+        run: |
+          desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin \
+            --help >/dev/null
+          desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin \
+            member --help >/dev/null
 
       - name: Install frontend dependencies
         working-directory: desktop

@@ -4,6 +4,7 @@ from pathlib import Path
 import yaml  # type: ignore
 
 CONFIG_PATH = ".guildbotics/config"
+GUILDBOTICS_DATA_DIR = "GUILDBOTICS_DATA_DIR"
 
 
 def find_package_subdir(subpath: Path) -> Path:
@@ -30,6 +31,8 @@ def get_storage_path() -> Path:
     Returns:
         Path: The storage path for the project.
     """
+    if data_dir := os.getenv(GUILDBOTICS_DATA_DIR):
+        return Path(data_dir).expanduser().resolve(strict=False)
     return Path.home() / ".guildbotics" / "data"
 
 

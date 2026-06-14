@@ -73,6 +73,7 @@ from guildbotics.entities import Project, Service, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.runtime import Context
+from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import (
     get_home_config_path,
     get_person_config_path,
@@ -86,6 +87,10 @@ from guildbotics.utils.prompt_trace import (
     prompt_trace_enabled,
     prompt_trace_path,
     read_prompt_trace_events,
+)
+from guildbotics.utils.workspace_state import (
+    GUILDBOTICS_CONFIG_DIR,
+    write_active_workspace,
 )
 
 TICKET_DRIVEN_WORKFLOW = "workflows/ticket_driven_workflow"
@@ -178,6 +183,7 @@ class AppRuntime:
             )
         self.stop_scheduler()
         os.chdir(workspace)
+        write_active_workspace(workspace)
         self._load_workspace_env()
         return self.get_config_status()
 
@@ -716,7 +722,14 @@ class AppRuntime:
             os.environ.pop(key, None)
         if dotenv_path.exists():
             load_dotenv(dotenv_path=dotenv_path, override=True)
-        self._loaded_dotenv_keys = set(new_values)
+            os.environ[GUILDBOTICS_ENV_FILE] = str(dotenv_path.resolve())
+            self._loaded_dotenv_keys = {*set(new_values), GUILDBOTICS_ENV_FILE}
+        else:
+            os.environ.pop(GUILDBOTICS_ENV_FILE, None)
+            self._loaded_dotenv_keys = set()
+        os.environ[GUILDBOTICS_CONFIG_DIR] = str(
+            (Path.cwd() / ".guildbotics" / "config").resolve()
+        )
 
     def _reserve_command(self, trace_id: str) -> None:
         with self._lock:

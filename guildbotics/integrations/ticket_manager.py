@@ -23,11 +23,6 @@ class TicketManager(ABC):
         self.team = team
 
     @abstractmethod
-    async def create_tickets(self, tasks: list[Task]):
-        """Create tickets based on the provided tasks."""
-        pass
-
-    @abstractmethod
     async def get_task_to_work_on(self) -> Task | None:
         """
         Retrieve a ticket that the person can work on.

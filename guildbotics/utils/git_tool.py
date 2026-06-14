@@ -9,6 +9,26 @@ import git
 from git import GitCommandError
 
 
+def create_git_askpass_script() -> Path:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        prefix="guildbotics-git-askpass-",
+        suffix=".sh",
+    ) as askpass:
+        askpass.write(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            '*Username*) printf "%s\\n" "${GIT_USERNAME:-x-access-token}" ;;\n'
+            '*Password*) printf "%s\\n" "$GIT_PASSWORD" ;;\n'
+            '*) printf "\\n" ;;\n'
+            "esac\n"
+        )
+    os.chmod(askpass.name, 0o700)
+    return Path(askpass.name)
+
+
 class GitTool:
     """
     A robust Git tool for managing Git operations within a specified workspace.
@@ -87,25 +107,9 @@ class GitTool:
         if not self._auth_token:
             return {}
 
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            delete=False,
-            prefix="guildbotics-git-askpass-",
-            suffix=".sh",
-        ) as askpass:
-            askpass.write(
-                "#!/bin/sh\n"
-                'case "$1" in\n'
-                '*Username*) printf "%s\\n" "${GIT_USERNAME:-x-access-token}" ;;\n'
-                '*Password*) printf "%s\\n" "$GIT_PASSWORD" ;;\n'
-                '*) printf "\\n" ;;\n'
-                "esac\n"
-            )
-        os.chmod(askpass.name, 0o700)
-        self._askpass_path = Path(askpass.name)
+        self._askpass_path = create_git_askpass_script()
         return {
-            "GIT_ASKPASS": askpass.name,
+            "GIT_ASKPASS": str(self._askpass_path),
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_USERNAME": "x-access-token",
             "GIT_PASSWORD": self._auth_token,
@@ -208,68 +212,4 @@ class GitTool:
             self.logger.error(
                 f"Failed to create or checkout branch '{branch_name}': {e}"
             )
-            raise
-
-    def commit_changes(self, message: str) -> str | None:
-        """
-        Commit and push changes to the current branch.
-
-        Args:
-            message (str): The commit message.
-
-        Returns:
-            str | None: The commit SHA if a commit was made, otherwise None.
-        """
-        try:
-            commit_sha = None
-            # Check for any changes (including untracked files)
-            if self.repo.is_dirty(untracked_files=True):
-                self.logger.info("Staging all changes.")
-                self.repo.git.add(A=True)
-                self.logger.info(f"Committing changes with message: '{message}'.")
-                commit_obj = self.repo.index.commit(message)
-                commit_sha = commit_obj.hexsha
-            else:
-                self.logger.info("No changes to commit.")
-
-            # Determine if we need to push:
-            origin = self.repo.remotes.origin
-            with self._git_auth_environment():
-                origin.fetch()
-            current_branch = self.repo.active_branch.name
-
-            # Try to list commits that are on local but not on remote.
-            try:
-                commits_ahead = list(
-                    self.repo.iter_commits(f"origin/{current_branch}..{current_branch}")
-                )
-                # Push if there are commits ahead
-                need_push = bool(commits_ahead)
-            except GitCommandError:
-                # Remote branch does not exist => needs push
-                need_push = True
-
-            if need_push:
-                self.logger.info(f"Pushing branch '{current_branch}' to remote.")
-                with self._git_auth_environment():
-                    origin.push(current_branch)
-            return commit_sha
-        except GitCommandError as e:
-            self.logger.error(f"Failed to commit or push changes: {e}")
-            raise
-
-    def get_diff(self) -> str:
-        """
-        Get the current git diff as a string.
-
-        Returns:
-            str: The output of 'git diff' (working tree changes).
-        """
-        try:
-            # Get the diff of the working tree (unstaged and staged changes)
-            status = self.repo.git.status("--short")
-            diff = self.repo.git.diff()
-            return f"{status}\n{diff}" if diff else status
-        except GitCommandError as e:
-            self.logger.error(f"Failed to get git diff: {e}")
             raise

@@ -1,5 +1,10 @@
 # Ticket Driven Workflow 改善方針
 
+現在の実装では、ticket workflow は GitHub ProjectV2 から起動対象を選び、member workspace root を cwd として
+CLI agent に ticket / PR URL と起動理由を渡す。GitHub/git 書き込みは workflow ではなく
+`guildbotics member ...` capability が担い、agent は最後に `guildbotics member task complete` を記録する。
+workflow はその task-run status を検証し、成功時に追加 comment を投稿しない。失敗時だけ safe error comment を投稿する。
+
 ## 対象チケット
 
 - [#156 チケット駆動ワークフローのシンプル化](https://github.com/GuildBotics/GuildBotics/issues/156)

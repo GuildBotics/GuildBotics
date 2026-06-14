@@ -83,7 +83,7 @@ GuildBotics enables you to:
   - Python scripts (with context injection)
   - Shell scripts
   - YAML workflows (command composition)
-- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Gemini CLI, Codex CLI, Claude Code)
+- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Gemini CLI, Codex CLI, Claude Code, GitHub Copilot CLI)
 - **Extensible Integrations**: Pluggable adapters for external services
 
 ## Built-in Capabilities
@@ -94,7 +94,8 @@ GuildBotics enables you to:
 # 2. Quick Start
 
 GuildBotics is configured through the **GuildBotics Desktop app (GUI)**, and run through the
-**`guildbotics` CLI**. Setup writes plain config files (`.env` and `.guildbotics/config/...`),
+**`guildbotics` CLI**. The desktop app bundles the CLI and installs a managed copy for CLI
+agents on first launch. Setup writes plain config files (`.env` and `.guildbotics/config/...`),
 so once configured you can run the CLI on any machine, including headless servers, by copying
 those files over.
 
@@ -104,14 +105,16 @@ those files over.
 #    It writes .env and .guildbotics/config/... into your chosen workspace.
 #    See desktop/README.md for installation.
 
-# 2. Run with the CLI
-uv tool install guildbotics
+# 2. Run with the managed CLI installed by the desktop app
+#    If ~/.local/bin is on PATH, the "guildbotics" shim is available.
+#    The stable absolute path always works:
+~/.guildbotics/bin/guildbotics workspace status
 
-# Run a custom command (from the workspace that holds .env / .guildbotics)
-echo "Hello" | guildbotics run translate English Japanese
+# Run a custom command
+echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 
 # Or start scheduler (runs default workflow: ticket_driven_workflow)
-guildbotics start
+~/.guildbotics/bin/guildbotics start
 ```
 
 See [Basic Usage](#5-basic-usage) for details, or [GitHub Integration Example](#6-github-integration-example) for the ticket-driven workflow setup.
@@ -145,15 +148,18 @@ Please install one of the following CLI agents and authenticate:
 Setup is performed with the **GuildBotics Desktop app**; command execution uses the
 **`guildbotics` CLI**.
 
-**Desktop app (setup):** Build or install the GuildBotics Desktop app. See
+**Desktop app (setup + managed CLI):** Build or install the GuildBotics Desktop app. See
 [desktop/README.md](desktop/README.md) for build and install instructions
-(currently macOS Apple Silicon).
+(currently macOS Apple Silicon). On first launch, the app installs:
 
-**CLI (execution):**
+- `~/.guildbotics/bin/guildbotics`: managed GuildBotics CLI used by CLI agents and skills
+- `~/.local/bin/guildbotics`: a small shim, only when the path is missing or already managed
+- GuildBotics skill files for detected Codex, Claude Code, Gemini CLI, and GitHub Copilot CLI
+  user skill directories. User-created or user-edited skills are not overwritten.
 
-```bash
-uv tool install guildbotics
-```
+**Standalone CLI (headless / non-desktop environments):** Use `uv tool install guildbotics`
+when you are not using the desktop app, or when you intentionally want a separately managed CLI
+installation.
 
 # 5. Basic Usage
 
@@ -162,6 +168,7 @@ uv tool install guildbotics
 Project setup is done in the **GuildBotics Desktop app**. Launch the app, pick a workspace
 directory, and complete the project setup form. The GUI:
 
+- Records the active workspace in `~/.guildbotics/data/active-workspace.json`
 - Selects language (English/Japanese)
 - Chooses the configuration directory location (workspace or home)
 - Configures LLM API settings and the default CLI agent
@@ -174,6 +181,15 @@ The following files are written:
 
 > These are plain text files. Because all setup lands in config files, you can move them to a
 > GUI-less environment (e.g. a server) and drive everything with the `guildbotics` CLI.
+
+The active workspace lets `guildbotics member ...` work from CLI-agent work directories that do
+not contain `.env` or `.guildbotics/config`. You can inspect or change it from the CLI:
+
+```bash
+guildbotics workspace status
+guildbotics workspace current
+guildbotics workspace use /path/to/workspace
+```
 
 ## 5.2. Add Members
 
@@ -619,13 +635,21 @@ This section describes how to use the default `ticket_driven_workflow` which int
 ## 6.1. Prerequisites
 
 ### 6.1.1. Git Environment
-- The ticket-driven workflow always clones and pushes over HTTPS, authenticating with
-  the assigned member's configured token (see below); no local GCM (Git Credential
-  Manager) or SSH key setup is required for the bot's git operations.
-- Configure each AI member's GitHub credentials in GuildBotics. Ticket-driven workflow
-  writes (branch push, PR creation, issue comments, and review replies) use the assigned
-  member's configured machine-user token or GitHub App installation, not the local
-  `gh auth` user.
+- Ticket-driven work is performed through the `guildbotics member ...` CLI. The workflow
+  selects a GitHub Project item, starts the CLI agent in
+  `~/.guildbotics/data/workspaces/<person_id>`, and verifies that the agent recorded task
+  completion. The agent itself performs clone/push/PR/comment/reply operations through
+  `guildbotics member`.
+- Configure each AI member's GitHub credentials in GuildBotics. GitHub/git writes use the
+  assigned member's configured machine-user token or GitHub App installation, not the local
+  `gh auth` user. Credential-required member commands load these values from
+  the active workspace `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the current directory.
+- For interactive CLI agent sessions, launch the GuildBotics Desktop app at least
+  once after selecting the workspace. The app installs the GuildBotics skill and managed CLI
+  under `~/.guildbotics/bin/guildbotics`. Configure the client to reject or require approval
+  for `gh`, direct GitHub token/API writes, and `git push`. This is a guardrail against
+  falling back to your own local GitHub account; it is not a complete technical sandbox
+  against token exfiltration.
 - When using Codex CLI as the CLI agent, verify its authentication and network reachability:
   ```bash
   codex doctor
@@ -722,11 +746,11 @@ To request a task from the AI agent, operate the GitHub Projects ticket as follo
 4. Move the ticket to the ready lane
 
 Note:
-The AI agent clones the specified Git repository under `~/.guildbotics/data/workspaces/<person_id>` and works there.
+The AI agent prepares repositories under `~/.guildbotics/data/workspaces/<person_id>` by running `guildbotics member git prepare` and works there.
 
 ### 6.3.3. Interacting with the AI Agent
 - If the AI agent has questions during work, it posts questions as ticket comments. Please respond in ticket comments. The agent periodically checks ticket comments and proceeds accordingly once answers are provided.
-- When the AI agent completes a task, it posts the result and any created Pull Request URL as a comment.
+- When the AI agent completes a task, it posts the result, PR URL, review reply, or reaction itself through `guildbotics member ...`, then records `guildbotics member task complete`.
 - For Pull Requests created from a ticket, write review results on the PR. GuildBotics checks unresolved review threads and delegates them back to the assigned agent.
 
 ## 6.4. Capabilities
@@ -736,11 +760,11 @@ With the ticket-driven workflow, you can:
 - **Request tasks for AI agents on a task board**
   - Assign an AI agent to a ticket and move it to the ready lane to have the AI agent execute the task
 - **Review AI agent results on the task board**
-  - When the agent completes a task, the results are posted as ticket comments
+  - When the agent completes a task, it leaves a comment, PR, review reply, or reaction through the member capability
 - **Create Pull Requests by AI agents**
-  - When a task requires code changes, GuildBotics creates a Pull Request from the agent's workspace changes
+  - When a task requires code changes, the agent publishes the member workspace branch and creates or reuses a Pull Request through `guildbotics member github pr create`
 - **Create tickets**
-  - If you instruct the AI agent to create tickets, GuildBotics creates them on the task board from the agent's structured result
+  - If you instruct the AI agent to create follow-up tickets, it creates real repository issues with `guildbotics member github issue create`
 
 # 7. Reference
 
@@ -762,6 +786,24 @@ Cognee memory reuses these keys. If `LLM_API_KEY` is not set, GuildBotics maps `
 - `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: For GitHub Apps
 
 If a `.env` file exists in the current directory, it is loaded automatically.
+`guildbotics member` commands first honor `--workspace <dir>`. Without that option, they keep
+an explicit `GUILDBOTICS_CONFIG_DIR` or current-directory `.guildbotics/config` if one is
+already present; otherwise they use the active workspace recorded by the desktop app or
+`guildbotics workspace use`. The selected workspace sets `GUILDBOTICS_CONFIG_DIR` and, when
+`<workspace>/.env` exists, `GUILDBOTICS_ENV_FILE`.
+
+Useful workspace commands:
+
+```bash
+guildbotics workspace status
+guildbotics workspace current
+guildbotics workspace use /path/to/workspace
+guildbotics member --workspace /path/to/workspace context --person <person_id> --check-credentials
+```
+
+The fallback for non-desktop/headless use is `GUILDBOTICS_ENV_FILE` pointing to an absolute
+`.env` path, or `.env` in the current directory. `guildbotics start` and the desktop runtime
+set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
 
 ## 7.2. Configuration Files
 

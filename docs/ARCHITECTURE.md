@@ -74,7 +74,7 @@ GuildBotics follows a layered architecture with clear separation of concerns:
                       ↓
 ┌─────────────────────────────────────────────────┐
 │ Layer 3: Integrations (External Services)       │
-│  - TicketManager, CodeHostingService            │
+│  - TicketManager, ChatService                   │
 └─────────────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────┐
@@ -171,7 +171,7 @@ client.
 - `Context`: Central execution context holding all dependencies
 - `LoaderFactory`: Creates TeamLoader instances
 - `BrainFactory`: Creates Brain instances
-- `IntegrationFactory`: Creates TicketManager and CodeHostingService instances
+- `IntegrationFactory`: Creates TicketManager and ChatService instances
 
 #### Entities (`guildbotics/entities/`)
 
@@ -190,7 +190,7 @@ Person
 
 Task
   ├── id, title, description
-  ├── status: READY | IN_PROGRESS | IN_REVIEW | DONE
+  ├── status: READY | IN_PROGRESS | DONE
   └── comments: Message[]
 
 Message
@@ -220,11 +220,11 @@ Message
 
 **Interfaces**:
 - `TicketManager`: Abstract ticket management interface
-- `CodeHostingService`: Abstract code hosting interface
+- `ChatService`: Abstract chat service interface
 
 **Implementations**:
 - `GitHubTicketManager`: GitHub Issues/Projects implementation
-- `GitHubCodeHostingService`: GitHub repository operations
+- `SlackChatService`: Slack chat implementation
 
 #### Intelligences (`guildbotics/intelligences/`)
 
@@ -237,7 +237,7 @@ Message
 
 **Common Models**: Response models for structured outputs (DecisionResponse, MessageResponse, etc.)
 
-**Functions**: Workflow utility functions (identify_mode, identify_role, talk_as, etc.)
+**Functions**: Workflow utility functions (identify_role, talk_as, etc.)
 
 #### Commands (`guildbotics/commands/`)
 
@@ -488,7 +488,7 @@ Automatically registered via registry discovery.
 
 ```python
 class CustomTicketManager(TicketManager):
-    async def create_tickets(self, tasks):
+    async def get_task_to_work_on(self):
         # Implementation
         pass
 ```

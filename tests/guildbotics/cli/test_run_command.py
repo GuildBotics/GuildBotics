@@ -21,6 +21,14 @@ from tests.guildbotics.runtime.test_context import (
 )
 
 
+def test_command_runner_public_exports():
+    import guildbotics.drivers.command_runner as command_runner
+
+    assert "PersonNotFoundError" in command_runner.__all__
+    assert "PersonSelectionRequiredError" in command_runner.__all__
+    assert "_resolve_person" in command_runner.__all__
+
+
 def test_parse_command_spec_with_person():
     name, person = _parse_command_spec("translate@yuki")
     assert name == "translate"
@@ -111,7 +119,7 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
     )
 
     result = await run_command(_get_context("stdin text"), "solo", ["world"])
-    assert result == f"Greetings world\nstdin text"
+    assert result == "Greetings world\nstdin text"
 
 
 @pytest.mark.asyncio
@@ -158,7 +166,6 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
     result = await executor.run()
 
     runner = executor._context
-    pipeline_path = str(tmp_path / "commands/pipeline.md")
     assert runner.shared_state["pipeline"].startswith("Main start for ARG")
     assert "first_payload" in runner.shared_state
     assert runner.shared_state["python_payload"] == {

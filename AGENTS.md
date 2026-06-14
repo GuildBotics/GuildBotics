@@ -42,10 +42,14 @@
 - `guildbotics stop`
 - `guildbotics kill`
 - `guildbotics version`
+- `guildbotics workspace use/current/status`
+- `guildbotics member ...`
 
 補足:
 
 - `run` は `--person` または `<command>@<person_id>` でメンバー指定可能
+- `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
+- `member` group は `--workspace <dir>` を受け取り、CLI agent / skill 経由の member capability の入口になる
 - `start` は PID ファイルを `~/.guildbotics/data/run/scheduler.pid` に保存
 - `stop` / `kill` は上記 PID を使ってプロセス停止
 
@@ -86,6 +90,8 @@
 重要事項:
 
 - 優先順は「一次設定 (`GUILDBOTICS_CONFIG_DIR` or `.guildbotics/config`) → `~/.guildbotics/config` → パッケージテンプレート」
+- `guildbotics member ...` は `guildbotics/utils/workspace_state.py` も使う。`--workspace` があればその workspace を最優先し、明示的な `GUILDBOTICS_CONFIG_DIR` または cwd の `.guildbotics/config` が無い場合だけ active workspace を適用する
+- desktop runtime は workspace 選択時に active workspace を保存し、workspace の `.guildbotics/config` と `.env` から `GUILDBOTICS_CONFIG_DIR` / `GUILDBOTICS_ENV_FILE` を設定する
 - ローカライズ対応ファイルは `.<lang>` → `.en` → 素のファイル名の順で探索
 - メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
 
@@ -164,6 +170,13 @@ npm run e2e           # desktop/e2e/*.spec.ts を headless chromium で実行
 
 - harness（`desktop/e2e/start-stack.mjs`）が backend を `uv run python -m guildbotics.app_api` で temp workspace 起動するため、事前にリポジトリルートで `uv sync --extra test --extra dev` 済みであること。
 - 詳細・journey 一覧は `desktop/README.md` の「テスト」節と `docs/test_gap_analysis.ja.md` を参照。
+
+desktop packaging / Tauri 変更時の確認:
+
+- `scripts/desktop-build-backend.sh` は PyInstaller で `guildbotics-app-api` と `guildbotics-cli` の 2 本を build し、`desktop/src-tauri/binaries/*-<target>` に配置する
+- `scripts/desktop-dev-tauri.sh` は `scripts/desktop-write-dev-binaries.sh` で Local API / CLI の開発用 wrapper を生成する
+- Rust/Tauri 側を変更したら `cargo fmt --check`、`cargo check`、必要に応じて `cargo test` を `desktop/src-tauri` で実行する
+- sidecar / packaging script を変更したら `bash -n scripts/desktop-build-backend.sh scripts/desktop-build-frontend.sh scripts/desktop-dev-tauri.sh scripts/desktop-write-dev-binaries.sh` と、可能なら `scripts/desktop-build-backend.sh` による smoke を行う
 
 エージェント作業時の品質確認:
 

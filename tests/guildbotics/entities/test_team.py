@@ -50,18 +50,31 @@ def test_project_get_language_code(tag: str, expected_code: str):
     assert project.get_language_code() == expected_code
 
 
-def test_project_get_language_name_non_empty():
+@pytest.mark.parametrize(
+    ("tag", "expected_name"),
+    [
+        ("en", "English"),
+        ("ja", "日本語"),
+    ],
+)
+def test_project_get_language_name_for_known_setup_languages(tag, expected_name):
+    project = Project(name="p", language=tag)
+
+    assert project.get_language_name() == expected_name
+
+
+def test_project_get_language_name_falls_back_to_langcodes_for_other_languages():
     with patch("guildbotics.entities.team.Language") as mock_language:
         mock_lang = MagicMock()
-        mock_lang.language = "en"
-        mock_lang.display_name.return_value = "English"
+        mock_lang.language = "fr"
+        mock_lang.display_name.return_value = "French"
         mock_language.get.return_value = mock_lang
 
-        project = Project(name="p", language="en")
+        project = Project(name="p", language="fr")
         name = project.get_language_name()
         assert isinstance(name, str) and name.strip() != ""
-        assert name == "English"
-        mock_lang.display_name.assert_called_once_with("en")
+        assert name == "French"
+        mock_lang.display_name.assert_called_once_with("fr")
 
 
 def test_project_accepts_description():

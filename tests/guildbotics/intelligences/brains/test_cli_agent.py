@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -129,6 +130,54 @@ async def test_cli_agent_run_inherits_environment_and_overlays_config(
     finally:
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_run_applies_session_state_env_overlay(monkeypatch, tmp_path):
+    # cli_agent_env in session_state is scoped to this single subprocess and
+    # survives credential isolation, without touching the process environment.
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+
+    captured = {}
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        captured["env"] = env
+        return StubProcess()
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        await brain.run(
+            "hello",
+            cwd=tmp_path,
+            session_state={"cli_agent_env": {"GUILDBOTICS_TASK_RUN_ID": "run-123"}},
+        )
+        assert captured["env"]["GUILDBOTICS_TASK_RUN_ID"] == "run-123"
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+    assert "GUILDBOTICS_TASK_RUN_ID" not in os.environ
 
 
 @pytest.mark.asyncio
