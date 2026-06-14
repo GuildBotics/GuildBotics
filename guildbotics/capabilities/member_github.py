@@ -510,7 +510,7 @@ class MemberGitHubCapabilityService:
             latest_id = int(latest["databaseId"])
             resolved = bool(thread.get("isResolved"))
             outdated = bool(thread.get("isOutdated"))
-            replyable = not resolved and not outdated
+            replyable = True
             threads.append(
                 {
                     "root_comment_id": root_id,

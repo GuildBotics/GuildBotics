@@ -186,16 +186,45 @@ async def test_pr_reply_uses_pull_replies_endpoint_and_proxy_signature():
 
 
 @pytest.mark.asyncio
-async def test_pr_reply_rejects_outdated_thread():
+async def test_pr_reply_allows_outdated_thread():
     service = _service()
     fake = FakeClient()
     fake.graphql_payloads.append(_review_threads_payload(outdated=True))
     service._client = fake
 
-    with pytest.raises(Exception, match="not replyable"):
-        await service.pr_reply(
-            "https://github.com/owner/repo/pull/7", ROOT_REVIEW_COMMENT_ID, "Fixed."
+    result = await service.pr_reply(
+        "https://github.com/owner/repo/pull/7", ROOT_REVIEW_COMMENT_ID, "Fixed."
+    )
+
+    assert result["reply_comment_id"] == REPLY_COMMENT_ID
+    assert fake.posts[-1:] == [
+        (
+            "/repos/owner/repo/pulls/7/comments/101/replies",
+            {"body": "Fixed.\n\n⚙aiko"},
+            None,
         )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pr_reply_allows_resolved_thread():
+    service = _service()
+    fake = FakeClient()
+    fake.graphql_payloads.append(_review_threads_payload(resolved=True))
+    service._client = fake
+
+    result = await service.pr_reply(
+        "https://github.com/owner/repo/pull/7", ROOT_REVIEW_COMMENT_ID, "Fixed."
+    )
+
+    assert result["reply_comment_id"] == REPLY_COMMENT_ID
+    assert fake.posts[-1:] == [
+        (
+            "/repos/owner/repo/pulls/7/comments/101/replies",
+            {"body": "Fixed.\n\n⚙aiko"},
+            None,
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -223,7 +252,35 @@ async def test_pr_inspect_includes_review_thread_resolution_fields():
     assert result["review_threads"][0]["root_comment_id"] == ROOT_REVIEW_COMMENT_ID
     assert result["review_threads"][0]["latest_comment_id"] == LATEST_REVIEW_COMMENT_ID
     assert result["review_threads"][0]["resolved"] is True
-    assert result["review_threads"][0]["replyable"] is False
+    assert result["review_threads"][0]["replyable"] is True
+    assert result["review_threads"][0]["reply_target_id"] == ROOT_REVIEW_COMMENT_ID
+
+
+@pytest.mark.asyncio
+async def test_pr_inspect_marks_outdated_thread_replyable():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "title": "PR",
+        "body": "Body",
+        "state": "open",
+        "merged_at": None,
+        "draft": False,
+        "html_url": "https://github.com/owner/repo/pull/7",
+        "head": {"ref": "feature"},
+        "base": {"ref": "main"},
+    }
+    fake.get_payloads["/repos/owner/repo/issues/7/comments"] = []
+    fake.graphql_payloads.append(_review_threads_payload(outdated=True))
+    service._client = fake
+
+    result = await service.pr_inspect(
+        "https://github.com/owner/repo/pull/7", include_comments=True
+    )
+
+    assert result["review_threads"][0]["outdated"] is True
+    assert result["review_threads"][0]["replyable"] is True
+    assert result["review_threads"][0]["reply_target_id"] == ROOT_REVIEW_COMMENT_ID
 
 
 @pytest.mark.asyncio

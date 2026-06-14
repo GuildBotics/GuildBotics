@@ -334,7 +334,7 @@ guildbotics member github pr reply \
 
 - PR inline review comment thread に reply する。
 - **エンドポイントは `POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies`**（`pull_number` 必須。`--url` から解決する）。既存 `respond_to_comments` / `InlineCommentThread.add_reply`（`guildbotics/integrations/code_hosting_service.py` / `github_code_hosting_service.py`）のロジックを流用し、reply 経路を再実装しない。
-- `reply-target-id` は `pr inspect --include-comments` が返した `reply_target_id` のみ受け付ける。resolved / outdated / reply 不可 thread、または reply-to-reply として不適切な id は fail-closed する。proxy agent signature を自動付与。
+- `reply-target-id` は `pr inspect --include-comments` が返した `reply_target_id` のみ受け付ける。resolved / outdated thread は GitHub 画面と同様に root comment への reply を許可し、`resolved=true` / `outdated=true` は agent が文脈を理解するための情報として返す。reply-to-reply として不適切な id は fail-closed する。proxy agent signature を自動付与。
 - 返却 JSON: `reply_comment_id` / `html_url` / `created_at`。
 
 ### CLI: GitHub reaction
@@ -707,7 +707,7 @@ desktop は基本触らず docs/spec 更新に留める。触った場合のみ 
 - PR inspect が review thread ごとに `root_comment_id` / `latest_comment_id` / `resolved` / `outdated` / `replyable` / `reply_target_id` を返す。
 - PR create が existing open PR を再利用 / issue URL から `Closes #N` 付与。
 - **PR reply が `/repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies` を呼ぶ。**
-- PR reply は `pr inspect --include-comments` が返した `reply_target_id` のみ受け付ける。root comment / latest comment / resolved thread / outdated thread / reply-to-reply 不適切 id の扱いを fixture で固定し、reply 不可なら fail-closed する。
+- PR reply は `pr inspect --include-comments` が返した `reply_target_id` のみ受け付ける。root comment / latest comment / resolved thread / outdated thread / reply-to-reply 不適切 id の扱いを fixture で固定する。resolved / outdated thread は reply 可能、reply-to-reply 不適切 id は fail-closed とする。
 - reaction add が target ごとに正しい endpoint を呼ぶ。
 - API error は secret を含まない exception に変換される。
 - write command が `GUILDBOTICS_TASK_RUN_ID` 指定時に task-run evidence を記録する。
