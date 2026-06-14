@@ -527,13 +527,15 @@ task_schedules:
 
 ## 5.6. Slack Chat Workflow
 
-In the Slack chat workflow, channels configured in `message_channels` of `person.yml` are monitored, and the agent replies to mentions and thread continuations. You can also post scheduled command outputs to channels.
+In the Slack chat workflow, channels configured in `message_channels` of `person.yml` are monitored, and incoming events are delegated to the configured CLI agent. The CLI agent decides whether to reply, add a reaction, record a no-op, ask a question, or report a blocked state. Slack posts, replies, and reactions are written only through the public member capability commands under `guildbotics member chat ...`.
+
+Scheduled command output posting remains separate: use `task_schedules` + `workflows/chat_post_command` for scheduled posts.
 
 Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
 
-For CLI-based chat replies, GuildBotics runs the reply step from the per-agent workspace root at `~/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. It also keeps a separate per-agent personal memory repository under `~/.guildbotics/data/memory/<person_id>/`.
-The default personal memory backend is Cognee, with one dataset per person (`guildbotics:person:<person_id>`). Set `GUILDBOTICS_MEMORY_BACKEND=file` to use the fallback/test/migration file backend, which stores a `memory_index.yml` and topic-scoped memories under `topics/<topic_id>/memory.md`; `GUILDBOTICS_MEMORY_BACKEND=fake` is available for deterministic tests. GuildBotics recalls relevant memory before reply generation, passes the normalized `memory_context` through the prompt, and runs a separate memory update step after posting the reply. Set `GUILDBOTICS_MEMORY_TRACE=1` to append normalized recall/remember trace events to JSONL; `GUILDBOTICS_MEMORY_TRACE_PATH` overrides the default `~/.guildbotics/data/run/memory_trace.jsonl`.
-You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat reply decisions and reply generation use this profile, so an agent can join even without an explicit mention when it can add a distinct perspective.
+For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent workspace root at `~/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through run evidence recorded by `guildbotics member chat complete`; natural-language agent stdout is not treated as proof of Slack side effects.
+It also keeps a separate per-agent personal memory repository under `~/.guildbotics/data/memory/<person_id>/`. The default personal memory backend is Cognee, with one dataset per person (`guildbotics:person:<person_id>`). Set `GUILDBOTICS_MEMORY_BACKEND=file` to use the fallback/test/migration file backend, which stores a `memory_index.yml` and topic-scoped memories under `topics/<topic_id>/memory.md`; `GUILDBOTICS_MEMORY_BACKEND=fake` is available for deterministic tests. GuildBotics recalls relevant memory before delegating to the CLI agent, passes the normalized `memory_context` through the prompt, and runs a separate memory update step only after a `chat_reply` or `chat_post` evidence record. Set `GUILDBOTICS_MEMORY_TRACE=1` to append normalized recall/remember trace events to JSONL; `GUILDBOTICS_MEMORY_TRACE_PATH` overrides the default `~/.guildbotics/data/run/memory_trace.jsonl`.
+You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the CLI agent.
 
 ### 5.6.1. Prerequisites (Slack Side)
 
@@ -609,8 +611,16 @@ task_schedules:
 Points:
 
 - Monitored channels are defined in `message_channels`; entries with `chat.enabled: true` are monitored.
+- Incoming replies, reactions, no-op records, and completion evidence go through `guildbotics member chat reply|post|reaction add|noop|complete`.
 - For scheduled posting, use `task_schedules` + `workflows/chat_post_command` (the post body is generated from a GuildBotics custom command output).
 - Example: `examples/reports/ai_news_digest` gets candidate news from Google News RSS first, then an LLM formats it into a Slack-friendly summary.
+
+Interactive member chat examples:
+
+```bash
+guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --body-file reply.md
+guildbotics member chat reaction add --person alice --service slack --channel-id C0123456789 --message-ts 1777554000.000000 --reaction ack
+```
 
 Example scheduled command (AI news digest):
 

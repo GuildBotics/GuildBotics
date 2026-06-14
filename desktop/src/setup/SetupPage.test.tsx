@@ -1965,6 +1965,8 @@ describe("MembersSection", () => {
     // appears in both the alert title and body.
     expect((await screen.findAllByText("Token missing")).length).toBeGreaterThan(0);
     expect(screen.queryByText(t("setup.members.diagnostics.ok"))).not.toBeInTheDocument();
+    // A top-of-panel issues summary surfaces the failure without scrolling.
+    expect(await screen.findByText(t("setup.members.diagnostics.issuesTitle"))).toBeInTheDocument();
   });
 });
 

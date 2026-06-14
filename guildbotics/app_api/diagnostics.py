@@ -14,9 +14,13 @@ from guildbotics.app_api.verify import (
     PROVIDER_ENV_KEYS,
     resolve_default_model_provider,
 )
+from guildbotics.capabilities.member_chat import probe_slack_app_token
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Service
-from guildbotics.integrations.chat_profile import get_chat_subscriptions
+from guildbotics.integrations.chat_profile import (
+    get_chat_slack_base_url,
+    get_chat_subscriptions,
+)
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.github.github_utils import (
     get_github_username,
@@ -534,6 +538,8 @@ class ScenarioDiagnosticsService:
                         target=member.to_person_env_key("SLACK_APP_TOKEN"),
                     )
                 )
+            else:
+                checks.append(await self._check_slack_app_token(member))
             c = context.clone_for(member)
             try:
                 chat_service = c.get_chat_service()
@@ -576,6 +582,39 @@ class ScenarioDiagnosticsService:
                 )
             )
         return checks
+
+    async def _check_slack_app_token(self, member: Person) -> DiagnosticCheck:
+        """Validate the Socket Mode app-level token, not just its presence.
+
+        A configured-but-invalid app token (truncated, revoked, wrong app) is the
+        common cause of a member silently not receiving events: the bot token can
+        still pass ``auth.test`` while Socket Mode fails with ``invalid_auth``.
+        This probes ``apps.connections.open`` (read-only; performs no data writes,
+        the same call the event listener makes) so the broken token surfaces in
+        diagnostics instead of only in runtime logs.
+        """
+        try:
+            await probe_slack_app_token(
+                member.get_secret("SLACK_APP_TOKEN"),
+                get_chat_slack_base_url(member),
+            )
+        except Exception as exc:
+            return self._check(
+                "slack",
+                "slack_app_token_invalid",
+                "error",
+                self._safe_error("Slack App token (Socket Mode) check failed", exc),
+                person_id=member.person_id,
+                target=member.to_person_env_key("SLACK_APP_TOKEN"),
+                context={"error_type": type(exc).__name__},
+            )
+        return self._check(
+            "slack",
+            "slack_app_token",
+            "ok",
+            "Slack App token (Socket Mode) is valid.",
+            person_id=member.person_id,
+        )
 
     async def _check_slack_channel(
         self, context: Context, subscription: dict[str, Any], person_id: str

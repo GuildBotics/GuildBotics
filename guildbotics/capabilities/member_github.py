@@ -109,11 +109,19 @@ class MemberGitHubCapabilityService:
                 "github pr comment",
                 "github pr reply",
                 "github reaction add",
+                "chat identity",
+                "chat inspect channel",
+                "chat inspect thread",
+                "chat post",
+                "chat reply",
+                "chat reaction add",
+                "chat noop",
+                "chat complete",
                 "task complete",
                 "task status",
             ],
             "safety_note": (
-                "GitHub and git writes must go through guildbotics member commands."
+                "GitHub, git, and chat writes must go through guildbotics member commands."
             ),
         }
 

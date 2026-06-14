@@ -31,8 +31,13 @@ async def test_get_bot_identity_uses_auth_test():
 
 @pytest.mark.asyncio
 async def test_list_channel_events_normalizes_messages():
+    expected_event_count = 2
+    seen_body = ""
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_body
         assert request.url.path.endswith("/conversations.history")
+        seen_body = (await request.aread()).decode()
         body = {
             "ok": True,
             "messages": [
@@ -69,18 +74,63 @@ async def test_list_channel_events_normalizes_messages():
     svc = SlackChatService(
         logging.getLogger("test"), client=client, base_url="https://x.test"
     )
-    page = await svc.list_channel_events("C1")
+    page = await svc.list_channel_events("C1", oldest_ts="90.0", latest_ts="110.0")
     assert page.cursor == "abc"
-    assert len(page.events) == 2
+    assert len(page.events) == expected_event_count
     assert page.events[0].event_id == "C1:100.1"
     assert page.events[0].mentions == ["UBOT123"]
     assert page.events[0].is_thread_reply is False
     assert page.events[1].is_bot_message is True
+    assert "oldest=90.0" in seen_body
+    assert "latest=110.0" in seen_body
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_list_thread_events_uses_conversations_replies():
+    seen_body = ""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_body
+        assert request.url.path.endswith("/conversations.replies")
+        seen_body = (await request.aread()).decode()
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": [
+                    {
+                        "type": "message",
+                        "user": "UUSER1",
+                        "text": "root",
+                        "ts": "100.1",
+                    },
+                    {
+                        "type": "message",
+                        "user": "UUSER2",
+                        "text": "reply",
+                        "ts": "100.2",
+                        "thread_ts": "100.1",
+                    },
+                ],
+            },
+        )
+
+    client = _client_for(handler)
+    svc = SlackChatService(
+        logging.getLogger("test"), client=client, base_url="https://x.test"
+    )
+    page = await svc.list_thread_events("C1", thread_ts="100.1", limit=20)
+    assert "ts=100.1" in seen_body
+    assert "limit=20" in seen_body
+    assert [event.text for event in page.events] == ["root", "reply"]
+    assert page.events[1].is_thread_reply is True
     await client.aclose()
 
 
 @pytest.mark.asyncio
 async def test_resolve_channel_id_uses_conversations_list_and_caches():
+    expected_calls = 2
     calls = 0
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -116,7 +166,7 @@ async def test_resolve_channel_id_uses_conversations_list_and_caches():
     cid2 = await svc.resolve_channel_id("#dev-chat")
     assert cid == "C2"
     assert cid2 == "C2"
-    assert calls == 2
+    assert calls == expected_calls
     await client.aclose()
 
 

@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 
 from click.testing import CliRunner
@@ -855,3 +856,391 @@ def test_member_task_status_cli(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert '"completed": true' in result.output
     assert '"evidence_types": ["issue_comment"]' in result.output
+
+
+def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+    body_file = tmp_path / "reply.md"
+    body_file.write_text("了解しました。", encoding="utf-8")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def reply(self, *, channel_id, channel_name, thread_ts, body):
+            return {
+                "service": "slack",
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "message_ts": "200.1",
+                "thread_ts": thread_ts,
+                "text": body,
+                "posted": True,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "reply",
+            "--person",
+            "aiko",
+            "--channel-id",
+            "C1",
+            "--thread-ts",
+            "100.1",
+            "--body-file",
+            str(body_file),
+            "--run-id",
+            "run-1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["text"] == "了解しました。"
+    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "chat_reply"
+
+
+def test_member_chat_reply_accepts_channel_name_and_message_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+    body_file = tmp_path / "reply.md"
+    body_file.write_text("了解しました。", encoding="utf-8")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def reply(self, *, channel_id, channel_name, thread_ts, body):
+            return {
+                "service": "slack",
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "message_ts": "200.1",
+                "thread_ts": thread_ts,
+                "text": body,
+                "posted": True,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "reply",
+            "--person",
+            "aiko",
+            "--channel-name",
+            "general",
+            "--message-url",
+            "https://example.slack.com/archives/C1/p1000000000000001",
+            "--body-file",
+            str(body_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["channel_id"] == "C1"
+    assert payload["channel_name"] == "general"
+    assert payload["thread_ts"] == "1000000000.000001"
+
+
+def test_member_chat_inspect_thread_accepts_message_url(monkeypatch, tmp_path):
+    expected_limit = 20
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def inspect_thread(self, *, channel_id, channel_name, thread_ts, limit):
+            return {
+                "service": "slack",
+                "mode": "thread",
+                "channel_id": channel_id,
+                "channel_name": channel_name or "",
+                "thread_ts": thread_ts,
+                "next_cursor": "",
+                "messages": [{"message_ts": "100.1", "text": "question"}],
+                "limit": limit,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "inspect",
+            "thread",
+            "--person",
+            "aiko",
+            "--message-url",
+            "https://example.slack.com/archives/C1/p1000000000000002"
+            "?thread_ts=1000000000.000001&cid=C1",
+            "--limit",
+            str(expected_limit),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["channel_id"] == "C1"
+    assert payload["thread_ts"] == "1000000000.000001"
+    assert payload["limit"] == expected_limit
+
+
+def test_member_chat_inspect_channel_accepts_channel_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def inspect_channel(
+            self, *, channel_id, channel_name, oldest_ts, latest_ts, limit
+        ):
+            return {
+                "service": "slack",
+                "mode": "channel",
+                "channel_id": channel_id or "C_GENERAL",
+                "channel_name": channel_name,
+                "oldest_ts": oldest_ts,
+                "latest_ts": latest_ts,
+                "next_cursor": "",
+                "messages": [{"message_ts": "100.1", "text": "topic"}],
+                "limit": limit,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "inspect",
+            "channel",
+            "--person",
+            "aiko",
+            "--channel-name",
+            "general",
+            "--oldest-ts",
+            "100.0",
+            "--latest-ts",
+            "200.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["channel_name"] == "general"
+    assert payload["oldest_ts"] == "100.0"
+    assert payload["latest_ts"] == "200.0"
+
+
+def test_member_chat_body_file_and_stdin_are_exclusive(tmp_path):
+    body_file = tmp_path / "reply.md"
+    body_file.write_text("hello", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "reply",
+            "--person",
+            "aiko",
+            "--channel-id",
+            "C1",
+            "--thread-ts",
+            "100.1",
+            "--body-file",
+            str(body_file),
+            "--body-stdin",
+        ],
+        input="hello",
+    )
+
+    assert result.exit_code != 0
+    assert "not both" in result.output
+
+
+def test_member_chat_reaction_accepts_message_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def add_reaction(self, *, channel_id, channel_name, message_ts, reaction):
+            return {
+                "service": "slack",
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "message_ts": message_ts,
+                "reaction": reaction,
+                "reacted": True,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "reaction",
+            "add",
+            "--person",
+            "aiko",
+            "--message-url",
+            "https://example.slack.com/archives/C1/p1000000000000002"
+            "?thread_ts=1000000000.000001&cid=C1",
+            "--reaction",
+            "ack",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["channel_id"] == "C1"
+    assert payload["message_ts"] == "1000000000.000002"
+    assert payload["reaction"] == "ack"
+
+
+def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    reason_file = tmp_path / "reason.md"
+    reason_file.write_text("Not relevant.", encoding="utf-8")
+    summary_file = tmp_path / "summary.md"
+    summary_file.write_text("No response needed.", encoding="utf-8")
+    runner = CliRunner()
+
+    noop = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "noop",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+            "--channel-id",
+            "C1",
+            "--thread-ts",
+            "100.1",
+            "--event-id",
+            "E1",
+            "--reason-file",
+            str(reason_file),
+        ],
+    )
+    complete = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "complete",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+            "--channel-id",
+            "C1",
+            "--thread-ts",
+            "100.1",
+            "--event-id",
+            "E1",
+            "--status",
+            "done",
+            "--summary-file",
+            str(summary_file),
+        ],
+    )
+
+    assert noop.exit_code == 0
+    assert complete.exit_code == 0
+    payload = json.loads(complete.output)
+    assert payload["subject_id"] == "slack:C1:100.1:E1"
+    assert payload["evidence_types"] == ["chat_noop"]

@@ -3455,6 +3455,8 @@ function MemberDiagnosticsPanel({
   }
 
   const issues = checks.filter((check) => check.status !== "ok");
+  const errorCount = checks.filter((check) => check.status === "error").length;
+  const warningCount = checks.filter((check) => check.status === "warning").length;
   return (
     <Stack>
       <Group justify="space-between">
@@ -3481,6 +3483,18 @@ function MemberDiagnosticsPanel({
       {checks.length > 0 && issues.length === 0 ? (
         <Alert color="green" title={t("setup.members.diagnostics.ok")}>
           {t("setup.members.diagnostics.okDescription", { count: checks.length })}
+        </Alert>
+      ) : null}
+      {issues.length > 0 ? (
+        <Alert
+          color={errorCount > 0 ? "red" : "orange"}
+          icon={diagnosticIcon(errorCount > 0 ? "error" : "warning")}
+          title={t("setup.members.diagnostics.issuesTitle")}
+        >
+          {t("setup.members.diagnostics.issuesDescription", {
+            errors: errorCount,
+            warnings: warningCount,
+          })}
         </Alert>
       ) : null}
       {checks.length > 0 ? (

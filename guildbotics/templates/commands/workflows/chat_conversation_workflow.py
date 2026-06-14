@@ -8,15 +8,14 @@ from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
+from uuid import uuid4
 
-from guildbotics.commands.utils import stringify_output
+from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
 from guildbotics.entities.message import Message
 from guildbotics.integrations.chat_service import (
-    SEMANTIC_REACTIONS,
     ChatEvent,
     ChatService,
-    SemanticReaction,
 )
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
@@ -29,20 +28,15 @@ from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
 )
-from guildbotics.templates.commands.workflows.chat import (
-    should_react as should_react_command,
-)
-from guildbotics.templates.commands.workflows.chat.should_react import (
-    DecisionResult,
-    ReactionInput,
-    ReactionThreadContext,
-)
 from guildbotics.utils.cognee_memory_backend import (
     CogneeMemoryBackend,
     FakeMemoryBackend,
 )
-from guildbotics.utils.fileio import get_workspace_path
-from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
+    get_storage_path,
+    get_workspace_path,
+)
 from guildbotics.utils.memory_backend import (
     FileMemoryBackend,
     MemoryBackend,
@@ -58,7 +52,6 @@ from guildbotics.utils.memory_backend import (
     write_memory_remember_trace,
 )
 from guildbotics.utils.person_profile import build_agent_profile
-from guildbotics.utils.prompt_trace import write_prompt_trace
 
 _MIN_CHAT_TIMESTAMP = 946684800.0
 _TOPIC_COALESCE_SIMILARITY_THRESHOLD = 0.3
@@ -97,23 +90,35 @@ async def _handle_event(
     identity_user_id: str,
     event: ChatEvent,
 ) -> None:
+    person_id = context.person.person_id
     thread_state = state_store.load_thread_state(
-        service_name, context.person.person_id, channel_id, event.thread_ts
+        service_name, person_id, channel_id, event.thread_ts
     )
-    channel_state = state_store.load_channel_cursor(
-        service_name, context.person.person_id, channel_id
-    )
+    channel_state = state_store.load_channel_cursor(service_name, person_id, channel_id)
     already_processed = event.event_id in set(channel_state.processed_event_ids)
     if event.is_edit_or_delete:
         if not already_processed:
             state_store.mark_processed_event(
-                service_name, context.person.person_id, channel_id, event.event_id
+                service_name, person_id, channel_id, event.event_id
             )
         return
+    if already_processed:
+        return
+    if event.is_from_user(identity_user_id):
+        state_store.mark_processed_event(
+            service_name, person_id, channel_id, event.event_id
+        )
+        return
+    if event.mentions and identity_user_id not in event.mentions:
+        state_store.mark_processed_event(
+            service_name, person_id, channel_id, event.event_id
+        )
+        return
+
     if not already_processed:
         state_store.append_thread_message(
             service_name,
-            context.person.person_id,
+            person_id,
             channel_id,
             event.thread_ts,
             ThreadMessageState(
@@ -127,172 +132,141 @@ async def _handle_event(
             ),
         )
 
-    decision = await _evaluate_should_react(
+    thread_messages = state_store.load_thread_messages(
+        service_name, person_id, channel_id, event.thread_ts
+    )
+    workflow_run_id = uuid4().hex
+    member_workspace = _get_chat_workspace_path(context)
+    if member_workspace is None:
+        raise RuntimeError("Member workspace path could not be resolved.")
+    prompt_payload, memory_context, _ = await _build_agent_prompt_payload(
         context=context,
         chat_service=chat_service,
-        self_person_id=context.person.person_id,
-        self_user_id=identity_user_id,
         event=event,
+        thread_messages=thread_messages,
+        self_user_id=identity_user_id,
         thread_state=thread_state,
-        thread_messages=state_store.load_thread_messages(
-            service_name, context.person.person_id, channel_id, event.thread_ts
-        ),
-        already_processed=already_processed,
     )
 
+    invoke = getattr(context, "invoke", None)
+    if not callable(invoke):
+        raise RuntimeError("Invoker function is not set.")
+    await invoke(
+        "functions/handle_chat_event",
+        person_id=person_id,
+        workflow_run_id=workflow_run_id,
+        service_name=service_name,
+        channel_id=channel_id,
+        event_id=event.event_id,
+        message_ts=event.message_ts,
+        thread_ts=event.thread_ts,
+        latest_message=json.dumps(
+            prompt_payload["latest_message"], ensure_ascii=False, sort_keys=True
+        ),
+        participant_labels=json.dumps(
+            prompt_payload["participant_labels"], ensure_ascii=False, sort_keys=True
+        ),
+        member_profile=json.dumps(
+            prompt_payload["member_profile"], ensure_ascii=False, sort_keys=True
+        ),
+        previous_thread_context=json.dumps(
+            prompt_payload["previous_thread_context"],
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        memory_context=json.dumps(
+            asdict(memory_context) if memory_context is not None else {},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        language=getattr(context, "language_name", ""),
+        member_workspace=str(member_workspace),
+        chat_capability_help=_chat_capability_help(),
+        cli_agent_env={
+            RUN_ENV: workflow_run_id,
+            GUILDBOTICS_DATA_DIR: str(get_storage_path()),
+        },
+        cwd=member_workspace,
+    )
+
+    completion, evidence = _chat_run_status(workflow_run_id, member_workspace)
     if hasattr(context, "logger"):
         with suppress(Exception):
             context.logger.info(
-                "chat decision=%s reason=%s channel=%s thread=%s event=%s",
-                decision.decision,
-                decision.reason,
+                "chat completion=%s evidence=%s channel=%s thread=%s event=%s",
+                completion.status,
+                completion.evidence_types,
                 channel_id,
                 event.thread_ts,
                 event.event_id,
             )
 
-    if decision.decision == "ignore":
-        return
-
-    if decision.decision == "react_only":
-        if decision.reaction:
-            await chat_service.add_reaction(
-                channel_id, event.message_ts, decision.reaction
+    state_store.mark_processed_event(
+        service_name, person_id, channel_id, event.event_id
+    )
+    posted = _latest_chat_post_evidence(evidence)
+    if posted is not None:
+        payload = posted.get("payload", {})
+        text = str(payload.get("text", "")).strip()
+        message_ts = str(payload.get("message_ts", "")).strip()
+        thread_ts = str(payload.get("thread_ts", event.thread_ts)).strip()
+        if text and message_ts:
+            state_store.append_thread_message(
+                service_name,
+                person_id,
+                channel_id,
+                thread_ts,
+                ThreadMessageState(
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    message_ts=message_ts,
+                    author_id=identity_user_id,
+                    text=text,
+                    mentions=[],
+                    is_bot_message=True,
+                ),
             )
-            # Record success of side effect before subsequent state writes so replay
-            # after a crash does not repeat the same reaction.
-            state_store.mark_processed_event(
-                service_name, context.person.person_id, channel_id, event.event_id
-            )
-        thread_messages = state_store.load_thread_messages(
-            service_name, context.person.person_id, channel_id, event.thread_ts
-        )
-        reply_text, thread_context = await _build_reply_text(
-            context,
-            event,
-            thread_messages,
-            identity_user_id,
-            chat_service,
-            thread_state,
-        )
-        thread_state.participants.add(context.person.person_id)
-        if thread_context.get("thread_topic"):
-            thread_state.thread_topic = thread_context["thread_topic"]
-        if thread_context.get("latest_focus"):
-            thread_state.latest_focus = thread_context["latest_focus"]
+    # Only record the member as a thread participant when it took a visible
+    # action (reply/post/reaction). noop / blocked completions leave no Slack
+    # trace, so marking the member as a participant would wrongly bias future
+    # follow-up decisions toward treating the thread as one it joined.
+    reacted = any(record.get("evidence_type") == "chat_reaction" for record in evidence)
+    if posted is not None or reacted:
+        thread_state.participants.add(person_id)
         state_store.save_thread_state(
             service_name,
-            context.person.person_id,
+            person_id,
             channel_id,
             event.thread_ts,
             thread_state,
         )
-        await _update_chat_memory(
-            context,
-            event,
-            thread_messages,
-            identity_user_id,
-            chat_service,
-            thread_context,
-            reply_text,
-        )
-        return
-
-    thread_messages = state_store.load_thread_messages(
-        service_name, context.person.person_id, channel_id, event.thread_ts
-    )
-    reply_text, thread_context = await _build_reply_text(
-        context, event, thread_messages, identity_user_id, chat_service, thread_state
-    )
-    if not reply_text.strip():
-        return
-    author_labels = await _build_author_labels(
-        context, identity_user_id, event, thread_messages[-20:]
-    )
-    rendered_reply_text = chat_service.render_participant_text(
-        reply_text, author_labels
-    )
-
-    post_result = await chat_service.post_message(
-        channel_id, rendered_reply_text, thread_ts=event.thread_ts
-    )
-    # Record success of the external side effect immediately. If the process crashes
-    # before source.mark_processed() runs, the event may replay but will be ignored.
-    state_store.mark_processed_event(
-        service_name, context.person.person_id, channel_id, event.event_id
-    )
-    state_store.append_thread_message(
-        service_name,
-        context.person.person_id,
-        channel_id,
-        post_result.thread_ts,
-        ThreadMessageState(
-            channel_id=channel_id,
-            thread_ts=post_result.thread_ts,
-            message_ts=post_result.message_ts,
-            author_id=identity_user_id,
-            text=rendered_reply_text,
-            mentions=[],
-            is_bot_message=True,
-        ),
-    )
-    thread_state.participants.add(context.person.person_id)
-    if thread_context.get("thread_topic"):
-        thread_state.thread_topic = thread_context["thread_topic"]
-    if thread_context.get("latest_focus"):
-        thread_state.latest_focus = thread_context["latest_focus"]
-    state_store.save_thread_state(
-        service_name,
-        context.person.person_id,
-        channel_id,
-        event.thread_ts,
-        thread_state,
-    )
-    await _update_chat_memory(
-        context,
-        event,
-        thread_messages,
-        identity_user_id,
-        chat_service,
-        thread_context,
-        rendered_reply_text,
-    )
+    if posted is not None:
+        payload = posted.get("payload", {})
+        reply_text = str(payload.get("text", "")).strip()
+        if reply_text:
+            await _update_chat_memory(
+                context,
+                event,
+                thread_messages,
+                identity_user_id,
+                chat_service,
+                {
+                    "thread_topic": thread_state.thread_topic,
+                    "latest_focus": thread_state.latest_focus,
+                },
+                reply_text,
+            )
 
 
-async def _build_reply_text(
+async def _build_agent_prompt_payload(
+    *,
     context: Any,
+    chat_service: ChatService,
     event: ChatEvent,
     thread_messages: list[ThreadMessageState],
     self_user_id: str,
-    chat_service: ChatService,
     thread_state: ThreadConversationState,
-) -> tuple[str, dict[str, str]]:
-    text, thread_context = await _build_reply_text_via_command(
-        context,
-        event,
-        thread_messages,
-        self_user_id,
-        chat_service,
-        thread_state,
-    )
-    if not text.strip():
-        # Fallback for contexts without invoker / command failures.
-        text = _build_reply_text_fallback(context, event, thread_messages)
-    return text, thread_context
-
-
-async def _build_reply_text_via_command(
-    context: Any,
-    event: ChatEvent,
-    thread_messages: list[ThreadMessageState],
-    self_user_id: str,
-    chat_service: ChatService,
-    thread_state: ThreadConversationState,
-) -> tuple[str, dict[str, str]]:
-    invoke = getattr(context, "invoke", None)
-    if not callable(invoke):
-        return "", {}
-
+) -> tuple[dict[str, Any], MemoryContext | None, str]:
     author_labels = await _build_author_labels(
         context, self_user_id, event, thread_messages[-20:]
     )
@@ -306,18 +280,10 @@ async def _build_reply_text_via_command(
         event, self_user_id, author_labels, chat_service
     )
 
-    payload = {
-        "latest_message": _message_to_prompt_dict(prompt_latest_message),
-        "thread_messages": [
-            _message_to_prompt_dict(message) for message in prompt_thread_messages
-        ],
-        "agent_profile": build_agent_profile(getattr(context, "person", None)),
-        "previous_thread_context": {
-            "thread_topic": thread_state.thread_topic,
-            "latest_focus": thread_state.latest_focus,
-        },
+    previous_thread_context = {
+        "thread_topic": thread_state.thread_topic,
+        "latest_focus": thread_state.latest_focus,
     }
-
     transcript_lines = [
         f"[{message.author}] {message.content}" for message in prompt_thread_messages
     ]
@@ -326,105 +292,85 @@ async def _build_reply_text_via_command(
             f"[{prompt_latest_message.author}] {prompt_latest_message.content}"
         )
     transcript = "\n".join(transcript_lines)
-
-    old_pipe = getattr(context, "pipe", "")
-    has_shared_state = isinstance(getattr(context, "shared_state", None), dict)
-    old_shared_state = deepcopy(context.shared_state) if has_shared_state else None
-    try:
-        memory_backend = _get_memory_backend(context)
-        workspace_path = _get_chat_workspace_path(context)
-        if has_shared_state:
-            context.shared_state["chat_reply_input"] = payload
-        if hasattr(context, "pipe"):
-            context.pipe = transcript
-        thread_context = await _classify_thread_context(context)
-        if has_shared_state:
-            context.shared_state["chat_reply_input"]["thread_context"] = thread_context
-        memory_query = _memory_query(
+    memory_context = _recall_memory_context(
+        context,
+        _get_memory_backend(context),
+        _memory_query(
             context,
-            thread_context,
+            previous_thread_context,
             transcript,
             event,
-            consumer="reply_generation",
-        )
-        memory_context = _recall_memory_context(context, memory_backend, memory_query)
-        if memory_context is not None:
-            write_memory_recall_trace(memory_context)
-        if has_shared_state:
-            context.shared_state["chat_reply_input"]["memory_context"] = (
-                asdict(memory_context) if memory_context is not None else {}
-            )
-        reply_intent = await _classify_reply_intent(context)
-        if has_shared_state:
-            context.shared_state["chat_reply_input"]["reply_intent"] = reply_intent
-        invoke_kwargs = {"cwd": workspace_path} if workspace_path is not None else {}
-        write_prompt_trace(
-            "chat.reply_input",
-            {
-                "person_id": getattr(context.person, "person_id", ""),
-                "service": getattr(event, "service_name", ""),
-                "channel": event.channel_id,
-                "thread_ts": event.thread_ts,
-                "event_id": event.event_id,
-                "command": "workflows/chat/chat_reply_actionable",
-                "cwd": workspace_path,
-                "transcript": transcript,
-                "payload": (
-                    context.shared_state.get("chat_reply_input", {})
-                    if has_shared_state
-                    else {
-                        **payload,
-                        "thread_context": thread_context,
-                        "memory_context": (
-                            asdict(memory_context) if memory_context is not None else {}
-                        ),
-                        "reply_intent": reply_intent,
-                    }
-                ),
-            },
-        )
-        reply_result = await invoke(
-            "workflows/chat/chat_reply_actionable", **invoke_kwargs
-        )
-        reply_text = stringify_output(reply_result).strip()
-        if memory_context is not None:
-            write_memory_context_trace(
-                event="memory.context.prompted",
-                backend=memory_context.backend,
-                person_id=memory_context.person_id,
-                consumer="reply_generation",
-                query=memory_context.query,
-                items=memory_context.items,
-                extra={
-                    "thread_context": thread_context,
-                    "reply_intent": reply_intent,
-                    "latest_message_excerpt": prompt_latest_message.content[:500],
-                    "reply_text_excerpt": reply_text[:500],
-                    "note": (
-                        "These memory items were supplied to reply generation; "
-                        "this event does not assert they influenced the final reply."
-                    ),
-                },
-            )
-        return reply_text, thread_context
-    except Exception:
-        _log_info(
-            context,
-            "chat reply command failed, falling back to placeholder reply generation",
-        )
-        return "", {}
-    finally:
-        if has_shared_state and old_shared_state is not None:
-            context.shared_state.clear()
-            context.shared_state.update(old_shared_state)
-        if hasattr(context, "pipe"):
-            context.pipe = old_pipe
+            consumer="chat_agent",
+        ),
+    )
+    if memory_context is not None:
+        write_memory_recall_trace(memory_context)
+    return (
+        {
+            "latest_message": _message_to_prompt_dict(prompt_latest_message),
+            "participant_labels": author_labels,
+            "member_profile": build_agent_profile(getattr(context, "person", None)),
+            "previous_thread_context": previous_thread_context,
+        },
+        memory_context,
+        transcript,
+    )
 
 
-def _build_reply_text_fallback(
-    context: Any, event: ChatEvent, thread_messages: list[ThreadMessageState]
-) -> str:
-    return t("commands.workflows.chat_conversation_workflow.reply_generation_failed")
+def _chat_run_status(
+    run_id: str, member_workspace: Path
+) -> tuple[Any, list[dict[str, Any]]]:
+    first_error: Exception | None = None
+    stores = [
+        RunStore(),
+        RunStore(member_workspace / ".guildbotics-data" / "task-runs"),
+        RunStore(member_workspace / ".guildbotics" / "data" / "task-runs"),
+    ]
+    for store in stores:
+        try:
+            return store.status(run_id), store.evidence(run_id)
+        except Exception as exc:
+            first_error = first_error or exc
+    if first_error is not None:
+        raise first_error
+    raise RuntimeError(f"Chat run '{run_id}' was not found.")
+
+
+def _latest_chat_post_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for record in reversed(evidence):
+        if record.get("evidence_type") in {"chat_reply", "chat_post"}:
+            return record
+    return None
+
+
+def _chat_capability_help() -> str:
+    return "\n".join(
+        [
+            "guildbotics member context --person <person>",
+            "guildbotics member chat identity --person <person> --service slack",
+            "guildbotics member chat inspect thread --person <person> --service slack "
+            "--channel-id <channel_id> --thread-ts <thread_ts> [--limit <limit>]",
+            "guildbotics member chat inspect channel --person <person> --service slack "
+            "(--channel-id <channel_id> | --channel-name <name>) "
+            "[--oldest-ts <oldest_ts>] [--latest-ts <latest_ts>] [--limit <limit>]",
+            "guildbotics member chat reply --person <person> --service slack "
+            "--channel-id <channel_id> --thread-ts <thread_ts> "
+            "(--body-file <path> | --body-stdin) [--run-id <run_id>]",
+            "guildbotics member chat post --person <person> --service slack "
+            "(--channel-id <channel_id> | --channel-name <name>) "
+            "(--body-file <path> | --body-stdin) [--run-id <run_id>]",
+            "guildbotics member chat reaction add --person <person> --service slack "
+            "--channel-id <channel_id> --message-ts <message_ts> "
+            "--reaction ack|agree|celebrate|support [--run-id <run_id>]",
+            "guildbotics member chat noop --person <person> --run-id <run_id> "
+            "--service slack --channel-id <channel_id> --thread-ts <thread_ts> "
+            "--event-id <event_id> --reason-file <path>",
+            "guildbotics member chat complete --person <person> --run-id <run_id> "
+            "--service slack --channel-id <channel_id> --thread-ts <thread_ts> "
+            "--event-id <event_id> --status done|asking|blocked "
+            "--summary-file <path>",
+        ]
+    )
 
 
 def _get_memory_backend(context: Any) -> MemoryBackend | None:
@@ -1437,84 +1383,6 @@ def _event_token(event: ChatEvent | None, *, fallback: str) -> str:
     return _topic_id(event.message_ts or event.event_id or fallback)[:24] or "unknown"
 
 
-async def _classify_reply_intent(context: Any) -> dict[str, str]:
-    invoke = getattr(context, "invoke", None)
-    if not callable(invoke):
-        return {
-            "label": "answer",
-            "reason": "default_without_invoker",
-            "confidence": "0.0",
-        }
-    try:
-        result = await invoke("workflows/chat/chat_reply_intent")
-    except Exception:
-        _log_info(
-            context, "chat reply intent classification failed, defaulting to answer"
-        )
-        return {
-            "label": "answer",
-            "reason": "intent_classification_failed",
-            "confidence": "0.0",
-        }
-    return _normalize_reply_intent(result)
-
-
-async def _classify_thread_context(context: Any) -> dict[str, str]:
-    invoke = getattr(context, "invoke", None)
-    if not callable(invoke):
-        return {}
-    try:
-        result = await invoke("workflows/chat/chat_thread_context")
-    except Exception:
-        _log_info(
-            context,
-            "chat thread context classification failed, defaulting to empty context",
-        )
-        return {}
-    return _normalize_thread_context(result)
-
-
-def _normalize_reply_intent(result: Any) -> dict[str, str]:
-    if isinstance(result, dict):
-        label = str(result.get("label", "")).strip()
-        reason = str(result.get("reason", "")).strip()
-        confidence = str(result.get("confidence", "")).strip()
-    else:
-        label = str(getattr(result, "label", "")).strip()
-        reason = str(getattr(result, "reason", "")).strip()
-        confidence = str(getattr(result, "confidence", "")).strip()
-
-    if label not in {"answer", "supplement", "challenge", "clarify", "summarize"}:
-        label = "answer"
-    return {
-        "label": label,
-        "reason": reason or "no_reason",
-        "confidence": confidence or "0.0",
-    }
-
-
-def _normalize_thread_context(result: Any) -> dict[str, str]:
-    if isinstance(result, dict):
-        thread_topic = str(result.get("thread_topic", "")).strip()
-        latest_focus = str(result.get("latest_focus", "")).strip()
-        reason = str(result.get("reason", "")).strip()
-        confidence = str(result.get("confidence", "")).strip()
-    else:
-        thread_topic = str(getattr(result, "thread_topic", "")).strip()
-        latest_focus = str(getattr(result, "latest_focus", "")).strip()
-        reason = str(getattr(result, "reason", "")).strip()
-        confidence = str(getattr(result, "confidence", "")).strip()
-    normalized = {
-        "thread_topic": thread_topic,
-        "latest_focus": latest_focus,
-        "reason": reason or "no_reason",
-        "confidence": confidence or "0.0",
-    }
-    if not normalized["thread_topic"] and not normalized["latest_focus"]:
-        return {}
-    return normalized
-
-
 async def _build_author_labels(
     context: Any,
     self_user_id: str,
@@ -1681,85 +1549,6 @@ def _message_to_prompt_dict(message: Message) -> dict[str, str]:
         "author": message.author,
         "author_type": message.author_type,
     }
-
-
-async def _evaluate_should_react(
-    *,
-    context: Any,
-    chat_service: ChatService,
-    self_person_id: str,
-    self_user_id: str,
-    event: ChatEvent,
-    thread_state: ThreadConversationState,
-    thread_messages: list[ThreadMessageState],
-    already_processed: bool,
-) -> DecisionResult:
-    if already_processed:
-        return DecisionResult(decision="ignore", reason="already_processed")
-
-    author_labels = await _build_author_labels(
-        context, self_user_id, event, thread_messages[-20:]
-    )
-    reaction_input = ReactionInput(
-        self_person_id=self_person_id,
-        self_user_id=self_user_id,
-        event=event,
-        thread_context=ReactionThreadContext(
-            participants=set(thread_state.participants),
-        ),
-        thread_messages=[
-            _message_to_prompt_dict(
-                _to_prompt_message_from_state(
-                    message, self_user_id, author_labels, chat_service
-                )
-            )
-            for message in thread_messages[-20:]
-        ],
-        already_processed=already_processed,
-    )
-
-    invoke = getattr(context, "invoke", None)
-    if callable(invoke):
-        result = await invoke(
-            "workflows/chat/should_react",
-            channel_type="chat",
-            reaction_input=reaction_input,
-        )
-    else:
-        result = await should_react_command.main(
-            context,
-            channel_type="chat",
-            reaction_input=reaction_input,
-        )
-    normalized = _normalize_policy_decision(result)
-    if normalized is None:
-        raise RuntimeError("should_react returned an invalid decision payload.")
-    return normalized
-
-
-def _normalize_policy_decision(result: Any) -> DecisionResult | None:
-    if isinstance(result, dict):
-        decision = str(result.get("decision", "")).strip()
-        reason = str(result.get("reason", "")).strip()
-        reaction = result.get("reaction")
-    else:
-        decision = str(getattr(result, "decision", "")).strip()
-        reason = str(getattr(result, "reason", "")).strip()
-        reaction = getattr(result, "reaction", None)
-
-    if decision not in {"ignore", "react_only", "reply"}:
-        return None
-    normalized_reaction: SemanticReaction | None = None
-    if reaction is not None:
-        reaction_value = str(reaction).strip()
-        if reaction_value not in SEMANTIC_REACTIONS:
-            return None
-        normalized_reaction = cast(SemanticReaction, reaction_value)
-    return DecisionResult(
-        decision=decision,
-        reason=reason or "no_reason",
-        reaction=normalized_reaction,
-    )
 
 
 def _log_info(context: Any, msg: str, *args: Any) -> None:

@@ -225,6 +225,26 @@ describe("Service Runtime screen", () => {
     expect(screen.getByText("worker crashed")).toBeInTheDocument();
   });
 
+  it("surfaces a Slack auth failure with the affected member id in the events card", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        events: runtimeUnit("events", {
+          state: "running",
+          running: true,
+          events_auth_failed_count: 1,
+          events_auth_failed_persons: ["yuki"],
+        }),
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    expect(await screen.findByText(t("overview.eventsCard.authFailedTitle"))).toBeInTheDocument();
+    expect(
+      screen.getByText(t("overview.eventsCard.authFailedBody", { persons: "yuki" })),
+    ).toBeInTheDocument();
+  });
+
   it("shows the stop-timeout pending warning instead of an error", async () => {
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
@@ -431,6 +451,8 @@ function runtimeUnit(
     events_drained_count: 0,
     events_delivered_count: 0,
     events_skipped_processed_count: 0,
+    events_auth_failed_count: 0,
+    events_auth_failed_persons: [],
     ...overrides,
   };
 }

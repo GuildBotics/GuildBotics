@@ -57,6 +57,7 @@ class SlackChatService(ChatService):
         *,
         cursor: str | None = None,
         oldest_ts: str | None = None,
+        latest_ts: str | None = None,
         limit: int = 100,
     ) -> ChatEventPage:
         form: dict[str, str] = {"channel": channel_id, "limit": str(limit)}
@@ -64,7 +65,42 @@ class SlackChatService(ChatService):
             form["cursor"] = cursor
         if oldest_ts:
             form["oldest"] = oldest_ts
+        if latest_ts:
+            form["latest"] = latest_ts
         payload = await self._post_form("conversations.history", form)
+        messages = payload.get("messages", [])
+        events: list[ChatEvent] = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            event = self._to_event(channel_id, item)
+            if event is not None:
+                events.append(event)
+        metadata = payload.get("response_metadata", {})
+        next_cursor = None
+        if isinstance(metadata, dict):
+            next_cursor = _str_or_none(metadata.get("next_cursor"))
+        page_oldest = None
+        if events:
+            page_oldest = max((ev.message_ts for ev in events), default=None)
+        return ChatEventPage(events=events, cursor=next_cursor, oldest_ts=page_oldest)
+
+    async def list_thread_events(
+        self,
+        channel_id: str,
+        *,
+        thread_ts: str,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> ChatEventPage:
+        form: dict[str, str] = {
+            "channel": channel_id,
+            "ts": thread_ts,
+            "limit": str(limit),
+        }
+        if cursor:
+            form["cursor"] = cursor
+        payload = await self._post_form("conversations.replies", form)
         messages = payload.get("messages", [])
         events: list[ChatEvent] = []
         for item in messages:

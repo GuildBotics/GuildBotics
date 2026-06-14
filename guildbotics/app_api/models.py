@@ -207,6 +207,8 @@ class RuntimeUnitStatus(BaseModel):
     events_drained_count: int | None = None
     events_delivered_count: int | None = None
     events_skipped_processed_count: int | None = None
+    events_auth_failed_count: int | None = None
+    events_auth_failed_persons: list[str] = Field(default_factory=list)
 
 
 class RuntimeStatus(BaseModel):

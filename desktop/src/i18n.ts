@@ -428,6 +428,9 @@ const resources = {
             failed: "Diagnostics failed",
             ok: "Member settings validated",
             okDescription: "{{count}} checks passed.",
+            issuesTitle: "Issues found",
+            issuesDescription:
+              "{{errors}} error(s) and {{warnings}} warning(s) found. See the details below.",
             saveFirstTitle: "Save this member first",
             saveFirstBody:
               "Diagnostics run against saved settings. Add or save this member before validating it.",
@@ -780,6 +783,9 @@ const resources = {
           processed: "Processed events",
           processedValue:
             "processed {{delivered}} / received {{drained}} / skipped {{skipped}} / failures {{failures}}",
+          authFailedTitle: "Slack authentication failed",
+          authFailedBody:
+            "Slack rejected the app-level token (Socket Mode) for: {{persons}}. These members cannot receive events until their SLACK_APP_TOKEN is fixed and the service is restarted.",
         },
         promptTrace: {
           title: "Prompt trace",
@@ -1245,6 +1251,9 @@ const resources = {
             failed: "検証に失敗しました",
             ok: "メンバー設定を検証しました",
             okDescription: "{{count}}件のチェックに問題はありません。",
+            issuesTitle: "問題が見つかりました",
+            issuesDescription:
+              "エラー {{errors}} 件、警告 {{warnings}} 件が見つかりました。詳細は下記を確認してください。",
             saveFirstTitle: "先にメンバーを保存してください",
             saveFirstBody:
               "検証は保存済みの設定を対象に実行します。メンバーを追加または保存してから検証してください。",
@@ -1721,6 +1730,9 @@ const resources = {
           processed: "イベント処理",
           processedValue:
             "処理 {{delivered}} / 受信 {{drained}} / スキップ {{skipped}} / 失敗 {{failures}}",
+          authFailedTitle: "Slack 認証に失敗しました",
+          authFailedBody:
+            "Slack が Socket Mode の App Token を拒否しました: {{persons}}。これらのメンバーは SLACK_APP_TOKEN を修正してサービスを再起動するまでイベントを受信できません。",
         },
         promptTrace: {
           title: "プロンプトトレース",
