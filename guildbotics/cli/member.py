@@ -73,16 +73,24 @@ async def _context_cmd(
         member_person.has_secret("SLACK_BOT_TOKEN")
         or member_person.has_secret("SLACK_APP_TOKEN")
     ):
-        chat_service = MemberChatCapabilityService(
+        # Build the chat service only when a bot token exists; the factory raises
+        # without one. The app-level token is validated independently (it does not
+        # need the chat service), so an app-token-only member is still checked.
+        chat_service = (
+            context.get_chat_service()
+            if member_person.has_secret("SLACK_BOT_TOKEN")
+            else None
+        )
+        chat = MemberChatCapabilityService(
             member_person,
             context.team,
             context.logger,
-            context.get_chat_service(),
+            chat_service,
         )
         try:
-            result["chat_credentials"] = await chat_service.check_credentials()
+            result["chat_credentials"] = await chat.check_credentials()
         finally:
-            await chat_service.aclose()
+            await chat.aclose()
     return result
 
 

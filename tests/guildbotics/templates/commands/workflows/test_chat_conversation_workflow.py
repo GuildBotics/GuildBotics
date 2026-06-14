@@ -208,6 +208,8 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert [message.message_ts for message in thread_messages] == ["100.1", "200.1"]
     assert thread_messages[1].is_bot_message is True
     assert memory_updates
+    thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
+    assert "alice" in thread_state.participants
 
 
 @pytest.mark.asyncio
@@ -234,6 +236,9 @@ async def test_reaction_only_completion_processes_without_bot_message(
     thread_messages = state_store.load_thread_messages("slack", "alice", "C1", "100.1")
     assert [message.message_ts for message in thread_messages] == ["100.1"]
     assert memory_updates == []
+    # A reaction is a visible action, so the member is recorded as a participant.
+    thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
+    assert "alice" in thread_state.participants
 
 
 @pytest.mark.asyncio
@@ -256,6 +261,10 @@ async def test_noop_completion_processes_without_memory_update(tmp_path, monkeyp
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E1"]
     assert memory_updates == []
+    # noop takes no visible action, so the member must not be recorded as a
+    # thread participant.
+    thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
+    assert "alice" not in thread_state.participants
 
 
 @pytest.mark.asyncio

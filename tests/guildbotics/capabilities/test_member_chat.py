@@ -261,6 +261,29 @@ async def test_check_credentials_surfaces_invalid_app_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_check_credentials_validates_app_token_without_chat_service(monkeypatch):
+    # A member with only an app token has no chat service (the factory requires a
+    # bot token); the app-token probe must still run.
+    monkeypatch.delenv("AIKO_SLACK_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("AIKO_SLACK_APP_TOKEN", "xapp-valid")
+
+    async def fake_probe(app_token, base_url):
+        return None
+
+    monkeypatch.setattr(member_chat, "probe_slack_app_token", fake_probe)
+    person = Person(person_id="aiko", name="Aiko")
+    team = Team(project=Project(name="demo"), members=[person])
+    logger = type("Logger", (), {"info": lambda *args, **kwargs: None})()
+    service = MemberChatCapabilityService(person, team, logger, None)
+
+    result = await service.check_credentials()
+
+    assert result["bot_token"] == "unconfigured"
+    assert result["app_token"] == "ok"
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
 async def test_check_credentials_reports_unconfigured_without_tokens(monkeypatch):
     monkeypatch.delenv("AIKO_SLACK_BOT_TOKEN", raising=False)
     monkeypatch.delenv("AIKO_SLACK_APP_TOKEN", raising=False)

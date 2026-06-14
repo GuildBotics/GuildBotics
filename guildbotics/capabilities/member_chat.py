@@ -27,15 +27,23 @@ class MemberChatCapabilityService:
         person: Person,
         team: Team,
         logger: Logger,
-        chat_service: ChatService,
+        chat_service: ChatService | None,
         *,
         service_name: str = "slack",
     ) -> None:
         self.person = person
         self.team = team
         self.logger = logger
+        # May be None for credential-only use when the member has an app token
+        # but no bot token (the chat service factory requires a bot token). Write
+        # operations resolve it through ``_chat`` and fail closed if absent.
         self.chat_service = chat_service
         self.service_name = service_name
+
+    def _chat(self) -> ChatService:
+        if self.chat_service is None:
+            raise MemberCapabilityError("Slack bot token is not configured.")
+        return self.chat_service
 
     async def aclose(self) -> None:
         close = getattr(self.chat_service, "aclose", None)
@@ -73,7 +81,7 @@ class MemberChatCapabilityService:
         return result
 
     async def _check_bot_token(self) -> tuple[str, str]:
-        if not self.person.has_secret(SLACK_BOT_TOKEN_KEY):
+        if not self.person.has_secret(SLACK_BOT_TOKEN_KEY) or self.chat_service is None:
             return "unconfigured", ""
         try:
             await self.chat_service.get_bot_identity()
@@ -95,7 +103,7 @@ class MemberChatCapabilityService:
 
     async def identity(self) -> dict[str, Any]:
         try:
-            identity = await self.chat_service.get_bot_identity()
+            identity = await self._chat().get_bot_identity()
         except Exception as exc:
             raise MemberCapabilityError(_safe_chat_error(exc)) from exc
         return {
@@ -116,7 +124,7 @@ class MemberChatCapabilityService:
     ) -> dict[str, Any]:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
         try:
-            page = await self.chat_service.list_channel_events(
+            page = await self._chat().list_channel_events(
                 resolved_channel_id,
                 oldest_ts=oldest_ts,
                 latest_ts=latest_ts,
@@ -145,7 +153,7 @@ class MemberChatCapabilityService:
     ) -> dict[str, Any]:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
         try:
-            page = await self.chat_service.list_thread_events(
+            page = await self._chat().list_thread_events(
                 resolved_channel_id,
                 thread_ts=thread_ts,
                 limit=limit,
@@ -171,7 +179,7 @@ class MemberChatCapabilityService:
     ) -> dict[str, Any]:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
         try:
-            result = await self.chat_service.post_message(resolved_channel_id, body)
+            result = await self._chat().post_message(resolved_channel_id, body)
         except Exception as exc:
             raise MemberCapabilityError(_safe_chat_error(exc)) from exc
         return {
@@ -193,7 +201,7 @@ class MemberChatCapabilityService:
     ) -> dict[str, Any]:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
         try:
-            result = await self.chat_service.post_message(
+            result = await self._chat().post_message(
                 resolved_channel_id, body, thread_ts=thread_ts
             )
         except Exception as exc:
@@ -220,7 +228,7 @@ class MemberChatCapabilityService:
         semantic_reaction = cast(SemanticReaction, reaction)
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
         try:
-            await self.chat_service.add_reaction(
+            await self._chat().add_reaction(
                 resolved_channel_id, message_ts, semantic_reaction
             )
         except Exception as exc:
@@ -243,7 +251,7 @@ class MemberChatCapabilityService:
                 "Either channel_id or channel_name is required."
             )
         try:
-            resolved = await self.chat_service.resolve_channel_id(channel_name)
+            resolved = await self._chat().resolve_channel_id(channel_name)
         except Exception as exc:
             raise MemberCapabilityError(_safe_chat_error(exc)) from exc
         if not resolved:

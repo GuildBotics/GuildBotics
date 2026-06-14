@@ -226,14 +226,20 @@ async def _handle_event(
                     is_bot_message=True,
                 ),
             )
-    thread_state.participants.add(person_id)
-    state_store.save_thread_state(
-        service_name,
-        person_id,
-        channel_id,
-        event.thread_ts,
-        thread_state,
-    )
+    # Only record the member as a thread participant when it took a visible
+    # action (reply/post/reaction). noop / blocked completions leave no Slack
+    # trace, so marking the member as a participant would wrongly bias future
+    # follow-up decisions toward treating the thread as one it joined.
+    reacted = any(record.get("evidence_type") == "chat_reaction" for record in evidence)
+    if posted is not None or reacted:
+        thread_state.participants.add(person_id)
+        state_store.save_thread_state(
+            service_name,
+            person_id,
+            channel_id,
+            event.thread_ts,
+            thread_state,
+        )
     if posted is not None:
         payload = posted.get("payload", {})
         reply_text = str(payload.get("text", "")).strip()
