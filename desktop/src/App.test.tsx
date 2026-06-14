@@ -943,6 +943,8 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     events_drained_count: 0,
     events_delivered_count: 0,
     events_skipped_processed_count: 0,
+    events_auth_failed_count: 0,
+    events_auth_failed_persons: [],
   };
 }
 

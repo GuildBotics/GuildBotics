@@ -4,17 +4,21 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import parse_qs, urlparse
 
 import click
 
+from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
 from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
     MemberGitHubCapabilityService,
 )
 from guildbotics.capabilities.task_runs import (
+    RunStore,
     TaskRunError,
     TaskRunStore,
+    current_run_id,
     current_task_run_id,
 )
 from guildbotics.commands.errors import PersonNotFoundError
@@ -24,6 +28,7 @@ from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
 FormatChoice = click.Choice(["json", "markdown"])
 WorkspaceMode = Literal["member", "current"]
+SLACK_TS_FRACTION_DIGITS = 6
 
 
 @click.group()
@@ -61,9 +66,498 @@ async def _context_cmd(
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        return await service.context(check_credentials=check_credentials)
+        result = await service.context(check_credentials=check_credentials)
     finally:
         await service.aclose()
+    if check_credentials and (
+        member_person.has_secret("SLACK_BOT_TOKEN")
+        or member_person.has_secret("SLACK_APP_TOKEN")
+    ):
+        chat_service = MemberChatCapabilityService(
+            member_person,
+            context.team,
+            context.logger,
+            context.get_chat_service(),
+        )
+        try:
+            result["chat_credentials"] = await chat_service.check_credentials()
+        finally:
+            await chat_service.aclose()
+    return result
+
+
+@member.group()
+def chat() -> None:
+    """Chat identity, posting, replies, reactions, and run completion."""
+
+
+@chat.command(name="identity")
+@click.option("--person", required=True)
+@click.option(
+    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+)
+@click.option("--format", "output_format", type=FormatChoice, default="markdown")
+def chat_identity(person: str, service_name: str, output_format: str) -> None:
+    _run(_chat_identity(person, service_name), output_format=output_format)
+
+
+async def _chat_identity(person: str, service_name: str) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberChatCapabilityService(
+        member_person,
+        context.team,
+        context.logger,
+        context.get_chat_service(),
+        service_name=service_name,
+    )
+    try:
+        return await service.identity()
+    finally:
+        await service.aclose()
+
+
+@chat.group(name="inspect")
+def chat_inspect() -> None:
+    """Inspect Slack channel or thread messages for interactive decisions."""
+
+
+@chat_inspect.command(name="channel")
+@click.option("--person", required=True)
+@click.option(
+    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+)
+@click.option("--channel-id", default="")
+@click.option("--channel-name", default="")
+@click.option("--oldest-ts", default="")
+@click.option("--latest-ts", default="")
+@click.option("--limit", type=click.IntRange(1, 200), default=50)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def chat_inspect_channel(
+    person: str,
+    service_name: str,
+    channel_id: str,
+    channel_name: str,
+    oldest_ts: str,
+    latest_ts: str,
+    limit: int,
+    output_format: str,
+) -> None:
+    _run(
+        _chat_inspect_channel(
+            person,
+            service_name,
+            channel_id or None,
+            channel_name or None,
+            oldest_ts or None,
+            latest_ts or None,
+            limit,
+        ),
+        output_format=output_format,
+    )
+
+
+async def _chat_inspect_channel(
+    person: str,
+    service_name: str,
+    channel_id: str | None,
+    channel_name: str | None,
+    oldest_ts: str | None,
+    latest_ts: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberChatCapabilityService(
+        member_person,
+        context.team,
+        context.logger,
+        context.get_chat_service(),
+        service_name=service_name,
+    )
+    try:
+        return await service.inspect_channel(
+            channel_id=channel_id,
+            channel_name=channel_name,
+            oldest_ts=oldest_ts,
+            latest_ts=latest_ts,
+            limit=limit,
+        )
+    finally:
+        await service.aclose()
+
+
+@chat_inspect.command(name="thread")
+@click.option("--person", required=True)
+@click.option(
+    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+)
+@click.option("--channel-id", default="")
+@click.option("--channel-name", default="")
+@click.option("--thread-ts", default="")
+@click.option("--message-url", default="")
+@click.option("--limit", type=click.IntRange(1, 200), default=100)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def chat_inspect_thread(
+    person: str,
+    service_name: str,
+    channel_id: str,
+    channel_name: str,
+    thread_ts: str,
+    message_url: str,
+    limit: int,
+    output_format: str,
+) -> None:
+    ref = _resolve_message_reference(
+        channel_id=channel_id or None,
+        thread_ts=thread_ts or None,
+        message_ts=None,
+        message_url=message_url or None,
+    )
+    resolved_thread_ts = ref["thread_ts"] or ref["message_ts"]
+    if not resolved_thread_ts:
+        raise click.ClickException("Either --thread-ts or --message-url is required.")
+    _run(
+        _chat_inspect_thread(
+            person,
+            service_name,
+            ref["channel_id"],
+            channel_name or None,
+            resolved_thread_ts,
+            limit,
+        ),
+        output_format=output_format,
+    )
+
+
+async def _chat_inspect_thread(
+    person: str,
+    service_name: str,
+    channel_id: str | None,
+    channel_name: str | None,
+    thread_ts: str,
+    limit: int,
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberChatCapabilityService(
+        member_person,
+        context.team,
+        context.logger,
+        context.get_chat_service(),
+        service_name=service_name,
+    )
+    try:
+        return await service.inspect_thread(
+            channel_id=channel_id,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            limit=limit,
+        )
+    finally:
+        await service.aclose()
+
+
+@chat.command(name="post")
+@click.option("--person", required=True)
+@click.option(
+    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+)
+@click.option("--channel-id", default="")
+@click.option("--channel-name", default="")
+@click.option("--body-file", type=click.Path(path_type=Path))
+@click.option("--body-stdin", is_flag=True)
+@click.option("--run-id", default="")
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def chat_post(
+    person: str,
+    service_name: str,
+    channel_id: str,
+    channel_name: str,
+    body_file: Path | None,
+    body_stdin: bool,
+    run_id: str,
+    output_format: str,
+) -> None:
+    body = _read_content(body_file, body_stdin, "body")
+    _run(
+        _chat_post(
+            person,
+            service_name,
+            channel_id or None,
+            channel_name or None,
+            body,
+            run_id or None,
+        ),
+        output_format=output_format,
+    )
+
+
+async def _chat_post(
+    person: str,
+    service_name: str,
+    channel_id: str | None,
+    channel_name: str | None,
+    body: str,
+    run_id: str | None,
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberChatCapabilityService(
+        member_person,
+        context.team,
+        context.logger,
+        context.get_chat_service(),
+        service_name=service_name,
+    )
+    try:
+        payload = await service.post(
+            channel_id=channel_id, channel_name=channel_name, body=body
+        )
+        RunStore().append_evidence(current_run_id(run_id), "chat_post", payload)
+        return payload
+    finally:
+        await service.aclose()
+
+
+@chat.command(name="reply")
+@click.option("--person", required=True)
+@click.option(
+    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+)
+@click.option("--channel-id", default="")
+@click.option("--channel-name", default="")
+@click.option("--thread-ts", default="")
+@click.option("--message-url", default="")
+@click.option("--body-file", type=click.Path(path_type=Path))
+@click.option("--body-stdin", is_flag=True)
+@click.option("--run-id", default="")
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def chat_reply(
+    person: str,
+    service_name: str,
+    channel_id: str,
+    channel_name: str,
+    thread_ts: str,
+    message_url: str,
+    body_file: Path | None,
+    body_stdin: bool,
+    run_id: str,
+    output_format: str,
+) -> None:
+    body = _read_content(body_file, body_stdin, "body")
+    ref = _resolve_message_reference(
+        channel_id=channel_id or None,
+        thread_ts=thread_ts or None,
+        message_ts=None,
+        message_url=message_url or None,
+    )
+    resolved_thread_ts = ref["thread_ts"] or ref["message_ts"]
+    if not resolved_thread_ts:
+        raise click.ClickException("Either --thread-ts or --message-url is required.")
+    _run(
+        _chat_reply(
+            person,
+            service_name,
+            ref["channel_id"],
+            channel_name or None,
+            resolved_thread_ts,
+            body,
+            run_id or None,
+        ),
+        output_format=output_format,
+    )
+
+
+async def _chat_reply(
+    person: str,
+    service_name: str,
+    channel_id: str | None,
+    channel_name: str | None,
+    thread_ts: str,
+    body: str,
+    run_id: str | None,
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberChatCapabilityService(
+        member_person,
+        context.team,
+        context.logger,
+        context.get_chat_service(),
+        service_name=service_name,
+    )
+    try:
+        payload = await service.reply(
+            channel_id=channel_id,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            body=body,
+        )
+        RunStore().append_evidence(current_run_id(run_id), "chat_reply", payload)
+        return payload
+    finally:
+        await service.aclose()
+
+
+@chat.group(name="reaction")
+def chat_reaction() -> None:
+    """Chat reaction operations."""
+
+
+@chat_reaction.command(name="add")
+@click.option("--person", required=True)
+@click.option(
+    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+)
+@click.option("--channel-id", default="")
+@click.option("--channel-name", default="")
+@click.option("--message-ts", default="")
+@click.option("--message-url", default="")
+@click.option(
+    "--reaction",
+    required=True,
+    type=click.Choice(["ack", "agree", "celebrate", "support"]),
+)
+@click.option("--run-id", default="")
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def chat_reaction_add(
+    person: str,
+    service_name: str,
+    channel_id: str,
+    channel_name: str,
+    message_ts: str,
+    message_url: str,
+    reaction: str,
+    run_id: str,
+    output_format: str,
+) -> None:
+    ref = _resolve_message_reference(
+        channel_id=channel_id or None,
+        thread_ts=None,
+        message_ts=message_ts or None,
+        message_url=message_url or None,
+    )
+    if not ref["message_ts"]:
+        raise click.ClickException("Either --message-ts or --message-url is required.")
+    _run(
+        _chat_reaction_add(
+            person,
+            service_name,
+            ref["channel_id"],
+            channel_name or None,
+            ref["message_ts"],
+            reaction,
+            run_id or None,
+        ),
+        output_format=output_format,
+    )
+
+
+async def _chat_reaction_add(
+    person: str,
+    service_name: str,
+    channel_id: str | None,
+    channel_name: str | None,
+    message_ts: str,
+    reaction: str,
+    run_id: str | None,
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberChatCapabilityService(
+        member_person,
+        context.team,
+        context.logger,
+        context.get_chat_service(),
+        service_name=service_name,
+    )
+    try:
+        payload = await service.add_reaction(
+            channel_id=channel_id,
+            channel_name=channel_name,
+            message_ts=message_ts,
+            reaction=reaction,
+        )
+        RunStore().append_evidence(current_run_id(run_id), "chat_reaction", payload)
+        return payload
+    finally:
+        await service.aclose()
+
+
+@chat.command(name="noop")
+@click.option("--person", required=True)
+@click.option("--run-id", required=True)
+@click.option(
+    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+)
+@click.option("--channel-id", required=True)
+@click.option("--thread-ts", required=True)
+@click.option("--event-id", required=True)
+@click.option("--reason-file", required=True, type=click.Path(path_type=Path))
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def chat_noop(
+    person: str,
+    run_id: str,
+    service_name: str,
+    channel_id: str,
+    thread_ts: str,
+    event_id: str,
+    reason_file: Path,
+    output_format: str,
+) -> None:
+    reason = _read_file(reason_file, "reason-file")
+    _resolve(person)
+    payload = {
+        "service": service_name,
+        "channel_id": channel_id,
+        "thread_ts": thread_ts,
+        "event_id": event_id,
+        "reason": reason,
+        "noop": True,
+    }
+    RunStore().append_evidence(run_id, "chat_noop", payload)
+    _emit(payload, output_format)
+
+
+@chat.command(name="complete")
+@click.option("--person", required=True)
+@click.option("--run-id", required=True)
+@click.option(
+    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+)
+@click.option("--channel-id", required=True)
+@click.option("--thread-ts", required=True)
+@click.option("--event-id", required=True)
+@click.option(
+    "--status", required=True, type=click.Choice(["done", "asking", "blocked"])
+)
+@click.option("--summary-file", required=True, type=click.Path(path_type=Path))
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def chat_complete(
+    person: str,
+    run_id: str,
+    service_name: str,
+    channel_id: str,
+    thread_ts: str,
+    event_id: str,
+    status: str,
+    summary_file: Path,
+    output_format: str,
+) -> None:
+    summary = _read_file(summary_file, "summary-file")
+    _resolve(person)
+    subject_id = f"{service_name}:{channel_id}:{thread_ts}:{event_id}"
+    try:
+        payload = (
+            RunStore()
+            .complete_run(
+                run_id,
+                status,
+                summary,
+                subject_type="chat",
+                subject_id=subject_id,
+                person_id=person,
+            )
+            .to_dict()
+        )
+    except TaskRunError as exc:
+        raise click.ClickException(_safe_error(exc)) from exc
+    _emit(payload, output_format)
 
 
 @member.group()
@@ -761,6 +1255,21 @@ def _read_message(message_file: Path | None, message_stdin: bool, label: str) ->
     raise click.ClickException("Either --message-file or --message-stdin is required.")
 
 
+def _read_content(content_file: Path | None, content_stdin: bool, label: str) -> str:
+    if content_file is not None and content_stdin:
+        raise click.ClickException(
+            f"Use either --{label}-file or --{label}-stdin, not both."
+        )
+    if content_file is not None:
+        return _read_file(content_file, f"{label}-file")
+    if content_stdin:
+        text = click.get_text_stream("stdin").read()
+        if not text.strip():
+            raise click.ClickException(f"{label} must not be empty.")
+        return text
+    raise click.ClickException(f"Either --{label}-file or --{label}-stdin is required.")
+
+
 def _read_pr_content(
     title_file: Path | None, body_file: Path | None, content_stdin: bool
 ) -> tuple[str, str]:
@@ -786,6 +1295,60 @@ def _read_pr_content(
     raise click.ClickException(
         "Either --content-stdin or both --title-file and --body-file is required."
     )
+
+
+def _resolve_message_reference(
+    *,
+    channel_id: str | None,
+    thread_ts: str | None,
+    message_ts: str | None,
+    message_url: str | None,
+) -> dict[str, str | None]:
+    if not message_url:
+        return {
+            "channel_id": channel_id,
+            "thread_ts": thread_ts,
+            "message_ts": message_ts,
+        }
+
+    parsed = _parse_slack_message_url(message_url)
+    return {
+        "channel_id": channel_id or parsed["channel_id"],
+        "thread_ts": thread_ts or parsed["thread_ts"],
+        "message_ts": message_ts or parsed["message_ts"],
+    }
+
+
+def _parse_slack_message_url(message_url: str) -> dict[str, str | None]:
+    parsed = urlparse(message_url)
+    parts = [part for part in parsed.path.split("/") if part]
+    try:
+        archives_index = parts.index("archives")
+        channel_id = parts[archives_index + 1]
+        raw_message_id = parts[archives_index + 2]
+    except (ValueError, IndexError) as exc:
+        raise click.ClickException(
+            "Slack message URL must be an /archives/... URL."
+        ) from exc
+
+    message_ts = _slack_permalink_ts(raw_message_id)
+    query = parse_qs(parsed.query)
+    thread_values = query.get("thread_ts", [])
+    thread_ts = thread_values[0] if thread_values else message_ts
+    return {
+        "channel_id": channel_id,
+        "message_ts": message_ts,
+        "thread_ts": thread_ts,
+    }
+
+
+def _slack_permalink_ts(raw_message_id: str) -> str:
+    if not raw_message_id.startswith("p"):
+        raise click.ClickException("Slack message URL does not contain a message id.")
+    digits = raw_message_id[1:]
+    if not digits.isdigit() or len(digits) <= SLACK_TS_FRACTION_DIGITS:
+        raise click.ClickException("Slack message URL contains an invalid message id.")
+    return f"{digits[:-SLACK_TS_FRACTION_DIGITS]}.{digits[-SLACK_TS_FRACTION_DIGITS:]}"
 
 
 def _run(coro, *, output_format: str) -> Any:

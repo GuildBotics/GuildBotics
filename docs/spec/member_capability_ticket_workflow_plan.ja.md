@@ -602,13 +602,13 @@ ticket workflow は CLI agent 起動時、repo path ではなく **member worksp
 
 ## Chat / Slack Decision
 
-今回 chat workflow の全面対応は行わない（理由は従来通り: 現行 `chat_conversation_workflow` は Slack event 前提で完結しており、Slack capability まで広げると scope 過大）。
+この ticket workflow 計画では chat workflow の全面対応は行わない。Chat / Slack 側は後続計画 `docs/spec/member_capability_chat_workflow_plan.ja.md` で、同じ member capability 境界へ移行する。
 
-今回やる将来対応:
+ticket workflow 実装時点での将来対応:
 
-- CLI group は `guildbotics member github ...` / `guildbotics member git ...` とし、将来 `guildbotics member chat ...` を足せる構造にする。
+- CLI group は `guildbotics member github ...` / `guildbotics member git ...` とし、後続で `guildbotics member chat ...` を足せる構造にする。
 - service package は `capabilities` として GitHub 専用名に閉じない。
-- docs/spec に「chat workflow は今後、同じ member capability を使って Slack 起点の GitHub/ticket/code 操作へ拡張する」と明記する。
+- chat workflow は後続計画で、Slack write boundary を `guildbotics member chat ...` へ集約する。
 
 ## Implementation Order For One PR
 
@@ -759,7 +759,7 @@ desktop は基本触らず docs/spec 更新に留める。触った場合のみ 
 - 導入前提（managed CLI / active workspace / skill 配置 / member credential / workspace path。env 手渡しは fallback）。
 - **ガードレールの経路別仕様と「完全な技術的禁止ではない」限界を明記する。**
 - follow-up issue 作成は `member github issue create`（実 issue）。review reply は `member github pr reply`。
-- chat workflow / Slack capability は今回 scope 外、将来同じ member capability に乗せる。
+- chat workflow / Slack capability はこの ticket 計画の scope 外。後続の chat 計画で同じ member capability に乗せる。
 
 ## Acceptance Criteria
 
@@ -774,7 +774,7 @@ desktop は基本触らず docs/spec 更新に留める。触った場合のみ 
 - existing ProjectV2 trigger 判定は維持される。
 - ノンインタラクティブ経路で `_isolate_github_write_credentials` が維持され、`gh`/ambient git による利用者アカウント操作が成立しない。
 - インタラクティブ経路向けに `gh`/`git push` のクライアント拒否設定手順が docs にある。
-- chat workflow は壊さず、今回の実装 scope から外れている。
+- chat workflow はこの ticket 計画では壊さず、後続の chat 計画で member capability 化する。
 - README/docs/spec が新構造とガードレール経路別仕様を説明している。
 - 関連 Python lint/type/test が通る。
 
@@ -895,7 +895,7 @@ PR review 対応シナリオ: review comment 付き PR → `pr inspect --include
 - ガードレールは経路別: ノンインタラクティブは `_isolate_github_write_credentials`（維持）、インタラクティブはクライアント拒否設定 + 人間承認。いずれも完全な技術的禁止ではない。
 - **member credential は active workspace / `GUILDBOTICS_ENV_FILE`（fallback: cwd `.env`）から `guildbotics member` が自力ロードする。agent 環境変数の継承には依存しない（Codex は `*TOKEN*` を削除するため）。**
 - Desktop app は同梱済み `guildbotics-cli` と skill を安定配置し、interactive skill 経路では `~/.guildbotics/bin/guildbotics` を優先する。
-- Slack capability は今回実装しない。
+- Slack capability はこの ticket 計画では実装しない。後続の chat 計画で `guildbotics member chat ...` として実装する。
 - App API 直呼びではなく CLI を skill の安定入口にする（CLI の裏側実装は将来変えてよい）。
 - ProjectV2 は trigger source として残す。
 - member workspace は `~/.guildbotics/data/workspaces/<person_id>` を使う。

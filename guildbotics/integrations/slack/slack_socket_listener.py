@@ -17,6 +17,24 @@ from guildbotics.runtime.event_listener import EventListener, IncomingChatEvent
 
 _MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 
+# Slack error codes that will not recover by reconnecting with the same token.
+# Retrying these only produces noise, so the listener surfaces them and stops.
+_PERMANENT_AUTH_ERRORS = frozenset(
+    {
+        "invalid_auth",
+        "not_authed",
+        "account_inactive",
+        "token_revoked",
+        "token_expired",
+        "no_permission",
+        "not_allowed_token_type",
+    }
+)
+
+
+class SlackSocketAuthError(RuntimeError):
+    """Raised when Slack rejects the app-level token (permanent failure)."""
+
 
 class SlackSocketEventListener(EventListener):
     """Slack Socket Mode listener that only manages receive/ack/queue lifecycle."""
@@ -29,10 +47,14 @@ class SlackSocketEventListener(EventListener):
         base_url: str | None = None,
         http_client: httpx.Client | None = None,
         ws_connect: Callable[[str], Any] | None = None,
+        person_ids: list[str] | None = None,
     ) -> None:
         self._logger = logger
         self._app_token = app_token
         self._base_url = (base_url or "https://slack.com/api").rstrip("/")
+        # Person IDs whose Socket Mode subscriptions share this app-level token.
+        # Used only to make auth-failure diagnostics name the affected member(s).
+        self._person_ids = list(person_ids or [])
         self._http_client = http_client
         self._owns_http_client = http_client is None
         self._ws_connect = ws_connect
@@ -47,9 +69,17 @@ class SlackSocketEventListener(EventListener):
         self._reconnects = 0
         self._received_events = 0
         self._acks_sent = 0
+        self._auth_failed = False
+
+    @property
+    def auth_failed(self) -> bool:
+        """True when Slack permanently rejected this connection's app-level token."""
+        return self._auth_failed
 
     def start(self) -> None:
         with self._thread_lock:
+            if self._auth_failed:
+                return
             if self._thread is not None and self._thread.is_alive():
                 return
             self._stop_event.clear()
@@ -118,6 +148,19 @@ class SlackSocketEventListener(EventListener):
                         self._received_events += 1
                         self._queue.put(item)
                     self._ack_if_needed(ws, payload)
+            except SlackSocketAuthError as e:
+                self._auth_failed = True
+                members = ", ".join(self._person_ids) or "unknown"
+                self._log_warning(
+                    "slack socket listener authentication failed: member(s)=%s "
+                    "base_url=%s error=%s. The app-level token (SLACK_APP_TOKEN) for "
+                    "the listed member(s) is invalid; stopping reconnect attempts "
+                    "until the token is fixed and the service is restarted.",
+                    members,
+                    self._base_url,
+                    e,
+                )
+                return
             except Exception as e:
                 if not self._stop_event.is_set():
                     self._log_debug(
@@ -141,7 +184,10 @@ class SlackSocketEventListener(EventListener):
                 if isinstance(payload, dict)
                 else "invalid_json"
             )
-            raise RuntimeError(f"Slack API 'apps.connections.open' failed: {error}")
+            message = f"Slack API 'apps.connections.open' failed: {error}"
+            if error in _PERMANENT_AUTH_ERRORS:
+                raise SlackSocketAuthError(message)
+            raise RuntimeError(message)
         url = str(payload.get("url", "") or "")
         if not url:
             raise RuntimeError("Slack API 'apps.connections.open' returned empty url.")
@@ -249,6 +295,10 @@ class SlackSocketEventListener(EventListener):
     def _log_info(self, message: str, *args: Any) -> None:
         with suppress(Exception):
             self._logger.info(message, *args)
+
+    def _log_warning(self, message: str, *args: Any) -> None:
+        with suppress(Exception):
+            self._logger.warning(message, *args)
 
 
 def _extract_mentions(text: str) -> list[str]:

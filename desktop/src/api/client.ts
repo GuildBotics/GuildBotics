@@ -66,6 +66,8 @@ export type RuntimeUnitStatus = {
   events_drained_count: number | null;
   events_delivered_count: number | null;
   events_skipped_processed_count: number | null;
+  events_auth_failed_count: number | null;
+  events_auth_failed_persons: string[];
 };
 
 export type RuntimeStatus = {

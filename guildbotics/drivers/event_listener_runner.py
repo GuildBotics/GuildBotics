@@ -58,6 +58,7 @@ class EventListenerRunner:
         self._thread_lock = threading.Lock()
         self._listeners: dict[SlackConnectionKey, EventListener] = {}
         self._listener_tokens: dict[SlackConnectionKey, str] = {}
+        self._connection_person_ids: dict[SlackConnectionKey, list[str]] = {}
         self._subscription_channel_cache: dict[
             str, tuple[SubscriptionSignature, set[str]]
         ] = {}
@@ -94,12 +95,18 @@ class EventListenerRunner:
         thread = self._thread
         return bool(thread is not None and thread.is_alive())
 
-    def get_status_summary(self) -> dict[str, int | str]:
+    def get_status_summary(self) -> dict[str, Any]:
         """Return lightweight runtime counters for GUI status displays."""
         subscription_count = sum(
             len(channel_ids)
             for _, channel_ids in self._subscription_channel_cache.values()
         )
+        auth_failed_persons: list[str] = []
+        auth_failed_count = 0
+        for key, listener in self._listeners.items():
+            if getattr(listener, "auth_failed", False):
+                auth_failed_count += 1
+                auth_failed_persons.extend(self._connection_person_ids.get(key, []))
         return {
             "workflow_command": self.workflow_command,
             "subscription_count": subscription_count,
@@ -109,6 +116,8 @@ class EventListenerRunner:
             "events_drained_count": self._events_drained_count,
             "events_delivered_count": self._events_delivered_count,
             "events_skipped_processed_count": self._events_skipped_processed_count,
+            "events_auth_failed_count": auth_failed_count,
+            "events_auth_failed_persons": sorted(set(auth_failed_persons)),
         }
 
     async def dispatch_incoming_event(
@@ -250,6 +259,10 @@ class EventListenerRunner:
                 continue
             self._listener_tokens.setdefault(key, app_token)
             grouped.setdefault(key, []).append((person, channel_ids))
+        self._connection_person_ids = {
+            key: [person.person_id for person, _ in subs]
+            for key, subs in grouped.items()
+        }
         return grouped
 
     async def _resolve_subscription_channel_ids_cached(
@@ -360,6 +373,7 @@ class EventListenerRunner:
             logger=self.context.logger,
             app_token=app_token,
             base_url=key.base_url,
+            person_ids=self._connection_person_ids.get(key, []),
         )
         self._listeners[key] = listener
         self._log_info(

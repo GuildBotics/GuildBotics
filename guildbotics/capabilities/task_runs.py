@@ -9,19 +9,24 @@ from typing import Any, ClassVar
 
 from guildbotics.utils.fileio import get_storage_path
 
+RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
 
 
-class TaskRunError(RuntimeError):
+class RunError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
-class TaskRunStatus:
+class RunStatus:
     run_id: str
     completed: bool
     status: str
     summary: str
+    subject_type: str
+    subject_id: str
+    subject_url: str
+    person_id: str
     evidence_count: int
     evidence_types: list[str]
     completed_at: str
@@ -32,14 +37,18 @@ class TaskRunStatus:
             "completed": self.completed,
             "status": self.status,
             "summary": self.summary,
+            "subject_type": self.subject_type,
+            "subject_id": self.subject_id,
+            "subject_url": self.subject_url,
+            "person_id": self.person_id,
             "evidence_count": self.evidence_count,
             "evidence_types": self.evidence_types,
             "completed_at": self.completed_at,
         }
 
 
-class TaskRunStore:
-    WRITE_EVIDENCE_TYPES: ClassVar[set[str]] = {
+class RunStore:
+    TICKET_WRITE_EVIDENCE_TYPES: ClassVar[set[str]] = {
         "issue_comment",
         "pr_comment",
         "pr_reply",
@@ -48,10 +57,20 @@ class TaskRunStore:
         "git_publish",
         "issue_create",
     }
-    COMMENT_EVIDENCE_TYPES: ClassVar[set[str]] = {
+    TICKET_COMMENT_EVIDENCE_TYPES: ClassVar[set[str]] = {
         "issue_comment",
         "pr_comment",
         "pr_reply",
+    }
+    CHAT_WRITE_EVIDENCE_TYPES: ClassVar[set[str]] = {
+        "chat_reply",
+        "chat_post",
+        "chat_reaction",
+        "chat_noop",
+    }
+    CHAT_ASKING_EVIDENCE_TYPES: ClassVar[set[str]] = {
+        "chat_reply",
+        "chat_post",
     }
 
     def __init__(self, root: Path | None = None) -> None:
@@ -83,12 +102,35 @@ class TaskRunStore:
 
     def complete(
         self, run_id: str, status: str, summary: str, ticket_url: str, person_id: str
-    ) -> TaskRunStatus:
-        records = self._read_records(run_id)
+    ) -> RunStatus:
+        return self.complete_run(
+            run_id,
+            status,
+            summary,
+            subject_type="ticket",
+            subject_id=ticket_url,
+            subject_url=ticket_url,
+            person_id=person_id,
+        )
+
+    def complete_run(
+        self,
+        run_id: str,
+        status: str,
+        summary: str,
+        *,
+        subject_type: str,
+        subject_id: str,
+        subject_url: str = "",
+        person_id: str,
+    ) -> RunStatus:
+        records = self._read_records_if_exists(run_id)
         evidence_types = _evidence_types(records)
-        if not self._has_required_evidence(status, evidence_types, records):
+        if not self._has_required_evidence(
+            status, subject_type, summary, evidence_types, records
+        ):
             raise TaskRunError(
-                f"Task run '{run_id}' cannot be completed without required write evidence."
+                f"Run '{run_id}' cannot be completed without required write evidence."
             )
         completed_at = datetime.now(UTC).isoformat()
         self.append(
@@ -97,14 +139,23 @@ class TaskRunStore:
                 "kind": "complete",
                 "status": status,
                 "summary": summary,
-                "ticket_url": ticket_url,
+                "subject_type": subject_type,
+                "subject_id": subject_id,
+                "subject_url": subject_url,
                 "person_id": person_id,
                 "completed_at": completed_at,
             },
         )
         return self.status(run_id)
 
-    def status(self, run_id: str) -> TaskRunStatus:
+    def evidence(self, run_id: str) -> list[dict[str, Any]]:
+        return [
+            record
+            for record in self._read_records(run_id)
+            if record.get("kind") == "evidence"
+        ]
+
+    def status(self, run_id: str) -> RunStatus:
         records = self._read_records(run_id)
         evidence_types = _evidence_types(records)
         completions = [record for record in records if record.get("kind") == "complete"]
@@ -114,13 +165,23 @@ class TaskRunStore:
         status = str(latest.get("status", ""))
         if status not in {"done", "asking", "blocked"}:
             raise TaskRunError(f"Task run '{run_id}' has invalid status '{status}'.")
-        if not self._has_required_evidence(status, evidence_types, records):
+        subject_type = str(latest.get("subject_type") or "ticket")
+        summary = str(latest.get("summary", ""))
+        if not self._has_required_evidence(
+            status, subject_type, summary, evidence_types, records
+        ):
             raise TaskRunError(f"Task run '{run_id}' is missing required evidence.")
-        return TaskRunStatus(
+        return RunStatus(
             run_id=run_id,
             completed=True,
             status=status,
-            summary=str(latest.get("summary", "")),
+            summary=summary,
+            subject_type=subject_type,
+            subject_id=str(latest.get("subject_id") or latest.get("ticket_url") or ""),
+            subject_url=str(
+                latest.get("subject_url") or latest.get("ticket_url") or ""
+            ),
+            person_id=str(latest.get("person_id", "")),
             evidence_count=len(evidence_types),
             evidence_types=evidence_types,
             completed_at=str(latest.get("completed_at", "")),
@@ -144,6 +205,12 @@ class TaskRunStore:
                 records.append(record)
         return records
 
+    def _read_records_if_exists(self, run_id: str) -> list[dict[str, Any]]:
+        path = self._path(run_id)
+        if not path.is_file():
+            return []
+        return self._read_records(run_id)
+
     def _path(self, run_id: str) -> Path:
         safe_run_id = run_id.strip()
         if not safe_run_id or "/" in safe_run_id or "\\" in safe_run_id:
@@ -151,20 +218,35 @@ class TaskRunStore:
         return self.root / f"{safe_run_id}.jsonl"
 
     def _has_required_evidence(
-        self, status: str, evidence_types: list[str], records: list[dict[str, Any]]
+        self,
+        status: str,
+        subject_type: str,
+        summary: str,
+        evidence_types: list[str],
+        records: list[dict[str, Any]],
     ) -> bool:
         present = set(evidence_types)
-        if not present & self.WRITE_EVIDENCE_TYPES:
+        if status == "blocked":
+            return bool(summary.strip())
+        if subject_type == "chat":
+            if status == "asking":
+                return bool(present & self.CHAT_ASKING_EVIDENCE_TYPES)
+            return bool(present & self.CHAT_WRITE_EVIDENCE_TYPES)
+        if not present & self.TICKET_WRITE_EVIDENCE_TYPES:
             return False
         if status == "asking":
-            return bool(present & self.COMMENT_EVIDENCE_TYPES)
+            return bool(present & self.TICKET_COMMENT_EVIDENCE_TYPES)
         if status == "done" and _has_code_publish(records):
             return "pr_create" in present
         return True
 
 
 def current_task_run_id(explicit: str | None = None) -> str | None:
-    return explicit or os.getenv(TASK_RUN_ENV) or None
+    return explicit or os.getenv(TASK_RUN_ENV) or os.getenv(RUN_ENV) or None
+
+
+def current_run_id(explicit: str | None = None) -> str | None:
+    return explicit or os.getenv(RUN_ENV) or os.getenv(TASK_RUN_ENV) or None
 
 
 def _evidence_types(records: list[dict[str, Any]]) -> list[str]:
@@ -199,3 +281,8 @@ def _has_code_publish(records: list[dict[str, Any]]) -> bool:
         if isinstance(payload, dict) and payload.get("commit_sha"):
             return True
     return False
+
+
+TaskRunError = RunError
+TaskRunStatus = RunStatus
+TaskRunStore = RunStore

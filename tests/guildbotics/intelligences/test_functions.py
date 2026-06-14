@@ -78,9 +78,8 @@ def test_guildbotics_skill_uses_member_persona_without_decorating_control_data()
         "active GuildBotics member for the rest of the conversation/session"
         in skill["body"]
     )
-    assert "Interactive Workspace Rules" in skill["body"]
+    assert "Workspace Rules" in skill["body"]
     assert "guildbotics_execution_mode=workflow" in skill["body"]
-    assert "Do not infer execution mode from the client name alone" in skill["body"]
     assert "shared pair-programming workspace" in skill["body"]
     assert "--workspace-mode current" in skill["body"]
     assert "Do not run `member git prepare`" in skill["body"]

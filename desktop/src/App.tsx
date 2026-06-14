@@ -610,7 +610,11 @@ function TraceExplorer() {
   const [source, setSource] = useState("all");
   const [searchInput, setSearchInput] = useState("");
   const [query, setQuery] = useState("");
-  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  // Default to the pinned Global / system view so unscoped records (service
+  // lifecycle events and global logs such as Slack listener auth failures) are
+  // visible the moment the executions tab opens, without the user having to know
+  // to click the Global entry.
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(GLOBAL_TRACE_ID);
   const [recordFilter, setRecordFilter] = useState("all");
   const [recordScopeFilter, setRecordScopeFilter] = useState<RecordScopeFilter | null>(null);
   const [drawerRecord, setDrawerRecord] = useState<TraceRecord | null>(null);
@@ -1524,6 +1528,13 @@ function ServiceRuntimeSection({
           <FragmentRow key={label} label={label} value={value || t("overview.unknown")} />
         ))}
       </dl>
+      {(unit?.events_auth_failed_count ?? 0) > 0 ? (
+        <Alert color="red" title={t("overview.eventsCard.authFailedTitle")}>
+          {t("overview.eventsCard.authFailedBody", {
+            persons: (unit?.events_auth_failed_persons ?? []).join(", ") || t("overview.unknown"),
+          })}
+        </Alert>
+      ) : null}
       {isStopTimeoutPending(unit) ? (
         <Text c="dimmed" size="sm">
           {t("overview.stopDelayHint")}

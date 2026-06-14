@@ -44,7 +44,24 @@ def _dummy_logger():
         def debug(self, *args, **kwargs):
             return None
 
+        def warning(self, *args, **kwargs):
+            return None
+
     return _L()
+
+
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.warnings: list[tuple] = []
+
+    def debug(self, *args, **kwargs):
+        return None
+
+    def info(self, *args, **kwargs):
+        return None
+
+    def warning(self, *args, **kwargs):
+        self.warnings.append(args)
 
 
 def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
@@ -115,6 +132,53 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
     assert ws2.closed is True
     assert [item.event.event_id for item in drained] == ["C1:100.1"]
     assert any("env-1" in msg for msg in ws1.sent)
+
+
+def test_invalid_auth_surfaces_warning_and_stops_retrying(monkeypatch):
+    monkeypatch.setattr(
+        "guildbotics.integrations.slack.slack_socket_listener.time.sleep",
+        lambda _s: None,
+    )
+
+    open_calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        open_calls["count"] += 1
+        return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    logger = _RecordingLogger()
+    listener = SlackSocketEventListener(
+        logger=logger,
+        app_token="xapp-broken",
+        http_client=client,
+        ws_connect=lambda _url: _FakeSocket([]),
+        person_ids=["yuki"],
+    )
+
+    listener.start()
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if listener.auth_failed:
+            break
+        time.sleep(0.01)
+
+    # Permanent auth errors must not be retried in a tight loop.
+    time.sleep(0.1)
+    listener.stop()
+    client.close()
+
+    assert listener.auth_failed is True
+    assert open_calls["count"] == 1
+    # The warning must name the affected member so the broken token is actionable.
+    assert any(
+        "authentication failed" in str(args) and "yuki" in str(args)
+        for args in logger.warnings
+    )
+
+    # A subsequent start() must be a no-op while the token stays invalid.
+    listener.start()
+    assert open_calls["count"] == 1
 
 
 def test_to_incoming_event_ignores_message_changed_and_deleted():

@@ -325,7 +325,7 @@ async def test_cli_agent_prompt_trace_records_request_and_response(
     try:
         brain = cli_agent.CliAgentBrain(
             "p1",
-            "workflows/chat/chat_reply_actionable",
+            "functions/handle_chat_event",
             logger=type(
                 "L",
                 (),
@@ -359,7 +359,7 @@ async def test_cli_agent_prompt_trace_records_request_and_response(
         "cli_agent.response",
     ]
     assert events[0]["person_id"] == "p1"
-    assert events[0]["brain"] == "workflows/chat/chat_reply_actionable"
+    assert events[0]["brain"] == "functions/handle_chat_event"
     assert "Reply as Alice." in events[0]["prompt"]
     assert events[1]["stdout"] == "done"
     assert events[1]["stderr"] == "debug output"

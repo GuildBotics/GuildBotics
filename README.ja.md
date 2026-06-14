@@ -520,13 +520,15 @@ task_schedules:
 
 ## 5.6. Slack チャットワークフロー
 
-Slackチャットワークフローでは、`person.yml` の `message_channels` に設定したチャネルを監視し、メンションやスレッド継続に反応して返信します。また、定期投稿用のコマンド出力をチャネルへ投稿できます。
+Slackチャットワークフローでは、`person.yml` の `message_channels` に設定したチャネルを監視し、incoming event を設定済み CLI agent へ委譲します。CLI agent は返信、reaction、no-op、質問、blocked のいずれにするかを判断します。Slack への投稿・返信・reaction は public member capability である `guildbotics member chat ...` 経由でのみ実行されます。
+
+定期投稿は別経路です。定期投稿には従来どおり `task_schedules` + `workflows/chat_post_command` を使います。
 
 チャット受信は `guildbotics start` で起動されるイベントリスナーランナーが担当するため、`--only scheduler` オプションでスケジューラのみを起動している場合は受信できません。
 
-CLI ベースのチャット返信では、返信生成は agent ごとの workspace root である `~/.guildbotics/data/workspaces/<person_id>/` を `cwd` にして実行されます。この配下にある cloned repository を参照できます。また、GuildBotics は `~/.guildbotics/data/memory/<person_id>/` に agent ごとの personal memory リポジトリも保持します。
-既定の personal memory backend は Cognee で、person ごとに `guildbotics:person:<person_id>` dataset を使います。`GUILDBOTICS_MEMORY_BACKEND=file` を設定すると fallback / test / migration 用の file backend を使い、`memory_index.yml` と `topics/<topic_id>/memory.md` の topic 別メモリーへ保存します。`GUILDBOTICS_MEMORY_BACKEND=fake` は deterministic test 用です。GuildBotics は返信生成前に関連メモリーを取得して正規化済み `memory_context` を prompt 経由で渡し、返信投稿後に独立したメモリー更新ステップを実行します。`GUILDBOTICS_MEMORY_TRACE=1` を設定すると recall / remember の正規化済み trace event を JSONL に追記します。`GUILDBOTICS_MEMORY_TRACE_PATH` で出力先を指定でき、未指定時は `~/.guildbotics/data/run/memory_trace.jsonl` を使います。
-`person.yml` の `character` には、興味・嗜好・会話参加方針などを定義できます。チャット返信判断と返信生成はこの profile を参照し、明示メンションがない会話でも、その agent ならではの観点を足せる場合に参加できます。
+CLI agent によるチャット処理では、`functions/handle_chat_event` が agent ごとの workspace root である `~/.guildbotics/data/workspaces/<person_id>/` を `cwd` にして実行されます。この配下にある cloned repository を参照できます。workflow は `guildbotics member chat complete` が記録した run evidence を検証し、agent の自然言語 stdout は Slack side effect の証拠として扱いません。
+また、GuildBotics は `~/.guildbotics/data/memory/<person_id>/` に agent ごとの personal memory リポジトリも保持します。既定の personal memory backend は Cognee で、person ごとに `guildbotics:person:<person_id>` dataset を使います。`GUILDBOTICS_MEMORY_BACKEND=file` を設定すると fallback / test / migration 用の file backend を使い、`memory_index.yml` と `topics/<topic_id>/memory.md` の topic 別メモリーへ保存します。`GUILDBOTICS_MEMORY_BACKEND=fake` は deterministic test 用です。GuildBotics は CLI agent への委譲前に関連メモリーを取得して正規化済み `memory_context` を prompt 経由で渡し、`chat_reply` または `chat_post` evidence がある場合だけ返信投稿後に独立したメモリー更新ステップを実行します。`GUILDBOTICS_MEMORY_TRACE=1` を設定すると recall / remember の正規化済み trace event を JSONL に追記します。`GUILDBOTICS_MEMORY_TRACE_PATH` で出力先を指定でき、未指定時は `~/.guildbotics/data/run/memory_trace.jsonl` を使います。
+`person.yml` の `character` には、興味・嗜好・会話参加方針などを定義できます。チャット判断と返信生成は CLI agent 経由でこの profile を参照します。
 
 ### 5.6.1. 事前設定（Slack 側）
 
@@ -603,8 +605,16 @@ task_schedules:
 ポイント:
 
 - 監視対象チャネルは `person.yml` の `message_channels` で定義し、`chat.enabled: true` のものが対象
+- incoming reply / reaction / no-op / completion evidence は `guildbotics member chat reply|post|reaction add|noop|complete` 経由で記録される
 - 定期投稿は `task_schedules` + `workflows/chat_post_command` を使う（投稿本文は GuildBotics カスタムコマンドの出力）
 - 例: `examples/reports/ai_news_digest` は前段でニュースRSSを取得し、後段でLLMがSlack向けに要約整形するサンプル
+
+interactive member chat の例:
+
+```bash
+guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --body-file reply.md
+guildbotics member chat reaction add --person alice --service slack --channel-id C0123456789 --message-ts 1777554000.000000 --reaction ack
+```
 
 
 定期投稿コマンドの具体例（AIニュースダイジェスト）:

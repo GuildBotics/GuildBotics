@@ -5,7 +5,7 @@ description: Work as a configured GuildBotics member through the guildbotics mem
 
 # GuildBotics Member Capability
 
-Use this skill when the user asks you to act as a GuildBotics member, handle a GitHub issue or pull request through GuildBotics, or publish GitHub/git work as a configured member.
+Use this skill when the user asks you to act as a GuildBotics member, handle a GitHub issue or pull request through GuildBotics, publish GitHub/git work as a configured member, or post/reply/react in Slack as a configured member.
 
 ## Required First Step
 
@@ -42,24 +42,18 @@ Do not switch to another member unless the user explicitly asks to switch member
 
 ## Safety Rules
 
-- Do not use direct GitHub or git write commands such as `gh`, raw GitHub token/API writes, `git commit`, or `git push`.
-- All GitHub and git writes must go through `guildbotics member ... --person <person_id>`.
+- Do not use direct GitHub, git, or Slack write commands such as `gh`, raw GitHub/Slack token/API writes, `git commit`, `git push`, or raw Slack HTTP calls.
+- All GitHub, git, and Slack writes must go through `guildbotics member ... --person <person_id>`.
 - Do not display, infer, store, or copy secrets.
 - Use the active GuildBotics workspace configured by the desktop app or `guildbotics workspace use <path>`.
 - If `guildbotics member ...` reports that no active workspace is configured, ask the user to select a workspace in GuildBotics desktop or run `guildbotics workspace use <path>`.
 - Prefer the desktop-managed CLI at `$HOME/.guildbotics/bin/guildbotics`. Use bare `guildbotics` only if that managed CLI is unavailable.
 
-## Interactive Workspace Rules
+## Workspace Rules
 
-Execution mode is determined by explicit GuildBotics markers:
-
-- If the prompt contains `guildbotics_execution_mode=workflow`, this is a non-interactive workflow run.
-- Otherwise, when the user invokes this skill directly from a CLI/Desktop coding session, this is an interactive run.
-
-Do not infer execution mode from the client name alone.
-In interactive runs, treat the user's currently open repository as the shared pair-programming workspace.
+Treat the user's currently open repository as the shared pair-programming workspace.
 Do not run `member git prepare` or clone into the member workspace unless the user explicitly asks for an isolated workspace.
-Do not switch branches, create branches, reset, clean, or pull automatically in interactive mode.
+Do not switch branches, create branches, reset, clean, or pull automatically.
 Inspect the current repository, branch, remote, and working tree state. If the current branch or repository does not match the issue/PR work, stop and ask the user before making git workspace changes.
 Edit and test in the current repository. When publishing is appropriate, use:
 
@@ -77,7 +71,7 @@ If the user explicitly asks to create a new branch from the current branch, use:
 "$HOME/.guildbotics/bin/guildbotics" member git branch create --person <person_id> --repo-path <current_repo_path> --branch <branch_name> --workspace-mode current
 ```
 
-## Interactive GitHub Issue Flow
+## GitHub Issue Flow
 
 1. `"$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>`
 2. `"$HOME/.guildbotics/bin/guildbotics" member github issue inspect --person <person_id> --url <issue_url>`
@@ -98,7 +92,7 @@ EOF
 Omit `--base` only when the repository default branch is the intended PR target.
 8. Post the final issue comment in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github issue comment`, or leave a reaction if no action is needed.
 
-## Interactive PR Review Flow
+## PR Review Flow
 
 1. `"$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>`
 2. `"$HOME/.guildbotics/bin/guildbotics" member github pr inspect --person <person_id> --url <pr_url> --include-comments`
@@ -110,14 +104,49 @@ Omit `--base` only when the repository default branch is the intended PR target.
 8. Reply to inline review threads in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github pr reply --reply-target-id <reply_target_id>`.
 9. If no change is needed, leave a reply or reaction so the workflow has observable evidence.
 
-## Workflow Runs
+## Slack Chat Flow
 
-When invoked by `ticket_driven_workflow`, the prompt contains `guildbotics_execution_mode=workflow` and includes `workflow_run_id`.
-Workflow runs are non-interactive and use isolated member workspaces. In that mode, run `member git prepare`, edit under `~/.guildbotics/data/workspaces/<person_id>`, and use the default member workspace publish mode. Do not use `--workspace-mode current` in workflow runs.
-Before returning success, run:
+1. `"$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>`
+2. Use the returned `communication_style.interactive_replies` and member profile to draft Slack text in the active member's voice.
+3. Prefer human-friendly Slack inputs. Use `--channel-name` for channel names such as `general` or `#general`, and use `--message-url` for Slack message links instead of asking the user for channel IDs, `thread_ts`, or `message_ts`.
+4. When the user asks you to inspect or respond to an existing Slack message/thread, read it first:
 
 ```bash
-"$HOME/.guildbotics/bin/guildbotics" member task complete --person <person_id> --run-id <workflow_run_id> --ticket-url <issue_url> --status done|asking|blocked --summary-file <file>
+"$HOME/.guildbotics/bin/guildbotics" member chat inspect thread --person <person_id> --service slack --message-url <slack_message_url>
 ```
 
-If this command fails, do not return a successful response. Add the required evidence with a member write command or fail the agent run.
+5. When the user asks about recent channel discussion, read the channel first. Convert natural-language date ranges to Slack timestamps before calling the command:
+
+```bash
+"$HOME/.guildbotics/bin/guildbotics" member chat inspect channel --person <person_id> --service slack --channel-name <channel_name> --oldest-ts <oldest_ts> --latest-ts <latest_ts> --limit <limit>
+```
+
+6. Post a thread reply with a Slack message URL and a body file or stdin:
+
+```bash
+"$HOME/.guildbotics/bin/guildbotics" member chat reply --person <person_id> --service slack --message-url <slack_message_url> --body-stdin <<'EOF'
+<Slack reply in the member's voice>
+EOF
+```
+
+7. Post a channel message only when a normal channel post is intended:
+
+```bash
+"$HOME/.guildbotics/bin/guildbotics" member chat post --person <person_id> --service slack --channel-name <channel_name> --body-stdin <<'EOF'
+<Slack message in the member's voice>
+EOF
+```
+
+8. For reaction-only responses, use semantic reactions only:
+
+```bash
+"$HOME/.guildbotics/bin/guildbotics" member chat reaction add --person <person_id> --service slack --message-url <slack_message_url> --reaction ack|agree|celebrate|support
+```
+
+Do not expose Slack emoji implementation names, Slack tokens, or raw Slack API payloads.
+
+## Workflow Marker Guardrail
+
+If a prompt contains `guildbotics_execution_mode=workflow`, treat that prompt as the primary workflow contract. Do not replace or infer workflow steps from this skill.
+Workflow runs are non-interactive and use isolated member workspaces. In that mode, follow the workflow prompt for repository preparation, inspect/read commands, write commands, and the required completion command. Do not use `--workspace-mode current` in workflow runs.
+Do not return success from a workflow run until the workflow prompt's required `guildbotics member ... complete` command has succeeded. If completion fails, add the missing evidence required by the workflow prompt or fail the agent run.

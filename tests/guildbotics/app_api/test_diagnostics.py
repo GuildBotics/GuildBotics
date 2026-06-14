@@ -153,6 +153,16 @@ def _patch_provider(monkeypatch: pytest.MonkeyPatch, provider: str = "openai") -
     )
 
 
+def _patch_app_token_probe(
+    monkeypatch: pytest.MonkeyPatch, *, error: Exception | None = None
+) -> None:
+    async def _probe(app_token: str, base_url: Any) -> None:
+        if error is not None:
+            raise error
+
+    monkeypatch.setattr(diagnostics_module, "probe_slack_app_token", _probe)
+
+
 def _by_code(response: Any) -> dict:
     return {check.code: check for check in response.checks}
 
@@ -732,6 +742,7 @@ async def test_slack_credential_present_and_channel_ok(
 ) -> None:
     _patch_talk(monkeypatch)
     _patch_cli(monkeypatch)
+    _patch_app_token_probe(monkeypatch)
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
     context = _StubContext(
         team=_team([_slack_member("alice")]),
@@ -741,10 +752,32 @@ async def test_slack_credential_present_and_channel_ok(
     response = await _run(context)
 
     checks = _by_code(response)
-    assert "slack_app_token" not in checks
+    assert checks["slack_app_token"].status == "ok"
     assert checks["slack_bot_auth"].status == "ok"
     assert checks["slack_bot_auth"].context["bot_user_id"] == "U123"
     assert checks["slack_channel_history"].status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_slack_app_token_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    from guildbotics.capabilities.member_github import MemberCapabilityError
+
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    _patch_app_token_probe(monkeypatch, error=MemberCapabilityError("invalid_auth"))
+    monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-broken")
+    context = _StubContext(
+        team=_team([_slack_member("alice")]),
+        brain=_StubBrain(_CliResult()),
+    )
+
+    response = await _run(context)
+
+    check = _by_code(response)["slack_app_token_invalid"]
+    assert check.status == "error"
+    assert check.target == "ALICE_SLACK_APP_TOKEN"
+    assert "invalid_auth" in check.message
+    assert not response.ok
 
 
 @pytest.mark.asyncio
@@ -769,6 +802,7 @@ async def test_slack_credential_missing(monkeypatch: pytest.MonkeyPatch) -> None
 async def test_slack_access_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_talk(monkeypatch)
     _patch_cli(monkeypatch)
+    _patch_app_token_probe(monkeypatch)
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
 
     class _FailingChat(_StubChatService):

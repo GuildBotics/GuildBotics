@@ -620,7 +620,8 @@ describe("Diagnostics executions tab", () => {
 
     renderApp();
     await openTab(user, t("diagnostics.tabs.executions"));
-    await user.click(await screen.findByText(t("diagnostics.executions.global.title")));
+    // The Global view is selected by default, so its records load without the
+    // user having to click the pinned Global entry.
 
     expect(await screen.findByText("application started")).toBeInTheDocument();
     expect(screen.getByText("scheduler.running")).toBeInTheDocument();
@@ -774,5 +775,7 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     events_drained_count: 0,
     events_delivered_count: 0,
     events_skipped_processed_count: 0,
+    events_auth_failed_count: 0,
+    events_auth_failed_persons: [],
   };
 }
