@@ -32,7 +32,7 @@ import {
   type IntelligenceConfig,
   type MemberConfig,
 } from "../api/client";
-import { restartBackend } from "../api/backend";
+import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import i18n from "../i18n";
 import {
   type ScheduledCommandDraft,
@@ -65,6 +65,14 @@ const dialogMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/backend", () => ({
+  forceUpdateCliAgentSkill: vi.fn(async (agent: string) => ({
+    agent,
+    agent_home: `/home/.${agent}`,
+    skill_path: `/home/.${agent}/skills/guildbotics/SKILL.md`,
+    status: "up_to_date",
+    can_force_update: false,
+  })),
+  getCliAgentSkillStatuses: vi.fn(async () => ({ agents: [] })),
   restartBackend: vi.fn(async () => undefined),
 }));
 
@@ -353,6 +361,40 @@ describe("SetupPage", () => {
 
     expect(screen.getByRole("button", { name: /OpenAI Codex CLI/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /Claude Code/ })).toBeDisabled();
+  });
+
+  it("shows CLI agent skill status and allows an explicit overwrite", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getConfigStatus).mockResolvedValue(
+      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
+    );
+    vi.mocked(getTeam).mockRejectedValue(
+      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
+    );
+    vi.mocked(getCliAgentSkillStatuses).mockResolvedValue({
+      agents: [
+        {
+          agent: "codex",
+          agent_home: "/home/.codex",
+          skill_path: "/home/.codex/skills/guildbotics/SKILL.md",
+          status: "user_modified",
+          can_force_update: true,
+        },
+      ],
+    });
+    renderSetupPage("/setup");
+
+    await screen.findByRole("heading", { name: "First setup" });
+    await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+
+    expect(await screen.findByText(t("setup.intelligence.skillStatusTitle"))).toBeInTheDocument();
+    expect(
+      screen.getByText(t("setup.intelligence.skillStatusMessages.user_modified")),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("setup.intelligence.skillOverwrite") }));
+
+    expect(vi.mocked(forceUpdateCliAgentSkill).mock.calls[0][0]).toBe("codex");
   });
 
   it("marks GitHub section ready for the disabled decision and incomplete when enabled without URLs", async () => {

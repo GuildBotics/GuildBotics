@@ -30,7 +30,7 @@ GuildBotics member capability
 本計画で特に重要なのは次の3点であり、Final Architecture の冒頭でまとめて確定させる。
 
 1. **Credential / config 解決**: agent subprocess の環境変数は剥奪される（Codex は `*TOKEN*` を全削除する）。そのため `guildbotics member ...` は agent の cwd や env 手渡しに依存せず、active workspace または明示 workspace から config / `.env` を自力ロードする。
-2. **managed CLI / skill 配布**: Mac 版 desktop app は同梱済み `guildbotics-cli` と GuildBotics skill を初回起動時に安定した場所へコピーする。Codex / Claude Code からは `~/.guildbotics/bin/guildbotics` と user skill を使う。
+2. **managed CLI / skill 配布**: Mac 版 desktop app は同梱済み `guildbotics-cli` と GuildBotics skill を初回起動時に安定した場所へ配置する。Codex / Claude Code / Gemini CLI / GitHub Copilot CLI からは `~/.guildbotics/bin/guildbotics` と user skill を使う。
 3. **ガードレールは経路別**: 「CLI agent が `gh` など内部標準コマンドを直接使って *利用者自身のアカウント* で操作してしまう」ことを防ぐ仕組みは、ノンインタラクティブ経路（GuildBotics が agent を spawn）とインタラクティブ経路（利用者がデスクトップアプリを起動）で別物になる。1つの「強力なガードレール」で両経路を覆えると考えない。
 4. **workflow の薄型化に伴う既存ガードの撤去**: 現行 `ticket_driven_workflow._main` は「agent が直接 commit したら `RuntimeError`」というインラインガードを持つ。新方式では agent が publish 経由で commit するため、このガードは撤去する。
 
@@ -67,7 +67,7 @@ GuildBotics member capability
   4. active workspace state
   5. 既存 fallback（`~/.guildbotics/config` → package templates）
 - workspace が選ばれた場合、`GUILDBOTICS_CONFIG_DIR=<workspace>/.guildbotics/config` を設定し、`<workspace>/.env` が存在すれば `GUILDBOTICS_ENV_FILE=<workspace>/.env` も設定する。
-- これにより、Codex / Claude Code の skill から `/path/to/workspace` や env を毎回渡す必要はない。desktop app で選択済みの workspace が安定した共有状態になる。
+- これにより、CLI agent の skill から `/path/to/workspace` や env を毎回渡す必要はない。desktop app で選択済みの workspace が安定した共有状態になる。
 
 - 環境変数 **`GUILDBOTICS_ENV_FILE`（secret を含む `.env` の絶対パス）** を導入する。
   - 名前に `TOKEN` / `KEY` / `SECRET` を含まないため Codex に削除されない。値はパスであり secret 値そのものではないため、secret を agent 環境に直接載せずに済む。
@@ -189,24 +189,57 @@ guildbotics member git prepare \
 - 既存 `GitTool.__init__` は default branch の checkout/pull と、checkout 時の reset/clean を行う（`guildbotics/utils/git_tool.py`）。`prepare` ではこの destructive 整備を許可してよいが、`publish` では絶対に使わない。
 
 ```bash
-guildbotics member git publish \
+guildbotics member git commit \
   --person <person_id> \
   --repo-path <path> \
-  --message-file <path> \
+  --message-file <path> | --message-stdin \
   [--format json|markdown]
 ```
 
-動作:
+- `repo_path` の current branch を対象にする。dirty/untracked があれば `git add -A` → commit。push は行わない。
+- `--message-stdin` を使うと、CLI agent の承認画面に heredoc で commit message 本文を表示しやすい。対話モードではこれを優先する。
+- 返却 JSON: `repo_path` / `branch` / `commit_sha`(or null) / `has_changes` / `status`。
 
+```bash
+guildbotics member git push \
+  --person <person_id> \
+  --repo-path <path> \
+  [--format json|markdown]
+```
+
+- `repo_path` の current branch を対象にする。remote branch が無い、または local が ahead の場合だけ push する。
+- member credential を使う。
+- 返却 JSON: `repo_path` / `branch` / `pushed` / `status`。
+
+```bash
+guildbotics member git publish \
+  --person <person_id> \
+  --repo-path <path> \
+  --message-file <path> | --message-stdin \
+  [--format json|markdown]
+```
+
+- 互換用の合成コマンド。`git commit` → `git push` を順に行う。
 - `repo_path` の current branch を対象にする。dirty/untracked があれば `git add -A` → commit → push。変更が無ければ commit せず push 要否だけ確認する。
 - member credential を使う。
 - 返却 JSON: `repo_path` / `branch` / `commit_sha`(or null) / `pushed` / `has_changes` / `status`。
+
+```bash
+guildbotics member git branch create \
+  --person <person_id> \
+  --repo-path <path> \
+  --branch <branch_name> \
+  [--format json|markdown]
+```
+
+- `repo_path` の current branch から新しい local branch を作成して checkout する。既存 branch は上書きしない。
+- 返却 JSON: `repo_path` / `branch` / `previous_branch` / `status`。
 
 制約:
 
 - `repo_path` は member workspace root 配下のみ許可（validation）。
 - `message-file` は存在する通常ファイルのみ。空 commit message は error。
-- **既存 checkout を開くだけにする**: `git.Repo(repo_path)` で開き、git config / auth env / commit / push のみ行う。checkout/reset/clean は行わない（作業差分を消さない）。
+- **commit/push/publish は checkout しない**。`git.Repo(repo_path)` で既存 checkout を開き、git config / auth env / commit / push のみ行う。checkout/reset/clean は行わない（作業差分を消さない）。
 
 ### CLI: GitHub issue
 
@@ -414,7 +447,7 @@ def resolve_member_context(person_identifier: str) -> tuple[Context, Person]
 
 目的:
 
-- Codex / Claude Code / desktop app から同じ考え方で使える薄い skill source。実処理はすべて `guildbotics member ...` に委譲する。
+- Codex / Claude Code / Gemini CLI / GitHub Copilot CLI / desktop app から同じ考え方で使える薄い skill source。実処理はすべて `guildbotics member ...` に委譲する。
 
 内容:
 
@@ -431,15 +464,18 @@ def resolve_member_context(person_identifier: str) -> tuple[Context, Person]
 - リポジトリ内に skill source を置く。
 - Mac 版 desktop app はビルド済み `guildbotics-cli` を同梱し、初回起動時（または setup 画面表示時）に `~/.guildbotics/bin/guildbotics` へコピーする。
 - `~/.local/bin/guildbotics` は存在しない場合、または既存ファイルが GuildBotics managed shim の場合だけ作成・更新する。利用者が手動で入れた CLI は上書きしない。
-- Codex 向け: `$CODEX_HOME/skills/guildbotics/SKILL.md` または `~/.codex/skills/guildbotics/SKILL.md` へ desktop app が配置する。**併せて、Codex の承認ポリシーで `gh` / `git push` を承認必須/拒否にする設定例を書く。**
-- Claude Code 向け: `$CLAUDE_HOME/skills/guildbotics/SKILL.md` または `~/.claude/skills/guildbotics/SKILL.md` へ desktop app が配置する。**併せて、`gh` / `git push` / 直接 token/API 書き込みを拒否または承認必須にするクライアント権限設定例を書く。** 具体 syntax は実装時に Codex / Claude Code の現行仕様で検証してから README に反映する。
+- Codex 向け: `$CODEX_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.codex/skills/guildbotics/SKILL.md` へ desktop app が配置する。**併せて、Codex の承認ポリシーで `gh` / `git push` を承認必須/拒否にする設定例を書く。**
+- Claude Code 向け: `$CLAUDE_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.claude/skills/guildbotics/SKILL.md` へ desktop app が配置する。**併せて、`gh` / `git push` / 直接 token/API 書き込みを拒否または承認必須にするクライアント権限設定例を書く。**
+- Gemini CLI 向け: `$GEMINI_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.gemini/skills/guildbotics/SKILL.md` へ desktop app が配置する。
+- GitHub Copilot CLI 向け: `$COPILOT_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.copilot/skills/guildbotics/SKILL.md` へ desktop app が配置する。
+- user skill は GuildBotics desktop が配置した未編集 skill だけを更新し、ユーザー作成またはユーザー編集済みの `SKILL.md` は上書きしない。
 - skill は thin wrapper とし、GitHub API schema や token 取り扱いの詳細を持たせない。操作詳細は `guildbotics member ... --help` と GuildBotics 実装を正とする。
 - skill 内のコマンド例は `"$HOME/.guildbotics/bin/guildbotics" member ...` を優先する。bare `guildbotics` は shim / PATH が使える場合の fallback とする。
-- **互換検証**: Codex と Claude Code で frontmatter 規約が異なる可能性があるため、「単一 SKILL.md が両クライアントで認識されること」を導入確認項目に含める。両者で差異がある場合は、共通本文 + クライアント別の最小ラッパー、という形に分けることを許容する。
+- **互換検証**: Codex / Claude Code / Gemini CLI / GitHub Copilot CLI で単一 `SKILL.md` が認識されることを導入確認項目に含める。クライアント差異がある場合は、共通本文 + クライアント別の最小ラッパー、という形に分けることを許容する。
 
 導入前提として docs に明記するもの:
 
-- 通常の desktop 導入では、利用者が PATH / `GUILDBOTICS_CONFIG_DIR` / `GUILDBOTICS_ENV_FILE` を Codex / Claude Code に手渡ししない。desktop app が active workspace と managed CLI / skill を配置する。
+- 通常の desktop 導入では、利用者が PATH / `GUILDBOTICS_CONFIG_DIR` / `GUILDBOTICS_ENV_FILE` を CLI agent に手渡ししない。desktop app が active workspace と managed CLI / skill を配置する。
 - headless / 開発時の fallback として、`guildbotics workspace use <workspace_dir>` または `guildbotics member --workspace <workspace_dir> ...` を使えること。
 - member workspace は `~/.guildbotics/data/workspaces/<person_id>` 配下に作られること。
 - skill 導入後の smoke check は `~/.guildbotics/bin/guildbotics workspace status` と `~/.guildbotics/bin/guildbotics member context --person <person_id> --check-credentials` が成功すること。
@@ -602,7 +638,7 @@ ticket workflow は CLI agent 起動時、repo path ではなく **member worksp
 
 ### Step 5: Skill source and command prompt
 
-- `skills/guildbotics/SKILL.md` 追加。desktop app による Codex / Claude Code user skill への自動配置 + **クライアント拒否設定例**（`gh`/`git push`）を docs に追加。
+- `skills/guildbotics/SKILL.md` 追加。desktop app による Codex / Claude Code / Gemini CLI / GitHub Copilot CLI user skill への自動配置 + **クライアント拒否設定例**（`gh`/`git push`）を docs に追加。
 - desktop app に同梱する `guildbotics-cli` と first-launch install（`~/.guildbotics/bin/guildbotics` / managed shim / skills）を追加。
 - active workspace（desktop app / `guildbotics workspace use` / `member --workspace`）の導入前提を docs に追加。env 手渡しは fallback として説明する。
 - skill 導入 smoke check（`~/.guildbotics/bin/guildbotics workspace status` と `member context --check-credentials`）を docs に追加。
@@ -716,7 +752,7 @@ desktop は基本触らず docs/spec 更新に留める。触った場合のみ 
 
 - ticket workflow は ProjectV2 trigger + member CLI delegation へ移行。GitHub/git operations は member capability であり workflow logic ではない。
 - CLI agent / skill は `guildbotics member ...` を使う。`gh` 直接利用は推奨しない。
-- Codex / Claude Code への skill 導入手順 + **クライアント拒否設定**（`gh`/`git push`）。
+- CLI agent への skill 導入手順 + **クライアント拒否設定**（`gh`/`git push`）。
 - 導入前提（managed CLI / active workspace / skill 配置 / member credential / workspace path。env 手渡しは fallback）。
 - **ガードレールの経路別仕様と「完全な技術的禁止ではない」限界を明記する。**
 - follow-up issue 作成は `member github issue create`（実 issue）。review reply は `member github pr reply`。
@@ -745,7 +781,7 @@ desktop は基本触らず docs/spec 更新に留める。触った場合のみ 
 
 ### 1. 導入テスト
 
-目的: Codex / Claude Code から GuildBotics skill と `guildbotics member ...` CLI を利用できる状態を確認する。
+目的: Codex / Claude Code / Gemini CLI / GitHub Copilot CLI から GuildBotics skill と `guildbotics member ...` CLI を利用できる状態を確認する。
 
 事前準備:
 
@@ -762,7 +798,7 @@ desktop は基本触らず docs/spec 更新に留める。触った場合のみ 
 
 - `~/.local/bin/guildbotics` は既存の手動インストールを上書きしないため、受け入れテストでは安定パス `~/.guildbotics/bin/guildbotics` を使う。
 
-Codex / Claude Code 導入確認（各クライアントで同様）:
+CLI agent 導入確認（各クライアントで同様）:
 
 - desktop app が配置した `skills/guildbotics/SKILL.md` が user skill として認識されることを確認する。
 - 推奨クライアント拒否設定（`gh` / `git push`）を適用する。
@@ -794,11 +830,11 @@ GuildBotics 設定確認:
 
 合格条件:
 
-- Codex と Claude Code の両方で skill を認識でき、両方から managed CLI の `member context --check-credentials` が動く。
+- Codex / Claude Code / Gemini CLI / GitHub Copilot CLI で skill を認識でき、各クライアントから managed CLI の `member context --check-credentials` が動く。
 - GuildBotics CLI が member credential を使える。
 - secret が CLI output / logs / prompt trace に出ない。
 - member workspace が想定パスに作られる。
-- 利用者が Codex / Claude Code に `/path/to/workspace` や `GUILDBOTICS_ENV_FILE` を毎回渡さなくても動く。
+- 利用者が CLI agent に `/path/to/workspace` や `GUILDBOTICS_ENV_FILE` を毎回渡さなくても動く。
 
 ### 2. スキル動作確認（インタラクティブ）
 
@@ -842,10 +878,10 @@ PR review 対応シナリオ: review comment 付き PR → `pr inspect --include
 - workflow が success 時に issue comment を二重投稿する / HEAD コミットガードが残って正常系で `RuntimeError`。
 - proxy agent signature が付かず自分の応答判定が崩れる。
 - **agent が capability を一切呼ばずに `done` を返し、workflow が success 扱いにしてチケットを沈黙させる。** 新方式では `member task complete/status` 未完了として検出する。
-- active workspace が保存されず、Codex / Claude Code 内の `guildbotics member` が workspace / credential 解決に失敗する。
-- managed CLI が配置されず、Codex / Claude Code が古い `guildbotics` や別環境の CLI を使う。
+- active workspace が保存されず、CLI agent 内の `guildbotics member` が workspace / credential 解決に失敗する。
+- managed CLI が配置されず、CLI agent が古い `guildbotics` や別環境の CLI を使う。
 - desktop app が既存の手動 `~/.local/bin/guildbotics` を上書きする。
-- Codex では動くが Claude Code では managed CLI / active workspace / skill 配置/拒否設定の都合で動かない（またはその逆）。
+- 特定の CLI agent では動くが別の CLI agent では managed CLI / active workspace / skill 配置/拒否設定の都合で動かない。
 - member workspace が cwd 外になり Codex workspace-write sandbox で編集できない。
 - secret が CLI output / stderr / prompt trace / diagnostics に混入する。
 

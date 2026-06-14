@@ -18,6 +18,7 @@ class FakeContext:
     def __init__(self, person):
         self.person = person
         self.team = Team(project=Project(name="demo"), members=[person])
+        self.logger = None
 
 
 def test_member_context_outputs_no_secret(monkeypatch):
@@ -181,6 +182,401 @@ def test_member_write_command_requires_existing_body_file(tmp_path):
 
     assert result.exit_code != 0
     assert "body-file does not exist" in result.output
+
+
+def test_member_git_publish_current_mode_uses_current_workspace_service(
+    monkeypatch, tmp_path
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    message_file = tmp_path / "message.txt"
+    message_file.write_text("publish\n", encoding="utf-8")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "main",
+                "commit_sha": "abc",
+                "pushed": True,
+                "has_changes": True,
+                "status": "published",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def publish_current_workspace(self, repo_path, message, cwd):
+            calls["repo_path"] = repo_path
+            calls["message"] = message
+            calls["cwd"] = cwd
+            return FakeResult()
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "publish",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--message-file",
+            str(message_file),
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["repo_path"] == repo_path
+    assert calls["message"] == "publish\n"
+    assert calls["cwd"].is_absolute()
+    assert calls["closed"] is True
+    assert '"status": "published"' in result.output
+
+
+def test_member_git_commit_current_mode_uses_current_workspace_service(
+    monkeypatch, tmp_path
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    message_file = tmp_path / "message.txt"
+    message_file.write_text("commit\n", encoding="utf-8")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "main",
+                "commit_sha": "abc",
+                "has_changes": True,
+                "status": "committed",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def commit(self, repo_path, message, workspace_mode, cwd):
+            calls["repo_path"] = repo_path
+            calls["message"] = message
+            calls["workspace_mode"] = workspace_mode
+            calls["cwd"] = cwd
+            return FakeResult()
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--message-file",
+            str(message_file),
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["repo_path"] == repo_path
+    assert calls["message"] == "commit\n"
+    assert calls["workspace_mode"] == "current"
+    assert calls["cwd"].is_absolute()
+    assert calls["closed"] is True
+    assert '"status": "committed"' in result.output
+
+
+def test_member_git_commit_reads_message_from_stdin(monkeypatch, tmp_path):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "main",
+                "commit_sha": "abc",
+                "has_changes": True,
+                "status": "committed",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def commit(self, repo_path, message, workspace_mode, cwd):
+            calls["message"] = message
+            return FakeResult()
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--message-stdin",
+            "--workspace-mode",
+            "current",
+        ],
+        input="日本語のコミットメッセージ\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls["message"] == "日本語のコミットメッセージ\n"
+
+
+def test_member_git_commit_rejects_missing_message_source(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Either --message-file or --message-stdin is required" in result.output
+
+
+def test_member_git_commit_rejects_multiple_message_sources(tmp_path):
+    runner = CliRunner()
+    message_file = tmp_path / "message.txt"
+    message_file.write_text("message\n", encoding="utf-8")
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(tmp_path),
+            "--message-file",
+            str(message_file),
+            "--message-stdin",
+        ],
+        input="message\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --message-file or --message-stdin" in result.output
+
+
+def test_member_git_push_current_mode_uses_current_workspace_service(
+    monkeypatch, tmp_path
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "main",
+                "pushed": True,
+                "status": "pushed",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def push(self, repo_path, workspace_mode, cwd):
+            calls["repo_path"] = repo_path
+            calls["workspace_mode"] = workspace_mode
+            calls["cwd"] = cwd
+            return FakeResult()
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "push",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["repo_path"] == repo_path
+    assert calls["workspace_mode"] == "current"
+    assert calls["cwd"].is_absolute()
+    assert calls["closed"] is True
+    assert '"status": "pushed"' in result.output
+
+
+def test_member_git_branch_create_current_mode_uses_current_workspace_service(
+    monkeypatch, tmp_path
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "feature/test",
+                "previous_branch": "main",
+                "status": "created",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def create_branch(self, repo_path, branch, workspace_mode, cwd):
+            calls["repo_path"] = repo_path
+            calls["branch"] = branch
+            calls["workspace_mode"] = workspace_mode
+            calls["cwd"] = cwd
+            return FakeResult()
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "branch",
+            "create",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--branch",
+            "feature/test",
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["repo_path"] == repo_path
+    assert calls["branch"] == "feature/test"
+    assert calls["workspace_mode"] == "current"
+    assert calls["cwd"].is_absolute()
+    assert calls["closed"] is True
+    assert '"status": "created"' in result.output
+
+
+def test_member_git_publish_current_mode_rejects_workflow_task_run(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
+    message_file = tmp_path / "message.txt"
+    message_file.write_text("publish\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "publish",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(tmp_path),
+            "--message-file",
+            str(message_file),
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "only for interactive use" in result.output
 
 
 def test_member_task_status_cli(monkeypatch, tmp_path):

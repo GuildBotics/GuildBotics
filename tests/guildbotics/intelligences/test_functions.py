@@ -50,6 +50,35 @@ def test_handle_github_ticket_prompt_uses_member_capability_contract():
     # which carries --pr-url for PR review.
     assert "{prepare_command}" in prompt["body"]
     assert "--pr-url" in prompt["body"]
+    assert "persona" in prompt["body"]
+    assert "communication style" in prompt["body"]
+    assert "conversational outputs" in prompt["body"]
+    assert "issue titles/bodies and PR titles/bodies" in prompt["body"]
+    assert (
+        "Keep `AgentResponse.message` as a neutral workflow execution summary"
+        in (prompt["body"])
+    )
+    assert "guildbotics_execution_mode=workflow" in prompt["body"]
+    assert "isolated member workspace" in prompt["body"]
+    assert "--workspace-mode current" in prompt["body"]
+
+
+def test_guildbotics_skill_uses_member_persona_without_decorating_control_data():
+    skill = load_markdown_with_frontmatter(Path("skills/guildbotics/SKILL.md"))
+
+    assert skill["name"] == "guildbotics"
+    assert "member context" in skill["body"]
+    assert "persona" in skill["body"]
+    assert "communication style" in skill["body"]
+    assert "conversational outputs" in skill["body"]
+    assert "issue titles/bodies, PR titles/bodies, commit messages" in skill["body"]
+    assert "workflow `AgentResponse.message`" in skill["body"]
+    assert "Interactive Workspace Rules" in skill["body"]
+    assert "guildbotics_execution_mode=workflow" in skill["body"]
+    assert "Do not infer execution mode from the client name alone" in skill["body"]
+    assert "shared pair-programming workspace" in skill["body"]
+    assert "--workspace-mode current" in skill["body"]
+    assert "Do not run `member git prepare`" in skill["body"]
 
 
 @pytest.mark.asyncio

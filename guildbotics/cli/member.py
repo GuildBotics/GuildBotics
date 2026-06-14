@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import click
 
@@ -23,6 +23,7 @@ from guildbotics.utils.env_loader import load_guildbotics_env
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
 FormatChoice = click.Choice(["json", "markdown"])
+WorkspaceMode = Literal["member", "current"]
 
 
 @click.group()
@@ -67,7 +68,7 @@ async def _context_cmd(
 
 @member.group()
 def git() -> None:
-    """Prepare and publish member git workspaces."""
+    """Prepare, commit, push, and publish member git workspaces."""
 
 
 @git.command(name="prepare")
@@ -93,41 +94,252 @@ async def _git_prepare(
         await service.aclose()
 
 
+@git.command(name="commit")
+@click.option("--person", required=True)
+@click.option("--repo-path", required=True, type=click.Path(path_type=Path))
+@click.option("--message-file", type=click.Path(path_type=Path))
+@click.option(
+    "--message-stdin",
+    is_flag=True,
+    help="Read the commit message from standard input instead of a file.",
+)
+@click.option(
+    "--workspace-mode",
+    type=click.Choice(["member", "current"]),
+    default="member",
+    help=(
+        "Use 'member' for isolated workflow workspaces or 'current' for the "
+        "repository currently open in an interactive coding session."
+    ),
+)
+@click.option("--run-id", default="")
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def git_commit(
+    person: str,
+    repo_path: Path,
+    message_file: Path | None,
+    message_stdin: bool,
+    workspace_mode: str,
+    run_id: str,
+    output_format: str,
+) -> None:
+    message = _read_message(message_file, message_stdin, "commit message")
+    _run(
+        _git_commit(person, repo_path, message, workspace_mode, run_id or None),
+        output_format=output_format,
+    )
+
+
+async def _git_commit(
+    person: str,
+    repo_path: Path,
+    message: str,
+    workspace_mode: str,
+    run_id: str | None,
+) -> dict[str, Any]:
+    task_run_id = current_task_run_id(run_id)
+    _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
+    context, member_person = _resolve(person)
+    service = MemberGitWorkspaceService(member_person, context.team, context.logger)
+    try:
+        result = await service.commit(
+            repo_path=repo_path,
+            message=message,
+            workspace_mode=_workspace_mode(workspace_mode),
+            cwd=Path.cwd(),
+        )
+        payload = result.to_dict()
+        TaskRunStore().append_evidence(task_run_id, "git_commit", payload)
+        return payload
+    finally:
+        await service.aclose()
+
+
+@git.command(name="push")
+@click.option("--person", required=True)
+@click.option("--repo-path", required=True, type=click.Path(path_type=Path))
+@click.option(
+    "--workspace-mode",
+    type=click.Choice(["member", "current"]),
+    default="member",
+    help=(
+        "Use 'member' for isolated workflow workspaces or 'current' for the "
+        "repository currently open in an interactive coding session."
+    ),
+)
+@click.option("--run-id", default="")
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def git_push(
+    person: str,
+    repo_path: Path,
+    workspace_mode: str,
+    run_id: str,
+    output_format: str,
+) -> None:
+    _run(
+        _git_push(person, repo_path, workspace_mode, run_id or None),
+        output_format=output_format,
+    )
+
+
+async def _git_push(
+    person: str,
+    repo_path: Path,
+    workspace_mode: str,
+    run_id: str | None,
+) -> dict[str, Any]:
+    task_run_id = current_task_run_id(run_id)
+    _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
+    context, member_person = _resolve(person)
+    service = MemberGitWorkspaceService(member_person, context.team, context.logger)
+    try:
+        result = await service.push(
+            repo_path=repo_path,
+            workspace_mode=_workspace_mode(workspace_mode),
+            cwd=Path.cwd(),
+        )
+        payload = result.to_dict()
+        TaskRunStore().append_evidence(task_run_id, "git_push", payload)
+        return payload
+    finally:
+        await service.aclose()
+
+
+@git.group(name="branch")
+def git_branch() -> None:
+    """Manage git branches as a configured member."""
+
+
+@git_branch.command(name="create")
+@click.option("--person", required=True)
+@click.option("--repo-path", required=True, type=click.Path(path_type=Path))
+@click.option("--branch", required=True)
+@click.option(
+    "--workspace-mode",
+    type=click.Choice(["member", "current"]),
+    default="member",
+    help=(
+        "Use 'member' for isolated workflow workspaces or 'current' for the "
+        "repository currently open in an interactive coding session."
+    ),
+)
+@click.option("--run-id", default="")
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def git_branch_create(
+    person: str,
+    repo_path: Path,
+    branch: str,
+    workspace_mode: str,
+    run_id: str,
+    output_format: str,
+) -> None:
+    _run(
+        _git_branch_create(person, repo_path, branch, workspace_mode, run_id or None),
+        output_format=output_format,
+    )
+
+
+async def _git_branch_create(
+    person: str,
+    repo_path: Path,
+    branch: str,
+    workspace_mode: str,
+    run_id: str | None,
+) -> dict[str, Any]:
+    task_run_id = current_task_run_id(run_id)
+    _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
+    context, member_person = _resolve(person)
+    service = MemberGitWorkspaceService(member_person, context.team, context.logger)
+    try:
+        result = await service.create_branch(
+            repo_path=repo_path,
+            branch=branch,
+            workspace_mode=_workspace_mode(workspace_mode),
+            cwd=Path.cwd(),
+        )
+        payload = result.to_dict()
+        TaskRunStore().append_evidence(task_run_id, "git_branch_create", payload)
+        return payload
+    finally:
+        await service.aclose()
+
+
 @git.command(name="publish")
 @click.option("--person", required=True)
 @click.option("--repo-path", required=True, type=click.Path(path_type=Path))
-@click.option("--message-file", required=True, type=click.Path(path_type=Path))
+@click.option("--message-file", type=click.Path(path_type=Path))
+@click.option(
+    "--message-stdin",
+    is_flag=True,
+    help="Read the commit message from standard input instead of a file.",
+)
+@click.option(
+    "--workspace-mode",
+    type=click.Choice(["member", "current"]),
+    default="member",
+    help=(
+        "Use 'member' for isolated workflow workspaces or 'current' for the "
+        "repository currently open in an interactive coding session."
+    ),
+)
 @click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def git_publish(
     person: str,
     repo_path: Path,
-    message_file: Path,
+    message_file: Path | None,
+    message_stdin: bool,
+    workspace_mode: str,
     run_id: str,
     output_format: str,
 ) -> None:
-    message = _read_file(message_file, "message-file")
+    message = _read_message(message_file, message_stdin, "commit message")
     result = _run(
-        _git_publish(person, repo_path, message, run_id or None),
+        _git_publish(person, repo_path, message, workspace_mode, run_id or None),
         output_format=output_format,
     )
     return result
 
 
 async def _git_publish(
-    person: str, repo_path: Path, message: str, run_id: str | None
+    person: str,
+    repo_path: Path,
+    message: str,
+    workspace_mode: str,
+    run_id: str | None,
 ) -> dict[str, Any]:
+    task_run_id = current_task_run_id(run_id)
+    _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
     context, member_person = _resolve(person)
     service = MemberGitWorkspaceService(member_person, context.team, context.logger)
     try:
-        result = await service.publish(repo_path=repo_path, message=message)
+        if workspace_mode == "current":
+            result = await service.publish_current_workspace(
+                repo_path=repo_path, message=message, cwd=Path.cwd()
+            )
+        else:
+            result = await service.publish(repo_path=repo_path, message=message)
         payload = result.to_dict()
-        TaskRunStore().append_evidence(
-            current_task_run_id(run_id), "git_publish", payload
-        )
+        TaskRunStore().append_evidence(task_run_id, "git_publish", payload)
         return payload
     finally:
         await service.aclose()
+
+
+def _reject_current_workspace_mode_in_task_run(
+    workspace_mode: str, task_run_id: str | None
+) -> None:
+    if workspace_mode == "current" and task_run_id:
+        raise click.ClickException(
+            "workspace-mode=current is only for interactive use and cannot be "
+            "used inside a workflow task run."
+        )
+
+
+def _workspace_mode(value: str) -> WorkspaceMode:
+    if value not in {"member", "current"}:
+        raise click.ClickException(f"Unsupported workspace mode: {value}")
+    return cast(WorkspaceMode, value)
 
 
 @member.group()
@@ -513,6 +725,23 @@ def _read_file(path: Path, label: str) -> str:
     if not text.strip():
         raise click.ClickException(f"{label} must not be empty: {path}")
     return text
+
+
+def _read_message(
+    message_file: Path | None, message_stdin: bool, label: str
+) -> str:
+    if message_file is not None and message_stdin:
+        raise click.ClickException(
+            "Use either --message-file or --message-stdin, not both."
+        )
+    if message_file is not None:
+        return _read_file(message_file, "message-file")
+    if message_stdin:
+        text = click.get_text_stream("stdin").read()
+        if not text.strip():
+            raise click.ClickException(f"{label} must not be empty.")
+        return text
+    raise click.ClickException("Either --message-file or --message-stdin is required.")
 
 
 def _run(coro, *, output_format: str) -> Any:

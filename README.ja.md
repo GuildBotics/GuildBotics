@@ -83,7 +83,7 @@ GuildBotics でできること:
   - Pythonスクリプト（コンテキスト注入付き）
   - Shellスクリプト
   - YAMLワークフロー（コマンド合成）
-- **Brain抽象化**: LLMプロバイダーの切り替え、またはCLIエージェント（Gemini CLI、Codex CLI、Claude Code）への委譲
+- **Brain抽象化**: LLMプロバイダーの切り替え、またはCLIエージェント（Gemini CLI、Codex CLI、Claude Code、GitHub Copilot CLI）への委譲
 - **拡張可能な統合**: 外部サービス向けプラガブルアダプター
 
 ## 組み込み機能
@@ -151,7 +151,8 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 
 - `~/.guildbotics/bin/guildbotics`: CLI agent / skill が使う managed GuildBotics CLI
 - `~/.local/bin/guildbotics`: 未作成、または既存の managed shim の場合だけ更新される小さな shim
-- Codex / Claude Code の user skill directory 配下の GuildBotics skill
+- 検出済みの Codex / Claude Code / Gemini CLI / GitHub Copilot CLI user skill directory 配下の
+  GuildBotics skill。ユーザーが作成・編集した skill は上書きしません。
 
 **単体 CLI（ヘッドレス / 非デスクトップ環境）:** デスクトップアプリを使わない環境、または別管理の CLI を明示的に使いたい場合だけ `uv tool install guildbotics` を使います。
 
@@ -636,7 +637,7 @@ guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat 
   ローカルの `gh auth` ユーザーではなく、割り当てられたメンバーの machine user token または
   GitHub App installation を使って行われます。credential が必要な member command は
   active workspace の `.env`、`GUILDBOTICS_ENV_FILE`、またはカレントディレクトリの `.env` からこれらを読み込みます。
-- Codex / Claude Code を対話的に使う場合は、ワークスペース選択後に GuildBotics デスクトップアプリを
+- CLI agent を対話的に使う場合は、ワークスペース選択後に GuildBotics デスクトップアプリを
   少なくとも一度起動してください。アプリが GuildBotics skill と managed CLI
   (`~/.guildbotics/bin/guildbotics`) を配置します。さらに `gh`、直接 token/API 書き込み、`git push` は拒否または承認必須にすることを推奨します。
   これは利用者自身の GitHub アカウントへフォールバックすることを避ける guardrail であり、token

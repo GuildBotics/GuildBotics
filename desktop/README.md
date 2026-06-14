@@ -247,8 +247,12 @@ scripts/desktop-dev-tauri.sh
 - 初回起動時または setup 画面表示時に、同梱 CLI と GuildBotics skill を CLI agent から参照できる場所へ配置します。
   - `~/.guildbotics/bin/guildbotics`: managed CLI
   - `~/.local/bin/guildbotics`: 未作成または既存の managed shim の場合だけ更新
-  - `$CODEX_HOME/skills/guildbotics/SKILL.md` または `~/.codex/skills/guildbotics/SKILL.md`
-  - `$CLAUDE_HOME/skills/guildbotics/SKILL.md` または `~/.claude/skills/guildbotics/SKILL.md`
+  - `$CODEX_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.codex/skills/guildbotics/SKILL.md`
+  - `$CLAUDE_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.claude/skills/guildbotics/SKILL.md`
+  - `$GEMINI_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.gemini/skills/guildbotics/SKILL.md`
+  - `$COPILOT_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.copilot/skills/guildbotics/SKILL.md`
+- 既存の user skill は、GuildBotics desktop が配置した未編集 skill だけを更新します。ユーザーが作成・編集した `SKILL.md` は上書きしません。
+- `設定 - LLM・CLIエージェント` では、CLI agent ごとの GuildBotics skill 状態を確認できます。ユーザー編集済みなどで最新版が自動適用されない場合は、画面上の `最新版で上書きする` ボタンから明示的に更新できます。
 
 ---
 

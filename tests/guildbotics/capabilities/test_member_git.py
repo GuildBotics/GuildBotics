@@ -75,6 +75,70 @@ async def test_publish_commits_pushes_and_preserves_worktree(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_commit_does_not_push(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    (repo_path / "README.md").write_text("initial\ncommitted\n", encoding="utf-8")
+
+    result = await service.commit(repo_path, "commit only")
+
+    assert result.has_changes is True
+    assert result.commit_sha is not None
+    assert result.status == "committed"
+    remote_repo = git.Repo(tmp_path / "remote.git")
+    assert remote_repo.commit("main").message == "initial"
+    assert repo.commit("main").hexsha == result.commit_sha
+
+
+@pytest.mark.asyncio
+async def test_push_pushes_existing_commit(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    (repo_path / "README.md").write_text("initial\ncommitted\n", encoding="utf-8")
+    repo.git.add(A=True)
+    commit_sha = repo.index.commit("local commit").hexsha
+
+    result = await service.push(repo_path)
+
+    assert result.pushed is True
+    assert result.status == "pushed"
+    remote_repo = git.Repo(tmp_path / "remote.git")
+    assert remote_repo.commit("main").hexsha == commit_sha
+
+
+@pytest.mark.asyncio
+async def test_create_branch_from_current_branch(tmp_path):
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+
+    result = await service.create_branch(repo_path, "feature/test")
+
+    assert result.previous_branch == "main"
+    assert result.branch == "feature/test"
+    assert result.status == "created"
+    assert repo.active_branch.name == "feature/test"
+
+
+@pytest.mark.asyncio
+async def test_create_branch_rejects_existing_branch(tmp_path):
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    _, repo_path = _workspace_repo(tmp_path, workspace)
+
+    with pytest.raises(MemberCapabilityError, match="already exists"):
+        await service.create_branch(repo_path, "main")
+
+
+@pytest.mark.asyncio
 async def test_publish_rejects_repo_outside_member_workspace(tmp_path):
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     service.workspace_root = tmp_path / "workspace" / "aiko"
@@ -82,6 +146,42 @@ async def test_publish_rejects_repo_outside_member_workspace(tmp_path):
 
     with pytest.raises(MemberCapabilityError, match="member workspace"):
         await service.publish(Path(outside_repo.working_tree_dir or ""), "message")
+
+
+@pytest.mark.asyncio
+async def test_publish_current_workspace_allows_current_repo_outside_member_workspace(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    service.workspace_root = tmp_path / "workspace" / "aiko"
+    repo, repo_path = _workspace_repo(tmp_path, tmp_path / "current")
+    (repo_path / "README.md").write_text("initial\ncurrent\n", encoding="utf-8")
+    before_branch = repo.active_branch.name
+
+    result = await service.publish_current_workspace(
+        repo_path, "publish current workspace", cwd=repo_path
+    )
+
+    assert result.has_changes is True
+    assert result.commit_sha is not None
+    assert result.pushed is True
+    assert repo.active_branch.name == before_branch
+
+
+@pytest.mark.asyncio
+async def test_publish_current_workspace_rejects_repo_that_is_not_current_workspace(
+    tmp_path,
+):
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    service.workspace_root = tmp_path / "workspace" / "aiko"
+    _, current_repo_path = _workspace_repo(tmp_path, tmp_path / "current")
+    other_repo = git.Repo.init(tmp_path / "other")
+
+    with pytest.raises(MemberCapabilityError, match="current workspace repository"):
+        await service.publish_current_workspace(
+            Path(other_repo.working_tree_dir or ""), "message", cwd=current_repo_path
+        )
 
 
 @pytest.mark.asyncio

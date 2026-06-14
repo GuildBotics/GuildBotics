@@ -94,6 +94,9 @@ class MemberGitHubCapabilityService:
             "available_member_commands": [
                 "context",
                 "git prepare",
+                "git branch create",
+                "git commit",
+                "git push",
                 "git publish",
                 "github issue inspect",
                 "github issue comment",

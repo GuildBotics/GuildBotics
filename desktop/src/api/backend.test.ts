@@ -187,6 +187,54 @@ describe("restartBackend", () => {
   });
 });
 
+describe("CLI agent skill commands", () => {
+  it("returns an empty status list outside Tauri", async () => {
+    setTauriRuntime(false);
+
+    const backend = await loadBackend();
+
+    await expect(backend.getCliAgentSkillStatuses()).resolves.toEqual({ agents: [] });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("loads skill statuses through Tauri", async () => {
+    setTauriRuntime(true);
+    invoke.mockResolvedValue({
+      agents: [
+        {
+          agent: "codex",
+          agent_home: "/home/.codex",
+          skill_path: "/home/.codex/skills/guildbotics/SKILL.md",
+          status: "up_to_date",
+          can_force_update: false,
+        },
+      ],
+    });
+
+    const backend = await loadBackend();
+    const statuses = await backend.getCliAgentSkillStatuses();
+
+    expect(invoke).toHaveBeenCalledWith("cli_agent_skill_statuses");
+    expect(statuses.agents[0].status).toBe("up_to_date");
+  });
+
+  it("force-updates a skill through Tauri", async () => {
+    setTauriRuntime(true);
+    invoke.mockResolvedValue({
+      agent: "codex",
+      agent_home: "/home/.codex",
+      skill_path: "/home/.codex/skills/guildbotics/SKILL.md",
+      status: "up_to_date",
+      can_force_update: false,
+    });
+
+    const backend = await loadBackend();
+    await backend.forceUpdateCliAgentSkill("codex");
+
+    expect(invoke).toHaveBeenCalledWith("force_update_cli_agent_skill", { agent: "codex" });
+  });
+});
+
 describe("restoreWorkspace via startBackend", () => {
   it("applies a previously stored workspace on startup", async () => {
     localStorage.setItem("guildbotics.workspace", "/restored");

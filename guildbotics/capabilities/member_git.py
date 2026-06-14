@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import git
 from git import GitCommandError
@@ -36,6 +36,56 @@ class PublishResult:
             "commit_sha": self.commit_sha,
             "pushed": self.pushed,
             "has_changes": self.has_changes,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class CommitResult:
+    repo_path: str
+    branch: str
+    commit_sha: str | None
+    has_changes: bool
+    status: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repo_path": self.repo_path,
+            "branch": self.branch,
+            "commit_sha": self.commit_sha,
+            "has_changes": self.has_changes,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class PushResult:
+    repo_path: str
+    branch: str
+    pushed: bool
+    status: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repo_path": self.repo_path,
+            "branch": self.branch,
+            "pushed": self.pushed,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class BranchResult:
+    repo_path: str
+    branch: str
+    previous_branch: str
+    status: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repo_path": self.repo_path,
+            "branch": self.branch,
+            "previous_branch": self.previous_branch,
             "status": self.status,
         }
 
@@ -98,30 +148,122 @@ class MemberGitWorkspaceService:
         }
 
     async def publish(self, repo_path: Path, message: str) -> PublishResult:
+        return await self._publish(repo_path, message, workspace_mode="member")
+
+    async def publish_current_workspace(
+        self, repo_path: Path, message: str, cwd: Path | None = None
+    ) -> PublishResult:
+        return await self._publish(
+            repo_path, message, workspace_mode="current", cwd=cwd
+        )
+
+    async def commit(
+        self,
+        repo_path: Path,
+        message: str,
+        *,
+        workspace_mode: Literal["member", "current"] = "member",
+        cwd: Path | None = None,
+    ) -> CommitResult:
         repo_path = repo_path.expanduser().resolve()
-        self._validate_repo_path(repo_path)
+        self._validate_repo_path(repo_path, workspace_mode=workspace_mode, cwd=cwd)
         if not message.strip():
             raise MemberCapabilityError("Commit message must not be empty.")
         repo = git.Repo(repo_path)
         self._configure_repo_identity(repo)
         branch = repo.active_branch.name
-        token = await get_person_github_token(self.person, self.github.base_url)
         has_changes = repo.is_dirty(untracked_files=True)
         commit_sha = None
         if has_changes:
             repo.git.add(A=True)
             commit_sha = repo.index.commit(message.strip()).hexsha
-        pushed = self._push_if_needed(repo, branch, token)
-        return PublishResult(
+        return CommitResult(
             repo_path=str(repo_path),
             branch=branch,
             commit_sha=commit_sha,
-            pushed=pushed,
             has_changes=has_changes,
-            status="published" if (commit_sha or pushed) else "up_to_date",
+            status="committed" if commit_sha else "up_to_date",
         )
 
-    def _validate_repo_path(self, repo_path: Path) -> None:
+    async def push(
+        self,
+        repo_path: Path,
+        *,
+        workspace_mode: Literal["member", "current"] = "member",
+        cwd: Path | None = None,
+    ) -> PushResult:
+        repo_path = repo_path.expanduser().resolve()
+        self._validate_repo_path(repo_path, workspace_mode=workspace_mode, cwd=cwd)
+        repo = git.Repo(repo_path)
+        branch = repo.active_branch.name
+        token = await get_person_github_token(self.person, self.github.base_url)
+        pushed = self._push_if_needed(repo, branch, token)
+        return PushResult(
+            repo_path=str(repo_path),
+            branch=branch,
+            pushed=pushed,
+            status="pushed" if pushed else "up_to_date",
+        )
+
+    async def create_branch(
+        self,
+        repo_path: Path,
+        branch: str,
+        *,
+        workspace_mode: Literal["member", "current"] = "member",
+        cwd: Path | None = None,
+    ) -> BranchResult:
+        repo_path = repo_path.expanduser().resolve()
+        self._validate_repo_path(repo_path, workspace_mode=workspace_mode, cwd=cwd)
+        branch = branch.strip()
+        if not branch:
+            raise MemberCapabilityError("Branch name must not be empty.")
+        repo = git.Repo(repo_path)
+        previous_branch = repo.active_branch.name
+        if branch in {head.name for head in repo.heads}:
+            raise MemberCapabilityError(f"Branch already exists: {branch}")
+        repo.git.checkout("-b", branch)
+        return BranchResult(
+            repo_path=str(repo_path),
+            branch=branch,
+            previous_branch=previous_branch,
+            status="created",
+        )
+
+    async def _publish(
+        self,
+        repo_path: Path,
+        message: str,
+        *,
+        workspace_mode: Literal["member", "current"],
+        cwd: Path | None = None,
+    ) -> PublishResult:
+        commit = await self.commit(
+            repo_path, message, workspace_mode=workspace_mode, cwd=cwd
+        )
+        push = await self.push(repo_path, workspace_mode=workspace_mode, cwd=cwd)
+        return PublishResult(
+            repo_path=commit.repo_path,
+            branch=commit.branch,
+            commit_sha=commit.commit_sha,
+            pushed=push.pushed,
+            has_changes=commit.has_changes,
+            status=(
+                "published" if (commit.commit_sha or push.pushed) else "up_to_date"
+            ),
+        )
+
+    def _validate_repo_path(
+        self,
+        repo_path: Path,
+        *,
+        workspace_mode: Literal["member", "current"],
+        cwd: Path | None = None,
+    ) -> None:
+        if workspace_mode == "current":
+            self._validate_current_workspace_repo(repo_path, cwd or Path.cwd())
+            return
+
         workspace = self.workspace_root.expanduser().resolve()
         if repo_path != workspace and workspace not in repo_path.parents:
             raise MemberCapabilityError(
@@ -130,6 +272,25 @@ class MemberGitWorkspaceService:
         if not (repo_path / ".git").exists():
             raise MemberCapabilityError(
                 f"repo_path is not a git repository: {repo_path}"
+            )
+
+    def _validate_current_workspace_repo(self, repo_path: Path, cwd: Path) -> None:
+        if not (repo_path / ".git").exists():
+            raise MemberCapabilityError(
+                f"repo_path is not a git repository: {repo_path}"
+            )
+        try:
+            current_repo = git.Repo(
+                cwd.expanduser().resolve(), search_parent_directories=True
+            )
+        except git.InvalidGitRepositoryError as exc:
+            raise MemberCapabilityError(
+                "current workspace mode requires running inside the target git repository."
+            ) from exc
+        current_root = Path(current_repo.working_tree_dir or "").resolve()
+        if repo_path != current_root:
+            raise MemberCapabilityError(
+                f"repo_path must match the current workspace repository: {current_root}"
             )
 
     def _configure_repo_identity(self, repo: git.Repo) -> None:

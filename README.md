@@ -83,7 +83,7 @@ GuildBotics enables you to:
   - Python scripts (with context injection)
   - Shell scripts
   - YAML workflows (command composition)
-- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Gemini CLI, Codex CLI, Claude Code)
+- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Gemini CLI, Codex CLI, Claude Code, GitHub Copilot CLI)
 - **Extensible Integrations**: Pluggable adapters for external services
 
 ## Built-in Capabilities
@@ -154,7 +154,8 @@ Setup is performed with the **GuildBotics Desktop app**; command execution uses 
 
 - `~/.guildbotics/bin/guildbotics`: managed GuildBotics CLI used by CLI agents and skills
 - `~/.local/bin/guildbotics`: a small shim, only when the path is missing or already managed
-- GuildBotics skill files for Codex and Claude Code under their user skill directories
+- GuildBotics skill files for detected Codex, Claude Code, Gemini CLI, and GitHub Copilot CLI
+  user skill directories. User-created or user-edited skills are not overwritten.
 
 **Standalone CLI (headless / non-desktop environments):** Use `uv tool install guildbotics`
 when you are not using the desktop app, or when you intentionally want a separately managed CLI
@@ -643,7 +644,7 @@ This section describes how to use the default `ticket_driven_workflow` which int
   assigned member's configured machine-user token or GitHub App installation, not the local
   `gh auth` user. Credential-required member commands load these values from
   the active workspace `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the current directory.
-- For interactive Codex or Claude Code sessions, launch the GuildBotics Desktop app at least
+- For interactive CLI agent sessions, launch the GuildBotics Desktop app at least
   once after selecting the workspace. The app installs the GuildBotics skill and managed CLI
   under `~/.guildbotics/bin/guildbotics`. Configure the client to reject or require approval
   for `gh`, direct GitHub token/API writes, and `git push`. This is a guardrail against

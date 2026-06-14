@@ -111,6 +111,21 @@ body {
   min-width: 0;
 }
 
+.mono-text {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.skill-status-row {
+  border-top: 1px solid #e1e5e0;
+  padding-top: 10px;
+}
+
+.skill-status-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
 .grid {
   display: grid;
   gap: 16px;
