@@ -15,6 +15,7 @@ from guildbotics.integrations.github.github_utils import (
     get_proxy_agent_signature,
     is_proxy_agent,
 )
+from guildbotics.utils.person_profile import build_member_communication_style
 
 REPO_WITH_OWNER_PART_COUNT = 2
 GITHUB_RESOURCE_MIN_PART_COUNT = 4
@@ -84,6 +85,8 @@ class MemberGitHubCapabilityService:
             "is_active": self.person.is_active,
             "roles": role_summaries,
             "profile": self.person.profile,
+            "speaking_style": self.person.speaking_style,
+            "communication_style": build_member_communication_style(self.person),
             "github_username": get_github_username(self.person),
             "proxy_agent_signature": (
                 get_proxy_agent_signature(self.person)

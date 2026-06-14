@@ -49,6 +49,47 @@ def test_member_context_outputs_no_secret(monkeypatch):
     assert "token" not in result.output.lower()
 
 
+def test_member_context_markdown_highlights_communication_style(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def context(self, check_credentials=False):
+            assert check_credentials is False
+            return {
+                "person_id": "aiko",
+                "communication_style": {
+                    "active_member_instruction": "Treat Aiko as active.",
+                    "interactive_replies": "Reply as Aiko.",
+                    "github_comments": "Comment as Aiko.",
+                    "neutral_documents": "Use neutral documents.",
+                    "machine_outputs": "Keep JSON factual.",
+                },
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(member_module.member, ["context", "--person", "aiko"])
+
+    assert result.exit_code == 0
+    assert "## Communication Style" in result.output
+    assert "Treat Aiko as active." in result.output
+    assert "Keep JSON factual." in result.output
+
+
 def test_member_context_uses_active_workspace(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
@@ -662,6 +703,135 @@ def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
         "closed": True,
     }
     assert '"base": "ticket-driven-workflow"' in result.output
+
+
+def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_create(self, repo, head, base, title, body, issue_url, draft):
+            calls.update(
+                {
+                    "repo": repo,
+                    "head": head,
+                    "base": base,
+                    "title": title,
+                    "body": body,
+                    "issue_url": issue_url,
+                    "draft": draft,
+                }
+            )
+            return {
+                "pr_number": 1,
+                "pr_url": "https://github.com/owner/repo/pull/1",
+                "created": True,
+                "draft": False,
+                "head": head,
+                "base": base,
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--base",
+            "ticket-driven-workflow",
+            "--content-stdin",
+        ],
+        input="PR title\n\n## Summary\n\nPR body\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "repo": "owner/repo",
+        "head": "feature",
+        "base": "ticket-driven-workflow",
+        "title": "PR title",
+        "body": "## Summary\n\nPR body\n",
+        "issue_url": "",
+        "draft": "auto",
+        "closed": True,
+    }
+    assert '"base": "ticket-driven-workflow"' in result.output
+
+
+def test_member_github_pr_create_rejects_mixed_content_sources(tmp_path):
+    title_file = tmp_path / "title.txt"
+    title_file.write_text("PR title\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--title-file",
+            str(title_file),
+            "--content-stdin",
+        ],
+        input="PR title\n\nPR body\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --content-stdin or both --title-file and --body-file" in (
+        result.output
+    )
+
+
+def test_member_github_pr_create_rejects_missing_content_source():
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Either --content-stdin or both --title-file and --body-file" in (
+        result.output
+    )
 
 
 def test_member_task_status_cli(monkeypatch, tmp_path):

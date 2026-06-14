@@ -170,7 +170,7 @@ def _github_capability_help() -> str:
             "guildbotics member github pr inspect --person <person> --url <pr_url> --include-comments",
             "guildbotics member git prepare --person <person> --issue-url <issue_url> [--pr-url <pr_url>]",
             "guildbotics member git publish --person <person> --repo-path <path> --message-file <file>",
-            "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> [--base <branch>] --title-file <file> --body-file <file> --issue-url <issue_url>",
+            "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> [--base <branch>] (--title-file <file> --body-file <file> | --content-stdin) --issue-url <issue_url>",
             "guildbotics member github issue comment --person <person> --url <issue_url> --body-file <file>",
             "guildbotics member github pr reply --person <person> --url <pr_url> --reply-target-id <id> --body-file <file>",
             "guildbotics member github reaction add --person <person> --repo <owner/repo> --target issue-comment|pr-review-comment --comment-id <id> --reaction +1",

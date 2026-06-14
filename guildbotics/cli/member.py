@@ -488,8 +488,16 @@ async def _pr_inspect(
     default="",
     help="Base branch for the pull request. Defaults to the repository default branch.",
 )
-@click.option("--title-file", required=True, type=click.Path(path_type=Path))
-@click.option("--body-file", required=True, type=click.Path(path_type=Path))
+@click.option("--title-file", type=click.Path(path_type=Path))
+@click.option("--body-file", type=click.Path(path_type=Path))
+@click.option(
+    "--content-stdin",
+    is_flag=True,
+    help=(
+        "Read PR title and body from standard input. The first line is the "
+        "title; the remaining content is the body."
+    ),
+)
 @click.option("--issue-url", default="")
 @click.option("--draft", type=click.Choice(["auto", "true", "false"]), default="auto")
 @click.option("--run-id", default="")
@@ -499,15 +507,15 @@ def pr_create(
     repo: str,
     head: str,
     base: str,
-    title_file: Path,
-    body_file: Path,
+    title_file: Path | None,
+    body_file: Path | None,
+    content_stdin: bool,
     issue_url: str,
     draft: str,
     run_id: str,
     output_format: str,
 ) -> None:
-    title = _read_file(title_file, "title-file")
-    body = _read_file(body_file, "body-file")
+    title, body = _read_pr_content(title_file, body_file, content_stdin)
     _run(
         _pr_create(
             person, repo, head, base, title, body, issue_url, draft, run_id or None
@@ -753,6 +761,33 @@ def _read_message(message_file: Path | None, message_stdin: bool, label: str) ->
     raise click.ClickException("Either --message-file or --message-stdin is required.")
 
 
+def _read_pr_content(
+    title_file: Path | None, body_file: Path | None, content_stdin: bool
+) -> tuple[str, str]:
+    if content_stdin and (title_file is not None or body_file is not None):
+        raise click.ClickException(
+            "Use either --content-stdin or both --title-file and --body-file, not both."
+        )
+    if content_stdin:
+        text = click.get_text_stream("stdin").read()
+        title, separator, body = text.partition("\n")
+        if not separator:
+            raise click.ClickException(
+                "--content-stdin requires a title line and body content."
+            )
+        body = body.removeprefix("\n")
+        if not title.strip():
+            raise click.ClickException("PR title must not be empty.")
+        if not body.strip():
+            raise click.ClickException("PR body must not be empty.")
+        return title.strip(), body
+    if title_file is not None and body_file is not None:
+        return _read_file(title_file, "title-file"), _read_file(body_file, "body-file")
+    raise click.ClickException(
+        "Either --content-stdin or both --title-file and --body-file is required."
+    )
+
+
 def _run(coro, *, output_format: str) -> Any:
     try:
         result = asyncio.run(coro)
@@ -772,6 +807,19 @@ def _emit(payload: dict[str, Any], output_format: str) -> None:
 def _to_markdown(payload: dict[str, Any]) -> str:
     lines = []
     for key, value in payload.items():
+        if key == "communication_style" and isinstance(value, dict):
+            lines.append("## Communication Style")
+            for style_key in (
+                "active_member_instruction",
+                "voice_basis",
+                "interactive_replies",
+                "github_comments",
+                "neutral_documents",
+                "machine_outputs",
+            ):
+                if style_key in value:
+                    lines.append(f"- **{style_key}**: {value[style_key]}")
+            continue
         if isinstance(value, (dict, list)):
             rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
         else:

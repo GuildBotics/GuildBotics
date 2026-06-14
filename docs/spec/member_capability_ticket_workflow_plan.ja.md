@@ -159,7 +159,8 @@ guildbotics member context --person <person_id> [--check-credentials] [--format 
 役割:
 
 - 指定 member の非 secret context を表示する。skill / desktop agent が最初に呼ぶ想定。
-- 出力に含める: `person_id` / `name` / `person_type` / active/default role summary・description / profile / GitHub username / proxy agent signature（該当時）/ available member commands / safety note（GitHub/git writes は `guildbotics member ...` 経由のみ）。
+- 出力に含める: `person_id` / `name` / `person_type` / active/default role summary・description / profile / `speaking_style` / LLM がそのまま従える `communication_style`（`interactive_replies` / `github_comments` / `neutral_documents` / `machine_outputs`）/ GitHub username / proxy agent signature（該当時）/ available member commands / safety note（GitHub/git writes は `guildbotics member ...` 経由のみ）。
+- `communication_style` は interactive reply と GitHub comment には member 口調を適用し、workflow `AgentResponse.message`、JSON、path、ID、commit message、PR title/body などには neutral / machine output style を適用することを明示する。これによりノンインタラクティブ workflow の JSON 応答が人格口調で壊れないようにする。
 - 含めない: access token / GitHub App private key path の中身 / env secret value / Slack token。
 - 既定では credential が無くても非 secret context を表示できる。`credential_status` は `unchecked` とする。
 - `--check-credentials` 指定時だけ GitHub credential 解決を必須にし、解決できなければ fail-closed（非ゼロ終了・secret を出さない安全メッセージ）。導入テストと workflow 前提確認ではこの option を使う。
@@ -298,8 +299,7 @@ guildbotics member github pr create \
   --repo <owner/repo または repo> \
   --head <branch> \
   [--base <branch>] \
-  --title-file <path> \
-  --body-file <path> \
+  (--title-file <path> --body-file <path> | --content-stdin) \
   [--issue-url <github_issue_url>] \
   [--draft auto|true|false] \
   [--format json|markdown]
@@ -307,6 +307,7 @@ guildbotics member github pr create \
 
 - same-repository PR を作成。同じ head/base branch の open PR が既にあれば新規作成せず既存 PR を返す。
 - `--base` 未指定時は repository default branch を向け先にする。
+- `--content-stdin` は stdin の 1 行目を PR title、空行を挟んだ残りを PR body として読む。CLI agent の承認画面に heredoc で PR title/body を表示しやすいため、対話モードではこれを優先する。
 - `--issue-url` 指定時は body に `Closes #<issue_number>` を付与（既に含まれていれば重複させない）。
 - `--draft auto` は proxy agent なら draft、それ以外は ready。
 - 返却 JSON: `pr_number` / `pr_url` / `created` / `draft` / `head` / `base`。

@@ -1,7 +1,7 @@
 import pytest
 
 from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
-from guildbotics.entities.team import Person, Project, Team
+from guildbotics.entities.team import Person, Project, Role, Team
 
 HTTP_BAD_REQUEST = 400
 ISSUE_NUMBER = 42
@@ -93,6 +93,49 @@ def test_parse_github_issue_and_pull_request_urls():
     assert issue.number == ISSUE_NUMBER
     assert issue.kind == "issue"
     assert pull.kind == "pull"
+
+
+@pytest.mark.asyncio
+async def test_context_returns_llm_ready_communication_style():
+    person = Person(
+        person_id="yuki",
+        name="Yuki Nakamura",
+        person_type="machine_user",
+        speaking_style="柔らかく親しみやすい日本語で話す。",
+        roles={
+            "programmer": Role(
+                id="programmer",
+                summary="プロダクトのコードベースを改善する役割。",
+                description="",
+            )
+        },
+        profile={
+            "character": {
+                "archetype": "親しみやすいアイデアメーカー",
+                "traits": ["明るい", "共感的"],
+                "interests": ["UX"],
+                "conversation_preferences": {
+                    "contribution_style": ["具体案をやわらかく提案する"]
+                },
+            }
+        },
+        account_info={"github_username": "yuki-bot"},
+    )
+    team = Team(project=Project(name="demo"), members=[person])
+    service = MemberGitHubCapabilityService(person, team)
+
+    result = await service.context()
+
+    assert result["speaking_style"] == "柔らかく親しみやすい日本語で話す。"
+    style = result["communication_style"]
+    assert "Yuki Nakamura" in style["active_member_instruction"]
+    assert "親しみやすいアイデアメーカー" in style["voice_basis"]
+    assert "具体案をやわらかく提案する" in style["voice_basis"]
+    assert "interactive replies" in style["interactive_replies"]
+    assert "GitHub issue comments" in style["github_comments"]
+    assert "PR titles/bodies" in style["neutral_documents"]
+    assert "workflow AgentResponse.message" in style["machine_outputs"]
+    assert "token" not in str(style).lower()
 
 
 @pytest.mark.asyncio

@@ -15,11 +15,15 @@ Run:
 "$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>
 ```
 
-Use the returned non-secret context for role, profile, GitHub username, proxy signature, and available commands.
+Use the returned non-secret context for role, profile, GitHub username, proxy signature, available commands, and `communication_style`.
 Treat the returned member context as the source of truth for the member's persona, role, profile, judgment criteria, and communication style.
-Use the member's voice for conversational outputs: interactive replies to the user, GitHub issue comments, PR conversation comments, and PR review thread replies.
-Use the GuildBotics project language and the project's neutral document style for document-like artifacts and durable records such as issue titles/bodies, PR titles/bodies, commit messages, and task summaries.
-Keep machine-readable command output, command arguments, IDs, paths, and workflow completion JSON factual and valid; do not decorate control data or workflow `AgentResponse.message` with persona prose.
+If `communication_style` is present, follow it directly:
+- Use `communication_style.interactive_replies` for interactive progress updates and final replies to the user.
+- Use `communication_style.github_comments` for GitHub issue comments, PR conversation comments, and PR review thread replies.
+- Use `communication_style.neutral_documents` for document-like artifacts and durable records such as issue titles/bodies, PR titles/bodies, commit messages, and task summaries.
+- Use `communication_style.machine_outputs` for command output, command arguments, IDs, paths, workflow completion JSON, and workflow `AgentResponse.message`.
+Interactive progress updates and final replies are conversational outputs, not neutral task summaries.
+Do not flatten the active member voice into the default CLI assistant voice unless `communication_style.machine_outputs` applies.
 If the user asks to verify credentials or include a credential check, run:
 
 ```bash
@@ -81,7 +85,17 @@ If the user explicitly asks to create a new branch from the current branch, use:
 4. Edit files in the user's current repository.
 5. Run relevant tests or checks.
 6. If code changed, write a commit message in the GuildBotics project language and run `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current` with the commit message supplied on stdin.
-7. If code changed for an issue and a PR is needed, run `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`, then write neutral PR title/body files and run `"$HOME/.guildbotics/bin/guildbotics" member github pr create --person <person_id> --repo <owner/repo> --head <current_branch> --base <target_branch> --title-file <file> --body-file <file> --issue-url <issue_url>` when the user specified a target branch. Omit `--base` only when the repository default branch is the intended PR target.
+7. If code changed for an issue and a PR is needed, run `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`, then create the PR with `--content-stdin` so the user can review the PR title/body in the approval prompt:
+
+```bash
+"$HOME/.guildbotics/bin/guildbotics" member github pr create --person <person_id> --repo <owner/repo> --head <current_branch> --base <target_branch> --content-stdin --issue-url <issue_url> <<'EOF'
+<neutral PR title in the GuildBotics project language>
+
+<neutral PR body in the GuildBotics project language>
+EOF
+```
+
+Omit `--base` only when the repository default branch is the intended PR target.
 8. Post the final issue comment in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github issue comment`, or leave a reaction if no action is needed.
 
 ## Interactive PR Review Flow
