@@ -297,6 +297,7 @@ guildbotics member github pr create \
   --person <person_id> \
   --repo <owner/repo または repo> \
   --head <branch> \
+  [--base <branch>] \
   --title-file <path> \
   --body-file <path> \
   [--issue-url <github_issue_url>] \
@@ -304,7 +305,8 @@ guildbotics member github pr create \
   [--format json|markdown]
 ```
 
-- same-repository PR を作成。同じ head branch の open PR が既にあれば新規作成せず既存 PR を返す。
+- same-repository PR を作成。同じ head/base branch の open PR が既にあれば新規作成せず既存 PR を返す。
+- `--base` 未指定時は repository default branch を向け先にする。
 - `--issue-url` 指定時は body に `Closes #<issue_number>` を付与（既に含まれていれば重複させない）。
 - `--draft auto` は proxy agent なら draft、それ以外は ready。
 - 返却 JSON: `pr_number` / `pr_url` / `created` / `draft` / `head` / `base`。

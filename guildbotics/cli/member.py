@@ -483,6 +483,11 @@ async def _pr_inspect(
 @click.option("--person", required=True)
 @click.option("--repo", required=True)
 @click.option("--head", required=True)
+@click.option(
+    "--base",
+    default="",
+    help="Base branch for the pull request. Defaults to the repository default branch.",
+)
 @click.option("--title-file", required=True, type=click.Path(path_type=Path))
 @click.option("--body-file", required=True, type=click.Path(path_type=Path))
 @click.option("--issue-url", default="")
@@ -493,6 +498,7 @@ def pr_create(
     person: str,
     repo: str,
     head: str,
+    base: str,
     title_file: Path,
     body_file: Path,
     issue_url: str,
@@ -503,7 +509,9 @@ def pr_create(
     title = _read_file(title_file, "title-file")
     body = _read_file(body_file, "body-file")
     _run(
-        _pr_create(person, repo, head, title, body, issue_url, draft, run_id or None),
+        _pr_create(
+            person, repo, head, base, title, body, issue_url, draft, run_id or None
+        ),
         output_format=output_format,
     )
 
@@ -512,6 +520,7 @@ async def _pr_create(
     person: str,
     repo: str,
     head: str,
+    base: str,
     title: str,
     body: str,
     issue_url: str,
@@ -521,7 +530,9 @@ async def _pr_create(
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        result = await service.pr_create(repo, head, title, body, issue_url, draft)
+        result = await service.pr_create(
+            repo, head, base, title, body, issue_url, draft
+        )
         TaskRunStore().append_evidence(current_task_run_id(run_id), "pr_create", result)
         return result
     finally:
@@ -727,9 +738,7 @@ def _read_file(path: Path, label: str) -> str:
     return text
 
 
-def _read_message(
-    message_file: Path | None, message_stdin: bool, label: str
-) -> str:
+def _read_message(message_file: Path | None, message_stdin: bool, label: str) -> str:
     if message_file is not None and message_stdin:
         raise click.ClickException(
             "Use either --message-file or --message-stdin, not both."

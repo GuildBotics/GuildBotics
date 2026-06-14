@@ -204,6 +204,7 @@ class MemberGitHubCapabilityService:
         self,
         repo: str,
         head: str,
+        base: str,
         title: str,
         body: str,
         issue_url: str,
@@ -211,9 +212,9 @@ class MemberGitHubCapabilityService:
     ) -> dict[str, Any]:
         owner, repo_name = self.parse_repo(repo)
         client = await self._get_client()
-        default_branch = await self.default_branch(owner, repo_name)
+        base_branch = base.strip() or await self.default_branch(owner, repo_name)
         endpoint = f"/repos/{owner}/{repo_name}/pulls"
-        params = {"head": f"{owner}:{head}", "base": default_branch, "state": "open"}
+        params = {"head": f"{owner}:{head}", "base": base_branch, "state": "open"}
         existing_resp = await client.get(endpoint, params=params)
         _raise_for_status(existing_resp)
         existing = _as_list(existing_resp.json())
@@ -225,14 +226,14 @@ class MemberGitHubCapabilityService:
                 "created": False,
                 "draft": bool(pr.get("draft", False)),
                 "head": head,
-                "base": default_branch,
+                "base": base_branch,
             }
 
         body = _append_closes(body, issue_url)
         payload: dict[str, Any] = {
             "title": title,
             "head": head,
-            "base": default_branch,
+            "base": base_branch,
             "body": body,
         }
         if draft == "true" or (draft == "auto" and is_proxy_agent(self.person)):
@@ -248,7 +249,7 @@ class MemberGitHubCapabilityService:
             "created": True,
             "draft": bool(pr.get("draft", payload.get("draft", False))),
             "head": head,
-            "base": default_branch,
+            "base": base_branch,
         }
 
     async def pr_comment(self, url: str, body: str) -> dict[str, Any]:

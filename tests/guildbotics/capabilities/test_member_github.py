@@ -327,6 +327,93 @@ async def test_issue_create_creates_real_issue_and_adds_project_item():
 
 
 @pytest.mark.asyncio
+async def test_pr_create_uses_explicit_base_branch():
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls"] = []
+    fake.post_payloads["/repos/owner/repo/pulls"] = {
+        "number": 8,
+        "html_url": "https://github.com/owner/repo/pull/8",
+        "draft": False,
+    }
+    service._client = fake
+
+    result = await service.pr_create(
+        "owner/repo",
+        "feature",
+        "ticket-driven-workflow",
+        "Title",
+        "Body",
+        "",
+        "false",
+    )
+
+    assert result == {
+        "pr_number": 8,
+        "pr_url": "https://github.com/owner/repo/pull/8",
+        "created": True,
+        "draft": False,
+        "head": "feature",
+        "base": "ticket-driven-workflow",
+    }
+    assert fake.gets[0] == (
+        "/repos/owner/repo/pulls",
+        {
+            "head": "owner:feature",
+            "base": "ticket-driven-workflow",
+            "state": "open",
+        },
+        None,
+    )
+    assert fake.posts[0] == (
+        "/repos/owner/repo/pulls",
+        {
+            "title": "Title",
+            "head": "feature",
+            "base": "ticket-driven-workflow",
+            "body": "Body",
+            "draft": False,
+        },
+        None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pr_create_uses_default_branch_when_base_is_empty():
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo"] = {"default_branch": "develop"}
+    fake.get_payloads["/repos/owner/repo/pulls"] = []
+    fake.post_payloads["/repos/owner/repo/pulls"] = {
+        "number": 9,
+        "html_url": "https://github.com/owner/repo/pull/9",
+        "draft": False,
+    }
+    service._client = fake
+
+    result = await service.pr_create(
+        "owner/repo",
+        "feature",
+        "",
+        "Title",
+        "Body",
+        "",
+        "false",
+    )
+
+    assert result["base"] == "develop"
+    assert fake.gets[:2] == [
+        ("/repos/owner/repo", None, None),
+        (
+            "/repos/owner/repo/pulls",
+            {"head": "owner:feature", "base": "develop", "state": "open"},
+            None,
+        ),
+    ]
+    assert fake.posts[0][1]["base"] == "develop"
+
+
+@pytest.mark.asyncio
 async def test_reaction_add_uses_target_specific_endpoint():
     service = _service(person_type="human")
     fake = FakeClient()

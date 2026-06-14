@@ -579,6 +579,91 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
     assert "only for interactive use" in result.output
 
 
+def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    title_file = tmp_path / "title.txt"
+    body_file = tmp_path / "body.md"
+    title_file.write_text("PR title\n", encoding="utf-8")
+    body_file.write_text("PR body\n", encoding="utf-8")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_create(self, repo, head, base, title, body, issue_url, draft):
+            calls.update(
+                {
+                    "repo": repo,
+                    "head": head,
+                    "base": base,
+                    "title": title,
+                    "body": body,
+                    "issue_url": issue_url,
+                    "draft": draft,
+                }
+            )
+            return {
+                "pr_number": 1,
+                "pr_url": "https://github.com/owner/repo/pull/1",
+                "created": True,
+                "draft": False,
+                "head": head,
+                "base": base,
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--base",
+            "ticket-driven-workflow",
+            "--title-file",
+            str(title_file),
+            "--body-file",
+            str(body_file),
+            "--issue-url",
+            "https://github.com/owner/repo/issues/42",
+            "--draft",
+            "false",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "repo": "owner/repo",
+        "head": "feature",
+        "base": "ticket-driven-workflow",
+        "title": "PR title\n",
+        "body": "PR body\n",
+        "issue_url": "https://github.com/owner/repo/issues/42",
+        "draft": "false",
+        "closed": True,
+    }
+    assert '"base": "ticket-driven-workflow"' in result.output
+
+
 def test_member_task_status_cli(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     store = TaskRunStore()

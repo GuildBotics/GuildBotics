@@ -81,7 +81,7 @@ If the user explicitly asks to create a new branch from the current branch, use:
 4. Edit files in the user's current repository.
 5. Run relevant tests or checks.
 6. If code changed, write a commit message in the GuildBotics project language and run `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current` with the commit message supplied on stdin.
-7. If code changed for an issue and a PR is needed, run `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`, then write neutral PR title/body files and run `"$HOME/.guildbotics/bin/guildbotics" member github pr create --person <person_id> --repo <owner/repo> --head <current_branch> --title-file <file> --body-file <file> --issue-url <issue_url>`.
+7. If code changed for an issue and a PR is needed, run `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`, then write neutral PR title/body files and run `"$HOME/.guildbotics/bin/guildbotics" member github pr create --person <person_id> --repo <owner/repo> --head <current_branch> --base <target_branch> --title-file <file> --body-file <file> --issue-url <issue_url>` when the user specified a target branch. Omit `--base` only when the repository default branch is the intended PR target.
 8. Post the final issue comment in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github issue comment`, or leave a reaction if no action is needed.
 
 ## Interactive PR Review Flow
