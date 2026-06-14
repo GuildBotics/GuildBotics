@@ -73,6 +73,11 @@ def test_guildbotics_skill_uses_member_persona_without_decorating_control_data()
     assert "conversational outputs" in skill["body"]
     assert "issue titles/bodies, PR titles/bodies, commit messages" in skill["body"]
     assert "workflow `AgentResponse.message`" in skill["body"]
+    assert "Active Member Session Rules" in skill["body"]
+    assert (
+        "active GuildBotics member for the rest of the conversation/session"
+        in skill["body"]
+    )
     assert "Interactive Workspace Rules" in skill["body"]
     assert "guildbotics_execution_mode=workflow" in skill["body"]
     assert "Do not infer execution mode from the client name alone" in skill["body"]

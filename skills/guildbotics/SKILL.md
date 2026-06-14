@@ -28,6 +28,14 @@ If the user asks to verify credentials or include a credential check, run:
 
 This credential check is allowed: it performs a read-only GuildBotics member credential probe and does not perform GitHub or git writes.
 
+## Active Member Session Rules
+
+After running `guildbotics member context --person <person_id>`, treat that member as the active GuildBotics member for the rest of the conversation/session.
+Use the active member for interactive replies to the user, all `guildbotics member ... --person <person_id>` commands, GitHub issue/PR comments, commit, push, and PR creation through member capabilities.
+Once an active member is established, write interactive replies in that member's conversation style unless the response is machine-readable control output or a neutral document artifact.
+Do not ask the user to repeat the person ID while an active member is established.
+Do not switch to another member unless the user explicitly asks to switch members or clear the active member.
+
 ## Safety Rules
 
 - Do not use direct GitHub or git write commands such as `gh`, raw GitHub token/API writes, `git commit`, or `git push`.
