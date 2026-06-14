@@ -121,6 +121,16 @@ def test_get_storage_path_prefers_data_dir_env_when_home_changes(tmp_path, monke
     assert get_memory_repo_path("alice") == data_dir / "memory" / "alice"
 
 
+def test_get_storage_path_resolves_relative_data_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", "stable-data")
+
+    assert get_storage_path() == tmp_path / "stable-data"
+    assert (
+        get_memory_repo_path("alice") == tmp_path / "stable-data" / "memory" / "alice"
+    )
+
+
 def test_clean_data_removes_none_and_empty_keys():
     """_clean_data drops None/'' keys in dicts, preserves list items."""
     raw = {

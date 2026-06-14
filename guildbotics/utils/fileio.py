@@ -32,7 +32,7 @@ def get_storage_path() -> Path:
         Path: The storage path for the project.
     """
     if data_dir := os.getenv(GUILDBOTICS_DATA_DIR):
-        return Path(data_dir).expanduser()
+        return Path(data_dir).expanduser().resolve(strict=False)
     return Path.home() / ".guildbotics" / "data"
 
 

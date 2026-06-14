@@ -5,15 +5,24 @@ from pathlib import Path
 from typing import Any
 
 from guildbotics.commands.discovery import resolve_named_command
-from guildbotics.commands.errors import CommandError
-from guildbotics.commands.errors import PersonNotFoundError as PersonNotFoundError
 from guildbotics.commands.errors import (
-    PersonSelectionRequiredError as PersonSelectionRequiredError,
+    CommandError,
+    PersonNotFoundError,
+    PersonSelectionRequiredError,
 )
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.spec_factory import CommandSpecFactory
+from guildbotics.entities.team import Person
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import resolve_person
+
+__all__ = [
+    "CommandRunner",
+    "PersonNotFoundError",
+    "PersonSelectionRequiredError",
+    "_resolve_person",
+    "run_command",
+]
 
 
 class CommandRunner:
@@ -123,5 +132,5 @@ async def run_command(
     return await runner.run()
 
 
-def _resolve_person(members: Sequence, identifier: str | None):
+def _resolve_person(members: Sequence[Person], identifier: str | None) -> Person:
     return resolve_person(members, identifier, default_to_single_active=True)
