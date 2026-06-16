@@ -86,7 +86,7 @@ GuildBotics member chat capability
 実装者は最初に次のファイルを読む。
 
 - `guildbotics/templates/commands/workflows/chat_conversation_workflow.py`: 現行 chat workflow。Slack event 処理、返信生成、投稿が集中している。
-- `guildbotics/templates/commands/workflows/chat/should_react.py`: deterministic gate と LLM follow-up 判定が混在している。
+- `guildbotics/templates/commands/functions/handle_chat_event.{ja,en}.md`: 返信要否・reaction・no-op の判断を CLI agent へ委譲する現行の chat prompt 入口。
 - `guildbotics/templates/commands/functions/handle_github_ticket.{ja,en}.md`: ticket workflow が CLI agent へ委譲するときの prompt 例。
 - `guildbotics/templates/commands/workflows/ticket_driven_workflow.py`: PR #183 後の薄い workflow と run completion 検証の例。
 - `guildbotics/cli/member.py`: `guildbotics member ...` CLI の既存実装。
