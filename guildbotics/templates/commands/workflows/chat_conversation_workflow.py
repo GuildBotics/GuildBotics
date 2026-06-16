@@ -148,7 +148,6 @@ async def _handle_event(
         ),
         language=getattr(context, "language_name", ""),
         member_workspace=str(member_workspace),
-        chat_capability_help=_chat_capability_help(),
         cli_agent_env={
             RUN_ENV: workflow_run_id,
             GUILDBOTICS_DATA_DIR: str(get_storage_path()),
@@ -261,36 +260,6 @@ def _latest_chat_post_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any]
         if record.get("evidence_type") in {"chat_reply", "chat_post"}:
             return record
     return None
-
-
-def _chat_capability_help() -> str:
-    return "\n".join(
-        [
-            "guildbotics member context --person <person>",
-            "guildbotics member chat identity --person <person> --service slack",
-            "guildbotics member chat inspect thread --person <person> --service slack "
-            "--channel-id <channel_id> --thread-ts <thread_ts> [--limit <limit>]",
-            "guildbotics member chat inspect channel --person <person> --service slack "
-            "(--channel-id <channel_id> | --channel-name <name>) "
-            "[--oldest-ts <oldest_ts>] [--latest-ts <latest_ts>] [--limit <limit>]",
-            "guildbotics member chat reply --person <person> --service slack "
-            "--channel-id <channel_id> --thread-ts <thread_ts> "
-            "(--body-file <path> | --body-stdin) [--run-id <run_id>]",
-            "guildbotics member chat post --person <person> --service slack "
-            "(--channel-id <channel_id> | --channel-name <name>) "
-            "(--body-file <path> | --body-stdin) [--run-id <run_id>]",
-            "guildbotics member chat reaction add --person <person> --service slack "
-            "--channel-id <channel_id> --message-ts <message_ts> "
-            "--reaction ack|agree|celebrate|support [--run-id <run_id>]",
-            "guildbotics member chat noop --person <person> --run-id <run_id> "
-            "--service slack --channel-id <channel_id> --thread-ts <thread_ts> "
-            "--event-id <event_id> --reason-file <path>",
-            "guildbotics member chat complete --person <person> --run-id <run_id> "
-            "--service slack --channel-id <channel_id> --thread-ts <thread_ts> "
-            "--event-id <event_id> --status done|asking|blocked "
-            "--summary-file <path>",
-        ]
-    )
 
 
 def _get_chat_workspace_path(context: Any) -> Path | None:

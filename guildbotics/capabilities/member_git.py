@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import git
-from git import GitCommandError
+from git import Actor, GitCommandError
 
 from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
@@ -74,22 +74,6 @@ class PushResult:
         }
 
 
-@dataclass(frozen=True)
-class BranchResult:
-    repo_path: str
-    branch: str
-    previous_branch: str
-    status: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "repo_path": self.repo_path,
-            "branch": self.branch,
-            "previous_branch": self.previous_branch,
-            "status": self.status,
-        }
-
-
 class MemberGitWorkspaceService:
     def __init__(
         self, person: Person, team: Team, logger: logging.Logger | None = None
@@ -122,18 +106,13 @@ class MemberGitWorkspaceService:
         default_branch = await self.github.default_branch(checkout_owner, checkout_repo)
         clone_url = await self.github.get_clone_url(checkout_owner, checkout_repo)
         token = await get_person_github_token(self.person, self.github.base_url)
-        git_user = self.person.account_info.get(
-            "git_user", self.person.name or "GuildBotics"
-        )
-        git_email = self.person.account_info.get(
-            "git_email", f"{self.person.person_id}@guildbotics.local"
-        )
+        git_user, git_email = self._git_identity()
         tool = GitTool(
             self.workspace_root,
             clone_url,
             self.logger,
-            str(git_user),
-            str(git_email),
+            git_user,
+            git_email,
             default_branch,
             auth_token=token,
         )
@@ -176,19 +155,20 @@ class MemberGitWorkspaceService:
         if not message.strip():
             raise MemberCapabilityError("Commit message must not be empty.")
         repo = git.Repo(repo_path)
-        self._configure_repo_identity(repo)
         branch = repo.active_branch.name
-        has_changes = repo.is_dirty(untracked_files=True)
+        has_staged = self._has_staged_changes(repo)
         commit_sha = None
-        if has_changes:
-            repo.git.add(A=True)
-            commit_sha = repo.index.commit(message.strip()).hexsha
+        if has_staged:
+            actor = self._member_actor()
+            commit_sha = repo.index.commit(
+                message.strip(), author=actor, committer=actor
+            ).hexsha
         return CommitResult(
             repo_path=str(repo_path),
             branch=branch,
             commit_sha=commit_sha,
-            has_changes=has_changes,
-            status="committed" if commit_sha else "up_to_date",
+            has_changes=has_staged,
+            status="committed" if commit_sha else "nothing_staged",
         )
 
     async def push(
@@ -209,31 +189,6 @@ class MemberGitWorkspaceService:
             branch=branch,
             pushed=pushed,
             status="pushed" if pushed else "up_to_date",
-        )
-
-    async def create_branch(
-        self,
-        repo_path: Path,
-        branch: str,
-        *,
-        workspace_mode: Literal["member", "current"] = "member",
-        cwd: Path | None = None,
-    ) -> BranchResult:
-        repo_path = repo_path.expanduser().resolve()
-        self._validate_repo_path(repo_path, workspace_mode=workspace_mode, cwd=cwd)
-        branch = branch.strip()
-        if not branch:
-            raise MemberCapabilityError("Branch name must not be empty.")
-        repo = git.Repo(repo_path)
-        previous_branch = repo.active_branch.name
-        if branch in {head.name for head in repo.heads}:
-            raise MemberCapabilityError(f"Branch already exists: {branch}")
-        repo.git.checkout("-b", branch)
-        return BranchResult(
-            repo_path=str(repo_path),
-            branch=branch,
-            previous_branch=previous_branch,
-            status="created",
         )
 
     async def _publish(
@@ -299,7 +254,7 @@ class MemberGitWorkspaceService:
                 f"repo_path must match the current workspace repository: {current_root}"
             )
 
-    def _configure_repo_identity(self, repo: git.Repo) -> None:
+    def _git_identity(self) -> tuple[str, str]:
         git_user = str(
             self.person.account_info.get("git_user", self.person.name or "GuildBotics")
         )
@@ -308,9 +263,20 @@ class MemberGitWorkspaceService:
                 "git_email", f"{self.person.person_id}@guildbotics.local"
             )
         )
-        with repo.config_writer(config_level="repository") as writer:
-            writer.set_value("user", "name", git_user)
-            writer.set_value("user", "email", git_email)
+        return git_user, git_email
+
+    def _member_actor(self) -> Actor:
+        git_user, git_email = self._git_identity()
+        return Actor(git_user, git_email)
+
+    @staticmethod
+    def _has_staged_changes(repo: git.Repo) -> bool:
+        # Commit only what the caller already staged with plain git. The member
+        # capability never stages on the caller's behalf, so that staging stays a
+        # normal git operation and partial commits remain possible.
+        if not repo.head.is_valid():
+            return bool(repo.index.entries)
+        return bool(repo.index.diff(repo.head.commit))
 
     def _push_if_needed(self, repo: git.Repo, branch: str, token: str) -> bool:
         origin = repo.remotes.origin

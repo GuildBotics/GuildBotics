@@ -119,7 +119,6 @@ async def _main(context: Context, ticket_manager: TicketManager) -> AgentRespons
         member_workspace=str(member_workspace),
         workflow_run_id=workflow_run_id,
         prepare_command=_prepare_command(context, ticket_url),
-        github_capability_help=_github_capability_help(),
         # Scope the run id to this agent subprocess only. Mutating the
         # process-global os.environ would race across the scheduler's
         # per-member worker threads; the brain merges this overlay into the
@@ -160,23 +159,6 @@ def _prepare_command(context: Context, ticket_url: str) -> str:
     if context.task.pull_request_url:
         command += f" --pr-url {context.task.pull_request_url}"
     return command
-
-
-def _github_capability_help() -> str:
-    return "\n".join(
-        [
-            "guildbotics member context --person <person> --check-credentials",
-            "guildbotics member github issue inspect --person <person> --url <issue_url>",
-            "guildbotics member github pr inspect --person <person> --url <pr_url> --include-comments",
-            "guildbotics member git prepare --person <person> --issue-url <issue_url> [--pr-url <pr_url>]",
-            "guildbotics member git publish --person <person> --repo-path <path> --message-file <file>",
-            "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> [--base <branch>] (--title-file <file> --body-file <file> | --content-stdin) --issue-url <issue_url>",
-            "guildbotics member github issue comment --person <person> --url <issue_url> --body-file <file>",
-            "guildbotics member github pr reply --person <person> --url <pr_url> --reply-target-id <id> --body-file <file>",
-            "guildbotics member github reaction add --person <person> --repo <owner/repo> --target issue-comment|pr-review-comment --comment-id <id> --reaction +1",
-            "guildbotics member task complete --person <person> --run-id <run_id> --ticket-url <issue_url> --status done|asking|blocked --summary-file <file>",
-        ]
-    )
 
 
 async def main(context: Context) -> AgentResponse | None:

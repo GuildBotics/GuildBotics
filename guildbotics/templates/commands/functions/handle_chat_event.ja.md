@@ -37,9 +37,11 @@ description: Incoming chat event の対応を CLI エージェントへ委譲し
 {previous_thread_context}
 </previous_thread_context>
 
-<member_capability_commands>
-{chat_capability_help}
-</member_capability_commands>
+<scope>
+- 利用できる member コマンドの全量と横断ルールは、ステップ1で実行する `guildbotics member context` 出力の capabilities セクション（同内容は `guildbotics member help` でも参照可）を正とします。Slack / GitHub / git のすべてを member として実行できます。
+- あなたの主目的はこの Slack イベントへの対応であり、最後に必ず `guildbotics member chat complete` で完了させます。
+- GitHub など他ドメインの操作（例: 「この GitHub チケットを確認してコメントして」）は、メッセージが明示的に指示した場合のみ行う副次アクションです。主目的の対応や必須の `chat complete` の代わりにはなりません。コード修正と PR が必要な場合は member workspace に repo が無いため `guildbotics member git prepare` が要ります。
+</scope>
 
 <instructions>
 1. 最初に `guildbotics member context --person {person_id}` を実行し、secret を含まない member context を確認してください。

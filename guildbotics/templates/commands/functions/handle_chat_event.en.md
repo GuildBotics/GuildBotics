@@ -37,9 +37,11 @@ Your assigned role is {context.active_role}.
 {previous_thread_context}
 </previous_thread_context>
 
-<member_capability_commands>
-{chat_capability_help}
-</member_capability_commands>
+<scope>
+- The full set of member commands and the cross-cutting rules are defined by the capabilities section of the `guildbotics member context` output you run in step 1 (also printable with `guildbotics member help`). You can perform Slack, GitHub, and git work as the member.
+- Your primary objective is this Slack event, and you must finish with `guildbotics member chat complete`.
+- Other-domain actions such as GitHub (e.g. "check this GitHub ticket and comment on it") are secondary and only when the message explicitly asks for them. They never replace handling the primary objective or the required `chat complete`. Code changes plus a PR need `guildbotics member git prepare` first, since the member workspace has no repository checkout.
+</scope>
 
 <instructions>
 1. First run `guildbotics member context --person {person_id}` and inspect the non-secret member context.

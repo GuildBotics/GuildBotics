@@ -21,9 +21,11 @@ Your assigned role is {context.active_role}.
 - Project default language: {language}
 </target>
 
-<member_capability_commands>
-{github_capability_help}
-</member_capability_commands>
+<scope>
+- The full set of member commands and the cross-cutting rules are defined by the capabilities section of the `guildbotics member context` output you run in step 1 (also printable with `guildbotics member help`). You can perform GitHub, git, and Slack work as the member.
+- Your primary objective is this GitHub issue / pull request, and you must finish with `guildbotics member task complete`.
+- Other-domain actions such as Slack (e.g. "also post the result to Slack") are secondary and only when the ticket explicitly asks for them. They never replace handling the primary objective or the required `task complete`.
+</scope>
 
 <instructions>
 1. First run `guildbotics member context --person {person_id}` and use that non-secret member context.
@@ -37,7 +39,7 @@ Your assigned role is {context.active_role}.
 9. Prepare the repository by running this command as-is: `{prepare_command}`. The checkout is created under the member workspace; edit files there. (For PR review work this command includes `--pr-url` so the PR head branch is checked out — always use it, or you would work on a separate branch and never update the PR under review.)
 10. Run relevant verification commands before publishing code changes.
 11. This prompt contains `guildbotics_execution_mode=workflow`. This non-interactive workflow run uses an isolated member workspace. Do not use `--workspace-mode current`.
-12. Publish code changes with `guildbotics member git publish`, then create or reuse a PR with `guildbotics member github pr create` when code changed for an issue.
+12. Stage code changes with plain git first (`git add -A` for everything, or `git add <paths>` for part of them), then publish with `guildbotics member git publish`. `publish` commits only the staged changes with the member identity and pushes (staging is normal git; the member commands only handle identity and credential). Create or reuse a PR with `guildbotics member github pr create` when code changed for an issue.
 13. If replying to PR review threads, use the `reply_target_id` returned by `pr inspect --include-comments` with `guildbotics member github pr reply`.
 14. If the issue asks for follow-up work, create real repository issues with `guildbotics member github issue create`.
 15. If information is missing, ask on GitHub with `issue comment`, `pr comment`, or `pr reply`; do not guess.
