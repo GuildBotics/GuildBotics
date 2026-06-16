@@ -17,7 +17,6 @@ from guildbotics.templates.commands.workflows import chat_conversation_workflow
 @pytest.fixture(autouse=True)
 def _isolated_data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("GUILDBOTICS_MEMORY_BACKEND", "none")
 
 
 class StubLogger:
@@ -65,13 +64,7 @@ class FakeInvokeContext(types.SimpleNamespace):
     async def invoke(self, name: str, /, **kwargs):
         self.invocations.append((name, kwargs))
         if name != "functions/handle_chat_event":
-            return {
-                "should_update": False,
-                "topic_id": "",
-                "title": "",
-                "summary": "",
-                "memory": "",
-            }
+            return {}
         run_id = kwargs["workflow_run_id"]
         store = RunStore()
         if self.action == "reply":
@@ -177,15 +170,7 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
-    memory_updates = []
     _set_incoming_event(ctx)
-
-    async def fake_memory_update(*args):
-        memory_updates.append(args)
-
-    monkeypatch.setattr(
-        chat_conversation_workflow, "_update_chat_memory", fake_memory_update
-    )
 
     await chat_conversation_workflow.main(
         ctx, chat_service=service, state_store=state_store
@@ -207,7 +192,6 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     thread_messages = state_store.load_thread_messages("slack", "alice", "C1", "100.1")
     assert [message.message_ts for message in thread_messages] == ["100.1", "200.1"]
     assert thread_messages[1].is_bot_message is True
-    assert memory_updates
     thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     assert "alice" in thread_state.participants
 
@@ -219,13 +203,7 @@ async def test_reaction_only_completion_processes_without_bot_message(
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reaction")
-    memory_updates = []
     _set_incoming_event(ctx)
-    monkeypatch.setattr(
-        chat_conversation_workflow,
-        "_update_chat_memory",
-        lambda *args: memory_updates.append(args),
-    )
 
     await chat_conversation_workflow.main(
         ctx, chat_service=service, state_store=state_store
@@ -235,24 +213,17 @@ async def test_reaction_only_completion_processes_without_bot_message(
     assert channel_state.processed_event_ids == ["E1"]
     thread_messages = state_store.load_thread_messages("slack", "alice", "C1", "100.1")
     assert [message.message_ts for message in thread_messages] == ["100.1"]
-    assert memory_updates == []
     # A reaction is a visible action, so the member is recorded as a participant.
     thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     assert "alice" in thread_state.participants
 
 
 @pytest.mark.asyncio
-async def test_noop_completion_processes_without_memory_update(tmp_path, monkeypatch):
+async def test_noop_completion_processes_without_visible_action(tmp_path, monkeypatch):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("noop")
-    memory_updates = []
     _set_incoming_event(ctx)
-    monkeypatch.setattr(
-        chat_conversation_workflow,
-        "_update_chat_memory",
-        lambda *args: memory_updates.append(args),
-    )
 
     await chat_conversation_workflow.main(
         ctx, chat_service=service, state_store=state_store
@@ -260,7 +231,6 @@ async def test_noop_completion_processes_without_memory_update(tmp_path, monkeyp
 
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E1"]
-    assert memory_updates == []
     # noop takes no visible action, so the member must not be recorded as a
     # thread participant.
     thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")

@@ -37,10 +37,6 @@ description: Incoming chat event の対応を CLI エージェントへ委譲し
 {previous_thread_context}
 </previous_thread_context>
 
-<memory_context>
-{memory_context}
-</memory_context>
-
 <member_capability_commands>
 {chat_capability_help}
 </member_capability_commands>
@@ -51,7 +47,7 @@ description: Incoming chat event の対応を CLI エージェントへ委譲し
 3. Slack token、raw Slack API、生 HTTP 書き込みを使わないでください。Slack への投稿・返信・reaction は必ず `guildbotics member chat ... --person {person_id}` 経由で行ってください。
 4. 返信・reaction・no-op の判断前に、必ず `guildbotics member chat inspect thread --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts}` を実行し、取得した thread messages を判断材料にしてください。
 5. `inspect thread` が失敗した場合は Slack へ投稿・reaction せず、safe summary を書いて `blocked` で complete してください。secret や token 値を summary に含めてはいけません。
-6. latest message、inspect 結果、previous thread context、memory context を読んで、次のいずれかを選んでください: reply / reaction-only / no-op / asking / blocked。
+6. latest message、inspect 結果、previous thread context を読んで、次のいずれかを選んでください: reply / reaction-only / no-op / asking / blocked。
 7. 本文返信が自然なら `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --body-file <file> --run-id {workflow_run_id}` を実行してください。
 8. channel への通常投稿が必要な場合だけ `guildbotics member chat post` を使ってください。incoming thread への通常応答は原則 reply を使ってください。
 9. reaction-only が自然なら `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support --run-id {workflow_run_id}` を実行してください。

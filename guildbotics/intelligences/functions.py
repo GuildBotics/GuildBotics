@@ -13,7 +13,6 @@ from pydantic import BaseModel
 from guildbotics.entities.message import Message
 from guildbotics.intelligences.common import (
     AgentResponse,
-    ChatMemoryRetentionDecision,
     DecisionResponse,
     Labels,
     MessageResponse,
@@ -291,19 +290,6 @@ async def identify_pr_comment_action(context: Context, input: str) -> str:
         params=session_state,
     )
     return response.label
-
-
-async def should_keep_chat_memory_update(
-    context: Context,
-    payload: dict[str, Any],
-) -> ChatMemoryRetentionDecision:
-    """Judge whether a proposed chat memory update should be persisted."""
-    response: ChatMemoryRetentionDecision = await get_content(
-        context,
-        "functions/should_keep_chat_memory_update",
-        message=json.dumps(payload, ensure_ascii=False, indent=2),
-    )
-    return response
 
 
 async def analyze_log(context: Context, log_output: str) -> AgentResponse:

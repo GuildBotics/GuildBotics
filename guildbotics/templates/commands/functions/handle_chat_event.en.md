@@ -37,10 +37,6 @@ Your assigned role is {context.active_role}.
 {previous_thread_context}
 </previous_thread_context>
 
-<memory_context>
-{memory_context}
-</memory_context>
-
 <member_capability_commands>
 {chat_capability_help}
 </member_capability_commands>
@@ -51,7 +47,7 @@ Your assigned role is {context.active_role}.
 3. Do not use Slack tokens, raw Slack APIs, or direct HTTP writes. Every Slack post, reply, or reaction must go through `guildbotics member chat ... --person {person_id}`.
 4. Before deciding whether to reply, react, or no-op, always run `guildbotics member chat inspect thread --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts}` and use the returned thread messages as the decision context.
 5. If `inspect thread` fails, do not post or react in Slack. Write a safe summary and complete the run with status `blocked`. Do not include secrets or token values in the summary.
-6. Read the latest message, inspect result, previous thread context, and memory context, then choose exactly one outcome: reply / reaction-only / no-op / asking / blocked.
+6. Read the latest message, inspect result, and previous thread context, then choose exactly one outcome: reply / reaction-only / no-op / asking / blocked.
 7. If a text reply is appropriate, run `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --body-file <file> --run-id {workflow_run_id}`.
 8. Use `guildbotics member chat post` only when a normal channel post is actually required. Normal incoming thread responses should be replies.
 9. If reaction-only is appropriate, run `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support --run-id {workflow_run_id}`.
