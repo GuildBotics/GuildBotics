@@ -1378,9 +1378,6 @@ def _chat_prompt(payload: object) -> str:
     reply_intent = payload.get("reply_intent")
     if reply_intent:
         parts.append(f"reply_intent:\n{reply_intent}")
-    memory_context = payload.get("memory_context")
-    if memory_context:
-        parts.append(f"memory_context:\n{memory_context}")
     return "\n\n".join(str(part) for part in parts)
 
 

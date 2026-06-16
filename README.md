@@ -534,7 +534,6 @@ Scheduled command output posting remains separate: use `task_schedules` + `workf
 Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
 
 For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent workspace root at `~/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through run evidence recorded by `guildbotics member chat complete`; natural-language agent stdout is not treated as proof of Slack side effects.
-It also keeps a separate per-agent personal memory repository under `~/.guildbotics/data/memory/<person_id>/`. The default personal memory backend is Cognee, with one dataset per person (`guildbotics:person:<person_id>`). Set `GUILDBOTICS_MEMORY_BACKEND=file` to use the fallback/test/migration file backend, which stores a `memory_index.yml` and topic-scoped memories under `topics/<topic_id>/memory.md`; `GUILDBOTICS_MEMORY_BACKEND=fake` is available for deterministic tests. GuildBotics recalls relevant memory before delegating to the CLI agent, passes the normalized `memory_context` through the prompt, and runs a separate memory update step only after a `chat_reply` or `chat_post` evidence record. Set `GUILDBOTICS_MEMORY_TRACE=1` to append normalized recall/remember trace events to JSONL; `GUILDBOTICS_MEMORY_TRACE_PATH` overrides the default `~/.guildbotics/data/run/memory_trace.jsonl`.
 You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the CLI agent.
 
 ### 5.6.1. Prerequisites (Slack Side)
@@ -785,8 +784,6 @@ With the ticket-driven workflow, you can:
 - `OPENAI_API_KEY`: OpenAI API
 - `ANTHROPIC_API_KEY`: Anthropic Claude API
 
-Cognee memory reuses these keys. If `LLM_API_KEY` is not set, GuildBotics maps `OPENAI_API_KEY` to Cognee's OpenAI LLM and embedding settings, or maps `GOOGLE_API_KEY` to Cognee's Gemini LLM and embedding settings. If both `OPENAI_API_KEY` and `GOOGLE_API_KEY` are set, Cognee memory uses `OPENAI_API_KEY` by default. Set Cognee's `LLM_*` / `EMBEDDING_*` variables explicitly to override this priority. `ANTHROPIC_API_KEY` can be used for Cognee's LLM, but Cognee still needs a separate embedding provider/key unless one is configured explicitly.
-
 **Slack Access**:
 - `{PERSON_ID}_SLACK_BOT_TOKEN`: Slack Bot Token per person
 - `{PERSON_ID}_SLACK_APP_TOKEN`: Slack App-Level Token per person
@@ -840,7 +837,6 @@ set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
 - `intelligences/cli_agent_mapping.yml`: Default CLI agent selection
 - `intelligences/cli_agents/*.yml`: CLI agent scripts
 - `team/members/<person_id>/intelligences/`: Per-agent overrides
-- `~/.guildbotics/data/memory/<person_id>/`: Per-agent local memory repository for chat replies
 
 
 # 8. Troubleshooting

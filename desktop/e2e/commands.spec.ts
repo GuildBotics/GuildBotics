@@ -56,7 +56,9 @@ test("runs the seeded context-info command and shows real output + events", asyn
   // The run history surfaces the request and reaches a terminal success state,
   // driven by the real command.started / command.finished websocket frames and
   // the /commands/run response.
-  await expect(page.getByText(/^Request /)).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".command-panel").getByText(/^Trace /)).toBeVisible({
+    timeout: 30_000,
+  });
   await expect(page.getByText("Success")).toBeVisible({ timeout: 30_000 });
 
   // The Output tab shows the deterministic template output rendered by the

@@ -559,7 +559,7 @@ uv run --no-sync mypy guildbotics
 - 診断画面に Events / Logs viewer を配置し、空状態、接続状態、エラー状態、フィルタ、request id / command との紐付け表示を追加する。
 - Events / Logs は raw payload を常時表示せず、時刻、種別、対象 request id、command、ユーザー向け要約を一覧表示し、詳細は必要時だけ開ける形にする。
 - Slack チャット応答の会話スタイル調査用に、prompt trace を opt-in で出力できるようにする。`GUILDBOTICS_PROMPT_TRACE=1` で有効化し、既定では storage の `run/prompt_trace.jsonl`、`GUILDBOTICS_PROMPT_TRACE_PATH` 指定時はその path に JSONL を出力する。
-- prompt trace には、chat reply 入力（`agent_profile`、`thread_messages`、`reply_intent`、`memory_context` など）、LLM request/response、CLI agent request/response を記録する。prompt や Slack 発言を含むため既定は OFF とする。
+- prompt trace には、chat reply 入力（`agent_profile`、`thread_messages`、`reply_intent` など）、LLM request/response、CLI agent request/response を記録する。prompt や Slack 発言を含むため既定は OFF とする。
 - prompt trace の ON/OFF と出力 path は、これから実行する処理の実行前設定として「サービス実行」と「コマンド実行」に配置する。ON/OFF と出力 path は `.env` に保存し、sidecar プロセスの環境変数にも即時反映する。
 - prompt trace の出力 path と表示対象 path は別物として扱う。出力 path はこれから追記する JSONL の保存先であり、表示対象 path は過去に保存済みの JSONL を読み込むための入力である。`診断` の `プロンプトトレース` タブでは表示対象 path を指定でき、出力設定を変えずに任意の記録済み trace file を読み込めるようにする。どちらもファイルパス入力欄そのものを主操作とし、Enter / focus out で適用する。ファイル選択と既定値復帰は、入力欄に紐づく補助アイコンとして配置する。
 - prompt trace の最新 event は raw JSON ではなく、event 種別、person、brain / command / cwd などのメタ情報、prompt/input、response/output に分けて表示する。デバッグ用途のため prompt 本文は表示するが、機密情報を含む可能性を UI 上で明示する。
