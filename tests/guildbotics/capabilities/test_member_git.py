@@ -3,8 +3,13 @@ from pathlib import Path
 import git
 import pytest
 
+from guildbotics.capabilities import member_git
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
-from guildbotics.capabilities.member_github import MemberCapabilityError
+from guildbotics.capabilities.member_github import (
+    GitHubPullRequestHead,
+    GitHubResource,
+    MemberCapabilityError,
+)
 from guildbotics.entities.team import Person, Project, Team
 
 
@@ -136,6 +141,79 @@ async def test_create_branch_rejects_existing_branch(tmp_path):
 
     with pytest.raises(MemberCapabilityError, match="already exists"):
         await service.create_branch(repo_path, "main")
+
+
+@pytest.mark.asyncio
+async def test_prepare_pull_request_review_clones_fork_head_repo(monkeypatch, tmp_path):
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    service.workspace_root = tmp_path / "workspace" / "aiko"
+    calls = {}
+
+    class FakeGitHub:
+        base_url = "https://api.github.com"
+
+        def parse_url(self, url):
+            calls["parsed_url"] = url
+            return GitHubResource("owner", "repo", 7, "pull")
+
+        async def get_pr_head(self, url):
+            calls["head_url"] = url
+            return GitHubPullRequestHead("contributor", "repo", "feature")
+
+        async def default_branch(self, owner, repo):
+            calls["default_branch_repo"] = (owner, repo)
+            return "main"
+
+        async def get_clone_url(self, owner, repo):
+            calls["clone_repo"] = (owner, repo)
+            return f"https://github.com/{owner}/{repo}.git"
+
+    class FakeGitTool:
+        def __init__(
+            self,
+            workspace,
+            repo_url,
+            logger,
+            user_name,
+            user_email,
+            default_branch,
+            auth_token=None,
+        ):
+            calls["git_tool"] = {
+                "workspace": workspace,
+                "repo_url": repo_url,
+                "default_branch": default_branch,
+                "auth_token": auth_token,
+            }
+            self.repo_path = workspace / "repo"
+
+        def checkout_branch(self, branch):
+            calls["checkout_branch"] = branch
+
+        def close(self):
+            calls["closed"] = True
+
+    async def fake_token(person, base_url):
+        calls["token_base_url"] = base_url
+        return "token"
+
+    service.github = FakeGitHub()
+    monkeypatch.setattr(member_git, "GitTool", FakeGitTool)
+    monkeypatch.setattr(member_git, "get_person_github_token", fake_token)
+
+    result = await service.prepare(
+        "https://github.com/owner/repo/issues/42",
+        pr_url="https://github.com/owner/repo/pull/7",
+    )
+
+    assert calls["default_branch_repo"] == ("contributor", "repo")
+    assert calls["clone_repo"] == ("contributor", "repo")
+    assert calls["git_tool"]["repo_url"] == "https://github.com/contributor/repo.git"
+    assert calls["checkout_branch"] == "feature"
+    assert result["repo"] == "owner/repo"
+    assert result["checkout_repo"] == "contributor/repo"
+    assert result["branch"] == "feature"
+    assert result["mode"] == "pull_request_review"
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,17 @@ class GitHubResource:
         return f"{self.owner}/{self.repo}"
 
 
+@dataclass(frozen=True)
+class GitHubPullRequestHead:
+    owner: str
+    repo: str
+    branch: str
+
+    @property
+    def full_repo(self) -> str:
+        return f"{self.owner}/{self.repo}"
+
+
 class MemberGitHubCapabilityService:
     def __init__(self, person: Person, team: Team) -> None:
         self.person = person
@@ -194,6 +205,7 @@ class MemberGitHubCapabilityService:
         )
         _raise_for_status(resp)
         pr = resp.json()
+        head = self._pull_request_head(resource, pr)
         result: dict[str, Any] = {
             "repo": resource.full_repo,
             "number": resource.number,
@@ -203,7 +215,10 @@ class MemberGitHubCapabilityService:
             "merged": pr.get("merged_at") is not None,
             "draft": bool(pr.get("draft", False)),
             "html_url": pr.get("html_url", url),
-            "head": (pr.get("head") or {}).get("ref", ""),
+            "head": head.branch,
+            "head_repo": head.full_repo,
+            "head_owner": head.owner,
+            "head_repo_name": head.repo,
             "base": (pr.get("base") or {}).get("ref", ""),
         }
         if include_comments:
@@ -336,12 +351,16 @@ class MemberGitHubCapabilityService:
         return f"{self.web_base_url()}/{owner}/{repo}.git"
 
     async def get_pr_head_branch(self, url: str) -> str:
-        self.parse_url(url, expected_kind="pull")
-        pr = await self.pr_inspect(url, include_comments=False)
-        head = str(pr.get("head") or "")
-        if not head:
-            raise MemberCapabilityError(f"Pull request head branch not found for {url}")
-        return head
+        return (await self.get_pr_head(url)).branch
+
+    async def get_pr_head(self, url: str) -> GitHubPullRequestHead:
+        resource = self.parse_url(url, expected_kind="pull")
+        client = await self._get_client()
+        resp = await client.get(
+            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}"
+        )
+        _raise_for_status(resp)
+        return self._pull_request_head(resource, resp.json())
 
     def parse_repo(self, repo: str) -> tuple[str, str]:
         parts = [part for part in repo.strip().split("/") if part]
@@ -666,6 +685,35 @@ class MemberGitHubCapabilityService:
             "created_at": comment.get("createdAt"),
             "html_url": comment.get("url"),
         }
+
+    def _pull_request_head(
+        self, resource: GitHubResource, pr: dict[str, Any]
+    ) -> GitHubPullRequestHead:
+        raw_head = pr.get("head")
+        head = raw_head if isinstance(raw_head, dict) else {}
+        branch = str(head.get("ref") or "")
+        raw_repo = head.get("repo")
+        repo = raw_repo if isinstance(raw_repo, dict) else {}
+        full_name = str(repo.get("full_name") or "")
+        raw_owner = repo.get("owner")
+        repo_owner = raw_owner if isinstance(raw_owner, dict) else {}
+        owner = str(repo_owner.get("login") or "")
+        repo_name = str(repo.get("name") or "")
+        if full_name and "/" in full_name:
+            owner, repo_name = full_name.split("/", 1)
+        if not branch:
+            raise MemberCapabilityError(
+                f"Pull request head branch not found for {resource.full_repo}#{resource.number}."
+            )
+        if not owner or not repo_name:
+            label = str(head.get("label") or "")
+            if label.startswith(f"{resource.owner}:"):
+                owner, repo_name = resource.owner, resource.repo
+            else:
+                raise MemberCapabilityError(
+                    f"Pull request head repository not found for {resource.full_repo}#{resource.number}."
+                )
+        return GitHubPullRequestHead(owner=owner, repo=repo_name, branch=branch)
 
 
 def _as_list(value: Any) -> list[dict[str, Any]]:

@@ -181,6 +181,64 @@ async def test_cli_agent_run_applies_session_state_env_overlay(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_cli_agent_run_propagates_cwd_workspace_environment(
+    monkeypatch, tmp_path
+):
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+    project = tmp_path / "project"
+    member_workspace = tmp_path / "member-workspace"
+    config_dir = project / ".guildbotics" / "config"
+    config_dir.mkdir(parents=True)
+    env_file = project / ".env"
+    env_file.write_text("DEMO=1\n", encoding="utf-8")
+    member_workspace.mkdir()
+
+    captured = {}
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return StubProcess()
+
+    monkeypatch.chdir(project)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_ENV_FILE", raising=False)
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        await brain.run("hello", cwd=member_workspace)
+        assert captured["cwd"] == str(member_workspace)
+        assert captured["env"]["GUILDBOTICS_CONFIG_DIR"] == str(config_dir.resolve())
+        assert captured["env"]["GUILDBOTICS_ENV_FILE"] == str(env_file.resolve())
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+    assert "GUILDBOTICS_CONFIG_DIR" not in os.environ
+    assert "GUILDBOTICS_ENV_FILE" not in os.environ
+
+
+@pytest.mark.asyncio
 async def test_cli_agent_execution_details_include_stderr_and_returncode(
     monkeypatch, tmp_path
 ):

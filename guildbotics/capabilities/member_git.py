@@ -110,12 +110,17 @@ class MemberGitWorkspaceService:
         if resource.kind == "pull":
             mode = "pull_request_review"
             pr_url = pr_url or issue_url
-            branch = await self.github.get_pr_head_branch(pr_url)
+            head = await self.github.get_pr_head(pr_url)
+            branch = head.branch
+            checkout_owner = head.owner
+            checkout_repo = head.repo
         else:
             mode = "issue"
             branch = f"ticket/{resource.number}"
-        default_branch = await self.github.default_branch(resource.owner, resource.repo)
-        clone_url = await self.github.get_clone_url(resource.owner, resource.repo)
+            checkout_owner = resource.owner
+            checkout_repo = resource.repo
+        default_branch = await self.github.default_branch(checkout_owner, checkout_repo)
+        clone_url = await self.github.get_clone_url(checkout_owner, checkout_repo)
         token = await get_person_github_token(self.person, self.github.base_url)
         git_user = self.person.account_info.get(
             "git_user", self.person.name or "GuildBotics"
@@ -139,6 +144,7 @@ class MemberGitWorkspaceService:
             tool.close()
         return {
             "repo": resource.full_repo,
+            "checkout_repo": f"{checkout_owner}/{checkout_repo}",
             "repo_path": str(repo_path),
             "branch": branch,
             "default_branch": default_branch,

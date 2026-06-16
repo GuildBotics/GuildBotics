@@ -15,10 +15,12 @@ from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.observability import span_scope
+from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.log_utils import get_log_output_dir
 from guildbotics.utils.prompt_trace import write_prompt_trace
 from guildbotics.utils.text_utils import replace_placeholders
+from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 
 class ExecutableInfo:
@@ -60,6 +62,18 @@ def _extra_env(kwargs: dict[str, Any]) -> dict[str, str]:
     if not isinstance(overlay, dict):
         return {}
     return {str(key): str(value) for key, value in overlay.items()}
+
+
+def _propagate_cwd_workspace_environment(env: dict[str, str]) -> None:
+    if not env.get(GUILDBOTICS_CONFIG_DIR, "").strip():
+        config_dir = Path.cwd() / ".guildbotics" / "config"
+        if config_dir.exists():
+            env[GUILDBOTICS_CONFIG_DIR] = str(config_dir.resolve())
+
+    if not env.get(GUILDBOTICS_ENV_FILE, "").strip():
+        env_file = Path.cwd() / ".env"
+        if env_file.is_file():
+            env[GUILDBOTICS_ENV_FILE] = str(env_file.resolve())
 
 
 def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
@@ -276,6 +290,7 @@ class CliAgentBrain(Brain):
 
         env = os.environ.copy()
         env.update(self.executable_info.env)
+        _propagate_cwd_workspace_environment(env)
         env["PATH"] = get_cli_agent_search_path(env.get("PATH"))
         gh_config_dir = tempfile.mkdtemp(prefix="guildbotics-gh-config-")
         self._isolate_github_write_credentials(env, gh_config_dir)

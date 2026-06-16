@@ -238,7 +238,7 @@ async def test_pr_inspect_includes_review_thread_resolution_fields():
         "merged_at": None,
         "draft": False,
         "html_url": "https://github.com/owner/repo/pull/7",
-        "head": {"ref": "feature"},
+        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
         "base": {"ref": "main"},
     }
     fake.get_payloads["/repos/owner/repo/issues/7/comments"] = []
@@ -257,6 +257,42 @@ async def test_pr_inspect_includes_review_thread_resolution_fields():
 
 
 @pytest.mark.asyncio
+async def test_pr_inspect_includes_fork_head_repository():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "title": "PR",
+        "body": "Body",
+        "state": "open",
+        "merged_at": None,
+        "draft": False,
+        "html_url": "https://github.com/owner/repo/pull/7",
+        "head": {
+            "ref": "feature",
+            "repo": {
+                "full_name": "contributor/repo",
+                "name": "repo",
+                "owner": {"login": "contributor"},
+            },
+        },
+        "base": {"ref": "main"},
+    }
+    service._client = fake
+
+    result = await service.pr_inspect(
+        "https://github.com/owner/repo/pull/7", include_comments=False
+    )
+    head = await service.get_pr_head("https://github.com/owner/repo/pull/7")
+
+    assert result["head"] == "feature"
+    assert result["head_repo"] == "contributor/repo"
+    assert result["head_owner"] == "contributor"
+    assert result["head_repo_name"] == "repo"
+    assert head.full_repo == "contributor/repo"
+    assert head.branch == "feature"
+
+
+@pytest.mark.asyncio
 async def test_pr_inspect_marks_outdated_thread_replyable():
     service = _service()
     fake = FakeClient()
@@ -267,7 +303,7 @@ async def test_pr_inspect_marks_outdated_thread_replyable():
         "merged_at": None,
         "draft": False,
         "html_url": "https://github.com/owner/repo/pull/7",
-        "head": {"ref": "feature"},
+        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
         "base": {"ref": "main"},
     }
     fake.get_payloads["/repos/owner/repo/issues/7/comments"] = []
@@ -313,7 +349,7 @@ async def test_issue_inspect_returns_linked_pull_request_candidates():
         "merged_at": None,
         "draft": False,
         "html_url": "https://github.com/owner/repo/pull/5",
-        "head": {"ref": "feature"},
+        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
         "base": {"ref": "main"},
     }
     service._client = fake
