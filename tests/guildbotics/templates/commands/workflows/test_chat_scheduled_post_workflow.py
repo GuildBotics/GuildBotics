@@ -18,9 +18,13 @@ class FakeChatService:
     async def resolve_channel_id(self, channel_name: str) -> str | None:
         return self.channel_name_map.get(channel_name)
 
-    async def post_message(self, channel_id: str, text: str, *, thread_ts: str | None = None):
+    async def post_message(
+        self, channel_id: str, text: str, *, thread_ts: str | None = None
+    ):
         self.posts.append((channel_id, text, thread_ts))
-        return ChatPostResult(channel_id=channel_id, message_ts="200.1", thread_ts="200.1")
+        return ChatPostResult(
+            channel_id=channel_id, message_ts="200.1", thread_ts="200.1"
+        )
 
 
 class StubLogger:
@@ -60,7 +64,9 @@ def _context(command_result: object = "hello") -> types.SimpleNamespace:
     return ctx
 
 
-def _context_channel_name_post(command_result: object = "hello") -> types.SimpleNamespace:
+def _context_channel_name_post(
+    command_result: object = "hello",
+) -> types.SimpleNamespace:
     person = types.SimpleNamespace(
         person_id="alice",
         profile={
@@ -96,7 +102,9 @@ async def test_posts_when_due_and_records_slot(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     now = dt.datetime(2026, 2, 23, 9, 0, 5)  # Monday
 
-    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+    await chat_scheduled_post_workflow.main(
+        ctx, chat_service=svc, state_store=store, now=now
+    )
 
     assert ctx._invoke_calls == [("examples/reports/morning_summary", ())]
     assert svc.posts == [("C1", "daily summary", None)]
@@ -112,8 +120,12 @@ async def test_skips_duplicate_post_in_same_minute(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     now = dt.datetime(2026, 2, 23, 9, 0, 10)
 
-    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
-    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+    await chat_scheduled_post_workflow.main(
+        ctx, chat_service=svc, state_store=store, now=now
+    )
+    await chat_scheduled_post_workflow.main(
+        ctx, chat_service=svc, state_store=store, now=now
+    )
 
     assert len(ctx._invoke_calls) == 1
     assert len(svc.posts) == 1
@@ -126,7 +138,9 @@ async def test_skips_when_not_due(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     now = dt.datetime(2026, 2, 23, 9, 1, 0)
 
-    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+    await chat_scheduled_post_workflow.main(
+        ctx, chat_service=svc, state_store=store, now=now
+    )
 
     assert ctx._invoke_calls == []
     assert svc.posts == []
@@ -139,7 +153,9 @@ async def test_command_output_is_stringified_and_empty_output_skips_post(tmp_pat
     store = FileConversationStateStore(base_dir=tmp_path)
     now = dt.datetime(2026, 2, 23, 9, 0, 0)
 
-    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+    await chat_scheduled_post_workflow.main(
+        ctx, chat_service=svc, state_store=store, now=now
+    )
 
     # command is still executed and slot is marked to prevent re-post loop this minute
     assert len(ctx._invoke_calls) == 1
@@ -156,7 +172,9 @@ async def test_resolves_channel_name_when_channel_id_missing(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     now = dt.datetime(2026, 2, 23, 9, 0, 5)
 
-    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+    await chat_scheduled_post_workflow.main(
+        ctx, chat_service=svc, state_store=store, now=now
+    )
 
     assert svc.posts == [("C1", "daily summary", None)]
 
@@ -164,12 +182,16 @@ async def test_resolves_channel_name_when_channel_id_missing(tmp_path):
 @pytest.mark.asyncio
 async def test_logs_and_skips_when_scheduled_command_has_invalid_quotes(tmp_path):
     ctx = _context(command_result="daily summary")
-    ctx.person.profile["chat"]["scheduled_posts"][0]["command"] = 'reports/x query="OpenAI'
+    ctx.person.profile["chat"]["scheduled_posts"][0]["command"] = (
+        'reports/x query="OpenAI'
+    )
     svc = FakeChatService()
     store = FileConversationStateStore(base_dir=tmp_path)
     now = dt.datetime(2026, 2, 23, 9, 0, 5)
 
-    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+    await chat_scheduled_post_workflow.main(
+        ctx, chat_service=svc, state_store=store, now=now
+    )
 
     assert ctx._invoke_calls == []
     assert svc.posts == []
@@ -203,7 +225,9 @@ async def test_skips_invalid_cron_entry_and_continues_other_scheduled_posts(tmp_
     store = FileConversationStateStore(base_dir=tmp_path)
     now = dt.datetime(2026, 2, 23, 9, 0, 5)
 
-    await chat_scheduled_post_workflow.main(ctx, chat_service=svc, state_store=store, now=now)
+    await chat_scheduled_post_workflow.main(
+        ctx, chat_service=svc, state_store=store, now=now
+    )
 
     assert ctx._invoke_calls == [("examples/reports/morning_summary", ())]
     assert svc.posts == [("C1", "daily summary", None)]

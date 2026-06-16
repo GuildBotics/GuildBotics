@@ -52,13 +52,23 @@ class _StubChatService:
 
 
 class _StubTicketManager:
+    def __init__(self) -> None:
+        self.lane_map: dict[str, str | None] = {
+            "ready": "Todo",
+            "working": "Doing",
+            "done": "Done",
+        }
+        self.assignable: bool = True
+        self.agent_field_options: list[str] = []
+
     async def get_statuses(self) -> list[str]:
         return list(TICKET_STATUSES)
 
+    async def is_assignable_user(self, username: str) -> bool:
+        return self.assignable
 
-class _StubCodeHostingService:
-    async def get_default_branch(self) -> str:
-        return "main"
+    async def get_agent_field_options(self) -> list[str]:
+        return list(self.agent_field_options)
 
 
 @dataclass
@@ -69,7 +79,6 @@ class _StubContext:
     person: Person | None = None
     brain: Any = None
     ticket_manager: Any = field(default_factory=_StubTicketManager)
-    code_hosting_service: Any = field(default_factory=_StubCodeHostingService)
     chat_service: Any = field(default_factory=_StubChatService)
     talk_result: str = "OK"
     logger: logging.Logger = field(
@@ -82,7 +91,6 @@ class _StubContext:
             person=member,
             brain=self.brain,
             ticket_manager=self.ticket_manager,
-            code_hosting_service=self.code_hosting_service,
             chat_service=self.chat_service,
             talk_result=self.talk_result,
             logger=self.logger,
@@ -97,9 +105,6 @@ class _StubContext:
 
     def get_ticket_manager(self) -> Any:
         return self.ticket_manager
-
-    def get_code_hosting_service(self) -> Any:
-        return self.code_hosting_service
 
     def get_chat_service(self) -> Any:
         return self.chat_service
@@ -146,6 +151,16 @@ def _patch_provider(monkeypatch: pytest.MonkeyPatch, provider: str = "openai") -
     monkeypatch.setattr(
         diagnostics_module, "resolve_default_model_provider", lambda: provider
     )
+
+
+def _patch_app_token_probe(
+    monkeypatch: pytest.MonkeyPatch, *, error: Exception | None = None
+) -> None:
+    async def _probe(app_token: str, base_url: Any) -> None:
+        if error is not None:
+            raise error
+
+    monkeypatch.setattr(diagnostics_module, "probe_slack_app_token", _probe)
 
 
 def _by_code(response: Any) -> dict:
@@ -480,7 +495,7 @@ async def test_github_not_configured_skipped(
 
 
 @pytest.mark.asyncio
-async def test_github_enabled_project_and_repository_access(
+async def test_github_enabled_project_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
@@ -490,7 +505,16 @@ async def test_github_enabled_project_and_repository_access(
         "code_hosting_service": {"name": "GitHub"},
     }
     context = _StubContext(
-        team=_team([_person("alice", is_active=True)], services=services),
+        team=_team(
+            [
+                _person(
+                    "alice",
+                    is_active=True,
+                    account_info={"github_username": "alice"},
+                )
+            ],
+            services=services,
+        ),
         brain=_StubBrain(_CliResult()),
     )
 
@@ -498,14 +522,166 @@ async def test_github_enabled_project_and_repository_access(
 
     checks = _by_code(response)
     assert checks["github_project_access"].status == "ok"
+    assert checks["github_lane_mapping"].status == "ok"
+    assert checks["github_agent_assignment"].status == "ok"
     assert checks["github_project_access"].context["status_count"] == len(
         TICKET_STATUSES
     )
-    # Repository / branch metadata is reported under the git section.
-    repo_check = checks["github_repository_access"]
-    assert repo_check.section == "git"
-    assert repo_check.status == "ok"
-    assert repo_check.context["default_branch"] == "main"
+    # The repository is derived from each issue at runtime, so there is no
+    # repository pre-flight check (and no default repository to validate).
+    assert "github_repository_access" not in checks
+
+
+def _github_services() -> dict:
+    return {
+        "ticket_manager": {"name": "GitHub"},
+        "code_hosting_service": {"name": "GitHub"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_github_missing_ready_lane_is_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    # "Backlog" is not among TICKET_STATUSES, so the ready lane is missing.
+    ticket_manager.lane_map = {"ready": "Backlog", "working": "Doing", "done": "Done"}
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "alice", is_active=True, account_info={"github_username": "alice"}
+                )
+            ],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_lane_missing"].status == "error"
+    assert "Backlog" in checks["github_lane_missing"].message
+    assert not response.ok
+
+
+@pytest.mark.asyncio
+async def test_github_missing_working_lane_is_warning_not_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    ticket_manager.lane_map = {
+        "ready": "Todo",
+        "working": "Nowhere",
+        "done": "Done",
+    }
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "alice", is_active=True, account_info={"github_username": "alice"}
+                )
+            ],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert "github_lane_missing" not in checks
+    assert checks["github_working_lane_missing"].status == "warning"
+    assert all(check.code != "github_working_lane_missing" for check in response.errors)
+
+
+@pytest.mark.asyncio
+async def test_github_non_assignable_human_advises_repo_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    # A human member with a GitHub username who is not a repo collaborator: the
+    # Agent field does not apply, so the remediation is repo permissions.
+    ticket_manager.assignable = False
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "alice", is_active=True, account_info={"github_username": "alice"}
+                )
+            ],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_member_not_assignable"].status == "error"
+    assert "github_agent_field_required" not in checks
+    assert not response.ok
+
+
+@pytest.mark.asyncio
+async def test_github_proxy_agent_without_agent_field_option_is_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    ticket_manager.assignable = False
+    ticket_manager.agent_field_options = []
+    context = _StubContext(
+        team=_team(
+            [_person("bot", is_active=True, person_type="proxy_agent")],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_agent_field_required"].status == "error"
+    assert checks["github_agent_field_required"].context["agent_option"] == "⚙bot"
+    assert not response.ok
+
+
+@pytest.mark.asyncio
+async def test_github_proxy_agent_with_agent_field_option_is_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    ticket_manager = _StubTicketManager()
+    ticket_manager.assignable = False
+    ticket_manager.agent_field_options = ["⚙bot"]
+    context = _StubContext(
+        team=_team(
+            [_person("bot", is_active=True, person_type="proxy_agent")],
+            services=_github_services(),
+        ),
+        brain=_StubBrain(_CliResult()),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["github_agent_assignment"].status == "ok"
+    assert "github_agent_field_required" not in checks
 
 
 @pytest.mark.asyncio
@@ -566,6 +742,7 @@ async def test_slack_credential_present_and_channel_ok(
 ) -> None:
     _patch_talk(monkeypatch)
     _patch_cli(monkeypatch)
+    _patch_app_token_probe(monkeypatch)
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
     context = _StubContext(
         team=_team([_slack_member("alice")]),
@@ -575,10 +752,32 @@ async def test_slack_credential_present_and_channel_ok(
     response = await _run(context)
 
     checks = _by_code(response)
-    assert "slack_app_token" not in checks
+    assert checks["slack_app_token"].status == "ok"
     assert checks["slack_bot_auth"].status == "ok"
     assert checks["slack_bot_auth"].context["bot_user_id"] == "U123"
     assert checks["slack_channel_history"].status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_slack_app_token_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    from guildbotics.capabilities.member_github import MemberCapabilityError
+
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    _patch_app_token_probe(monkeypatch, error=MemberCapabilityError("invalid_auth"))
+    monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-broken")
+    context = _StubContext(
+        team=_team([_slack_member("alice")]),
+        brain=_StubBrain(_CliResult()),
+    )
+
+    response = await _run(context)
+
+    check = _by_code(response)["slack_app_token_invalid"]
+    assert check.status == "error"
+    assert check.target == "ALICE_SLACK_APP_TOKEN"
+    assert "invalid_auth" in check.message
+    assert not response.ok
 
 
 @pytest.mark.asyncio
@@ -603,6 +802,7 @@ async def test_slack_credential_missing(monkeypatch: pytest.MonkeyPatch) -> None
 async def test_slack_access_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_talk(monkeypatch)
     _patch_cli(monkeypatch)
+    _patch_app_token_probe(monkeypatch)
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
 
     class _FailingChat(_StubChatService):

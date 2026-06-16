@@ -1,8 +1,32 @@
 import logging
+import os
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import git
 from git import GitCommandError
+
+
+def create_git_askpass_script() -> Path:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        prefix="guildbotics-git-askpass-",
+        suffix=".sh",
+    ) as askpass:
+        askpass.write(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            '*Username*) printf "%s\\n" "${GIT_USERNAME:-x-access-token}" ;;\n'
+            '*Password*) printf "%s\\n" "$GIT_PASSWORD" ;;\n'
+            '*) printf "\\n" ;;\n'
+            "esac\n"
+        )
+    os.chmod(askpass.name, 0o700)
+    return Path(askpass.name)
 
 
 class GitTool:
@@ -18,6 +42,7 @@ class GitTool:
         user_name: str,
         user_email: str,
         default_branch: str = "main",
+        auth_token: str | None = None,
     ):
         """
         Initialize the GitTool.
@@ -36,6 +61,9 @@ class GitTool:
         self.user_name = user_name
         self.user_email = user_email
         self.default_branch = default_branch
+        self._auth_token = auth_token or ""
+        self._askpass_path: Path | None = None
+        self._git_env = self._build_git_env()
 
         # Ensure workspace exists
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -47,7 +75,9 @@ class GitTool:
         try:
             if not self.repo_path.exists():
                 self.logger.info(f"Cloning {repo_url} into {self.repo_path}")
-                self.repo = git.Repo.clone_from(repo_url, self.repo_path)
+                self.repo = git.Repo.clone_from(
+                    repo_url, self.repo_path, env=self._git_env or None
+                )
             else:
                 self.repo = git.Repo(self.repo_path)
         except GitCommandError as e:
@@ -65,12 +95,44 @@ class GitTool:
             self.checkout_branch(self.default_branch)
             self.logger.info(f"Pulling latest changes on '{self.default_branch}'")
             origin = self.repo.remotes.origin
-            origin.pull(self.default_branch)
+            with self._git_auth_environment():
+                origin.pull(self.default_branch)
         except GitCommandError as e:
             self.logger.error(
                 f"Failed to checkout or update default branch '{self.default_branch}': {e}"
             )
             raise
+
+    def _build_git_env(self) -> dict[str, str]:
+        if not self._auth_token:
+            return {}
+
+        self._askpass_path = create_git_askpass_script()
+        return {
+            "GIT_ASKPASS": str(self._askpass_path),
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_USERNAME": "x-access-token",
+            "GIT_PASSWORD": self._auth_token,
+        }
+
+    @contextmanager
+    def _git_auth_environment(self) -> Iterator[None]:
+        if not self._git_env:
+            yield
+            return
+        with self.repo.git.custom_environment(**self._git_env):
+            yield
+
+    def close(self) -> None:
+        if self._askpass_path is None:
+            return
+        try:
+            self._askpass_path.unlink(missing_ok=True)
+        finally:
+            self._askpass_path = None
+
+    def __del__(self) -> None:
+        self.close()
 
     def checkout_branch(self, branch_name: str):
         """
@@ -87,7 +149,8 @@ class GitTool:
 
         try:
             origin = self.repo.remotes.origin
-            origin.fetch()
+            with self._git_auth_environment():
+                origin.fetch()
 
             # Remove untracked working tree files to avoid checkout conflicts
             untracked = self.repo.untracked_files
@@ -104,6 +167,7 @@ class GitTool:
                 self.repo.git.reset("--hard")
 
             local_branches = {b.name for b in self.repo.branches}
+            remote_branches = {ref.remote_head for ref in origin.refs}
             if branch_name in local_branches:
                 # If branch exists locally: checkout
                 self.logger.info(
@@ -111,7 +175,6 @@ class GitTool:
                 )
                 self.repo.git.checkout(branch_name)
                 # If exists remotely, pull and set upstream
-                remote_branches = {ref.remote_head for ref in origin.refs}
                 if branch_name in remote_branches:
                     self.logger.info(
                         f"Setting upstream and pulling '{branch_name}' from origin."
@@ -120,15 +183,25 @@ class GitTool:
                         "--set-upstream-to", f"origin/{branch_name}", branch_name
                     )
                     try:
-                        origin.pull(branch_name)
+                        with self._git_auth_environment():
+                            origin.pull(branch_name)
                     except GitCommandError as e:
                         self.logger.warning(
                             f"Failed to pull branch '{branch_name}' from origin: {e}"
                         )
                         self.repo.git.checkout(self.default_branch)
                         self.repo.git.branch("-D", branch_name)
-                        origin.fetch(f"{branch_name}:{branch_name}")
+                        with self._git_auth_environment():
+                            origin.fetch(f"{branch_name}:{branch_name}")
                         self.repo.git.checkout(branch_name)
+            elif branch_name in remote_branches:
+                self.logger.info(
+                    f"Creating local branch '{branch_name}' from 'origin/{branch_name}'."
+                )
+                self.repo.git.checkout("-b", branch_name, f"origin/{branch_name}")
+                self.repo.git.branch(
+                    "--set-upstream-to", f"origin/{branch_name}", branch_name
+                )
             else:
                 # Create new branch locally from default
                 self.logger.info(
@@ -139,66 +212,4 @@ class GitTool:
             self.logger.error(
                 f"Failed to create or checkout branch '{branch_name}': {e}"
             )
-            raise
-
-    def commit_changes(self, message: str) -> str | None:
-        """
-        Commit and push changes to the current branch.
-
-        Args:
-            message (str): The commit message.
-
-        Returns:
-            str | None: The commit SHA if a commit was made, otherwise None.
-        """
-        try:
-            commit_sha = None
-            # Check for any changes (including untracked files)
-            if self.repo.is_dirty(untracked_files=True):
-                self.logger.info("Staging all changes.")
-                self.repo.git.add(A=True)
-                self.logger.info(f"Committing changes with message: '{message}'.")
-                commit_obj = self.repo.index.commit(message)
-                commit_sha = commit_obj.hexsha
-            else:
-                self.logger.info("No changes to commit.")
-
-            # Determine if we need to push:
-            origin = self.repo.remotes.origin
-            origin.fetch()
-            current_branch = self.repo.active_branch.name
-
-            # Try to list commits that are on local but not on remote.
-            try:
-                commits_ahead = list(
-                    self.repo.iter_commits(f"origin/{current_branch}..{current_branch}")
-                )
-                # Push if there are commits ahead
-                need_push = bool(commits_ahead)
-            except GitCommandError:
-                # Remote branch does not exist => needs push
-                need_push = True
-
-            if need_push:
-                self.logger.info(f"Pushing branch '{current_branch}' to remote.")
-                origin.push(current_branch)
-            return commit_sha
-        except GitCommandError as e:
-            self.logger.error(f"Failed to commit or push changes: {e}")
-            raise
-
-    def get_diff(self) -> str:
-        """
-        Get the current git diff as a string.
-
-        Returns:
-            str: The output of 'git diff' (working tree changes).
-        """
-        try:
-            # Get the diff of the working tree (unstaged and staged changes)
-            status = self.repo.git.status("--short")
-            diff = self.repo.git.diff()
-            return f"{status}\n{diff}" if diff else status
-        except GitCommandError as e:
-            self.logger.error(f"Failed to get git diff: {e}")
             raise

@@ -14,10 +14,19 @@ from guildbotics.app_api.verify import (
     PROVIDER_ENV_KEYS,
     resolve_default_model_provider,
 )
+from guildbotics.capabilities.member_chat import probe_slack_app_token
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Service
-from guildbotics.integrations.chat_profile import get_chat_subscriptions
+from guildbotics.integrations.chat_profile import (
+    get_chat_slack_base_url,
+    get_chat_subscriptions,
+)
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.integrations.github.github_utils import (
+    get_github_username,
+    get_proxy_agent_signature,
+    is_proxy_agent,
+)
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.functions import talk_as
 from guildbotics.runtime import Context
@@ -353,6 +362,7 @@ class ScenarioDiagnosticsService:
             ]
 
         checks: list[DiagnosticCheck] = []
+        lane_checked = False
         for member in members:
             c = context.clone_for(member)
             try:
@@ -369,19 +379,13 @@ class ScenarioDiagnosticsService:
                             context={"status_count": len(statuses)},
                         )
                     )
-                if project.is_available_service(Service.CODE_HOSTING_SERVICE):
-                    default_branch = (
-                        await c.get_code_hosting_service().get_default_branch()
-                    )
-                    checks.append(
-                        self._check(
-                            "git",
-                            "github_repository_access",
-                            "ok",
-                            "GitHub repository metadata was fetched.",
-                            person_id=member.person_id,
-                            context={"default_branch": default_branch},
+                    if not lane_checked:
+                        checks.extend(
+                            self._check_lane_mapping(ticket_manager, statuses)
                         )
+                        lane_checked = True
+                    checks.append(
+                        await self._check_agent_assignment(ticket_manager, member)
                     )
             except Exception as exc:
                 checks.append(
@@ -397,6 +401,116 @@ class ScenarioDiagnosticsService:
             finally:
                 await c.aclose()
         return checks
+
+    def _check_lane_mapping(
+        self, ticket_manager: GitHubTicketManager, statuses: list[str]
+    ) -> list[DiagnosticCheck]:
+        """Validate that the configured ready/done lanes exist on the board.
+
+        The working lane is optional: a missing working lane is reported as a
+        warning (tickets simply are not moved on start), never an error.
+        """
+        status_set = set(statuses)
+        lane_map = ticket_manager.lane_map
+        ready = lane_map.get(GitHubTicketManager.LANE_READY)
+        done = lane_map.get(GitHubTicketManager.LANE_DONE)
+        working = lane_map.get(GitHubTicketManager.LANE_WORKING)
+
+        checks: list[DiagnosticCheck] = []
+        missing = [name for name in (ready, done) if name and name not in status_set]
+        if missing:
+            checks.append(
+                self._check(
+                    "github",
+                    "github_lane_missing",
+                    "error",
+                    "Required workflow lanes are missing from the GitHub Project "
+                    f"status options: {', '.join(missing)}.",
+                    context={"missing": missing, "available": sorted(status_set)},
+                )
+            )
+        else:
+            checks.append(
+                self._check(
+                    "github",
+                    "github_lane_mapping",
+                    "ok",
+                    "Ready and done lanes exist in the GitHub Project.",
+                    context={"ready": ready, "done": done},
+                )
+            )
+        if working and working not in status_set:
+            checks.append(
+                self._check(
+                    "github",
+                    "github_working_lane_missing",
+                    "warning",
+                    f"Configured working lane '{working}' is not a GitHub Project "
+                    "status; tickets will not be moved to a working lane on start.",
+                    context={"working": working},
+                )
+            )
+        return checks
+
+    async def _check_agent_assignment(
+        self, ticket_manager: GitHubTicketManager, member: Person
+    ) -> DiagnosticCheck:
+        """Verify each member can receive ticket assignments.
+
+        A member whose GitHub username resolves to a real user account needs
+        nothing else. Otherwise the remediation depends on the member type: human
+        members are assigned through GitHub assignees, so a human whose username
+        does not resolve has a misconfigured username (the ``Agent`` field does
+        not apply to them). Non-human identities (proxy agents, GitHub Apps,
+        machine users) are assigned through the project's ``Agent`` field and need
+        a matching option.
+        """
+        username = get_github_username(member)
+        if (
+            not is_proxy_agent(member)
+            and username
+            and await ticket_manager.is_assignable_user(username)
+        ):
+            return self._check(
+                "github",
+                "github_agent_assignment",
+                "ok",
+                "Member resolves to a GitHub user account; the Agent field is not required.",
+                person_id=member.person_id,
+                context={"github_username": username},
+            )
+
+        if member.person_type in ("", "human"):
+            return self._check(
+                "github",
+                "github_member_not_assignable",
+                "error",
+                "Member's GitHub username could not be resolved to a user "
+                "account; check the configured GitHub username.",
+                person_id=member.person_id,
+                context={"github_username": username},
+            )
+
+        signature = get_proxy_agent_signature(member)
+        options = await ticket_manager.get_agent_field_options()
+        if signature in options:
+            return self._check(
+                "github",
+                "github_agent_assignment",
+                "ok",
+                "Member is assigned through the project's Agent field option.",
+                person_id=member.person_id,
+                context={"agent_option": signature},
+            )
+        return self._check(
+            "github",
+            "github_agent_field_required",
+            "error",
+            "Member does not resolve to a GitHub user and has no Agent field "
+            "option; set the Agent field for this member.",
+            person_id=member.person_id,
+            context={"agent_option": signature},
+        )
 
     async def _check_slack(
         self, context: Context, members: list[Person]
@@ -424,6 +538,8 @@ class ScenarioDiagnosticsService:
                         target=member.to_person_env_key("SLACK_APP_TOKEN"),
                     )
                 )
+            else:
+                checks.append(await self._check_slack_app_token(member))
             c = context.clone_for(member)
             try:
                 chat_service = c.get_chat_service()
@@ -466,6 +582,39 @@ class ScenarioDiagnosticsService:
                 )
             )
         return checks
+
+    async def _check_slack_app_token(self, member: Person) -> DiagnosticCheck:
+        """Validate the Socket Mode app-level token, not just its presence.
+
+        A configured-but-invalid app token (truncated, revoked, wrong app) is the
+        common cause of a member silently not receiving events: the bot token can
+        still pass ``auth.test`` while Socket Mode fails with ``invalid_auth``.
+        This probes ``apps.connections.open`` (read-only; performs no data writes,
+        the same call the event listener makes) so the broken token surfaces in
+        diagnostics instead of only in runtime logs.
+        """
+        try:
+            await probe_slack_app_token(
+                member.get_secret("SLACK_APP_TOKEN"),
+                get_chat_slack_base_url(member),
+            )
+        except Exception as exc:
+            return self._check(
+                "slack",
+                "slack_app_token_invalid",
+                "error",
+                self._safe_error("Slack App token (Socket Mode) check failed", exc),
+                person_id=member.person_id,
+                target=member.to_person_env_key("SLACK_APP_TOKEN"),
+                context={"error_type": type(exc).__name__},
+            )
+        return self._check(
+            "slack",
+            "slack_app_token",
+            "ok",
+            "Slack App token (Socket Mode) is valid.",
+            person_id=member.person_id,
+        )
 
     async def _check_slack_channel(
         self, context: Context, subscription: dict[str, Any], person_id: str

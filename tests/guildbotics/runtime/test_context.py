@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from guildbotics.entities.task import Task
-from guildbotics.entities.team import Person, Project, Repository, Role, Team
+from guildbotics.entities.team import Person, Project, Role, Team
 from guildbotics.integrations.chat_service import ChatIdentity
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.brains.brain import Brain
@@ -35,7 +35,7 @@ class DummyTeamLoader(TeamLoader):
     def __init__(self, team: Team):
         self._team = team
 
-    def load(self) -> Team:  # noqa: D401 - simple override
+    def load(self) -> Team:
         """Return the configured Team instance."""
         return self._team
 
@@ -47,7 +47,7 @@ class DummyLoaderFactory(LoaderFactory):
         self._team = team
         self.create_team_loader_calls = 0
 
-    def create_team_loader(self) -> TeamLoader:  # noqa: D401 - simple override
+    def create_team_loader(self) -> TeamLoader:
         """Return a TeamLoader that loads the configured Team."""
         self.create_team_loader_calls += 1
         return DummyTeamLoader(self._team)
@@ -56,27 +56,23 @@ class DummyLoaderFactory(LoaderFactory):
 class DummyTicketManager(TicketManager):
     """Concrete TicketManager test double with no-op async methods."""
 
-    async def create_tickets(self, tasks: list[Task]):  # noqa: D401 - test double
-        """No-op create tickets."""
-        return None
-
-    async def get_task_to_work_on(self) -> Task | None:  # noqa: D401 - test double
+    async def get_task_to_work_on(self) -> Task | None:
         """No-op fetch task."""
         return None
 
-    async def move_ticket(self, task: Task, new_status: str) -> None:  # noqa: D401
+    async def move_ticket(self, task: Task, new_status: str) -> bool:
         """No-op move ticket."""
-        return None
+        return False
 
-    async def add_comment_to_ticket(self, task: Task, comment: str) -> None:  # noqa: D401
+    async def add_comment_to_ticket(self, task: Task, comment: str) -> None:
         """No-op add comment."""
         return None
 
-    async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:  # noqa: D401
+    async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:
         """No-op get URL."""
         return ""
 
-    async def update_ticket(self, task: Task) -> None:  # noqa: D401 - test double
+    async def update_ticket(self, task: Task) -> None:
         """No-op update ticket."""
         return None
 
@@ -86,22 +82,14 @@ class DummyIntegrationFactory(IntegrationFactory):
 
     def __init__(self):
         self.ticket_manager_calls: list[tuple[Person, Team]] = []
-        self.code_hosting_calls: list[tuple[Person, Team, str | None]] = []
         self.chat_service_calls: list[tuple[Person, Team]] = []
 
     def create_ticket_manager(
         self, logger: logging.Logger, person: Person, team: Team
-    ) -> TicketManager:  # noqa: D401
+    ) -> TicketManager:
         """Return a new DummyTicketManager and record the call."""
         self.ticket_manager_calls.append((person, team))
         return DummyTicketManager(logger, person, team)
-
-    def create_code_hosting_service(
-        self, person: Person, team: Team, repository: str | None = None
-    ):
-        """Record the call and return a sentinel object."""
-        self.code_hosting_calls.append((person, team, repository))
-        return object()
 
     def create_chat_service(self, logger: logging.Logger, person: Person, team: Team):
         """Record the call and return a minimal chat service stub."""
@@ -123,7 +111,7 @@ class DummyIntegrationFactory(IntegrationFactory):
 class DummyBrain(Brain):
     """Concrete Brain stub capturing inputs; does nothing on run()."""
 
-    async def run(self, message: str, **kwargs: Any):  # noqa: D401 - test double
+    async def run(self, message: str, **kwargs: Any):
         """No-op run implementation for abstract base."""
         return {"message": message, **kwargs}
 
@@ -142,7 +130,7 @@ class DummyBrainFactory(BrainFactory):
         logger: logging.Logger,
         config: dict | None = None,
         class_resolver: ClassResolver | None = None,
-    ) -> Brain:  # noqa: D401
+    ) -> Brain:
         """Record arguments and return a DummyBrain with the given name/logger."""
         self.calls.append((person_id, name, language_code, logger))
         return DummyBrain(person_id=person_id, name=name, logger=logger)
@@ -153,7 +141,6 @@ def _make_team(language: str = "en") -> Team:
     project = Project(
         name="demo",
         language=language,
-        repositories=[Repository(name="repo", description="demo", is_default=True)],
         services={},
     )
     return Team(project=project, members=[])

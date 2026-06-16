@@ -83,7 +83,7 @@ GuildBotics enables you to:
   - Python scripts (with context injection)
   - Shell scripts
   - YAML workflows (command composition)
-- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Gemini CLI, Codex CLI, Claude Code)
+- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Gemini CLI, Codex CLI, Claude Code, GitHub Copilot CLI)
 - **Extensible Integrations**: Pluggable adapters for external services
 
 ## Built-in Capabilities
@@ -94,7 +94,8 @@ GuildBotics enables you to:
 # 2. Quick Start
 
 GuildBotics is configured through the **GuildBotics Desktop app (GUI)**, and run through the
-**`guildbotics` CLI**. Setup writes plain config files (`.env` and `.guildbotics/config/...`),
+**`guildbotics` CLI**. The desktop app bundles the CLI and installs a managed copy for CLI
+agents on first launch. Setup writes plain config files (`.env` and `.guildbotics/config/...`),
 so once configured you can run the CLI on any machine, including headless servers, by copying
 those files over.
 
@@ -104,14 +105,16 @@ those files over.
 #    It writes .env and .guildbotics/config/... into your chosen workspace.
 #    See desktop/README.md for installation.
 
-# 2. Run with the CLI
-uv tool install guildbotics
+# 2. Run with the managed CLI installed by the desktop app
+#    If ~/.local/bin is on PATH, the "guildbotics" shim is available.
+#    The stable absolute path always works:
+~/.guildbotics/bin/guildbotics workspace status
 
-# Run a custom command (from the workspace that holds .env / .guildbotics)
-echo "Hello" | guildbotics run translate English Japanese
+# Run a custom command
+echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 
 # Or start scheduler (runs default workflow: ticket_driven_workflow)
-guildbotics start
+~/.guildbotics/bin/guildbotics start
 ```
 
 See [Basic Usage](#5-basic-usage) for details, or [GitHub Integration Example](#6-github-integration-example) for the ticket-driven workflow setup.
@@ -145,15 +148,18 @@ Please install one of the following CLI agents and authenticate:
 Setup is performed with the **GuildBotics Desktop app**; command execution uses the
 **`guildbotics` CLI**.
 
-**Desktop app (setup):** Build or install the GuildBotics Desktop app. See
+**Desktop app (setup + managed CLI):** Build or install the GuildBotics Desktop app. See
 [desktop/README.md](desktop/README.md) for build and install instructions
-(currently macOS Apple Silicon).
+(currently macOS Apple Silicon). On first launch, the app installs:
 
-**CLI (execution):**
+- `~/.guildbotics/bin/guildbotics`: managed GuildBotics CLI used by CLI agents and skills
+- `~/.local/bin/guildbotics`: a small shim, only when the path is missing or already managed
+- GuildBotics skill files for detected Codex, Claude Code, Gemini CLI, and GitHub Copilot CLI
+  user skill directories. User-created or user-edited skills are not overwritten.
 
-```bash
-uv tool install guildbotics
-```
+**Standalone CLI (headless / non-desktop environments):** Use `uv tool install guildbotics`
+when you are not using the desktop app, or when you intentionally want a separately managed CLI
+installation.
 
 # 5. Basic Usage
 
@@ -162,6 +168,7 @@ uv tool install guildbotics
 Project setup is done in the **GuildBotics Desktop app**. Launch the app, pick a workspace
 directory, and complete the project setup form. The GUI:
 
+- Records the active workspace in `~/.guildbotics/data/active-workspace.json`
 - Selects language (English/Japanese)
 - Chooses the configuration directory location (workspace or home)
 - Configures LLM API settings and the default CLI agent
@@ -174,6 +181,15 @@ The following files are written:
 
 > These are plain text files. Because all setup lands in config files, you can move them to a
 > GUI-less environment (e.g. a server) and drive everything with the `guildbotics` CLI.
+
+The active workspace lets `guildbotics member ...` work from CLI-agent work directories that do
+not contain `.env` or `.guildbotics/config`. You can inspect or change it from the CLI:
+
+```bash
+guildbotics workspace status
+guildbotics workspace current
+guildbotics workspace use /path/to/workspace
+```
 
 ## 5.2. Add Members
 
@@ -511,13 +527,15 @@ task_schedules:
 
 ## 5.6. Slack Chat Workflow
 
-In the Slack chat workflow, channels configured in `message_channels` of `person.yml` are monitored, and the agent replies to mentions and thread continuations. You can also post scheduled command outputs to channels.
+In the Slack chat workflow, channels configured in `message_channels` of `person.yml` are monitored, and incoming events are delegated to the configured CLI agent. The CLI agent decides whether to reply, add a reaction, record a no-op, ask a question, or report a blocked state. Slack posts, replies, and reactions are written only through the public member capability commands under `guildbotics member chat ...`.
+
+Scheduled command output posting remains separate: use `task_schedules` + `workflows/chat_post_command` for scheduled posts.
 
 Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
 
-For CLI-based chat replies, GuildBotics runs the reply step from the per-agent workspace root at `~/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. It also keeps a separate per-agent personal memory repository under `~/.guildbotics/data/memory/<person_id>/`.
-The default personal memory backend is Cognee, with one dataset per person (`guildbotics:person:<person_id>`). Set `GUILDBOTICS_MEMORY_BACKEND=file` to use the fallback/test/migration file backend, which stores a `memory_index.yml` and topic-scoped memories under `topics/<topic_id>/memory.md`; `GUILDBOTICS_MEMORY_BACKEND=fake` is available for deterministic tests. GuildBotics recalls relevant memory before reply generation, passes the normalized `memory_context` through the prompt, and runs a separate memory update step after posting the reply. Set `GUILDBOTICS_MEMORY_TRACE=1` to append normalized recall/remember trace events to JSONL; `GUILDBOTICS_MEMORY_TRACE_PATH` overrides the default `~/.guildbotics/data/run/memory_trace.jsonl`.
-You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat reply decisions and reply generation use this profile, so an agent can join even without an explicit mention when it can add a distinct perspective.
+For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent workspace root at `~/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through run evidence recorded by `guildbotics member chat complete`; natural-language agent stdout is not treated as proof of Slack side effects.
+It also keeps a separate per-agent personal memory repository under `~/.guildbotics/data/memory/<person_id>/`. The default personal memory backend is Cognee, with one dataset per person (`guildbotics:person:<person_id>`). Set `GUILDBOTICS_MEMORY_BACKEND=file` to use the fallback/test/migration file backend, which stores a `memory_index.yml` and topic-scoped memories under `topics/<topic_id>/memory.md`; `GUILDBOTICS_MEMORY_BACKEND=fake` is available for deterministic tests. GuildBotics recalls relevant memory before delegating to the CLI agent, passes the normalized `memory_context` through the prompt, and runs a separate memory update step only after a `chat_reply` or `chat_post` evidence record. Set `GUILDBOTICS_MEMORY_TRACE=1` to append normalized recall/remember trace events to JSONL; `GUILDBOTICS_MEMORY_TRACE_PATH` overrides the default `~/.guildbotics/data/run/memory_trace.jsonl`.
+You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the CLI agent.
 
 ### 5.6.1. Prerequisites (Slack Side)
 
@@ -593,8 +611,16 @@ task_schedules:
 Points:
 
 - Monitored channels are defined in `message_channels`; entries with `chat.enabled: true` are monitored.
+- Incoming replies, reactions, no-op records, and completion evidence go through `guildbotics member chat reply|post|reaction add|noop|complete`.
 - For scheduled posting, use `task_schedules` + `workflows/chat_post_command` (the post body is generated from a GuildBotics custom command output).
 - Example: `examples/reports/ai_news_digest` gets candidate news from Google News RSS first, then an LLM formats it into a Slack-friendly summary.
+
+Interactive member chat examples:
+
+```bash
+guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --body-file reply.md
+guildbotics member chat reaction add --person alice --service slack --channel-id C0123456789 --message-ts 1777554000.000000 --reaction ack
+```
 
 Example scheduled command (AI news digest):
 
@@ -619,22 +645,34 @@ This section describes how to use the default `ticket_driven_workflow` which int
 ## 6.1. Prerequisites
 
 ### 6.1.1. Git Environment
-- Configure Git access for repositories:
-  - HTTPS: Install GCM (Git Credential Manager) and sign in
-  - or SSH: Set up SSH keys and `known_hosts`
+- Ticket-driven work is performed through the `guildbotics member ...` CLI. The workflow
+  selects a GitHub Project item, starts the CLI agent in
+  `~/.guildbotics/data/workspaces/<person_id>`, and verifies that the agent recorded task
+  completion. The agent itself performs clone/push/PR/comment/reply operations through
+  `guildbotics member`.
+- Configure each AI member's GitHub credentials in GuildBotics. GitHub/git writes use the
+  assigned member's configured machine-user token or GitHub App installation, not the local
+  `gh auth` user. Credential-required member commands load these values from
+  the active workspace `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the current directory.
+- For interactive CLI agent sessions, launch the GuildBotics Desktop app at least
+  once after selecting the workspace. The app installs the GuildBotics skill and managed CLI
+  under `~/.guildbotics/bin/guildbotics`. Configure the client to reject or require approval
+  for `gh`, direct GitHub token/API writes, and `git push`. This is a guardrail against
+  falling back to your own local GitHub account; it is not a complete technical sandbox
+  against token exfiltration.
+- When using Codex CLI as the CLI agent, verify its authentication and network reachability:
+  ```bash
+  codex doctor
+  ```
 
 ### 6.1.2. Create a GitHub Project
 Create a GitHub Projects (v2) project and add the following columns (statuses) in advance:
-  - New
-  - Ready
+  - Todo
   - In Progress
-  - In Review
-  - Retrospective
   - Done
 
 Note:
-- For existing projects, you can map already-existing statuses to the above ones with the settings described later.
-- If you do not use retrospectives, the Retrospective column is not required.
+- For existing projects, you can map already-existing statuses to the above lanes with the settings described later.
 
 ### 6.1.3. Prepare a GitHub Account for the AI Agent
 Prepare an account the AI agent will use to access GitHub. You can choose one of the following:
@@ -681,15 +719,22 @@ After completing [Basic Usage](#5-basic-usage) steps, verify the configuration f
 LLM, and CLI agent settings are usable.
 
 **Custom fields** are created automatically the first time GuildBotics operates on a GitHub
-Project, so no explicit setup step is required. GuildBotics manages these fields:
-- `Mode`: Behavior mode (comment/edit/ticket)
-- `Role`: Role to use for the task
-- `Agent`: AI agent to execute the task
+Project, so no explicit setup step is required. GuildBotics manages the `Agent` field to select
+the AI agent when GitHub assignees are not enough.
 
-**Status mapping**: GuildBotics maps GitHub Projects statuses to its own statuses
-(New/Ready/In Progress/In Review/Retrospective/Done). If your GitHub Project uses custom status
-names, map them with the `services.ticket_manager.status_map` key in
-`team/project.yml` (see [Configuration Files](#72-configuration-files)).
+**Lane mapping**: GuildBotics uses GitHub Projects statuses as lightweight workflow lanes.
+By default it treats `Todo` as ready, `In Progress` as working, and `Done` as done.
+The ready and done lanes also act as the boundaries of the work window: statuses positioned
+**between** them on the board (for example `In Review`) are automatically treated as working
+lanes, while statuses placed **before** ready (for example `Backlog`) or **at/after** done
+(for example `Icebox`) are ignored. This means you can add intermediate or parked lanes by
+ordering board columns alone, without touching `lane_map`.
+If your GitHub Project uses custom status names for the ready/working/done lanes, map them with
+the `services.ticket_manager.lane_map` key in `team/project.yml`
+(see [Configuration Files](#72-configuration-files)). The desktop setup app also exposes these
+lanes in the GitHub section: it offers your Project's status options when they can be read, and
+otherwise falls back to manual entry. Defaults work for a standard `Todo` / `In Progress` / `Done`
+board, so no lane configuration is required there.
 
 ## 6.3. Running the Ticket-Driven Workflow
 
@@ -707,36 +752,29 @@ To request a task from the AI agent, operate the GitHub Projects ticket as follo
 1. Create a ticket, select the target Git repository, and save it as an Issue
 2. Describe instructions to the AI agent in the ticket
    - This becomes the prompt to the agent, so be as specific as possible
-3. Set the `Agent` field to select the AI agent that will execute the task
-4. Set the `Mode` field
-   - `comment`: Ask the agent to reply via ticket comments
-   - `edit`: Ask the agent to edit files and open a Pull Request
-   - `ticket`: Ask the agent to create tickets
-5. Optionally set the `Role` field to specify the role to use when performing the task
-6. Change the ticket status to `Ready`
+3. Assign the target AI agent, or set the `Agent` field when GitHub assignees are not enough
+4. Move the ticket to the ready lane
 
 Note:
-The AI agent clones the specified Git repository under `~/.guildbotics/data/workspaces/<person_id>` and works there.
+The AI agent prepares repositories under `~/.guildbotics/data/workspaces/<person_id>` by running `guildbotics member git prepare` and works there.
 
 ### 6.3.3. Interacting with the AI Agent
 - If the AI agent has questions during work, it posts questions as ticket comments. Please respond in ticket comments. The agent periodically checks ticket comments and proceeds accordingly once answers are provided.
-- When the AI agent completes a task, it changes the ticket status to `In Review` and posts the results and the created Pull Request URL as a comment.
-- In `edit` mode, the AI agent creates a Pull Request. Please write review results as comments on the PR. When there are tickets in `In Review`, the agent checks for PR comments and responds accordingly if they exist.
+- When the AI agent completes a task, it posts the result, PR URL, review reply, or reaction itself through `guildbotics member ...`, then records `guildbotics member task complete`.
+- For Pull Requests created from a ticket, write review results on the PR. GuildBotics checks unresolved review threads and delegates them back to the assigned agent.
 
 ## 6.4. Capabilities
 
 With the ticket-driven workflow, you can:
 
 - **Request tasks for AI agents on a task board**
-  - Assign an AI agent to a ticket and move it to the **Ready** column to have the AI agent execute the task
+  - Assign an AI agent to a ticket and move it to the ready lane to have the AI agent execute the task
 - **Review AI agent results on the task board**
-  - When the agent completes a task, the ticket moves to **In Review** and the results are posted as ticket comments
+  - When the agent completes a task, it leaves a comment, PR, review reply, or reaction through the member capability
 - **Create Pull Requests by AI agents**
-  - When a task is completed, the AI agent creates a Pull Request
+  - When a task requires code changes, the agent publishes the member workspace branch and creates or reuses a Pull Request through `guildbotics member github pr create`
 - **Create tickets**
-  - If you instruct the AI agent to create tickets, it automatically creates them on the task board
-- **Retrospective**
-  - Move completed-task tickets to the **Retrospective** column and request a retrospective in a comment; the AI agent analyzes the interaction with reviewers on the created PR, extracts issues, and creates improvement tickets
+  - If you instruct the AI agent to create follow-up tickets, it creates real repository issues with `guildbotics member github issue create`
 
 # 7. Reference
 
@@ -758,6 +796,24 @@ Cognee memory reuses these keys. If `LLM_API_KEY` is not set, GuildBotics maps `
 - `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: For GitHub Apps
 
 If a `.env` file exists in the current directory, it is loaded automatically.
+`guildbotics member` commands first honor `--workspace <dir>`. Without that option, they keep
+an explicit `GUILDBOTICS_CONFIG_DIR` or current-directory `.guildbotics/config` if one is
+already present; otherwise they use the active workspace recorded by the desktop app or
+`guildbotics workspace use`. The selected workspace sets `GUILDBOTICS_CONFIG_DIR` and, when
+`<workspace>/.env` exists, `GUILDBOTICS_ENV_FILE`.
+
+Useful workspace commands:
+
+```bash
+guildbotics workspace status
+guildbotics workspace current
+guildbotics workspace use /path/to/workspace
+guildbotics member --workspace /path/to/workspace context --person <person_id> --check-credentials
+```
+
+The fallback for non-desktop/headless use is `GUILDBOTICS_ENV_FILE` pointing to an absolute
+`.env` path, or `.env` in the current directory. `guildbotics start` and the desktop runtime
+set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
 
 ## 7.2. Configuration Files
 
@@ -767,7 +823,7 @@ If a `.env` file exists in the current directory, it is loaded automatically.
 - `language`: Project language
 - `repositories`: Repository definitions
 - `services.ticket_manager`: GitHub Projects settings
-- `services.ticket_manager.status_map`: Maps GuildBotics statuses (New/Ready/In Progress/In Review/Retrospective/Done) to your GitHub Project's status names. Set this when your Project uses custom status names.
+- `services.ticket_manager.lane_map`: Maps ready, working, and done lanes to your GitHub Project's status names. Set this when your Project uses custom status names.
 - `services.code_hosting_service`: GitHub repository settings
 
 **Member Configuration** (`team/members/<person_id>/person.yml`):

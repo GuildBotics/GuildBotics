@@ -6,7 +6,6 @@ from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.common import (
     DecisionResponse,
     IssueBranchLevel1,
-    NextTaskItem,
 )
 
 
@@ -58,19 +57,6 @@ class BrainStub(Brain):
                             reason="Stubbed reason",
                             confidence=1.0,
                             sub=None,
-                        )
-                    ]
-                )
-            elif self.response_class.__name__ == "NextTasksResponse":
-                return self.response_class(
-                    tasks=[
-                        NextTaskItem(
-                            title=f"Stubbed response for: {message}",
-                            description=f"Stubbed response for: {message}",
-                            role="default",
-                            priority=1,
-                            output="default",
-                            mode="default",
                         )
                     ]
                 )

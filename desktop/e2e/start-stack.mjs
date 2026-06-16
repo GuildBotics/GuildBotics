@@ -34,7 +34,7 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -228,7 +228,30 @@ async function seedWorkspace() {
     roles: ["architect"],
     speaking_style: "concise",
   });
+  seedMockCliAgent();
   console.log(`${tag} seeded configured workspace (workspace=${workspaceDir})`);
+}
+
+// Override the default CLI agent script in the seeded workspace with a mock that
+// echoes a canned response instead of spawning the real `codex` process. The
+// workspace config dir takes precedence over the packaged template, so the
+// scenario diagnostics' cli_agent check stays fast and deterministic and never
+// depends on a real CLI agent being installed or reachable. The "codex" token is
+// kept so executable detection still resolves to the configured agent.
+function seedMockCliAgent() {
+  const cliAgentsDir = join(configDir, "intelligences", "cli_agents");
+  mkdirSync(cliAgentsDir, { recursive: true });
+  writeFileSync(
+    join(cliAgentsDir, "codex-cli.yml"),
+    [
+      "env:",
+      "script: |",
+      "  # codex mock CLI agent for e2e (no real codex process is spawned).",
+      '  cat "$PROMPT_FILE" > /dev/null 2>&1 || true',
+      '  echo "OK"',
+      "",
+    ].join("\n"),
+  );
 }
 
 function startFrontend() {

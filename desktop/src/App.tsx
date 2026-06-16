@@ -2,9 +2,11 @@ import {
   ActionIcon,
   Alert,
   Anchor,
+  Autocomplete,
   Badge,
   Button,
   Card,
+  CopyButton,
   Drawer,
   Group,
   NumberInput,
@@ -23,12 +25,15 @@ import {
   Activity,
   CheckCircle2,
   Copy,
+  ExternalLink,
   FolderOpen,
   Play,
   RotateCcw,
+  Search,
   Settings,
   Square,
   Terminal,
+  Ticket,
   TriangleAlert,
   XCircle,
 } from "lucide-react";
@@ -46,14 +51,18 @@ import {
   type RuntimeEvent,
   type RuntimeLog,
   type RuntimeUnitStatus,
-  type StreamStatus,
+  type TraceRecord,
   getConfigStatus,
   getCommandOptions,
+  getGlobalRecords,
   getProjectConfig,
   getPromptTrace,
+  getRuntimeDebug,
   getSchedulerRoutines,
   getSchedulerStatus,
   getTeam,
+  getTraceDetail,
+  getTraces,
   runCommand,
   runScenarioDiagnostics,
   startScheduler,
@@ -61,6 +70,7 @@ import {
   subscribeEvents,
   subscribeLogs,
   updatePromptTrace,
+  updateRuntimeDebug,
 } from "./api/client";
 import { type AppLanguage, normalizeLanguage, setAppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
@@ -93,6 +103,11 @@ export function App() {
           </NavLink>
         </nav>
         <Select
+          className="sidebar-language"
+          classNames={{
+            input: "sidebar-language-input",
+            label: "sidebar-language-label",
+          }}
           label={t("app.language.label")}
           data={[
             { label: t("app.language.english"), value: "en" },
@@ -381,6 +396,7 @@ function ServicePage() {
             />
           </div>
           <PromptTraceOutputSettings />
+          <RuntimeDebugSettings />
           {startBlockedByGithub ? (
             <Alert color="yellow" title={t("overview.startGuardTitle")}>
               <Group justify="space-between" align="center">
@@ -409,12 +425,6 @@ function ServicePage() {
 
 function DiagnosticsPage() {
   const { t } = useTranslation();
-  const [feedFilter, setFeedFilter] = useState("all");
-  const [streamView, setStreamView] = useState<"events" | "logs">("events");
-  const [eventStreamStatus, setEventStreamStatus] = useState<StreamStatus>("connecting");
-  const [logStreamStatus, setLogStreamStatus] = useState<StreamStatus>("connecting");
-  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([]);
-  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLog[]>([]);
   const [readTracePath, setReadTracePath] = useState("");
   const [readTracePathEdited, setReadTracePathEdited] = useState(false);
   const [loadedTracePath, setLoadedTracePath] = useState("");
@@ -472,27 +482,6 @@ function DiagnosticsPage() {
     setLoadedTracePath(selected);
     setReadTracePathEdited(false);
   };
-  useEffect(() => {
-    const stopEvents = subscribeEvents((event) => {
-      setRuntimeEvents((current) => [event, ...current].slice(0, 80));
-    }, setEventStreamStatus);
-    const stopLogs = subscribeLogs((log) => {
-      setRuntimeLogs((current) => [log, ...current].slice(0, 80));
-    }, setLogStreamStatus);
-    return () => {
-      stopEvents();
-      stopLogs();
-    };
-  }, []);
-  const filteredEvents = useMemo(
-    () => runtimeEvents.filter((event) => matchesFeedFilter(event, feedFilter)),
-    [feedFilter, runtimeEvents],
-  );
-  const filteredLogs = useMemo(
-    () => runtimeLogs.filter((log) => matchesLogFilter(log, feedFilter)),
-    [feedFilter, runtimeLogs],
-  );
-
   return (
     <Stack className="diagnostics-page" gap="lg">
       <Group justify="space-between">
@@ -503,8 +492,8 @@ function DiagnosticsPage() {
       <Tabs className="diagnostics-tabs" defaultValue="readiness">
         <Tabs.List>
           <Tabs.Tab value="readiness">{t("diagnostics.tabs.readiness")}</Tabs.Tab>
+          <Tabs.Tab value="executions">{t("diagnostics.tabs.executions")}</Tabs.Tab>
           <Tabs.Tab value="promptTrace">{t("diagnostics.tabs.promptTrace")}</Tabs.Tab>
-          <Tabs.Tab value="runtimeStream">{t("diagnostics.tabs.runtimeStream")}</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="readiness" pt="md">
           <Card withBorder radius="md" p="lg">
@@ -593,114 +582,893 @@ function DiagnosticsPage() {
             <PromptTraceList entries={promptTrace.data?.events ?? []} />
           </Card>
         </Tabs.Panel>
-        <Tabs.Panel className="diagnostics-fill-panel" value="runtimeStream" pt="md">
-          <Card className="diagnostics-fill-card stream-fill-card" withBorder radius="md" p="lg">
-            <Group justify="space-between" align="flex-start">
-              <div>
-                <Title order={3}>{t("overview.runtimeFeed")}</Title>
-                <Text c="dimmed" size="sm">
-                  {t("overview.runtimeFeedDescription")}
-                </Text>
-              </div>
-              <SegmentedControl
-                value={feedFilter}
-                onChange={setFeedFilter}
-                data={[
-                  { value: "all", label: t("overview.feedFilters.all") },
-                  { value: "error", label: t("overview.feedFilters.error") },
-                  { value: "command", label: t("overview.feedFilters.command") },
-                  { value: "scheduler", label: t("overview.feedFilters.scheduler") },
-                  { value: "events", label: t("overview.feedFilters.events") },
-                ]}
-              />
-            </Group>
-            <SegmentedControl
-              mt="md"
-              value={streamView}
-              onChange={(value) => setStreamView(value as "events" | "logs")}
-              data={[
-                {
-                  value: "events",
-                  label: (
-                    <>
-                      {t("overview.events")} <StreamBadge status={eventStreamStatus} />
-                    </>
-                  ),
-                },
-                {
-                  value: "logs",
-                  label: (
-                    <>
-                      {t("overview.logs")} <StreamBadge status={logStreamStatus} />
-                    </>
-                  ),
-                },
-              ]}
-            />
-            <div className="runtime-stream-list">
-              <div className="runtime-stream-header">
-                <span>{t("overview.runtimeStreamColumns.time")}</span>
-                <span>{t("overview.runtimeStreamColumns.type")}</span>
-                <span>{t("overview.runtimeStreamColumns.request")}</span>
-                <span>{t("overview.runtimeStreamColumns.message")}</span>
-              </div>
-              {streamView === "events" ? (
-                <>
-                  {filteredEvents.length === 0 ? (
-                    <div className="empty-row runtime-stream-empty">
-                      {t("overview.emptyEvents")}
-                    </div>
-                  ) : null}
-                  {filteredEvents.map((event, index) => (
-                    <div
-                      className="runtime-stream-row"
-                      key={`${event.timestamp}-${event.type}-${index}`}
-                    >
-                      <span>{formatTime(event.timestamp)}</span>
-                      <span>
-                        <Badge color={eventBadgeColor(event.type)} variant="light">
-                          {eventTypeLabel(t, event.type)}
-                        </Badge>
-                      </span>
-                      <span className="runtime-stream-request">
-                        {event.request_id ? event.request_id.slice(0, 10) : "-"}
-                      </span>
-                      <span title={formatRuntimeEvent(t, event)}>
-                        {formatRuntimeEvent(t, event)}
-                      </span>
-                    </div>
-                  ))}
-                </>
-              ) : (
-                <>
-                  {filteredLogs.length === 0 ? (
-                    <div className="empty-row runtime-stream-empty">{t("overview.emptyLogs")}</div>
-                  ) : null}
-                  {filteredLogs.map((log, index) => (
-                    <div
-                      className="runtime-stream-row"
-                      key={`${log.timestamp}-${log.level}-${index}`}
-                    >
-                      <span>{formatTime(log.timestamp)}</span>
-                      <span>
-                        <Badge color={logBadgeColor(log.level)} variant="light">
-                          {log.level}
-                        </Badge>
-                      </span>
-                      <span className="runtime-stream-request">
-                        {log.request_id ? log.request_id.slice(0, 10) : "-"}
-                      </span>
-                      <span title={log.message}>{log.message}</span>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          </Card>
+        <Tabs.Panel className="diagnostics-fill-panel" value="executions" pt="md">
+          <TraceExplorer />
         </Tabs.Panel>
       </Tabs>
     </Stack>
   );
+}
+
+const TRACE_SOURCES = ["all", "manual", "routine", "scheduled", "event_listener"] as const;
+
+const RECORD_FILTERS = ["all", "error", "llm", "cli_agent", "event", "log"] as const;
+
+export type RecordScopeFilter = {
+  kind: "span" | "call" | "subtree";
+  value: string;
+  label: string;
+};
+
+// Sentinel selection for the pinned "Global / system" view, which shows
+// unscoped records (service lifecycle events + global logs) that do not belong
+// to any trace.
+const GLOBAL_TRACE_ID = "__global__";
+
+function TraceExplorer() {
+  const { t } = useTranslation();
+  const [source, setSource] = useState("all");
+  const [searchInput, setSearchInput] = useState("");
+  const [query, setQuery] = useState("");
+  // Default to the pinned Global / system view so unscoped records (service
+  // lifecycle events and global logs such as Slack listener auth failures) are
+  // visible the moment the executions tab opens, without the user having to know
+  // to click the Global entry.
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(GLOBAL_TRACE_ID);
+  const [recordFilter, setRecordFilter] = useState("all");
+  const [recordScopeFilter, setRecordScopeFilter] = useState<RecordScopeFilter | null>(null);
+  const [drawerRecord, setDrawerRecord] = useState<TraceRecord | null>(null);
+  const [attrFilter, setAttrFilter] = useState<AttrFilter | null>(null);
+  const isGlobal = selectedTraceId === GLOBAL_TRACE_ID;
+
+  const traces = useQuery({
+    queryKey: ["diagnostics-traces", source, query, attrFilter?.key, attrFilter?.value],
+    queryFn: () =>
+      getTraces({
+        source: source === "all" ? undefined : source,
+        query: query.trim() || undefined,
+        attrKey: attrFilter?.key,
+        attrValue: attrFilter?.value,
+        limit: 200,
+      }),
+    refetchInterval: 5000,
+  });
+  const detail = useQuery({
+    queryKey: ["diagnostics-trace", selectedTraceId],
+    queryFn: () => (isGlobal ? getGlobalRecords() : getTraceDetail(selectedTraceId as string)),
+    enabled: Boolean(selectedTraceId),
+    refetchInterval: selectedTraceId ? 5000 : false,
+  });
+  const traceItems = useMemo(() => traces.data?.traces ?? [], [traces.data]);
+  const selectedSummary = useMemo(
+    () =>
+      traceItems.find((trace) => trace.trace_id === selectedTraceId) ??
+      detail.data?.summary ??
+      null,
+    [traceItems, selectedTraceId, detail.data],
+  );
+  // The API returns records oldest-first; show them newest-first so a live
+  // (polling) trace surfaces new records at the top without scrolling, matching
+  // the descending order used by the rest of the diagnostics UI.
+  const records = (detail.data?.records ?? [])
+    .filter((record) => matchesRecordFilter(record, recordFilter))
+    .filter((record) => matchesRecordScopeFilter(record, recordScopeFilter))
+    .reverse();
+
+  // Selecting a different execution resets its per-trace UI state (record
+  // filter) at the event source rather than in an effect.
+  const selectTrace = (traceId: string) => {
+    setSelectedTraceId(traceId);
+    setRecordFilter("all");
+    setRecordScopeFilter(null);
+  };
+
+  // The pinned Global view only belongs under "all"; narrowing to a specific
+  // source filters traces, so drop a Global selection when leaving "all".
+  const changeSource = (value: string) => {
+    setSource(value);
+    if (value !== "all" && selectedTraceId === GLOBAL_TRACE_ID) {
+      setSelectedTraceId(null);
+    }
+  };
+
+  const applySearch = () => {
+    const parsed = parseTraceSearch(searchInput);
+    setQuery(parsed.query);
+    setAttrFilter(parsed.attrFilter);
+  };
+  const clearSearch = () => {
+    setSearchInput("");
+    setQuery("");
+    setAttrFilter(null);
+  };
+  const applyAttrFilter = (filter: AttrFilter) => {
+    setAttrFilter(filter);
+  };
+  const clearAttrFilter = () => {
+    setAttrFilter(null);
+  };
+  const showGlobalEntry = source === "all" && !attrFilter;
+
+  return (
+    <Card className="diagnostics-fill-card executions-fill-card" withBorder radius="md" p="lg">
+      <div className="exec-header">
+        <Title order={3}>{t("diagnostics.executions.title")}</Title>
+        <Text c="dimmed" size="sm">
+          {t("diagnostics.executions.description")}
+        </Text>
+      </div>
+      <div className="exec-toolbar">
+        <div className="exec-source-filter">
+          <SegmentedControl
+            className="exec-source-segmented"
+            classNames={{ label: "exec-source-segmented-label" }}
+            value={source}
+            onChange={changeSource}
+            data={TRACE_SOURCES.map((value) => ({
+              value,
+              label: traceSourceLabel(t, value),
+            }))}
+          />
+        </div>
+        <TextInput
+          className="exec-search"
+          aria-label={t("diagnostics.executions.search")}
+          placeholder={t("diagnostics.executions.searchPlaceholder")}
+          leftSection={<Search size={15} />}
+          rightSection={
+            searchInput || query || attrFilter ? (
+              <ActionIcon
+                size="sm"
+                variant="transparent"
+                color="gray"
+                aria-label={t("diagnostics.executions.searchClear")}
+                onClick={clearSearch}
+              >
+                <XCircle size={16} />
+              </ActionIcon>
+            ) : null
+          }
+          rightSectionPointerEvents="auto"
+          value={searchInput}
+          onChange={(event) => setSearchInput(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              applySearch();
+            }
+          }}
+        />
+        {attrFilter ? (
+          <Badge
+            className="exec-filter-pill"
+            size="lg"
+            variant="light"
+            color="grape"
+            leftSection={<Ticket size={12} />}
+            rightSection={
+              <ActionIcon
+                size="xs"
+                variant="transparent"
+                color="grape"
+                aria-label={t("diagnostics.executions.ticket.clear")}
+                onClick={clearAttrFilter}
+              >
+                <XCircle size={14} />
+              </ActionIcon>
+            }
+          >
+            {attrFilter.label}
+          </Badge>
+        ) : null}
+      </div>
+      <div className="exec-grid">
+        <div className="exec-list">
+          {showGlobalEntry ? (
+            <button
+              type="button"
+              className={
+                isGlobal ? "exec-row exec-row-global exec-row-active" : "exec-row exec-row-global"
+              }
+              onClick={() => selectTrace(GLOBAL_TRACE_ID)}
+            >
+              <div className="exec-row-top">
+                <Badge size="sm" color="gray" variant="light">
+                  {t("diagnostics.executions.global.badge")}
+                </Badge>
+              </div>
+              <Text className="exec-row-command" fw={600} size="sm">
+                {t("diagnostics.executions.global.title")}
+              </Text>
+              <div className="exec-row-meta">
+                <span>{t("diagnostics.executions.global.subtitle")}</span>
+              </div>
+            </button>
+          ) : null}
+          {traceItems.length === 0 ? (
+            <div className="empty-row">{t("diagnostics.executions.empty")}</div>
+          ) : (
+            traceItems.map((trace) => (
+              <button
+                type="button"
+                key={trace.trace_id}
+                className={
+                  trace.trace_id === selectedTraceId ? "exec-row exec-row-active" : "exec-row"
+                }
+                onClick={() => selectTrace(trace.trace_id)}
+              >
+                <div className="exec-row-top">
+                  <Badge size="sm" color={traceStatusColor(trace.status)} variant="light">
+                    {t(`diagnostics.executions.status.${trace.status}`, {
+                      defaultValue: trace.status,
+                    })}
+                  </Badge>
+                  <Badge size="sm" variant="outline">
+                    {traceSourceLabel(t, trace.source || "unknown")}
+                  </Badge>
+                  {ticketChipInfo(trace.attributes) ? (
+                    <Badge size="sm" color="grape" variant="light">
+                      {ticketChipInfo(trace.attributes)?.label}
+                    </Badge>
+                  ) : null}
+                  <span className="exec-row-time">{formatTime(trace.updated_at)}</span>
+                </div>
+                <Tooltip
+                  label={trace.command || trace.trace_id}
+                  openDelay={400}
+                  withArrow
+                  multiline
+                >
+                  <Text className="exec-row-command" fw={600} size="sm" lineClamp={1}>
+                    {trace.command || trace.trace_id}
+                  </Text>
+                </Tooltip>
+                <div className="exec-row-meta">
+                  <span className="exec-row-person">{trace.person_id || "—"}</span>
+                  <span className="exec-row-counts">
+                    {t("diagnostics.executions.counts", {
+                      events: trace.event_count,
+                      logs: trace.log_count,
+                    })}
+                    {trace.error_count > 0 ? (
+                      <span className="exec-row-errors">
+                        {" · "}
+                        {t("diagnostics.executions.errorChip", { count: trace.error_count })}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+        <div className="exec-detail">
+          {isGlobal ? (
+            <>
+              <div className="exec-summary">
+                <Text fw={700} size="sm">
+                  {t("diagnostics.executions.global.title")}
+                </Text>
+                <Text c="dimmed" size="xs">
+                  {t("diagnostics.executions.global.description")}
+                </Text>
+              </div>
+              <ExecTimeline
+                records={records}
+                filter={recordFilter}
+                scopeFilter={recordScopeFilter}
+                onFilter={setRecordFilter}
+                onClearScopeFilter={() => setRecordScopeFilter(null)}
+                onSelect={setDrawerRecord}
+              />
+            </>
+          ) : selectedTraceId && selectedSummary ? (
+            <>
+              <div className="exec-summary">
+                <div className="exec-summary-head">
+                  <Group gap="xs">
+                    <Badge color={traceStatusColor(selectedSummary.status)} variant="light">
+                      {t(`diagnostics.executions.status.${selectedSummary.status}`, {
+                        defaultValue: selectedSummary.status,
+                      })}
+                    </Badge>
+                    <Badge variant="outline">
+                      {traceSourceLabel(t, selectedSummary.source || "unknown")}
+                    </Badge>
+                    {(() => {
+                      const chip = ticketChipInfo(selectedSummary.attributes);
+                      if (!chip) {
+                        return null;
+                      }
+                      return (
+                        <Tooltip label={t("diagnostics.executions.ticket.filterTo")} withArrow>
+                          <Badge
+                            color="grape"
+                            variant="light"
+                            style={{ cursor: "pointer" }}
+                            onClick={() =>
+                              applyAttrFilter({
+                                key: chip.key,
+                                value: chip.value,
+                                label: chip.label,
+                              })
+                            }
+                            rightSection={
+                              chip.url ? (
+                                <ActionIcon
+                                  size="xs"
+                                  variant="transparent"
+                                  color="grape"
+                                  aria-label={t("diagnostics.executions.ticket.open")}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void openExternal(chip.url);
+                                  }}
+                                >
+                                  <ExternalLink size={12} />
+                                </ActionIcon>
+                              ) : null
+                            }
+                          >
+                            {chip.label}
+                          </Badge>
+                        </Tooltip>
+                      );
+                    })()}
+                  </Group>
+                </div>
+                <Tooltip
+                  label={selectedSummary.command || selectedSummary.trace_id}
+                  openDelay={400}
+                  withArrow
+                  multiline
+                >
+                  <Text fw={700} size="sm" lineClamp={1}>
+                    {selectedSummary.command || selectedSummary.trace_id}
+                  </Text>
+                </Tooltip>
+                <div className="exec-summary-meta">
+                  <span className="exec-summary-id">
+                    {t("diagnostics.executions.meta.trace")}:{" "}
+                    <Tooltip label={selectedSummary.trace_id} withArrow>
+                      <code>{shortTraceId(selectedSummary.trace_id)}</code>
+                    </Tooltip>
+                    <CopyButton value={selectedSummary.trace_id} timeout={1500}>
+                      {({ copied, copy }) => (
+                        <Tooltip
+                          label={
+                            copied
+                              ? t("diagnostics.executions.copied")
+                              : t("diagnostics.executions.copy")
+                          }
+                          withArrow
+                        >
+                          <ActionIcon
+                            variant="subtle"
+                            size="sm"
+                            color={copied ? "teal" : "gray"}
+                            onClick={copy}
+                          >
+                            {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                    </CopyButton>
+                  </span>
+                  {selectedSummary.person_id ? (
+                    <span>
+                      {t("diagnostics.executions.meta.member")}: {selectedSummary.person_id}
+                    </span>
+                  ) : null}
+                  <span>
+                    {t("diagnostics.executions.meta.started")}:{" "}
+                    {formatDateTime(selectedSummary.started_at) || "—"}
+                  </span>
+                  <span>
+                    {t("diagnostics.executions.meta.duration")}: {traceDuration(selectedSummary)}
+                  </span>
+                  <span>
+                    {t("diagnostics.executions.counts", {
+                      events: selectedSummary.event_count,
+                      logs: selectedSummary.log_count,
+                    })}
+                  </span>
+                  {selectedSummary.error_count > 0 ? (
+                    <span className="exec-row-errors">
+                      {t("diagnostics.executions.errorChip", {
+                        count: selectedSummary.error_count,
+                      })}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <ExecTimeline
+                records={records}
+                filter={recordFilter}
+                scopeFilter={recordScopeFilter}
+                onFilter={setRecordFilter}
+                onClearScopeFilter={() => setRecordScopeFilter(null)}
+                onSelect={setDrawerRecord}
+              />
+            </>
+          ) : (
+            <div className="empty-row">{t("diagnostics.executions.selectHint")}</div>
+          )}
+        </div>
+      </div>
+      <Drawer
+        opened={Boolean(drawerRecord)}
+        onClose={() => setDrawerRecord(null)}
+        position="right"
+        size="lg"
+        title={drawerRecord ? recordBadgeLabel(t, drawerRecord) : ""}
+      >
+        {drawerRecord ? (
+          <TraceRecordDetail
+            record={drawerRecord}
+            onScopeFilter={(filter) => {
+              setRecordScopeFilter(filter);
+              setDrawerRecord(null);
+            }}
+          />
+        ) : null}
+      </Drawer>
+    </Card>
+  );
+}
+
+function ExecTimeline({
+  records,
+  filter,
+  scopeFilter,
+  onFilter,
+  onClearScopeFilter,
+  onSelect,
+}: {
+  records: TraceRecord[];
+  filter: string;
+  scopeFilter: RecordScopeFilter | null;
+  onFilter: (value: string) => void;
+  onClearScopeFilter: () => void;
+  onSelect: (record: TraceRecord) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <div className="exec-timeline-toolbar">
+        <SegmentedControl
+          className="exec-filter"
+          size="xs"
+          value={filter}
+          onChange={onFilter}
+          data={RECORD_FILTERS.map((value) => ({
+            value,
+            label: t(`diagnostics.executions.recordFilters.${value}`),
+          }))}
+        />
+        {scopeFilter ? (
+          <Badge
+            className="exec-filter-pill exec-record-scope-pill"
+            size="lg"
+            variant="light"
+            color="blue"
+            rightSection={
+              <ActionIcon
+                size="xs"
+                variant="transparent"
+                color="blue"
+                aria-label={t("diagnostics.executions.recordScope.clear")}
+                onClick={onClearScopeFilter}
+              >
+                <XCircle size={14} />
+              </ActionIcon>
+            }
+          >
+            {scopeFilter.label}
+          </Badge>
+        ) : null}
+      </div>
+      <div className="exec-timeline">
+        {records.length === 0 ? (
+          <div className="empty-row">{t("diagnostics.executions.noRecords")}</div>
+        ) : (
+          records.map((record, index) => (
+            <button
+              type="button"
+              className="exec-timeline-row"
+              key={`${record.timestamp}-${record.kind}-${index}`}
+              onClick={() => onSelect(record)}
+            >
+              <span className="exec-timeline-time">{formatTime(record.timestamp)}</span>
+              <Badge color={recordBadgeColor(record)} variant="light">
+                {recordBadgeLabel(t, record)}
+              </Badge>
+              <span className="exec-timeline-message">{recordDisplayMessage(record)}</span>
+              <span className="exec-timeline-chevron" aria-hidden>
+                ›
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </>
+  );
+}
+
+function TraceRecordDetail({
+  record,
+  onScopeFilter,
+}: {
+  record: TraceRecord;
+  onScopeFilter: (filter: RecordScopeFilter) => void;
+}) {
+  const { t } = useTranslation();
+  const message = recordDisplayMessage(record);
+  const payload = record.payload ?? {};
+  const metaEntries = (
+    [
+      [t("diagnostics.executions.developer.traceId"), record.trace_id ?? ""],
+      [t("diagnostics.executions.developer.spanId"), record.span_id ?? ""],
+      [t("diagnostics.executions.developer.parentId"), record.parent_id ?? ""],
+      [t("diagnostics.executions.developer.callId"), record.call_id ?? ""],
+      [
+        t("diagnostics.executions.developer.source"),
+        traceSourceLabel(t, record.source || "unknown"),
+      ],
+      [t("diagnostics.executions.developer.member"), record.person_id],
+      [t("diagnostics.executions.developer.command"), record.command],
+      [t("diagnostics.executions.developer.workflow"), record.workflow],
+    ] as [string, string][]
+  ).filter(([, value]) => value);
+  const hasAttributes = Object.keys(record.attributes ?? {}).length > 0;
+  const attributeRows = recordAttributeRows(t, record.attributes ?? {});
+  const hasPayload = Object.keys(payload).length > 0;
+  return (
+    <Stack gap="sm">
+      <div className="exec-record-head">
+        <div className="exec-record-head-top">
+          <Group gap="xs">
+            <Badge color={recordBadgeColor(record)} variant="light">
+              {recordBadgeLabel(t, record)}
+            </Badge>
+            {record.source ? (
+              <Badge variant="outline">{traceSourceLabel(t, record.source || "unknown")}</Badge>
+            ) : null}
+            <Text c="dimmed" size="xs">
+              {formatDateTime(record.timestamp) || "—"}
+            </Text>
+          </Group>
+          <CopyButton value={message} timeout={1500}>
+            {({ copied, copy }) => (
+              <Button
+                size="xs"
+                variant="subtle"
+                leftSection={copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                onClick={copy}
+              >
+                {copied
+                  ? t("diagnostics.executions.messageCopied")
+                  : t("diagnostics.executions.copyMessage")}
+              </Button>
+            )}
+          </CopyButton>
+        </div>
+        <Text className="exec-record-message" size="sm">
+          {message || "—"}
+        </Text>
+      </div>
+      <Group gap="xs">
+        {record.span_id ? (
+          <Button
+            radius="xl"
+            size="xs"
+            variant="light"
+            onClick={() =>
+              onScopeFilter({
+                kind: "span",
+                value: record.span_id as string,
+                label: t("diagnostics.executions.recordScope.span"),
+              })
+            }
+          >
+            {t("diagnostics.executions.recordScope.span")}
+          </Button>
+        ) : null}
+        {record.call_id ? (
+          <Button
+            radius="xl"
+            size="xs"
+            variant="light"
+            onClick={() =>
+              onScopeFilter({
+                kind: "call",
+                value: record.call_id as string,
+                label: t("diagnostics.executions.recordScope.call"),
+              })
+            }
+          >
+            {t("diagnostics.executions.recordScope.call")}
+          </Button>
+        ) : null}
+        {record.span_id ? (
+          <Button
+            radius="xl"
+            size="xs"
+            variant="light"
+            onClick={() =>
+              onScopeFilter({
+                kind: "subtree",
+                value: record.span_id as string,
+                label: t("diagnostics.executions.recordScope.subtree"),
+              })
+            }
+          >
+            {t("diagnostics.executions.recordScope.subtree")}
+          </Button>
+        ) : null}
+      </Group>
+      {hasAttributes ? (
+        <div className="exec-record-section">
+          <Text fw={600} size="sm">
+            {t("diagnostics.executions.attributes")}
+          </Text>
+          {attributeRows.length > 0 ? (
+            <dl className="exec-record-meta exec-record-attribute-list">
+              {attributeRows.map(([label, value]) => (
+                <FragmentRow key={label} label={label} value={value} />
+              ))}
+            </dl>
+          ) : null}
+          <details className="exec-record-raw">
+            <summary>{t("diagnostics.executions.rawAttributes")}</summary>
+            <pre className="command-output">{JSON.stringify(record.attributes, null, 2)}</pre>
+          </details>
+        </div>
+      ) : null}
+      {hasPayload ? (
+        <div className="exec-record-section">
+          <Text fw={600} size="sm">
+            {t("diagnostics.executions.payload")}
+          </Text>
+          <pre className="command-output">{JSON.stringify(payload, null, 2)}</pre>
+        </div>
+      ) : null}
+      {metaEntries.length > 0 ? (
+        <details className="exec-record-developer">
+          <summary>{t("diagnostics.executions.developer.title")}</summary>
+          <dl className="exec-record-meta">
+            {metaEntries.map(([label, value]) => (
+              <FragmentRow key={label} label={label} value={value} />
+            ))}
+          </dl>
+        </details>
+      ) : null}
+    </Stack>
+  );
+}
+
+export function matchesRecordFilter(record: TraceRecord, filter: string): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "error") {
+    return (
+      ["ERROR", "CRITICAL", "WARNING"].includes(record.level.toUpperCase()) ||
+      record.type.endsWith(".failed")
+    );
+  }
+  // LLM / CLI Agent group both the prompt-trace request/response records and the
+  // logs emitted during that agent's span (tagged via record.span).
+  if (filter === "llm") {
+    return (
+      (record.kind === "prompt_trace" && record.type.startsWith("llm")) ||
+      (record.kind === "log" && record.span === "llm")
+    );
+  }
+  if (filter === "cli_agent") {
+    return (
+      (record.kind === "prompt_trace" && record.type.startsWith("cli_agent")) ||
+      (record.kind === "log" && record.span === "cli_agent")
+    );
+  }
+  return record.kind === filter;
+}
+
+export function matchesRecordScopeFilter(
+  record: TraceRecord,
+  filter: RecordScopeFilter | null,
+): boolean {
+  if (!filter) {
+    return true;
+  }
+  if (filter.kind === "span") {
+    return record.span_id === filter.value;
+  }
+  if (filter.kind === "call") {
+    return record.call_id === filter.value;
+  }
+  return record.span_id === filter.value || record.parent_id === filter.value;
+}
+
+export function recordAttributeRows(
+  t: TFunction,
+  attributes: Record<string, unknown>,
+): Array<[string, string]> {
+  return [
+    ["event.provider", t("diagnostics.executions.attributeLabels.eventProvider")],
+    ["github.repo", t("diagnostics.executions.attributeLabels.githubRepo")],
+    ["github.number", t("diagnostics.executions.attributeLabels.githubNumber")],
+    ["github.kind", t("diagnostics.executions.attributeLabels.githubKind")],
+    ["github.url", t("diagnostics.executions.attributeLabels.githubUrl")],
+    ["service_run_id", t("diagnostics.executions.attributeLabels.serviceRun")],
+    ["slack.channel", t("diagnostics.executions.attributeLabels.slackChannel")],
+    ["slack.thread_ts", t("diagnostics.executions.attributeLabels.slackThread")],
+    ["slack.ts", t("diagnostics.executions.attributeLabels.slackMessage")],
+  ].flatMap(([key, label]) => {
+    const value = attributes[key];
+    return typeof value === "string" && value ? [[label, value]] : [];
+  });
+}
+
+export function traceSourceLabel(t: TFunction, source: string): string {
+  return t(`diagnostics.executions.sources.${source}`, { defaultValue: source });
+}
+
+export type AttrFilter = { key: string; value: string; label: string };
+
+type TraceSearch = { query: string; attrFilter: AttrFilter | null };
+
+// Derive the GitHub ticket/PR chip from a trace's attributes. Prefers the URL
+// (globally unique) for exact filtering; falls back to the bare number.
+export function ticketChipInfo(
+  attributes: Record<string, unknown>,
+): { label: string; key: string; value: string; url: string } | null {
+  const number = typeof attributes["github.number"] === "string" ? attributes["github.number"] : "";
+  const url = typeof attributes["github.url"] === "string" ? attributes["github.url"] : "";
+  if (!number && !url) {
+    return null;
+  }
+  const prefix = attributes["github.kind"] === "pull_request" ? "PR #" : "#";
+  const label = number ? `${prefix}${number}` : prefix.trim();
+  return url
+    ? { label, key: "github.url", value: url, url }
+    : { label, key: "github.number", value: number, url: "" };
+}
+
+// Turn a ticket-lookup input into an exact structured filter. Accepts a GitHub
+// issue/PR URL, "owner/repo#42", "#42" or a bare "42" — never a fuzzy match.
+export function parseTicketQuery(input: string): AttrFilter | null {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const ticketPrefixMatch = trimmed.match(/^ticket:(\d+)$/i);
+  if (ticketPrefixMatch) {
+    return {
+      key: "github.number",
+      value: ticketPrefixMatch[1],
+      label: `#${ticketPrefixMatch[1]}`,
+    };
+  }
+  const urlMatch = trimmed.match(/^https?:\/\/\S+\/(?:issues|pull)\/(\d+)\b/);
+  if (urlMatch) {
+    return {
+      key: "github.url",
+      value: trimmed.replace(/[#?].*$/, ""),
+      label: `#${urlMatch[1]}`,
+    };
+  }
+  const refMatch = trimmed.match(/^(?:[\w.-]+\/[\w.-]+)?#?(\d+)$/);
+  if (refMatch) {
+    return { key: "github.number", value: refMatch[1], label: `#${refMatch[1]}` };
+  }
+  return null;
+}
+
+export function parseTraceSearch(input: string): TraceSearch {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return { query: "", attrFilter: null };
+  }
+  const tokens = trimmed.split(/\s+/);
+  const ticketIndex = tokens.findIndex((token) => {
+    const parsed = parseTicketQuery(token);
+    return parsed && isTicketSearchToken(token, tokens.length === 1);
+  });
+  if (ticketIndex < 0) {
+    return { query: trimmed, attrFilter: null };
+  }
+  return {
+    query: tokens.filter((_, index) => index !== ticketIndex).join(" "),
+    attrFilter: parseTicketQuery(tokens[ticketIndex]),
+  };
+}
+
+function isTicketSearchToken(token: string, singleToken: boolean): boolean {
+  return (
+    /^https?:\/\//i.test(token) ||
+    /^ticket:/i.test(token) ||
+    token.includes("#") ||
+    (singleToken && /^\d+$/.test(token))
+  );
+}
+
+async function openExternal(url: string): Promise<void> {
+  if (!url) {
+    return;
+  }
+  if (isTauriRuntime()) {
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+// Surface the most useful one-line summary per record: log message, prompt
+// description, or — for events — the payload detail (e.g. a failure reason)
+// falling back to the raw event type.
+export function recordDisplayMessage(record: TraceRecord): string {
+  if (record.kind === "log") {
+    return record.message;
+  }
+  if (record.kind === "prompt_trace") {
+    return record.message || record.type;
+  }
+  const payload = record.payload ?? {};
+  for (const key of ["message", "error", "code", "error_type"]) {
+    const value = payload[key];
+    if (typeof value === "string" && value) {
+      return value;
+    }
+  }
+  return record.type;
+}
+
+export function shortTraceId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;
+}
+
+export function traceDuration(summary: { started_at: string; updated_at: string }): string {
+  const start = Date.parse(summary.started_at);
+  const end = Date.parse(summary.updated_at);
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
+    return "—";
+  }
+  const ms = end - start;
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function traceStatusColor(status: string): string {
+  if (status === "success") {
+    return "green";
+  }
+  if (status === "failed") {
+    return "red";
+  }
+  if (status === "running") {
+    return "blue";
+  }
+  return "gray";
+}
+
+export function recordBadgeColor(record: TraceRecord): string {
+  if (record.kind === "prompt_trace") {
+    return "violet";
+  }
+  if (record.kind === "log") {
+    return logBadgeColor(record.level);
+  }
+  return eventBadgeColor(record.type);
+}
+
+export function recordBadgeLabel(t: TFunction, record: TraceRecord): string {
+  if (record.kind === "prompt_trace") {
+    return record.type || t("diagnostics.executions.kinds.prompt_trace");
+  }
+  if (record.kind === "log") {
+    return record.level || "LOG";
+  }
+  return eventTypeLabel(t, record.type);
 }
 
 function ServiceRuntimeSection({
@@ -760,6 +1528,13 @@ function ServiceRuntimeSection({
           <FragmentRow key={label} label={label} value={value || t("overview.unknown")} />
         ))}
       </dl>
+      {(unit?.events_auth_failed_count ?? 0) > 0 ? (
+        <Alert color="red" title={t("overview.eventsCard.authFailedTitle")}>
+          {t("overview.eventsCard.authFailedBody", {
+            persons: (unit?.events_auth_failed_persons ?? []).join(", ") || t("overview.unknown"),
+          })}
+        </Alert>
+      ) : null}
       {isStopTimeoutPending(unit) ? (
         <Text c="dimmed" size="sm">
           {t("overview.stopDelayHint")}
@@ -767,6 +1542,52 @@ function ServiceRuntimeSection({
       ) : unit?.error ? (
         <Alert color="red" title={t("overview.runtimeError")}>
           {unit.error}
+        </Alert>
+      ) : null}
+    </div>
+  );
+}
+
+function RuntimeDebugSettings() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const runtimeDebug = useQuery({
+    queryKey: ["runtime-debug"],
+    queryFn: getRuntimeDebug,
+    refetchInterval: 5000,
+  });
+  const runtimeDebugMutation = useMutation({
+    mutationFn: (enabled: boolean) => updateRuntimeDebug({ enabled }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["runtime-debug"], data);
+      queryClient.invalidateQueries({ queryKey: ["runtime-debug"] });
+    },
+  });
+  const enabled = Boolean(runtimeDebug.data?.enabled);
+  return (
+    <div className="trace-runtime-settings">
+      <Group justify="space-between" align="center">
+        <div>
+          <Text fw={700} size="sm">
+            {t("overview.runtimeDebug.title")}
+          </Text>
+          <Text c="dimmed" size="xs">
+            {t("overview.runtimeDebug.status", {
+              logLevel: runtimeDebug.data?.log_level ?? "-",
+              agnoDebug: runtimeDebug.data?.agno_debug ? "true" : "false",
+            })}
+          </Text>
+        </div>
+        <Switch
+          checked={enabled}
+          disabled={runtimeDebugMutation.isPending || runtimeDebug.isLoading}
+          label={enabled ? t("overview.runtimeDebug.enabled") : t("overview.runtimeDebug.disabled")}
+          onChange={(event) => runtimeDebugMutation.mutate(event.currentTarget.checked)}
+        />
+      </Group>
+      {runtimeDebugMutation.error ? (
+        <Alert color="red" title={t("overview.runtimeDebug.saveError")}>
+          {runtimeDebugMutation.error.message}
         </Alert>
       ) : null}
     </div>
@@ -1137,16 +1958,6 @@ export function isStopTimeoutPending(unit: RuntimeUnitStatus | undefined) {
   );
 }
 
-function StreamBadge({ status }: { status: StreamStatus }) {
-  const { t } = useTranslation();
-  const color = status === "connected" ? "teal" : status === "error" ? "red" : "gray";
-  return (
-    <Badge color={color} ml={6} size="xs" variant="light">
-      {t(`overview.streamStates.${status}`)}
-    </Badge>
-  );
-}
-
 function ScenarioDiagnosticsSummary({
   checks,
   error,
@@ -1363,53 +2174,28 @@ export function decodeTraceText(value: string) {
 }
 
 function formatDateTime(value: string | null | undefined) {
-  if (!value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) {
     return "-";
   }
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "short",
     timeStyle: "medium",
-  }).format(new Date(value));
+  }).format(date);
 }
 
-function formatTime(value: string) {
+function formatTime(value: string | null | undefined) {
+  // Guard invalid/empty values: Intl.DateTimeFormat.format(new Date("")) throws
+  // "Invalid time value", which would crash the whole React tree.
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    return "";
+  }
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-  }).format(new Date(value));
-}
-
-export function matchesFeedFilter(event: RuntimeEvent, filter: string) {
-  if (filter === "all") {
-    return true;
-  }
-  if (filter === "error") {
-    return event.type.endsWith(".failed") || event.type.includes("error");
-  }
-  if (filter === "command") {
-    return event.type.startsWith("command.");
-  }
-  if (filter === "scheduler") {
-    return event.type.startsWith("scheduler.");
-  }
-  if (filter === "events") {
-    return event.type.startsWith("events.");
-  }
-  return true;
-}
-
-export function matchesLogFilter(log: RuntimeLog, filter: string) {
-  if (filter === "all") {
-    return true;
-  }
-  if (filter === "error") {
-    return ["ERROR", "CRITICAL", "WARNING"].includes(log.level.toUpperCase());
-  }
-  if (filter === "command") {
-    return Boolean(log.request_id);
-  }
-  return log.message.toLowerCase().includes(filter);
+  }).format(date);
 }
 
 export function eventTypeLabel(t: TFunction, type: string) {
@@ -1449,35 +2235,6 @@ export function logBadgeColor(level: string) {
     return "orange";
   }
   return "gray";
-}
-
-export function formatRuntimeEvent(t: TFunction, event: RuntimeEvent): string {
-  const { payload } = event;
-  if (typeof payload.message === "string") {
-    return payload.message;
-  }
-  if (typeof payload.command === "string") {
-    return t("overview.eventSummaries.command", { command: payload.command });
-  }
-  if (typeof payload.error === "string") {
-    return payload.error;
-  }
-  if (event.type === "scheduler.running") {
-    return t("overview.eventSummaries.schedulerRunning");
-  }
-  if (event.type === "scheduler.stopped") {
-    return t("overview.eventSummaries.schedulerStopped");
-  }
-  if (event.type === "events.running") {
-    return t("overview.eventSummaries.eventsRunning");
-  }
-  if (event.type === "events.stopped") {
-    return t("overview.eventSummaries.eventsStopped");
-  }
-  if (event.type.endsWith(".failed")) {
-    return t("overview.eventSummaries.failed");
-  }
-  return event.type;
 }
 
 function isTauriRuntime() {
@@ -1528,9 +2285,15 @@ function CommandsPage() {
   const hasProjectConfig = Boolean(
     config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
   );
-  const [mode, setMode] = useState("catalog");
+  const [initialHistory] = useState(loadCustomCommandHistory);
+  const restoreCustom = initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
+  const [mode, setMode] = useState(restoreCustom ? "custom" : "catalog");
   const [selectedCommand, setSelectedCommand] = useState("");
-  const [customCommand, setCustomCommand] = useState("");
+  const [customCommand, setCustomCommand] = useState(
+    restoreCustom ? initialHistory.commands[0] : "",
+  );
+  const [customHistory, setCustomHistory] = useState<string[]>(initialHistory.commands);
+  const [lastRunWasCustom, setLastRunWasCustom] = useState(initialHistory.lastRunWasCustom);
   const [rawArgs, setRawArgs] = useState("");
   const [argValues, setArgValues] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
@@ -1540,7 +2303,8 @@ function CommandsPage() {
   const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([]);
   const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLog[]>([]);
   const [history, setHistory] = useState<CommandRunRecord[]>([]);
-  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<string | null>("events");
   const commandOptions = useQuery({
     queryKey: ["command-options", person],
     queryFn: () => getCommandOptions(person || undefined),
@@ -1601,13 +2365,20 @@ function CommandsPage() {
         cwd: cwd.trim() || undefined,
       }),
     onMutate: () => {
-      setActiveRequestId(null);
+      setActiveTraceId(null);
+      setActiveTab("events");
+      const ranCustom = mode === "custom";
+      setLastRunWasCustom(ranCustom);
+      if (ranCustom) {
+        setCustomHistory((current) => pushCustomCommand(current, command));
+      }
     },
     onSuccess: (response) => {
-      setActiveRequestId(response.request_id);
+      setActiveTraceId(response.trace_id);
+      setActiveTab("output");
       setHistory((current) =>
         upsertCommandRecord(current, {
-          requestId: response.request_id,
+          traceId: response.trace_id,
           person: effectivePerson ?? "",
           command,
           startedAt: new Date().toISOString(),
@@ -1617,11 +2388,12 @@ function CommandsPage() {
       );
     },
     onError: (error) => {
-      const requestId = activeRequestId ?? `local-${Date.now()}`;
-      setActiveRequestId(requestId);
+      const traceId = activeTraceId ?? `local-${Date.now()}`;
+      setActiveTraceId(traceId);
+      setActiveTab("output");
       setHistory((current) =>
         upsertCommandRecord(current, {
-          requestId,
+          traceId,
           person: effectivePerson || "",
           command,
           startedAt: new Date().toISOString(),
@@ -1636,19 +2408,23 @@ function CommandsPage() {
   const canRun = !runBusy && !runDisabled && !commandBlocked;
 
   useEffect(() => {
+    saveCustomCommandHistory({ commands: customHistory, lastRunWasCustom });
+  }, [customHistory, lastRunWasCustom]);
+
+  useEffect(() => {
     const stopEvents = subscribeEvents((event) => {
       if (!event.type.startsWith("command.")) {
         return;
       }
       setRuntimeEvents((current) => [event, ...current].slice(0, 80));
-      if (!event.request_id) {
+      if (!event.trace_id) {
         return;
       }
       if (event.type === "command.started") {
-        setActiveRequestId(event.request_id);
+        setActiveTraceId(event.trace_id);
         setHistory((current) =>
           upsertCommandRecord(current, {
-            requestId: event.request_id ?? "",
+            traceId: event.trace_id ?? "",
             person: stringPayload(event.payload.person),
             command: stringPayload(event.payload.command),
             startedAt: event.timestamp,
@@ -1659,7 +2435,7 @@ function CommandsPage() {
       if (event.type === "command.failed") {
         setHistory((current) =>
           upsertCommandRecord(current, {
-            requestId: event.request_id ?? "",
+            traceId: event.trace_id ?? "",
             person: stringPayload(event.payload.person),
             command: stringPayload(event.payload.command),
             startedAt: event.timestamp,
@@ -1671,7 +2447,7 @@ function CommandsPage() {
       if (event.type === "command.finished") {
         setHistory((current) =>
           upsertCommandRecord(current, {
-            requestId: event.request_id ?? "",
+            traceId: event.trace_id ?? "",
             person: stringPayload(event.payload.person),
             command: stringPayload(event.payload.command),
             startedAt: event.timestamp,
@@ -1680,8 +2456,13 @@ function CommandsPage() {
         );
       }
     });
+    // Logs flow on a single path now (no command.log events); collect them so
+    // the events tab can show the run's logs inline, scoped by trace id.
     const stopLogs = subscribeLogs((log) => {
-      setRuntimeLogs((current) => [log, ...current].slice(0, 80));
+      if (!log.trace_id) {
+        return;
+      }
+      setRuntimeLogs((current) => [log, ...current].slice(0, 200));
     });
     return () => {
       stopEvents();
@@ -1690,20 +2471,13 @@ function CommandsPage() {
   }, [t]);
 
   const selectedRecord = useMemo(
-    () => history.find((record) => record.requestId === activeRequestId) ?? history[0] ?? null,
-    [activeRequestId, history],
+    () => history.find((record) => record.traceId === activeTraceId) ?? history[0] ?? null,
+    [activeTraceId, history],
   );
-  const visibleRequestId = selectedRecord?.requestId ?? activeRequestId;
-  const commandEvents = useMemo(
-    () =>
-      runtimeEvents.filter(
-        (event) => event.type.startsWith("command.") && event.request_id === visibleRequestId,
-      ),
-    [runtimeEvents, visibleRequestId],
-  );
-  const commandLogs = useMemo(
-    () => runtimeLogs.filter((log) => log.request_id === visibleRequestId),
-    [runtimeLogs, visibleRequestId],
+  const visibleTraceId = selectedRecord?.traceId ?? activeTraceId;
+  const commandTimeline = useMemo(
+    () => buildCommandTimeline(runtimeEvents, runtimeLogs, visibleTraceId),
+    [runtimeEvents, runtimeLogs, visibleTraceId],
   );
 
   return (
@@ -1802,10 +2576,18 @@ function CommandsPage() {
                       }}
                     />
                   ) : (
-                    <TextInput
+                    <Autocomplete
                       aria-label={t("commands.command")}
+                      placeholder={t("commands.customCommandPlaceholder")}
+                      description={
+                        customHistory.length ? t("commands.customCommandHistoryHint") : undefined
+                      }
+                      data={customHistory}
                       value={customCommand}
-                      onChange={(event) => setCustomCommand(event.currentTarget.value)}
+                      onChange={setCustomCommand}
+                      // Always show the full history (newest first) instead of
+                      // narrowing it to entries matching the current input.
+                      filter={({ options }) => options}
                     />
                   )}
                   {selectedOption && mode === "catalog" ? (
@@ -1939,15 +2721,16 @@ function CommandsPage() {
                     <Text fw={700}>{t("commands.currentRun")}</Text>
                     <Text c="dimmed" size="sm">
                       {selectedRecord
-                        ? t("commands.currentRunBody", { requestId: selectedRecord.requestId })
+                        ? t("commands.currentRunBody", { traceId: selectedRecord.traceId })
                         : t("commands.noRunSelected")}
                     </Text>
                   </div>
                   {selectedRecord ? (
                     <CommandRunDetails
                       record={selectedRecord}
-                      events={commandEvents}
-                      logs={commandLogs}
+                      items={commandTimeline}
+                      activeTab={activeTab}
+                      onTabChange={setActiveTab}
                     />
                   ) : (
                     <div className="empty-row">{t("commands.noRunsYet")}</div>
@@ -1958,6 +2741,7 @@ function CommandsPage() {
           </div>
 
           <PromptTraceOutputSettings />
+          <RuntimeDebugSettings />
         </Stack>
       </Card>
     </Stack>
@@ -1965,7 +2749,7 @@ function CommandsPage() {
 }
 
 export type CommandRunRecord = {
-  requestId: string;
+  traceId: string;
   person: string;
   command: string;
   startedAt: string;
@@ -1974,14 +2758,94 @@ export type CommandRunRecord = {
   error?: string;
 };
 
+export function commandOutputText(record: CommandRunRecord): string {
+  if (record.status === "failed") {
+    const detail = record.error || JSON.stringify({ trace_id: record.traceId }, null, 2);
+    return record.output?.trim() ? `${detail}\n---\n${record.output}` : detail;
+  }
+  return record.output ?? "";
+}
+
+export const CUSTOM_COMMAND_HISTORY_KEY = "guildbotics.commands.customHistory";
+const CUSTOM_COMMAND_HISTORY_LIMIT = 30;
+
+export type CustomCommandHistory = {
+  commands: string[];
+  lastRunWasCustom: boolean;
+};
+
+// Keep a newest-first command list well-formed: drop non-strings/blanks, trim,
+// de-duplicate (first occurrence wins), and cap at the history limit. Shared by
+// both the in-memory push and the persisted load so stored values cannot grow
+// unbounded or contain blank entries.
+function normalizeCustomCommands(values: unknown, limit = CUSTOM_COMMAND_HISTORY_LIMIT): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of values) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    result.push(trimmed);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+// Newest-first history of free-input commands: a re-run moves the existing entry
+// to the top instead of duplicating it.
+export function pushCustomCommand(
+  commands: string[],
+  command: string,
+  limit = CUSTOM_COMMAND_HISTORY_LIMIT,
+): string[] {
+  return normalizeCustomCommands([command, ...commands], limit);
+}
+
+export function loadCustomCommandHistory(): CustomCommandHistory {
+  const empty: CustomCommandHistory = { commands: [], lastRunWasCustom: false };
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_COMMAND_HISTORY_KEY);
+    if (!raw) {
+      return empty;
+    }
+    const parsed = JSON.parse(raw) as Partial<CustomCommandHistory>;
+    return {
+      commands: normalizeCustomCommands(parsed.commands),
+      lastRunWasCustom: Boolean(parsed.lastRunWasCustom),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+export function saveCustomCommandHistory(value: CustomCommandHistory): void {
+  try {
+    window.localStorage.setItem(CUSTOM_COMMAND_HISTORY_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore persistence failures (e.g. storage disabled or full).
+  }
+}
+
 function CommandRunDetails({
   record,
-  events,
-  logs,
+  items,
+  activeTab,
+  onTabChange,
 }: {
   record: CommandRunRecord;
-  events: RuntimeEvent[];
-  logs: RuntimeLog[];
+  items: CommandTimelineItem[];
+  activeTab: string | null;
+  onTabChange: (value: string | null) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -1993,25 +2857,17 @@ function CommandRunDetails({
         <span>{record.command}</span>
         <span>{record.person || t("commands.defaultPerson")}</span>
       </div>
-      <Tabs defaultValue="output">
+      <Tabs value={activeTab} onChange={onTabChange}>
         <Tabs.List>
-          <Tabs.Tab value="output">{t("commands.output")}</Tabs.Tab>
           <Tabs.Tab value="events">{t("commands.events")}</Tabs.Tab>
-          <Tabs.Tab value="logs">{t("commands.logs")}</Tabs.Tab>
-          <Tabs.Tab value="details">{t("commands.details")}</Tabs.Tab>
+          <Tabs.Tab value="output">{t("commands.output")}</Tabs.Tab>
         </Tabs.List>
-        <Tabs.Panel value="output" pt="md">
-          <pre className="command-output">{record.output || t("commands.noOutput")}</pre>
-        </Tabs.Panel>
         <Tabs.Panel value="events" pt="md">
-          <CommandEventList events={events} />
+          <CommandEventList items={items} />
         </Tabs.Panel>
-        <Tabs.Panel value="logs" pt="md">
-          <CommandLogList logs={logs} />
-        </Tabs.Panel>
-        <Tabs.Panel value="details" pt="md">
+        <Tabs.Panel value="output" pt="md">
           <pre className="command-output">
-            {record.error || JSON.stringify({ request_id: record.requestId }, null, 2)}
+            {commandOutputText(record) || t("commands.noOutput")}
           </pre>
         </Tabs.Panel>
       </Tabs>
@@ -2019,38 +2875,54 @@ function CommandRunDetails({
   );
 }
 
-function CommandEventList({ events }: { events: RuntimeEvent[] }) {
+function CommandEventList({ items }: { items: CommandTimelineItem[] }) {
   const { t } = useTranslation();
-  if (!events.length) {
+  if (!items.length) {
     return <div className="empty-row">{t("commands.noRelatedEvents")}</div>;
   }
   return (
     <div className="event-list">
-      {events.map((event, index) => (
-        <div className="event-row" key={`${event.timestamp}-${event.type}-${index}`}>
-          <span>{event.type.replace("command.", "")}</span>
-          <p>{formatCommandEvent(event)}</p>
+      {items.map((item, index) => (
+        <div className="event-row" key={`${item.timestamp}-${item.label}-${index}`}>
+          <span>{item.label}</span>
+          <p>{item.message}</p>
         </div>
       ))}
     </div>
   );
 }
 
-function CommandLogList({ logs }: { logs: RuntimeLog[] }) {
-  const { t } = useTranslation();
-  if (!logs.length) {
-    return <div className="empty-row">{t("commands.noRelatedLogs")}</div>;
+export type CommandTimelineItem = {
+  timestamp: string;
+  label: string;
+  message: string;
+};
+
+// Merge a run's command.* state-change events with its logs (both scoped by
+// trace id) into one newest-first timeline for the Commands "events" tab.
+export function buildCommandTimeline(
+  events: RuntimeEvent[],
+  logs: RuntimeLog[],
+  traceId: string | null,
+): CommandTimelineItem[] {
+  if (!traceId) {
+    return [];
   }
-  return (
-    <div className="event-list">
-      {logs.map((log, index) => (
-        <div className="event-row" key={`${log.timestamp}-${log.level}-${index}`}>
-          <span>{log.level}</span>
-          <p>{log.message}</p>
-        </div>
-      ))}
-    </div>
-  );
+  const eventItems: CommandTimelineItem[] = events
+    .filter((event) => event.type.startsWith("command.") && event.trace_id === traceId)
+    .map((event) => ({
+      timestamp: event.timestamp,
+      label: event.type.replace("command.", ""),
+      message: formatCommandEvent(event),
+    }));
+  const logItems: CommandTimelineItem[] = logs
+    .filter((log) => log.trace_id === traceId)
+    .map((log) => ({
+      timestamp: log.timestamp,
+      label: log.level,
+      message: log.message,
+    }));
+  return [...eventItems, ...logItems].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 }
 
 export function buildCommandArgs(
@@ -2095,7 +2967,7 @@ export function upsertCommandRecord(
   records: CommandRunRecord[],
   next: CommandRunRecord,
 ): CommandRunRecord[] {
-  const existing = records.find((record) => record.requestId === next.requestId);
+  const existing = records.find((record) => record.traceId === next.traceId);
   const merged = existing
     ? {
         ...existing,
@@ -2106,7 +2978,7 @@ export function upsertCommandRecord(
         person: next.person || existing.person,
       }
     : next;
-  return [merged, ...records.filter((record) => record.requestId !== next.requestId)]
+  return [merged, ...records.filter((record) => record.traceId !== next.traceId)]
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     .slice(0, 20);
 }
@@ -2128,7 +3000,7 @@ function stringPayload(value: unknown): string {
 export function commandFailureDetail(event: RuntimeEvent): string {
   return JSON.stringify(
     {
-      request_id: event.request_id,
+      trace_id: event.trace_id,
       type: event.type,
       payload: event.payload,
     },
@@ -2145,5 +3017,5 @@ export function formatCommandEvent(event: RuntimeEvent): string {
   if (typeof payload.command === "string") {
     return payload.command;
   }
-  return event.request_id ?? event.type;
+  return event.trace_id ?? event.type;
 }

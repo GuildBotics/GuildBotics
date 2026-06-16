@@ -1,13 +1,7 @@
 import logging
-import sys
 from pathlib import Path
 
 import git
-
-# Ensure repository root is importable when running pytest directly
-repo_root = str(Path(__file__).resolve().parents[3])
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
 
 from guildbotics.utils.git_tool import GitTool
 
@@ -82,7 +76,7 @@ def _init_git_tool(tmp_path: Path) -> tuple[GitTool, Path, Path]:
 
 
 def test_init_clones_and_configures_user(tmp_path: Path):
-    tool, workspace, _ = _init_git_tool(tmp_path)
+    tool, _, _ = _init_git_tool(tmp_path)
 
     # Repository should be cloned into workspace/<repo_name>
     assert tool.repo_path.exists()
@@ -92,6 +86,29 @@ def test_init_clones_and_configures_user(tmp_path: Path):
     with tool.repo.config_reader(config_level="repository") as cr:
         assert cr.get_value("user", "name") == "Tester"
         assert cr.get_value("user", "email") == "tester@example.com"
+
+
+def test_init_with_auth_token_uses_temporary_askpass(tmp_path: Path):
+    remote = _setup_bare_remote_with_main(tmp_path)
+    workspace = tmp_path / "workspace"
+    tool = GitTool(
+        workspace=workspace,
+        repo_url=str(remote),
+        logger=_logger(),
+        user_name="Tester",
+        user_email="tester@example.com",
+        default_branch="main",
+        auth_token="secret-token",
+    )
+
+    assert tool.repo_path.exists()
+    assert tool._askpass_path is not None
+    assert tool._askpass_path.exists()
+
+    askpass_path = tool._askpass_path
+    tool.close()
+
+    assert not askpass_path.exists()
 
 
 def test_checkout_branch_creates_new_branch_from_default(tmp_path: Path):
@@ -104,36 +121,24 @@ def test_checkout_branch_creates_new_branch_from_default(tmp_path: Path):
     assert tool.repo.head.commit.hexsha == base_commit
 
 
-def test_commit_changes_commits_and_pushes(tmp_path: Path):
+def test_checkout_branch_uses_remote_branch_when_available(tmp_path: Path):
     tool, _, remote = _init_git_tool(tmp_path)
 
-    # Create a new file to commit
-    new_file = tool.repo_path / "new.txt"
-    new_file.write_text("content\n", encoding="utf-8")
+    seed = tmp_path / "seed"
+    seed_repo = git.Repo.clone_from(str(remote), seed)
+    with seed_repo.config_writer() as cw:
+        cw.set_value("user", "name", "Seed User")
+        cw.set_value("user", "email", "seed@example.com")
+    seed_repo.git.checkout("-b", "feature/remote-only")
+    (seed / "remote.txt").write_text("remote branch content\n", encoding="utf-8")
+    seed_repo.git.add(A=True)
+    remote_commit = seed_repo.index.commit("remote branch commit").hexsha
+    seed_repo.git.push("--set-upstream", "origin", "feature/remote-only")
 
-    sha = tool.commit_changes("add new file")
-    assert isinstance(sha, str) and len(sha) > 0
+    tool.checkout_branch("feature/remote-only")
 
-    # Verify the bare remote received the new commit on 'main'
-    remote_repo = git.Repo(remote)
-    assert remote_repo.commit("main").hexsha == sha
-
-
-def test_commit_changes_noop_when_clean(tmp_path: Path):
-    tool, _, _ = _init_git_tool(tmp_path)
-
-    sha = tool.commit_changes("no changes")
-    assert sha is None
-
-
-def test_get_diff_includes_status_and_diff(tmp_path: Path):
-    tool, _, _ = _init_git_tool(tmp_path)
-
-    # Modify tracked file without staging
-    readme = tool.repo_path / "README.md"
-    readme.write_text(readme.read_text(encoding="utf-8") + "more\n", encoding="utf-8")
-
-    diff_output = tool.get_diff()
-    # Should mention the file in status and include a diff header
-    assert "README.md" in diff_output
-    assert "diff --git" in diff_output or " M " in diff_output
+    assert tool.repo.active_branch.name == "feature/remote-only"
+    assert tool.repo.head.commit.hexsha == remote_commit
+    assert (tool.repo_path / "remote.txt").read_text(encoding="utf-8") == (
+        "remote branch content\n"
+    )

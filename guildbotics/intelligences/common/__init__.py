@@ -406,73 +406,6 @@ class IssueTreeResponse(BaseModel):
         )
 
 
-class NextTaskItem(BaseModel):
-    """
-    Represents a single next task identified by the identify/next_tasks intelligence.
-
-    Attributes:
-        title (str): The title or brief description of the task.
-        description (str): A detailed description of the task.
-        role (str): The role that should be involved in this task.
-        priority (int): Priority level of the task. Smaller values indicate higher priority.
-        inputs (list[str]): Information required to start this task.
-        output (str): Single expected output or result of the task.
-        mode (str): The work style for producing the output.
-    """
-
-    title: str = Field(..., description="Title or brief description of the task.")
-    description: str = Field(..., description="A detailed description of the task.")
-    role: str = Field(..., description="The role that should be involved in this task.")
-    priority: int = Field(
-        ...,
-        description="Priority level of the task. Smaller values indicate higher priority.",
-    )
-    inputs: list[str] = Field(
-        default_factory=list, description="Information required to start this task."
-    )
-    output: str = Field(
-        description="Single expected output or result of the task.",
-    )
-    mode: str = Field(
-        description=("The work style for producing the output."),
-    )
-
-    def to_task(self) -> Task:
-        description = self.description
-        if self.inputs:
-            description += "\n\n**Inputs:**\n" + "\n".join(
-                f"- {input_}" for input_ in self.inputs
-            )
-        if self.output:
-            description += f"\n\n**Output:**\n- {self.output}"
-        return Task(
-            title=self.title,
-            description=description,
-            role=self.role,
-            priority=self.priority,
-            mode=self.mode,
-        )
-
-
-class NextTasksResponse(BaseModel):
-    """
-    Response model for the identify/next_tasks intelligence.
-
-    Attributes:
-        tasks (list[NextTaskItem]): A list of next tasks with their explanations.
-    """
-
-    tasks: list[NextTaskItem] = Field(..., description="List of identified next tasks.")
-
-    def to_labels(self, indent: int = 2) -> Labels:
-        """Convert the list of NextTaskItem objects to a Labels object."""
-        if not self.tasks:
-            return Labels([])
-
-        labels = {task.title: task.description for task in self.tasks}
-        return Labels(labels, indent=indent)
-
-
 class FileInfoResponse(BaseModel):
     file_name: str = Field(
         ...,
@@ -683,7 +616,7 @@ class ImprovementSuggestion(BaseModel):
         return Task(
             title=self.proposal,
             description=description,
-            status=Task.RETROSPECTIVE,
+            status=Task.READY,
         )
 
 

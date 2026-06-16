@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Generator
 from copy import deepcopy
 from pathlib import Path
-from typing import Generator
 
 import pytest
 import yaml  # type: ignore
@@ -28,7 +28,7 @@ def isolate_i18n_state() -> Generator[None, None, None]:
     """
     import i18n  # type: ignore
 
-    settings_backup = deepcopy(getattr(i18n, "config").settings)
+    settings_backup = deepcopy(i18n.config.settings)
     load_path_backup = list(i18n.load_path)
 
     try:
@@ -82,10 +82,10 @@ def test_all_t_call_sites_produce_translated_strings() -> None:
     missing_entries = sorted(key for key in keys if key not in placeholder_map)
     assert not missing_entries, f"Missing locale entries for keys: {missing_entries}"
 
-    translation_sanity_check = i18n_tool.t("entities.task.available_modes.comment")
-    assert (
-        translation_sanity_check != "entities.task.available_modes.comment"
-    ), translation_sanity_check
+    translation_sanity_check = i18n_tool.t("drivers.task_scheduler.task_error")
+    assert translation_sanity_check != "drivers.task_scheduler.task_error", (
+        translation_sanity_check
+    )
     for key in sorted(keys):
         kwargs = {name: f"<{name}>" for name in placeholder_map[key]}
         value = i18n_tool.t(key, **kwargs)
@@ -189,7 +189,7 @@ def _iter_leaf_strings(
     results: list[tuple[str, str]] = []
     if isinstance(node, dict):
         for key, value in node.items():
-            results.extend(_iter_leaf_strings(value, prefix + (str(key),)))
+            results.extend(_iter_leaf_strings(value, (*prefix, str(key))))
     elif isinstance(node, str):
         results.append((".".join(prefix), node))
     return results

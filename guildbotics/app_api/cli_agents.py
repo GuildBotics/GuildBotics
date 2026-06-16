@@ -36,6 +36,7 @@ def get_cli_agent_search_path(path: str | None = None) -> str:
     home = Path.home()
     entries.extend(
         [
+            str(home / ".guildbotics/bin"),
             str(home / ".local/bin"),
             str(home / "bin"),
             str(home / ".cargo/bin"),

@@ -12,14 +12,20 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
+    AgentFieldOption,
+    AgentFieldStateResponse,
     CliAgentDetectionsResponse,
     CommandOption,
     CommandOptionsResponse,
     CommandRunRequest,
     ConfigStatus,
     DiagnosticCheck,
+    ProjectStatusOptionsRequest,
+    ProjectStatusOptionsResponse,
     PromptTraceStatus,
     PromptTraceUpdateRequest,
+    RuntimeDebugStatus,
+    RuntimeDebugUpdateRequest,
     RuntimeStatus,
     RuntimeUnitStatus,
     ScenarioDiagnosticsResponse,
@@ -35,6 +41,7 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
+from guildbotics.observability import trace_scope
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
@@ -95,6 +102,30 @@ class RuntimeStub:
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
 
+    async def fetch_project_status_options(
+        self, request: ProjectStatusOptionsRequest
+    ) -> ProjectStatusOptionsResponse:
+        self.status_options_request = request
+        return getattr(
+            self, "status_options", ProjectStatusOptionsResponse(available=False)
+        )
+
+    async def fetch_agent_field_state(
+        self, request: ProjectStatusOptionsRequest
+    ) -> AgentFieldStateResponse:
+        self.agent_field_request = request
+        return getattr(
+            self, "agent_field_state", AgentFieldStateResponse(available=False)
+        )
+
+    async def ensure_agent_field(
+        self, request: ProjectStatusOptionsRequest
+    ) -> AgentFieldStateResponse:
+        self.agent_field_ensure_request = request
+        return getattr(
+            self, "agent_field_state", AgentFieldStateResponse(available=False)
+        )
+
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
         project_file = workspace_dir / ".guildbotics/config/team/project.yml"
         config_dir = workspace_dir / ".guildbotics/config"
@@ -133,7 +164,7 @@ class RuntimeStub:
                 "Unable to locate command 'missing'.",
                 context={"command": request.command},
             )
-        return {"request_id": "stub-request", "output": f"ran {request.command}"}
+        return {"trace_id": "stub-request", "output": f"ran {request.command}"}
 
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
         return CommandOptionsResponse(
@@ -193,6 +224,26 @@ class RuntimeStub:
             trace_file_exists=False,
             event_count=0,
             events=[],
+        )
+
+    def get_runtime_debug_status(self) -> RuntimeDebugStatus:
+        return RuntimeDebugStatus(
+            enabled=False,
+            log_level="INFO",
+            agno_debug=False,
+            env_file=self.config_status.env_file,
+            env_file_exists=self.config_status.env_file.exists(),
+        )
+
+    def update_runtime_debug(
+        self, request: RuntimeDebugUpdateRequest
+    ) -> RuntimeDebugStatus:
+        return RuntimeDebugStatus(
+            enabled=request.enabled,
+            log_level="DEBUG" if request.enabled else "INFO",
+            agno_debug=request.enabled,
+            env_file=self.config_status.env_file,
+            env_file_exists=True,
         )
 
     def get_default_routines(self) -> list[str]:
@@ -593,7 +644,7 @@ def test_command_run_uses_runtime(tmp_path: Path) -> None:
 
     assert response.status_code == HTTP_OK
     assert response.json() == {
-        "request_id": "stub-request",
+        "trace_id": "stub-request",
         "output": "ran hello",
     }
 
@@ -612,18 +663,18 @@ def test_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
     assert response.json()["options"][0]["label"] == "Hello"
 
 
-def test_event_stream_replays_request_id(tmp_path: Path) -> None:
+def test_event_stream_replays_trace_id(tmp_path: Path) -> None:
     event_bus = EventBus()
     app = create_app(
         session_token="secret",
         runtime=RuntimeStub(tmp_path),
         event_bus=event_bus,
     )
-    event_bus.publish_event(
-        "command.started",
-        {"command": "hello"},
-        request_id="request-1",
-    )
+    with trace_scope("manual", trace_id="request-1"):
+        event_bus.publish_event(
+            "command.started",
+            {"command": "hello"},
+        )
 
     with (
         TestClient(app) as client,
@@ -632,7 +683,7 @@ def test_event_stream_replays_request_id(tmp_path: Path) -> None:
         event = websocket.receive_json()
 
     assert event["type"] == "command.started"
-    assert event["request_id"] == "request-1"
+    assert event["trace_id"] == "request-1"
     assert event["payload"] == {"command": "hello"}
     assert event["timestamp"]
 
@@ -877,11 +928,9 @@ def test_config_project_endpoints_read_and_update_non_destructively(
                 "llm_api_type": "gemini",
                 "cli_agent": "codex",
                 "github_enabled": True,
-                "repository_name": "GuildBotics",
                 "owner": "GuildBotics",
                 "project_id": "7",
                 "github_project_url": "https://github.com/orgs/GuildBotics/projects/7",
-                "repo_base_url": "ssh://git@github.com",
             },
         )
         assert put_response.status_code == HTTP_OK
@@ -889,10 +938,14 @@ def test_config_project_endpoints_read_and_update_non_destructively(
     updated_project = safe_load((team_dir / "project.yml").read_text())
     assert updated_project["language"] == "ja"
     assert updated_project["description"] == "Updated description"
-    assert (
-        updated_project["services"]["code_hosting_service"]["repo_base_url"]
-        == "ssh://git@github.com"
-    )
+    code_hosting = updated_project["services"]["code_hosting_service"]
+    assert code_hosting["owner"] == "GuildBotics"
+    # Clone access is always HTTPS now, so the stale repo_base_url seeded in the
+    # original file is dropped on update.
+    assert "repo_base_url" not in code_hosting
+    # ``repositories`` is no longer part of the schema; a stale entry seeded in
+    # the original file is dropped on update.
+    assert "repositories" not in updated_project
 
     env_text = env_file.read_text()
     assert "OPENAI_API_KEY=existing-openai" in env_text
@@ -1419,6 +1472,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             routine_commands: list[str],
             consecutive_error_limit: int,
             routine_interval_minutes: int,
+            service_run_id: str | None = None,
         ) -> None:
             self.shutdown_calls = 0
             self.routine_commands = routine_commands
@@ -1489,6 +1543,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
             routine_commands: list[str],
             consecutive_error_limit: int,
             routine_interval_minutes: int,
+            service_run_id: str | None = None,
         ) -> None:
             self.shutdown_timeout: float | None = None
 
@@ -1532,7 +1587,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
     class RunningEventListener:
         instances: ClassVar[list["RunningEventListener"]] = []
 
-        def __init__(self, context: object) -> None:
+        def __init__(self, context: object, service_run_id: str | None = None) -> None:
             self.alive = False
             self.stop_calls = 0
             RunningEventListener.instances.append(self)
@@ -1610,7 +1665,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
     class StuckEventListener:
         instances: ClassVar[list["StuckEventListener"]] = []
 
-        def __init__(self, context: object) -> None:
+        def __init__(self, context: object, service_run_id: str | None = None) -> None:
             self.alive = False
             StuckEventListener.instances.append(self)
 
@@ -1707,7 +1762,7 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
         "command.started",
         "command.finished",
     ]
-    assert all(event["request_id"] == response.request_id for event in events)
+    assert all(event["trace_id"] == response.trace_id for event in events)
 
 
 # --- auth coverage -------------------------------------------------------
@@ -1727,6 +1782,8 @@ PROTECTED_ENDPOINTS = [
     ("POST", "/scheduler/stop"),
     ("GET", "/prompt-trace"),
     ("PUT", "/prompt-trace"),
+    ("GET", "/runtime/debug"),
+    ("PUT", "/runtime/debug"),
     ("POST", "/verify"),
     ("POST", "/diagnostics/scenario"),
     ("GET", "/intelligences/cli-agents/detection"),
@@ -1876,6 +1933,96 @@ def test_config_project_get_reports_project_not_found(tmp_path: Path) -> None:
     assert payload["code"] == "project_not_found"
     assert "primary" in payload["context"]
     assert "home" in payload["context"]
+
+
+def test_config_project_status_options_returns_payload(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    runtime.status_options = ProjectStatusOptionsResponse(
+        available=True, statuses=["Todo", "In Progress", "Done"]
+    )
+    client = _client(runtime)
+
+    response = client.post(
+        "/config/project/status-options",
+        headers=AUTH_HEADERS,
+        json={
+            "owner": "acme",
+            "project_id": "9",
+            "github_project_url": "https://github.com/orgs/acme/projects/9",
+        },
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "available": True,
+        "statuses": ["Todo", "In Progress", "Done"],
+    }
+    assert runtime.status_options_request.owner == "acme"
+    assert runtime.status_options_request.project_id == "9"
+
+
+def test_config_project_agent_field_returns_state(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    runtime.agent_field_state = AgentFieldStateResponse(
+        available=True,
+        exists=True,
+        options=[AgentFieldOption(name="⚙bot1", description="Bot One")],
+        missing=[AgentFieldOption(name="⚙bot2", description="Bot Two")],
+    )
+    client = _client(runtime)
+
+    response = client.post(
+        "/config/project/agent-field",
+        headers=AUTH_HEADERS,
+        json={
+            "owner": "acme",
+            "project_id": "9",
+            "github_project_url": "https://github.com/orgs/acme/projects/9",
+        },
+    )
+
+    assert response.status_code == HTTP_OK
+    body = response.json()
+    assert body["available"] is True
+    assert body["exists"] is True
+    assert body["options"] == [{"name": "⚙bot1", "description": "Bot One"}]
+    assert body["missing"] == [{"name": "⚙bot2", "description": "Bot Two"}]
+    assert runtime.agent_field_request.owner == "acme"
+
+
+def test_config_project_agent_field_ensure_applies(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    runtime.agent_field_state = AgentFieldStateResponse(
+        available=True, exists=True, options=[], missing=[]
+    )
+    client = _client(runtime)
+
+    response = client.post(
+        "/config/project/agent-field/ensure",
+        headers=AUTH_HEADERS,
+        json={
+            "owner": "acme",
+            "project_id": "9",
+            "github_project_url": "https://github.com/orgs/acme/projects/9",
+        },
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["available"] is True
+    assert runtime.agent_field_ensure_request.project_id == "9"
+
+
+def test_config_project_status_options_unavailable_falls_back(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post(
+        "/config/project/status-options",
+        headers=AUTH_HEADERS,
+        json={"owner": "", "project_id": "", "github_project_url": ""},
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {"available": False, "statuses": []}
 
 
 def test_config_project_update_maps_setup_service_error(
@@ -2159,6 +2306,34 @@ def test_prompt_trace_put_rejects_out_of_range_limit(
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert response.json()["code"] == "validation_error"
+
+
+def test_runtime_debug_status_endpoint(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get("/runtime/debug", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_OK
+    body = response.json()
+    assert body["enabled"] is False
+    assert body["log_level"] == "INFO"
+    assert body["agno_debug"] is False
+
+
+def test_runtime_debug_update_endpoint(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.put(
+        "/runtime/debug",
+        headers=AUTH_HEADERS,
+        json={"enabled": True},
+    )
+
+    assert response.status_code == HTTP_OK
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["log_level"] == "DEBUG"
+    assert body["agno_debug"] is True
 
 
 # --- commands ------------------------------------------------------------

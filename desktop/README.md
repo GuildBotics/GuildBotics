@@ -1,6 +1,6 @@
 # GuildBotics Desktop (macOS)
 
-GuildBotics の macOS 向けデスクトップ GUI です。Tauri v2 + TypeScript frontend と、Python backend（Local API daemon）を sidecar として同梱します。
+GuildBotics の macOS 向けデスクトップ GUI です。Tauri v2 + TypeScript frontend と、Python backend（Local API daemon）および GuildBotics CLI を sidecar として同梱します。
 
 - 正式対応: macOS Apple Silicon (arm64)
 - v1 は手動更新前提（自動更新なし）
@@ -15,7 +15,7 @@ GuildBotics の macOS 向けデスクトップ GUI です。Tauri v2 + TypeScrip
 ### ビルド
 
 ```bash
-# Python sidecar のみ
+# Python sidecar（Local API + CLI）のみ
 scripts/desktop-build-backend.sh
 
 # Tauri / DMG のみ（事前に sidecar が必要）
@@ -25,7 +25,8 @@ scripts/desktop-build-frontend.sh
 scripts/desktop-build-all.sh
 ```
 
-`desktop-build-frontend.sh` は `desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` を使って DMG を作ります。別ターゲットを使う場合は `DESKTOP_TARGET` を指定してください。
+`desktop-build-frontend.sh` は `desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` と
+`desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin` を使って DMG を作ります。別ターゲットを使う場合は `DESKTOP_TARGET` を指定してください。
 
 ```bash
 DESKTOP_TARGET=aarch64-apple-darwin scripts/desktop-build-all.sh
@@ -56,7 +57,7 @@ GUILDBOTICS_APP_API_TOKEN=local-token \
 scripts/desktop-dev-frontend.sh
 ```
 
-`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。`desktop/src-tauri/binaries/` に開発用 sidecar が必要です（後述の「3. 開発モード」を参照）。
+`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。
 
 ---
 
@@ -162,26 +163,22 @@ PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" \
 
 リポジトリのルートで実行します。
 
-### 2.1 Python sidecar（Local API）を build する
+### 2.1 Python sidecar（Local API + CLI）を build する
 
-GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) にまとめてあります。
+GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) と [sidecar/guildbotics-cli.spec](sidecar/guildbotics-cli.spec) にまとめてあります。通常は `scripts/desktop-build-backend.sh` を使って 2 本まとめて build します。
 
 ```bash
 # リポジトリルートで実行
 uv sync --extra test --extra dev
 
-uv run --with pyinstaller python -m PyInstaller \
-  desktop/sidecar/guildbotics-app-api.spec \
-  --noconfirm --clean \
-  --distpath dist --workpath build/sidecar
+scripts/desktop-build-backend.sh
 
-# Tauri sidecar の配置規則に合わせてコピー（ターゲット triple のサフィックスが必須）
-mkdir -p desktop/src-tauri/binaries
-cp dist/guildbotics-app-api \
-  desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
+# 生成物:
+# desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
+# desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin
 ```
 
-生成される sidecar は onefile で約 200MB 強です。
+生成される Local API sidecar は onefile で約 200MB 強です。CLI sidecar は desktop app の初回起動時に managed CLI として `~/.guildbotics/bin/guildbotics` へコピーされます。
 
 > **動作確認（任意）**: 配置前に sidecar 単体を起動して health を確認できます。
 >
@@ -207,31 +204,16 @@ desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/GuildBotics_<ve
 
 （例: `GuildBotics_0.1.0_aarch64.dmg`。`<version>` は [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `version`）
 
-DMG 内の `GuildBotics.app/Contents/MacOS/` に desktop 本体と sidecar `guildbotics-app-api` が同梱されます。secrets を設定していないローカルビルドは **ad-hoc 署名（実質 unsigned）** です。署名・notarization は次節を参照。
+DMG 内の `GuildBotics.app/Contents/MacOS/` に desktop 本体、sidecar `guildbotics-app-api`、sidecar `guildbotics-cli` が同梱されます。secrets を設定していないローカルビルドは **ad-hoc 署名（実質 unsigned）** です。署名・notarization は次節を参照。
 
 ---
 
 ## 3. 開発モード（`tauri dev`）
 
-毎回 PyInstaller を build せずに開発したい場合は、sidecar の配置先に「ソースを直接実行する薄いシェルスクリプト」を置くと高速に反復できます。
-
-`desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` を以下の内容で作成し、実行権限を付与します。
-
-```sh
-#!/bin/sh
-set -eu
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)"
-cd "$REPO_ROOT"
-if command -v uv >/dev/null 2>&1; then
-  exec uv run --no-sync python -m guildbotics.app_api "$@"
-fi
-exec python3 -m guildbotics.app_api "$@"
-```
+毎回 PyInstaller を build せずに開発したい場合は、`scripts/desktop-dev-tauri.sh` を使います。このスクリプトは Tauri sidecar の配置先に「ソースを直接実行する薄いシェルスクリプト」を Local API / CLI の両方について自動生成します。
 
 ```bash
-chmod +x desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
-cd desktop && npm run tauri dev
+scripts/desktop-dev-tauri.sh
 ```
 
 > `desktop/src-tauri/binaries/` は `.gitignore` 対象です。配布物を作る前には、必ず 2.1 の手順で本物の PyInstaller バイナリへ置き換えてください。
@@ -262,6 +244,15 @@ cd desktop && npm run tauri dev
 
 - 初回起動時、アプリは同梱の sidecar（Local API）を起動します。**onefile sidecar の自己展開のため、初回は起動完了まで約 10 秒かかります**（2 回目以降は速くなります）。
 - backend が立ち上がると、設定状態（config / `.env` / storage path）が画面に表示されます。
+- 初回起動時または setup 画面表示時に、同梱 CLI と GuildBotics skill を CLI agent から参照できる場所へ配置します。
+  - `~/.guildbotics/bin/guildbotics`: managed CLI
+  - `~/.local/bin/guildbotics`: 未作成または既存の managed shim の場合だけ更新
+  - `$CODEX_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.codex/skills/guildbotics/SKILL.md`
+  - `$CLAUDE_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.claude/skills/guildbotics/SKILL.md`
+  - `$GEMINI_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.gemini/skills/guildbotics/SKILL.md`
+  - `$COPILOT_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.copilot/skills/guildbotics/SKILL.md`
+- 既存の user skill は、GuildBotics desktop が配置した未編集 skill だけを更新します。ユーザーが作成・編集した `SKILL.md` は上書きしません。
+- `設定 - LLM・CLIエージェント` では、CLI agent ごとの GuildBotics skill 状態を確認できます。ユーザー編集済みなどで最新版が自動適用されない場合は、画面上の `最新版で上書きする` ボタンから明示的に更新できます。
 
 ---
 
@@ -288,8 +279,9 @@ CI（[../.github/workflows/desktop-macos.yml](../.github/workflows/desktop-macos
 | 症状 | 原因 / 対処 |
 |---|---|
 | `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.85+ を使う（§1 参照）。 |
-| `tauri build` で sidecar が見つからない | §2.1 を実行し、`desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` が存在するか確認。 |
-| PyInstaller 実行時に `ModuleNotFoundError` | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
+| `tauri build` で sidecar が見つからない | §2.1 を実行し、`desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` と `desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin` が存在するか確認。 |
+| PyInstaller 実行時に `ModuleNotFoundError` | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) または [sidecar/guildbotics-cli.spec](sidecar/guildbotics-cli.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
 | GUI で PDF 変換（`to_pdf`）が使えない | v1 既知の制約。sidecar は `weasyprint` を同梱しない。PDF が必要な場合は native dependency を入れた CLI を使う。 |
 | 「開発元を確認できません」で起動できない | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。 |
 | 初回起動が遅い | onefile sidecar の自己展開のため。約 10 秒待つ。 |
+| `guildbotics` が PATH で古い CLI を指す | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。 |

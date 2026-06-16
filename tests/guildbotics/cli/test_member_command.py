@@ -1,0 +1,1246 @@
+import importlib
+import json
+import os
+
+from click.testing import CliRunner
+
+from guildbotics.capabilities.task_runs import TaskRunStore
+from guildbotics.entities.team import Person, Project, Team
+from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
+from guildbotics.utils.workspace_state import (
+    GUILDBOTICS_CONFIG_DIR,
+    write_active_workspace,
+)
+
+member_module = importlib.import_module("guildbotics.cli.member")
+
+
+class FakeContext:
+    def __init__(self, person):
+        self.person = person
+        self.team = Team(project=Project(name="demo"), members=[person])
+        self.logger = None
+
+
+def test_member_context_outputs_no_secret(monkeypatch):
+    person = Person(
+        person_id="aiko",
+        name="Aiko",
+        person_type="human",
+        profile={"bio": "developer"},
+        account_info={"github_username": "aiko-gh"},
+    )
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member, ["context", "--person", "aiko", "--format", "json"]
+    )
+
+    assert result.exit_code == 0
+    assert '"person_id": "aiko"' in result.output
+    assert '"credential_status": "unchecked"' in result.output
+    assert "token" not in result.output.lower()
+
+
+def test_member_context_markdown_highlights_communication_style(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def context(self, check_credentials=False):
+            assert check_credentials is False
+            return {
+                "person_id": "aiko",
+                "communication_style": {
+                    "active_member_instruction": "Treat Aiko as active.",
+                    "interactive_replies": "Reply as Aiko.",
+                    "github_comments": "Comment as Aiko.",
+                    "neutral_documents": "Use neutral documents.",
+                    "machine_outputs": "Keep JSON factual.",
+                },
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(member_module.member, ["context", "--person", "aiko"])
+
+    assert result.exit_code == 0
+    assert "## Communication Style" in result.output
+    assert "Treat Aiko as active." in result.output
+    assert "Keep JSON factual." in result.output
+
+
+def test_member_context_uses_active_workspace(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
+    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".env").write_text("WORKSPACE_MARKER=loaded\n", encoding="utf-8")
+    write_active_workspace(workspace)
+
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
+            workspace.resolve() / ".guildbotics" / "config"
+        )
+        assert os.environ[GUILDBOTICS_ENV_FILE] == str(workspace.resolve() / ".env")
+        assert os.environ["WORKSPACE_MARKER"] == "loaded"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member, ["context", "--person", "aiko", "--format", "json"]
+    )
+
+    assert result.exit_code == 0
+
+
+def test_member_context_workspace_option_overrides_active_workspace(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
+    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
+    active_workspace = tmp_path / "active"
+    active_workspace.mkdir()
+    explicit_workspace = tmp_path / "explicit"
+    explicit_workspace.mkdir()
+    write_active_workspace(active_workspace)
+
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
+            explicit_workspace.resolve() / ".guildbotics" / "config"
+        )
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "--workspace",
+            str(explicit_workspace),
+            "context",
+            "--person",
+            "aiko",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+
+def test_member_context_check_credentials_fail_closed(monkeypatch):
+    person = Person(
+        person_id="aiko",
+        name="Aiko",
+        person_type="human",
+        account_info={"github_username": "aiko-gh"},
+    )
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def context(self, check_credentials=False):
+            assert check_credentials is True
+            raise KeyError("AIKO_GITHUB_ACCESS_TOKEN")
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        ["context", "--person", "aiko", "--check-credentials", "--format", "json"],
+    )
+
+    assert result.exit_code != 0
+    assert "Member credential could not be resolved" in result.output
+    assert "GITHUB_ACCESS_TOKEN" not in result.output
+
+
+def test_member_write_command_requires_existing_body_file(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "comment",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/1",
+            "--body-file",
+            str(tmp_path / "missing.md"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "body-file does not exist" in result.output
+
+
+def test_member_git_publish_current_mode_uses_current_workspace_service(
+    monkeypatch, tmp_path
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    message_file = tmp_path / "message.txt"
+    message_file.write_text("publish\n", encoding="utf-8")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "main",
+                "commit_sha": "abc",
+                "pushed": True,
+                "has_changes": True,
+                "status": "published",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def publish_current_workspace(self, repo_path, message, cwd):
+            calls["repo_path"] = repo_path
+            calls["message"] = message
+            calls["cwd"] = cwd
+            return FakeResult()
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "publish",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--message-file",
+            str(message_file),
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["repo_path"] == repo_path
+    assert calls["message"] == "publish\n"
+    assert calls["cwd"].is_absolute()
+    assert calls["closed"] is True
+    assert '"status": "published"' in result.output
+
+
+def test_member_git_commit_current_mode_uses_current_workspace_service(
+    monkeypatch, tmp_path
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    message_file = tmp_path / "message.txt"
+    message_file.write_text("commit\n", encoding="utf-8")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "main",
+                "commit_sha": "abc",
+                "has_changes": True,
+                "status": "committed",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def commit(self, repo_path, message, workspace_mode, cwd):
+            calls["repo_path"] = repo_path
+            calls["message"] = message
+            calls["workspace_mode"] = workspace_mode
+            calls["cwd"] = cwd
+            return FakeResult()
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--message-file",
+            str(message_file),
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["repo_path"] == repo_path
+    assert calls["message"] == "commit\n"
+    assert calls["workspace_mode"] == "current"
+    assert calls["cwd"].is_absolute()
+    assert calls["closed"] is True
+    assert '"status": "committed"' in result.output
+
+
+def test_member_git_commit_reads_message_from_stdin(monkeypatch, tmp_path):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "main",
+                "commit_sha": "abc",
+                "has_changes": True,
+                "status": "committed",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def commit(self, repo_path, message, workspace_mode, cwd):
+            calls["message"] = message
+            return FakeResult()
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--message-stdin",
+            "--workspace-mode",
+            "current",
+        ],
+        input="日本語のコミットメッセージ\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls["message"] == "日本語のコミットメッセージ\n"
+
+
+def test_member_git_commit_rejects_missing_message_source(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Either --message-file or --message-stdin is required" in result.output
+
+
+def test_member_git_commit_rejects_multiple_message_sources(tmp_path):
+    runner = CliRunner()
+    message_file = tmp_path / "message.txt"
+    message_file.write_text("message\n", encoding="utf-8")
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(tmp_path),
+            "--message-file",
+            str(message_file),
+            "--message-stdin",
+        ],
+        input="message\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --message-file or --message-stdin" in result.output
+
+
+def test_member_git_push_current_mode_uses_current_workspace_service(
+    monkeypatch, tmp_path
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "main",
+                "pushed": True,
+                "status": "pushed",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def push(self, repo_path, workspace_mode, cwd):
+            calls["repo_path"] = repo_path
+            calls["workspace_mode"] = workspace_mode
+            calls["cwd"] = cwd
+            return FakeResult()
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "push",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["repo_path"] == repo_path
+    assert calls["workspace_mode"] == "current"
+    assert calls["cwd"].is_absolute()
+    assert calls["closed"] is True
+    assert '"status": "pushed"' in result.output
+
+
+def test_member_git_branch_create_current_mode_uses_current_workspace_service(
+    monkeypatch, tmp_path
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeResult:
+        def to_dict(self):
+            return {
+                "repo_path": str(repo_path),
+                "branch": "feature/test",
+                "previous_branch": "main",
+                "status": "created",
+            }
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def create_branch(self, repo_path, branch, workspace_mode, cwd):
+            calls["repo_path"] = repo_path
+            calls["branch"] = branch
+            calls["workspace_mode"] = workspace_mode
+            calls["cwd"] = cwd
+            return FakeResult()
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "branch",
+            "create",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(repo_path),
+            "--branch",
+            "feature/test",
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["repo_path"] == repo_path
+    assert calls["branch"] == "feature/test"
+    assert calls["workspace_mode"] == "current"
+    assert calls["cwd"].is_absolute()
+    assert calls["closed"] is True
+    assert '"status": "created"' in result.output
+
+
+def test_member_git_publish_current_mode_rejects_workflow_task_run(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
+    message_file = tmp_path / "message.txt"
+    message_file.write_text("publish\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "publish",
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(tmp_path),
+            "--message-file",
+            str(message_file),
+            "--workspace-mode",
+            "current",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "only for interactive use" in result.output
+
+
+def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    title_file = tmp_path / "title.txt"
+    body_file = tmp_path / "body.md"
+    title_file.write_text("PR title\n", encoding="utf-8")
+    body_file.write_text("PR body\n", encoding="utf-8")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_create(self, repo, head, base, title, body, issue_url, draft):
+            calls.update(
+                {
+                    "repo": repo,
+                    "head": head,
+                    "base": base,
+                    "title": title,
+                    "body": body,
+                    "issue_url": issue_url,
+                    "draft": draft,
+                }
+            )
+            return {
+                "pr_number": 1,
+                "pr_url": "https://github.com/owner/repo/pull/1",
+                "created": True,
+                "draft": False,
+                "head": head,
+                "base": base,
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--base",
+            "ticket-driven-workflow",
+            "--title-file",
+            str(title_file),
+            "--body-file",
+            str(body_file),
+            "--issue-url",
+            "https://github.com/owner/repo/issues/42",
+            "--draft",
+            "false",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "repo": "owner/repo",
+        "head": "feature",
+        "base": "ticket-driven-workflow",
+        "title": "PR title\n",
+        "body": "PR body\n",
+        "issue_url": "https://github.com/owner/repo/issues/42",
+        "draft": "false",
+        "closed": True,
+    }
+    assert '"base": "ticket-driven-workflow"' in result.output
+
+
+def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_create(self, repo, head, base, title, body, issue_url, draft):
+            calls.update(
+                {
+                    "repo": repo,
+                    "head": head,
+                    "base": base,
+                    "title": title,
+                    "body": body,
+                    "issue_url": issue_url,
+                    "draft": draft,
+                }
+            )
+            return {
+                "pr_number": 1,
+                "pr_url": "https://github.com/owner/repo/pull/1",
+                "created": True,
+                "draft": False,
+                "head": head,
+                "base": base,
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--base",
+            "ticket-driven-workflow",
+            "--content-stdin",
+        ],
+        input="PR title\n\n## Summary\n\nPR body\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "repo": "owner/repo",
+        "head": "feature",
+        "base": "ticket-driven-workflow",
+        "title": "PR title",
+        "body": "## Summary\n\nPR body\n",
+        "issue_url": "",
+        "draft": "auto",
+        "closed": True,
+    }
+    assert '"base": "ticket-driven-workflow"' in result.output
+
+
+def test_member_github_pr_create_rejects_mixed_content_sources(tmp_path):
+    title_file = tmp_path / "title.txt"
+    title_file.write_text("PR title\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--title-file",
+            str(title_file),
+            "--content-stdin",
+        ],
+        input="PR title\n\nPR body\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --content-stdin or both --title-file and --body-file" in (
+        result.output
+    )
+
+
+def test_member_github_pr_create_rejects_missing_content_source():
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Either --content-stdin or both --title-file and --body-file" in (
+        result.output
+    )
+
+
+def test_member_task_status_cli(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    store = TaskRunStore()
+    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.complete(
+        "run-1",
+        "done",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        ["task", "status", "--person", "aiko", "--run-id", "run-1"],
+    )
+
+    assert result.exit_code == 0
+    assert '"completed": true' in result.output
+    assert '"evidence_types": ["issue_comment"]' in result.output
+
+
+def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+    body_file = tmp_path / "reply.md"
+    body_file.write_text("了解しました。", encoding="utf-8")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def reply(self, *, channel_id, channel_name, thread_ts, body):
+            return {
+                "service": "slack",
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "message_ts": "200.1",
+                "thread_ts": thread_ts,
+                "text": body,
+                "posted": True,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "reply",
+            "--person",
+            "aiko",
+            "--channel-id",
+            "C1",
+            "--thread-ts",
+            "100.1",
+            "--body-file",
+            str(body_file),
+            "--run-id",
+            "run-1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["text"] == "了解しました。"
+    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "chat_reply"
+
+
+def test_member_chat_reply_accepts_channel_name_and_message_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+    body_file = tmp_path / "reply.md"
+    body_file.write_text("了解しました。", encoding="utf-8")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def reply(self, *, channel_id, channel_name, thread_ts, body):
+            return {
+                "service": "slack",
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "message_ts": "200.1",
+                "thread_ts": thread_ts,
+                "text": body,
+                "posted": True,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "reply",
+            "--person",
+            "aiko",
+            "--channel-name",
+            "general",
+            "--message-url",
+            "https://example.slack.com/archives/C1/p1000000000000001",
+            "--body-file",
+            str(body_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["channel_id"] == "C1"
+    assert payload["channel_name"] == "general"
+    assert payload["thread_ts"] == "1000000000.000001"
+
+
+def test_member_chat_inspect_thread_accepts_message_url(monkeypatch, tmp_path):
+    expected_limit = 20
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def inspect_thread(self, *, channel_id, channel_name, thread_ts, limit):
+            return {
+                "service": "slack",
+                "mode": "thread",
+                "channel_id": channel_id,
+                "channel_name": channel_name or "",
+                "thread_ts": thread_ts,
+                "next_cursor": "",
+                "messages": [{"message_ts": "100.1", "text": "question"}],
+                "limit": limit,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "inspect",
+            "thread",
+            "--person",
+            "aiko",
+            "--message-url",
+            "https://example.slack.com/archives/C1/p1000000000000002"
+            "?thread_ts=1000000000.000001&cid=C1",
+            "--limit",
+            str(expected_limit),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["channel_id"] == "C1"
+    assert payload["thread_ts"] == "1000000000.000001"
+    assert payload["limit"] == expected_limit
+
+
+def test_member_chat_inspect_channel_accepts_channel_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def inspect_channel(
+            self, *, channel_id, channel_name, oldest_ts, latest_ts, limit
+        ):
+            return {
+                "service": "slack",
+                "mode": "channel",
+                "channel_id": channel_id or "C_GENERAL",
+                "channel_name": channel_name,
+                "oldest_ts": oldest_ts,
+                "latest_ts": latest_ts,
+                "next_cursor": "",
+                "messages": [{"message_ts": "100.1", "text": "topic"}],
+                "limit": limit,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "inspect",
+            "channel",
+            "--person",
+            "aiko",
+            "--channel-name",
+            "general",
+            "--oldest-ts",
+            "100.0",
+            "--latest-ts",
+            "200.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["channel_name"] == "general"
+    assert payload["oldest_ts"] == "100.0"
+    assert payload["latest_ts"] == "200.0"
+
+
+def test_member_chat_body_file_and_stdin_are_exclusive(tmp_path):
+    body_file = tmp_path / "reply.md"
+    body_file.write_text("hello", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "reply",
+            "--person",
+            "aiko",
+            "--channel-id",
+            "C1",
+            "--thread-ts",
+            "100.1",
+            "--body-file",
+            str(body_file),
+            "--body-stdin",
+        ],
+        input="hello",
+    )
+
+    assert result.exit_code != 0
+    assert "not both" in result.output
+
+
+def test_member_chat_reaction_accepts_message_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+    context.get_chat_service = lambda: object()
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return context, person
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def add_reaction(self, *, channel_id, channel_name, message_ts, reaction):
+            return {
+                "service": "slack",
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "message_ts": message_ts,
+                "reaction": reaction,
+                "reacted": True,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "reaction",
+            "add",
+            "--person",
+            "aiko",
+            "--message-url",
+            "https://example.slack.com/archives/C1/p1000000000000002"
+            "?thread_ts=1000000000.000001&cid=C1",
+            "--reaction",
+            "ack",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["channel_id"] == "C1"
+    assert payload["message_ts"] == "1000000000.000002"
+    assert payload["reaction"] == "ack"
+
+
+def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    reason_file = tmp_path / "reason.md"
+    reason_file.write_text("Not relevant.", encoding="utf-8")
+    summary_file = tmp_path / "summary.md"
+    summary_file.write_text("No response needed.", encoding="utf-8")
+    runner = CliRunner()
+
+    noop = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "noop",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+            "--channel-id",
+            "C1",
+            "--thread-ts",
+            "100.1",
+            "--event-id",
+            "E1",
+            "--reason-file",
+            str(reason_file),
+        ],
+    )
+    complete = runner.invoke(
+        member_module.member,
+        [
+            "chat",
+            "complete",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+            "--channel-id",
+            "C1",
+            "--thread-ts",
+            "100.1",
+            "--event-id",
+            "E1",
+            "--status",
+            "done",
+            "--summary-file",
+            str(summary_file),
+        ],
+    )
+
+    assert noop.exit_code == 0
+    assert complete.exit_code == 0
+    payload = json.loads(complete.output)
+    assert payload["subject_id"] == "slack:C1:100.1:E1"
+    assert payload["evidence_types"] == ["chat_noop"]

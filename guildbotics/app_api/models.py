@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
+
 
 class VerifyCheck(BaseModel):
     code: str
@@ -129,8 +131,53 @@ class CommandRunRequest(BaseModel):
 
 
 class CommandRunResponse(BaseModel):
-    request_id: str
+    trace_id: str
     output: str
+
+
+class TraceSummary(BaseModel):
+    trace_id: str
+    source: str = ""
+    person_id: str = ""
+    command: str = ""
+    workflow: str = ""
+    started_at: str = ""
+    updated_at: str = ""
+    status: str = "info"
+    event_count: int = 0
+    log_count: int = 0
+    error_count: int = 0
+    span_count: int = 0
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class TraceRecord(BaseModel):
+    kind: str
+    timestamp: str = ""
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_id: str | None = None
+    call_id: str | None = None
+    span: str = ""
+    source: str = ""
+    person_id: str = ""
+    command: str = ""
+    workflow: str = ""
+    type: str = ""
+    level: str = ""
+    message: str = ""
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class TracesResponse(BaseModel):
+    traces: list[TraceSummary] = Field(default_factory=list)
+
+
+class TraceDetailResponse(BaseModel):
+    trace_id: str
+    summary: TraceSummary | None = None
+    records: list[TraceRecord] = Field(default_factory=list)
 
 
 class SchedulerStartRequest(BaseModel):
@@ -160,6 +207,8 @@ class RuntimeUnitStatus(BaseModel):
     events_drained_count: int | None = None
     events_delivered_count: int | None = None
     events_skipped_processed_count: int | None = None
+    events_auth_failed_count: int | None = None
+    events_auth_failed_persons: list[str] = Field(default_factory=list)
 
 
 class RuntimeStatus(BaseModel):
@@ -170,6 +219,18 @@ class RuntimeStatus(BaseModel):
 class PromptTraceUpdateRequest(BaseModel):
     enabled: bool
     trace_path: str = ""
+
+
+class RuntimeDebugUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class RuntimeDebugStatus(BaseModel):
+    enabled: bool
+    log_level: str
+    agno_debug: bool
+    env_file: Path
+    env_file_exists: bool
 
 
 class PromptTraceEntry(BaseModel):
@@ -292,16 +353,60 @@ class ProjectConfigResponse(BaseModel):
     cli_agent: Literal["codex", "gemini", "claude", "copilot"]
     github_enabled: bool
     github_project_url: str = ""
-    github_repository_url: str = ""
-    repo_base_url: Literal["https://github.com", "ssh://git@github.com"] = (
-        "https://github.com"
-    )
+    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
     has_google_api_key: bool
     has_openai_api_key: bool
     has_anthropic_api_key: bool
 
 
-class ProjectConfigUpdateRequest(BaseModel):
+class ProjectStatusOptionsRequest(BaseModel):
+    """Identify the GitHub Project to read Status options from.
+
+    The form supplies the project being edited (which may not be saved yet);
+    the backend reads its Status options live using a configured member's
+    credentials, without writing anything to GitHub.
+    """
+
+    owner: str = ""
+    project_id: str = ""
+    github_project_url: str = ""
+
+
+class ProjectStatusOptionsResponse(BaseModel):
+    """Status (lane) option names read from a GitHub Project.
+
+    ``available`` is False when options could not be read (incomplete project
+    identity, no member credentials, or a GitHub error); the frontend then
+    falls back to manual lane-name entry.
+    """
+
+    available: bool
+    statuses: list[str] = Field(default_factory=list)
+
+
+class AgentFieldOption(BaseModel):
+    """A single ``Agent`` field option, keyed by a member's proxy signature."""
+
+    name: str
+    description: str = ""
+
+
+class AgentFieldStateResponse(BaseModel):
+    """State of a GitHub Project's ``Agent`` single-select field.
+
+    ``available`` is False when the field state could not be read (incomplete
+    project identity, no member credentials, or a GitHub error). ``options`` are
+    the members currently registered as field options; ``missing`` are
+    configured non-human members not yet registered (what an ensure call adds).
+    """
+
+    available: bool
+    exists: bool = False
+    options: list[AgentFieldOption] = Field(default_factory=list)
+    missing: list[AgentFieldOption] = Field(default_factory=list)
+
+
+class ProjectConfigUpdateRequest(GitHubProjectInput):
     config_dir: Path
     env_file_path: Path
     language: Literal["en", "ja"]
@@ -309,13 +414,6 @@ class ProjectConfigUpdateRequest(BaseModel):
     llm_api_type: Literal["openai", "gemini", "anthropic"]
     cli_agent: Literal["codex", "gemini", "claude", "copilot"]
     github_enabled: bool
-    repository_name: str = ""
-    owner: str = ""
-    project_id: str = ""
-    github_project_url: str = ""
-    repo_base_url: Literal["https://github.com", "ssh://git@github.com"] = (
-        "https://github.com"
-    )
     google_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
+from guildbotics.observability import span_scope
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.import_utils import instantiate_class
 from guildbotics.utils.log_utils import get_file_handler
@@ -122,10 +123,11 @@ class AgnoAgentDefaultBrain(Brain):
                 self.model_config.rate_limit.max_requests_per_minute,
             )
         message = self.patch_message(message)
-        self._write_request_trace(message, description, kwargs)
-        response = await agent.arun(message)
-        content = response.content
-        self._write_response_trace(content)
+        with span_scope("llm"):
+            self._write_request_trace(message, description, kwargs)
+            response = await agent.arun(message)
+            content = response.content
+            self._write_response_trace(content)
         if self.response_class and (
             self.model_config.is_restricted_model
             or not isinstance(content, self.response_class)

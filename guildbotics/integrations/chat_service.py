@@ -64,9 +64,21 @@ class ChatService(ABC):
         *,
         cursor: str | None = None,
         oldest_ts: str | None = None,
+        latest_ts: str | None = None,
         limit: int = 100,
     ) -> ChatEventPage:
         """Fetch channel events incrementally."""
+
+    @abstractmethod
+    async def list_thread_events(
+        self,
+        channel_id: str,
+        *,
+        thread_ts: str,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> ChatEventPage:
+        """Fetch events in a single thread."""
 
     @abstractmethod
     async def resolve_channel_id(self, channel_name: str) -> str | None:

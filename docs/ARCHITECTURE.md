@@ -58,8 +58,7 @@ GuildBotics follows a layered architecture with clear separation of concerns:
                       ↓
 ┌─────────────────────────────────────────────────┐
 │ Layer 6: Templates (Workflow Implementations)   │
-│  - ticket_driven_workflow, retrospective        │
-│  - Modes: ticket/comment/edit                   │
+│  - ticket_driven_workflow                       │
 └─────────────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────┐
@@ -75,7 +74,7 @@ GuildBotics follows a layered architecture with clear separation of concerns:
                       ↓
 ┌─────────────────────────────────────────────────┐
 │ Layer 3: Integrations (External Services)       │
-│  - TicketManager, CodeHostingService            │
+│  - TicketManager, ChatService                   │
 └─────────────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────┐
@@ -172,7 +171,7 @@ client.
 - `Context`: Central execution context holding all dependencies
 - `LoaderFactory`: Creates TeamLoader instances
 - `BrainFactory`: Creates Brain instances
-- `IntegrationFactory`: Creates TicketManager and CodeHostingService instances
+- `IntegrationFactory`: Creates TicketManager and ChatService instances
 
 #### Entities (`guildbotics/entities/`)
 
@@ -191,7 +190,7 @@ Person
 
 Task
   ├── id, title, description
-  ├── status: READY | IN_PROGRESS | IN_REVIEW | DONE | RETROSPECTIVE
+  ├── status: READY | IN_PROGRESS | DONE
   └── comments: Message[]
 
 Message
@@ -221,11 +220,11 @@ Message
 
 **Interfaces**:
 - `TicketManager`: Abstract ticket management interface
-- `CodeHostingService`: Abstract code hosting interface
+- `ChatService`: Abstract chat service interface
 
 **Implementations**:
 - `GitHubTicketManager`: GitHub Issues/Projects implementation
-- `GitHubCodeHostingService`: GitHub repository operations
+- `SlackChatService`: Slack chat implementation
 
 #### Intelligences (`guildbotics/intelligences/`)
 
@@ -238,7 +237,7 @@ Message
 
 **Common Models**: Response models for structured outputs (DecisionResponse, MessageResponse, etc.)
 
-**Functions**: Workflow utility functions (identify_mode, identify_role, talk_as, etc.)
+**Functions**: Workflow utility functions (identify_role, talk_as, etc.)
 
 #### Commands (`guildbotics/commands/`)
 
@@ -263,12 +262,6 @@ Message
 
 **Key Workflows**:
 - `ticket_driven_workflow.py`: Main workflow
-- `retrospective.py`: Retrospective analysis workflow
-
-**Modes**:
-- `ticket_mode.py`: Create sub-tasks
-- `comment_mode.py`: Add comments
-- `edit_mode.py`: Edit code and create PRs
 
 ---
 
@@ -302,25 +295,12 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[GitHub Projects] -->|get_task_to_work_on| B[Task: READY]
-    B -->|identify_role| C[Brain Inference]
-    B -->|identify_mode| D[Brain Inference]
-    C --> E{Mode?}
-    D --> E
-
-    E -->|ticket| F[ticket_mode.main]
-    E -->|comment| G[comment_mode.main]
-    E -->|edit| H[edit_mode.main]
-
-    F -->|identify_next_tasks| I[Create Tickets]
-    G -->|add_comment| J[Post Comment]
-    H -->|commit + PR| K[Create Pull Request]
-
-    I --> L[Task: IN_REVIEW]
-    J --> L
-    K --> L
-
-    L -->|update| A
+    A[GitHub Projects] -->|get_task_to_work_on| B[Issue or PR Review Task]
+    B -->|checkout work branch| C[Repository Workspace]
+    C -->|delegate URL and context| D[CLI Agent]
+    D -->|structured result| E[GuildBotics]
+    E -->|member credential| F[GitHub writes]
+    F -->|comments / PR / tickets / lane update| A
 ```
 
 ### 4.3 Command Execution Flow
@@ -426,9 +406,6 @@ async def _run_with_children(spec):
 # team/project.yml
 name: MyProject
 language: ja
-repositories:
-  - name: main
-    is_default: true
 services:
   ticket_manager:
     name: github
@@ -511,7 +488,7 @@ Automatically registered via registry discovery.
 
 ```python
 class CustomTicketManager(TicketManager):
-    async def create_tickets(self, tasks):
+    async def get_task_to_work_on(self):
         # Implementation
         pass
 ```

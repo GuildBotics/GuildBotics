@@ -5,6 +5,29 @@ const STATIC_BASE = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0
 
 let currentWorkspace = localStorage.getItem("guildbotics.workspace") ?? "";
 
+export type CliAgentSkillStatus =
+  | "up_to_date"
+  | "user_modified"
+  | "unmanaged"
+  | "missing"
+  | "outdated"
+  | "agent_home_missing"
+  | "error";
+
+export type CliAgentSkillState = {
+  agent: "codex" | "gemini" | "claude" | "copilot";
+  agent_home: string | null;
+  skill_path: string | null;
+  status: CliAgentSkillStatus;
+  can_force_update: boolean;
+  error?: string;
+};
+
+export type CliAgentSkillStatusesResponse = {
+  agents: CliAgentSkillState[];
+  error?: string;
+};
+
 /**
  * Connect the frontend to the Local API backend.
  *
@@ -48,6 +71,24 @@ export async function restartBackend(workspace: string) {
 export async function stopBackend() {
   // The sidecar lifecycle is owned by the Rust host (killed on app exit), so
   // there is nothing for the frontend to tear down here.
+}
+
+export async function getCliAgentSkillStatuses(): Promise<CliAgentSkillStatusesResponse> {
+  if (!isTauriRuntime()) {
+    return { agents: [] };
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<CliAgentSkillStatusesResponse>("cli_agent_skill_statuses");
+}
+
+export async function forceUpdateCliAgentSkill(
+  agent: CliAgentSkillState["agent"],
+): Promise<CliAgentSkillState> {
+  if (!isTauriRuntime()) {
+    throw new Error("GuildBotics Desktop is required to update CLI agent skills.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<CliAgentSkillState>("force_update_cli_agent_skill", { agent });
 }
 
 async function restoreWorkspace() {

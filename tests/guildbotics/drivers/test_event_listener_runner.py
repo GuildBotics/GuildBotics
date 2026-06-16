@@ -7,15 +7,33 @@ import uuid
 
 import pytest
 
-from guildbotics.drivers.event_listener_runner import EventListenerRunner, SlackConnectionKey
+from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.drivers.event_listener_runner import (
+    EventListenerRunner,
+    SlackConnectionKey,
+)
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatEvent
-from guildbotics.integrations.chat_service import ChatIdentity, ChatPostResult
+from guildbotics.integrations.chat_service import (
+    ChatEvent,
+    ChatIdentity,
+    ChatPostResult,
+)
+from guildbotics.observability import correlation_fields
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.event_listener import INCOMING_CHAT_EVENT_KEY, IncomingChatEvent
-from tests.guildbotics.runtime.test_context import DummyBrainFactory, DummyLoaderFactory, _make_team
+from guildbotics.runtime.event_listener import (
+    INCOMING_CHAT_EVENT_KEY,
+    IncomingChatEvent,
+)
 from guildbotics.runtime.integration_factory import IntegrationFactory
+from tests.guildbotics.runtime.test_context import (
+    DummyBrainFactory,
+    DummyLoaderFactory,
+    _make_team,
+)
+
+EXPECTED_LISTENER_COUNT = 2
+WARNING_ARG_COUNT = 2
 
 
 class _FakeContext:
@@ -65,9 +83,13 @@ class _WorkflowChatService:
     ) -> ChatPostResult:
         self.posts.append((channel_id, text, thread_ts))
         ts = "999.1"
-        return ChatPostResult(channel_id=channel_id, message_ts=ts, thread_ts=thread_ts or ts)
+        return ChatPostResult(
+            channel_id=channel_id, message_ts=ts, thread_ts=thread_ts or ts
+        )
 
-    async def add_reaction(self, channel_id: str, message_ts: str, reaction: str) -> None:
+    async def add_reaction(
+        self, channel_id: str, message_ts: str, reaction: str
+    ) -> None:
         self.reactions.append((channel_id, message_ts, reaction))
 
     def normalize_participant_text(
@@ -95,9 +117,6 @@ class _WorkflowIntegrationFactory(IntegrationFactory):
     def create_ticket_manager(self, logger, person, team):
         raise AssertionError("unused in this test")
 
-    def create_code_hosting_service(self, person, team, repository=None):
-        raise AssertionError("unused in this test")
-
     def create_chat_service(self, logger, person, team):
         return self.chat_service
 
@@ -113,6 +132,7 @@ async def test_dispatch_incoming_event_sets_shared_state_and_runs_workflow(monke
             captured["command_args"] = list(command_args)
 
         async def run(self):
+            captured["correlation"] = correlation_fields()
             return "ok"
 
     monkeypatch.setattr(
@@ -141,6 +161,9 @@ async def test_dispatch_incoming_event_sets_shared_state_and_runs_workflow(monke
     assert out == "ok"
     assert captured["command_name"] == "workflows/chat_conversation_workflow"
     assert captured["command_args"] == []
+    assert captured["correlation"]["source"] == "event_listener"
+    assert captured["correlation"]["attributes"]["event.provider"] == "slack"
+    assert captured["correlation"]["attributes"]["slack.channel"] == "C1"
     ctx = captured["context"]
     payload = ctx.shared_state[INCOMING_CHAT_EVENT_KEY]
     assert payload["service_name"] == "slack"
@@ -150,8 +173,26 @@ async def test_dispatch_incoming_event_sets_shared_state_and_runs_workflow(monke
 
 
 @pytest.mark.asyncio
-async def test_dispatch_incoming_event_runs_real_workflow_via_command_runner(monkeypatch, tmp_path):
-    from guildbotics.templates.commands.workflows import chat_conversation_workflow
+async def test_dispatch_incoming_event_runs_real_workflow_via_command_runner(
+    monkeypatch, tmp_path
+):
+    """Dispatch runs the real chat workflow through CommandRunner.
+
+    The workflow no longer posts to Slack directly; it delegates to the
+    ``functions/handle_chat_event`` CLI agent, which records run evidence and
+    completion. Here that agent invocation is faked at the CommandRunner boundary
+    (the real agent is an external process), so the test verifies the wiring and
+    the evidence-driven state update rather than a direct chat post.
+    """
+    import guildbotics.drivers.command_runner as command_runner_module
+    from guildbotics.integrations.file_chat_state_store import (
+        FileConversationStateStore,
+    )
+
+    # The workflow uses the default RunStore / state store, both keyed off
+    # GUILDBOTICS_DATA_DIR, so point them at a temp dir instead of user storage.
+    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("GUILDBOTICS_MEMORY_BACKEND", "none")
 
     chat_service = _WorkflowChatService()
     team = _make_team(language="en")
@@ -168,24 +209,51 @@ async def test_dispatch_incoming_event_runs_real_workflow_via_command_runner(mon
     )
     runner = EventListenerRunner(context)
 
-    # Force workflow fallback path to use a temp state store rather than user storage.
-    from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+    # Fake the agent invocation at the CommandRunner boundary: record a reply
+    # evidence + completion exactly as `guildbotics member chat ...` would.
+    async def fake_invoke(self, name, *args, **kwargs):
+        if name != "functions/handle_chat_event":
+            return None
+        run_id = kwargs["workflow_run_id"]
+        store = RunStore()
+        store.append_evidence(
+            run_id,
+            "chat_reply",
+            {
+                "service": "slack",
+                "channel_id": kwargs["channel_id"],
+                "message_ts": "200.1",
+                "thread_ts": kwargs["thread_ts"],
+                "text": "Acknowledged.",
+                "posted": True,
+            },
+        )
+        store.complete_run(
+            run_id,
+            "done",
+            "Posted a reply.",
+            subject_type="chat",
+            subject_id=(
+                f"slack:{kwargs['channel_id']}:"
+                f"{kwargs['thread_ts']}:{kwargs['event_id']}"
+            ),
+            person_id=kwargs["person_id"],
+        )
+        return {"status": "done", "message": "done"}
 
-    monkeypatch.setattr(
-        chat_conversation_workflow,
-        "FileConversationStateStore",
-        lambda: FileConversationStateStore(base_dir=tmp_path),
-    )
+    monkeypatch.setattr(command_runner_module.CommandRunner, "_invoke", fake_invoke)
 
     unique_suffix = uuid.uuid4().hex
+    event_id = f"E_INT_{unique_suffix}"
+    thread_ts = f"100.{abs(hash(unique_suffix)) % 100000}"
     incoming = IncomingChatEvent(
         service_name="slack",
         channel_id="C1",
         event=ChatEvent(
-            event_id=f"E_INT_{unique_suffix}",
+            event_id=event_id,
             channel_id="C1",
-            message_ts=f"100.{abs(hash(unique_suffix)) % 100000}",
-            thread_ts=f"100.{abs(hash(unique_suffix)) % 100000}",
+            message_ts=thread_ts,
+            thread_ts=thread_ts,
             author_id="U_USER",
             text="<@U_ALICE> integration path",
             mentions=["U_ALICE"],
@@ -194,11 +262,19 @@ async def test_dispatch_incoming_event_runs_real_workflow_via_command_runner(mon
 
     await runner.dispatch_incoming_event(person, incoming)
 
-    assert len(chat_service.posts) == 1
-    channel_id, text, thread_ts = chat_service.posts[0]
-    assert channel_id == "C1"
-    assert thread_ts == incoming.event.thread_ts
-    assert text.strip() != ""
+    # The workflow delegates instead of posting to Slack directly.
+    assert chat_service.posts == []
+    # Evidence drives the processed-event record and the appended bot reply.
+    # Read through the default store (same GUILDBOTICS_DATA_DIR-based path the
+    # workflow wrote to).
+    state_store = FileConversationStateStore()
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert event_id in channel_state.processed_event_ids
+    thread_messages = state_store.load_thread_messages(
+        "slack", "alice", "C1", thread_ts
+    )
+    bot_messages = [message for message in thread_messages if message.is_bot_message]
+    assert [message.message_ts for message in bot_messages] == ["200.1"]
 
 
 def test_make_connection_key_hashes_app_token(monkeypatch):
@@ -223,7 +299,7 @@ def test_get_or_create_listener_reuses_same_connection_key(monkeypatch):
     created: list[tuple[str, str | None]] = []
 
     class _FakeSlackSocketEventListener:
-        def __init__(self, *, logger, app_token, base_url=None):
+        def __init__(self, *, logger, app_token, base_url=None, person_ids=None):
             created.append((app_token, base_url))
 
         def start(self):
@@ -262,7 +338,7 @@ def test_get_or_create_listener_splits_when_base_url_differs(monkeypatch):
     created: list[tuple[str, str | None]] = []
 
     class _FakeSlackSocketEventListener:
-        def __init__(self, *, logger, app_token, base_url=None):
+        def __init__(self, *, logger, app_token, base_url=None, person_ids=None):
             created.append((app_token, base_url))
 
         def start(self):
@@ -296,7 +372,7 @@ def test_get_or_create_listener_splits_when_base_url_differs(monkeypatch):
     s2 = runner._get_or_create_listener(key2)
 
     assert s1 is not s2
-    assert len(created) == 2
+    assert len(created) == EXPECTED_LISTENER_COUNT
 
 
 @pytest.mark.asyncio
@@ -364,8 +440,16 @@ async def test_run_once_dispatches_events_and_marks_processed(monkeypatch):
     monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: fake_listener)
     monkeypatch.setattr(runner, "dispatch_incoming_event", _fake_dispatch)
     mark_calls = []
-    monkeypatch.setattr(runner, "_mark_processed_for_person", lambda person, incoming: mark_calls.append((person.person_id, incoming.event.event_id)))
-    monkeypatch.setattr(runner, "_is_processed_for_person", lambda person, incoming: False)
+    monkeypatch.setattr(
+        runner,
+        "_mark_processed_for_person",
+        lambda person, incoming: mark_calls.append(
+            (person.person_id, incoming.event.event_id)
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "_is_processed_for_person", lambda person, incoming: False
+    )
 
     await runner._run_once()
 
@@ -442,11 +526,15 @@ async def test_run_once_broadcasts_same_event_to_multiple_people(monkeypatch):
     )
     monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
     monkeypatch.setattr(runner, "dispatch_incoming_event", _fake_dispatch)
-    monkeypatch.setattr(runner, "_is_processed_for_person", lambda person, incoming: False)
+    monkeypatch.setattr(
+        runner, "_is_processed_for_person", lambda person, incoming: False
+    )
     monkeypatch.setattr(
         runner,
         "_mark_processed_for_person",
-        lambda person, incoming: marked.append((person.person_id, incoming.event.event_id)),
+        lambda person, incoming: marked.append(
+            (person.person_id, incoming.event.event_id)
+        ),
     )
 
     await runner._run_once()
@@ -526,7 +614,9 @@ async def test_run_once_skips_person_when_already_processed(monkeypatch):
         "_is_processed_for_person",
         lambda person, incoming: person.person_id == "bob",
     )
-    monkeypatch.setattr(runner, "_mark_processed_for_person", lambda person, incoming: None)
+    monkeypatch.setattr(
+        runner, "_mark_processed_for_person", lambda person, incoming: None
+    )
 
     await runner._run_once()
 
@@ -542,7 +632,11 @@ async def test_build_person_subscriptions_uses_cached_channel_resolution(monkeyp
         profile={
             "chat": {
                 "subscriptions": [
-                    {"service": "slack", "channel_name": "dev-chat", "event_source": "socket_mode"}
+                    {
+                        "service": "slack",
+                        "channel_name": "dev-chat",
+                        "event_source": "socket_mode",
+                    }
                 ]
             }
         },
@@ -607,7 +701,7 @@ async def test_aclose_sources_stops_listeners_and_clears_caches():
     )
     runner._listeners[key] = _FakeListener("l1")
     runner._listener_tokens[key] = "xapp"
-    runner._subscription_channel_cache["alice"] = (tuple(), {"C1"})
+    runner._subscription_channel_cache["alice"] = ((), {"C1"})
     runner._last_group_log_state = (1, 1)
 
     await runner._aclose_sources()
@@ -619,8 +713,52 @@ async def test_aclose_sources_stops_listeners_and_clears_caches():
     assert runner._last_group_log_state is None
 
 
+def test_get_status_summary_surfaces_auth_failed_connections():
+    ctx = _FakeContext()
+    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+
+    class _AuthFailedListener:
+        auth_failed = True
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def drain_events(self):
+            return []
+
+    failed_key = SlackConnectionKey(
+        service="slack",
+        event_source="socket_mode",
+        app_token_hash="f" * 64,
+        base_url="https://slack.com/api",
+    )
+    ok_key = SlackConnectionKey(
+        service="slack",
+        event_source="socket_mode",
+        app_token_hash="a" * 64,
+        base_url="https://slack.com/api",
+    )
+    runner._listeners[failed_key] = _AuthFailedListener()
+    runner._listeners[ok_key] = _AuthFailedListener.__new__(_AuthFailedListener)
+    runner._listeners[ok_key].auth_failed = False  # type: ignore[attr-defined]
+    runner._connection_person_ids = {
+        failed_key: ["yuki", "yuki"],
+        ok_key: ["aiko"],
+    }
+
+    summary = runner.get_status_summary()
+
+    assert summary["events_auth_failed_count"] == 1
+    assert summary["events_auth_failed_persons"] == ["yuki"]
+
+
 @pytest.mark.asyncio
-async def test_build_person_subscriptions_skips_person_with_missing_app_token(monkeypatch):
+async def test_build_person_subscriptions_skips_person_with_missing_app_token(
+    monkeypatch,
+):
     alice = Person(
         person_id="alice",
         name="Alice",
@@ -650,6 +788,8 @@ async def test_build_person_subscriptions_skips_person_with_missing_app_token(mo
     only_group = next(iter(grouped.values()))
     assert [person.person_id for person, _channel_ids in only_group] == ["alice"]
     assert any(
-        "skipped person=%s" in str(args[0]) and len(args) >= 2 and args[1] == "bob"
+        "skipped person=%s" in str(args[0])
+        and len(args) >= WARNING_ARG_COUNT
+        and args[1] == "bob"
         for args in ctx.warnings
     )

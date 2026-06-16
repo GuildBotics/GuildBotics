@@ -8,10 +8,9 @@ from guildbotics.intelligences import functions as f
 from guildbotics.intelligences.common import (
     AgentResponse,
     DecisionResponse,
-    Labels,
     MessageResponse,
-    NextTasksResponse,
 )
+from guildbotics.utils.fileio import load_markdown_with_frontmatter
 
 
 def test_to_text_with_model_and_list():
@@ -32,6 +31,58 @@ def test_messages_to_json_basic():
     s = f.messages_to_json(msgs)
     data = json.loads(s)
     assert data[0]["content"] == "hi" and data[1]["author_type"] == "Assistant"
+
+
+def test_handle_github_ticket_prompt_uses_member_capability_contract():
+    prompt = load_markdown_with_frontmatter(
+        Path("guildbotics/templates/commands/functions/handle_github_ticket.en.md")
+    )
+
+    assert prompt["response_class"] == "guildbotics.intelligences.common.AgentResponse"
+    assert "guildbotics member" in prompt["body"]
+    assert "member task complete" in prompt["body"]
+    assert "GitHubTicketAgentResult" not in prompt["body"]
+    assert "git push" in prompt["body"]
+    # The workflow no longer injects issue content; the agent inspects it.
+    assert "{issue_title}" not in prompt["body"]
+    assert "{issue_description}" not in prompt["body"]
+    # PR-review safety: the agent runs the workflow-provided prepare command,
+    # which carries --pr-url for PR review.
+    assert "{prepare_command}" in prompt["body"]
+    assert "--pr-url" in prompt["body"]
+    assert "persona" in prompt["body"]
+    assert "communication style" in prompt["body"]
+    assert "conversational outputs" in prompt["body"]
+    assert "issue titles/bodies and PR titles/bodies" in prompt["body"]
+    assert (
+        "Keep `AgentResponse.message` as a neutral workflow execution summary"
+        in (prompt["body"])
+    )
+    assert "guildbotics_execution_mode=workflow" in prompt["body"]
+    assert "isolated member workspace" in prompt["body"]
+    assert "--workspace-mode current" in prompt["body"]
+
+
+def test_guildbotics_skill_uses_member_persona_without_decorating_control_data():
+    skill = load_markdown_with_frontmatter(Path("skills/guildbotics/SKILL.md"))
+
+    assert skill["name"] == "guildbotics"
+    assert "member context" in skill["body"]
+    assert "persona" in skill["body"]
+    assert "communication style" in skill["body"]
+    assert "conversational outputs" in skill["body"]
+    assert "issue titles/bodies, PR titles/bodies, commit messages" in skill["body"]
+    assert "workflow `AgentResponse.message`" in skill["body"]
+    assert "Active Member Session Rules" in skill["body"]
+    assert (
+        "active GuildBotics member for the rest of the conversation/session"
+        in skill["body"]
+    )
+    assert "Workspace Rules" in skill["body"]
+    assert "guildbotics_execution_mode=workflow" in skill["body"]
+    assert "shared pair-programming workspace" in skill["body"]
+    assert "--workspace-mode current" in skill["body"]
+    assert "Do not run `member git prepare`" in skill["body"]
 
 
 @pytest.mark.asyncio
@@ -80,7 +131,7 @@ async def test_talk_as_and_reply_as_build_session_state(monkeypatch, fake_contex
 
 
 @pytest.mark.asyncio
-async def test_identify_role_and_mode(monkeypatch, fake_context, stub_brain):
+async def test_identify_role(monkeypatch, fake_context, stub_brain):
     ctx = fake_context
 
     async def fake_get_content(context, name, message, **kwargs):
@@ -89,57 +140,6 @@ async def test_identify_role_and_mode(monkeypatch, fake_context, stub_brain):
     monkeypatch.setattr(f, "get_content", fake_get_content)
 
     assert await f.identify_role(ctx, "who") == "dev"
-    assert await f.identify_mode(ctx, Labels({"build": "b"}), input="mode?") == "dev"
-
-
-@pytest.mark.asyncio
-async def test_write_commit_message_and_pr_description(
-    monkeypatch, fake_context, stub_brain
-):
-    ctx = fake_context
-
-    async def fake_get_content(context, name, message, **kwargs):
-        return "message"
-
-    monkeypatch.setattr(f, "get_content", fake_get_content)
-    assert (
-        await f.write_commit_message(ctx, task_title="t", changes="diff")
-    ) == "message"
-
-    assert (
-        await f.write_pull_request_description(
-            ctx, changes="d", commit_message="c", ticket_url="u", pr_template="tmp"
-        )
-    ) == "message"
-
-
-
-
-@pytest.mark.asyncio
-async def test_identify_tasks(monkeypatch, fake_context, stub_brain):
-    ctx = fake_context
-    nxt = NextTasksResponse(tasks=[])
-
-    captured = {"called": False, "session_state": None}
-
-    async def fake_get_content(context, name, message, params=None, cwd=None):
-        captured["called"] = True
-        captured["params"] = params
-        captured["message"] = message
-        return nxt
-
-    monkeypatch.setattr(f, "get_content", fake_get_content)
-
-    modes = Labels({"build": "desc"})
-    messages = [Message(content="d", author="user", author_type="user")]
-    out = await f.identify_next_tasks(
-        ctx, role_id="dev", cwd=Path("."), messages=messages, available_modes=modes
-    )
-    assert out is nxt and captured["called"]
-    assert "available_modes" in captured["params"]
-    assert (
-        str(captured["message"]).replace(" ", "").replace("\n", "") == '[{"user":"d"}]'
-    )
 
 
 @pytest.mark.asyncio

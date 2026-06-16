@@ -18,11 +18,15 @@ SAMPLE_COMMANDS_PATH = TEMPLATE_PATH / "sample_commands"
 GITHUB_URL = "https://github.com/"
 GITHUB_APPS_URL_MIN_PARTS = 8
 GITHUB_PROJECT_URL_MIN_PARTS = 7
-GITHUB_REPOSITORY_URL_MIN_PARTS = 5
 CRON_FIELD_COUNT = 5
 HTTP_OK = 200
 GITHUB_USER_LOOKUP_TIMEOUT_SECONDS = 10.0
 SLACK_CHANNEL_ID_PATTERN = re.compile(r"^[CGD][A-Z0-9]{8,}$")
+
+# Default GitHub Projects status names used when no custom lane mapping is set.
+DEFAULT_LANE_READY = "Todo"
+DEFAULT_LANE_WORKING = "In Progress"
+DEFAULT_LANE_DONE = "Done"
 
 
 def _to_int_or_none(value: object) -> int | None:
@@ -48,12 +52,6 @@ class GitHubProjectReference(BaseModel):
     url: str
 
 
-class GitHubRepositoryReference(BaseModel):
-    owner: str
-    repository_name: str
-    url: str
-
-
 class GitHubUserReference(BaseModel):
     person_id: str
     github_username: str
@@ -61,20 +59,68 @@ class GitHubUserReference(BaseModel):
     git_email: str
 
 
-class ProjectSetupInput(BaseModel):
+class LaneMapInput(BaseModel):
+    """Mapping of workflow lanes to GitHub Project Status option names.
+
+    Blank values fall back to the GitHub Projects defaults (the persistence
+    layer strips empty strings, so a lane name cannot be stored empty). If the
+    resulting working lane does not exist on the board, the workflow simply
+    does not move tickets on start; runtime/diagnostics surface that as a
+    warning rather than an error. ``ready`` and ``done`` must differ.
+    """
+
+    ready: str = DEFAULT_LANE_READY
+    working: str = DEFAULT_LANE_WORKING
+    done: str = DEFAULT_LANE_DONE
+
+    @field_validator("ready", "working", "done")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _apply_defaults(self) -> LaneMapInput:
+        if not self.ready:
+            self.ready = DEFAULT_LANE_READY
+        if not self.working:
+            self.working = DEFAULT_LANE_WORKING
+        if not self.done:
+            self.done = DEFAULT_LANE_DONE
+        if self.ready == self.done:
+            raise ValueError("ready and done lanes must be different")
+        return self
+
+    def to_config(self) -> dict[str, str]:
+        """Serialize to the ``lane_map`` mapping stored in project.yml."""
+        return {"ready": self.ready, "working": self.working, "done": self.done}
+
+    @classmethod
+    def from_config(cls, raw: object) -> LaneMapInput:
+        """Build from a stored ``lane_map`` mapping, tolerating missing keys."""
+        if not isinstance(raw, dict):
+            return cls()
+        values: dict[str, str] = {}
+        for key in ("ready", "working", "done"):
+            if key in raw and raw[key] is not None:
+                values[key] = str(raw[key])
+        return cls(**values)
+
+
+class GitHubProjectInput(BaseModel):
+    """GitHub Project identity fields shared by project setup / update inputs."""
+
+    owner: str = ""
+    project_id: str = ""
+    github_project_url: str = ""
+    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
+
+
+class ProjectSetupInput(GitHubProjectInput):
     config_dir: Path
     env_file_path: Path
     env_file_option: str = Field(pattern="^(skip|append|overwrite)$")
     language: str
     description: str = ""
-    repository_name: str = ""
-    owner: str = ""
-    project_id: str = ""
-    github_project_url: str = ""
-    repo_base_url: str = Field(
-        default="https://github.com",
-        pattern="^(https://github.com|ssh://git@github.com)$",
-    )
     llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
     cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
     google_api_key: str = ""
@@ -93,14 +139,13 @@ class ProjectSetupInput(BaseModel):
         if self.env_file_option == "append" and not self.env_file_path.exists():
             raise ValueError("env_file_option=append requires an existing env file")
         github_fields = [
-            self.repository_name,
             self.owner,
             self.project_id,
             self.github_project_url,
         ]
         if any(github_fields) and not all(github_fields):
             raise ValueError(
-                "repository_name, owner, project_id and github_project_url "
+                "owner, project_id and github_project_url "
                 "are required when GitHub integration is enabled"
             )
         return self
@@ -124,17 +169,13 @@ class ProjectConfigSnapshot(BaseModel):
     cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
     github_enabled: bool
     github_project_url: str = ""
-    github_repository_url: str = ""
-    repo_base_url: str = Field(
-        default="https://github.com",
-        pattern="^(https://github.com|ssh://git@github.com)$",
-    )
+    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
     has_google_api_key: bool = False
     has_openai_api_key: bool = False
     has_anthropic_api_key: bool = False
 
 
-class ProjectUpdateInput(BaseModel):
+class ProjectUpdateInput(GitHubProjectInput):
     config_dir: Path
     env_file_path: Path
     language: str
@@ -142,14 +183,6 @@ class ProjectUpdateInput(BaseModel):
     llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
     cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
     github_enabled: bool = False
-    repository_name: str = ""
-    owner: str = ""
-    project_id: str = ""
-    github_project_url: str = ""
-    repo_base_url: str = Field(
-        default="https://github.com",
-        pattern="^(https://github.com|ssh://git@github.com)$",
-    )
     google_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
@@ -164,14 +197,13 @@ class ProjectUpdateInput(BaseModel):
     @model_validator(mode="after")
     def validate_github_fields(self) -> ProjectUpdateInput:
         github_fields = [
-            self.repository_name,
             self.owner,
             self.project_id,
             self.github_project_url,
         ]
         if self.github_enabled and not all(github_fields):
             raise ValueError(
-                "repository_name, owner, project_id and github_project_url "
+                "owner, project_id and github_project_url "
                 "are required when GitHub integration is enabled"
             )
         return self
@@ -318,21 +350,11 @@ class SimpleProjectSetupService:
 
         services = project_data.get("services", {})
         ticket_manager = services.get("ticket_manager", {}) if services else {}
-        repositories = project_data.get("repositories", [])
-        repository_name = (
-            repositories[0].get("name", "")
-            if isinstance(repositories, list) and repositories
-            else ""
-        )
         owner = str(ticket_manager.get("owner", ""))
         project_id = str(ticket_manager.get("project_id", ""))
         github_project_url = str(ticket_manager.get("url", ""))
-        github_enabled = bool(
-            owner and project_id and github_project_url and repository_name
-        )
-
-        code_hosting = services.get("code_hosting_service", {}) if services else {}
-        repo_base_url = str(code_hosting.get("repo_base_url", "https://github.com"))
+        github_enabled = bool(owner and project_id and github_project_url)
+        lane_map = LaneMapInput.from_config(ticket_manager.get("lane_map"))
 
         env_values = (
             dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
@@ -346,12 +368,7 @@ class SimpleProjectSetupService:
             cli_agent=self._infer_cli_agent(cli_mapping),
             github_enabled=github_enabled,
             github_project_url=github_project_url,
-            github_repository_url=(
-                f"https://github.com/{owner}/{repository_name}"
-                if github_enabled
-                else ""
-            ),
-            repo_base_url=repo_base_url,
+            lane_map=lane_map,
             has_google_api_key=bool(env_values.get("GOOGLE_API_KEY")),
             has_openai_api_key=bool(env_values.get("OPENAI_API_KEY")),
             has_anthropic_api_key=bool(env_values.get("ANTHROPIC_API_KEY")),
@@ -378,30 +395,6 @@ class SimpleProjectSetupService:
             owner=owner,
             project_id=project_id,
             url=f"{GITHUB_URL}{project_type}/{owner}/projects/{project_id}",
-        )
-
-    def parse_github_repository_url(
-        self, url: str, *, owner: str
-    ) -> GitHubRepositoryReference:
-        url_parts = url.split("/")
-        if (
-            len(url_parts) < GITHUB_REPOSITORY_URL_MIN_PARTS
-            or not url.startswith(GITHUB_URL)
-            or url_parts[4] == ""
-        ):
-            raise SetupServiceError(
-                "invalid_github_repository_url", "Invalid GitHub repository URL."
-            )
-        if url_parts[3] != owner:
-            raise SetupServiceError(
-                "inconsistent_github_url", "GitHub repository owner is inconsistent."
-            )
-
-        repository_name = url_parts[4]
-        return GitHubRepositoryReference(
-            owner=owner,
-            repository_name=repository_name,
-            url=f"{GITHUB_URL}{owner}/{repository_name}",
         )
 
     def write_project(self, config: ProjectSetupInput) -> ProjectSetupResult:
@@ -503,21 +496,12 @@ class SimpleProjectSetupService:
                 "owner": config.owner,
                 "project_id": str(config.project_id),
                 "url": config.github_project_url,
-                "status_map": {
-                    "new": "New",
-                    "ready": "Ready",
-                    "in_progress": "In Progress",
-                    "in_review": "In Review",
-                    "retrospective": "Retrospective",
-                    "done": "Done",
-                },
+                "lane_map": config.lane_map.to_config(),
             }
             services["code_hosting_service"] = {
                 "name": "GitHub",
                 "owner": config.owner,
-                "repo_base_url": config.repo_base_url,
             }
-            project_data["repositories"] = [{"name": config.repository_name}]
         else:
             services.pop("ticket_manager", None)
             services.pop("code_hosting_service", None)
@@ -526,6 +510,10 @@ class SimpleProjectSetupService:
             project_data["services"] = services
         else:
             project_data.pop("services", None)
+
+        # ``repositories`` is no longer part of the schema; drop any stale entry
+        # left by older configurations.
+        project_data.pop("repositories", None)
 
         project_config_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(project_config_file, project_data)
@@ -587,27 +575,18 @@ class SimpleProjectSetupService:
         if config.description:
             project["description"] = config.description
 
-        if config.repository_name:
-            project["repositories"] = [{"name": config.repository_name}]
+        if config.github_project_url:
             project["services"] = {
                 "ticket_manager": {
                     "name": "GitHub",
                     "owner": config.owner,
                     "project_id": str(config.project_id),
                     "url": config.github_project_url,
-                    "status_map": {
-                        "new": "New",
-                        "ready": "Ready",
-                        "in_progress": "In Progress",
-                        "in_review": "In Review",
-                        "retrospective": "Retrospective",
-                        "done": "Done",
-                    },
+                    "lane_map": config.lane_map.to_config(),
                 },
                 "code_hosting_service": {
                     "name": "GitHub",
                     "owner": config.owner,
-                    "repo_base_url": config.repo_base_url,
                 },
             }
         return project

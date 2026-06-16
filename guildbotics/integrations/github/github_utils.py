@@ -44,11 +44,7 @@ class GitHubAppAuth(httpx.Auth):
         self._expires_at: dt.datetime | None = None
         self._leeway = dt.timedelta(seconds=120)
 
-        with open(self.private_key_path, "rb") as f:
-            key = serialization.load_pem_private_key(f.read(), password=None)
-            if not isinstance(key, RSAPrivateKey):
-                raise TypeError("Private key must be an RSA private key")
-            self._private_key = key
+        self._private_key = _load_rsa_private_key(self.private_key_path)
 
     def _need_refresh(self) -> bool:
         now = dt.datetime.now(dt.UTC)
@@ -63,9 +59,7 @@ class GitHubAppAuth(httpx.Auth):
             path=f"/app/installations/{self.installation_id}/access_tokens",
             query=None,
         )
-        now = int(time.time()) - 60
-        payload = {"iat": now, "exp": now + 10 * 60, "iss": self.app_id}
-        jwt_token = jwt.encode(payload, self._private_key, algorithm="RS256")
+        jwt_token = _build_github_app_jwt(self.app_id, self._private_key)
         ua = request.headers.get("user-agent", "GuildBotics/1.0")
         headers = {
             "Authorization": f"Bearer {jwt_token}",
@@ -102,6 +96,52 @@ class GitHubAppAuth(httpx.Auth):
                 yield request
             else:
                 raise
+
+
+def _load_rsa_private_key(private_key_path: str) -> RSAPrivateKey:
+    with open(private_key_path, "rb") as f:
+        key = serialization.load_pem_private_key(f.read(), password=None)
+        if not isinstance(key, RSAPrivateKey):
+            raise TypeError("Private key must be an RSA private key")
+        return key
+
+
+def _build_github_app_jwt(app_id: str, private_key: RSAPrivateKey) -> str:
+    now = int(time.time()) - 60
+    payload = {"iat": now, "exp": now + 10 * 60, "iss": app_id}
+    return jwt.encode(payload, private_key, algorithm="RS256")
+
+
+async def create_github_app_installation_token(
+    app_id: str, installation_id: str, private_key_path: str, base_url: str
+) -> str:
+    """Create a short-lived GitHub App installation token."""
+    private_key = _load_rsa_private_key(private_key_path)
+    jwt_token = _build_github_app_jwt(app_id, private_key)
+    async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+        resp = await client.post(
+            f"/app/installations/{installation_id}/access_tokens",
+            headers={
+                "Authorization": f"Bearer {jwt_token}",
+                "Accept": "application/vnd.github.v3+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "GuildBotics/1.0",
+            },
+        )
+        resp.raise_for_status()
+        return str(resp.json()["token"])
+
+
+async def get_person_github_token(person: Person, base_url: str) -> str:
+    """Return the token that represents the configured GitHub identity for a member."""
+    if person.person_type == GitHubAppAuth.GITHUB_APPS:
+        return await create_github_app_installation_token(
+            app_id=person.get_secret("github_app_id"),
+            installation_id=person.get_secret("github_installation_id"),
+            private_key_path=person.get_secret("github_private_key_path"),
+            base_url=base_url,
+        )
+    return person.get_secret("github_access_token")
 
 
 async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClient:

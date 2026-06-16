@@ -8,7 +8,6 @@ from croniter import croniter  # type: ignore[import]
 from pydantic import BaseModel, Field
 
 from guildbotics.entities.message import Message
-from guildbotics.utils.i18n_tool import t
 
 CRON_FIELD_COUNT = 5
 MINUTE_FIELD_INDEX = 0
@@ -27,8 +26,6 @@ class Task(BaseModel):
         title (str): The title of the task.
         description (str): A description of the task.
         comments (list[Message]): Comments associated with the task.
-        workflow (str): The workflow associated with the task.
-        mode (Optional[str]): The mode of the task deliverable creation process. For example, "edit" mode is used for creating git commits and pull requests.
         status (str): The current status of the task (default is "new").
         role (str | None): The role associated with the task.
         owner (str | None): The owner of the task.
@@ -42,11 +39,7 @@ class Task(BaseModel):
     NEW: ClassVar[str] = "new"
     READY: ClassVar[str] = "ready"
     IN_PROGRESS: ClassVar[str] = "in_progress"
-    IN_REVIEW: ClassVar[str] = "in_review"
-    RETROSPECTIVE: ClassVar[str] = "retrospective"
     DONE: ClassVar[str] = "done"
-
-    OUTPUT_PREFIX: ClassVar[str] = "Output: "
 
     id: str | None = Field(
         default=None, description="The unique identifier for the task."
@@ -55,10 +48,6 @@ class Task(BaseModel):
     description: str = Field(..., description="A description of the task.")
     comments: list[Message] = Field(
         default_factory=list, description="Comments associated with the task."
-    )
-    mode: str | None = Field(
-        default=None,
-        description='The mode of the task deliverable creation process. For example, "edit" mode is used for creating git commits and pull requests.',
     )
     status: str = Field(
         default=NEW, description='The current status of the task (default is "new").'
@@ -82,6 +71,22 @@ class Task(BaseModel):
     assignee: str | None = Field(
         default=None,
         description="The person_id of the agent currently assigned to the task, if any.",
+    )
+    pull_request_url: str | None = Field(
+        default=None,
+        description="The related pull request URL when the task is triggered by PR review state.",
+    )
+    number: int | None = Field(
+        default=None,
+        description="The GitHub issue/PR number, when the task originates from one.",
+    )
+    url: str | None = Field(
+        default=None,
+        description="The GitHub issue/PR html URL, when the task originates from one.",
+    )
+    trigger_reason: str | None = Field(
+        default=None,
+        description="Short reason why the task was selected for the workflow.",
     )
 
     def __lt__(self, other: "Task") -> bool:
@@ -112,40 +117,6 @@ class Task(BaseModel):
         c1, c2 = parse(self.created_at), parse(other.created_at)
 
         return (p1, d1, c1) < (p2, d2, c2)
-
-    def find_output_title_and_url_from_comments(
-        self, strict: bool = True
-    ) -> tuple[str, str]:
-        """Find the title and URL from task comments."""
-        for comment in self.comments:
-            if comment.author_type != Message.ASSISTANT:
-                continue
-            comment_lines = comment.content.splitlines()
-            for raw_line in comment_lines:
-                line = raw_line.strip()
-                if line.startswith(self.OUTPUT_PREFIX):
-                    # line = "Output: [Title](https://example.com)"
-                    title_and_url = line[len(self.OUTPUT_PREFIX) :].strip()
-                    # title_and_url = "[Title](https://example.com)"
-                    if title_and_url.startswith("[") and "](" in title_and_url:
-                        title = title_and_url.split("](")[0][1:]
-                        url = title_and_url.split("](")[1][:-1]
-                        if title and url:
-                            return title, url
-        # If no title and URL found, raise an error.
-        if strict:
-            raise ValueError(
-                "No page title and URL found in task comments. Please ensure the task has been processed correctly."
-            )
-        return "", ""
-
-    @staticmethod
-    def get_available_modes() -> dict[str, str]:
-        return {
-            "comment": t("entities.task.available_modes.comment"),
-            "edit": t("entities.task.available_modes.edit"),
-            "ticket": t("entities.task.available_modes.ticket"),
-        }
 
 
 _DEFAULT_RANGES = [

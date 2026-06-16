@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
+"$SCRIPT_DIR/desktop-write-dev-binaries.sh"
+
 cd "$REPO_ROOT/desktop"
 
 if [[ ! -d node_modules ]]; then

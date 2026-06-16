@@ -50,6 +50,7 @@ def test_cli_agent_search_path_includes_user_bin_dirs(monkeypatch) -> None:
 
     entries = get_cli_agent_search_path("/usr/bin").split(":")
 
+    assert "/home/tester/.guildbotics/bin" in entries
     assert "/home/tester/.local/bin" in entries
     assert "/home/tester/bin" in entries
     assert "/home/tester/.cargo/bin" in entries
@@ -66,8 +67,10 @@ def test_cli_agent_search_path_falls_back_to_defpath_when_none(monkeypatch) -> N
     assert "/defpath/bin" in entries
 
 
-def test_resolve_cli_agent_path_checks_user_bin(tmp_path: Path, monkeypatch) -> None:
-    bin_dir = tmp_path / ".local/bin"
+def test_resolve_cli_agent_path_checks_managed_guildbotics_bin(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bin_dir = tmp_path / ".guildbotics/bin"
     bin_dir.mkdir(parents=True)
     executable = bin_dir / "codex"
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")

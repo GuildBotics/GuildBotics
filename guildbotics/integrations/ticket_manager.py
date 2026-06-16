@@ -23,11 +23,6 @@ class TicketManager(ABC):
         self.team = team
 
     @abstractmethod
-    async def create_tickets(self, tasks: list[Task]):
-        """Create tickets based on the provided tasks."""
-        pass
-
-    @abstractmethod
     async def get_task_to_work_on(self) -> Task | None:
         """
         Retrieve a ticket that the person can work on.
@@ -39,13 +34,19 @@ class TicketManager(ABC):
         pass
 
     @abstractmethod
-    async def move_ticket(self, task: Task, new_status: str) -> None:
+    async def move_ticket(self, task: Task, new_status: str) -> bool:
         """
         Move a ticket to a new status.
 
         Args:
             task (Task): The task representing the ticket to move.
             new_status (str): The new status to assign to the ticket.
+
+        Returns:
+            bool: True if the ticket was actually moved, False if the move was a
+                no-op (e.g. the target lane is not configured or cannot be
+                resolved). Callers should not assume the new status took effect
+                when this returns False.
         """
         pass
 

@@ -5,6 +5,7 @@ import time
 
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
+from guildbotics.observability import trace_scope
 from guildbotics.runtime import Context
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
@@ -17,6 +18,7 @@ class TaskScheduler:
         default_routine_commands: list[str],
         consecutive_error_limit: int = 3,
         routine_interval_minutes: int = DEFAULT_ROUTINE_INTERVAL_MINUTES,
+        service_run_id: str | None = None,
     ):
         """
         Initialize the TaskScheduler with a list of jobs.
@@ -34,6 +36,7 @@ class TaskScheduler:
         # A non-positive value is treated as 1 to avoid infinite loops on error.
         self.consecutive_error_limit = max(1, int(consecutive_error_limit))
         self.routine_interval_minutes = max(1, int(routine_interval_minutes))
+        self.service_run_id = service_run_id
         self.scheduled_tasks_list = {
             p: p.get_scheduled_commands() for p in context.team.members
         }
@@ -126,9 +129,17 @@ class TaskScheduler:
                     if self._stop_event.is_set():
                         break
                     if scheduled_task.should_run(start_time):
-                        ok = loop.run_until_complete(
-                            run_command(context, scheduled_task.command, "scheduled")
-                        )
+                        with trace_scope(
+                            "scheduled",
+                            person_id=person.person_id,
+                            command=scheduled_task.command,
+                            attributes={"service_run_id": self.service_run_id},
+                        ):
+                            ok = loop.run_until_complete(
+                                run_command(
+                                    context, scheduled_task.command, "scheduled"
+                                )
+                            )
                         consecutive_errors, should_stop = (
                             self._update_consecutive_errors(
                                 ok,
@@ -157,9 +168,15 @@ class TaskScheduler:
                     routine_command_index += 1
 
                 if routine_command and not self._stop_event.is_set():
-                    ok = loop.run_until_complete(
-                        run_command(context, routine_command, "routine")
-                    )
+                    with trace_scope(
+                        "routine",
+                        person_id=person.person_id,
+                        command=routine_command,
+                        attributes={"service_run_id": self.service_run_id},
+                    ):
+                        ok = loop.run_until_complete(
+                            run_command(context, routine_command, "routine")
+                        )
                     next_routine_time = datetime.datetime.now() + datetime.timedelta(
                         minutes=self.routine_interval_minutes
                     )

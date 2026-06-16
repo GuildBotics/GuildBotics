@@ -1,2 +1,2 @@
 en:
-  task_error: "An error occurred while executing the task. Please check the error log for details."
+  task_error: "An error occurred while running this task, so it could not be completed. The operator will look into it."

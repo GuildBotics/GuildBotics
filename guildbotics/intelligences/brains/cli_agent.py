@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 import tempfile
 from contextlib import suppress
 from dataclasses import dataclass
@@ -10,14 +11,16 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
-from guildbotics.app_api.cli_agents import get_cli_agent_search_path
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
+from guildbotics.observability import span_scope
+from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.log_utils import get_log_output_dir
 from guildbotics.utils.prompt_trace import write_prompt_trace
 from guildbotics.utils.text_utils import replace_placeholders
+from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 
 class ExecutableInfo:
@@ -25,7 +28,7 @@ class ExecutableInfo:
     Information about an executable script.
     """
 
-    def __init__(self, script: str, env: dict | None = None):
+    def __init__(self, script: str, env: dict[str, str] | None = None):
         """
         Initialize the executable information.
 
@@ -45,6 +48,32 @@ class CliAgentExecutionResult:
     stdout: str
     stderr: str
     returncode: int
+
+
+def _extra_env(kwargs: dict[str, Any]) -> dict[str, str]:
+    """Per-invocation environment overlay passed via ``session_state``.
+
+    Callers (e.g. ticket workflow) put a ``cli_agent_env`` mapping into the
+    invoke params so values like the workflow run id reach this single agent
+    subprocess only, instead of mutating the process-global ``os.environ``
+    (which would race across the scheduler's per-member worker threads).
+    """
+    overlay = (kwargs.get("session_state") or {}).get("cli_agent_env")
+    if not isinstance(overlay, dict):
+        return {}
+    return {str(key): str(value) for key, value in overlay.items()}
+
+
+def _propagate_cwd_workspace_environment(env: dict[str, str]) -> None:
+    if not env.get(GUILDBOTICS_CONFIG_DIR, "").strip():
+        config_dir = Path.cwd() / ".guildbotics" / "config"
+        if config_dir.exists():
+            env[GUILDBOTICS_CONFIG_DIR] = str(config_dir.resolve())
+
+    if not env.get(GUILDBOTICS_ENV_FILE, "").strip():
+        env_file = Path.cwd() / ".env"
+        if env_file.is_file():
+            env[GUILDBOTICS_ENV_FILE] = str(env_file.resolve())
 
 
 def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
@@ -157,32 +186,44 @@ class CliAgentBrain(Brain):
         input = self.prompt_info.to_prompt(
             message, kwargs.get("session_state", {}), self.template_engine
         )
-        self.logger.debug(
-            f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
-        )
-        self._write_request_trace(input, kwargs)
+        # The span wraps the whole call (including this brain's own logging) so
+        # logs emitted here are attributed to the "cli_agent" span in diagnostics.
+        with span_scope("cli_agent"):
+            self.logger.debug(
+                f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
+            )
+            self._write_request_trace(input, kwargs)
 
-        response_file = ""
-        log_file = ""
-        output_dir = get_log_output_dir()
-        if output_dir:
-            current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
-            log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
+            response_file = ""
+            log_file = ""
+            output_dir = get_log_output_dir()
+            if output_dir:
+                current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                response_file = str(
+                    output_dir / f"cli_agent_response_{current_time}.log"
+                )
+                log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-        result = await self._execute_script(input, response_file, log_file, cwd)
-        output: Any = result.stdout
-        self._write_response_trace(result)
+            result = await self._execute_script(
+                input, response_file, log_file, cwd, _extra_env(kwargs)
+            )
+            output: Any = result.stdout
+            self._write_response_trace(result)
+            self._raise_if_execution_failed(result)
 
-        self.logger.debug(
-            f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
-        )
-        if self.response_class:
-            output = to_response_class(output, self.response_class)
-        if isinstance(output, AgentResponse):
-            log_file_path = Path(log_file)
-            if output.status == AgentResponse.ASKING and log_file_path.exists():
-                output.message = f"{output.message}\n\nSee: {log_file_path.name}"
+            self.logger.debug(
+                f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
+            )
+            if self.response_class:
+                output = to_response_class(output, self.response_class)
+            if isinstance(output, AgentResponse):
+                log_file_path = Path(log_file)
+                if (
+                    output.status == AgentResponse.ASKING
+                    and log_file
+                    and log_file_path.exists()
+                ):
+                    output.message = f"{output.message}\n\nSee: {log_file_path.name}"
 
         return output
 
@@ -193,25 +234,47 @@ class CliAgentBrain(Brain):
         input = self.prompt_info.to_prompt(
             message, kwargs.get("session_state", {}), self.template_engine
         )
-        self.logger.debug(
-            f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
-        )
-        self._write_request_trace(input, kwargs)
+        with span_scope("cli_agent"):
+            self.logger.debug(
+                f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
+            )
+            self._write_request_trace(input, kwargs)
 
-        response_file = ""
-        log_file = ""
-        output_dir = get_log_output_dir()
-        if output_dir:
-            current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            response_file = str(output_dir / f"cli_agent_response_{current_time}.log")
-            log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
+            response_file = ""
+            log_file = ""
+            output_dir = get_log_output_dir()
+            if output_dir:
+                current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                response_file = str(
+                    output_dir / f"cli_agent_response_{current_time}.log"
+                )
+                log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-        result = await self._execute_script(input, response_file, log_file, cwd)
-        self._write_response_trace(result)
+            result = await self._execute_script(
+                input, response_file, log_file, cwd, _extra_env(kwargs)
+            )
+            self._write_response_trace(result)
         return result
 
+    def _raise_if_execution_failed(self, result: CliAgentExecutionResult) -> None:
+        if result.returncode != 0:
+            detail = result.stderr or result.stdout or "no output"
+            raise RuntimeError(
+                f"CLI agent '{self.cli_agent}' exited with code {result.returncode}: {detail}"
+            )
+        if not result.stdout:
+            detail = result.stderr or "no output"
+            raise RuntimeError(
+                f"CLI agent '{self.cli_agent}' produced no response: {detail}"
+            )
+
     async def _execute_script(
-        self, input: str, response_file: str, log_file: str, cwd: Path | str
+        self,
+        input: str,
+        response_file: str,
+        log_file: str,
+        cwd: Path | str,
+        extra_env: dict[str, str] | None = None,
     ) -> CliAgentExecutionResult:
         """
         Execute the script specified in the coding_agent.run configuration
@@ -223,12 +286,19 @@ class CliAgentBrain(Brain):
         Raises:
             RuntimeError: If the subprocess exits with a non-zero status.
         """
-        # Merge provided env with current environment
-        env = (self.executable_info.env or {}).copy()
-        env["PATH"] = get_cli_agent_search_path()
-        xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-        if xdg_runtime_dir:
-            env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
+        from guildbotics.app_api.cli_agents import get_cli_agent_search_path
+
+        env = os.environ.copy()
+        env.update(self.executable_info.env)
+        _propagate_cwd_workspace_environment(env)
+        env["PATH"] = get_cli_agent_search_path(env.get("PATH"))
+        gh_config_dir = tempfile.mkdtemp(prefix="guildbotics-gh-config-")
+        self._isolate_github_write_credentials(env, gh_config_dir)
+        # Per-invocation overlay (e.g. the workflow run id) is applied after
+        # credential isolation so callers can scope values to this single
+        # subprocess without mutating the shared process environment.
+        if extra_env:
+            env.update(extra_env)
 
         # Create temporary file for the prompt input
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
@@ -249,7 +319,7 @@ class CliAgentBrain(Brain):
             self.logger.info(
                 f"Running CLI agent '{self.cli_agent}' with script: {self.executable_info.script}"
             )
-            self.logger.debug(f"Environment: {env}")
+            self.logger.debug(f"Environment: {self._mask_env(env)}")
             stdout, stderr = await process.communicate()
             self.logger.info(
                 f"CLI Agent '{self.cli_agent}' finished execution with return code {process.returncode}"
@@ -280,6 +350,35 @@ class CliAgentBrain(Brain):
         finally:
             # Clean up temporary prompt file
             self.remove_temp_file(temp_file_name)
+            shutil.rmtree(gh_config_dir, ignore_errors=True)
+
+    def _isolate_github_write_credentials(
+        self, env: dict[str, str], gh_config_dir: str
+    ) -> None:
+        for key in [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+            "GH_CONFIG_DIR",
+            "GIT_ASKPASS",
+            "SSH_ASKPASS",
+            "SSH_AUTH_SOCK",
+        ]:
+            env.pop(key, None)
+        env["GH_CONFIG_DIR"] = gh_config_dir
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_CONFIG_GLOBAL"] = os.devnull
+        env["GIT_SSH_COMMAND"] = (
+            "ssh -F /dev/null -o BatchMode=yes "
+            "-o IdentitiesOnly=yes -o IdentityFile=/dev/null"
+        )
+
+    def _mask_env(self, env: dict[str, str]) -> dict[str, str]:
+        sensitive = ("TOKEN", "PASSWORD", "SECRET", "PRIVATE_KEY", "ASKPASS")
+        return {
+            key: "***" if any(part in key.upper() for part in sensitive) else value
+            for key, value in env.items()
+        }
 
     def remove_temp_file(self, file_name: str):
         """

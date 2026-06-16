@@ -33,7 +33,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/guildbotics-app-api"],
+    "externalBin": ["binaries/guildbotics-app-api", "binaries/guildbotics-cli"],
     "macOS": {
       "minimumSystemVersion": "13.0"
     }

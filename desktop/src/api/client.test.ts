@@ -3,21 +3,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
   configureApi,
+  ensureAgentField,
+  getAgentFieldState,
   getApiBase,
   getCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
   getMemberConfig,
   getPromptTrace,
+  getRuntimeDebug,
   runScenarioDiagnostics,
   setWorkspace,
   subscribeEvents,
   subscribeLogs,
+  updateRuntimeDebug,
   verify,
   type RuntimeEvent,
   type RuntimeLog,
   type StreamStatus,
 } from "./client";
+import { makeRuntimeEvent, makeRuntimeLog } from "../test/factories";
 
 type FetchArgs = { url: string; init: RequestInit };
 
@@ -107,6 +112,38 @@ describe("request headers and body", () => {
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBeUndefined();
   });
+
+  it("POSTs the project identity for getAgentFieldState", async () => {
+    const { calls } = captureFetch(
+      jsonResponse({ available: true, exists: false, options: [], missing: [] }),
+    );
+    const body = {
+      owner: "acme",
+      project_id: "9",
+      github_project_url: "https://github.com/orgs/acme/projects/9",
+    };
+    await getAgentFieldState(body);
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/project/agent-field");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify(body));
+  });
+
+  it("POSTs to the ensure endpoint for ensureAgentField", async () => {
+    const { calls } = captureFetch(
+      jsonResponse({ available: true, exists: true, options: [], missing: [] }),
+    );
+    const body = {
+      owner: "acme",
+      project_id: "9",
+      github_project_url: "https://github.com/orgs/acme/projects/9",
+    };
+    await ensureAgentField(body);
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/project/agent-field/ensure");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify(body));
+  });
 });
 
 describe("GET query parameter encoding", () => {
@@ -127,6 +164,22 @@ describe("GET query parameter encoding", () => {
     await getPromptTrace();
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/prompt-trace?limit=20");
+  });
+
+  it("fetches runtime debug status", async () => {
+    const { calls } = captureFetch(jsonResponse({ enabled: false }));
+    await getRuntimeDebug();
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/runtime/debug");
+  });
+
+  it("updates runtime debug status", async () => {
+    const { calls } = captureFetch(jsonResponse({ enabled: true }));
+    await updateRuntimeDebug({ enabled: true });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/runtime/debug");
+    expect(calls[0].init.method).toBe("PUT");
+    expect(calls[0].init.body).toBe(JSON.stringify({ enabled: true }));
   });
 
   it("encodes person_id for runScenarioDiagnostics", async () => {
@@ -292,22 +345,17 @@ describe("websocket subscriptions", () => {
     socket.onopen?.();
     expect(statuses).toEqual(["connecting", "connected"]);
 
-    socket.onmessage?.({
-      data: JSON.stringify({
-        type: "task_started",
-        request_id: "r1",
-        payload: { id: 1 },
-        timestamp: "2026-06-05T00:00:00Z",
-      }),
+    const event = makeRuntimeEvent({
+      type: "task_started",
+      trace_id: "r1",
+      span_id: "s1",
+      source: "manual",
+      payload: { id: 1 },
+      attributes: { "github.number": 42 },
+      timestamp: "2026-06-05T00:00:00Z",
     });
-    expect(events).toEqual([
-      {
-        type: "task_started",
-        request_id: "r1",
-        payload: { id: 1 },
-        timestamp: "2026-06-05T00:00:00Z",
-      },
-    ]);
+    socket.onmessage?.({ data: JSON.stringify(event) });
+    expect(events).toEqual([event]);
 
     socket.onerror?.();
     expect(statuses).toEqual(["connecting", "connected", "error"]);
@@ -333,17 +381,16 @@ describe("websocket subscriptions", () => {
     expect(socket.url).toBe("ws://127.0.0.1:8765/logs?token=a%20b%26c");
     expect(statuses).toEqual(["connecting"]);
 
-    socket.onmessage?.({
-      data: JSON.stringify({
-        level: "INFO",
-        message: "hello",
-        request_id: null,
-        timestamp: "2026-06-05T00:00:00Z",
-      }),
+    const log = makeRuntimeLog({
+      level: "INFO",
+      message: "hello",
+      trace_id: "r1",
+      span_id: "s1",
+      source: "manual",
+      timestamp: "2026-06-05T00:00:00Z",
     });
-    expect(logs).toEqual([
-      { level: "INFO", message: "hello", request_id: null, timestamp: "2026-06-05T00:00:00Z" },
-    ]);
+    socket.onmessage?.({ data: JSON.stringify(log) });
+    expect(logs).toEqual([log]);
   });
 
   it("works without an onStatus callback", () => {

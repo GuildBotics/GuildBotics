@@ -1,255 +1,199 @@
 import re
-import shlex
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
-from guildbotics.entities.message import Message
+from guildbotics.capabilities.task_runs import (
+    TASK_RUN_ENV,
+    TaskRunError,
+    TaskRunStatus,
+    TaskRunStore,
+)
 from guildbotics.entities.task import Task
 from guildbotics.integrations.ticket_manager import TicketManager
-from guildbotics.intelligences.common import AgentResponse, Labels
-from guildbotics.intelligences.functions import identify_mode, identify_role, to_text
+from guildbotics.intelligences.common import AgentResponse
+from guildbotics.observability import set_attributes
 from guildbotics.runtime import Context
-from guildbotics.templates.commands.workflows.modes.util import checkout
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
+    get_storage_path,
+    get_workspace_path,
+)
 from guildbotics.utils.i18n_tool import t
 
-COMMENT_MODE = "comment"
 
-
-async def _move_task_to_in_progress_if_ready(
+async def _move_task_to_working_if_ready(
     context: Context, ticket_manager: TicketManager
-):
-    """Move the task to 'In Progress' if it is ready."""
+) -> None:
+    """Move a newly selected task to the working lane when one is available."""
     if context.task.status == Task.READY and context.task.id is not None:
-        await ticket_manager.move_ticket(context.task, Task.IN_PROGRESS)
-        context.task.status = Task.IN_PROGRESS
+        moved = await ticket_manager.move_ticket(context.task, Task.IN_PROGRESS)
+        if moved:
+            context.task.status = Task.IN_PROGRESS
 
 
-async def _move_task_to_in_review_if_in_progress(
-    context: Context, ticket_manager: TicketManager
-):
-    """Move the task to 'In Review' if it is currently 'In Progress'."""
-    if context.task.status == Task.IN_PROGRESS:
-        await ticket_manager.move_ticket(context.task, Task.IN_REVIEW)
-        context.task.status = Task.IN_REVIEW
+def _ticket_trace_attributes(task: Task) -> dict[str, str]:
+    """Correlation attributes that make a ticket run findable in diagnostics."""
+    attributes: dict[str, str] = {}
+    if task.repository:
+        attributes["github.repo"] = task.repository
+    if task.pull_request_url:
+        attributes["github.kind"] = "pull_request"
+        attributes["github.url"] = task.pull_request_url
+        match = re.search(r"/pull/(\d+)", task.pull_request_url)
+        if match:
+            attributes["github.number"] = match.group(1)
+    else:
+        attributes["github.kind"] = "issue"
+        if task.url:
+            attributes["github.url"] = task.url
+        if task.number is not None:
+            attributes["github.number"] = str(task.number)
+    return attributes
 
 
-async def _build_task_error_message(context) -> str:
+async def _build_task_error_message(
+    context: Context, error: Exception | None = None
+) -> str:
+    # The traceback is logged (trace-scoped ERROR) by the command runner on
+    # re-raise; the ticket comment stays a safe, reader-facing message with no
+    # local paths or internal details.
     error_text = t("drivers.task_scheduler.task_error")
     try:
         from guildbotics.intelligences.functions import talk_as
 
-        talked_text = await talk_as(
-            context,
-            error_text,
-            t("commands.workflows.modes.ticket_mode.agent_response_context_location"),
-            [],
-        )
-
+        talked_text = await talk_as(context, error_text, "Ticket", [])
         return talked_text or error_text
     except Exception:
         return error_text
 
 
-def _should_react_to_ticket(
-    context: Context, task: Task, messages: list[Message]
-) -> bool:
-    """Determine whether the agent should react to the current ticket."""
-    is_my_ticket = task.assignee == context.person.person_id
-
-    if task.status == Task.RETROSPECTIVE:
-        return is_my_ticket
-
-    if not messages or len(messages) <= 1:
-        return is_my_ticket
-
-    person_lower = (context.person.person_id or "").casefold()
-    mentions = {
-        match.group(1).casefold()
-        for match in re.finditer(r"(?<!\S)(?:⚙|@)([\w.-]+)", messages[-1].content or "")
-    }
-    mentions_me = bool(person_lower and person_lower in mentions)
-    mentions_others = any(mention != person_lower for mention in mentions)
-
-    if is_my_ticket:
-        return (not mentions_others) or mentions_me
-    else:
-        return mentions_me
+def _work_type(task: Task) -> str:
+    if task.pull_request_url:
+        return "pull_request_review"
+    return "issue"
 
 
-async def _main(context: Context, ticket_manager: TicketManager):
-    assigned_to_me = context.task.assignee == context.person.person_id
-    if not assigned_to_me:
-        context.task.mode = COMMENT_MODE
-
-    # Prepare the input for the mode logic from the task details.
-    messages = []
-    title_and_description = t(
-        "commands.workflows.ticket_driven_workflow.title_and_description",
-        title=context.task.title,
-        description=context.task.description,
-    )
-
-    messages.append(
-        Message(
-            content=title_and_description,
-            author=context.task.owner or "user",
-            author_type=Message.USER,
-            timestamp=(
-                context.task.created_at.isoformat() if context.task.created_at else ""
-            ),
-        )
-    )
-
-    input = title_and_description
-    if context.task.comments:
-        input += t(
-            "commands.workflows.ticket_driven_workflow.comments",
-            comments=to_text(context.task.comments),
-        )
-        for comment in context.task.comments:
-            messages.append(comment)
-
-    should_react = _should_react_to_ticket(context, context.task, messages)
-    if not should_react:
-        return
-
-    if assigned_to_me:
-        await _move_task_to_in_progress_if_ready(context, ticket_manager)
-
-    if not context.task.role:
-        context.task.role = await identify_role(context, input)
-        context.update_task(context.task)
-        await ticket_manager.update_ticket(context.task)
-
-    code_hosting_service = context.get_code_hosting_service(context.task.repository)
-
-    if context.task.status == Task.RETROSPECTIVE:
-        response = await context.invoke(
-            "workflows/retrospective", code_hosting_service=code_hosting_service
-        )
-    else:
-        git_tool = await checkout(context)
-        params = {
-            "messages": messages,
-            "git_tool": git_tool,
-            "code_hosting_service": code_hosting_service,
-            "ticket_manager": ticket_manager,
-        }
-
-        if _is_custom_command(context, messages):
-            response = await _invoke_custom_command(context, params)
-        else:
-            if not context.task.mode:
-                available_modes = Labels(Task.get_available_modes())
-                context.task.mode = await identify_mode(context, available_modes, input)
-                await ticket_manager.update_ticket(context.task)
-
-            command_name = _mode_to_command_name(context.task.mode)
-            response = await context.invoke(command_name, **params)
-
-    # If the response is asking for more information, return it.
-    if not response.skip_ticket_comment:
-        await ticket_manager.add_comment_to_ticket(context.task, response.message)
-    if response.status == response.ASKING:
-        return
-
-    # If the task is in progress, move it to "In Review".
-    await _move_task_to_in_review_if_in_progress(context, ticket_manager)
-
-
-async def _invoke_custom_command(context: Context, params: dict) -> AgentResponse:
-    """
-    Invoke a custom command based on the last message.
-    Args:
-        context (Context): The runtime context.
-        params (dict): The parameters to pass to the command.
-    Returns:
-        AgentResponse: The agent response.
-    """
-    content = _get_last_message(context, params["messages"])
-    lines = content.splitlines()
-    command_name, command_args = _preprocess_line(lines[0])
-    if len(lines) > 1:
-        context.pipe = "\n".join(lines[1:]).strip()
-
-    response = await context.invoke(command_name, *command_args, **params)
+def _normalize_agent_response(response: Any) -> AgentResponse:
     if isinstance(response, AgentResponse):
         return response
+    return AgentResponse(
+        status=AgentResponse.DONE,
+        message=str(response) if response is not None else "",
+        skip_ticket_comment=True,
+    )
 
-    message = str(response) if response is not None else ""
-    return AgentResponse(status=AgentResponse.DONE, message=message)
+
+def _task_run_status(run_id: str, member_workspace: Path) -> TaskRunStatus:
+    first_error: TaskRunError | None = None
+    stores = [
+        TaskRunStore(),
+        TaskRunStore(member_workspace / ".guildbotics-data" / "task-runs"),
+        TaskRunStore(member_workspace / ".guildbotics" / "data" / "task-runs"),
+    ]
+    for store in stores:
+        try:
+            return store.status(run_id)
+        except TaskRunError as exc:
+            first_error = first_error or exc
+    if first_error is not None:
+        raise first_error
+    raise TaskRunError(f"Task run '{run_id}' was not found.")
 
 
-def _preprocess_line(line: str) -> tuple[str, list[str]]:
+async def _main(context: Context, ticket_manager: TicketManager) -> AgentResponse:
+    await _move_task_to_working_if_ready(context, ticket_manager)
+
+    ticket_url = await ticket_manager.get_ticket_url(context.task, markdown=False)
+    workflow_run_id = uuid4().hex
+    member_workspace = get_workspace_path(context.person.person_id)
+    member_workspace.mkdir(parents=True, exist_ok=True)
+    response = await context.invoke(
+        "functions/handle_github_ticket",
+        person_id=context.person.person_id,
+        ticket_url=ticket_url,
+        pull_request_url=context.task.pull_request_url or "",
+        work_type=_work_type(context.task),
+        trigger_reason=context.task.trigger_reason or "",
+        language=context.language_name,
+        member_workspace=str(member_workspace),
+        workflow_run_id=workflow_run_id,
+        prepare_command=_prepare_command(context, ticket_url),
+        github_capability_help=_github_capability_help(),
+        # Scope the run id to this agent subprocess only. Mutating the
+        # process-global os.environ would race across the scheduler's
+        # per-member worker threads; the brain merges this overlay into the
+        # subprocess env so child ``guildbotics member`` calls record evidence
+        # under the correct run id.
+        cli_agent_env={
+            TASK_RUN_ENV: workflow_run_id,
+            GUILDBOTICS_DATA_DIR: str(get_storage_path()),
+        },
+        cwd=member_workspace,
+    )
+    agent_response = _normalize_agent_response(response)
+    completion = _task_run_status(workflow_run_id, member_workspace)
+    return AgentResponse(
+        status=(
+            AgentResponse.ASKING
+            if completion.status == AgentResponse.ASKING
+            else AgentResponse.DONE
+        ),
+        message=agent_response.message or completion.summary,
+        skip_ticket_comment=True,
+    )
+
+
+def _prepare_command(context: Context, ticket_url: str) -> str:
+    """Build the exact ``git prepare`` command for this run.
+
+    The workflow already knows whether this is a PR review (``pull_request_url``
+    is set), so it hands the agent a ready-to-run command. For PR review this
+    includes ``--pr-url`` so the PR head branch is checked out; without it
+    ``prepare`` would fall back to issue mode and silently work on a new
+    ``ticket/<n>`` branch instead of the PR under review.
     """
-    Preprocess a command line by extracting the command name and arguments.
-    Args:
-        line (str): The command line to preprocess.
-    Returns:
-        tuple[str, list[str]]: The command name and a list of arguments.
+    person_id = context.person.person_id
+    command = (
+        f"guildbotics member git prepare --person {person_id} --issue-url {ticket_url}"
+    )
+    if context.task.pull_request_url:
+        command += f" --pr-url {context.task.pull_request_url}"
+    return command
+
+
+def _github_capability_help() -> str:
+    return "\n".join(
+        [
+            "guildbotics member context --person <person> --check-credentials",
+            "guildbotics member github issue inspect --person <person> --url <issue_url>",
+            "guildbotics member github pr inspect --person <person> --url <pr_url> --include-comments",
+            "guildbotics member git prepare --person <person> --issue-url <issue_url> [--pr-url <pr_url>]",
+            "guildbotics member git publish --person <person> --repo-path <path> --message-file <file>",
+            "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> [--base <branch>] (--title-file <file> --body-file <file> | --content-stdin) --issue-url <issue_url>",
+            "guildbotics member github issue comment --person <person> --url <issue_url> --body-file <file>",
+            "guildbotics member github pr reply --person <person> --url <pr_url> --reply-target-id <id> --body-file <file>",
+            "guildbotics member github reaction add --person <person> --repo <owner/repo> --target issue-comment|pr-review-comment --comment-id <id> --reaction +1",
+            "guildbotics member task complete --person <person> --run-id <run_id> --ticket-url <issue_url> --status done|asking|blocked --summary-file <file>",
+        ]
+    )
+
+
+async def main(context: Context) -> AgentResponse | None:
     """
-    try:
-        words = shlex.split(line[2:].strip())
-    except ValueError:
-        words = line[2:].strip().split()
-
-    return words[0], words[1:]
-
-
-def _get_last_message(context: Context, messages: list[Message]) -> str:
-    """
-    Get the content of the last message.
-    Args:
-        messages (list[Message]): The list of messages.
-    Returns:
-        str: The content of the last message.
-    """
-    if len(messages) == 1:
-        return context.task.description
-    else:
-        return messages[-1].content.strip()
-
-
-def _is_custom_command(context: Context, messages: list[Message]) -> bool:
-    """
-    Determine if the last message is a custom command.
-    Args:
-        messages (list[Message]): The list of messages.
-    Returns:
-        bool: True if the last message is a custom command, False otherwise.
-    """
-    if not messages:
-        return False
-
-    return _get_last_message(context, messages).startswith("//")
-
-
-def _mode_to_command_name(mode: str | None) -> str:
-    """
-    Convert a mode name to a command name.
-    Args:
-        mode (str | None): The mode name.
-    Returns:
-        str: The command name.
-    """
-    if not mode:
-        mode = COMMENT_MODE
-
-    return f"workflows/modes/{mode}_mode"
-
-
-async def main(context: Context):
-    """
-    Main function for the ticket-driven workflow.
-    Args:
-        context (Context): The runtime context.
+    Poll the ticket manager for one actionable GitHub issue or PR and delegate the
+    actual GitHub/git/PR work to the configured CLI agent.
     """
     ticket_manager = context.get_ticket_manager()
     task = await ticket_manager.get_task_to_work_on()
     if task is None:
-        return
+        return None
+
     context.update_task(task)
+    set_attributes(**_ticket_trace_attributes(task))
     try:
-        await _main(context, ticket_manager)
-    except Exception:
-        message = await _build_task_error_message(context)
+        return await _main(context, ticket_manager)
+    except Exception as error:
+        message = await _build_task_error_message(context, error)
         await ticket_manager.add_comment_to_ticket(task, message)
         raise

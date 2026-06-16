@@ -9,6 +9,7 @@ and never touch the real home directory or network.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -16,12 +17,209 @@ import pytest
 
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.models import PromptTraceUpdateRequest
+from guildbotics.app_api.models import (
+    ProjectStatusOptionsRequest,
+    PromptTraceUpdateRequest,
+    RuntimeDebugUpdateRequest,
+)
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.entities import Person, Project, Team
+from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
+from guildbotics.utils.workspace_state import (
+    GUILDBOTICS_CONFIG_DIR,
+    active_workspace_file,
+)
 
 HTTP_BAD_REQUEST = 400
 TRACE_EVENT_TOTAL = 5
 TRACE_EVENT_LIMIT = 2
+
+
+class _FakeContext:
+    def __init__(self, members: list[Person]) -> None:
+        self.team = Team(project=Project(name="demo"), members=members)
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_fetch_status_options_incomplete_identity_is_unavailable() -> None:
+    runtime = AppRuntime(EventBus())
+    result = await runtime.fetch_project_status_options(
+        ProjectStatusOptionsRequest(owner="", project_id="", github_project_url="")
+    )
+    assert result.available is False
+    assert result.statuses == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_status_options_reads_live_with_member_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    member = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        account_info={"github_username": "alice"},
+    )
+    monkeypatch.setattr(
+        AppRuntime, "_get_context", lambda self, message="": _FakeContext([member])
+    )
+
+    class _FakeTicketManager:
+        def __init__(self, logger: object, person: Person, team: Team) -> None:
+            self.client = None
+            self.person = person
+
+        async def get_statuses(self) -> list[str]:
+            return ["Todo", "In Progress", "Done"]
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.GitHubTicketManager", _FakeTicketManager
+    )
+
+    runtime = AppRuntime(EventBus())
+    result = await runtime.fetch_project_status_options(
+        ProjectStatusOptionsRequest(
+            owner="acme",
+            project_id="9",
+            github_project_url="https://github.com/orgs/acme/projects/9",
+        )
+    )
+    assert result.available is True
+    assert result.statuses == ["Todo", "In Progress", "Done"]
+
+
+def _agent_request() -> ProjectStatusOptionsRequest:
+    return ProjectStatusOptionsRequest(
+        owner="acme",
+        project_id="9",
+        github_project_url="https://github.com/orgs/acme/projects/9",
+    )
+
+
+def _patch_agent_ticket_manager(
+    monkeypatch: pytest.MonkeyPatch, *, state: dict, record: dict | None = None
+) -> None:
+    member = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        account_info={"github_username": "alice"},
+    )
+    monkeypatch.setattr(
+        AppRuntime, "_get_context", lambda self, message="": _FakeContext([member])
+    )
+
+    class _FakeTicketManager:
+        def __init__(self, logger: object, person: Person, team: Team) -> None:
+            self.client = None
+
+        async def get_agent_field_state(self) -> dict:
+            return state
+
+        async def sync_agent_field(self) -> dict:
+            if record is not None:
+                record["synced"] = True
+            return state
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.GitHubTicketManager", _FakeTicketManager
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_field_state_incomplete_identity_is_unavailable() -> None:
+    runtime = AppRuntime(EventBus())
+    result = await runtime.fetch_agent_field_state(
+        ProjectStatusOptionsRequest(owner="", project_id="", github_project_url="")
+    )
+    assert result.available is False
+    assert result.exists is False
+    assert result.options == []
+    assert result.missing == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_field_state_maps_live_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_agent_ticket_manager(
+        monkeypatch,
+        state={
+            "exists": True,
+            "options": [{"name": "⚙bot1", "description": "Bot One"}],
+            "missing": [{"name": "⚙bot2", "description": "Bot Two"}],
+        },
+    )
+    runtime = AppRuntime(EventBus())
+    result = await runtime.fetch_agent_field_state(_agent_request())
+
+    assert result.available is True
+    assert result.exists is True
+    assert [o.name for o in result.options] == ["⚙bot1"]
+    assert result.missing[0].description == "Bot Two"
+
+
+@pytest.mark.asyncio
+async def test_agent_field_skips_member_without_github_username(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An active member without a GitHub username makes GitHubTicketManager.__init__
+    # raise; the helper must skip it and try the next credentialed member instead
+    # of surfacing a 500.
+    bad = Person(person_id="bot", name="Bot", is_active=True, account_info={})
+    good = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        account_info={"github_username": "alice"},
+    )
+    monkeypatch.setattr(
+        AppRuntime, "_get_context", lambda self, message="": _FakeContext([bad, good])
+    )
+
+    class _FakeTicketManager:
+        def __init__(self, logger: object, person: Person, team: Team) -> None:
+            self.client = None
+            if not person.account_info.get("github_username"):
+                raise ValueError("github username required")
+
+        async def get_agent_field_state(self) -> dict:
+            return {"exists": True, "options": [], "missing": []}
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.GitHubTicketManager", _FakeTicketManager
+    )
+
+    runtime = AppRuntime(EventBus())
+    result = await runtime.fetch_agent_field_state(_agent_request())
+
+    assert result.available is True
+    assert result.exists is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_agent_field_syncs_and_returns_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record: dict = {}
+    _patch_agent_ticket_manager(
+        monkeypatch,
+        state={
+            "exists": True,
+            "options": [{"name": "⚙bot1", "description": "Bot One"}],
+            "missing": [],
+        },
+        record=record,
+    )
+    runtime = AppRuntime(EventBus())
+    result = await runtime.ensure_agent_field(_agent_request())
+
+    assert record.get("synced") is True
+    assert result.available is True
+    assert result.missing == []
 
 
 @pytest.fixture
@@ -163,6 +361,11 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert stop_calls == [True]
     assert Path.cwd() == workspace.resolve()
     assert os.environ["WORKSPACE_MARKER"] == "loaded"
+    assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
+        workspace.resolve() / ".guildbotics" / "config"
+    )
+    assert os.environ[GUILDBOTICS_ENV_FILE] == str(workspace.resolve() / ".env")
+    assert active_workspace_file().exists()
     assert status.cwd == workspace.resolve()
     assert status.primary_config_location == "workspace"
     assert status.active_config_location == "workspace"
@@ -426,6 +629,83 @@ def test_update_prompt_trace_preserves_existing_keys_and_order(
     assert env_map["GUILDBOTICS_PROMPT_TRACE"] == "1"
     assert env_map["EXTRA"] == "keep"
     assert env_map["GUILDBOTICS_PROMPT_TRACE_PATH"] == str(trace_path)
+
+
+# --- runtime debug ----------------------------------------------------------
+
+
+def test_runtime_debug_status_reads_env_file(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("AGNO_DEBUG", raising=False)
+    (isolated_home / ".env").write_text("LOG_LEVEL=DEBUG\nAGNO_DEBUG=false\n")
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.get_runtime_debug_status()
+
+    assert status.enabled is True
+    assert status.log_level == "DEBUG"
+    assert status.agno_debug is False
+    assert status.env_file == isolated_home / ".env"
+    assert status.env_file_exists is True
+
+
+def test_update_runtime_debug_writes_env_environ_and_logger_level(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("AGNO_DEBUG", raising=False)
+    (isolated_home / ".env").write_text("OPENAI_API_KEY=keep\nLOG_LEVEL=INFO\n")
+    runtime = AppRuntime(EventBus())
+    logger = logging.getLogger("guildbotics")
+    original_level = logger.level
+    handler = logging.StreamHandler()
+    logger.addHandler(handler)
+
+    try:
+        status = runtime.update_runtime_debug(RuntimeDebugUpdateRequest(enabled=True))
+
+        assert os.environ["LOG_LEVEL"] == "DEBUG"
+        assert os.environ["AGNO_DEBUG"] == "true"
+        assert logger.level == logging.DEBUG
+        assert handler.level == logging.DEBUG
+        env_map = dict(
+            line.split("=", 1)
+            for line in (isolated_home / ".env").read_text().splitlines()
+            if "=" in line
+        )
+        assert env_map == {
+            "OPENAI_API_KEY": "keep",
+            "LOG_LEVEL": "DEBUG",
+            "AGNO_DEBUG": "true",
+        }
+        assert status.enabled is True
+        assert status.log_level == "DEBUG"
+        assert status.agno_debug is True
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(original_level)
+
+
+def test_update_runtime_debug_disables_both_debug_flags(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("AGNO_DEBUG", "true")
+    (isolated_home / ".env").write_text("LOG_LEVEL=DEBUG\nAGNO_DEBUG=true\n")
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.update_runtime_debug(RuntimeDebugUpdateRequest(enabled=False))
+
+    assert os.environ["LOG_LEVEL"] == "INFO"
+    assert os.environ["AGNO_DEBUG"] == "false"
+    env_text = (isolated_home / ".env").read_text()
+    assert "LOG_LEVEL=INFO" in env_text
+    assert "AGNO_DEBUG=false" in env_text
+    assert status.enabled is False
+    assert status.log_level == "INFO"
+    assert status.agno_debug is False
 
 
 # --- detect_cli_agents() ----------------------------------------------------

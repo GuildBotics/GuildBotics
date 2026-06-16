@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   Divider,
+  Fieldset,
   Group,
   Modal,
   MultiSelect,
@@ -63,6 +64,7 @@ import {
   type IntelligenceConfig,
   type MemberSetupRequest,
   type MemberConfig,
+  type LaneMap,
   type MemberConfigUpdateRequest,
   type MemberTaskSchedule,
   type RoleOption,
@@ -71,13 +73,18 @@ import {
   type ProjectSetupRequest,
   ApiRequestError,
   addMemberConfig,
+  type AgentFieldState,
   deleteMemberConfig,
+  ensureAgentField,
+  getAgentFieldState,
   getCliAgentDetections,
   getCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
   getMemberConfig,
   getProjectConfig,
+  getProjectStatusOptions,
+  type ProjectStatusOptionsRequest,
   getRoleOptions,
   getTeam,
   initConfig,
@@ -87,7 +94,13 @@ import {
   updateIntelligenceConfig,
   updateProjectConfig,
 } from "../api/client";
-import { restartBackend } from "../api/backend";
+import {
+  type CliAgentSkillState,
+  type CliAgentSkillStatusesResponse,
+  forceUpdateCliAgentSkill,
+  getCliAgentSkillStatuses,
+  restartBackend,
+} from "../api/backend";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -106,8 +119,9 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
       githubDecision: z.enum(["", "disabled", "enabled"]),
       githubEnabled: z.boolean(),
       githubProjectUrl: z.string(),
-      githubRepositoryUrl: z.string(),
-      repoAccess: z.enum(["https", "ssh"]),
+      laneReady: z.string(),
+      laneWorking: z.string(),
+      laneDone: z.string(),
     })
     .superRefine((values, ctx) => {
       if (!values.githubDecision) {
@@ -129,15 +143,21 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
           message: githubErrors.githubProjectUrl,
         });
       }
-      if (githubErrors.githubRepositoryUrl) {
+      const ready = (values.laneReady || DEFAULT_LANE_READY).trim();
+      const done = (values.laneDone || DEFAULT_LANE_DONE).trim();
+      if (ready === done) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ["githubRepositoryUrl"],
-          message: githubErrors.githubRepositoryUrl,
+          path: ["laneDone"],
+          message: t("setup.validation.laneReadyDoneSame"),
         });
       }
     });
 }
+
+export const DEFAULT_LANE_READY = "Todo";
+export const DEFAULT_LANE_WORKING = "In Progress";
+export const DEFAULT_LANE_DONE = "Done";
 
 type ProjectFormValues = z.infer<ReturnType<typeof createProjectSchema>>;
 type ProjectForm = UseFormReturnType<ProjectFormValues>;
@@ -147,8 +167,8 @@ type IntelligenceDraftState = {
   config: IntelligenceConfig;
   savedSerialized: string;
 };
-const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "github", "members"] as const;
-const CORE_SETUP_SECTIONS_CONFIGURED = ["project", "intelligence", "github", "members"] as const;
+const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "members", "github"] as const;
+const CORE_SETUP_SECTIONS_CONFIGURED = ["project", "intelligence", "members", "github"] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
 const LLM_PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI", family: "GPT" },
@@ -604,8 +624,8 @@ function SetupSectionNav({
   const items: Array<readonly [CoreSection, string, boolean]> = [
     ["project", t("setup.nav.project"), status.projectReady],
     ["intelligence", t("setup.nav.intelligence"), status.intelligenceReady],
-    ["github", t("setup.nav.github"), status.githubReady],
     ["members", t("setup.nav.members"), status.membersReady],
+    ["github", t("setup.nav.github"), status.githubReady],
   ];
   return (
     <Card withBorder radius="md" p="xs" className="setup-nav">
@@ -689,6 +709,24 @@ function ProjectSection({
           minRows={2}
           {...form.getInputProps("description")}
         />
+        <Select
+          label={<RequiredLabel text={t("setup.github.decision")} />}
+          aria-label={t("setup.github.decision")}
+          aria-required
+          description={t("setup.github.decisionHint")}
+          placeholder={t("setup.github.decisionPlaceholder")}
+          data={[
+            { value: "disabled", label: t("setup.github.disabled") },
+            { value: "enabled", label: t("setup.github.enabled") },
+          ]}
+          value={form.values.githubDecision || null}
+          onChange={(value) => {
+            const decision = (value ?? "") as ProjectFormValues["githubDecision"];
+            form.setFieldValue("githubDecision", decision);
+            form.setFieldValue("githubEnabled", decision === "enabled");
+          }}
+          error={form.errors.githubDecision}
+        />
       </Stack>
     </Card>
   );
@@ -710,6 +748,7 @@ function IntelligenceSection({
   projectConfig: ProjectConfig | undefined;
 }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const selectedProviderKeyField = getProviderKeyField(form.values.llmApiType);
   const selectedProviderKeyLabel = getProviderKeyLabel(form.values.llmApiType);
   const selectedProviderKey = form.values[selectedProviderKeyField];
@@ -720,6 +759,35 @@ function IntelligenceSection({
     () => new Set(detections.filter((agent) => agent.detected).map((agent) => agent.name)),
     [detections],
   );
+  const skillStatuses = useQuery({
+    queryKey: ["cli-agent-skill-statuses"],
+    queryFn: getCliAgentSkillStatuses,
+  });
+  const forceSkillUpdate = useMutation({
+    mutationFn: forceUpdateCliAgentSkill,
+    onSuccess: (updated) => {
+      queryClient.setQueryData<CliAgentSkillStatusesResponse>(
+        ["cli-agent-skill-statuses"],
+        (current) => ({
+          agents: upsertByAgent(current?.agents ?? [], updated),
+          error: current?.error,
+        }),
+      );
+      notifications.show({
+        color: "green",
+        title: t("setup.intelligence.skillUpdatedTitle"),
+        message: t("setup.intelligence.skillUpdatedBody"),
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        color: "red",
+        title: t("setup.intelligence.skillUpdateFailedTitle"),
+        message:
+          error instanceof Error ? error.message : t("setup.intelligence.skillUpdateFailedBody"),
+      });
+    },
+  });
   useEffect(() => {
     if (detectionLoading) {
       return;
@@ -819,6 +887,13 @@ function IntelligenceSection({
         <Text size="sm" c="dimmed">
           {t("setup.intelligence.cliHint")}
         </Text>
+        <CliAgentSkillStatusList
+          detections={detections}
+          statuses={skillStatuses.data?.agents ?? []}
+          loading={skillStatuses.isLoading}
+          onForceUpdate={(agent) => forceSkillUpdate.mutate(agent)}
+          updatingAgent={forceSkillUpdate.isPending ? forceSkillUpdate.variables : undefined}
+        />
         {autosaveEnabled ? (
           <Accordion variant="contained">
             <Accordion.Item value="advanced-intelligence">
@@ -832,6 +907,134 @@ function IntelligenceSection({
       </Stack>
     </Card>
   );
+}
+
+function CliAgentSkillStatusList({
+  detections,
+  statuses,
+  loading,
+  updatingAgent,
+  onForceUpdate,
+}: {
+  detections: CliAgentDetection[];
+  statuses: CliAgentSkillState[];
+  loading: boolean;
+  updatingAgent?: CliAgentSkillState["agent"];
+  onForceUpdate: (agent: CliAgentSkillState["agent"]) => void;
+}) {
+  const { t } = useTranslation();
+  const statusByAgent = useMemo(
+    () => new Map(statuses.map((status) => [status.agent, status])),
+    [statuses],
+  );
+  const detectedByAgent = useMemo(
+    () => new Map(detections.map((detection) => [detection.name, detection])),
+    [detections],
+  );
+
+  return (
+    <Card withBorder radius="sm" p="md">
+      <Stack gap="sm">
+        <Group justify="space-between" align="flex-start">
+          <Box>
+            <Text fw={700} size="sm">
+              {t("setup.intelligence.skillStatusTitle")}
+            </Text>
+            <Text size="sm" c="dimmed">
+              {t("setup.intelligence.skillStatusDescription")}
+            </Text>
+          </Box>
+          {loading ? (
+            <Badge color="gray" variant="light">
+              {t("setup.intelligence.skillStatusLoading")}
+            </Badge>
+          ) : null}
+        </Group>
+        <Stack gap="xs">
+          {CLI_AGENT_OPTIONS.map((option) => {
+            const status = statusByAgent.get(option.value);
+            const detected = Boolean(detectedByAgent.get(option.value)?.detected);
+            const statusKey = status?.status ?? "agent_home_missing";
+            const canForceUpdate = Boolean(status?.can_force_update);
+            return (
+              <Group
+                key={option.value}
+                justify="space-between"
+                align="flex-start"
+                gap="sm"
+                wrap="nowrap"
+                className="skill-status-row"
+              >
+                <Box>
+                  <Group gap="xs">
+                    <Text fw={600} size="sm">
+                      {option.label}
+                    </Text>
+                    <Badge color={detected ? "green" : "gray"} variant="light" size="sm">
+                      {detected
+                        ? t("setup.intelligence.detected")
+                        : t("setup.intelligence.notDetected")}
+                    </Badge>
+                    <Badge color={skillStatusColor(statusKey)} variant="light" size="sm">
+                      {t(`setup.intelligence.skillStatusLabels.${statusKey}`)}
+                    </Badge>
+                  </Group>
+                  <Text size="sm" c={statusKey === "up_to_date" ? "dimmed" : undefined}>
+                    {t(`setup.intelligence.skillStatusMessages.${statusKey}`)}
+                  </Text>
+                  {status?.skill_path ? (
+                    <Text size="xs" c="dimmed" className="mono-text">
+                      {status.skill_path}
+                    </Text>
+                  ) : null}
+                  {status?.error ? (
+                    <Text size="xs" c="red">
+                      {status.error}
+                    </Text>
+                  ) : null}
+                </Box>
+                {canForceUpdate ? (
+                  <Button
+                    size="xs"
+                    variant="light"
+                    leftSection={<WandSparkles size={14} />}
+                    loading={updatingAgent === option.value}
+                    onClick={() => onForceUpdate(option.value)}
+                  >
+                    {t("setup.intelligence.skillOverwrite")}
+                  </Button>
+                ) : null}
+              </Group>
+            );
+          })}
+        </Stack>
+      </Stack>
+    </Card>
+  );
+}
+
+function skillStatusColor(status: CliAgentSkillState["status"]) {
+  if (status === "up_to_date") {
+    return "green";
+  }
+  if (status === "user_modified" || status === "unmanaged" || status === "outdated") {
+    return "yellow";
+  }
+  if (status === "error") {
+    return "red";
+  }
+  return "gray";
+}
+
+function upsertByAgent(
+  statuses: CliAgentSkillState[],
+  updated: CliAgentSkillState,
+): CliAgentSkillState[] {
+  const exists = statuses.some((status) => status.agent === updated.agent);
+  if (!exists) {
+    return [...statuses, updated];
+  }
+  return statuses.map((status) => (status.agent === updated.agent ? updated : status));
 }
 
 function IntelligenceEditor({
@@ -2955,73 +3158,275 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
   );
 }
 
+function LaneField({
+  label,
+  placeholder,
+  description,
+  choices,
+  inputProps,
+  error,
+}: {
+  label: string;
+  placeholder: string;
+  description?: string;
+  choices: string[];
+  inputProps: ReturnType<ProjectForm["getInputProps"]>;
+  error?: ReactNode;
+}) {
+  // When status options were read from the Project, pick strictly from them: a
+  // non-searchable Select shows every option (no filtering) and disallows
+  // values that are not real board lanes. Only fall back to free text when no
+  // options could be read.
+  if (choices.length > 0) {
+    return (
+      <Select
+        label={label}
+        aria-label={label}
+        placeholder={placeholder}
+        description={description}
+        data={choices}
+        searchable={false}
+        allowDeselect={false}
+        {...inputProps}
+        error={error}
+      />
+    );
+  }
+  return (
+    <TextInput
+      label={label}
+      aria-label={label}
+      placeholder={placeholder}
+      description={description}
+      {...inputProps}
+      error={error}
+    />
+  );
+}
+
+function buildLaneFetchTarget(values: ProjectFormValues): ProjectStatusOptionsRequest | null {
+  const parsed = parseGitHub(values.githubProjectUrl);
+  if (!parsed.projectValid) {
+    return null;
+  }
+  return {
+    owner: parsed.owner,
+    project_id: parsed.projectId,
+    github_project_url: parsed.projectUrl,
+  };
+}
+
 function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
   const { t } = useTranslation();
   const githubErrors = getGitHubFieldErrors(form.values, t);
+  const githubEnabled = form.values.githubDecision === "enabled";
+
+  // Lane status options are fetched live for the entered Project URL (not the
+  // saved project) so they appear before saving. The fetch target is seeded
+  // from the current form values so an already-configured Project URL loads its
+  // lanes as soon as the section opens, and is refreshed when the URL changes.
+  const [laneFetchTarget, setLaneFetchTarget] = useState<ProjectStatusOptionsRequest | null>(() =>
+    buildLaneFetchTarget(form.values),
+  );
+  const statusOptions = useQuery({
+    queryKey: ["projectStatusOptions", laneFetchTarget],
+    queryFn: () => getProjectStatusOptions(laneFetchTarget as ProjectStatusOptionsRequest),
+    enabled: githubEnabled && laneFetchTarget !== null,
+  });
+  const laneChoices =
+    githubEnabled && laneFetchTarget !== null && statusOptions.data?.available
+      ? statusOptions.data.statuses
+      : [];
+
+  // Always update the target (to null for an invalid/cleared URL) so the lane
+  // Selects never keep showing options fetched for a different project.
+  const refreshLaneOptions = () => {
+    setLaneFetchTarget(buildLaneFetchTarget(form.values));
+  };
+
+  const projectUrlProps = form.getInputProps("githubProjectUrl");
+
+  if (!githubEnabled) {
+    return (
+      <Card withBorder radius="md" p="lg">
+        <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
+        <Box mt="md">
+          <InfoCallout title={t("setup.github.disabledTitle")}>
+            {t("setup.github.disabledHint")}
+          </InfoCallout>
+        </Box>
+      </Card>
+    );
+  }
+
   return (
     <Card withBorder radius="md" p="lg">
       <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
       <Stack mt="md">
-        <Select
-          label={<RequiredLabel text={t("setup.github.decision")} />}
-          aria-label={t("setup.github.decision")}
-          aria-required
-          placeholder={t("setup.github.decisionPlaceholder")}
-          data={[
-            { value: "disabled", label: t("setup.github.disabled") },
-            { value: "enabled", label: t("setup.github.enabled") },
-          ]}
-          value={form.values.githubDecision || null}
-          onChange={(value) => {
-            const decision = (value ?? "") as ProjectFormValues["githubDecision"];
-            form.setFieldValue("githubDecision", decision);
-            form.setFieldValue("githubEnabled", decision === "enabled");
-          }}
-          error={form.errors.githubDecision}
-        />
-        {form.values.githubDecision === "disabled" ? (
-          <Text size="sm" c="dimmed">
-            {t("setup.github.disabledHint")}
-          </Text>
-        ) : null}
         <TextInput
-          label={
-            form.values.githubDecision === "enabled" ? (
-              <RequiredLabel text={t("setup.github.projectUrl")} />
-            ) : (
-              t("setup.github.projectUrl")
-            )
-          }
+          label={<RequiredLabel text={t("setup.github.projectUrl")} />}
           aria-label={t("setup.github.projectUrl")}
-          aria-required={form.values.githubDecision === "enabled"}
-          disabled={form.values.githubDecision !== "enabled"}
-          {...form.getInputProps("githubProjectUrl")}
+          aria-required
+          description={t("setup.github.projectUrlHint")}
+          {...projectUrlProps}
+          onBlur={(event) => {
+            projectUrlProps.onBlur?.(event);
+            refreshLaneOptions();
+          }}
           error={githubErrors.githubProjectUrl || form.errors.githubProjectUrl}
         />
-        <TextInput
-          label={
-            form.values.githubDecision === "enabled" ? (
-              <RequiredLabel text={t("setup.github.repositoryUrl")} />
-            ) : (
-              t("setup.github.repositoryUrl")
-            )
-          }
-          aria-label={t("setup.github.repositoryUrl")}
-          aria-required={form.values.githubDecision === "enabled"}
-          disabled={form.values.githubDecision !== "enabled"}
-          {...form.getInputProps("githubRepositoryUrl")}
-          error={githubErrors.githubRepositoryUrl || form.errors.githubRepositoryUrl}
-        />
-        <SegmentedControl
-          disabled={form.values.githubDecision !== "enabled"}
-          data={[
-            { label: "HTTPS", value: "https" },
-            { label: "SSH", value: "ssh" },
-          ]}
-          {...form.getInputProps("repoAccess")}
-        />
+        <Fieldset legend={t("setup.github.laneMapping")} radius="md">
+          <Stack>
+            <Text size="sm" c="dimmed">
+              {laneChoices.length > 0
+                ? t("setup.github.laneMappingHint")
+                : t("setup.github.laneMappingManualHint")}
+            </Text>
+            <LaneField
+              label={t("setup.github.laneReady")}
+              placeholder={DEFAULT_LANE_READY}
+              choices={laneChoices}
+              inputProps={form.getInputProps("laneReady")}
+            />
+            <LaneField
+              label={t("setup.github.laneWorking")}
+              placeholder={DEFAULT_LANE_WORKING}
+              description={t("setup.github.laneWorkingHint")}
+              choices={laneChoices}
+              inputProps={form.getInputProps("laneWorking")}
+            />
+            <LaneField
+              label={t("setup.github.laneDone")}
+              placeholder={DEFAULT_LANE_DONE}
+              choices={laneChoices}
+              inputProps={form.getInputProps("laneDone")}
+              error={form.errors.laneDone}
+            />
+          </Stack>
+        </Fieldset>
+        <AgentFieldPanel target={laneFetchTarget} />
       </Stack>
     </Card>
+  );
+}
+
+function AgentFieldMemberBadges({
+  options,
+  color,
+  variant,
+}: {
+  options: AgentFieldState["options"];
+  color: string;
+  variant: "light" | "outline";
+}) {
+  return (
+    <Group gap="xs">
+      {options.map((option) => (
+        <Badge key={option.name} color={color} variant={variant}>
+          {option.description || option.name}
+        </Badge>
+      ))}
+    </Group>
+  );
+}
+
+function AgentFieldActionLabel({ state }: { state: AgentFieldState }) {
+  const { t } = useTranslation();
+  if (!state.exists) {
+    return <>{t("setup.github.agentFieldCreate")}</>;
+  }
+  if (state.missing.length > 0) {
+    return <>{t("setup.github.agentFieldAddMembers", { count: state.missing.length })}</>;
+  }
+  return <>{t("setup.github.agentFieldUpToDate")}</>;
+}
+
+function AgentFieldPanel({ target }: { target: ProjectStatusOptionsRequest | null }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const stateQuery = useQuery({
+    queryKey: ["agentFieldState", target],
+    queryFn: () => getAgentFieldState(target as ProjectStatusOptionsRequest),
+    enabled: target !== null,
+  });
+  const ensureMutation = useMutation({
+    mutationFn: () => ensureAgentField(target as ProjectStatusOptionsRequest),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["agentFieldState", target], data);
+    },
+  });
+  const state = stateQuery.data;
+
+  return (
+    <Fieldset legend={t("setup.github.agentField")} radius="md">
+      <Stack>
+        <Text size="sm" c="dimmed">
+          {t("setup.github.agentFieldHint")}
+        </Text>
+        {target === null ? (
+          <Text size="sm" c="dimmed">
+            {t("setup.github.agentFieldNeedsProject")}
+          </Text>
+        ) : stateQuery.isLoading ? (
+          <Text size="sm" c="dimmed">
+            {t("setup.github.agentFieldLoading")}
+          </Text>
+        ) : !state?.available ? (
+          <InfoCallout title={t("setup.github.agentFieldUnavailableTitle")}>
+            {t("setup.github.agentFieldUnavailableHint")}
+          </InfoCallout>
+        ) : (
+          <>
+            <Group gap="xs">
+              <Text size="sm" fw={500}>
+                {t("setup.github.agentFieldStatus")}
+              </Text>
+              <Badge color={state.exists ? "green" : "gray"} variant="light">
+                {state.exists
+                  ? t("setup.github.agentFieldExists")
+                  : t("setup.github.agentFieldMissing")}
+              </Badge>
+            </Group>
+            {state.exists && (
+              <div>
+                <Text size="sm" fw={500} mb={4}>
+                  {t("setup.github.agentFieldRegistered")}
+                </Text>
+                {state.options.length > 0 ? (
+                  <AgentFieldMemberBadges options={state.options} color="blue" variant="light" />
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    {t("setup.github.agentFieldNoMembers")}
+                  </Text>
+                )}
+              </div>
+            )}
+            {state.missing.length > 0 && (
+              <div>
+                <Text size="sm" fw={500} mb={4}>
+                  {t("setup.github.agentFieldMissingMembers")}
+                </Text>
+                <AgentFieldMemberBadges options={state.missing} color="orange" variant="outline" />
+              </div>
+            )}
+            <Group>
+              <Button
+                onClick={() => ensureMutation.mutate()}
+                loading={ensureMutation.isPending}
+                disabled={state.exists && state.missing.length === 0}
+              >
+                <AgentFieldActionLabel state={state} />
+              </Button>
+            </Group>
+            {ensureMutation.isError && (
+              <Text size="sm" c="red">
+                {t("setup.github.agentFieldError")}
+              </Text>
+            )}
+          </>
+        )}
+      </Stack>
+    </Fieldset>
   );
 }
 
@@ -3050,6 +3455,8 @@ function MemberDiagnosticsPanel({
   }
 
   const issues = checks.filter((check) => check.status !== "ok");
+  const errorCount = checks.filter((check) => check.status === "error").length;
+  const warningCount = checks.filter((check) => check.status === "warning").length;
   return (
     <Stack>
       <Group justify="space-between">
@@ -3076,6 +3483,18 @@ function MemberDiagnosticsPanel({
       {checks.length > 0 && issues.length === 0 ? (
         <Alert color="green" title={t("setup.members.diagnostics.ok")}>
           {t("setup.members.diagnostics.okDescription", { count: checks.length })}
+        </Alert>
+      ) : null}
+      {issues.length > 0 ? (
+        <Alert
+          color={errorCount > 0 ? "red" : "orange"}
+          icon={diagnosticIcon(errorCount > 0 ? "error" : "warning")}
+          title={t("setup.members.diagnostics.issuesTitle")}
+        >
+          {t("setup.members.diagnostics.issuesDescription", {
+            errors: errorCount,
+            warnings: warningCount,
+          })}
         </Alert>
       ) : null}
       {checks.length > 0 ? (
@@ -3517,7 +3936,9 @@ function getInitialCoreStatus(
   selectedCliAgentDetected: boolean,
 ): InitialProgress {
   const projectReady =
-    values.workspaceDir.trim().length > 0 && values.description.trim().length > 0;
+    values.workspaceDir.trim().length > 0 &&
+    values.description.trim().length > 0 &&
+    Boolean(values.githubDecision);
   const intelligenceReady =
     Boolean(values.llmApiType) &&
     Boolean(values.cliAgent) &&
@@ -3547,30 +3968,23 @@ function isGitHubDecisionComplete(values: ProjectFormValues): boolean {
   if (values.githubDecision !== "enabled") {
     return false;
   }
-  const parsed = parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl);
-  return parsed.projectValid && parsed.repositoryValid && parsed.ownerConsistent;
+  const parsed = parseGitHub(values.githubProjectUrl);
+  return parsed.projectValid;
 }
 
 function getGitHubFieldErrors(
   values: ProjectFormValues,
   t: TFunction | ((key: string) => string),
-): { githubProjectUrl?: string; githubRepositoryUrl?: string } {
+): { githubProjectUrl?: string } {
   if (values.githubDecision !== "enabled") {
     return {};
   }
-  const parsed = parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl);
-  const errors: { githubProjectUrl?: string; githubRepositoryUrl?: string } = {};
+  const parsed = parseGitHub(values.githubProjectUrl);
+  const errors: { githubProjectUrl?: string } = {};
   if (!values.githubProjectUrl.trim()) {
     errors.githubProjectUrl = t("setup.validation.githubProjectRequired");
   } else if (!parsed.projectValid) {
     errors.githubProjectUrl = t("setup.validation.githubProjectInvalid");
-  }
-  if (!values.githubRepositoryUrl.trim()) {
-    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryRequired");
-  } else if (!parsed.repositoryValid) {
-    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryInvalid");
-  } else if (parsed.projectValid && !parsed.ownerConsistent) {
-    errors.githubRepositoryUrl = t("setup.validation.githubRepositoryOwnerMismatch");
   }
   return errors;
 }
@@ -3893,8 +4307,9 @@ export function initialProjectValues(
       githubDecision: projectConfig.github_enabled ? "enabled" : "disabled",
       githubEnabled: projectConfig.github_enabled,
       githubProjectUrl: projectConfig.github_project_url ?? "",
-      githubRepositoryUrl: projectConfig.github_repository_url ?? "",
-      repoAccess: projectConfig.repo_base_url === "ssh://git@github.com" ? "ssh" : "https",
+      laneReady: projectConfig.lane_map?.ready ?? DEFAULT_LANE_READY,
+      laneWorking: projectConfig.lane_map?.working ?? DEFAULT_LANE_WORKING,
+      laneDone: projectConfig.lane_map?.done ?? DEFAULT_LANE_DONE,
     };
   }
   const cwd = config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "";
@@ -3912,8 +4327,9 @@ export function initialProjectValues(
     githubDecision: "",
     githubEnabled: false,
     githubProjectUrl: "",
-    githubRepositoryUrl: "",
-    repoAccess: "https",
+    laneReady: DEFAULT_LANE_READY,
+    laneWorking: DEFAULT_LANE_WORKING,
+    laneDone: DEFAULT_LANE_DONE,
   };
 }
 
@@ -3924,21 +4340,17 @@ export function toProjectSetupRequest(
 ): ProjectSetupRequest {
   const workspaceConfigDir = joinPath(values.workspaceDir, ".guildbotics/config");
   const homeConfigDir = config?.home_config_dir ?? workspaceConfigDir;
-  const github =
-    values.githubDecision === "enabled"
-      ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
-      : null;
+  const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: values.configLocation === "home" ? homeConfigDir : workspaceConfigDir,
     env_file_path: joinPath(values.workspaceDir, ".env"),
     env_file_option: options.envFileOption ?? values.envFileOption,
     language: values.language,
     description: values.description,
-    repository_name: github?.repositoryName ?? "",
     owner: github?.owner ?? "",
     project_id: github?.projectId ?? "",
     github_project_url: github?.projectUrl ?? "",
-    repo_base_url: values.repoAccess === "ssh" ? "ssh://git@github.com" : "https://github.com",
+    lane_map: github ? toLaneMap(values) : undefined,
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
     google_api_key: values.googleApiKey,
@@ -3947,15 +4359,20 @@ export function toProjectSetupRequest(
   };
 }
 
+function toLaneMap(values: ProjectFormValues): LaneMap {
+  return {
+    ready: values.laneReady.trim() || DEFAULT_LANE_READY,
+    working: values.laneWorking.trim() || DEFAULT_LANE_WORKING,
+    done: values.laneDone.trim() || DEFAULT_LANE_DONE,
+  };
+}
+
 export function toProjectUpdateRequest(
   values: ProjectFormValues,
   config: ConfigStatus | undefined,
   snapshot: ProjectConfig,
 ): ProjectConfigUpdateRequest {
-  const github =
-    values.githubDecision === "enabled"
-      ? parseGitHub(values.githubProjectUrl, values.githubRepositoryUrl)
-      : null;
+  const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: snapshot.config_dir || config?.primary_config_dir || "",
     env_file_path: snapshot.env_file_path || joinPath(values.workspaceDir, ".env"),
@@ -3964,11 +4381,10 @@ export function toProjectUpdateRequest(
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
     github_enabled: values.githubDecision === "enabled",
-    repository_name: github?.repositoryName ?? "",
     owner: github?.owner ?? "",
     project_id: github?.projectId ?? "",
     github_project_url: github?.projectUrl ?? "",
-    repo_base_url: values.repoAccess === "ssh" ? "ssh://git@github.com" : "https://github.com",
+    lane_map: github ? toLaneMap(values) : undefined,
     google_api_key: values.googleApiKey.trim() ? values.googleApiKey : undefined,
     openai_api_key: values.openaiApiKey.trim() ? values.openaiApiKey : undefined,
     anthropic_api_key: values.anthropicApiKey.trim() ? values.anthropicApiKey : undefined,
@@ -4286,16 +4702,12 @@ function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-export function parseGitHub(projectUrl: string, repositoryUrl: string) {
+export function parseGitHub(projectUrl: string) {
   const normalizedProjectUrl = projectUrl.trim();
-  const normalizedRepositoryUrl = repositoryUrl.trim();
   const projectParts = normalizedProjectUrl.split("/");
-  const repoParts = normalizedRepositoryUrl.split("/");
   const projectType = projectParts[3] ?? "";
   const owner = projectParts[4] ?? "";
   const projectId = projectParts[6]?.split("?")[0] ?? "";
-  const repositoryOwner = repoParts[3] ?? "";
-  const repositoryName = repoParts[4] ?? "";
   const projectValid = Boolean(
     normalizedProjectUrl.startsWith("https://github.com/") &&
     ["orgs", "users"].includes(projectType) &&
@@ -4303,20 +4715,13 @@ export function parseGitHub(projectUrl: string, repositoryUrl: string) {
     projectParts[5] === "projects" &&
     projectId,
   );
-  const repositoryValid = Boolean(
-    normalizedRepositoryUrl.startsWith("https://github.com/") && repositoryOwner && repositoryName,
-  );
-  const ownerConsistent = projectValid && repositoryValid && repositoryOwner === owner;
   return {
     owner: projectValid ? owner : "",
     projectId: projectValid ? projectId : "",
-    repositoryName: repositoryValid && ownerConsistent ? repositoryName : "",
     projectUrl: projectValid
       ? `https://github.com/${projectType}/${owner}/projects/${projectId}`
       : normalizedProjectUrl,
     projectValid,
-    repositoryValid,
-    ownerConsistent,
   };
 }
 

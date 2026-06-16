@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from guildbotics.editions.simple.setup_service import (
+    LaneMapInput,
     PersonSetupInput,
     PersonUpdateInput,
     ProjectSetupInput,
@@ -68,7 +69,6 @@ def _github_project_input(
     return _project_input(
         config_dir,
         env_file_path,
-        repository_name="GuildBotics",
         owner="GuildBotics",
         project_id="1",
         github_project_url="https://github.com/orgs/GuildBotics/projects/1",
@@ -238,12 +238,12 @@ def test_update_project_github_disabled_enabled_disabled_diff(
     assert "services" not in disabled
     assert "repositories" not in disabled
 
-    # Enabled: ticket_manager + code_hosting_service + repositories added.
+    # Enabled: ticket_manager + code_hosting_service added (no repository entry;
+    # the repository is derived from each issue at runtime).
     service.update_project(
         ProjectUpdateInput(
             **base,
             github_enabled=True,
-            repository_name="GuildBotics",
             owner="GuildBotics",
             project_id="42",
             github_project_url="https://github.com/orgs/GuildBotics/projects/42",
@@ -255,24 +255,16 @@ def test_update_project_github_disabled_enabled_disabled_diff(
     assert services["ticket_manager"]["project_id"] == "42"
     assert services["ticket_manager"]["url"].endswith("/projects/42")
     assert services["code_hosting_service"]["owner"] == "GuildBotics"
-    assert enabled["repositories"] == [{"name": "GuildBotics"}]
+    assert "repositories" not in enabled
 
-    # Disabled again: GitHub services removed. NOTE: update_project only pops
-    # the ``services`` block, so a previously written ``repositories`` entry is
-    # intentionally left in place by the current implementation.
+    # Disabled again: GitHub services removed.
     service.update_project(ProjectUpdateInput(**base, github_enabled=False))
     re_disabled = load_yaml_file(project_file)
     assert "services" not in re_disabled
-    assert re_disabled["repositories"] == [{"name": "GuildBotics"}]
+    assert "repositories" not in re_disabled
 
 
-@pytest.mark.parametrize(
-    "repo_base_url",
-    ["https://github.com", "ssh://git@github.com"],
-)
-def test_update_project_round_trips_repo_access_scheme(
-    tmp_path: Path, repo_base_url: str
-) -> None:
+def test_update_project_enables_github_from_project_url(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     env_file_path = tmp_path / ".env"
     _seed_project(config_dir, env_file_path)
@@ -286,21 +278,121 @@ def test_update_project_round_trips_repo_access_scheme(
             llm_api_type="openai",
             cli_agent="codex",
             github_enabled=True,
-            repository_name="GuildBotics",
             owner="GuildBotics",
             project_id="1",
             github_project_url="https://github.com/orgs/GuildBotics/projects/1",
-            repo_base_url=repo_base_url,
         )
     )
 
     stored = load_yaml_file(config_dir / "team/project.yml")
-    assert stored["services"]["code_hosting_service"]["repo_base_url"] == repo_base_url
+    code_hosting = stored["services"]["code_hosting_service"]
+    assert code_hosting["owner"] == "GuildBotics"
+    # Clone access is always HTTPS now, so no repo_base_url is persisted.
+    assert "repo_base_url" not in code_hosting
     snapshot = service.read_project_config(
         config_dir=config_dir, env_file_path=env_file_path
     )
-    assert snapshot.repo_base_url == repo_base_url
     assert snapshot.github_enabled is True
+
+
+# --------------------------------------------------------------------------- #
+# lane_map: persist, defaults, custom values, round-trip, github-disabled
+# --------------------------------------------------------------------------- #
+
+
+def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    SimpleProjectSetupService().write_project(
+        _github_project_input(config_dir, env_file_path)
+    )
+
+    stored = load_yaml_file(config_dir / "team/project.yml")
+    assert stored["services"]["ticket_manager"]["lane_map"] == {
+        "ready": "Todo",
+        "working": "In Progress",
+        "done": "Done",
+    }
+
+
+def test_write_project_persists_custom_lane_map(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    SimpleProjectSetupService().write_project(
+        _github_project_input(
+            config_dir,
+            env_file_path,
+            lane_map=LaneMapInput(ready="Ready", working="Doing", done="Shipped"),
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/project.yml")
+    assert stored["services"]["ticket_manager"]["lane_map"] == {
+        "ready": "Ready",
+        "working": "Doing",
+        "done": "Shipped",
+    }
+
+
+def test_blank_working_lane_falls_back_to_default(tmp_path: Path) -> None:
+    # The YAML layer strips empty strings, so a blank working lane cannot be
+    # persisted; it falls back to the default "In Progress".
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    SimpleProjectSetupService().write_project(
+        _github_project_input(
+            config_dir,
+            env_file_path,
+            lane_map=LaneMapInput(ready="Todo", working="", done="Done"),
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/project.yml")
+    assert stored["services"]["ticket_manager"]["lane_map"]["working"] == "In Progress"
+
+
+def test_lane_map_rejects_identical_ready_and_done() -> None:
+    with pytest.raises(ValueError):
+        LaneMapInput(ready="Same", done="Same")
+
+
+def test_read_project_config_round_trips_lane_map(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    service = SimpleProjectSetupService()
+    service.write_project(
+        _github_project_input(
+            config_dir,
+            env_file_path,
+            lane_map=LaneMapInput(ready="Ready", working="Doing", done="Shipped"),
+        )
+    )
+
+    snapshot = service.read_project_config(
+        config_dir=config_dir, env_file_path=env_file_path
+    )
+    assert snapshot.lane_map.ready == "Ready"
+    assert snapshot.lane_map.working == "Doing"
+    assert snapshot.lane_map.done == "Shipped"
+
+
+def test_update_project_github_disabled_writes_no_lane_map(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    _seed_project(config_dir, env_file_path)
+    SimpleProjectSetupService().update_project(
+        ProjectUpdateInput(
+            config_dir=config_dir,
+            env_file_path=env_file_path,
+            language="en",
+            llm_api_type="openai",
+            cli_agent="codex",
+            github_enabled=False,
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/project.yml")
+    assert "services" not in stored
 
 
 # --------------------------------------------------------------------------- #

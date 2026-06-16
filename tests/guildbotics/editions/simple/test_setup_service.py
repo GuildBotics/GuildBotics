@@ -7,7 +7,6 @@ from guildbotics.editions.simple.setup_service import (
     PersonUpdateInput,
     ProjectSetupInput,
     ProjectUpdateInput,
-    SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
@@ -25,11 +24,9 @@ def test_write_project_creates_cli_compatible_files(tmp_path: Path) -> None:
             env_file_path=env_file_path,
             env_file_option="overwrite",
             language="en",
-            repository_name="GuildBotics",
             owner="GuildBotics",
             project_id="1",
             github_project_url="https://github.com/orgs/GuildBotics/projects/1",
-            repo_base_url="https://github.com",
             llm_api_type="openai",
             cli_agent="codex",
             openai_api_key="test-openai-key",
@@ -71,7 +68,6 @@ def test_write_project_without_github_creates_loadable_core_config(
 
     assert team.project.get_language_code() == "ja"
     assert team.project.description == "Local automation workspace"
-    assert team.project.repositories == []
     assert team.project.services == {}
     assert "GOOGLE_API_KEY=test-google-key" in env_file_path.read_text()
     assert "指定した2言語間で翻訳" in (config_dir / "commands/translate.md").read_text()
@@ -110,28 +106,10 @@ def test_project_service_parses_github_urls() -> None:
     project = service.parse_github_project_url(
         "https://github.com/orgs/GuildBotics/projects/12?pane=info"
     )
-    repository = service.parse_github_repository_url(
-        "https://github.com/GuildBotics/GuildBotics", owner=project.owner
-    )
 
     assert project.owner == "GuildBotics"
     assert project.project_id == "12"
     assert project.url == "https://github.com/orgs/GuildBotics/projects/12"
-    assert repository.repository_name == "GuildBotics"
-    assert repository.url == "https://github.com/GuildBotics/GuildBotics"
-
-
-def test_project_service_rejects_inconsistent_repository_owner() -> None:
-    service = SimpleProjectSetupService()
-
-    try:
-        service.parse_github_repository_url(
-            "https://github.com/Other/GuildBotics", owner="GuildBotics"
-        )
-    except SetupServiceError as exc:
-        assert exc.code == "inconsistent_github_url"
-    else:
-        raise AssertionError("Expected SetupServiceError")
 
 
 def test_write_person_creates_person_config_and_masks_secrets(tmp_path: Path) -> None:
