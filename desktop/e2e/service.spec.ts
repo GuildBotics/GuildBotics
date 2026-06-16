@@ -75,7 +75,7 @@ test("starts the events target, reaches running via real events, then stops", as
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
 
   const schedulerPanel = panel(page, "Auto patrol");
-  const eventsPanel = panel(page, "Chat handling");
+  const eventsPanel = panel(page, "Event listener");
 
   // Disable the GitHub-requiring scheduler target so the events target alone is
   // started; with it enabled the backend-derived GitHub guard blocks Start.
@@ -109,7 +109,7 @@ test("scheduler-only is blocked by the backend GitHub requirement", async ({ pag
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
 
   // Leave only the scheduler target enabled.
-  await toggleTarget(panel(page, "Chat handling"));
+  await toggleTarget(panel(page, "Event listener"));
 
   // The default routine requires GitHub, which is disabled in the seeded
   // workspace, so the REAL backend-derived guard disables Start and surfaces the
