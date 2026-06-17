@@ -35,6 +35,8 @@ def test_member_context_outputs_no_secret(monkeypatch):
         assert identifier == "aiko"
         return FakeContext(person), person
 
+    # Seed a real per-person secret value; context output must never include it.
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "super-secret-sentinel-value")
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
@@ -47,7 +49,50 @@ def test_member_context_outputs_no_secret(monkeypatch):
     assert result.exit_code == 0
     assert '"person_id": "aiko"' in result.output
     assert '"credential_status": "unchecked"' in result.output
-    assert "token" not in result.output.lower()
+    assert "super-secret-sentinel-value" not in result.output
+
+
+def test_member_help_prints_capability_reference():
+    runner = CliRunner()
+
+    result = runner.invoke(member_module.member, ["help"])
+
+    assert result.exit_code == 0
+    assert "guildbotics member git commit" in result.output
+    assert "guildbotics member chat reply" in result.output
+    assert "### Rules" in result.output
+
+
+def test_member_context_markdown_renders_capabilities_section(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def context(self, check_credentials=False):
+            return {
+                "person_id": "aiko",
+                "capabilities": "### GitHub\n- `guildbotics member github pr create ...`",
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(member_module.member, ["context", "--person", "aiko"])
+
+    assert result.exit_code == 0
+    assert "## Member Capabilities" in result.output
+    assert "guildbotics member github pr create" in result.output
 
 
 def test_member_context_markdown_highlights_communication_style(monkeypatch):
@@ -526,73 +571,6 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
     assert '"status": "pushed"' in result.output
 
 
-def test_member_git_branch_create_current_mode_uses_current_workspace_service(
-    monkeypatch, tmp_path
-):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
-    repo_path = tmp_path / "repo"
-    repo_path.mkdir()
-    calls = {}
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return FakeContext(person), person
-
-    class FakeResult:
-        def to_dict(self):
-            return {
-                "repo_path": str(repo_path),
-                "branch": "feature/test",
-                "previous_branch": "main",
-                "status": "created",
-            }
-
-    class FakeService:
-        def __init__(self, *_args):
-            pass
-
-        async def create_branch(self, repo_path, branch, workspace_mode, cwd):
-            calls["repo_path"] = repo_path
-            calls["branch"] = branch
-            calls["workspace_mode"] = workspace_mode
-            calls["cwd"] = cwd
-            return FakeResult()
-
-        async def aclose(self):
-            calls["closed"] = True
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "git",
-            "branch",
-            "create",
-            "--person",
-            "aiko",
-            "--repo-path",
-            str(repo_path),
-            "--branch",
-            "feature/test",
-            "--workspace-mode",
-            "current",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert calls["repo_path"] == repo_path
-    assert calls["branch"] == "feature/test"
-    assert calls["workspace_mode"] == "current"
-    assert calls["cwd"].is_absolute()
-    assert calls["closed"] is True
-    assert '"status": "created"' in result.output
-
-
 def test_member_git_publish_current_mode_rejects_workflow_task_run(
     monkeypatch, tmp_path
 ):
@@ -860,6 +838,9 @@ def test_member_task_status_cli(monkeypatch, tmp_path):
 
 def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # The run id is injected by the workflow via env, not a CLI flag; the write
+    # command records its evidence under the env-provided run id.
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
@@ -907,8 +888,6 @@ def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp
             "100.1",
             "--body-file",
             str(body_file),
-            "--run-id",
-            "run-1",
         ],
     )
 

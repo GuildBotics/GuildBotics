@@ -15,8 +15,9 @@ Run:
 "$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>
 ```
 
-Use the returned non-secret context for role, profile, GitHub username, proxy signature, available commands, and `communication_style`.
+Use the returned non-secret context for role, profile, GitHub username, proxy signature, and `communication_style`.
 Treat the returned member context as the source of truth for the member's persona, role, profile, judgment criteria, and communication style.
+The context output also includes a `capabilities` section: this is the authoritative list of every `guildbotics member ...` command (GitHub, git, and Slack) and the cross-cutting rules. Treat it as the source of truth for what you can run, regardless of which task you are doing. The same reference can be reprinted any time with `"$HOME/.guildbotics/bin/guildbotics" member help`.
 If `communication_style` is present, follow it directly:
 - Use `communication_style.interactive_replies` for interactive progress updates and final replies to the user.
 - Use `communication_style.github_comments` for GitHub issue comments, PR conversation comments, and PR review thread replies.
@@ -53,23 +54,27 @@ Do not switch to another member unless the user explicitly asks to switch member
 
 Treat the user's currently open repository as the shared pair-programming workspace.
 Do not run `member git prepare` or clone into the member workspace unless the user explicitly asks for an isolated workspace.
-Do not switch branches, create branches, reset, clean, or pull automatically.
+Do not switch branches, reset, clean, or pull automatically.
 Inspect the current repository, branch, remote, and working tree state. If the current branch or repository does not match the issue/PR work, stop and ask the user before making git workspace changes.
-Edit and test in the current repository. When publishing is appropriate, use:
+
+The member git commands only add the member identity and credential. Everything else is plain git that you run yourself:
+
+- Staging: run plain git (`git add`) to choose what goes into a commit. `member git commit` commits only what is already staged.
+- Branching: run plain git (`git switch -c <branch_name>`) when the user explicitly asks for a new branch. There is no member command for branches.
+- `member git commit` applies the member name/email to that one commit without changing the repository's git config, so the user's own identity is unaffected afterward.
+- `member git push` pushes with the member credential.
+
+Edit and test in the current repository. When publishing is appropriate, stage with plain git first, then use the member commands:
 
 ```bash
+git add -A   # or: git add <paths> to stage only part of your changes
 "$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current <<'EOF'
 <commit message in the GuildBotics project language>
 EOF
 "$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current
 ```
 
-This still commits and pushes with the configured GuildBotics member identity and credential. Run `member git commit` without `member git push` when the user asks for a local commit only.
-If the user explicitly asks to create a new branch from the current branch, use:
-
-```bash
-"$HOME/.guildbotics/bin/guildbotics" member git branch create --person <person_id> --repo-path <current_repo_path> --branch <branch_name> --workspace-mode current
-```
+Run `member git commit` without `member git push` when the user asks for a local commit only.
 
 ## GitHub Issue Flow
 
@@ -78,7 +83,7 @@ If the user explicitly asks to create a new branch from the current branch, use:
 3. Inspect the current repository, branch, remote, and working tree state without changing branches automatically.
 4. Edit files in the user's current repository.
 5. Run relevant tests or checks.
-6. If code changed, write a commit message in the GuildBotics project language and run `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current` with the commit message supplied on stdin.
+6. If code changed, stage it with plain git (`git add -A`, or `git add <paths>` for a partial commit), write a commit message in the GuildBotics project language, and run `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current` with the commit message supplied on stdin.
 7. If code changed for an issue and a PR is needed, run `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`, then create the PR with `--content-stdin` so the user can review the PR title/body in the approval prompt:
 
 ```bash
@@ -99,7 +104,7 @@ Omit `--base` only when the repository default branch is the intended PR target.
 3. Inspect the current repository, branch, remote, and working tree state without changing branches automatically.
 4. If the current branch/repository is not the PR head branch/repository, ask the user before making git workspace changes.
 5. Address valid review comments and run relevant checks in the current repository.
-6. Commit changes with `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current`, supplying the commit message on stdin in the GuildBotics project language.
+6. Stage changes with plain git (`git add -A`, or `git add <paths>` for a partial commit), then commit with `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current`, supplying the commit message on stdin in the GuildBotics project language.
 7. Push updates with `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`.
 8. Reply to inline review threads in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github pr reply --reply-target-id <reply_target_id>`.
 9. If no change is needed, leave a reply or reaction so the workflow has observable evidence.

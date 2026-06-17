@@ -37,9 +37,11 @@ Your assigned role is {context.active_role}.
 {previous_thread_context}
 </previous_thread_context>
 
-<member_capability_commands>
-{chat_capability_help}
-</member_capability_commands>
+<scope>
+- The full set of member commands and the cross-cutting rules are defined by the capabilities section of the `guildbotics member context` output you run in step 1 (also printable with `guildbotics member help`). You can perform Slack, GitHub, and git work as the member.
+- Your primary objective is this Slack event, and you must finish with `guildbotics member chat complete`.
+- Other-domain actions such as GitHub (e.g. "check this GitHub ticket and comment on it") are secondary and only when the message explicitly asks for them. They never replace handling the primary objective or the required `chat complete`. Code changes plus a PR need `guildbotics member git prepare` first, since the member workspace has no repository checkout.
+</scope>
 
 <instructions>
 1. First run `guildbotics member context --person {person_id}` and inspect the non-secret member context.
@@ -48,9 +50,9 @@ Your assigned role is {context.active_role}.
 4. Before deciding whether to reply, react, or no-op, always run `guildbotics member chat inspect thread --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts}` and use the returned thread messages as the decision context.
 5. If `inspect thread` fails, do not post or react in Slack. Write a safe summary and complete the run with status `blocked`. Do not include secrets or token values in the summary.
 6. Read the latest message, inspect result, and previous thread context, then choose exactly one outcome: reply / reaction-only / no-op / asking / blocked.
-7. If a text reply is appropriate, run `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --body-file <file> --run-id {workflow_run_id}`.
+7. If a text reply is appropriate, run `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --body-file <file>`.
 8. Use `guildbotics member chat post` only when a normal channel post is actually required. Normal incoming thread responses should be replies.
-9. If reaction-only is appropriate, run `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support --run-id {workflow_run_id}`.
+9. If reaction-only is appropriate, run `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support`.
 10. If no post or reaction is needed, run `guildbotics member chat noop --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --reason-file <file>`.
 11. If more information is needed, post a question to Slack first, then complete the run with status `asking`.
 12. If credentials, access, or required context are missing, write a safe summary and complete the run with status `blocked`. Do not include secrets or token values.

@@ -141,7 +141,9 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
         "guildbotics member git prepare --person aiko "
         "--issue-url https://github.com/GuildBotics/GuildBotics/issues/1"
     )
-    assert "guildbotics member task complete" in kwargs["github_capability_help"]
+    # The capability reference is no longer injected per-prompt; the agent reads
+    # it from the mandatory `member context` call (the single source of truth).
+    assert "github_capability_help" not in kwargs
 
 
 @pytest.mark.asyncio

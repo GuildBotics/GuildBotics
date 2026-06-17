@@ -153,6 +153,22 @@ async def test_context_check_credentials_uses_rate_limit_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_context_includes_capability_reference():
+    service = _service()
+    fake = FakeClient()
+    service._client = fake
+
+    result = await service.context()
+
+    # The context carries the full capability reference (single source of truth)
+    # instead of a flat command-name list, and not the old fields.
+    assert "guildbotics member chat reply" in result["capabilities"]
+    assert "guildbotics member github pr create" in result["capabilities"]
+    assert "available_member_commands" not in result
+    assert "safety_note" not in result
+
+
+@pytest.mark.asyncio
 async def test_context_without_check_credentials_is_unchecked():
     service = _service()
     fake = FakeClient()

@@ -197,9 +197,11 @@ guildbotics member git commit \
   [--format json|markdown]
 ```
 
-- `repo_path` の current branch を対象にする。dirty/untracked があれば `git add -A` → commit。push は行わない。
+- `repo_path` の current branch を対象にする。**ステージ済みの変更だけ**を commit する。staging はプレーン git（`git add`）で呼び出し側が行い、member capability は staging しない。これにより部分コミットが可能。push は行わない。
+- member identity（name/email）はその commit にのみ適用する（`index.commit(author=..., committer=...)`）。repo の git config は書き換えないため、member identity が config に残らず、対話セッション後も利用者自身の git config identity がそのまま保たれる。
+- staging された変更が無い場合は commit せず `status="nothing_staged"` を返す。
 - `--message-stdin` を使うと、CLI agent の承認画面に heredoc で commit message 本文を表示しやすい。対話モードではこれを優先する。
-- 返却 JSON: `repo_path` / `branch` / `commit_sha`(or null) / `has_changes` / `status`。
+- 返却 JSON: `repo_path` / `branch` / `commit_sha`(or null) / `has_changes` / `status`(`committed`|`nothing_staged`)。
 
 ```bash
 guildbotics member git push \
@@ -221,26 +223,17 @@ guildbotics member git publish \
 ```
 
 - 互換用の合成コマンド。`git commit` → `git push` を順に行う。
-- `repo_path` の current branch を対象にする。dirty/untracked があれば `git add -A` → commit → push。変更が無ければ commit せず push 要否だけ確認する。
+- `repo_path` の current branch を対象にする。`commit` と同様にステージ済みの変更だけを member identity で commit し（staging はプレーン git）、その後 push する。staging された変更が無ければ commit せず push 要否だけ確認する。
 - member credential を使う。
 - 返却 JSON: `repo_path` / `branch` / `commit_sha`(or null) / `pushed` / `has_changes` / `status`。
 
-```bash
-guildbotics member git branch create \
-  --person <person_id> \
-  --repo-path <path> \
-  --branch <branch_name> \
-  [--format json|markdown]
-```
-
-- `repo_path` の current branch から新しい local branch を作成して checkout する。既存 branch は上書きしない。
-- 返却 JSON: `repo_path` / `branch` / `previous_branch` / `status`。
+branch の作成・切り替えは member capability では提供しない。member identity も credential も不要なため、プレーン git（`git switch -c <branch_name>` など）で行う。
 
 制約:
 
 - `repo_path` は member workspace root 配下のみ許可（validation）。
 - `message-file` は存在する通常ファイルのみ。空 commit message は error。
-- **commit/push/publish は checkout しない**。`git.Repo(repo_path)` で既存 checkout を開き、git config / auth env / commit / push のみ行う。checkout/reset/clean は行わない（作業差分を消さない）。
+- **commit/push/publish は checkout しない**。`git.Repo(repo_path)` で既存 checkout を開き、commit（identity は `index.commit` 引数で一時注入）/ auth env / push のみ行う。repo の git config は書き換えない。checkout/reset/clean は行わない（作業差分を消さない）。
 
 ### CLI: GitHub issue
 
@@ -367,7 +360,7 @@ guildbotics member task complete \
 ```
 
 - workflow が agent 起動前に `workflow_run_id` を生成し、prompt input と環境変数 `GUILDBOTICS_TASK_RUN_ID` の両方で渡す。
-- `member github ...` / `member git ...` の write command は、`GUILDBOTICS_TASK_RUN_ID` または `--run-id` がある場合、secret を含まない操作記録を `~/.guildbotics/data/task-runs/<run_id>.jsonl` に append する。
+- `member github ...` / `member git ...` の write command は `--run-id` を受け取らない。run id は env（`GUILDBOTICS_TASK_RUN_ID` / `GUILDBOTICS_RUN_ID`）から解決し、注入されている場合に secret を含まない操作記録を `~/.guildbotics/data/task-runs/<run_id>.jsonl` に append する。run id を明示引数として持つのは完了・status 系（`task complete` / `chat complete` / `chat noop` / `task status`）だけで、これは「寄与行為はアンビエント文脈として env で暗黙伝播し、run を閉じる/参照する操作だけが run id を明示する」という非対称設計を表す。
 - `task complete` は同じ run id の操作記録を読み、少なくとも 1 件の write evidence（`issue_comment` / `pr_comment` / `pr_reply` / `reaction_add` / `pr_create` / `git_publish` / `issue_create`）がある場合のみ成功する。
 - `status=asking` は `issue_comment` / `pr_comment` / `pr_reply` のいずれかを必須 evidence とする。
 - `status=done` は、コード変更がある場合は `git_publish` + `pr_create`、対応不要の場合は `reaction_add` または comment/reply を evidence として残す。agent が「対応不要」と判断した場合でも無痕跡の完了は許可しない。
@@ -425,7 +418,7 @@ guildbotics member task status \
 重要:
 
 - `prepare` は作業開始前の整備なので reset/clean を許可してよい。
-- `publish` は agent が編集した後なので reset/clean を絶対にしない。`git.Repo(repo_path)` で既存 checkout を開き、git config / auth env / commit / push のみ行う。
+- `publish` は agent が編集した後なので reset/clean を絶対にしない。`git.Repo(repo_path)` で既存 checkout を開き、commit（identity は `index.commit` 引数で一時注入）/ auth env / push のみ行う。repo の git config は書き換えない。
 - 既存 `GitTool.__init__` は default branch checkout/pull を行うため、publish path でそのまま呼ぶと作業差分を壊す。`GitTool` に non-destructive 経路を足すのではなく、`MemberGitWorkspaceService` 側で `prepare`（GitTool 流用可）と `publish`（生 `git.Repo` 操作）を明確に分けて実装する。
 
 ### Credential / Context / identity loading

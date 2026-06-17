@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from httpx import AsyncClient
 
+from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
@@ -105,35 +106,14 @@ class MemberGitHubCapabilityService:
                 else ""
             ),
             "credential_status": credential_status,
-            "available_member_commands": [
-                "context",
-                "git prepare",
-                "git branch create",
-                "git commit",
-                "git push",
-                "git publish",
-                "github issue inspect",
-                "github issue comment",
-                "github issue create",
-                "github pr inspect",
-                "github pr create",
-                "github pr comment",
-                "github pr reply",
-                "github reaction add",
-                "chat identity",
-                "chat inspect channel",
-                "chat inspect thread",
-                "chat post",
-                "chat reply",
-                "chat reaction add",
-                "chat noop",
-                "chat complete",
-                "task complete",
-                "task status",
-            ],
-            "safety_note": (
-                "GitHub, git, and chat writes must go through guildbotics member commands."
-            ),
+            # The full member command surface and cross-cutting rules. This is
+            # the same reference printed by ``guildbotics member help`` and is
+            # the single source every entrypoint relies on (context is the
+            # mandatory first call), so each member can perform GitHub, git, and
+            # chat work regardless of which workflow invoked it. Task contracts
+            # (primary objective, required completion command) stay in the
+            # prompts, never here.
+            "capabilities": capability_reference_text(),
         }
 
     async def issue_inspect(self, url: str) -> dict[str, Any]:

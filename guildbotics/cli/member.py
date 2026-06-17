@@ -14,6 +14,7 @@ from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
     MemberGitHubCapabilityService,
 )
+from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.capabilities.task_runs import (
     RunStore,
     TaskRunError,
@@ -58,6 +59,16 @@ def context_cmd(person: str, check_credentials: bool, output_format: str) -> Non
         _context_cmd(person, check_credentials, output_format),
         output_format=output_format,
     )
+
+
+@member.command(name="help")
+def help_cmd() -> None:
+    """Print the member capability reference (commands and cross-cutting rules).
+
+    This is the same reference embedded in ``member context``; use it to reread
+    the available commands without re-running the full context.
+    """
+    click.echo(capability_reference_text())
 
 
 async def _context_cmd(
@@ -272,7 +283,6 @@ async def _chat_inspect_thread(
 @click.option("--channel-name", default="")
 @click.option("--body-file", type=click.Path(path_type=Path))
 @click.option("--body-stdin", is_flag=True)
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def chat_post(
     person: str,
@@ -281,7 +291,6 @@ def chat_post(
     channel_name: str,
     body_file: Path | None,
     body_stdin: bool,
-    run_id: str,
     output_format: str,
 ) -> None:
     body = _read_content(body_file, body_stdin, "body")
@@ -292,7 +301,6 @@ def chat_post(
             channel_id or None,
             channel_name or None,
             body,
-            run_id or None,
         ),
         output_format=output_format,
     )
@@ -304,7 +312,6 @@ async def _chat_post(
     channel_id: str | None,
     channel_name: str | None,
     body: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberChatCapabilityService(
@@ -318,7 +325,7 @@ async def _chat_post(
         payload = await service.post(
             channel_id=channel_id, channel_name=channel_name, body=body
         )
-        RunStore().append_evidence(current_run_id(run_id), "chat_post", payload)
+        RunStore().append_evidence(current_run_id(), "chat_post", payload)
         return payload
     finally:
         await service.aclose()
@@ -335,7 +342,6 @@ async def _chat_post(
 @click.option("--message-url", default="")
 @click.option("--body-file", type=click.Path(path_type=Path))
 @click.option("--body-stdin", is_flag=True)
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def chat_reply(
     person: str,
@@ -346,7 +352,6 @@ def chat_reply(
     message_url: str,
     body_file: Path | None,
     body_stdin: bool,
-    run_id: str,
     output_format: str,
 ) -> None:
     body = _read_content(body_file, body_stdin, "body")
@@ -367,7 +372,6 @@ def chat_reply(
             channel_name or None,
             resolved_thread_ts,
             body,
-            run_id or None,
         ),
         output_format=output_format,
     )
@@ -380,7 +384,6 @@ async def _chat_reply(
     channel_name: str | None,
     thread_ts: str,
     body: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberChatCapabilityService(
@@ -397,7 +400,7 @@ async def _chat_reply(
             thread_ts=thread_ts,
             body=body,
         )
-        RunStore().append_evidence(current_run_id(run_id), "chat_reply", payload)
+        RunStore().append_evidence(current_run_id(), "chat_reply", payload)
         return payload
     finally:
         await service.aclose()
@@ -422,7 +425,6 @@ def chat_reaction() -> None:
     required=True,
     type=click.Choice(["ack", "agree", "celebrate", "support"]),
 )
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def chat_reaction_add(
     person: str,
@@ -432,7 +434,6 @@ def chat_reaction_add(
     message_ts: str,
     message_url: str,
     reaction: str,
-    run_id: str,
     output_format: str,
 ) -> None:
     ref = _resolve_message_reference(
@@ -451,7 +452,6 @@ def chat_reaction_add(
             channel_name or None,
             ref["message_ts"],
             reaction,
-            run_id or None,
         ),
         output_format=output_format,
     )
@@ -464,7 +464,6 @@ async def _chat_reaction_add(
     channel_name: str | None,
     message_ts: str,
     reaction: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberChatCapabilityService(
@@ -481,7 +480,7 @@ async def _chat_reaction_add(
             message_ts=message_ts,
             reaction=reaction,
         )
-        RunStore().append_evidence(current_run_id(run_id), "chat_reaction", payload)
+        RunStore().append_evidence(current_run_id(), "chat_reaction", payload)
         return payload
     finally:
         await service.aclose()
@@ -614,7 +613,6 @@ async def _git_prepare(
         "repository currently open in an interactive coding session."
     ),
 )
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def git_commit(
     person: str,
@@ -622,12 +620,17 @@ def git_commit(
     message_file: Path | None,
     message_stdin: bool,
     workspace_mode: str,
-    run_id: str,
     output_format: str,
 ) -> None:
+    """Commit already-staged changes with the member identity.
+
+    Stage the files you want with plain git (e.g. ``git add``) first; this
+    command commits only what is staged and applies the member name/email to
+    that single commit without changing the repository's git config.
+    """
     message = _read_message(message_file, message_stdin, "commit message")
     _run(
-        _git_commit(person, repo_path, message, workspace_mode, run_id or None),
+        _git_commit(person, repo_path, message, workspace_mode),
         output_format=output_format,
     )
 
@@ -637,9 +640,8 @@ async def _git_commit(
     repo_path: Path,
     message: str,
     workspace_mode: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
-    task_run_id = current_task_run_id(run_id)
+    task_run_id = current_task_run_id()
     _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
     context, member_person = _resolve(person)
     service = MemberGitWorkspaceService(member_person, context.team, context.logger)
@@ -669,17 +671,15 @@ async def _git_commit(
         "repository currently open in an interactive coding session."
     ),
 )
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def git_push(
     person: str,
     repo_path: Path,
     workspace_mode: str,
-    run_id: str,
     output_format: str,
 ) -> None:
     _run(
-        _git_push(person, repo_path, workspace_mode, run_id or None),
+        _git_push(person, repo_path, workspace_mode),
         output_format=output_format,
     )
 
@@ -688,9 +688,8 @@ async def _git_push(
     person: str,
     repo_path: Path,
     workspace_mode: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
-    task_run_id = current_task_run_id(run_id)
+    task_run_id = current_task_run_id()
     _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
     context, member_person = _resolve(person)
     service = MemberGitWorkspaceService(member_person, context.team, context.logger)
@@ -702,65 +701,6 @@ async def _git_push(
         )
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_push", payload)
-        return payload
-    finally:
-        await service.aclose()
-
-
-@git.group(name="branch")
-def git_branch() -> None:
-    """Manage git branches as a configured member."""
-
-
-@git_branch.command(name="create")
-@click.option("--person", required=True)
-@click.option("--repo-path", required=True, type=click.Path(path_type=Path))
-@click.option("--branch", required=True)
-@click.option(
-    "--workspace-mode",
-    type=click.Choice(["member", "current"]),
-    default="member",
-    help=(
-        "Use 'member' for isolated workflow workspaces or 'current' for the "
-        "repository currently open in an interactive coding session."
-    ),
-)
-@click.option("--run-id", default="")
-@click.option("--format", "output_format", type=FormatChoice, default="json")
-def git_branch_create(
-    person: str,
-    repo_path: Path,
-    branch: str,
-    workspace_mode: str,
-    run_id: str,
-    output_format: str,
-) -> None:
-    _run(
-        _git_branch_create(person, repo_path, branch, workspace_mode, run_id or None),
-        output_format=output_format,
-    )
-
-
-async def _git_branch_create(
-    person: str,
-    repo_path: Path,
-    branch: str,
-    workspace_mode: str,
-    run_id: str | None,
-) -> dict[str, Any]:
-    task_run_id = current_task_run_id(run_id)
-    _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
-    context, member_person = _resolve(person)
-    service = MemberGitWorkspaceService(member_person, context.team, context.logger)
-    try:
-        result = await service.create_branch(
-            repo_path=repo_path,
-            branch=branch,
-            workspace_mode=_workspace_mode(workspace_mode),
-            cwd=Path.cwd(),
-        )
-        payload = result.to_dict()
-        TaskRunStore().append_evidence(task_run_id, "git_branch_create", payload)
         return payload
     finally:
         await service.aclose()
@@ -784,7 +724,6 @@ async def _git_branch_create(
         "repository currently open in an interactive coding session."
     ),
 )
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def git_publish(
     person: str,
@@ -792,12 +731,17 @@ def git_publish(
     message_file: Path | None,
     message_stdin: bool,
     workspace_mode: str,
-    run_id: str,
     output_format: str,
 ) -> None:
+    """Commit already-staged changes with the member identity, then push.
+
+    Stage the files you want with plain git (e.g. ``git add``) first; this
+    commits only what is staged with the member name/email and pushes the
+    branch using the member credential.
+    """
     message = _read_message(message_file, message_stdin, "commit message")
     result = _run(
-        _git_publish(person, repo_path, message, workspace_mode, run_id or None),
+        _git_publish(person, repo_path, message, workspace_mode),
         output_format=output_format,
     )
     return result
@@ -808,9 +752,8 @@ async def _git_publish(
     repo_path: Path,
     message: str,
     workspace_mode: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
-    task_run_id = current_task_run_id(run_id)
+    task_run_id = current_task_run_id()
     _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
     context, member_person = _resolve(person)
     service = MemberGitWorkspaceService(member_person, context.team, context.logger)
@@ -875,32 +818,26 @@ async def _issue_inspect(person: str, issue_url: str) -> dict[str, Any]:
 @click.option("--person", required=True)
 @click.option("--url", "issue_url", required=True)
 @click.option("--body-file", required=True, type=click.Path(path_type=Path))
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def issue_comment(
     person: str,
     issue_url: str,
     body_file: Path,
-    run_id: str,
     output_format: str,
 ) -> None:
     body = _read_file(body_file, "body-file")
     _run(
-        _issue_comment(person, issue_url, body, run_id or None),
+        _issue_comment(person, issue_url, body),
         output_format=output_format,
     )
 
 
-async def _issue_comment(
-    person: str, issue_url: str, body: str, run_id: str | None
-) -> dict[str, Any]:
+async def _issue_comment(person: str, issue_url: str, body: str) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
         result = await service.issue_comment(issue_url, body)
-        TaskRunStore().append_evidence(
-            current_task_run_id(run_id), "issue_comment", result
-        )
+        TaskRunStore().append_evidence(current_task_run_id(), "issue_comment", result)
         return result
     finally:
         await service.aclose()
@@ -912,7 +849,6 @@ async def _issue_comment(
 @click.option("--title-file", required=True, type=click.Path(path_type=Path))
 @click.option("--body-file", required=True, type=click.Path(path_type=Path))
 @click.option("--add-to-project/--no-add-to-project", default=True)
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def issue_create(
     person: str,
@@ -920,13 +856,12 @@ def issue_create(
     title_file: Path,
     body_file: Path,
     add_to_project: bool,
-    run_id: str,
     output_format: str,
 ) -> None:
     title = _read_file(title_file, "title-file")
     body = _read_file(body_file, "body-file")
     _run(
-        _issue_create(person, repo, title, body, add_to_project, run_id or None),
+        _issue_create(person, repo, title, body, add_to_project),
         output_format=output_format,
     )
 
@@ -937,15 +872,12 @@ async def _issue_create(
     title: str,
     body: str,
     add_to_project: bool,
-    run_id: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
         result = await service.issue_create(repo, title, body, add_to_project)
-        TaskRunStore().append_evidence(
-            current_task_run_id(run_id), "issue_create", result
-        )
+        TaskRunStore().append_evidence(current_task_run_id(), "issue_create", result)
         return result
     finally:
         await service.aclose()
@@ -1002,7 +934,6 @@ async def _pr_inspect(
 )
 @click.option("--issue-url", default="")
 @click.option("--draft", type=click.Choice(["auto", "true", "false"]), default="auto")
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def pr_create(
     person: str,
@@ -1014,14 +945,11 @@ def pr_create(
     content_stdin: bool,
     issue_url: str,
     draft: str,
-    run_id: str,
     output_format: str,
 ) -> None:
     title, body = _read_pr_content(title_file, body_file, content_stdin)
     _run(
-        _pr_create(
-            person, repo, head, base, title, body, issue_url, draft, run_id or None
-        ),
+        _pr_create(person, repo, head, base, title, body, issue_url, draft),
         output_format=output_format,
     )
 
@@ -1035,7 +963,6 @@ async def _pr_create(
     body: str,
     issue_url: str,
     draft: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
@@ -1043,7 +970,7 @@ async def _pr_create(
         result = await service.pr_create(
             repo, head, base, title, body, issue_url, draft
         )
-        TaskRunStore().append_evidence(current_task_run_id(run_id), "pr_create", result)
+        TaskRunStore().append_evidence(current_task_run_id(), "pr_create", result)
         return result
     finally:
         await service.aclose()
@@ -1053,28 +980,21 @@ async def _pr_create(
 @click.option("--person", required=True)
 @click.option("--url", "pr_url", required=True)
 @click.option("--body-file", required=True, type=click.Path(path_type=Path))
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
-def pr_comment(
-    person: str, pr_url: str, body_file: Path, run_id: str, output_format: str
-) -> None:
+def pr_comment(person: str, pr_url: str, body_file: Path, output_format: str) -> None:
     body = _read_file(body_file, "body-file")
     _run(
-        _pr_comment(person, pr_url, body, run_id or None),
+        _pr_comment(person, pr_url, body),
         output_format=output_format,
     )
 
 
-async def _pr_comment(
-    person: str, pr_url: str, body: str, run_id: str | None
-) -> dict[str, Any]:
+async def _pr_comment(person: str, pr_url: str, body: str) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
         result = await service.pr_comment(pr_url, body)
-        TaskRunStore().append_evidence(
-            current_task_run_id(run_id), "pr_comment", result
-        )
+        TaskRunStore().append_evidence(current_task_run_id(), "pr_comment", result)
         return result
     finally:
         await service.aclose()
@@ -1085,19 +1005,17 @@ async def _pr_comment(
 @click.option("--url", "pr_url", required=True)
 @click.option("--reply-target-id", required=True, type=int)
 @click.option("--body-file", required=True, type=click.Path(path_type=Path))
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def pr_reply(
     person: str,
     pr_url: str,
     reply_target_id: int,
     body_file: Path,
-    run_id: str,
     output_format: str,
 ) -> None:
     body = _read_file(body_file, "body-file")
     _run(
-        _pr_reply(person, pr_url, reply_target_id, body, run_id or None),
+        _pr_reply(person, pr_url, reply_target_id, body),
         output_format=output_format,
     )
 
@@ -1107,13 +1025,12 @@ async def _pr_reply(
     pr_url: str,
     reply_target_id: int,
     body: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
         result = await service.pr_reply(pr_url, reply_target_id, body)
-        TaskRunStore().append_evidence(current_task_run_id(run_id), "pr_reply", result)
+        TaskRunStore().append_evidence(current_task_run_id(), "pr_reply", result)
         return result
     finally:
         await service.aclose()
@@ -1141,7 +1058,6 @@ def reaction() -> None:
         ["+1", "eyes", "heart", "hooray", "rocket", "laugh", "confused", "-1"]
     ),
 )
-@click.option("--run-id", default="")
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def reaction_add(
     person: str,
@@ -1149,13 +1065,10 @@ def reaction_add(
     target: str,
     comment_id: int,
     reaction_content: str,
-    run_id: str,
     output_format: str,
 ) -> None:
     _run(
-        _reaction_add(
-            person, repo, target, comment_id, reaction_content, run_id or None
-        ),
+        _reaction_add(person, repo, target, comment_id, reaction_content),
         output_format=output_format,
     )
 
@@ -1166,15 +1079,12 @@ async def _reaction_add(
     target: str,
     comment_id: int,
     reaction_content: str,
-    run_id: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
         result = await service.reaction_add(repo, target, comment_id, reaction_content)
-        TaskRunStore().append_evidence(
-            current_task_run_id(run_id), "reaction_add", result
-        )
+        TaskRunStore().append_evidence(current_task_run_id(), "reaction_add", result)
         return result
     finally:
         await service.aclose()
@@ -1390,6 +1300,10 @@ def _to_markdown(payload: dict[str, Any]) -> str:
             ):
                 if style_key in value:
                     lines.append(f"- **{style_key}**: {value[style_key]}")
+            continue
+        if key == "capabilities" and isinstance(value, str):
+            lines.append("## Member Capabilities")
+            lines.append(value)
             continue
         if isinstance(value, (dict, list)):
             rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)

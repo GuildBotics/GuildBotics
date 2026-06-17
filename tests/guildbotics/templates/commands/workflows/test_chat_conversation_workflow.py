@@ -185,7 +185,9 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert kwargs["channel_id"] == "C1"
     assert kwargs["cli_agent_env"]["GUILDBOTICS_RUN_ID"] == kwargs["workflow_run_id"]
     assert kwargs["cwd"].name == "alice"
-    assert "member chat inspect thread" in kwargs["chat_capability_help"]
+    # The capability reference is no longer injected per-prompt; the agent reads
+    # it from the mandatory `member context` call (the single source of truth).
+    assert "chat_capability_help" not in kwargs
 
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E1"]
