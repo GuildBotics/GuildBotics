@@ -838,6 +838,9 @@ def test_member_task_status_cli(monkeypatch, tmp_path):
 
 def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # The run id is injected by the workflow via env, not a CLI flag; the write
+    # command records its evidence under the env-provided run id.
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
@@ -885,8 +888,6 @@ def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp
             "100.1",
             "--body-file",
             str(body_file),
-            "--run-id",
-            "run-1",
         ],
     )
 

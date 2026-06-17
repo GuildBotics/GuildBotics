@@ -50,9 +50,9 @@ description: Incoming chat event の対応を CLI エージェントへ委譲し
 4. 返信・reaction・no-op の判断前に、必ず `guildbotics member chat inspect thread --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts}` を実行し、取得した thread messages を判断材料にしてください。
 5. `inspect thread` が失敗した場合は Slack へ投稿・reaction せず、safe summary を書いて `blocked` で complete してください。secret や token 値を summary に含めてはいけません。
 6. latest message、inspect 結果、previous thread context を読んで、次のいずれかを選んでください: reply / reaction-only / no-op / asking / blocked。
-7. 本文返信が自然なら `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --body-file <file> --run-id {workflow_run_id}` を実行してください。
+7. 本文返信が自然なら `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --body-file <file>` を実行してください。
 8. channel への通常投稿が必要な場合だけ `guildbotics member chat post` を使ってください。incoming thread への通常応答は原則 reply を使ってください。
-9. reaction-only が自然なら `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support --run-id {workflow_run_id}` を実行してください。
+9. reaction-only が自然なら `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support` を実行してください。
 10. 投稿も reaction も不要なら `guildbotics member chat noop --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --reason-file <file>` を実行してください。
 11. 追加情報が必要な場合は質問本文を Slack に reply/post してから、status `asking` で complete してください。
 12. credential 不足、access 不足、必要文脈不足などで処理できない場合は、safe summary を書いて status `blocked` で complete してください。secret や token 値を summary に含めてはいけません。

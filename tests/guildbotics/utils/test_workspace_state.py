@@ -31,6 +31,10 @@ def test_write_and_read_active_workspace(monkeypatch, tmp_path):
 
 
 def test_apply_workspace_environment_sets_config_and_env(monkeypatch, tmp_path):
+    # Sandbox HOME so write_active_workspace targets the temp dir instead of the
+    # real ~/.guildbotics/data/active-workspace.json (writing there would clobber
+    # the developer's active workspace when the suite runs).
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     workspace = tmp_path / "project"

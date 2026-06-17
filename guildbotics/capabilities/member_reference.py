@@ -39,7 +39,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member git commit --person <person> --repo-path <path> "
-                "(--message-file <file> | --message-stdin) [--workspace-mode member|current]",
+                "(--message-file <file> | --message-stdin) "
+                "[--workspace-mode member|current]",
                 "Commit already-staged changes with the member identity (git config untouched).",
             ),
             (
@@ -49,7 +50,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member git publish --person <person> --repo-path <path> "
-                "(--message-file <file> | --message-stdin) [--workspace-mode member|current]",
+                "(--message-file <file> | --message-stdin) "
+                "[--workspace-mode member|current]",
                 "Commit already-staged changes with the member identity, then push.",
             ),
         ],
@@ -66,7 +68,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Comment on an issue in the member voice.",
             ),
             (
-                "guildbotics member github issue create --person <person> --repo <owner/repo> --content-stdin",
+                "guildbotics member github issue create --person <person> --repo <owner/repo> "
+                "--title-file <file> --body-file <file> [--add-to-project]",
                 "Open a follow-up issue.",
             ),
             (
@@ -75,7 +78,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
-                "[--base <branch>] (--title-file <f> --body-file <f> | --content-stdin) [--issue-url <url>]",
+                "[--base <branch>] (--title-file <f> --body-file <f> | --content-stdin) "
+                "[--issue-url <url>] [--draft auto|true|false]",
                 "Open or reuse a PR.",
             ),
             (
@@ -113,12 +117,14 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member chat reply --person <person> --service slack "
-                "(--message-url <url> | --channel-id <id> --thread-ts <ts>) (--body-file <file> | --body-stdin)",
+                "(--message-url <url> | --channel-id <id> --thread-ts <ts>) "
+                "(--body-file <file> | --body-stdin)",
                 "Reply in a thread in the member voice.",
             ),
             (
                 "guildbotics member chat post --person <person> --service slack "
-                "(--channel-id <id> | --channel-name <name>) (--body-file <file> | --body-stdin)",
+                "(--channel-id <id> | --channel-name <name>) "
+                "(--body-file <file> | --body-stdin)",
                 "Post a new channel message.",
             ),
             (
@@ -156,9 +162,10 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
 ]
 
 _CROSS_CUTTING_RULES: list[str] = [
-    "All GitHub, git, and Slack writes go through these `guildbotics member ...` commands. "
-    "Never use gh, raw GitHub/Slack tokens or APIs, raw `git commit` / `git push`, or raw Slack HTTP calls.",
-    "Staging and branching are plain git: run `git add` / `git switch -c` yourself. "
+    "Publishing writes go through these `guildbotics member ...` commands: commits, pushes, PRs, "
+    "issue/PR comments, and Slack posts/reactions. Never use gh, raw GitHub/Slack tokens or APIs, "
+    "raw `git commit` / `git push`, or raw Slack HTTP calls for those.",
+    "Local-only git is the opposite: run `git add` and `git switch -c` yourself as plain git. "
     "`member git commit` / `publish` commit only what you staged and apply the member name/email "
     "to that one commit without changing the repository git config.",
     "Apply the member voice from `communication_style` to conversational and document outputs; "
