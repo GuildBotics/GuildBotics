@@ -17,7 +17,6 @@ from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
     get_workspace_data_root,
-    get_workspace_path,
 )
 from guildbotics.utils.i18n_tool import t
 
@@ -84,10 +83,12 @@ def _normalize_agent_response(response: Any) -> AgentResponse:
     )
 
 
-def _task_run_status(run_id: str, member_workspace: Path) -> TaskRunStatus:
+def _task_run_status(
+    run_id: str, task_run_root: Path, member_workspace: Path
+) -> TaskRunStatus:
     first_error: TaskRunError | None = None
     stores = [
-        TaskRunStore(),
+        TaskRunStore(task_run_root),
         TaskRunStore(member_workspace / ".guildbotics-data" / "task-runs"),
         TaskRunStore(member_workspace / ".guildbotics" / "data" / "task-runs"),
     ]
@@ -106,7 +107,8 @@ async def _main(context: Context, ticket_manager: TicketManager) -> AgentRespons
 
     ticket_url = await ticket_manager.get_ticket_url(context.task, markdown=False)
     workflow_run_id = uuid4().hex
-    member_workspace = get_workspace_path(context.person.person_id)
+    workspace_data_root = get_workspace_data_root()
+    member_workspace = workspace_data_root / "workspaces" / context.person.person_id
     member_workspace.mkdir(parents=True, exist_ok=True)
     response = await context.invoke(
         "functions/handle_github_ticket",
@@ -126,12 +128,14 @@ async def _main(context: Context, ticket_manager: TicketManager) -> AgentRespons
         # under the correct run id.
         cli_agent_env={
             TASK_RUN_ENV: workflow_run_id,
-            GUILDBOTICS_DATA_DIR: str(get_workspace_data_root()),
+            GUILDBOTICS_DATA_DIR: str(workspace_data_root),
         },
         cwd=member_workspace,
     )
     agent_response = _normalize_agent_response(response)
-    completion = _task_run_status(workflow_run_id, member_workspace)
+    completion = _task_run_status(
+        workflow_run_id, workspace_data_root / "task-runs", member_workspace
+    )
     return AgentResponse(
         status=(
             AgentResponse.ASKING
