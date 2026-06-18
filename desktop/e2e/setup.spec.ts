@@ -39,9 +39,9 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // first-setup screen.
   await expect(page.getByRole("heading", { name: "First setup" })).toBeVisible();
 
-  // The working directory is pre-filled from the backend cwd (the temp
-  // workspace). Allow for macOS /private symlink normalization.
-  const workspaceField = page.getByLabel("Working directory");
+  // The workspace is pre-filled from the backend cwd (the temp workspace).
+  // Allow for macOS /private symlink normalization.
+  const workspaceField = page.getByLabel("Workspace");
   await expect
     .poll(async () => (await workspaceField.inputValue()).replace(/^\/private/, ""))
     .toBe(ctx.workspaceDir.replace(/^\/private/, ""));

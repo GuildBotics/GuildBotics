@@ -45,7 +45,7 @@ CLI / member CLI では、以下の優先順で runtime workspace root を決め
 2. active workspace state が適用された場合は、その `workspace`
 3. それ以外は command 実行時の cwd
 
-Runtime workspace root は、config の保存場所とは別概念である。desktop の「ホーム共通」設定では、config は `$HOME/.guildbotics/config` に置かれるが、runtime workspace root は選択された作業ディレクトリである。
+Runtime workspace root は、config の保存場所とは別概念である。通常のプロジェクト config は `<workspace>/.guildbotics/config` に置くが、runtime workspace root はあくまで現在の runtime が作業対象としている workspace である。
 
 ### Workspace Data Root
 
@@ -256,7 +256,7 @@ Desktop sidecar runtime は process 内で lifecycle を管理するため、こ
 <runtime-workspace-root>/.env
 ```
 
-desktop の設定ファイル保存先が「作業ディレクトリ内」でも「ホーム共通」でも、`.env` は runtime workspace root に置く。
+`.env` は runtime workspace root に置く。
 
 `.env` は secrets と runtime 設定を保持する。
 
@@ -270,12 +270,11 @@ workspace `.env` を process 環境へ反映するとき、`HOME`、`USERPROFILE
 
 設定ファイルは config root 配下に置く。
 
-Desktop 設定画面の保存先ごとの挙動:
+Desktop 設定画面の挙動:
 
-| 保存先 | `config_dir` | `env_file_path` | runtime workspace root |
-| --- | --- | --- | --- |
-| 作業ディレクトリ内 | `<workspace>/.guildbotics/config` | `<workspace>/.env` | `<workspace>` |
-| ホーム共通 | `$HOME/.guildbotics/config` | `<workspace>/.env` | `<workspace>` |
+| `config_dir` | `env_file_path` | runtime workspace root |
+| --- | --- | --- |
+| `<workspace>/.guildbotics/config` | `<workspace>/.env` | `<workspace>` |
 
 `config_dir` は config source であり、workspace data root の根拠にはしない。
 
@@ -370,8 +369,6 @@ Slack / chat workflow の cursor、processed event、thread state、pending even
 5. `GUILDBOTICS_CONFIG_DIR` は `<workspace>/.guildbotics/config` に設定する。
 6. process 起動時点に保存しておいた inherited `GUILDBOTICS_DATA_DIR` と `<workspace>/.env` から effective workspace data root を解決し、`GUILDBOTICS_DATA_DIR` に設定する。
 7. workspace data root は `GUILDBOTICS_DATA_DIR` の値になる。
-
-Desktop で設定保存先を「ホーム共通」にした場合でも、runtime workspace root は選択 workspace のままである。config root だけが `$HOME/.guildbotics/config` になる。
 
 ### `guildbotics workspace use <dir>`
 
@@ -565,8 +562,7 @@ Root 解決は unit test で網羅する。
 
 検証するケース:
 
-- config 保存先が「作業ディレクトリ内」の場合、config は `<workspace>/.guildbotics/config`、`.env` は `<workspace>/.env`、workspace data は `<workspace>/.guildbotics/data` と表示される。
-- config 保存先が「ホーム共通」の場合、config は `$HOME/.guildbotics/config`、`.env` は `<workspace>/.env`、workspace data は `<workspace>/.guildbotics/data` と表示される。
+- config は `<workspace>/.guildbotics/config`、`.env` は `<workspace>/.env`、workspace data は `<workspace>/.guildbotics/data` と表示される。
 - UI 上で `GUILDBOTICS_CONFIG_DIR` を workspace data root の根拠として表示しない。
 
 ### Workflow test

@@ -156,15 +156,9 @@ function configStatus(overrides: Record<string, unknown> = {}) {
     cwd: "/workspace",
     env_file: "/workspace/.env",
     env_file_exists: true,
-    primary_config_dir: "/workspace/.guildbotics/config",
-    primary_config_location: "workspace",
-    primary_project_file: "/workspace/.guildbotics/config/project.yml",
-    primary_project_file_exists: true,
-    home_config_dir: "/home/.guildbotics/config",
-    home_project_file: "/home/.guildbotics/config/project.yml",
-    home_project_file_exists: false,
-    active_config_dir: "/workspace/.guildbotics/config",
-    active_config_location: "workspace",
+    config_dir: "/workspace/.guildbotics/config",
+    project_file: "/workspace/.guildbotics/config/project.yml",
+    project_file_exists: true,
     storage_dir: "/workspace/.guildbotics",
     ...overrides,
   };
@@ -461,8 +455,8 @@ describe("Setup integration (real client + mock server)", () => {
   it("drives first-time setup to a member add and project init with real requests", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const server = new MockServer()
-      .json("GET", "/config/status", configStatus({ primary_project_file_exists: false }))
-      .json("POST", "/workspace", configStatus({ primary_project_file_exists: false }))
+      .json("GET", "/config/status", configStatus({ project_file_exists: false }))
+      .json("POST", "/workspace", configStatus({ project_file_exists: false }))
       .on("GET", "/team", () => ({
         status: 404,
         body: { code: "not_found", message: "missing", context: {} },
@@ -481,9 +475,7 @@ describe("Setup integration (real client + mock server)", () => {
     renderSetup(server, "/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await waitFor(() =>
-      expect(screen.getByLabelText("Working directory")).toHaveValue("/workspace"),
-    );
+    await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
 
     await user.type(screen.getByLabelText("Project description"), "Demo project");
     // The GitHub use/don't decision now lives in the Project section.

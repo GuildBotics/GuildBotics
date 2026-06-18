@@ -101,15 +101,9 @@ vi.mock("../api/client", async (importOriginal) => {
       cwd: "/workspace",
       env_file: "/workspace/.env",
       env_file_exists: true,
-      primary_config_dir: "/workspace/.guildbotics/config",
-      primary_config_location: "workspace",
-      primary_project_file: "/workspace/.guildbotics/config/project.yml",
-      primary_project_file_exists: true,
-      home_config_dir: "/home/.guildbotics/config",
-      home_project_file: "/home/.guildbotics/config/project.yml",
-      home_project_file_exists: false,
-      active_config_dir: "/workspace/.guildbotics/config",
-      active_config_location: "workspace",
+      config_dir: "/workspace/.guildbotics/config",
+      project_file: "/workspace/.guildbotics/config/project.yml",
+      project_file_exists: true,
       storage_dir: "/workspace/.guildbotics",
     })),
     getIntelligenceConfig: vi.fn(async () => ({
@@ -199,7 +193,7 @@ beforeEach(() => {
   // Restore the default existing-project responses so that first-setup tests,
   // which install persistent `mockResolvedValue` overrides, do not leak into
   // subsequent existing-project tests.
-  vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ primary_project_file_exists: true }));
+  vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
   vi.mocked(getTeam).mockResolvedValue({
     project: { name: "Demo", language_code: "en", language_name: "English" },
     members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["professional"] }],
@@ -224,7 +218,7 @@ describe("SetupPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Project" }));
 
-    expect(await screen.findByLabelText("Working directory")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Workspace")).toBeInTheDocument();
     expect(screen.queryByText("Alice (alice)")).not.toBeInTheDocument();
   });
 
@@ -241,12 +235,9 @@ describe("SetupPage", () => {
         cwd: "/empty-workspace",
         env_file: "/empty-workspace/.env",
         env_file_exists: false,
-        primary_config_dir: "/empty-workspace/.guildbotics/config",
-        primary_project_file: "/empty-workspace/.guildbotics/config/team/project.yml",
-        primary_project_file_exists: false,
-        home_project_file_exists: false,
-        active_config_dir: null,
-        active_config_location: "missing",
+        config_dir: "/empty-workspace/.guildbotics/config",
+        project_file: "/empty-workspace/.guildbotics/config/team/project.yml",
+        project_file_exists: false,
       }),
     );
     vi.mocked(getTeam).mockRejectedValueOnce(new Error("project config missing"));
@@ -256,7 +247,7 @@ describe("SetupPage", () => {
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/empty-workspace"));
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
     expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
-    expect(screen.getByLabelText("Working directory")).toHaveValue("/empty-workspace");
+    expect(screen.getByLabelText("Workspace")).toHaveValue("/empty-workspace");
   });
 
   it("switches from first setup mode to settings mode when the selected workspace is configured", async () => {
@@ -267,12 +258,9 @@ describe("SetupPage", () => {
         cwd: "/empty-workspace",
         env_file: "/empty-workspace/.env",
         env_file_exists: false,
-        primary_config_dir: "/empty-workspace/.guildbotics/config",
-        primary_project_file: "/empty-workspace/.guildbotics/config/team/project.yml",
-        primary_project_file_exists: false,
-        home_project_file_exists: false,
-        active_config_dir: null,
-        active_config_location: "missing",
+        config_dir: "/empty-workspace/.guildbotics/config",
+        project_file: "/empty-workspace/.guildbotics/config/team/project.yml",
+        project_file_exists: false,
       }),
     );
     renderSetupPage("/setup");
@@ -285,12 +273,9 @@ describe("SetupPage", () => {
         cwd: "/configured-workspace",
         env_file: "/configured-workspace/.env",
         env_file_exists: true,
-        primary_config_dir: "/configured-workspace/.guildbotics/config",
-        primary_project_file: "/configured-workspace/.guildbotics/config/team/project.yml",
-        primary_project_file_exists: true,
-        home_project_file_exists: false,
-        active_config_dir: "/configured-workspace/.guildbotics/config",
-        active_config_location: "workspace",
+        config_dir: "/configured-workspace/.guildbotics/config",
+        project_file: "/configured-workspace/.guildbotics/config/team/project.yml",
+        project_file_exists: true,
       }),
     );
     vi.mocked(getProjectConfig).mockResolvedValueOnce(
@@ -309,13 +294,11 @@ describe("SetupPage", () => {
 
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/configured-workspace"));
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Working directory")).toHaveValue("/configured-workspace");
+    expect(screen.getByLabelText("Workspace")).toHaveValue("/configured-workspace");
   });
 
   it("renders the first-setup required progress and project section fields", async () => {
-    vi.mocked(getConfigStatus).mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
@@ -325,21 +308,16 @@ describe("SetupPage", () => {
     expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
     expect(screen.getByText(t("setup.saveMode.manual"))).toBeInTheDocument();
 
-    await waitFor(() =>
-      expect(screen.getByLabelText("Working directory")).toHaveValue("/workspace"),
-    );
+    await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
     // In first-setup mode the existing project config is not loaded, so the
     // description starts empty.
     expect(screen.getByLabelText("Project description")).toHaveValue("");
     expect(screen.getByText(t("setup.project.agentLanguage"))).toBeInTheDocument();
-    expect(screen.getByText(t("setup.project.configLocation"))).toBeInTheDocument();
   });
 
   it("shows the LLM provider and CLI agent selection with API-key availability", async () => {
     const user = userEvent.setup();
-    vi.mocked(getConfigStatus).mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
@@ -365,9 +343,7 @@ describe("SetupPage", () => {
 
   it("shows CLI agent skill status and allows an explicit overwrite", async () => {
     const user = userEvent.setup();
-    vi.mocked(getConfigStatus).mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
@@ -399,9 +375,7 @@ describe("SetupPage", () => {
 
   it("marks GitHub section ready for the disabled decision and incomplete when enabled without URLs", async () => {
     const user = userEvent.setup();
-    vi.mocked(getConfigStatus).mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
@@ -432,9 +406,7 @@ describe("SetupPage", () => {
 
   it("offers fetched status options for lane mapping when GitHub is enabled", async () => {
     const user = userEvent.setup();
-    vi.mocked(getConfigStatus).mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
@@ -582,18 +554,14 @@ describe("SetupPage", () => {
 
   it("navigates between sections with the next and back buttons", async () => {
     const user = userEvent.setup();
-    vi.mocked(getConfigStatus).mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await waitFor(() =>
-      expect(screen.getByLabelText("Working directory")).toHaveValue("/workspace"),
-    );
+    await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
 
     // The Next button stays disabled until the current section is complete, so
     // fill in the required project description and make the GitHub decision
@@ -608,7 +576,7 @@ describe("SetupPage", () => {
     expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: t("setup.status.back") }));
-    expect(await screen.findByLabelText("Working directory")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Workspace")).toBeInTheDocument();
   });
 
   it("creates the initial setup via initConfig and restartBackend", async () => {
@@ -619,9 +587,7 @@ describe("SetupPage", () => {
         { name: "codex", executable: "codex", detected: true, path: "/usr/local/bin/codex" },
       ],
     });
-    vi.mocked(getConfigStatus).mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
@@ -631,9 +597,7 @@ describe("SetupPage", () => {
 
     // Complete every required section so the Create action becomes available:
     // project description, the provider API key, and a GitHub decision.
-    await waitFor(() =>
-      expect(screen.getByLabelText("Working directory")).toHaveValue("/workspace"),
-    );
+    await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
     await user.type(screen.getByLabelText("Project description"), "Demo project");
     // The GitHub decision now lives in the Project section.
     await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
@@ -762,7 +726,6 @@ type MemberFormValues = Parameters<typeof getMemberFieldErrors>[0];
 function baseProjectValues(overrides: Partial<ProjectFormValues> = {}): ProjectFormValues {
   return {
     workspaceDir: "/workspace",
-    configLocation: "workspace",
     envFileOption: "append",
     language: "en",
     description: "Demo project",
@@ -823,15 +786,9 @@ function configStatus(overrides: Record<string, unknown> = {}): ConfigStatus {
     cwd: "/workspace",
     env_file: "/workspace/.env",
     env_file_exists: true,
-    primary_config_dir: "/workspace/.guildbotics/config",
-    primary_config_location: "workspace",
-    primary_project_file: "/workspace/.guildbotics/config/project.yml",
-    primary_project_file_exists: false,
-    home_config_dir: "/home/.guildbotics/config",
-    home_project_file: "/home/.guildbotics/config/project.yml",
-    home_project_file_exists: false,
-    active_config_dir: "/workspace/.guildbotics/config",
-    active_config_location: "workspace",
+    config_dir: "/workspace/.guildbotics/config",
+    project_file: "/workspace/.guildbotics/config/project.yml",
+    project_file_exists: false,
     storage_dir: "/workspace/.guildbotics",
     ...overrides,
   } as ConfigStatus;
@@ -886,7 +843,7 @@ function firstError(
 describe("createProjectSchema", () => {
   const schema = createProjectSchema(t);
 
-  it("requires a workspace directory", () => {
+  it("requires a workspace", () => {
     const result = schema.safeParse(baseProjectValues({ workspaceDir: "" }));
     expect(firstError(result, "workspaceDir")).toBe(t("setup.validation.workspaceRequired"));
   });
@@ -977,7 +934,6 @@ describe("initialProjectValues", () => {
     const values = initialProjectValues(undefined, "ja", null, undefined);
     expect(values).toMatchObject({
       workspaceDir: "",
-      configLocation: "home",
       envFileOption: "overwrite",
       language: "ja",
       description: "",
@@ -988,42 +944,30 @@ describe("initialProjectValues", () => {
     });
   });
 
-  it("derives workspace config location and append option from config status", () => {
+  it("derives workspace and append option from config status", () => {
     const values = initialProjectValues(
-      configStatus({ primary_config_location: "workspace", env_file_exists: true }),
+      configStatus({ env_file_exists: true }),
       "en",
       null,
       undefined,
     );
     expect(values.workspaceDir).toBe("/workspace");
-    expect(values.configLocation).toBe("workspace");
     expect(values.envFileOption).toBe("append");
   });
 
-  it("maps home config location and overwrite option", () => {
+  it("maps a missing env file to overwrite option", () => {
     const values = initialProjectValues(
-      configStatus({ primary_config_location: "home", env_file_exists: false }),
+      configStatus({ env_file_exists: false }),
       "en",
       null,
       undefined,
     );
-    expect(values.configLocation).toBe("home");
     expect(values.envFileOption).toBe("overwrite");
   });
 
-  it("treats custom config location as home", () => {
+  it("uses the project language when the project file exists", () => {
     const values = initialProjectValues(
-      configStatus({ primary_config_location: "custom" }),
-      "en",
-      null,
-      undefined,
-    );
-    expect(values.configLocation).toBe("home");
-  });
-
-  it("uses the project language when the primary project file exists", () => {
-    const values = initialProjectValues(
-      configStatus({ primary_project_file_exists: true }),
+      configStatus({ project_file_exists: true }),
       "en",
       "ja",
       undefined,
@@ -1033,7 +977,7 @@ describe("initialProjectValues", () => {
 
   it("hydrates from an existing project config without exposing API keys", () => {
     const values = initialProjectValues(
-      configStatus({ active_config_location: "workspace" }),
+      configStatus(),
       "en",
       null,
       projectConfig({
@@ -1079,14 +1023,6 @@ describe("toProjectSetupRequest", () => {
     expect(request.owner).toBe("acme");
     expect(request.project_id).toBe("9");
     expect(request.github_project_url).toBe("https://github.com/orgs/acme/projects/9");
-  });
-
-  it("uses the home config dir when home location is selected", () => {
-    const request = toProjectSetupRequest(
-      baseProjectValues({ configLocation: "home" }),
-      configStatus({ home_config_dir: "/home/.guildbotics/config" }),
-    );
-    expect(request.config_dir).toBe("/home/.guildbotics/config");
   });
 
   it("includes a trimmed lane_map when GitHub is enabled", () => {
@@ -1749,9 +1685,7 @@ describe("MembersSection", () => {
 
   it("keeps added members as drafts before the project is persisted", async () => {
     const user = userEvent.setup();
-    vi.mocked(getConfigStatus).mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );

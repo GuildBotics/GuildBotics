@@ -39,41 +39,31 @@ def test_find_package_subdir_templates_exists():
     assert p.exists() and p.is_dir()
 
 
-def test_get_config_path_prefers_env_over_home(tmp_path, monkeypatch):
-    """When both env and HOME contain the file, env dir takes precedence."""
+def test_get_config_path_prefers_env_over_template(tmp_path, monkeypatch):
+    """When env config contains the file, it takes precedence over templates."""
     env_dir = tmp_path / "envcfg"
     env_dir.mkdir()
-    home_dir = tmp_path / "home"
-    (home_dir / ".guildbotics" / "config").mkdir(parents=True)
 
     env_file = env_dir / "foo.yaml"
-    home_file = home_dir / ".guildbotics" / "config" / "foo.yaml"
     env_file.write_text("a: 1\n", encoding="utf-8")
-    home_file.write_text("a: 2\n", encoding="utf-8")
 
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(env_dir))
-    monkeypatch.setenv("HOME", str(home_dir))
 
     resolved = get_config_path("foo.yaml")
     assert resolved == env_file
     assert load_yaml_file(resolved) == {"a": 1}
 
 
-def test_get_config_path_uses_home_when_env_missing_file(tmp_path, monkeypatch):
-    """If env dir lacks the file, falls back to $HOME/.guildbotics/config."""
+def test_get_config_path_uses_template_when_env_missing_file(tmp_path, monkeypatch):
+    """If the workspace config lacks the file, falls back to package templates."""
     env_dir = tmp_path / "envcfg"
     env_dir.mkdir()
-    home_dir = tmp_path / "home"
-    (home_dir / ".guildbotics" / "config").mkdir(parents=True)
-
-    home_file = home_dir / ".guildbotics" / "config" / "bar.yaml"
-    home_file.write_text("k: v\n", encoding="utf-8")
 
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(env_dir))
-    monkeypatch.setenv("HOME", str(home_dir))
 
-    resolved = get_config_path("bar.yaml")
-    assert resolved == home_file
+    resolved = get_config_path("team/defaults.yml")
+    assert "templates" in resolved.parts
+    assert resolved.name == "defaults.yml"
 
 
 def test_get_config_path_language_specific_and_fallback(tmp_path, monkeypatch):

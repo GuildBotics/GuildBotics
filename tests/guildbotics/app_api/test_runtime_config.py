@@ -261,23 +261,8 @@ def test_config_status_reports_workspace_when_workspace_config_present(
     status = AppRuntime(EventBus()).get_config_status()
 
     assert status.cwd == isolated_home
-    assert status.primary_config_dir == isolated_home / ".guildbotics" / "config"
-    assert status.primary_config_location == "workspace"
-    assert status.primary_project_file_exists is True
-    assert status.active_config_dir == isolated_home / ".guildbotics" / "config"
-    assert status.active_config_location == "workspace"
-
-
-def test_config_status_falls_back_to_home_config(isolated_home: Path) -> None:
-    home_config = isolated_home / "home" / ".guildbotics" / "config"
-    _write_project(home_config)
-
-    status = AppRuntime(EventBus()).get_config_status()
-
-    assert status.home_project_file_exists is True
-    assert status.primary_project_file_exists is False
-    assert status.active_config_dir == home_config
-    assert status.active_config_location == "home"
+    assert status.config_dir == isolated_home / ".guildbotics" / "config"
+    assert status.project_file_exists is True
 
 
 def test_config_status_uses_custom_config_dir_env(
@@ -289,10 +274,8 @@ def test_config_status_uses_custom_config_dir_env(
 
     status = AppRuntime(EventBus()).get_config_status()
 
-    assert status.primary_config_dir == custom_config
-    assert status.primary_config_location == "custom"
-    assert status.active_config_dir == custom_config
-    assert status.active_config_location == "custom"
+    assert status.config_dir == custom_config
+    assert status.project_file_exists is True
 
 
 def test_config_status_reports_missing_when_no_project_file(
@@ -300,10 +283,7 @@ def test_config_status_reports_missing_when_no_project_file(
 ) -> None:
     status = AppRuntime(EventBus()).get_config_status()
 
-    assert status.primary_project_file_exists is False
-    assert status.home_project_file_exists is False
-    assert status.active_config_dir is None
-    assert status.active_config_location == "missing"
+    assert status.project_file_exists is False
     assert status.env_file == isolated_home / ".env"
     assert status.env_file_exists is False
 
@@ -375,8 +355,7 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
     assert status.workspace_data_dir == workspace.resolve() / ".guildbotics" / "data"
     assert status.storage_dir == status.workspace_data_dir
-    assert status.primary_config_location == "workspace"
-    assert status.active_config_location == "workspace"
+    assert status.config_dir == workspace.resolve() / ".guildbotics" / "config"
     assert status.env_file_exists is True
 
 

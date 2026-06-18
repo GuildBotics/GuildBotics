@@ -444,10 +444,7 @@ def create_app(
             raise AppApiError(
                 "project_not_found",
                 "Project config was not found.",
-                context={
-                    "primary": str(status.primary_project_file),
-                    "home": str(status.home_project_file),
-                },
+                context={"project": str(status.project_file)},
                 status_code=400,
             )
         try:
@@ -548,10 +545,7 @@ def create_app(
             raise AppApiError(
                 "project_not_found",
                 "Project config was not found.",
-                context={
-                    "primary": str(status.primary_project_file),
-                    "home": str(status.home_project_file),
-                },
+                context={"project": str(status.project_file)},
                 status_code=400,
             )
         try:
@@ -654,21 +648,14 @@ def _resolve_existing_config_dir(app_runtime: AppRuntime) -> Path:
     raise AppApiError(
         "project_not_found",
         "Project config was not found.",
-        context={
-            "primary": str(status.primary_project_file),
-            "home": str(status.home_project_file),
-        },
+        context={"project": str(status.project_file)},
         status_code=400,
     )
 
 
 def _get_existing_config_dir(status: ConfigStatus) -> Path | None:
-    if status.active_config_dir is not None:
-        return status.active_config_dir
-    if status.primary_project_file_exists:
-        return status.primary_config_dir
-    if status.home_project_file_exists:
-        return status.home_config_dir
+    if status.project_file_exists:
+        return status.config_dir
     return None
 
 

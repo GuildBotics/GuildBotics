@@ -107,7 +107,6 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
   return z
     .object({
       workspaceDir: z.string().min(1, t("setup.validation.workspaceRequired")),
-      configLocation: z.enum(["home", "workspace"]),
       envFileOption: z.enum(["skip", "append", "overwrite"]),
       language: z.enum(["en", "ja"]),
       description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
@@ -222,9 +221,7 @@ export function SetupPage() {
     queryFn: getCliAgentDetections,
     retry: false,
   });
-  const hasExistingProject = Boolean(
-    config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
-  );
+  const hasExistingProject = Boolean(config.data?.project_file_exists);
   const projectConfig = useQuery({
     queryKey: ["project-config"],
     queryFn: getProjectConfig,
@@ -501,7 +498,6 @@ export function SetupPage() {
               members={persistedTeam?.members ?? []}
               config={config.data}
               workspaceDir={form.values.workspaceDir}
-              configLocation={form.values.configLocation}
               cliDetections={cliDetections.data?.agents ?? []}
               llmProviderAvailability={llmProviderAvailability}
               initialTab={focusMemberTab}
@@ -689,17 +685,6 @@ function ProjectSection({
           }
         />
         <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
-        <LabeledSegmentedControl
-          label={t("setup.project.configLocation")}
-          data={[
-            { label: t("setup.project.homeConfig"), value: "home" },
-            { label: t("setup.project.workspaceConfig"), value: "workspace" },
-          ]}
-          value={form.values.configLocation}
-          onChange={(value) =>
-            form.setFieldValue("configLocation", value as ProjectFormValues["configLocation"])
-          }
-        />
         <Textarea
           label={<RequiredLabel text={t("setup.project.description")} />}
           aria-label={t("setup.project.description")}
@@ -1555,7 +1540,6 @@ function MembersSection({
   members,
   config,
   workspaceDir,
-  configLocation,
   cliDetections,
   llmProviderAvailability,
   initialTab,
@@ -1565,7 +1549,6 @@ function MembersSection({
   members: Array<{ person_id: string; name: string; is_active: boolean; roles: string[] }>;
   config: ConfigStatus | undefined;
   workspaceDir: string;
-  configLocation: "home" | "workspace";
   cliDetections: CliAgentDetection[];
   llmProviderAvailability: LlmProviderAvailability;
   initialTab?: MemberEditorTab;
@@ -1620,9 +1603,7 @@ function MembersSection({
   const [draftMembers, setDraftMembers] = useState<MemberConfig[]>([]);
   const memberIntelligenceSaveRef = useRef<(() => Promise<void>) | null>(null);
   const emptyAddDefaultsAppliedRef = useRef(false);
-  const hasPersistedProject = Boolean(
-    config?.primary_project_file_exists || config?.home_project_file_exists,
-  );
+  const hasPersistedProject = Boolean(config?.project_file_exists);
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
   const rolesQuery = useQuery({
     queryKey: ["member-role-options", appLanguage],
@@ -1894,7 +1875,7 @@ function MembersSection({
   });
 
   const usesGitHubMember = personType !== "";
-  const configDir = resolveConfigDir(config, workspaceDir, configLocation);
+  const configDir = resolveConfigDir(workspaceDir);
   const envFilePath = joinPath(workspaceDir, ".env");
   const requiresGitHubAuth = personType === "machine_user" || personType === "proxy_agent";
   const requiresGitHubAppsAuth = personType === "github_apps";
@@ -3826,7 +3807,7 @@ function useAutosave(
       setSaveState("idle");
       return;
     }
-    if (!config?.primary_project_file_exists && !config?.home_project_file_exists) {
+    if (!config?.project_file_exists) {
       setSaveState("idle");
       return;
     }
@@ -3853,9 +3834,7 @@ function useSetupStatus(
   activeMemberCount: number,
   values: ProjectFormValues,
 ): SetupStatus {
-  const projectReady = Boolean(
-    config?.primary_project_file_exists || config?.home_project_file_exists,
-  );
+  const projectReady = Boolean(config?.project_file_exists);
   const githubReady = isGitHubDecisionComplete(values);
   const intelligenceReady = projectReady;
   const membersReady = activeMemberCount > 0;
@@ -4277,15 +4256,6 @@ function toInitialProjectSetupRequest(
   });
 }
 
-function toFormConfigLocation(
-  location:
-    | ConfigStatus["active_config_location"]
-    | ConfigStatus["primary_config_location"]
-    | undefined,
-): ProjectFormValues["configLocation"] {
-  return location === "workspace" ? "workspace" : "home";
-}
-
 export function initialProjectValues(
   config: ConfigStatus | undefined,
   appLanguage: ProjectFormValues["language"],
@@ -4295,7 +4265,6 @@ export function initialProjectValues(
   if (projectConfig) {
     return {
       workspaceDir: config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "",
-      configLocation: toFormConfigLocation(config?.active_config_location),
       envFileOption: getInitialEnvFileOption(config),
       language: projectConfig.language,
       description: projectConfig.description ?? "",
@@ -4315,9 +4284,8 @@ export function initialProjectValues(
   const cwd = config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "";
   return {
     workspaceDir: cwd,
-    configLocation: toFormConfigLocation(config?.primary_config_location),
     envFileOption: getInitialEnvFileOption(config),
-    language: config?.primary_project_file_exists ? (projectLanguage ?? appLanguage) : appLanguage,
+    language: config?.project_file_exists ? (projectLanguage ?? appLanguage) : appLanguage,
     description: "",
     llmApiType: "openai",
     cliAgent: "codex",
@@ -4335,14 +4303,12 @@ export function initialProjectValues(
 
 export function toProjectSetupRequest(
   values: ProjectFormValues,
-  config: ConfigStatus | undefined,
+  _config: ConfigStatus | undefined,
   options: { envFileOption?: ProjectFormValues["envFileOption"] } = {},
 ): ProjectSetupRequest {
-  const workspaceConfigDir = joinPath(values.workspaceDir, ".guildbotics/config");
-  const homeConfigDir = config?.home_config_dir ?? workspaceConfigDir;
   const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
-    config_dir: values.configLocation === "home" ? homeConfigDir : workspaceConfigDir,
+    config_dir: resolveConfigDir(values.workspaceDir),
     env_file_path: joinPath(values.workspaceDir, ".env"),
     env_file_option: options.envFileOption ?? values.envFileOption,
     language: values.language,
@@ -4374,7 +4340,7 @@ export function toProjectUpdateRequest(
 ): ProjectConfigUpdateRequest {
   const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
-    config_dir: snapshot.config_dir || config?.primary_config_dir || "",
+    config_dir: snapshot.config_dir || config?.config_dir || resolveConfigDir(values.workspaceDir),
     env_file_path: snapshot.env_file_path || joinPath(values.workspaceDir, ".env"),
     language: values.language,
     description: values.description,
@@ -4971,14 +4937,6 @@ function localFileHref(path: string) {
   return encodeURI(`${prefix}${normalizedPath}`);
 }
 
-function resolveConfigDir(
-  config: ConfigStatus | undefined,
-  workspaceDir: string,
-  configLocation: "home" | "workspace",
-): string {
-  const workspaceConfigDir = joinPath(workspaceDir, ".guildbotics/config");
-  if (configLocation === "workspace") {
-    return workspaceConfigDir;
-  }
-  return config?.home_config_dir ?? workspaceConfigDir;
+function resolveConfigDir(workspaceDir: string): string {
+  return joinPath(workspaceDir, ".guildbotics/config");
 }

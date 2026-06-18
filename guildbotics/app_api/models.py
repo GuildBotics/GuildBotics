@@ -26,23 +26,13 @@ class HealthResponse(BaseModel):
     status: str
 
 
-ConfigLocation = Literal["workspace", "home", "custom"]
-ActiveConfigLocation = Literal["workspace", "home", "custom", "missing"]
-
-
 class ConfigStatus(BaseModel):
     cwd: Path
     env_file: Path
     env_file_exists: bool
-    primary_config_dir: Path
-    primary_config_location: ConfigLocation = "workspace"
-    primary_project_file: Path
-    primary_project_file_exists: bool
-    home_config_dir: Path
-    home_project_file: Path
-    home_project_file_exists: bool
-    active_config_dir: Path | None = None
-    active_config_location: ActiveConfigLocation = "missing"
+    config_dir: Path
+    project_file: Path
+    project_file_exists: bool
     storage_dir: Path
     machine_state_dir: Path | None = None
     workspace_data_dir: Path | None = None
@@ -102,7 +92,7 @@ class CommandOption(BaseModel):
     label: str
     description: str = ""
     category: Literal["workflow", "function", "example", "custom"]
-    source: Literal["workspace", "home", "template"]
+    source: Literal["workspace", "template"]
     path: Path
     arguments: list[CommandArgumentOption] = Field(default_factory=list)
     supports_raw_args: bool = True

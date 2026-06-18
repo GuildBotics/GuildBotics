@@ -143,9 +143,7 @@ function IndexRedirect() {
   if (config.isLoading) {
     return null;
   }
-  const configured = Boolean(
-    config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
-  );
+  const configured = Boolean(config.data?.project_file_exists);
   return <Navigate replace to={configured ? "/service" : "/setup"} />;
 }
 
@@ -169,9 +167,7 @@ function ServicePage() {
     queryFn: getSchedulerStatus,
     refetchInterval: 5000,
   });
-  const hasProjectConfig = Boolean(
-    config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
-  );
+  const hasProjectConfig = Boolean(config.data?.project_file_exists);
   const projectConfig = useQuery({
     queryKey: ["project-config"],
     queryFn: getProjectConfig,
@@ -439,9 +435,7 @@ function DiagnosticsPage() {
   const effectiveReadTracePath = readTracePathEdited
     ? readTracePath
     : (promptTrace.data?.trace_file ?? loadedTracePath);
-  const hasProjectConfig = Boolean(
-    config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
-  );
+  const hasProjectConfig = Boolean(config.data?.project_file_exists);
   const projectConfig = useQuery({
     queryKey: ["project-config"],
     queryFn: getProjectConfig,
@@ -2282,9 +2276,7 @@ function CommandsPage() {
   const { t } = useTranslation();
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
-  const hasProjectConfig = Boolean(
-    config.data?.primary_project_file_exists || config.data?.home_project_file_exists,
-  );
+  const hasProjectConfig = Boolean(config.data?.project_file_exists);
   const [initialHistory] = useState(loadCustomCommandHistory);
   const restoreCustom = initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
   const [mode, setMode] = useState(restoreCustom ? "custom" : "catalog");

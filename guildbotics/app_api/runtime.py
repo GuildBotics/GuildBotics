@@ -26,7 +26,6 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
-    ActiveConfigLocation,
     AgentFieldOption,
     AgentFieldStateResponse,
     CliAgentDetection,
@@ -37,7 +36,6 @@ from guildbotics.app_api.models import (
     CommandRequirement,
     CommandRunRequest,
     CommandRunResponse,
-    ConfigLocation,
     ConfigStatus,
     MemberSummary,
     ProjectStatusOptionsRequest,
@@ -77,7 +75,6 @@ from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
     apply_workspace_data_root,
-    get_home_config_path,
     get_machine_state_root,
     get_person_config_path,
     get_primary_config_path,
@@ -105,21 +102,6 @@ WORKSPACE_DOTENV_PROTECTED_KEYS = {
     "HOMEPATH",
 }
 TICKET_DRIVEN_WORKFLOW = "workflows/ticket_driven_workflow"
-
-
-def _normalized_path(path: Path) -> Path:
-    return path.expanduser().resolve(strict=False)
-
-
-def _classify_config_dir(
-    config_dir: Path, cwd: Path, home_config_dir: Path
-) -> ConfigLocation:
-    normalized_config_dir = _normalized_path(config_dir)
-    if normalized_config_dir == _normalized_path(cwd / ".guildbotics" / "config"):
-        return "workspace"
-    if normalized_config_dir == _normalized_path(home_config_dir):
-        return "home"
-    return "custom"
 
 
 class AppRuntime:
@@ -150,35 +132,16 @@ class AppRuntime:
 
     def get_config_status(self) -> ConfigStatus:
         cwd = Path.cwd()
-        primary_config_dir = get_primary_config_path(Path())
-        primary_project_file = primary_config_dir / "team" / "project.yml"
-        home_config_dir = get_home_config_path(Path())
-        home_project_file = home_config_dir / "team" / "project.yml"
+        config_dir = get_primary_config_path(Path())
+        project_file = config_dir / "team" / "project.yml"
         env_file = cwd / ".env"
-        primary_config_location = _classify_config_dir(
-            primary_config_dir, cwd, home_config_dir
-        )
-        active_config_dir: Path | None = None
-        active_config_location: ActiveConfigLocation = "missing"
-        if primary_project_file.exists():
-            active_config_dir = primary_config_dir
-            active_config_location = primary_config_location
-        elif home_project_file.exists():
-            active_config_dir = home_config_dir
-            active_config_location = "home"
         return ConfigStatus(
             cwd=cwd,
             env_file=env_file,
             env_file_exists=env_file.exists(),
-            primary_config_dir=primary_config_dir,
-            primary_config_location=primary_config_location,
-            primary_project_file=primary_project_file,
-            primary_project_file_exists=primary_project_file.exists(),
-            home_config_dir=home_config_dir,
-            home_project_file=home_project_file,
-            home_project_file_exists=home_project_file.exists(),
-            active_config_dir=active_config_dir,
-            active_config_location=active_config_location,
+            config_dir=config_dir,
+            project_file=project_file,
+            project_file_exists=project_file.exists(),
             storage_dir=get_workspace_data_root(cwd),
             machine_state_dir=get_machine_state_root(),
             workspace_data_dir=get_workspace_data_root(cwd),
@@ -229,9 +192,9 @@ class AppRuntime:
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
         context = self._get_context()
         status = self.get_config_status()
-        if status.active_config_dir is not None:
+        if status.project_file_exists:
             SimpleProjectSetupService().ensure_sample_commands(
-                status.active_config_dir,
+                status.config_dir,
                 context.team.project.get_language_code(),
             )
         if person:
@@ -801,12 +764,9 @@ def _iter_command_files(context: Context) -> Iterator[tuple[str, Path, str]]:
 
 def _command_roots(person_id: str) -> list[tuple[Path, str]]:
     primary = get_primary_config_path(Path())
-    home = get_home_config_path(Path())
     return [
         (primary / "team" / "members" / person_id / "commands", "workspace"),
-        (home / "team" / "members" / person_id / "commands", "home"),
         (primary / "commands", "workspace"),
-        (home / "commands", "home"),
     ]
 
 

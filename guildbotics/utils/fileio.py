@@ -137,29 +137,13 @@ def get_primary_config_path(path: Path) -> Path:
     return config_dir / path
 
 
-def get_home_config_path(path: Path) -> Path:
-    """
-    Get the configuration path in the user's home directory.
-
-    The returned path may not exist; check with .exists() if needed.
-
-    Args:
-        path (Path): The relative path to the configuration file.
-
-    Returns:
-        Path: The absolute path under ~/.guildbotics/config/.
-    """
-    return Path.home() / CONFIG_PATH / path
-
-
 def _get_config_path(path: Path) -> Path:
     """
     Resolve the configuration path by searching in priority order.
 
     Returns the first existing file from the following locations:
     1. Primary config path (GUILDBOTICS_CONFIG_DIR or CONFIG_PATH)
-    2. Home config path (~/.guildbotics/config/)
-    3. Template path (returned even if not found)
+    2. Template path (returned even if not found)
 
     Args:
         path (Path): The relative path to the configuration file.
@@ -168,10 +152,6 @@ def _get_config_path(path: Path) -> Path:
         Path: An absolute path to an existing file, or the template path fallback.
     """
     p = get_primary_config_path(path)
-    if p.exists():
-        return p
-
-    p = get_home_config_path(path)
     if p.exists():
         return p
 

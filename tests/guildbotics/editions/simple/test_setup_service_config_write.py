@@ -109,14 +109,14 @@ def _env_dict(env_file_path: Path) -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------- #
-# project init: file set per config location (workspace / home / custom)
+# project init: file set per config location (workspace / sibling / custom)
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
     "location",
-    [".guildbotics/config", "home_config", "custom/place/config"],
-    ids=["workspace", "home", "custom"],
+    [".guildbotics/config", "sibling_config", "custom/place/config"],
+    ids=["workspace", "sibling", "custom"],
 )
 def test_write_project_file_set_is_location_independent(
     tmp_path: Path, location: str
