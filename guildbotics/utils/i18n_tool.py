@@ -5,16 +5,12 @@ from typing import Any
 import i18n  # type: ignore
 
 from guildbotics.utils.fileio import (
-    get_home_config_path,
     get_primary_config_path,
     get_template_path,
 )
 
 locales_path = Path("locales")
 i18n.load_path.append(get_template_path() / locales_path)
-home_config_locales_path = get_home_config_path(locales_path)
-if home_config_locales_path.exists():
-    i18n.load_path.append(home_config_locales_path)
 primary_config_locales_path = get_primary_config_path(locales_path)
 if primary_config_locales_path.exists():
     i18n.load_path.append(primary_config_locales_path)

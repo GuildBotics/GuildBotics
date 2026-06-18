@@ -147,9 +147,7 @@ describe("Service Runtime screen", () => {
   });
 
   it("disables start and shows a setup link when project config is missing", async () => {
-    getConfigStatusMock.mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    getConfigStatusMock.mockResolvedValue(configStatus({ project_file_exists: false }));
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
@@ -294,9 +292,7 @@ describe("Service Runtime screen", () => {
 
 describe("App routing and layout", () => {
   it("redirects to /setup when the project config is missing", async () => {
-    getConfigStatusMock.mockResolvedValue(
-      configStatus({ primary_project_file_exists: false, home_project_file_exists: false }),
-    );
+    getConfigStatusMock.mockResolvedValue(configStatus({ project_file_exists: false }));
     renderApp("/");
 
     expect(await screen.findByText("Setup Mock")).toBeInTheDocument();
@@ -379,15 +375,9 @@ function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
     cwd: "/workspace",
     env_file: "/workspace/.env",
     env_file_exists: true,
-    primary_config_dir: "/workspace/.guildbotics/config",
-    primary_config_location: "workspace",
-    primary_project_file: "/workspace/.guildbotics/config/project.yml",
-    primary_project_file_exists: true,
-    home_config_dir: "/home/.guildbotics/config",
-    home_project_file: "/home/.guildbotics/config/project.yml",
-    home_project_file_exists: false,
-    active_config_dir: "/workspace/.guildbotics/config",
-    active_config_location: "workspace",
+    config_dir: "/workspace/.guildbotics/config",
+    project_file: "/workspace/.guildbotics/config/project.yml",
+    project_file_exists: true,
     storage_dir: "/workspace/.guildbotics",
     ...overrides,
   };

@@ -24,8 +24,16 @@ from guildbotics.drivers import (
     run_command,
 )
 from guildbotics.editions import get_edition
-from guildbotics.utils.env_loader import load_guildbotics_env
-from guildbotics.utils.fileio import get_storage_path
+from guildbotics.utils.env_loader import (
+    load_guildbotics_env,
+    resolve_guildbotics_env_file,
+)
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
+    apply_workspace_data_root,
+    get_machine_state_path,
+)
+from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 
 def _resolve_version() -> str:
@@ -40,13 +48,27 @@ def _resolve_version() -> str:
             return "0.0.0+unknown"
 
 
+def _apply_runtime_workspace(workspace_root: Path) -> Path:
+    root = workspace_root.expanduser().resolve(strict=False)
+    env_file = resolve_guildbotics_env_file(root, prefer_env_file=True)
+    inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
+    apply_workspace_data_root(
+        root,
+        env_file,
+        inherited_data_dir=inherited_data_dir,
+    )
+    load_guildbotics_env(root, override=False, prefer_env_file=True)
+    if not os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip():
+        os.environ[GUILDBOTICS_CONFIG_DIR] = str(root / ".guildbotics" / "config")
+    return root
+
+
 def _load_env_from_cwd() -> None:
-    load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=False)
+    _apply_runtime_workspace(Path.cwd())
 
 
 def _pid_file_path() -> Path:
-    # Store PID under user's home storage path to avoid CWD dependency
-    return get_storage_path() / "run" / "scheduler.pid"
+    return get_machine_state_path("run", "scheduler.pid")
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -205,7 +227,7 @@ def run(
     command_args: tuple[str, ...],
 ) -> None:
     """Run the GuildBotics application."""
-    _load_env_from_cwd()
+    runtime_workspace = _apply_runtime_workspace(Path(cwd) if cwd else Path.cwd())
     message = "" if sys.stdin.isatty() else sys.stdin.read()
     asyncio.run(
         _run_custom_command(
@@ -213,7 +235,7 @@ def run(
             command_args,
             person_option,
             message,
-            Path(cwd) if cwd else None,
+            runtime_workspace if cwd else None,
         )
     )
 

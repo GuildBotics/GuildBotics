@@ -87,10 +87,10 @@ class VerifyService:
         checks = [
             self._check(
                 "config_project_file",
-                config.primary_project_file_exists or config.home_project_file_exists,
+                config.project_file_exists,
                 "Project config file was found.",
-                "project.yml was not found in primary or home config.",
-                target=str(config.primary_project_file),
+                "project.yml was not found in the config directory.",
+                target=str(config.project_file),
             )
         ]
         if config.env_file_exists:

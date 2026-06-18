@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
-from guildbotics.utils.fileio import get_storage_path
+from guildbotics.utils.fileio import get_workspace_data_path
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
@@ -74,7 +74,7 @@ class RunStore:
     }
 
     def __init__(self, root: Path | None = None) -> None:
-        self.root = root or get_storage_path() / "task-runs"
+        self.root = root or get_workspace_data_path("task-runs")
 
     def append(self, run_id: str, record: dict[str, Any]) -> None:
         path = self._path(run_id)

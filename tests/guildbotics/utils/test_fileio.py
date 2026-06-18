@@ -3,13 +3,18 @@ from pathlib import Path
 import pytest
 
 from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
     _clean_data,
     find_package_subdir,
     get_config_path,
+    get_machine_state_path,
+    get_machine_state_root,
     get_primary_config_path,
     get_storage_path,
+    get_workspace_data_root,
     load_markdown_with_frontmatter,
     load_yaml_file,
+    resolve_workspace_data_root,
     save_yaml_file,
 )
 
@@ -34,41 +39,31 @@ def test_find_package_subdir_templates_exists():
     assert p.exists() and p.is_dir()
 
 
-def test_get_config_path_prefers_env_over_home(tmp_path, monkeypatch):
-    """When both env and HOME contain the file, env dir takes precedence."""
+def test_get_config_path_prefers_env_over_template(tmp_path, monkeypatch):
+    """When env config contains the file, it takes precedence over templates."""
     env_dir = tmp_path / "envcfg"
     env_dir.mkdir()
-    home_dir = tmp_path / "home"
-    (home_dir / ".guildbotics" / "config").mkdir(parents=True)
 
     env_file = env_dir / "foo.yaml"
-    home_file = home_dir / ".guildbotics" / "config" / "foo.yaml"
     env_file.write_text("a: 1\n", encoding="utf-8")
-    home_file.write_text("a: 2\n", encoding="utf-8")
 
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(env_dir))
-    monkeypatch.setenv("HOME", str(home_dir))
 
     resolved = get_config_path("foo.yaml")
     assert resolved == env_file
     assert load_yaml_file(resolved) == {"a": 1}
 
 
-def test_get_config_path_uses_home_when_env_missing_file(tmp_path, monkeypatch):
-    """If env dir lacks the file, falls back to $HOME/.guildbotics/config."""
+def test_get_config_path_uses_template_when_env_missing_file(tmp_path, monkeypatch):
+    """If the workspace config lacks the file, falls back to package templates."""
     env_dir = tmp_path / "envcfg"
     env_dir.mkdir()
-    home_dir = tmp_path / "home"
-    (home_dir / ".guildbotics" / "config").mkdir(parents=True)
-
-    home_file = home_dir / ".guildbotics" / "config" / "bar.yaml"
-    home_file.write_text("k: v\n", encoding="utf-8")
 
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(env_dir))
-    monkeypatch.setenv("HOME", str(home_dir))
 
-    resolved = get_config_path("bar.yaml")
-    assert resolved == home_file
+    resolved = get_config_path("team/defaults.yml")
+    assert "templates" in resolved.parts
+    assert resolved.name == "defaults.yml"
 
 
 def test_get_config_path_language_specific_and_fallback(tmp_path, monkeypatch):
@@ -115,6 +110,71 @@ def test_get_storage_path_resolves_relative_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_DATA_DIR", "stable-data")
 
     assert get_storage_path() == tmp_path / "stable-data"
+
+
+def test_get_machine_state_root_ignores_data_dir_env(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    data_dir = tmp_path / "workspace-data"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(data_dir))
+
+    assert get_machine_state_root() == home / ".guildbotics" / "data"
+    assert get_machine_state_path("run", "scheduler.pid") == (
+        home / ".guildbotics" / "data" / "run" / "scheduler.pid"
+    )
+
+
+def test_resolve_workspace_data_root_prefers_workspace_env_over_inherited(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env_file = workspace / ".env"
+    env_file.write_text(
+        "GUILDBOTICS_DATA_DIR=workspace-data\nOTHER=value\n",
+        encoding="utf-8",
+    )
+
+    assert resolve_workspace_data_root(
+        workspace,
+        env_file,
+        inherited_data_dir=str(tmp_path / "inherited-data"),
+    ) == (tmp_path / "workspace-data").resolve(strict=False)
+
+
+def test_resolve_workspace_data_root_uses_inherited_without_workspace_override(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env_file = workspace / ".env"
+    env_file.write_text("OTHER=value\n", encoding="utf-8")
+
+    assert resolve_workspace_data_root(
+        workspace,
+        env_file,
+        inherited_data_dir=str(tmp_path / "inherited-data"),
+    ) == (tmp_path / "inherited-data").resolve(strict=False)
+
+
+def test_resolve_workspace_data_root_defaults_to_workspace_data(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    assert resolve_workspace_data_root(workspace) == (
+        workspace / ".guildbotics" / "data"
+    ).resolve(strict=False)
+
+
+def test_get_workspace_data_root_defaults_to_workspace_root(tmp_path, monkeypatch):
+    monkeypatch.delenv(GUILDBOTICS_DATA_DIR, raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    assert get_workspace_data_root(workspace) == (
+        workspace / ".guildbotics" / "data"
+    ).resolve(strict=False)
 
 
 def test_clean_data_removes_none_and_empty_keys():

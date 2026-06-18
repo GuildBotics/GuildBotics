@@ -87,12 +87,9 @@ class RuntimeStub:
             cwd=tmp_path,
             env_file=tmp_path / ".env",
             env_file_exists=False,
-            primary_config_dir=tmp_path / ".guildbotics/config",
-            primary_project_file=tmp_path / ".guildbotics/config/team/project.yml",
-            primary_project_file_exists=False,
-            home_config_dir=tmp_path / "home/.guildbotics/config",
-            home_project_file=tmp_path / "home/.guildbotics/config/team/project.yml",
-            home_project_file_exists=False,
+            config_dir=tmp_path / ".guildbotics/config",
+            project_file=tmp_path / ".guildbotics/config/team/project.yml",
+            project_file_exists=False,
             storage_dir=tmp_path / "home/.guildbotics/data",
         )
 
@@ -135,14 +132,9 @@ class RuntimeStub:
                 "cwd": workspace_dir,
                 "env_file": workspace_dir / ".env",
                 "env_file_exists": (workspace_dir / ".env").exists(),
-                "primary_config_dir": config_dir,
-                "primary_config_location": "workspace",
-                "primary_project_file": project_file,
-                "primary_project_file_exists": project_file_exists,
-                "active_config_dir": config_dir if project_file_exists else None,
-                "active_config_location": "workspace"
-                if project_file_exists
-                else "missing",
+                "config_dir": config_dir,
+                "project_file": project_file,
+                "project_file_exists": project_file_exists,
             }
         )
         return self.config_status
@@ -354,9 +346,7 @@ def test_workspace_change_updates_runtime_workspace(tmp_path: Path) -> None:
 
     assert response.status_code == HTTP_OK
     assert response.json()["cwd"] == str(workspace)
-    assert response.json()["primary_config_dir"] == str(
-        workspace / ".guildbotics/config"
-    )
+    assert response.json()["config_dir"] == str(workspace / ".guildbotics/config")
 
 
 def test_runtime_config_status_reports_workspace_active_location(
@@ -370,10 +360,8 @@ def test_runtime_config_status_reports_workspace_active_location(
 
     status = AppRuntime(EventBus()).get_config_status()
 
-    assert status.primary_config_dir == tmp_path / ".guildbotics/config"
-    assert status.primary_config_location == "workspace"
-    assert status.active_config_dir == tmp_path / ".guildbotics/config"
-    assert status.active_config_location == "workspace"
+    assert status.config_dir == tmp_path / ".guildbotics/config"
+    assert status.project_file_exists is True
 
 
 def test_app_runtime_command_options_describe_workspace_commands(
@@ -876,7 +864,7 @@ def test_config_project_endpoints_read_and_update_non_destructively(
             ]
         )
     )
-    runtime.config_status.primary_project_file_exists = True
+    runtime.config_status.project_file_exists = True
     env_file = tmp_path / ".env"
     env_file.write_text("OPENAI_API_KEY=existing-openai\nEXTRA=keep")
     model_mapping = config_dir / "intelligences/model_mapping.yml"
@@ -1028,7 +1016,7 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
     config_dir = tmp_path / ".guildbotics/config"
     (config_dir / "team").mkdir(parents=True, exist_ok=True)
     (config_dir / "team/project.yml").write_text("language: en")
-    runtime.config_status.primary_project_file_exists = True
+    runtime.config_status.project_file_exists = True
 
     with TestClient(app) as client:
         get_response = client.get(
@@ -1165,7 +1153,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
     team_dir = config_dir / "team"
     (team_dir / "project.yml").parent.mkdir(parents=True, exist_ok=True)
     (team_dir / "project.yml").write_text("language: en")
-    runtime.config_status.primary_project_file_exists = True
+    runtime.config_status.project_file_exists = True
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(
@@ -1261,7 +1249,7 @@ def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     (config_dir / "team").mkdir(parents=True, exist_ok=True)
     (config_dir / "team/project.yml").write_text("language: en")
-    runtime.config_status.primary_project_file_exists = True
+    runtime.config_status.project_file_exists = True
 
     wrong_config_dir = tmp_path / "wrong/.guildbotics/config"
     wrong_env_file = tmp_path / "wrong/.env"
@@ -1931,8 +1919,9 @@ def test_config_project_get_reports_project_not_found(tmp_path: Path) -> None:
     assert response.status_code == HTTP_BAD_REQUEST
     payload = response.json()
     assert payload["code"] == "project_not_found"
-    assert "primary" in payload["context"]
-    assert "home" in payload["context"]
+    assert payload["context"]["project"] == str(
+        tmp_path / ".guildbotics/config/team/project.yml"
+    )
 
 
 def test_config_project_status_options_returns_payload(tmp_path: Path) -> None:

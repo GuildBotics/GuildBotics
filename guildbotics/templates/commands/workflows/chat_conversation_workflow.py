@@ -24,8 +24,7 @@ from guildbotics.runtime.event_listener import (
 )
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
-    get_storage_path,
-    get_workspace_path,
+    get_workspace_data_root,
 )
 from guildbotics.utils.person_profile import build_agent_profile
 
@@ -108,7 +107,8 @@ async def _handle_event(
         service_name, person_id, channel_id, event.thread_ts
     )
     workflow_run_id = uuid4().hex
-    member_workspace = _get_chat_workspace_path(context)
+    workspace_data_root = get_workspace_data_root()
+    member_workspace = _get_chat_workspace_path(context, workspace_data_root)
     if member_workspace is None:
         raise RuntimeError("Member workspace path could not be resolved.")
     prompt_payload = await _build_agent_prompt_payload(
@@ -150,12 +150,14 @@ async def _handle_event(
         member_workspace=str(member_workspace),
         cli_agent_env={
             RUN_ENV: workflow_run_id,
-            GUILDBOTICS_DATA_DIR: str(get_storage_path()),
+            GUILDBOTICS_DATA_DIR: str(workspace_data_root),
         },
         cwd=member_workspace,
     )
 
-    completion, evidence = _chat_run_status(workflow_run_id, member_workspace)
+    completion, evidence = _chat_run_status(
+        workflow_run_id, workspace_data_root / "task-runs", member_workspace
+    )
     if hasattr(context, "logger"):
         with suppress(Exception):
             context.logger.info(
@@ -237,11 +239,11 @@ async def _build_agent_prompt_payload(
 
 
 def _chat_run_status(
-    run_id: str, member_workspace: Path
+    run_id: str, task_run_root: Path, member_workspace: Path
 ) -> tuple[Any, list[dict[str, Any]]]:
     first_error: Exception | None = None
     stores = [
-        RunStore(),
+        RunStore(task_run_root),
         RunStore(member_workspace / ".guildbotics-data" / "task-runs"),
         RunStore(member_workspace / ".guildbotics" / "data" / "task-runs"),
     ]
@@ -262,11 +264,11 @@ def _latest_chat_post_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any]
     return None
 
 
-def _get_chat_workspace_path(context: Any) -> Path | None:
+def _get_chat_workspace_path(context: Any, workspace_data_root: Path) -> Path | None:
     person_id = str(getattr(getattr(context, "person", None), "person_id", "")).strip()
     if not person_id:
         return None
-    path = get_workspace_path(person_id)
+    path = workspace_data_root / "workspaces" / person_id
     path.mkdir(parents=True, exist_ok=True)
     return path
 

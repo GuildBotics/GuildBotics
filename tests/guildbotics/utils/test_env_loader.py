@@ -1,6 +1,10 @@
 import os
 
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE, load_guildbotics_env
+from guildbotics.utils.env_loader import (
+    GUILDBOTICS_ENV_FILE,
+    HOME_ENV_PROTECTED_KEYS,
+    load_guildbotics_env,
+)
 
 
 def test_load_guildbotics_env_prefers_env_file(monkeypatch, tmp_path):
@@ -32,4 +36,30 @@ def test_load_guildbotics_env_sets_absolute_path(monkeypatch, tmp_path):
     assert loaded.is_absolute()
     assert loaded.read_text(encoding="utf-8")
     assert os.environ["AIKO_GITHUB_ACCESS_TOKEN"] == "from-cwd"
+    assert os.environ[GUILDBOTICS_ENV_FILE] == str(env_file.resolve())
+
+
+def test_load_guildbotics_env_skips_home_keys_when_unset(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "HOME=workspace-home",
+                "USERPROFILE=workspace-userprofile",
+                "HOMEDRIVE=Z:",
+                "HOMEPATH=\\Users\\Workspace",
+                "WORKSPACE_MARKER=loaded",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for key in HOME_ENV_PROTECTED_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    loaded = load_guildbotics_env(tmp_path, override=True, prefer_env_file=False)
+
+    assert loaded == env_file.resolve()
+    for key in HOME_ENV_PROTECTED_KEYS:
+        assert key not in os.environ
+    assert os.environ["WORKSPACE_MARKER"] == "loaded"
     assert os.environ[GUILDBOTICS_ENV_FILE] == str(env_file.resolve())

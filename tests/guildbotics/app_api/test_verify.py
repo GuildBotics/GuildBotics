@@ -24,21 +24,17 @@ def _config_status(
     env_file = tmp_path / ".env"
     if env_file_exists:
         env_file.write_text("")
-    primary_project_file = tmp_path / ".guildbotics/config/team/project.yml"
-    primary_project_file.parent.mkdir(parents=True, exist_ok=True)
+    project_file = tmp_path / ".guildbotics/config/team/project.yml"
+    project_file.parent.mkdir(parents=True, exist_ok=True)
     if project_file_exists:
-        primary_project_file.write_text("language: en\n")
-    home_project_file = tmp_path / "home/.guildbotics/config/team/project.yml"
+        project_file.write_text("language: en\n")
     return ConfigStatus(
         cwd=tmp_path,
         env_file=env_file,
         env_file_exists=env_file.exists(),
-        primary_config_dir=tmp_path / ".guildbotics/config",
-        primary_project_file=primary_project_file,
-        primary_project_file_exists=primary_project_file.exists(),
-        home_config_dir=tmp_path / "home/.guildbotics/config",
-        home_project_file=home_project_file,
-        home_project_file_exists=home_project_file.exists(),
+        config_dir=tmp_path / ".guildbotics/config",
+        project_file=project_file,
+        project_file_exists=project_file.exists(),
         storage_dir=tmp_path / "home/.guildbotics/data",
     )
 

@@ -25,6 +25,7 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities import Person, Project, Team
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
+from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     active_workspace_file,
@@ -230,6 +231,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv(GUILDBOTICS_DATA_DIR, raising=False)
     return tmp_path
 
 
@@ -259,23 +261,8 @@ def test_config_status_reports_workspace_when_workspace_config_present(
     status = AppRuntime(EventBus()).get_config_status()
 
     assert status.cwd == isolated_home
-    assert status.primary_config_dir == isolated_home / ".guildbotics" / "config"
-    assert status.primary_config_location == "workspace"
-    assert status.primary_project_file_exists is True
-    assert status.active_config_dir == isolated_home / ".guildbotics" / "config"
-    assert status.active_config_location == "workspace"
-
-
-def test_config_status_falls_back_to_home_config(isolated_home: Path) -> None:
-    home_config = isolated_home / "home" / ".guildbotics" / "config"
-    _write_project(home_config)
-
-    status = AppRuntime(EventBus()).get_config_status()
-
-    assert status.home_project_file_exists is True
-    assert status.primary_project_file_exists is False
-    assert status.active_config_dir == home_config
-    assert status.active_config_location == "home"
+    assert status.config_dir == isolated_home / ".guildbotics" / "config"
+    assert status.project_file_exists is True
 
 
 def test_config_status_uses_custom_config_dir_env(
@@ -287,10 +274,8 @@ def test_config_status_uses_custom_config_dir_env(
 
     status = AppRuntime(EventBus()).get_config_status()
 
-    assert status.primary_config_dir == custom_config
-    assert status.primary_config_location == "custom"
-    assert status.active_config_dir == custom_config
-    assert status.active_config_location == "custom"
+    assert status.config_dir == custom_config
+    assert status.project_file_exists is True
 
 
 def test_config_status_reports_missing_when_no_project_file(
@@ -298,10 +283,7 @@ def test_config_status_reports_missing_when_no_project_file(
 ) -> None:
     status = AppRuntime(EventBus()).get_config_status()
 
-    assert status.primary_project_file_exists is False
-    assert status.home_project_file_exists is False
-    assert status.active_config_dir is None
-    assert status.active_config_location == "missing"
+    assert status.project_file_exists is False
     assert status.env_file == isolated_home / ".env"
     assert status.env_file_exists is False
 
@@ -365,11 +347,173 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
         workspace.resolve() / ".guildbotics" / "config"
     )
     assert os.environ[GUILDBOTICS_ENV_FILE] == str(workspace.resolve() / ".env")
+    assert os.environ[GUILDBOTICS_DATA_DIR] == str(
+        workspace.resolve() / ".guildbotics" / "data"
+    )
     assert active_workspace_file().exists()
     assert status.cwd == workspace.resolve()
-    assert status.primary_config_location == "workspace"
-    assert status.active_config_location == "workspace"
+    assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
+    assert status.workspace_data_dir == workspace.resolve() / ".guildbotics" / "data"
+    assert status.storage_dir == status.workspace_data_dir
+    assert status.config_dir == workspace.resolve() / ".guildbotics" / "config"
     assert status.env_file_exists is True
+
+
+def test_set_workspace_env_does_not_override_home_state_root(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_home = os.environ["HOME"]
+    original_userprofile = str(isolated_home / "userprofile")
+    original_homedrive = "C:"
+    original_homepath = "\\Users\\Original"
+    monkeypatch.setenv("USERPROFILE", original_userprofile)
+    monkeypatch.setenv("HOMEDRIVE", original_homedrive)
+    monkeypatch.setenv("HOMEPATH", original_homepath)
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+
+    workspace = isolated_home / "workspace"
+    workspace.mkdir()
+    _write_project(workspace / ".guildbotics" / "config")
+    (workspace / ".env").write_text(
+        "\n".join(
+            [
+                "HOME=workspace-home",
+                "USERPROFILE=workspace-userprofile",
+                "HOMEDRIVE=Z:",
+                "HOMEPATH=\\Users\\Workspace",
+                "WORKSPACE_MARKER=loaded",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    status = runtime.set_workspace(workspace)
+
+    assert os.environ["HOME"] == original_home
+    assert os.environ["USERPROFILE"] == original_userprofile
+    assert os.environ["HOMEDRIVE"] == original_homedrive
+    assert os.environ["HOMEPATH"] == original_homepath
+    assert os.environ["WORKSPACE_MARKER"] == "loaded"
+    assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
+    assert active_workspace_file() == (
+        isolated_home / "home/.guildbotics/data/active-workspace.json"
+    )
+
+
+def test_set_workspace_prefers_env_data_dir_over_inherited(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inherited_data = isolated_home / "inherited-data"
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(inherited_data))
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+
+    workspace = isolated_home / "workspace"
+    workspace.mkdir()
+    _write_project(workspace / ".guildbotics" / "config")
+    (workspace / ".env").write_text(
+        "GUILDBOTICS_DATA_DIR=workspace-data\n",
+        encoding="utf-8",
+    )
+
+    status = runtime.set_workspace(workspace)
+
+    expected = (workspace / "workspace-data").resolve(strict=False)
+    assert os.environ[GUILDBOTICS_DATA_DIR] == str(expected)
+    assert status.workspace_data_dir == expected
+    assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
+    assert active_workspace_file() == (
+        isolated_home / "home/.guildbotics/data/active-workspace.json"
+    )
+
+
+def test_set_workspace_uses_initial_inherited_data_dir_across_switches(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inherited_data = isolated_home / "inherited-data"
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(inherited_data))
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+
+    workspace_a = isolated_home / "workspace-a"
+    workspace_a.mkdir()
+    _write_project(workspace_a / ".guildbotics" / "config")
+    (workspace_a / ".env").write_text(
+        "GUILDBOTICS_DATA_DIR=workspace-a-data\n",
+        encoding="utf-8",
+    )
+
+    workspace_b = isolated_home / "workspace-b"
+    workspace_b.mkdir()
+    _write_project(workspace_b / ".guildbotics" / "config")
+
+    runtime.set_workspace(workspace_a)
+    status_b = runtime.set_workspace(workspace_b)
+
+    assert status_b.workspace_data_dir == inherited_data.resolve(strict=False)
+    assert os.environ[GUILDBOTICS_DATA_DIR] == str(inherited_data.resolve(strict=False))
+
+
+def test_get_context_does_not_reapply_workspace_data_root(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    workspace = isolated_home / "workspace"
+    workspace.mkdir()
+    _write_project(workspace / ".guildbotics" / "config")
+    env_file = workspace / ".env"
+    env_file.write_text(
+        "GUILDBOTICS_DATA_DIR=data-a\nWORKSPACE_MARKER=a\n",
+        encoding="utf-8",
+    )
+    runtime.set_workspace(workspace)
+    data_root = os.environ[GUILDBOTICS_DATA_DIR]
+    env_file.write_text(
+        "GUILDBOTICS_DATA_DIR=data-b\nWORKSPACE_MARKER=b\n",
+        encoding="utf-8",
+    )
+
+    class _FakeEdition:
+        def get_context(self, message: str = "") -> _FakeContext:
+            return _FakeContext([])
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.get_edition", lambda: _FakeEdition()
+    )
+
+    runtime._get_context()
+
+    assert os.environ[GUILDBOTICS_DATA_DIR] == data_root
+    assert os.environ["WORKSPACE_MARKER"] == "b"
+
+
+def test_diagnostics_store_switches_with_workspace_data_root(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from guildbotics.app_api.diagnostics_store import DiagnosticsStore
+
+    store = DiagnosticsStore()
+    runtime = AppRuntime(EventBus(store=store))
+    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+
+    workspace_a = isolated_home / "workspace-a"
+    workspace_a.mkdir()
+    _write_project(workspace_a / ".guildbotics" / "config")
+
+    workspace_b = isolated_home / "workspace-b"
+    workspace_b.mkdir()
+    _write_project(workspace_b / ".guildbotics" / "config")
+
+    runtime.set_workspace(workspace_a)
+    store.record({"kind": "event", "type": "a", "trace_id": "trace-a"})
+    runtime.set_workspace(workspace_b)
+
+    assert store.list_traces() == []
+    assert (
+        store.path == workspace_b.resolve() / ".guildbotics/data/run/diagnostics.jsonl"
+    )
 
 
 def test_set_workspace_clears_stale_dotenv_keys_from_previous_workspace(

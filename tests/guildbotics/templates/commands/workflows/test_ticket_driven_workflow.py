@@ -10,6 +10,11 @@ from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
 
+@pytest.fixture(autouse=True)
+def _isolated_workspace_data(monkeypatch, tmp_path):
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / ".guildbotics" / "data"))
+
+
 class StubTicketManager:
     def __init__(self, task=None, move_succeeds=True):
         self.task = task
@@ -55,6 +60,7 @@ class StubContext:
         self.task_run_status = "done"
         self.evidence_type = "issue_comment"
         self.task_run_store_root = None
+        self.data_dir_after_invoke = None
 
         class _PersonStub:
             person_id = "aiko"
@@ -90,14 +96,15 @@ class StubContext:
                 kwargs["ticket_url"],
                 kwargs["person_id"],
             )
+        if self.data_dir_after_invoke is not None:
+            os.environ[GUILDBOTICS_DATA_DIR] = str(self.data_dir_after_invoke)
         return self.invoke_response
 
 
 @pytest.mark.asyncio
 async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
-    monkeypatch, tmp_path
+    tmp_path,
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
     task = Task(id="1", title="T", description="D", status=Task.READY)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
@@ -167,9 +174,8 @@ async def test_move_to_working_keeps_status_when_move_is_noop():
     ],
 )
 async def test_run_accepts_task_completion_written_inside_member_workspace(
-    monkeypatch, tmp_path, relative_store_root
+    tmp_path, relative_store_root
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
@@ -187,8 +193,24 @@ async def test_run_accepts_task_completion_written_inside_member_workspace(
 
 
 @pytest.mark.asyncio
-async def test_run_passes_pull_request_work_type(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+async def test_run_reads_completion_from_invocation_data_root_if_env_changes(tmp_path):
+    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
+    tm = StubTicketManager(task)
+    ctx = StubContext(task, tm)
+    ctx.data_dir_after_invoke = tmp_path / "stale" / "data"
+
+    response = await ticket_driven_workflow.main(ctx)
+
+    assert response == AgentResponse(
+        status=AgentResponse.DONE,
+        message="done",
+        skip_ticket_comment=True,
+    )
+    assert tm.commented == []
+
+
+@pytest.mark.asyncio
+async def test_run_passes_pull_request_work_type():
     task = Task(
         id="1",
         title="T",
@@ -227,8 +249,7 @@ async def test_run_returns_none_when_no_task():
 
 
 @pytest.mark.asyncio
-async def test_asking_response_requires_comment_evidence(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+async def test_asking_response_requires_comment_evidence():
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
@@ -247,8 +268,7 @@ async def test_asking_response_requires_comment_evidence(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_agent_done_without_task_completion_is_not_success(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+async def test_agent_done_without_task_completion_is_not_success(monkeypatch):
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
@@ -268,9 +288,8 @@ async def test_agent_done_without_task_completion_is_not_success(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_run_posts_safe_error_message_without_leaking_details(
-    monkeypatch, tmp_path
+    monkeypatch,
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)

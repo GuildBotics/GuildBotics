@@ -16,16 +16,12 @@ export type ConfigStatus = {
   cwd: string;
   env_file: string;
   env_file_exists: boolean;
-  primary_config_dir: string;
-  primary_config_location: "workspace" | "home" | "custom";
-  primary_project_file: string;
-  primary_project_file_exists: boolean;
-  home_config_dir: string;
-  home_project_file: string;
-  home_project_file_exists: boolean;
-  active_config_dir: string | null;
-  active_config_location: "workspace" | "home" | "custom" | "missing";
+  config_dir: string;
+  project_file: string;
+  project_file_exists: boolean;
   storage_dir: string;
+  machine_state_dir?: string | null;
+  workspace_data_dir?: string | null;
 };
 
 export type WorkspaceChangeRequest = {

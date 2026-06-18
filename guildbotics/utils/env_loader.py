@@ -3,9 +3,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 GUILDBOTICS_ENV_FILE = "GUILDBOTICS_ENV_FILE"
+HOME_ENV_PROTECTED_KEYS = frozenset(
+    {
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    }
+)
 
 
 def resolve_guildbotics_env_file(
@@ -35,6 +43,11 @@ def load_guildbotics_env(
     env_file = resolve_guildbotics_env_file(cwd, prefer_env_file=prefer_env_file)
     if env_file is None:
         return None
-    load_dotenv(dotenv_path=env_file, override=override)
+    values = dotenv_values(env_file)
+    for key, value in values.items():
+        if value is None or key in HOME_ENV_PROTECTED_KEYS:
+            continue
+        if override or key not in os.environ:
+            os.environ[key] = value
     os.environ[GUILDBOTICS_ENV_FILE] = str(env_file)
     return env_file

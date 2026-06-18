@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import dotenv_values
 
 from guildbotics.app_api.cli_agents import (
     CLI_AGENT_EXECUTABLES,
@@ -26,7 +26,6 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
-    ActiveConfigLocation,
     AgentFieldOption,
     AgentFieldStateResponse,
     CliAgentDetection,
@@ -37,7 +36,6 @@ from guildbotics.app_api.models import (
     CommandRequirement,
     CommandRunRequest,
     CommandRunResponse,
-    ConfigLocation,
     ConfigStatus,
     MemberSummary,
     ProjectStatusOptionsRequest,
@@ -73,13 +71,16 @@ from guildbotics.entities import Project, Service, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.runtime import Context
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
+from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE, HOME_ENV_PROTECTED_KEYS
 from guildbotics.utils.fileio import (
-    get_home_config_path,
+    GUILDBOTICS_DATA_DIR,
+    apply_workspace_data_root,
+    get_machine_state_root,
     get_person_config_path,
     get_primary_config_path,
-    get_storage_path,
     get_template_path,
+    get_workspace_data_path,
+    get_workspace_data_root,
     load_markdown_with_frontmatter,
     load_yaml_file,
 )
@@ -93,22 +94,11 @@ from guildbotics.utils.workspace_state import (
     write_active_workspace,
 )
 
+WORKSPACE_DOTENV_PROTECTED_KEYS = {
+    GUILDBOTICS_DATA_DIR,
+    *HOME_ENV_PROTECTED_KEYS,
+}
 TICKET_DRIVEN_WORKFLOW = "workflows/ticket_driven_workflow"
-
-
-def _normalized_path(path: Path) -> Path:
-    return path.expanduser().resolve(strict=False)
-
-
-def _classify_config_dir(
-    config_dir: Path, cwd: Path, home_config_dir: Path
-) -> ConfigLocation:
-    normalized_config_dir = _normalized_path(config_dir)
-    if normalized_config_dir == _normalized_path(cwd / ".guildbotics" / "config"):
-        return "workspace"
-    if normalized_config_dir == _normalized_path(home_config_dir):
-        return "home"
-    return "custom"
 
 
 class AppRuntime:
@@ -124,6 +114,12 @@ class AppRuntime:
         self._lock = threading.Lock()
         self._running_command_id: str | None = None
         self._loaded_dotenv_keys: set[str] = set()
+        self._inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
+        apply_workspace_data_root(
+            Path.cwd(),
+            Path.cwd() / ".env",
+            inherited_data_dir=self._inherited_data_dir,
+        )
         self._lifecycle = RuntimeLifecycleService(
             event_bus=event_bus,
             context_factory=self._get_context,
@@ -133,36 +129,19 @@ class AppRuntime:
 
     def get_config_status(self) -> ConfigStatus:
         cwd = Path.cwd()
-        primary_config_dir = get_primary_config_path(Path())
-        primary_project_file = primary_config_dir / "team" / "project.yml"
-        home_config_dir = get_home_config_path(Path())
-        home_project_file = home_config_dir / "team" / "project.yml"
+        config_dir = get_primary_config_path(Path())
+        project_file = config_dir / "team" / "project.yml"
         env_file = cwd / ".env"
-        primary_config_location = _classify_config_dir(
-            primary_config_dir, cwd, home_config_dir
-        )
-        active_config_dir: Path | None = None
-        active_config_location: ActiveConfigLocation = "missing"
-        if primary_project_file.exists():
-            active_config_dir = primary_config_dir
-            active_config_location = primary_config_location
-        elif home_project_file.exists():
-            active_config_dir = home_config_dir
-            active_config_location = "home"
         return ConfigStatus(
             cwd=cwd,
             env_file=env_file,
             env_file_exists=env_file.exists(),
-            primary_config_dir=primary_config_dir,
-            primary_config_location=primary_config_location,
-            primary_project_file=primary_project_file,
-            primary_project_file_exists=primary_project_file.exists(),
-            home_config_dir=home_config_dir,
-            home_project_file=home_project_file,
-            home_project_file_exists=home_project_file.exists(),
-            active_config_dir=active_config_dir,
-            active_config_location=active_config_location,
-            storage_dir=get_storage_path(),
+            config_dir=config_dir,
+            project_file=project_file,
+            project_file_exists=project_file.exists(),
+            storage_dir=get_workspace_data_root(cwd),
+            machine_state_dir=get_machine_state_root(),
+            workspace_data_dir=get_workspace_data_root(cwd),
         )
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
@@ -184,7 +163,7 @@ class AppRuntime:
         self.stop_scheduler()
         os.chdir(workspace)
         write_active_workspace(workspace)
-        self._load_workspace_env()
+        self._load_workspace_env(apply_data_root=True)
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
@@ -210,9 +189,9 @@ class AppRuntime:
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
         context = self._get_context()
         status = self.get_config_status()
-        if status.active_config_dir is not None:
+        if status.project_file_exists:
             SimpleProjectSetupService().ensure_sample_commands(
-                status.active_config_dir,
+                status.config_dir,
                 context.team.project.get_language_code(),
             )
         if person:
@@ -376,7 +355,7 @@ class AppRuntime:
             env_file_exists=status.env_file.exists(),
             trace_file=trace_file,
             output_trace_file=output_trace_file,
-            default_trace_file=get_storage_path() / "run" / "prompt_trace.jsonl",
+            default_trace_file=get_workspace_data_path("run", "prompt_trace.jsonl"),
             trace_file_exists=trace_file.exists(),
             event_count=event_count,
             events=[_prompt_trace_entry(event) for event in events],
@@ -702,7 +681,7 @@ class AppRuntime:
         )
 
     def _get_context(self, message: str = "") -> Context:
-        self._load_workspace_env()
+        self._load_workspace_env(apply_data_root=False)
         try:
             return get_edition().get_context(message)
         except FileNotFoundError as exc:
@@ -712,24 +691,35 @@ class AppRuntime:
                 context={"path": str(exc.filename or "")},
             ) from exc
 
-    def _load_workspace_env(self) -> None:
+    def _load_workspace_env(self, *, apply_data_root: bool = False) -> None:
         dotenv_path = Path.cwd() / ".env"
         new_values = dotenv_values(dotenv_path) if dotenv_path.exists() else {}
+        dotenv_keys = {
+            key for key, value in new_values.items() if value is not None
+        } - WORKSPACE_DOTENV_PROTECTED_KEYS
         # Remove keys that a previously selected workspace injected but the
         # current one no longer defines, so stale credentials (OpenAI, GitHub,
         # Slack, ...) do not leak across workspace switches.
-        for key in self._loaded_dotenv_keys - set(new_values):
+        for key in self._loaded_dotenv_keys - dotenv_keys:
             os.environ.pop(key, None)
         if dotenv_path.exists():
-            load_dotenv(dotenv_path=dotenv_path, override=True)
+            for key, value in new_values.items():
+                if key not in WORKSPACE_DOTENV_PROTECTED_KEYS and value is not None:
+                    os.environ[key] = value
             os.environ[GUILDBOTICS_ENV_FILE] = str(dotenv_path.resolve())
-            self._loaded_dotenv_keys = {*set(new_values), GUILDBOTICS_ENV_FILE}
+            self._loaded_dotenv_keys = {*dotenv_keys, GUILDBOTICS_ENV_FILE}
         else:
             os.environ.pop(GUILDBOTICS_ENV_FILE, None)
             self._loaded_dotenv_keys = set()
         os.environ[GUILDBOTICS_CONFIG_DIR] = str(
             (Path.cwd() / ".guildbotics" / "config").resolve()
         )
+        if apply_data_root:
+            apply_workspace_data_root(
+                Path.cwd(),
+                dotenv_path,
+                inherited_data_dir=self._inherited_data_dir,
+            )
 
     def _reserve_command(self, trace_id: str) -> None:
         with self._lock:
@@ -771,12 +761,9 @@ def _iter_command_files(context: Context) -> Iterator[tuple[str, Path, str]]:
 
 def _command_roots(person_id: str) -> list[tuple[Path, str]]:
     primary = get_primary_config_path(Path())
-    home = get_home_config_path(Path())
     return [
         (primary / "team" / "members" / person_id / "commands", "workspace"),
-        (home / "team" / "members" / person_id / "commands", "home"),
         (primary / "commands", "workspace"),
-        (home / "commands", "home"),
     ]
 
 

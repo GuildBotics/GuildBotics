@@ -165,48 +165,48 @@ installation.
 
 ## 5.1. Initial Setup
 
-Project setup is done in the **GuildBotics Desktop app**. Launch the app, pick a workspace
-directory, and complete the project setup form. The GUI:
+Project setup is done in the **GuildBotics Desktop app**.
+When you launch the app, the **Project** settings open first. Configure:
 
-- Records the active workspace in `~/.guildbotics/data/active-workspace.json`
-- Selects language (English/Japanese)
-- Chooses the configuration directory location (workspace or home)
-- Configures LLM API settings and the default CLI agent
-- Sets up the basic project structure
+- Language (English/Japanese)
+- Workspace folder
+- Project description
+- Whether to enable GitHub integration
 
-The following files are written:
-- `.env`: Environment variables
+In GuildBotics, a **workspace** is the folder selected as the working location for a project.
+GuildBotics writes configuration files such as the following into the workspace:
+
+- `.env`: Environment variable settings
 - `.guildbotics/config/team/project.yml`: Project definition
 - `.guildbotics/config/intelligences/`: Brain and CLI agent settings
 
-> These are plain text files. Because all setup lands in config files, you can move them to a
-> GUI-less environment (e.g. a server) and drive everything with the `guildbotics` CLI.
+These are all plain text configuration files.
+Because GuildBotics stores all settings in these files, you can copy the workspace folder to a
+GUI-less environment such as a server and operate it with only the `guildbotics` CLI.
 
-The active workspace lets `guildbotics member ...` work from CLI-agent work directories that do
-not contain `.env` or `.guildbotics/config`. You can inspect or change it from the CLI:
+The selected workspace is recorded in `~/.guildbotics/data/active-workspace.json`.
+Use the following commands to inspect or change the workspace from the CLI:
 
 ```bash
-guildbotics workspace status
 guildbotics workspace current
 guildbotics workspace use /path/to/workspace
 ```
 
-## 5.2. Add Members
+GuildBotics writes two kinds of local data:
 
-Add AI agents or human team members from the **Members** section of the Desktop app.
-For each member you provide:
+- Computer-wide control files, such as the selected workspace and the CLI scheduler PID,
+  are stored under `$HOME/.guildbotics/data`.
+- Workspace-specific run data, such as member work directories, task and chat run records,
+  diagnostics, prompt traces, and chat state, is stored under `<workspace>/.guildbotics/data` by
+  default. To change this location, set `GUILDBOTICS_DATA_DIR` in `.env`.
 
-- Member type (human, AI agent, etc.)
-- Display name and person_id
-- Roles (e.g., programmer, architect, product_owner)
-- Speaking style (for AI agents)
-- GitHub / Slack credentials (stored in `.env`)
+## 5.2. Other Settings
 
-This writes:
-- `.guildbotics/config/team/members/<person_id>/person.yml`
-- Environment variables in `.env` (for credentials)
+After completing the project settings, configure the following initial settings:
 
-Repeat for each team member.
+- **LLM / CLI agent:** Default LLM, CLI agent, and LLM API keys
+- **Members:** Team member creation and settings
+- **GitHub:** GitHub integration settings (only when using GitHub)
 
 ## 5.3. Run Commands
 
@@ -427,7 +427,7 @@ The scheduler behavior (from `guildbotics/drivers/task_scheduler.py` and `guildb
 
 **Error handling**:
 - Consecutive command failures (default: 3) stop the worker thread
-- Error logs are recorded in `~/.guildbotics/data/error.log`
+- Runtime diagnostics are recorded under `<workspace>/.guildbotics/data/run/diagnostics.jsonl` by default
 
 ## 5.5. Schedule Configuration Examples
 
@@ -533,7 +533,7 @@ Scheduled command output posting remains separate: use `task_schedules` + `workf
 
 Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
 
-For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent workspace root at `~/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through run evidence recorded by `guildbotics member chat complete`; natural-language agent stdout is not treated as proof of Slack side effects.
+For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent work directory. By default, that directory is `<workspace>/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through evidence recorded by `guildbotics member chat complete`; natural-language agent stdout alone is not treated as proof that Slack was updated.
 You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the CLI agent.
 
 ### 5.6.1. Prerequisites (Slack Side)
@@ -645,14 +645,15 @@ This section describes how to use the default `ticket_driven_workflow` which int
 
 ### 6.1.1. Git Environment
 - Ticket-driven work is performed through the `guildbotics member ...` CLI. The workflow
-  selects a GitHub Project item, starts the CLI agent in
-  `~/.guildbotics/data/workspaces/<person_id>`, and verifies that the agent recorded task
-  completion. The agent itself performs clone/push/PR/comment/reply operations through
+  selects a GitHub Project item, starts the CLI agent in that member's work directory, and
+  verifies that the agent recorded task completion. By default, the work directory is
+  `<workspace>/.guildbotics/data/workspaces/<person_id>`. The agent itself performs
+  clone/push/PR/comment/reply operations through
   `guildbotics member`.
 - Configure each AI member's GitHub credentials in GuildBotics. GitHub/git writes use the
   assigned member's configured machine-user token or GitHub App installation, not the local
   `gh auth` user. Credential-required member commands load these values from
-  the active workspace `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the current directory.
+  the selected workspace `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the current directory.
 - For interactive CLI agent sessions, launch the GuildBotics Desktop app at least
   once after selecting the workspace. The app installs the GuildBotics skill and managed CLI
   under `~/.guildbotics/bin/guildbotics`. Configure the client to reject or require approval
@@ -755,7 +756,7 @@ To request a task from the AI agent, operate the GitHub Projects ticket as follo
 4. Move the ticket to the ready lane
 
 Note:
-The AI agent prepares repositories under `~/.guildbotics/data/workspaces/<person_id>` by running `guildbotics member git prepare` and works there.
+The AI agent prepares repositories in the member work directory by running `guildbotics member git prepare` and works there. By default, that directory is `<workspace>/.guildbotics/data/workspaces/<person_id>`.
 
 ### 6.3.3. Interacting with the AI Agent
 - If the AI agent has questions during work, it posts questions as ticket comments. Please respond in ticket comments. The agent periodically checks ticket comments and proceeds accordingly once answers are provided.
@@ -771,7 +772,7 @@ With the ticket-driven workflow, you can:
 - **Review AI agent results on the task board**
   - When the agent completes a task, it leaves a comment, PR, review reply, or reaction through the member capability
 - **Create Pull Requests by AI agents**
-  - When a task requires code changes, the agent publishes the member workspace branch and creates or reuses a Pull Request through `guildbotics member github pr create`
+  - When a task requires code changes, the agent publishes the member work-directory branch and creates or reuses a Pull Request through `guildbotics member github pr create`
 - **Create tickets**
   - If you instruct the AI agent to create follow-up tickets, it creates real repository issues with `guildbotics member github issue create`
 
@@ -793,11 +794,10 @@ With the ticket-driven workflow, you can:
 - `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: For GitHub Apps
 
 If a `.env` file exists in the current directory, it is loaded automatically.
-`guildbotics member` commands first honor `--workspace <dir>`. Without that option, they keep
-an explicit `GUILDBOTICS_CONFIG_DIR` or current-directory `.guildbotics/config` if one is
-already present; otherwise they use the active workspace recorded by the desktop app or
-`guildbotics workspace use`. The selected workspace sets `GUILDBOTICS_CONFIG_DIR` and, when
-`<workspace>/.env` exists, `GUILDBOTICS_ENV_FILE`.
+`guildbotics member` commands first honor `--workspace <dir>`. Without that option, they use the
+selected workspace recorded by the desktop app or `guildbotics workspace use`, unless the command is
+already running inside a configured workspace. The selected workspace sets `GUILDBOTICS_CONFIG_DIR`
+to `<workspace>/.guildbotics/config` and, when `<workspace>/.env` exists, `GUILDBOTICS_ENV_FILE`.
 
 Useful workspace commands:
 
@@ -811,6 +811,9 @@ guildbotics member --workspace /path/to/workspace context --person <person_id> -
 The fallback for non-desktop/headless use is `GUILDBOTICS_ENV_FILE` pointing to an absolute
 `.env` path, or `.env` in the current directory. `guildbotics start` and the desktop runtime
 set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
+`GUILDBOTICS_DATA_DIR` may be set in the workspace `.env` to move the directory used for
+workspace-specific run data. If it is set in the process environment at startup and the workspace
+`.env` does not define it, that process uses the startup value as its shared run-data directory.
 
 ## 7.2. Configuration Files
 
@@ -841,7 +844,7 @@ set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
 
 # 8. Troubleshooting
 
-**Error Logs**: Check `~/.guildbotics/data/error.log` for details when errors occur.
+**Diagnostics**: Runtime events and errors are recorded under `<workspace>/.guildbotics/data/run/diagnostics.jsonl` by default. You can also check them in the Desktop diagnostics view.
 
 **Debug Output**: Set environment variables for detailed logging:
 - `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
