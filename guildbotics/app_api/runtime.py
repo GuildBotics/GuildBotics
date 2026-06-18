@@ -97,6 +97,13 @@ from guildbotics.utils.workspace_state import (
     write_active_workspace,
 )
 
+WORKSPACE_DOTENV_PROTECTED_KEYS = {
+    GUILDBOTICS_DATA_DIR,
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+}
 TICKET_DRIVEN_WORKFLOW = "workflows/ticket_driven_workflow"
 
 
@@ -729,7 +736,7 @@ class AppRuntime:
         new_values = dotenv_values(dotenv_path) if dotenv_path.exists() else {}
         dotenv_keys = {
             key for key, value in new_values.items() if value is not None
-        } - {GUILDBOTICS_DATA_DIR}
+        } - WORKSPACE_DOTENV_PROTECTED_KEYS
         # Remove keys that a previously selected workspace injected but the
         # current one no longer defines, so stale credentials (OpenAI, GitHub,
         # Slack, ...) do not leak across workspace switches.
@@ -737,7 +744,7 @@ class AppRuntime:
             os.environ.pop(key, None)
         if dotenv_path.exists():
             for key, value in new_values.items():
-                if key != GUILDBOTICS_DATA_DIR and value is not None:
+                if key not in WORKSPACE_DOTENV_PROTECTED_KEYS and value is not None:
                     os.environ[key] = value
             os.environ[GUILDBOTICS_ENV_FILE] = str(dotenv_path.resolve())
             self._loaded_dotenv_keys = {*dotenv_keys, GUILDBOTICS_ENV_FILE}

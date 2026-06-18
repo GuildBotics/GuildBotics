@@ -380,6 +380,48 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert status.env_file_exists is True
 
 
+def test_set_workspace_env_does_not_override_home_state_root(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_home = os.environ["HOME"]
+    original_userprofile = str(isolated_home / "userprofile")
+    original_homedrive = "C:"
+    original_homepath = "\\Users\\Original"
+    monkeypatch.setenv("USERPROFILE", original_userprofile)
+    monkeypatch.setenv("HOMEDRIVE", original_homedrive)
+    monkeypatch.setenv("HOMEPATH", original_homepath)
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+
+    workspace = isolated_home / "workspace"
+    workspace.mkdir()
+    _write_project(workspace / ".guildbotics" / "config")
+    (workspace / ".env").write_text(
+        "\n".join(
+            [
+                "HOME=workspace-home",
+                "USERPROFILE=workspace-userprofile",
+                "HOMEDRIVE=Z:",
+                "HOMEPATH=\\Users\\Workspace",
+                "WORKSPACE_MARKER=loaded",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    status = runtime.set_workspace(workspace)
+
+    assert os.environ["HOME"] == original_home
+    assert os.environ["USERPROFILE"] == original_userprofile
+    assert os.environ["HOMEDRIVE"] == original_homedrive
+    assert os.environ["HOMEPATH"] == original_homepath
+    assert os.environ["WORKSPACE_MARKER"] == "loaded"
+    assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
+    assert active_workspace_file() == (
+        isolated_home / "home/.guildbotics/data/active-workspace.json"
+    )
+
+
 def test_set_workspace_prefers_env_data_dir_over_inherited(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -264,6 +264,8 @@ desktop の設定ファイル保存先が「作業ディレクトリ内」でも
 
 `GUILDBOTICS_DATA_DIR` の解決は、dotenv の `override=True/False` の違いに依存させない。workspace 適用処理は `.env` を parse し、`.env` 内の `GUILDBOTICS_DATA_DIR` があれば process 環境へ明示的に反映する。
 
+workspace `.env` を process 環境へ反映するとき、`HOME`、`USERPROFILE`、`HOMEDRIVE`、`HOMEPATH` は読み込まない。これらを許可すると `Path.home()` の解決が workspace `.env` に影響され、machine state root が workspace 側へ移動してしまうためである。
+
 ### Project / Member Config
 
 設定ファイルは config root 配下に置く。
