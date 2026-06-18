@@ -2,11 +2,13 @@ import importlib
 import json
 import os
 
+import pytest
 from click.testing import CliRunner
 
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
+from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     write_active_workspace,
@@ -20,6 +22,13 @@ class FakeContext:
         self.person = person
         self.team = Team(project=Project(name="demo"), members=[person])
         self.logger = None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_member_data_root(monkeypatch, tmp_path):
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
+    monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
+    monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
 
 
 def test_member_context_outputs_no_secret(monkeypatch):
@@ -208,6 +217,100 @@ def test_member_context_workspace_option_overrides_active_workspace(
     )
 
     assert result.exit_code == 0
+
+
+def test_member_workspace_without_env_does_not_load_cwd_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
+    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
+    monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    (caller / ".env").write_text("CWD_ONLY_MARKER=leaked\n", encoding="utf-8")
+    monkeypatch.chdir(caller)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def context(self, check_credentials=False):
+            return {"person_id": "aiko"}
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "--workspace",
+            str(workspace),
+            "context",
+            "--person",
+            "aiko",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "CWD_ONLY_MARKER" not in os.environ
+    assert GUILDBOTICS_ENV_FILE not in os.environ
+
+
+def test_member_active_workspace_without_env_does_not_load_cwd_env(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
+    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
+    monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    (caller / ".env").write_text("CWD_ONLY_MARKER=leaked\n", encoding="utf-8")
+    monkeypatch.chdir(caller)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write_active_workspace(workspace)
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def context(self, check_credentials=False):
+            return {"person_id": "aiko"}
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member, ["context", "--person", "aiko", "--format", "json"]
+    )
+
+    assert result.exit_code == 0
+    assert "CWD_ONLY_MARKER" not in os.environ
+    assert GUILDBOTICS_ENV_FILE not in os.environ
 
 
 def test_member_context_check_credentials_fail_closed(monkeypatch):

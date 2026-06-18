@@ -17,7 +17,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadConversationState,
     ThreadMessageState,
 )
-from guildbotics.utils.fileio import get_storage_path
+from guildbotics.utils.fileio import get_workspace_data_path
 
 
 class FileConversationStateStore(ConversationStateStore):
@@ -30,7 +30,7 @@ class FileConversationStateStore(ConversationStateStore):
         max_thread_messages: int = 500,
     ):
         self._base_dir = (
-            base_dir if base_dir is not None else get_storage_path() / "chat_state"
+            base_dir if base_dir is not None else get_workspace_data_path("chat_state")
         )
         self._max_processed_events = max(1, int(max_processed_events))
         self._max_thread_messages = max(1, int(max_thread_messages))

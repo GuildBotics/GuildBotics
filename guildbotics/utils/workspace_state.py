@@ -6,8 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import get_storage_path
+from guildbotics.utils.env_loader import (
+    GUILDBOTICS_ENV_FILE,
+    resolve_guildbotics_env_file,
+)
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
+    apply_workspace_data_root,
+    get_machine_state_path,
+)
 
 GUILDBOTICS_CONFIG_DIR = "GUILDBOTICS_CONFIG_DIR"
 ACTIVE_WORKSPACE_FILE = "active-workspace.json"
@@ -28,7 +35,7 @@ class WorkspaceState:
 
 
 def active_workspace_file() -> Path:
-    return get_storage_path() / ACTIVE_WORKSPACE_FILE
+    return get_machine_state_path(ACTIVE_WORKSPACE_FILE)
 
 
 def workspace_state(workspace: Path) -> WorkspaceState:
@@ -70,12 +77,19 @@ def read_active_workspace() -> WorkspaceState | None:
     return state
 
 
-def apply_workspace_environment(state: WorkspaceState) -> None:
+def apply_workspace_environment(
+    state: WorkspaceState, *, inherited_data_dir: str | None = None
+) -> None:
     os.environ[GUILDBOTICS_CONFIG_DIR] = str(state.config_dir)
     if state.env_file.is_file():
         os.environ[GUILDBOTICS_ENV_FILE] = str(state.env_file)
     else:
         os.environ.pop(GUILDBOTICS_ENV_FILE, None)
+    apply_workspace_data_root(
+        state.workspace,
+        state.env_file,
+        inherited_data_dir=inherited_data_dir,
+    )
 
 
 def has_primary_config_source(cwd: Path | None = None) -> bool:
@@ -87,21 +101,41 @@ def has_primary_config_source(cwd: Path | None = None) -> bool:
 
 
 def apply_workspace_for_cli(
-    workspace: Path | None = None, *, cwd: Path | None = None
+    workspace: Path | None = None,
+    *,
+    cwd: Path | None = None,
+    inherited_data_dir: str | None = None,
 ) -> WorkspaceState | None:
+    if inherited_data_dir is None:
+        inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
     if workspace is not None:
         state = workspace_state(workspace)
         if not state.workspace.is_dir():
             raise NotADirectoryError(str(state.workspace))
-        apply_workspace_environment(state)
+        apply_workspace_environment(state, inherited_data_dir=inherited_data_dir)
         return state
 
     if has_primary_config_source(cwd):
+        root = cwd if cwd is not None else Path.cwd()
+        env_file = resolve_guildbotics_env_file(root, prefer_env_file=True)
+        apply_workspace_data_root(
+            root,
+            env_file,
+            inherited_data_dir=inherited_data_dir,
+        )
         return None
 
     active_state = read_active_workspace()
     if active_state is not None:
-        apply_workspace_environment(active_state)
+        apply_workspace_environment(active_state, inherited_data_dir=inherited_data_dir)
+    else:
+        root = cwd if cwd is not None else Path.cwd()
+        env_file = resolve_guildbotics_env_file(root, prefer_env_file=True)
+        apply_workspace_data_root(
+            root,
+            env_file,
+            inherited_data_dir=inherited_data_dir,
+        )
     return active_state
 
 

@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from guildbotics.observability import correlation_fields
-from guildbotics.utils.fileio import get_storage_path
+from guildbotics.utils.fileio import get_workspace_data_path
 
 JsonMap = dict[str, Any]
 
@@ -52,7 +52,7 @@ def prompt_trace_path() -> Path:
     configured = os.getenv("GUILDBOTICS_PROMPT_TRACE_PATH", "").strip()
     if configured:
         return Path(configured).expanduser()
-    return get_storage_path() / "run" / "prompt_trace.jsonl"
+    return get_workspace_data_path("run", "prompt_trace.jsonl")
 
 
 def read_prompt_trace_events(

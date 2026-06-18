@@ -3,13 +3,18 @@ from pathlib import Path
 import pytest
 
 from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
     _clean_data,
     find_package_subdir,
     get_config_path,
+    get_machine_state_path,
+    get_machine_state_root,
     get_primary_config_path,
     get_storage_path,
+    get_workspace_data_root,
     load_markdown_with_frontmatter,
     load_yaml_file,
+    resolve_workspace_data_root,
     save_yaml_file,
 )
 
@@ -115,6 +120,71 @@ def test_get_storage_path_resolves_relative_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_DATA_DIR", "stable-data")
 
     assert get_storage_path() == tmp_path / "stable-data"
+
+
+def test_get_machine_state_root_ignores_data_dir_env(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    data_dir = tmp_path / "workspace-data"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(data_dir))
+
+    assert get_machine_state_root() == home / ".guildbotics" / "data"
+    assert get_machine_state_path("run", "scheduler.pid") == (
+        home / ".guildbotics" / "data" / "run" / "scheduler.pid"
+    )
+
+
+def test_resolve_workspace_data_root_prefers_workspace_env_over_inherited(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env_file = workspace / ".env"
+    env_file.write_text(
+        "GUILDBOTICS_DATA_DIR=workspace-data\nOTHER=value\n",
+        encoding="utf-8",
+    )
+
+    assert resolve_workspace_data_root(
+        workspace,
+        env_file,
+        inherited_data_dir=str(tmp_path / "inherited-data"),
+    ) == (tmp_path / "workspace-data").resolve(strict=False)
+
+
+def test_resolve_workspace_data_root_uses_inherited_without_workspace_override(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env_file = workspace / ".env"
+    env_file.write_text("OTHER=value\n", encoding="utf-8")
+
+    assert resolve_workspace_data_root(
+        workspace,
+        env_file,
+        inherited_data_dir=str(tmp_path / "inherited-data"),
+    ) == (tmp_path / "inherited-data").resolve(strict=False)
+
+
+def test_resolve_workspace_data_root_defaults_to_workspace_data(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    assert resolve_workspace_data_root(workspace) == (
+        workspace / ".guildbotics" / "data"
+    ).resolve(strict=False)
+
+
+def test_get_workspace_data_root_defaults_to_workspace_root(tmp_path, monkeypatch):
+    monkeypatch.delenv(GUILDBOTICS_DATA_DIR, raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    assert get_workspace_data_root(workspace) == (
+        workspace / ".guildbotics" / "data"
+    ).resolve(strict=False)
 
 
 def test_clean_data_removes_none_and_empty_keys():

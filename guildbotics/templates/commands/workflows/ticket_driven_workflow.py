@@ -16,7 +16,7 @@ from guildbotics.observability import set_attributes
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
-    get_storage_path,
+    get_workspace_data_root,
     get_workspace_path,
 )
 from guildbotics.utils.i18n_tool import t
@@ -126,7 +126,7 @@ async def _main(context: Context, ticket_manager: TicketManager) -> AgentRespons
         # under the correct run id.
         cli_agent_env={
             TASK_RUN_ENV: workflow_run_id,
-            GUILDBOTICS_DATA_DIR: str(get_storage_path()),
+            GUILDBOTICS_DATA_DIR: str(get_workspace_data_root()),
         },
         cwd=member_workspace,
     )

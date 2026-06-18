@@ -43,10 +43,17 @@ SLACK_TS_FRACTION_DIGITS = 6
 def member(workspace_dir: Path | None) -> None:
     """Operate as a configured GuildBotics member."""
     try:
-        apply_workspace_for_cli(workspace_dir)
+        applied_workspace = apply_workspace_for_cli(workspace_dir)
     except NotADirectoryError as exc:
         raise click.ClickException(f"workspace does not exist: {exc}") from exc
-    load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=True)
+    if applied_workspace is not None:
+        load_guildbotics_env(
+            applied_workspace.workspace,
+            override=False,
+            prefer_env_file=False,
+        )
+    else:
+        load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=True)
 
 
 @member.command(name="context")

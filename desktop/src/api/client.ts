@@ -26,6 +26,8 @@ export type ConfigStatus = {
   active_config_dir: string | null;
   active_config_location: "workspace" | "home" | "custom" | "missing";
   storage_dir: string;
+  machine_state_dir?: string | null;
+  workspace_data_dir?: string | null;
 };
 
 export type WorkspaceChangeRequest = {

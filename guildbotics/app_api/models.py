@@ -44,6 +44,8 @@ class ConfigStatus(BaseModel):
     active_config_dir: Path | None = None
     active_config_location: ActiveConfigLocation = "missing"
     storage_dir: Path
+    machine_state_dir: Path | None = None
+    workspace_data_dir: Path | None = None
 
 
 class WorkspaceChangeRequest(BaseModel):

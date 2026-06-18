@@ -24,7 +24,7 @@ from guildbotics.runtime.event_listener import (
 )
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
-    get_storage_path,
+    get_workspace_data_root,
     get_workspace_path,
 )
 from guildbotics.utils.person_profile import build_agent_profile
@@ -150,7 +150,7 @@ async def _handle_event(
         member_workspace=str(member_workspace),
         cli_agent_env={
             RUN_ENV: workflow_run_id,
-            GUILDBOTICS_DATA_DIR: str(get_storage_path()),
+            GUILDBOTICS_DATA_DIR: str(get_workspace_data_root()),
         },
         cwd=member_workspace,
     )

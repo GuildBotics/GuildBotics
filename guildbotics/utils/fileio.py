@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import yaml  # type: ignore
+from dotenv import dotenv_values
 
 CONFIG_PATH = ".guildbotics/config"
 GUILDBOTICS_DATA_DIR = "GUILDBOTICS_DATA_DIR"
@@ -25,18 +26,67 @@ def find_package_subdir(subpath: Path) -> Path:
         current = current.parent
 
 
-def get_storage_path() -> Path:
-    """
-    Get the storage path for the project.
-    Returns:
-        Path: The storage path for the project.
-    """
-    if data_dir := os.getenv(GUILDBOTICS_DATA_DIR):
-        return Path(data_dir).expanduser().resolve(strict=False)
+def get_machine_state_root() -> Path:
+    """Return the machine-local GuildBotics state root."""
     return Path.home() / ".guildbotics" / "data"
 
 
-def get_workspace_path(person_id: str) -> Path:
+def get_machine_state_path(*parts: str) -> Path:
+    """Return a path under the machine-local GuildBotics state root."""
+    return get_machine_state_root().joinpath(*parts)
+
+
+def resolve_workspace_data_root(
+    workspace_root: Path,
+    env_file: Path | None = None,
+    inherited_data_dir: str | None = None,
+) -> Path:
+    """Resolve the effective data root for a runtime workspace."""
+    data_dir = _data_dir_from_env_file(env_file)
+    if data_dir is None:
+        data_dir = (inherited_data_dir or "").strip() or None
+    if data_dir is not None:
+        return Path(data_dir).expanduser().resolve(strict=False)
+    return workspace_root.expanduser().resolve(strict=False) / ".guildbotics" / "data"
+
+
+def get_workspace_data_root(workspace_root: Path | None = None) -> Path:
+    """Return the current workspace data root."""
+    if data_dir := os.getenv(GUILDBOTICS_DATA_DIR, "").strip():
+        return Path(data_dir).expanduser().resolve(strict=False)
+    root = workspace_root if workspace_root is not None else Path.cwd()
+    return root.expanduser().resolve(strict=False) / ".guildbotics" / "data"
+
+
+def get_workspace_data_path(
+    *parts: str,
+    workspace_root: Path | None = None,
+) -> Path:
+    """Return a path under the current workspace data root."""
+    return get_workspace_data_root(workspace_root).joinpath(*parts)
+
+
+def apply_workspace_data_root(
+    workspace_root: Path,
+    env_file: Path | None = None,
+    inherited_data_dir: str | None = None,
+) -> Path:
+    """Resolve and publish the effective workspace data root."""
+    data_root = resolve_workspace_data_root(
+        workspace_root,
+        env_file,
+        inherited_data_dir=inherited_data_dir,
+    )
+    os.environ[GUILDBOTICS_DATA_DIR] = str(data_root)
+    return data_root
+
+
+def get_storage_path() -> Path:
+    """Backward-compatible alias for the current workspace data root."""
+    return get_workspace_data_root()
+
+
+def get_workspace_path(person_id: str, workspace_root: Path | None = None) -> Path:
     """
     Get the workspace path for a specific person.
     Args:
@@ -44,7 +94,20 @@ def get_workspace_path(person_id: str) -> Path:
     Returns:
         Path: The workspace path for the person.
     """
-    return get_storage_path() / "workspaces" / person_id
+    return get_workspace_data_path(
+        "workspaces", person_id, workspace_root=workspace_root
+    )
+
+
+def _data_dir_from_env_file(env_file: Path | None) -> str | None:
+    if env_file is None or not env_file.is_file():
+        return None
+    values = dotenv_values(env_file)
+    value = values.get(GUILDBOTICS_DATA_DIR)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
 
 
 def get_template_path() -> Path:

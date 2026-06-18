@@ -15,11 +15,11 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from guildbotics.utils.fileio import get_storage_path
+from guildbotics.utils.fileio import get_workspace_data_path
 
 
 def default_store_path() -> Path:
-    return get_storage_path() / "run" / "diagnostics.jsonl"
+    return get_workspace_data_path("run", "diagnostics.jsonl")
 
 
 class DiagnosticsStore:
@@ -32,19 +32,22 @@ class DiagnosticsStore:
         memory_limit: int = 5000,
         max_file_bytes: int = 8 * 1024 * 1024,
     ) -> None:
+        self._path_override = path
         self._path = path or default_store_path()
         self._memory_limit = memory_limit
         self._max_file_bytes = max_file_bytes
         self._records: deque[dict[str, Any]] = deque(maxlen=memory_limit)
         self._lock = threading.Lock()
-        self._load()
+        self._load_from_path(self._path)
 
     @property
     def path(self) -> Path:
+        self._refresh_path()
         return self._path
 
     def record(self, item: dict[str, Any]) -> None:
         with self._lock:
+            self._refresh_path_locked()
             self._records.append(item)
             self._append_to_file(item)
 
@@ -59,6 +62,7 @@ class DiagnosticsStore:
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         with self._lock:
+            self._refresh_path_locked()
             records = list(self._records)
         summaries: dict[str, dict[str, Any]] = {}
         for item in records:
@@ -78,6 +82,7 @@ class DiagnosticsStore:
 
     def get_records(self, trace_id: str) -> list[dict[str, Any]]:
         with self._lock:
+            self._refresh_path_locked()
             records = [
                 item for item in self._records if item.get("trace_id") == trace_id
             ]
@@ -101,17 +106,32 @@ class DiagnosticsStore:
         (callers/UI reverse for display), capped to the most recent ``limit``.
         """
         with self._lock:
+            self._refresh_path_locked()
             records = [item for item in self._records if not item.get("trace_id")]
         records.sort(key=lambda item: item.get("timestamp", ""))
         return records[-max(1, limit) :]
 
     # -- persistence ---------------------------------------------------------
 
-    def _load(self) -> None:
-        if not self._path.exists():
+    def _refresh_path(self) -> None:
+        with self._lock:
+            self._refresh_path_locked()
+
+    def _refresh_path_locked(self) -> None:
+        if self._path_override is not None:
+            return
+        path = default_store_path()
+        if path == self._path:
+            return
+        self._path = path
+        self._records.clear()
+        self._load_from_path(path)
+
+    def _load_from_path(self, path: Path) -> None:
+        if not path.exists():
             return
         try:
-            with self._path.open(encoding="utf-8") as handle:
+            with path.open(encoding="utf-8") as handle:
                 for line in handle:
                     raw = line.strip()
                     if not raw:

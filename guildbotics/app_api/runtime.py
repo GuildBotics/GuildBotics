@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import dotenv_values
 
 from guildbotics.app_api.cli_agents import (
     CLI_AGENT_EXECUTABLES,
@@ -75,11 +75,15 @@ from guildbotics.observability import new_id, trace_scope
 from guildbotics.runtime import Context
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
+    apply_workspace_data_root,
     get_home_config_path,
+    get_machine_state_root,
     get_person_config_path,
     get_primary_config_path,
-    get_storage_path,
     get_template_path,
+    get_workspace_data_path,
+    get_workspace_data_root,
     load_markdown_with_frontmatter,
     load_yaml_file,
 )
@@ -124,6 +128,12 @@ class AppRuntime:
         self._lock = threading.Lock()
         self._running_command_id: str | None = None
         self._loaded_dotenv_keys: set[str] = set()
+        self._inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
+        apply_workspace_data_root(
+            Path.cwd(),
+            Path.cwd() / ".env",
+            inherited_data_dir=self._inherited_data_dir,
+        )
         self._lifecycle = RuntimeLifecycleService(
             event_bus=event_bus,
             context_factory=self._get_context,
@@ -162,7 +172,9 @@ class AppRuntime:
             home_project_file_exists=home_project_file.exists(),
             active_config_dir=active_config_dir,
             active_config_location=active_config_location,
-            storage_dir=get_storage_path(),
+            storage_dir=get_workspace_data_root(cwd),
+            machine_state_dir=get_machine_state_root(),
+            workspace_data_dir=get_workspace_data_root(cwd),
         )
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
@@ -184,7 +196,7 @@ class AppRuntime:
         self.stop_scheduler()
         os.chdir(workspace)
         write_active_workspace(workspace)
-        self._load_workspace_env()
+        self._load_workspace_env(apply_data_root=True)
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
@@ -376,7 +388,7 @@ class AppRuntime:
             env_file_exists=status.env_file.exists(),
             trace_file=trace_file,
             output_trace_file=output_trace_file,
-            default_trace_file=get_storage_path() / "run" / "prompt_trace.jsonl",
+            default_trace_file=get_workspace_data_path("run", "prompt_trace.jsonl"),
             trace_file_exists=trace_file.exists(),
             event_count=event_count,
             events=[_prompt_trace_entry(event) for event in events],
@@ -702,7 +714,7 @@ class AppRuntime:
         )
 
     def _get_context(self, message: str = "") -> Context:
-        self._load_workspace_env()
+        self._load_workspace_env(apply_data_root=False)
         try:
             return get_edition().get_context(message)
         except FileNotFoundError as exc:
@@ -712,24 +724,35 @@ class AppRuntime:
                 context={"path": str(exc.filename or "")},
             ) from exc
 
-    def _load_workspace_env(self) -> None:
+    def _load_workspace_env(self, *, apply_data_root: bool = False) -> None:
         dotenv_path = Path.cwd() / ".env"
         new_values = dotenv_values(dotenv_path) if dotenv_path.exists() else {}
+        dotenv_keys = {
+            key for key, value in new_values.items() if value is not None
+        } - {GUILDBOTICS_DATA_DIR}
         # Remove keys that a previously selected workspace injected but the
         # current one no longer defines, so stale credentials (OpenAI, GitHub,
         # Slack, ...) do not leak across workspace switches.
-        for key in self._loaded_dotenv_keys - set(new_values):
+        for key in self._loaded_dotenv_keys - dotenv_keys:
             os.environ.pop(key, None)
         if dotenv_path.exists():
-            load_dotenv(dotenv_path=dotenv_path, override=True)
+            for key, value in new_values.items():
+                if key != GUILDBOTICS_DATA_DIR and value is not None:
+                    os.environ[key] = value
             os.environ[GUILDBOTICS_ENV_FILE] = str(dotenv_path.resolve())
-            self._loaded_dotenv_keys = {*set(new_values), GUILDBOTICS_ENV_FILE}
+            self._loaded_dotenv_keys = {*dotenv_keys, GUILDBOTICS_ENV_FILE}
         else:
             os.environ.pop(GUILDBOTICS_ENV_FILE, None)
             self._loaded_dotenv_keys = set()
         os.environ[GUILDBOTICS_CONFIG_DIR] = str(
             (Path.cwd() / ".guildbotics" / "config").resolve()
         )
+        if apply_data_root:
+            apply_workspace_data_root(
+                Path.cwd(),
+                dotenv_path,
+                inherited_data_dir=self._inherited_data_dir,
+            )
 
     def _reserve_command(self, trace_id: str) -> None:
         with self._lock:

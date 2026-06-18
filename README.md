@@ -191,6 +191,14 @@ guildbotics workspace current
 guildbotics workspace use /path/to/workspace
 ```
 
+GuildBotics keeps machine state and workspace data separate. Active workspace state and the
+CLI scheduler PID live under `$HOME/.guildbotics/data` and are not affected by workspace `.env`
+settings. Runtime data such as member workspaces, task/chat run evidence, diagnostics, prompt
+traces, and chat state defaults to `<workspace>/.guildbotics/data`. `GUILDBOTICS_DATA_DIR`
+overrides only this workspace data root; it does not move active workspace state or scheduler
+PID files. `GUILDBOTICS_CONFIG_DIR` changes the config source only and is not treated as a
+workspace root.
+
 ## 5.2. Add Members
 
 Add AI agents or human team members from the **Members** section of the Desktop app.
@@ -427,7 +435,7 @@ The scheduler behavior (from `guildbotics/drivers/task_scheduler.py` and `guildb
 
 **Error handling**:
 - Consecutive command failures (default: 3) stop the worker thread
-- Error logs are recorded in `~/.guildbotics/data/error.log`
+- Runtime diagnostics are recorded under `<workspace-data-root>/run/diagnostics.jsonl`
 
 ## 5.5. Schedule Configuration Examples
 
@@ -533,7 +541,7 @@ Scheduled command output posting remains separate: use `task_schedules` + `workf
 
 Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
 
-For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent workspace root at `~/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through run evidence recorded by `guildbotics member chat complete`; natural-language agent stdout is not treated as proof of Slack side effects.
+For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent workspace root at `<workspace-data-root>/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through run evidence recorded by `guildbotics member chat complete`; natural-language agent stdout is not treated as proof of Slack side effects.
 You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the CLI agent.
 
 ### 5.6.1. Prerequisites (Slack Side)
@@ -646,7 +654,7 @@ This section describes how to use the default `ticket_driven_workflow` which int
 ### 6.1.1. Git Environment
 - Ticket-driven work is performed through the `guildbotics member ...` CLI. The workflow
   selects a GitHub Project item, starts the CLI agent in
-  `~/.guildbotics/data/workspaces/<person_id>`, and verifies that the agent recorded task
+  `<workspace-data-root>/workspaces/<person_id>`, and verifies that the agent recorded task
   completion. The agent itself performs clone/push/PR/comment/reply operations through
   `guildbotics member`.
 - Configure each AI member's GitHub credentials in GuildBotics. GitHub/git writes use the
@@ -755,7 +763,7 @@ To request a task from the AI agent, operate the GitHub Projects ticket as follo
 4. Move the ticket to the ready lane
 
 Note:
-The AI agent prepares repositories under `~/.guildbotics/data/workspaces/<person_id>` by running `guildbotics member git prepare` and works there.
+The AI agent prepares repositories under `<workspace-data-root>/workspaces/<person_id>` by running `guildbotics member git prepare` and works there.
 
 ### 6.3.3. Interacting with the AI Agent
 - If the AI agent has questions during work, it posts questions as ticket comments. Please respond in ticket comments. The agent periodically checks ticket comments and proceeds accordingly once answers are provided.
@@ -811,6 +819,9 @@ guildbotics member --workspace /path/to/workspace context --person <person_id> -
 The fallback for non-desktop/headless use is `GUILDBOTICS_ENV_FILE` pointing to an absolute
 `.env` path, or `.env` in the current directory. `guildbotics start` and the desktop runtime
 set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
+`GUILDBOTICS_DATA_DIR` may be set in the workspace `.env` to override the workspace data root.
+If it is set in the process environment at startup and the workspace `.env` has no override, it
+acts as a fallback shared data root for that process.
 
 ## 7.2. Configuration Files
 
@@ -841,7 +852,8 @@ set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
 
 # 8. Troubleshooting
 
-**Error Logs**: Check `~/.guildbotics/data/error.log` for details when errors occur.
+**Diagnostics**: Check `<workspace-data-root>/run/diagnostics.jsonl` or the Desktop diagnostics
+view for runtime events and errors.
 
 **Debug Output**: Set environment variables for detailed logging:
 - `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
