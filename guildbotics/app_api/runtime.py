@@ -71,7 +71,7 @@ from guildbotics.entities import Project, Service, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.runtime import Context
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
+from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE, HOME_ENV_PROTECTED_KEYS
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
     apply_workspace_data_root,
@@ -96,10 +96,7 @@ from guildbotics.utils.workspace_state import (
 
 WORKSPACE_DOTENV_PROTECTED_KEYS = {
     GUILDBOTICS_DATA_DIR,
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
+    *HOME_ENV_PROTECTED_KEYS,
 }
 TICKET_DRIVEN_WORKFLOW = "workflows/ticket_driven_workflow"
 

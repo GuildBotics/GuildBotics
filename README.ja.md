@@ -177,7 +177,7 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 - 言語選択（英語/日本語）
 - ワークスペースフォルダの選択
 - プロジェクトの説明文
-- GiHub連携を行うかどうか
+- GitHub連携を行うかどうか
 
 GuildBotics では、プロジェクトの作業場所として選ぶフォルダを **ワークスペース** と呼びます。
 ワークスペースには、以下のような GuildBotics の設定ファイルが書き出されます。

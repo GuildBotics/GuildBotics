@@ -89,7 +89,7 @@ class VerifyService:
                 "config_project_file",
                 config.project_file_exists,
                 "Project config file was found.",
-                "project.yml was not found in the workspace config.",
+                "project.yml was not found in the config directory.",
                 target=str(config.project_file),
             )
         ]
