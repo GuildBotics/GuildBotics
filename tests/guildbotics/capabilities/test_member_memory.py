@@ -8,7 +8,7 @@ from guildbotics.capabilities.member_memory import (
     MemberMemoryError,
     MemberMemoryService,
 )
-from guildbotics.capabilities.task_runs import RUN_ENV
+from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, load_yaml_file
 
@@ -25,6 +25,7 @@ def data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     root = tmp_path / "data"
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(root))
     monkeypatch.delenv(RUN_ENV, raising=False)
+    monkeypatch.delenv(TASK_RUN_ENV, raising=False)
     return root
 
 
@@ -36,10 +37,15 @@ def test_record_recall_get_and_digest_redact_secret(
 
     result = service.record(
         scope="personal",
-        title="Retry pitfall",
-        summary="Refresh tokens before retrying.",
-        keywords=["retry", "リトライ"],
-        source=[{"type": "ticket", "url": "https://example.test/issues/1"}],
+        title="Retry secret-token-value pitfall",
+        summary="Refresh secret-token-value before retrying.",
+        keywords=["retry", "リトライ", "secret-token-value"],
+        source=[
+            {
+                "type": "ticket",
+                "url": "https://example.test/issues/secret-token-value",
+            }
+        ],
         body="Do not store secret-token-value. Retry after refresh.",
     )
 
@@ -49,8 +55,10 @@ def test_record_recall_get_and_digest_redact_secret(
         data_root / "documents" / "personal" / "aiko" / doc_id / "meta.yml"
     )
     assert isinstance(meta, dict)
-    assert meta["title"] == "Retry pitfall"
-    assert meta["source"][0]["url"] == "https://example.test/issues/1"
+    assert meta["title"] == "Retry *** pitfall"
+    assert meta["summary"] == "Refresh *** before retrying."
+    assert meta["keywords"] == ["retry", "リトライ", "***"]
+    assert meta["source"][0]["url"] == "https://example.test/issues/***"
     assert (data_root / "documents" / "personal" / "aiko" / "recent.txt").read_text(
         encoding="utf-8"
     ).splitlines() == [doc_id]
@@ -58,7 +66,7 @@ def test_record_recall_get_and_digest_redact_secret(
     by_body = service.recall(queries=["リトライ", "retry"])["results"]
     assert [item["doc_id"] for item in by_body] == [doc_id]
     by_source = service.recall(
-        queries=["https://example.test/issues/1"], meta_only=True
+        queries=["https://example.test/issues/***"], meta_only=True
     )["results"]
     assert [item["doc_id"] for item in by_source] == [doc_id]
 
@@ -66,6 +74,29 @@ def test_record_recall_get_and_digest_redact_secret(
     assert full["body"] == "Do not store ***. Retry after refresh."
     assert full["assets"] == []
     assert service.load_digest(limit=1)[0]["doc_id"] == doc_id
+
+
+def test_record_rejects_set_for_note(person: Person) -> None:
+    service = MemberMemoryService(person)
+
+    with pytest.raises(MemberMemoryError, match="--set"):
+        service.record(
+            scope="personal",
+            title="Note",
+            body="body",
+            params={"digest_n": EXPECTED_DIGEST_N},
+        )
+
+
+def test_recall_strips_blank_queries(person: Person) -> None:
+    service = MemberMemoryService(person)
+    first = service.record(scope="personal", title="First", body="alpha")
+    second = service.record(scope="personal", title="Second", body="beta")
+
+    results = service.recall(queries=["   ", " alpha "])["results"]
+
+    assert [item["doc_id"] for item in results] == [first["doc_id"]]
+    assert second["doc_id"] not in [item["doc_id"] for item in results]
 
 
 def test_recall_uses_rg_for_meta_only(

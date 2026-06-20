@@ -68,6 +68,8 @@ class MemberMemoryService:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         kind = _normalize_kind(kind)
+        if params and kind != "policy":
+            raise MemberMemoryError("--set is only available for policy memory.")
         if kind == "policy":
             self._ensure_policy_write_allowed(policy_approved)
             existing = self._team_policy_doc()
@@ -115,7 +117,7 @@ class MemberMemoryService:
         meta_only: bool = False,
         limit: int = DEFAULT_DIGEST_N,
     ) -> dict[str, Any]:
-        normalized_queries = [query for query in queries if query]
+        normalized_queries = [query.strip() for query in queries if query.strip()]
         if normalized_queries:
             results = self._recall_with_rg(
                 queries=normalized_queries,
@@ -451,7 +453,7 @@ class MemberMemoryService:
 
     def _write_doc(self, doc_dir: Path, meta: dict[str, Any], body: str) -> None:
         doc_dir.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(doc_dir / META_FILE, meta)
+        save_yaml_file(doc_dir / META_FILE, _redact_meta(meta))
         (doc_dir / BODY_FILE).write_text(_redact_secrets(body), encoding="utf-8")
         (doc_dir / "assets").mkdir(exist_ok=True)
 
@@ -638,3 +640,17 @@ def _redact_secrets(text: str) -> str:
         if len(value) >= MIN_SECRET_VALUE_LENGTH:
             redacted = redacted.replace(value, "***")
     return redacted
+
+
+def _redact_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    return {key: _redact_value(value) for key, value in meta.items()}
+
+
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact_secrets(value)
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    return value

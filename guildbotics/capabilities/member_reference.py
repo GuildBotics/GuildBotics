@@ -142,7 +142,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "guildbotics member memory record --person <person> --scope personal|team "
                 "--title <title> (--body-file <file> | --body-stdin) "
                 "[--summary <text>] [--keyword <word> ...] [--ticket <url>] [--pr <url>] "
-                "[--channel <url>] [--thread <url>] [--kind note|policy] [--pin]",
+                "[--channel <url>] [--thread <url>] [--kind note|policy] [--pin] "
+                "[--policy-approved] [--set <key=value> ...]",
                 "Create a memory document and move it to the front of the digest.",
             ),
             (
@@ -158,7 +159,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "guildbotics member memory update --person <person> --id <doc-id> "
                 "[--team] [--body-file <file> | --body-stdin] [--title <title>] "
                 "[--summary <text>] [--add-keyword <word>] [--remove-keyword <word>] "
-                "[--pin|--unpin]",
+                "[--pin|--unpin] [--policy-approved] [--set <key=value> ...]",
                 "Replace selected body or metadata fields and move the document to the digest front.",
             ),
             (
@@ -166,7 +167,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Mark a useful memory as actually used by moving it to the digest front.",
             ),
             (
-                "guildbotics member memory archive --person <person> --id <doc-id> [--team]",
+                "guildbotics member memory archive --person <person> --id <doc-id> "
+                "[--team] [--policy-approved]",
                 "Move a stale memory under archived/ and remove it from recall and digest.",
             ),
             (

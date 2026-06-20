@@ -23,7 +23,7 @@ GuildBotics は「Slack や GitHub を通じて協調作業するチームを作
   personal/<person_id>/             # personal スコープ（chat_state/<person_id> と同流儀）
       <doc-id>/                     # 1文書 = 1ディレクトリ
           meta.yml
-          <body>.md
+          body.md
           assets/...                # 画像など
       archived/<doc-id>/            # 退避済み（recall/digest の対象外）
       recent.txt                    # MRU（recency インデックス、§4）
@@ -214,7 +214,7 @@ memory record --person alice --scope personal \
 渡すもの:
 
 - **`--scope`** … `personal` / `team` のどちらに作るか。
-- **`--title`** / **本文**（`--body-file` / stdin / パイプ）。
+- **`--title`** / **本文**（`--body-file` / stdin / パイプ）。保存時の本文ファイル名は `body.md` 固定。
 - **`--keyword`**（繰り返し可）… キーワード。
   - **ポイント** … 同義語・英日を入れる（例: `リトライ` / `再試行` / `retry`）。recall は字句 grep（§4）なので、ここの語彙が後の当たりやすさを決める。
 - **`--summary`** … digest と recall 一覧に出る1行。一目で「使えそうか」を判断できる要点を書く。
@@ -247,7 +247,7 @@ memory update --person alice --id auth-retry-pitfall --body-file fixed.md
 memory update --person alice --id recording-policy --add-keyword 命名 --remove-keyword naming --pin
 ```
 
-- **変更できるもの**: 本文（`<body>.md`）と meta のフィールド（`title` / `summary` / `keywords` / `source` / `pinned` / `kind`）。同時にも個別にも変更でき、**指定しなかったものは不変**。本文は**全置換**（部分パッチはしない。`memory get` で現本文を取り、編集して全文を渡す）。
+- **変更できるもの**: 本文（`body.md`）と meta のフィールド（`title` / `summary` / `keywords` / `source` / `pinned` / `kind`）。同時にも個別にも変更でき、**指定しなかったものは不変**。本文は**全置換**（部分パッチはしない。`memory get` で現本文を取り、編集して全文を渡す）。
 - **システムが自動でやること**: `updated_at` を現在時刻に更新（手動不可。陳腐化・recency のシグナル）、recency を上げる（MRU 先頭）。
 - **変わらないもの**: `created_at` / `doc-id` / `path` / `scope`（scope 変更は `promote`、退避は `archive`）。
 
@@ -511,7 +511,7 @@ policy 変更の提案チャネル（モード別に明示する）:
 
 **mechanism / policy の分担**
 
-- **mechanism（システムが固定で提供）**: スコープ2種、`memory` コマンド、source の付与、recency / MRU / digest、pinned 常在化、`kind: policy` 予約と `meta.yml` の機械パラメータ読取、policy 書き込みの人間承認ゲート（自律実行は拒否）、record 時の secret 除去（§9）。
+- **mechanism（システムが固定で提供）**: スコープ2種、`memory` コマンド、source の付与、recency / MRU / digest、pinned 常在化、`kind: policy` 予約と `meta.yml` の機械パラメータ読取、policy 書き込みの人間承認ゲート（自律実行は拒否）、record/update 時の secret 除去（§9）。
 - **policy（エージェントが提案し、人間が承認して育てる文書）**: 何を残すか・粒度・分類・昇格・recall 習慣・digest の `N`。
 - **誰が何をするか**:
   - **利用者(人)**: 会話で意図を伝え、policy 変更を承認する。コードも config も触らない。
@@ -520,7 +520,7 @@ policy 変更の提案チャネル（モード別に明示する）:
 
 ### 9. 秘匿・安全
 
-- 記録は member capability 境界を通す。既存 `task-runs` の `_without_secrets` と同じく、record 時に既知の secret / token を本文から除去する。トークン値は本文に入れない。
+- 記録は member capability 境界を通す。既存 `task-runs` の `_without_secrets` と同じく、record/update 時に既知の secret / token を本文と `meta.yml` の文字列値から best-effort で除去する。トークン値は本文・title・summary・keywords・source URL などに入れない。
 - 可視範囲: `team/` はワークスペース内のチーム共有、`personal/<person_id>` は当人のみ（パスのスコープ + 実行時の person_id で担保）。他人の personal は触れない。
 - 限界: 文書は平文ファイル。secret の除去は best-effort のガイドであって暗号化ではない。
 
