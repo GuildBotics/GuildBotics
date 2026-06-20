@@ -14,6 +14,10 @@ from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
     MemberGitHubCapabilityService,
 )
+from guildbotics.capabilities.member_memory import (
+    MemberMemoryError,
+    MemberMemoryService,
+)
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.capabilities.task_runs import (
     RunStore,
@@ -76,6 +80,281 @@ def help_cmd() -> None:
     the available commands without re-running the full context.
     """
     click.echo(capability_reference_text())
+
+
+@member.group()
+def memory() -> None:
+    """Record, recall, and maintain member memory documents."""
+
+
+@memory.command(name="record")
+@click.option("--person", required=True)
+@click.option(
+    "--scope",
+    type=click.Choice(["personal", "team"]),
+    default="personal",
+    show_default=True,
+)
+@click.option("--title", required=True)
+@click.option("--summary", default="")
+@click.option("--keyword", "keywords", multiple=True)
+@click.option("--ticket", "tickets", multiple=True)
+@click.option("--pr", "prs", multiple=True)
+@click.option("--channel", "channels", multiple=True)
+@click.option("--thread", "threads", multiple=True)
+@click.option("--kind", type=click.Choice(["note", "policy"]), default="note")
+@click.option("--pin", "pinned", is_flag=True)
+@click.option("--body-file", type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--body-stdin", is_flag=True)
+@click.option("--policy-approved", is_flag=True)
+@click.option("--set", "set_values", multiple=True)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def memory_record(
+    person: str,
+    scope: str,
+    title: str,
+    summary: str,
+    keywords: tuple[str, ...],
+    tickets: tuple[str, ...],
+    prs: tuple[str, ...],
+    channels: tuple[str, ...],
+    threads: tuple[str, ...],
+    kind: str,
+    pinned: bool,
+    body_file: Path | None,
+    body_stdin: bool,
+    policy_approved: bool,
+    set_values: tuple[str, ...],
+    output_format: str,
+) -> None:
+    body = _read_content(body_file, body_stdin, "body")
+    _run(
+        _memory_record(
+            person,
+            scope,
+            title,
+            summary,
+            list(keywords),
+            _source_entries(tickets, prs, channels, threads),
+            kind,
+            pinned,
+            body,
+            policy_approved,
+            _parse_set_values(set_values),
+        ),
+        output_format=output_format,
+    )
+
+
+async def _memory_record(
+    person: str,
+    scope: str,
+    title: str,
+    summary: str,
+    keywords: list[str],
+    source: list[dict[str, Any]],
+    kind: str,
+    pinned: bool,
+    body: str,
+    policy_approved: bool,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    _context, member_person = _resolve(person)
+    return MemberMemoryService(member_person).record(
+        scope=cast(Any, scope),
+        title=title,
+        summary=summary,
+        keywords=keywords,
+        source=source,
+        kind=kind,
+        pinned=pinned,
+        body=body,
+        policy_approved=policy_approved,
+        params=params,
+    )
+
+
+@memory.command(name="recall")
+@click.option("--person", required=True)
+@click.option("--query", "queries", multiple=True)
+@click.option("--meta-only", is_flag=True)
+@click.option("--limit", type=click.IntRange(1, 200), default=20)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def memory_recall(
+    person: str,
+    queries: tuple[str, ...],
+    meta_only: bool,
+    limit: int,
+    output_format: str,
+) -> None:
+    _run(
+        _memory_recall(person, list(queries), meta_only, limit),
+        output_format=output_format,
+    )
+
+
+async def _memory_recall(
+    person: str, queries: list[str], meta_only: bool, limit: int
+) -> dict[str, Any]:
+    _context, member_person = _resolve(person)
+    return MemberMemoryService(member_person).recall(
+        queries=queries,
+        meta_only=meta_only,
+        limit=limit,
+    )
+
+
+@memory.command(name="get")
+@click.option("--person", required=True)
+@click.option("--id", "doc_id", required=True)
+@click.option("--team", "team_scope", is_flag=True)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def memory_get(person: str, doc_id: str, team_scope: bool, output_format: str) -> None:
+    _run(
+        _memory_get(person, doc_id, "team" if team_scope else None),
+        output_format=output_format,
+    )
+
+
+async def _memory_get(person: str, doc_id: str, scope: str | None) -> dict[str, Any]:
+    _context, member_person = _resolve(person)
+    return MemberMemoryService(member_person).get(doc_id=doc_id, scope=cast(Any, scope))
+
+
+@memory.command(name="update")
+@click.option("--person", required=True)
+@click.option("--id", "doc_id", required=True)
+@click.option("--team", "team_scope", is_flag=True)
+@click.option("--title")
+@click.option("--summary")
+@click.option("--keyword", "keywords", multiple=True)
+@click.option("--add-keyword", "add_keywords", multiple=True)
+@click.option("--remove-keyword", "remove_keywords", multiple=True)
+@click.option("--ticket", "tickets", multiple=True)
+@click.option("--pr", "prs", multiple=True)
+@click.option("--channel", "channels", multiple=True)
+@click.option("--thread", "threads", multiple=True)
+@click.option("--pin", "pin_value", flag_value=True, default=None)
+@click.option("--unpin", "pin_value", flag_value=False)
+@click.option("--kind", type=click.Choice(["note", "policy"]))
+@click.option("--body-file", type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--body-stdin", is_flag=True)
+@click.option("--policy-approved", is_flag=True)
+@click.option("--set", "set_values", multiple=True)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def memory_update(
+    person: str,
+    doc_id: str,
+    team_scope: bool,
+    title: str | None,
+    summary: str | None,
+    keywords: tuple[str, ...],
+    add_keywords: tuple[str, ...],
+    remove_keywords: tuple[str, ...],
+    tickets: tuple[str, ...],
+    prs: tuple[str, ...],
+    channels: tuple[str, ...],
+    threads: tuple[str, ...],
+    pin_value: bool | None,
+    kind: str | None,
+    body_file: Path | None,
+    body_stdin: bool,
+    policy_approved: bool,
+    set_values: tuple[str, ...],
+    output_format: str,
+) -> None:
+    body = _read_optional_content(body_file, body_stdin, "body")
+    source = _source_entries(tickets, prs, channels, threads)
+    _run(
+        _memory_update(
+            person=person,
+            doc_id=doc_id,
+            scope="team" if team_scope else None,
+            title=title,
+            summary=summary,
+            keywords=list(keywords) if keywords else None,
+            add_keywords=list(add_keywords),
+            remove_keywords=list(remove_keywords),
+            source=source if source else None,
+            pinned=pin_value,
+            kind=kind,
+            body=body,
+            policy_approved=policy_approved,
+            params=_parse_set_values(set_values),
+        ),
+        output_format=output_format,
+    )
+
+
+async def _memory_update(**kwargs: Any) -> dict[str, Any]:
+    _context, member_person = _resolve(str(kwargs.pop("person")))
+    return MemberMemoryService(member_person).update(**kwargs)
+
+
+@memory.command(name="touch")
+@click.option("--person", required=True)
+@click.option("--id", "doc_id", required=True)
+@click.option("--team", "team_scope", is_flag=True)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def memory_touch(
+    person: str, doc_id: str, team_scope: bool, output_format: str
+) -> None:
+    _run(
+        _memory_touch(person, doc_id, "team" if team_scope else None),
+        output_format=output_format,
+    )
+
+
+async def _memory_touch(person: str, doc_id: str, scope: str | None) -> dict[str, Any]:
+    _context, member_person = _resolve(person)
+    return MemberMemoryService(member_person).touch(
+        doc_id=doc_id, scope=cast(Any, scope)
+    )
+
+
+@memory.command(name="archive")
+@click.option("--person", required=True)
+@click.option("--id", "doc_id", required=True)
+@click.option("--team", "team_scope", is_flag=True)
+@click.option("--policy-approved", is_flag=True)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def memory_archive(
+    person: str,
+    doc_id: str,
+    team_scope: bool,
+    policy_approved: bool,
+    output_format: str,
+) -> None:
+    _run(
+        _memory_archive(
+            person, doc_id, "team" if team_scope else None, policy_approved
+        ),
+        output_format=output_format,
+    )
+
+
+async def _memory_archive(
+    person: str, doc_id: str, scope: str | None, policy_approved: bool
+) -> dict[str, Any]:
+    _context, member_person = _resolve(person)
+    return MemberMemoryService(member_person).archive(
+        doc_id=doc_id,
+        scope=cast(Any, scope),
+        policy_approved=policy_approved,
+    )
+
+
+@memory.command(name="promote")
+@click.option("--person", required=True)
+@click.option("--id", "doc_id", required=True)
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def memory_promote(person: str, doc_id: str, output_format: str) -> None:
+    _run(_memory_promote(person, doc_id), output_format=output_format)
+
+
+async def _memory_promote(person: str, doc_id: str) -> dict[str, Any]:
+    _context, member_person = _resolve(person)
+    return MemberMemoryService(member_person).promote(doc_id=doc_id)
 
 
 async def _context_cmd(
@@ -1195,6 +1474,54 @@ def _read_content(content_file: Path | None, content_stdin: bool, label: str) ->
     raise click.ClickException(f"Either --{label}-file or --{label}-stdin is required.")
 
 
+def _read_optional_content(
+    content_file: Path | None, content_stdin: bool, label: str
+) -> str | None:
+    if content_file is None and not content_stdin:
+        return None
+    return _read_content(content_file, content_stdin, label)
+
+
+def _source_entries(
+    tickets: tuple[str, ...],
+    prs: tuple[str, ...],
+    channels: tuple[str, ...],
+    threads: tuple[str, ...],
+) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for source_type, values in (
+        ("ticket", tickets),
+        ("pr", prs),
+        ("channel", channels),
+        ("thread", threads),
+    ):
+        for value in values:
+            if value.strip():
+                entries.append({"type": source_type, "url": value.strip()})
+    return entries
+
+
+def _parse_set_values(values: tuple[str, ...]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for raw in values:
+        key, separator, value = raw.partition("=")
+        key = key.strip()
+        if not key or not separator:
+            raise click.ClickException("--set values must use key=value syntax.")
+        parsed[key] = _parse_scalar(value.strip())
+    return parsed
+
+
+def _parse_scalar(value: str) -> Any:
+    lowered = value.casefold()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
 def _read_pr_content(
     title_file: Path | None, body_file: Path | None, content_stdin: bool
 ) -> tuple[str, str]:
@@ -1279,7 +1606,7 @@ def _slack_permalink_ts(raw_message_id: str) -> str:
 def _run(coro, *, output_format: str) -> Any:
     try:
         result = asyncio.run(coro)
-    except (MemberCapabilityError, TaskRunError, KeyError) as exc:
+    except (MemberCapabilityError, MemberMemoryError, TaskRunError, KeyError) as exc:
         raise click.ClickException(_safe_error(exc)) from exc
     _emit(result, output_format)
     return result
