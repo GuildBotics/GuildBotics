@@ -50,6 +50,29 @@ Do not switch to another member unless the user explicitly asks to switch member
 - If `guildbotics member ...` reports that no active workspace is configured, ask the user to select a workspace in GuildBotics desktop or run `guildbotics workspace use <path>`.
 - Prefer the desktop-managed CLI at `$HOME/.guildbotics/bin/guildbotics`. Use bare `guildbotics` only if that managed CLI is unavailable.
 
+## Memory Flow
+
+The `member context` output includes a `memory` block: `pinned` contains always-on notes, including team policy, and must be treated as standing rules for this session. `digest` contains recently used or updated notes as compact titles and summaries; use it as a hint that a relevant note may exist.
+
+Before working a task, find prior notes. Recall (search) and get (read) are separate:
+
+- When the user asks what the member remembers, recorded, learned, or previously discussed, memory is the primary source. Recall/get memory before inspecting external sources such as GitHub or Slack. Use external sources to verify freshness, when the user asks for the current external state, or when the task requires current state.
+- When multiple sources are relevant, synthesize them instead of treating the first source as final. Memory may contain prior context, rationale, and progress not visible in GitHub/Slack; GitHub, Slack, and code may contain the current external state. If sources differ, prefer the newest timestamped information for narrative progress, but prefer the current owning system for canonical state fields such as GitHub issue state, assignees, labels, PR links, Slack thread contents, and code behavior. Clearly separate memory-derived context from current external state when both matter.
+- Recall by source, always when a ticket or thread URL is known: `guildbotics member memory recall --person <person_id> --query <ticket_or_thread_url> --meta-only`.
+- Recall by topic when prior notes seem likely: take key terms from the ticket/thread, such as feature names, error codes, and identifiers, then add synonyms and EN-JA variants in one OR call, for example `--query リトライ --query 再試行 --query retry`.
+- Get only promising hits: from `digest` and recall results, read the few useful notes in full with `guildbotics member memory get`. If nothing looks relevant, do not get.
+
+While working, reality-check each note you read against the current code, ticket, or thread. Do not trust a note blindly.
+
+Before finishing, maintain memory:
+
+- A note was wrong: `guildbotics member memory update --person <person_id> --id <doc-id> ...`
+- A note was correct and actually helped: `guildbotics member memory touch --person <person_id> --id <doc-id>`
+- You learned something durable: `guildbotics member memory record --person <person_id> --scope personal --title ... --ticket <url> ...`
+- The user says "remember this", "this is wrong, fix it", or "raise this to the team": record, update, or promote on their behalf. Never ask the user to edit files.
+
+Policy is pinned team memory (`kind: policy`) and is human-gated. Change it only on the user's instruction or approval, using `member memory update ... --policy-approved` and `--set <key>=<value>` for parameters such as `digest_n=30`. When you think policy should change, propose the change in your reply and apply it only after the user approves.
+
 ## Workspace Rules
 
 Treat the user's currently open repository as the shared pair-programming workspace.
@@ -79,12 +102,14 @@ Run `member git commit` without `member git push` when the user asks for a local
 ## GitHub Issue Flow
 
 1. `"$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>`
-2. `"$HOME/.guildbotics/bin/guildbotics" member github issue inspect --person <person_id> --url <issue_url>`
-3. Inspect the current repository, branch, remote, and working tree state without changing branches automatically.
-4. Edit files in the user's current repository.
-5. Run relevant tests or checks.
-6. If code changed, stage it with plain git (`git add -A`, or `git add <paths>` for a partial commit), write a commit message in the GuildBotics project language, and run `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current` with the commit message supplied on stdin.
-7. If code changed for an issue and a PR is needed, run `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`, then create the PR with `--content-stdin` so the user can review the PR title/body in the approval prompt:
+2. Follow Memory Flow: source recall by issue URL, topic recall when useful, then get only promising hits.
+3. `"$HOME/.guildbotics/bin/guildbotics" member github issue inspect --person <person_id> --url <issue_url>` when the task needs current GitHub state or implementation work.
+4. Inspect the current repository, branch, remote, and working tree state without changing branches automatically.
+5. Edit files in the user's current repository.
+6. Run relevant tests or checks.
+7. Maintain memory for notes you used, corrected, or newly learned.
+8. If code changed, stage it with plain git (`git add -A`, or `git add <paths>` for a partial commit), write a commit message in the GuildBotics project language, and run `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current` with the commit message supplied on stdin.
+9. If code changed for an issue and a PR is needed, run `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`, then create the PR with `--content-stdin` so the user can review the PR title/body in the approval prompt:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member github pr create --person <person_id> --repo <owner/repo> --head <current_branch> --base <target_branch> --content-stdin --issue-url <issue_url> <<'EOF'
@@ -95,19 +120,21 @@ EOF
 ```
 
 Omit `--base` only when the repository default branch is the intended PR target.
-8. Post the final issue comment in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github issue comment`, or leave a reaction if no action is needed.
+10. Post the final issue comment in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github issue comment`, or leave a reaction if no action is needed.
 
 ## PR Review Flow
 
 1. `"$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>`
 2. `"$HOME/.guildbotics/bin/guildbotics" member github pr inspect --person <person_id> --url <pr_url> --include-comments`
-3. Inspect the current repository, branch, remote, and working tree state without changing branches automatically.
-4. If the current branch/repository is not the PR head branch/repository, ask the user before making git workspace changes.
-5. Address valid review comments and run relevant checks in the current repository.
-6. Stage changes with plain git (`git add -A`, or `git add <paths>` for a partial commit), then commit with `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current`, supplying the commit message on stdin in the GuildBotics project language.
-7. Push updates with `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`.
-8. Reply to inline review threads in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github pr reply --reply-target-id <reply_target_id>`.
-9. If no change is needed, leave a reply or reaction so the workflow has observable evidence.
+3. Follow Memory Flow: source recall, topic recall when useful, then get only promising hits.
+4. Inspect the current repository, branch, remote, and working tree state without changing branches automatically.
+5. If the current branch/repository is not the PR head branch/repository, ask the user before making git workspace changes.
+6. Address valid review comments and run relevant checks in the current repository.
+7. Maintain memory for notes you used, corrected, or newly learned.
+8. Stage changes with plain git (`git add -A`, or `git add <paths>` for a partial commit), then commit with `"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current`, supplying the commit message on stdin in the GuildBotics project language.
+9. Push updates with `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`.
+10. Reply to inline review threads in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github pr reply --reply-target-id <reply_target_id>`.
+11. If no change is needed, leave a reply or reaction so the workflow has observable evidence.
 
 ## Slack Chat Flow
 
@@ -120,13 +147,15 @@ Omit `--base` only when the repository default branch is the intended PR target.
 "$HOME/.guildbotics/bin/guildbotics" member chat inspect thread --person <person_id> --service slack --message-url <slack_message_url>
 ```
 
-5. When the user asks about recent channel discussion, read the channel first. Convert natural-language date ranges to Slack timestamps before calling the command:
+5. Follow Memory Flow after inspecting a thread or channel: source recall when a thread URL is known, topic recall when useful, then get only promising hits.
+6. When the user asks about recent channel discussion, read the channel first. Convert natural-language date ranges to Slack timestamps before calling the command:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member chat inspect channel --person <person_id> --service slack --channel-name <channel_name> --oldest-ts <oldest_ts> --latest-ts <latest_ts> --limit <limit>
 ```
 
-6. Post a thread reply with a Slack message URL and a body file or stdin:
+7. Maintain memory for notes you used, corrected, or newly learned before posting the final response.
+8. Post a thread reply with a Slack message URL and a body file or stdin:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member chat reply --person <person_id> --service slack --message-url <slack_message_url> --body-stdin <<'EOF'
@@ -134,7 +163,7 @@ Omit `--base` only when the repository default branch is the intended PR target.
 EOF
 ```
 
-7. Post a channel message only when a normal channel post is intended:
+9. Post a channel message only when a normal channel post is intended:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member chat post --person <person_id> --service slack --channel-name <channel_name> --body-stdin <<'EOF'
@@ -142,7 +171,7 @@ EOF
 EOF
 ```
 
-8. For reaction-only responses, use semantic reactions only:
+10. For reaction-only responses, use semantic reactions only:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member chat reaction add --person <person_id> --service slack --message-url <slack_message_url> --reaction ack|agree|celebrate|support

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from httpx import AsyncClient
 
+from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.github_utils import (
@@ -106,6 +107,7 @@ class MemberGitHubCapabilityService:
                 else ""
             ),
             "credential_status": credential_status,
+            "memory": MemberMemoryService(self.person).load_context_memory(),
             # The full member command surface and cross-cutting rules. This is
             # the same reference printed by ``guildbotics member help`` and is
             # the single source every entrypoint relies on (context is the

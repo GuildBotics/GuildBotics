@@ -136,6 +136,48 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
+        "Memory",
+        [
+            (
+                "guildbotics member memory record --person <person> --scope personal|team "
+                "--title <title> (--body-file <file> | --body-stdin) "
+                "[--summary <text>] [--keyword <word> ...] [--ticket <url>] [--pr <url>] "
+                "[--channel <url>] [--thread <url>] [--kind note|policy] [--pin] "
+                "[--policy-approved] [--set <key=value> ...]",
+                "Create a memory document and move it to the front of the digest.",
+            ),
+            (
+                "guildbotics member memory recall --person <person> --query <text> "
+                "[--query <text> ...] [--meta-only] [--limit <n>]",
+                "Search personal and team memory by literal OR queries and return compact hits.",
+            ),
+            (
+                "guildbotics member memory get --person <person> --id <doc-id> [--team]",
+                "Read one memory document's metadata, body, and asset paths without changing recency.",
+            ),
+            (
+                "guildbotics member memory update --person <person> --id <doc-id> "
+                "[--team] [--body-file <file> | --body-stdin] [--title <title>] "
+                "[--summary <text>] [--add-keyword <word>] [--remove-keyword <word>] "
+                "[--pin|--unpin] [--policy-approved] [--set <key=value> ...]",
+                "Replace selected body or metadata fields and move the document to the digest front.",
+            ),
+            (
+                "guildbotics member memory touch --person <person> --id <doc-id> [--team]",
+                "Mark a useful memory as actually used by moving it to the digest front.",
+            ),
+            (
+                "guildbotics member memory archive --person <person> --id <doc-id> "
+                "[--team] [--policy-approved]",
+                "Move a stale memory under archived/ and remove it from recall and digest.",
+            ),
+            (
+                "guildbotics member memory promote --person <person> --id <doc-id>",
+                "Move a personal memory into team memory without changing the document id.",
+            ),
+        ],
+    ),
+    (
         "Run completion — workflow runs only",
         [
             (
@@ -170,6 +212,10 @@ _CROSS_CUTTING_RULES: list[str] = [
     "to that one commit without changing the repository git config.",
     "Apply the member voice from `communication_style` to conversational and document outputs; "
     "keep IDs, paths, command arguments, and machine-readable output factual.",
+    "Memory recall and get are read-only. Use touch only after a memory actually helped, update it "
+    "when reality proves it wrong, and record only durable reusable lessons. Policy memory "
+    "(`kind: policy`) requires human approval through `--policy-approved` and cannot be changed "
+    "from autonomous workflow runs.",
     "Never display, infer, store, or copy secrets or token values.",
 ]
 

@@ -5,8 +5,9 @@ script: |
   status=0
   # Run non-interactively inside Codex's workspace-write sandbox instead of
   # fully bypassing approvals + sandbox. File writes stay confined to the repo
-  # checkout (the subprocess cwd) and temp dirs, while network access is kept
-  # enabled for dependency installation / test execution. Dropping the previous
+  # checkout (the subprocess cwd), the workspace data dir, and temp dirs, while
+  # network access is kept enabled for dependency installation / test execution.
+  # Dropping the previous
   # `-c shell_environment_policy.inherit=all` lets Codex apply its default env
   # policy, which strips secret-looking variables (*KEY*/*TOKEN*/*SECRET*) from
   # the environment handed to model-run shell commands, shrinking the blast
@@ -19,9 +20,15 @@ script: |
   #     unrestricted behavior: replace the two sandbox lines below with
   #       --dangerously-bypass-approvals-and-sandbox \
   #       -c shell_environment_policy.inherit=all \
+  if [ -n "${GUILDBOTICS_DATA_DIR:-}" ]; then
+    set -- --add-dir "$GUILDBOTICS_DATA_DIR"
+  else
+    set --
+  fi
   DEBUG=true codex exec \
     --skip-git-repo-check \
     --sandbox workspace-write \
+    "$@" \
     -c sandbox_workspace_write.network_access=true \
     --output-last-message "$res" \
     < "$PROMPT_FILE" >"$log" 2>&1 || status=$?

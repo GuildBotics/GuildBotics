@@ -69,7 +69,62 @@ def test_member_help_prints_capability_reference():
     assert result.exit_code == 0
     assert "guildbotics member git commit" in result.output
     assert "guildbotics member chat reply" in result.output
+    assert "guildbotics member memory recall" in result.output
     assert "### Rules" in result.output
+
+
+def test_member_memory_record_and_recall_cli(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    runner = CliRunner()
+
+    record = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "record",
+            "--person",
+            "aiko",
+            "--scope",
+            "personal",
+            "--title",
+            "Retry note",
+            "--summary",
+            "Retry summary",
+            "--keyword",
+            "retry",
+            "--ticket",
+            "https://example.test/issues/1",
+            "--body-stdin",
+        ],
+        input="Retry after refresh.\n",
+    )
+
+    assert record.exit_code == 0
+    doc_id = json.loads(record.output)["doc_id"]
+
+    recall = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "recall",
+            "--person",
+            "aiko",
+            "--query",
+            "https://example.test/issues/1",
+            "--meta-only",
+        ],
+    )
+
+    assert recall.exit_code == 0
+    assert json.loads(recall.output)["results"][0]["doc_id"] == doc_id
 
 
 def test_member_context_markdown_renders_capabilities_section(monkeypatch):
