@@ -628,7 +628,7 @@ function MemoryEventsPanel({ members }: { members: Array<{ person_id: string; na
       }),
     refetchInterval: 5000,
   });
-  const events = memoryEvents.data?.events ?? [];
+  const events = sortMemoryEventsDescending(memoryEvents.data?.events ?? []);
   const selectedEvent =
     events.find((event) => memoryEventKey(event) === selectedId) ?? events[0] ?? null;
   const selectedKey = selectedEvent ? memoryEventKey(selectedEvent) : "";
@@ -1576,6 +1576,17 @@ function memoryActionColor(action: string): string {
 
 function memoryEventKey(event: MemoryEvent): string {
   return `${event.timestamp}-${event.action}-${event.person_id}-${event.doc_id}`;
+}
+
+function sortMemoryEventsDescending(events: MemoryEvent[]): MemoryEvent[] {
+  return [...events].sort(
+    (left, right) => memoryEventTimestampValue(right) - memoryEventTimestampValue(left),
+  );
+}
+
+function memoryEventTimestampValue(event: MemoryEvent): number {
+  const value = Date.parse(event.timestamp);
+  return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value;
 }
 
 function memorySourceSummary(source: Array<Record<string, unknown>>): string {

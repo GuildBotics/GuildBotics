@@ -355,6 +355,35 @@ describe("Diagnostics memory tab", () => {
       });
     });
   });
+
+  it("sorts memory events by timestamp descending", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemoryEvents).mockResolvedValue({
+      event_count: 2,
+      events: [
+        memoryEvent({
+          timestamp: "2026-06-21T09:30:00+09:00",
+          title: "Offset older",
+          doc_id: "doc-older",
+        }),
+        memoryEvent({
+          timestamp: "2026-06-21T01:00:00Z",
+          title: "UTC newer",
+          doc_id: "doc-newer",
+        }),
+      ],
+    });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.memory"));
+
+    await screen.findAllByText("UTC newer");
+    const rows = screen
+      .getAllByRole("button")
+      .filter((button) => button.classList.contains("memory-row"));
+    expect(rows[0]).toHaveTextContent("UTC newer");
+    expect(rows[1]).toHaveTextContent("Offset older");
+  });
 });
 
 describe("Diagnostics executions tab", () => {
