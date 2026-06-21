@@ -324,7 +324,11 @@ def _record_handoffs(
     }
     for user_id in mentioned_user_ids:
         person_id = participant_labels.get(user_id, "")
-        if not person_id or person_id == source_person_id:
+        if (
+            not person_id
+            or person_id == source_person_id
+            or person_id not in roles_by_person
+        ):
             continue
         key = (person_id, message_ts)
         if key in existing:

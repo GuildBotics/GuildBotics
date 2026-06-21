@@ -445,6 +445,24 @@ def test_record_handoffs_saves_mentions_to_known_members():
     assert handoff.text == "<@U_BOB> design観点を見てもらえますか?"
 
 
+def test_record_handoffs_ignores_non_team_participant_labels():
+    alice = Person(person_id="alice", name="Alice")
+    ctx = types.SimpleNamespace(team=types.SimpleNamespace(members=[alice]))
+    thread_state = ThreadConversationState(channel_id="C1", thread_ts="100.1")
+
+    chat_conversation_workflow._record_handoffs(
+        context=ctx,
+        thread_state=thread_state,
+        participant_labels={"U_ALICE": "alice", "U_USER": "user_1"},
+        mentioned_user_ids=["U_USER"],
+        source_person_id="alice",
+        message_ts="200.1",
+        text="<@U_USER> どう思いますか?",
+    )
+
+    assert thread_state.handoffs == []
+
+
 @pytest.mark.asyncio
 async def test_prompt_payload_includes_existing_handoffs():
     thread_state = ThreadConversationState(
