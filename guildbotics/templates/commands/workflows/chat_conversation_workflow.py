@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from guildbotics.integrations.chat_service import (
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
     ThreadConversationState,
+    ThreadHandoffState,
     ThreadMessageState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -26,7 +28,10 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
     get_workspace_data_root,
 )
-from guildbotics.utils.person_profile import build_agent_profile
+
+CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
+_SLACK_MENTION_RE = re.compile(r"<@([^>|]+)(?:\|[^>]+)?>")
+_MAX_HANDOFF_TEXT_LENGTH = 240
 
 
 async def main(
@@ -80,7 +85,20 @@ async def _handle_event(
             service_name, person_id, channel_id, event.event_id
         )
         return
-    if event.mentions and identity_user_id not in event.mentions:
+
+    thread_messages = state_store.load_thread_messages(
+        service_name, person_id, channel_id, event.thread_ts
+    )
+    latest_mentions_self = identity_user_id in set(event.mentions)
+    thread_has_mentioned_self = _thread_has_mentioned_user(
+        thread_messages, identity_user_id
+    )
+    if event.mentions and not latest_mentions_self:
+        state_store.mark_processed_event(
+            service_name, person_id, channel_id, event.event_id
+        )
+        return
+    if not latest_mentions_self and not thread_has_mentioned_self:
         state_store.mark_processed_event(
             service_name, person_id, channel_id, event.event_id
         )
@@ -138,19 +156,24 @@ async def _handle_event(
         participant_labels=json.dumps(
             prompt_payload["participant_labels"], ensure_ascii=False, sort_keys=True
         ),
-        member_profile=json.dumps(
-            prompt_payload["member_profile"], ensure_ascii=False, sort_keys=True
-        ),
         previous_thread_context=json.dumps(
             prompt_payload["previous_thread_context"],
             ensure_ascii=False,
             sort_keys=True,
+        ),
+        handoff_candidates=json.dumps(
+            prompt_payload["handoff_candidates"], ensure_ascii=False, sort_keys=True
         ),
         language=getattr(context, "language_name", ""),
         member_workspace=str(member_workspace),
         cli_agent_env={
             RUN_ENV: workflow_run_id,
             GUILDBOTICS_DATA_DIR: str(workspace_data_root),
+            CHAT_PARTICIPANT_LABELS_ENV: json.dumps(
+                prompt_payload["participant_labels"],
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
         },
         cwd=member_workspace,
     )
@@ -173,11 +196,13 @@ async def _handle_event(
         service_name, person_id, channel_id, event.event_id
     )
     posted = _latest_chat_post_evidence(evidence)
+    mentioned_user_ids: list[str] = []
     if posted is not None:
         payload = posted.get("payload", {})
         text = str(payload.get("text", "")).strip()
         message_ts = str(payload.get("message_ts", "")).strip()
         thread_ts = str(payload.get("thread_ts", event.thread_ts)).strip()
+        mentioned_user_ids = _mentioned_user_ids_from_text(text)
         if text and message_ts:
             state_store.append_thread_message(
                 service_name,
@@ -190,9 +215,18 @@ async def _handle_event(
                     message_ts=message_ts,
                     author_id=identity_user_id,
                     text=text,
-                    mentions=[],
+                    mentions=mentioned_user_ids,
                     is_bot_message=True,
                 ),
+            )
+            _record_handoffs(
+                context=context,
+                thread_state=thread_state,
+                participant_labels=prompt_payload["participant_labels"],
+                mentioned_user_ids=mentioned_user_ids,
+                source_person_id=person_id,
+                message_ts=message_ts,
+                text=text,
             )
     # Only record the member as a thread participant when it took a visible
     # action (reply/post/reaction). noop / blocked completions leave no Slack
@@ -219,8 +253,9 @@ async def _build_agent_prompt_payload(
     self_user_id: str,
     thread_state: ThreadConversationState,
 ) -> dict[str, Any]:
-    author_labels = await _build_author_labels(
-        context, self_user_id, event, thread_messages[-20:]
+    person_labels = await _chat_user_to_person_labels(context)
+    author_labels = _build_author_labels(
+        context, self_user_id, event, thread_messages[-20:], person_labels
     )
     prompt_latest_message = _to_prompt_message_from_event(
         event, self_user_id, author_labels, chat_service
@@ -229,11 +264,12 @@ async def _build_agent_prompt_payload(
     previous_thread_context = {
         "thread_topic": thread_state.thread_topic,
         "latest_focus": thread_state.latest_focus,
+        "handoffs": [_handoff_to_prompt_dict(item) for item in thread_state.handoffs],
     }
     return {
         "latest_message": _message_to_prompt_dict(prompt_latest_message),
         "participant_labels": author_labels,
-        "member_profile": build_agent_profile(getattr(context, "person", None)),
+        "handoff_candidates": _build_handoff_candidates(context, person_labels),
         "previous_thread_context": previous_thread_context,
     }
 
@@ -264,6 +300,87 @@ def _latest_chat_post_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any]
     return None
 
 
+def _mentioned_user_ids_from_text(text: str) -> list[str]:
+    return list(
+        dict.fromkeys(match.group(1) for match in _SLACK_MENTION_RE.finditer(text))
+    )
+
+
+def _record_handoffs(
+    *,
+    context: Any,
+    thread_state: ThreadConversationState,
+    participant_labels: dict[str, str],
+    mentioned_user_ids: list[str],
+    source_person_id: str,
+    message_ts: str,
+    text: str,
+) -> None:
+    if not mentioned_user_ids:
+        return
+    roles_by_person = _roles_by_person(context)
+    existing = {
+        (handoff.person_id, handoff.message_ts) for handoff in thread_state.handoffs
+    }
+    for user_id in mentioned_user_ids:
+        person_id = participant_labels.get(user_id, "")
+        if not person_id or person_id == source_person_id:
+            continue
+        key = (person_id, message_ts)
+        if key in existing:
+            continue
+        thread_state.handoffs.append(
+            ThreadHandoffState(
+                person_id=person_id,
+                roles=roles_by_person.get(person_id, []),
+                message_ts=message_ts,
+                text=_truncate_handoff_text(text),
+                thread_topic=thread_state.thread_topic,
+                latest_focus=thread_state.latest_focus,
+            )
+        )
+        existing.add(key)
+
+
+def _roles_by_person(context: Any) -> dict[str, list[str]]:
+    team = getattr(context, "team", None)
+    members = getattr(team, "members", []) if team is not None else []
+    roles: dict[str, list[str]] = {}
+    for member in members:
+        person_id = str(getattr(member, "person_id", "")).strip()
+        if not person_id:
+            continue
+        member_roles = getattr(member, "roles", {}) or {}
+        roles[person_id] = [str(role_id) for role_id in member_roles]
+    return roles
+
+
+def _truncate_handoff_text(text: str) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= _MAX_HANDOFF_TEXT_LENGTH:
+        return normalized
+    return normalized[: _MAX_HANDOFF_TEXT_LENGTH - 1].rstrip() + "..."
+
+
+def _handoff_to_prompt_dict(handoff: ThreadHandoffState) -> dict[str, Any]:
+    return {
+        "person_id": handoff.person_id,
+        "roles": handoff.roles,
+        "message_ts": handoff.message_ts,
+        "text": handoff.text,
+        "thread_topic": handoff.thread_topic,
+        "latest_focus": handoff.latest_focus,
+    }
+
+
+def _thread_has_mentioned_user(
+    thread_messages: list[ThreadMessageState], user_id: str
+) -> bool:
+    if not user_id:
+        return False
+    return any(user_id in set(message.mentions) for message in thread_messages)
+
+
 def _get_chat_workspace_path(context: Any, workspace_data_root: Path) -> Path | None:
     person_id = str(getattr(getattr(context, "person", None), "person_id", "")).strip()
     if not person_id:
@@ -273,15 +390,15 @@ def _get_chat_workspace_path(context: Any, workspace_data_root: Path) -> Path | 
     return path
 
 
-async def _build_author_labels(
+def _build_author_labels(
     context: Any,
     self_user_id: str,
     event: ChatEvent | None,
     thread_messages: list[ThreadMessageState],
+    person_labels: dict[str, str],
 ) -> dict[str, str]:
     ordered_ids: list[str] = []
     bot_ids: set[str] = set()
-    person_labels = await _chat_user_to_person_labels(context)
 
     def register(user_id: str | None, *, is_bot: bool) -> None:
         if not user_id:
@@ -325,7 +442,64 @@ async def _build_author_labels(
             continue
         labels[user_id] = f"user_{user_index}"
         user_index += 1
+    for user_id, person_id in person_labels.items():
+        if user_id not in labels:
+            labels[user_id] = person_id
     return labels
+
+
+def _build_handoff_candidates(
+    context: Any, person_labels: dict[str, str]
+) -> list[dict[str, Any]]:
+    team = getattr(context, "team", None)
+    members = getattr(team, "members", []) if team is not None else []
+    self_person_id = str(
+        getattr(getattr(context, "person", None), "person_id", "")
+    ).strip()
+    mentionable_person_ids = set(person_labels.values())
+    candidates: list[dict[str, Any]] = []
+    for member in members:
+        person_id = str(getattr(member, "person_id", "")).strip()
+        if (
+            not person_id
+            or person_id == self_person_id
+            or person_id not in mentionable_person_ids
+        ):
+            continue
+        roles = _handoff_roles(member)
+        if not roles:
+            continue
+        candidates.append(
+            {
+                "person_id": person_id,
+                "name": str(getattr(member, "name", "")).strip(),
+                "mention": f"@{person_id}",
+                "roles": roles,
+            }
+        )
+    return candidates
+
+
+def _handoff_roles(member: Any) -> dict[str, dict[str, str]]:
+    raw_roles = getattr(member, "roles", {}) or {}
+    if not isinstance(raw_roles, dict):
+        return {}
+
+    roles: dict[str, dict[str, str]] = {}
+    for fallback_id, role in raw_roles.items():
+        role_id = str(getattr(role, "id", fallback_id)).strip()
+        if not role_id:
+            continue
+        role_info = {
+            key: value
+            for key, value in {
+                "summary": str(getattr(role, "summary", "")).strip(),
+                "description": str(getattr(role, "description", "")).strip(),
+            }.items()
+            if value
+        }
+        roles[role_id] = role_info
+    return roles
 
 
 async def _chat_user_to_person_labels(context: Any) -> dict[str, str]:
@@ -346,6 +520,12 @@ async def _runtime_chat_user_to_person_labels(
     for member in members:
         person_id = str(getattr(member, "person_id", "")).strip()
         if not person_id or person_id in runtime_labels.values():
+            continue
+        slack_user_id = str(
+            (getattr(member, "account_info", {}) or {}).get("slack_user_id", "")
+        ).strip()
+        if slack_user_id:
+            runtime_labels[slack_user_id] = person_id
             continue
         try:
             member_context = clone_for(member)

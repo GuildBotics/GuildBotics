@@ -39,12 +39,12 @@ test("adds a second member through the UI and persists it to the backend", async
   await expect(page.getByText("Local Agent (local-agent)")).toBeVisible({ timeout: 30_000 });
 
   // With a member already configured the add form is collapsed behind the
-  // "Add new member" toggle; reveal it, then fill the required Basic fields. The
-  // add form is pre-populated with the "professional" preset, so only the id and
-  // display name are missing for a human member.
+  // "Add new member" toggle; reveal it, then fill the required Basic fields.
   await page.getByRole("button", { name: "Add new member" }).click();
   await page.getByLabel("Member ID").fill("local-agent-2");
   await page.getByLabel("Display name").fill("Second Agent");
+  await page.getByLabel("Roles").click();
+  await page.getByRole("option", { name: "product" }).click();
   await page.getByRole("button", { name: "Add member" }).click();
 
   // The reloaded list (driven by the real /team response) now shows BOTH members.

@@ -37,6 +37,7 @@ export type TeamSummary = {
   members: Array<{
     person_id: string;
     name: string;
+    person_type?: "human" | "agent" | "";
     is_active: boolean;
     roles: string[];
   }>;
@@ -361,11 +362,15 @@ export type ProjectConfigUpdateRequest = {
   anthropic_api_key?: string;
 };
 
-export type MemberSetupRequest = {
+export type MemberPersonType = "human" | "agent";
+export type MemberGitHubAccountType = "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
+
+type MemberWriteRequestBase = {
   config_dir: string;
   env_file_path: string;
   append_env_file?: boolean;
-  person_type: "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
+  person_type: MemberPersonType;
+  github_account_type: MemberGitHubAccountType;
   person_id: string;
   person_name: string;
   is_active: boolean;
@@ -379,12 +384,15 @@ export type MemberSetupRequest = {
   github_app_id?: number;
   github_private_key_path?: string;
   github_access_token?: string;
+  slack_user_id?: string;
   slack_bot_token?: string;
   slack_app_token?: string;
   slack_channels?: string[];
   routine_commands?: string[];
   task_schedules?: MemberTaskSchedule[];
 };
+
+export type MemberSetupRequest = MemberWriteRequestBase;
 
 export type MemberResolveRequest = {
   person_type: "human" | "machine_user" | "github_apps" | "proxy_agent";
@@ -401,7 +409,8 @@ export type MemberResolveResponse = {
 export type MemberConfig = {
   person_id: string;
   person_name: string;
-  person_type: "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
+  person_type: MemberPersonType | "";
+  github_account_type: MemberGitHubAccountType;
   is_active: boolean;
   github_username: string;
   git_email: string;
@@ -416,6 +425,7 @@ export type MemberConfig = {
   has_github_app_id: boolean;
   has_github_private_key_path: boolean;
   has_github_access_token: boolean;
+  slack_user_id?: string;
   has_slack_bot_token: boolean;
   has_slack_app_token: boolean;
   slack_channels: string[];
@@ -428,29 +438,8 @@ export type MemberTaskSchedule = {
   schedules: string[];
 };
 
-export type MemberConfigUpdateRequest = {
-  config_dir: string;
-  env_file_path: string;
+export type MemberConfigUpdateRequest = MemberWriteRequestBase & {
   original_person_id: string;
-  person_type: "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
-  person_id: string;
-  person_name: string;
-  is_active: boolean;
-  github_username: string;
-  git_email: string;
-  roles?: string[];
-  speaking_style?: string;
-  relationships?: string;
-  character?: Record<string, unknown>;
-  github_installation_id?: number;
-  github_app_id?: number;
-  github_private_key_path?: string;
-  github_access_token?: string;
-  slack_bot_token?: string;
-  slack_app_token?: string;
-  slack_channels?: string[];
-  routine_commands?: string[];
-  task_schedules?: MemberTaskSchedule[];
 };
 
 export type MemberDeleteRequest = {

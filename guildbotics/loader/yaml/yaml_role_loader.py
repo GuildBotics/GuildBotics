@@ -42,7 +42,10 @@ class YamlRoleLoader:
             dict[str, Role]: A dictionary of roles for the person.
         """
         base_roles = self.load_all()
-        self._update_roles_from_map(person.profile, base_roles, person.roles)
+        profile = person.profile if isinstance(person.profile, dict) else {}
+        role_map = profile.get("roles", {})
+        if isinstance(role_map, dict):
+            self._update_roles_from_map(role_map, base_roles, person.roles)
 
     def _add_roles_from_dir(self, dir: Path, roles_data: dict[str, Role]) -> None:
         if not dir.exists() or not dir.is_dir():

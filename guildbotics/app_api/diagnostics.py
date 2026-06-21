@@ -23,6 +23,8 @@ from guildbotics.integrations.chat_profile import (
 )
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.github.github_utils import (
+    GitHubAppAuth,
+    get_github_account_type,
     get_github_username,
     get_proxy_agent_signature,
     is_proxy_agent,
@@ -480,7 +482,7 @@ class ScenarioDiagnosticsService:
                 context={"github_username": username},
             )
 
-        if member.person_type in ("", "human"):
+        if get_github_account_type(member) in ("", GitHubAppAuth.HUMAN):
             return self._check(
                 "github",
                 "github_member_not_assignable",

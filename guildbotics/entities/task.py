@@ -27,7 +27,6 @@ class Task(BaseModel):
         description (str): A description of the task.
         comments (list[Message]): Comments associated with the task.
         status (str): The current status of the task (default is "new").
-        role (str | None): The role associated with the task.
         owner (str | None): The owner of the task.
         priority (Optional[int]): The priority level for this assignment.
         created_at (Optional[datetime]): The date and time when the task was created.
@@ -51,9 +50,6 @@ class Task(BaseModel):
     )
     status: str = Field(
         default=NEW, description='The current status of the task (default is "new").'
-    )
-    role: str | None = Field(
-        default=None, description="The role associated with the task."
     )
     owner: str | None = Field(default=None, description="The owner of the task.")
     priority: int | None = Field(

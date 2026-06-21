@@ -53,7 +53,6 @@ class Context:
         set_language(self.team.project.get_language_code())
         self.person = person
         self.task = task
-        self.active_role = person.get_role(task.role)
         self.ticket_manager: TicketManager | None = None
         self.chat_service: ChatService | None = None
         self.pipe = message
@@ -120,7 +119,6 @@ class Context:
             task (Task): The new task to set in the context.
         """
         self.task = task
-        self.active_role = self.person.get_role(task.role)
 
     def get_brain(
         self, name: str, config: dict | None, class_resolver: ClassResolver | None

@@ -216,21 +216,6 @@ async def reply_as(
     return reply.content.strip() if reply else ""
 
 
-async def identify_role(context: Context, input: str) -> str:
-    """Identify the role based on the input text."""
-    roles: dict[str, str] = {
-        role.id: role.summary for role in context.person.roles.values()
-    }
-    session_state = {"item_type": "role", "candidates": str(Labels(roles))}
-    response: DecisionResponse = await get_content(
-        context,
-        "functions/identify_item",
-        message=input,
-        params=session_state,
-    )
-    return response.label
-
-
 async def identify_output_type(context: Context, input: str) -> str:
     """Identify the output type based on the input text."""
     available_output_types = {

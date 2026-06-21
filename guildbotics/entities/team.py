@@ -226,7 +226,7 @@ class Person(BaseModel):
         person_id (str): The unique identifier for the person.
         name (str): The name of the person.
         is_active (bool): Indicates if the person is currently active on the platform.
-        person_type (str): The type of person (e.g., human, machine_user).
+        person_type (str): The type of person (e.g., human, agent).
         roles (dict[str, Role]): A dictionary mapping role IDs to Role objects.
         account_info (dict[str, str]): A dictionary containing account information for the person.
         profile (dict): A dictionary containing the profile information for the person.
@@ -246,7 +246,7 @@ class Person(BaseModel):
     )
     person_type: str = Field(
         default="",
-        description="The type of person (e.g., human, machine_user).",
+        description="The type of person (e.g., human, agent).",
     )
     roles: dict[str, Role] = Field(
         default_factory=dict,
@@ -306,26 +306,6 @@ class Person(BaseModel):
                 ]
             )
         return scheduled_commands
-
-    def get_role(self, role_id: str | None) -> Role:
-        """
-        Get a role by its ID.
-
-        Args:
-            role_id (str): The ID of the role to retrieve.
-
-        Returns:
-            Role: The role object if found, otherwise raises KeyError.
-        """
-        if role_id is None:
-            role_id = "professional"
-
-        return self.roles.get(
-            role_id,
-            Person.DEFINED_ROLES.get(
-                role_id, Role(id=role_id, summary="", description="")
-            ),
-        )
 
     def get_role_descriptions(
         self, role_ids: list[str] | None = None

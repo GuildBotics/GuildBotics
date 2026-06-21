@@ -93,6 +93,11 @@ class FakeChatService:
     async def add_reaction(self, channel_id, message_ts, reaction):
         self.reactions.append((channel_id, message_ts, reaction))
 
+    def render_participant_text(self, text, participant_labels):
+        for user_id, label in participant_labels.items():
+            text = text.replace(f"@{label}", f"<@{user_id}>")
+        return text
+
     async def aclose(self):
         self.closed = True
 
@@ -133,6 +138,21 @@ async def test_post_resolves_channel_name_and_returns_evidence_payload():
     assert result["thread_ts"] == "200.1"
     assert result["text"] == "hello team"
     assert result["posted"] is True
+
+
+@pytest.mark.asyncio
+async def test_post_renders_participant_labels_from_workflow_env(monkeypatch):
+    monkeypatch.setenv(
+        member_chat.CHAT_PARTICIPANT_LABELS_ENV,
+        '{"UBOB":"bob","UAIKO":"aiko"}',
+    )
+    fake = FakeChatService()
+    service = _service(fake)
+
+    result = await service.post(channel_id="C1", channel_name=None, body="@bob please")
+
+    assert fake.posts == [("C1", "<@UBOB> please", None)]
+    assert result["text"] == "<@UBOB> please"
 
 
 @pytest.mark.asyncio
@@ -181,6 +201,20 @@ async def test_reply_posts_to_thread():
     assert fake.posts == [("C1", "reply", "100.1")]
     assert result["thread_ts"] == "100.1"
     assert result["text"] == "reply"
+
+
+@pytest.mark.asyncio
+async def test_reply_renders_participant_labels_from_workflow_env(monkeypatch):
+    monkeypatch.setenv(member_chat.CHAT_PARTICIPANT_LABELS_ENV, '{"UBOB":"bob"}')
+    fake = FakeChatService()
+    service = _service(fake)
+
+    result = await service.reply(
+        channel_id="C1", channel_name=None, thread_ts="100.1", body="@bob thoughts?"
+    )
+
+    assert fake.posts == [("C1", "<@UBOB> thoughts?", "100.1")]
+    assert result["text"] == "<@UBOB> thoughts?"
 
 
 @pytest.mark.asyncio

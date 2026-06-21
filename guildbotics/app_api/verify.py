@@ -12,7 +12,10 @@ from guildbotics.app_api.cli_agents import (
 )
 from guildbotics.app_api.models import ConfigStatus, VerifyCheck, VerifyResponse
 from guildbotics.entities.team import Person, Service, Team
-from guildbotics.integrations.github.github_utils import GitHubAppAuth
+from guildbotics.integrations.github.github_utils import (
+    GitHubAppAuth,
+    get_github_account_type,
+)
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
 PROVIDER_ENV_KEYS: dict[str, str] = {
@@ -230,13 +233,14 @@ class VerifyService:
         return checks
 
     def _github_required_keys(self, member: Person) -> list[str]:
-        if member.person_type == GitHubAppAuth.GITHUB_APPS:
+        github_account_type = get_github_account_type(member)
+        if github_account_type == GitHubAppAuth.GITHUB_APPS:
             return [
                 "github_installation_id",
                 "github_app_id",
                 "github_private_key_path",
             ]
-        if member.person_type in {
+        if github_account_type in {
             GitHubAppAuth.MACHINE_USER,
             GitHubAppAuth.PROXY_AGENT,
         }:

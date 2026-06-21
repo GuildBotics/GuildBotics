@@ -15,6 +15,7 @@ from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
     ScheduledPostState,
     ThreadConversationState,
+    ThreadHandoffState,
     ThreadMessageState,
 )
 from guildbotics.utils.fileio import get_workspace_data_path
@@ -97,12 +98,27 @@ class FileConversationStateStore(ConversationStateStore):
         participants = data.get("participants") or []
         if not isinstance(participants, list):
             participants = []
+        handoffs = data.get("handoffs") or []
+        if not isinstance(handoffs, list):
+            handoffs = []
         return ThreadConversationState(
             channel_id=str(data.get("channel_id", channel_id)),
             thread_ts=str(data.get("thread_ts", thread_ts)),
             participants={str(item) for item in participants if str(item)},
             thread_topic=str(data.get("thread_topic", "") or ""),
             latest_focus=str(data.get("latest_focus", "") or ""),
+            handoffs=[
+                ThreadHandoffState(
+                    person_id=str(item.get("person_id", "") or ""),
+                    roles=[str(role) for role in item.get("roles", []) if str(role)],
+                    message_ts=str(item.get("message_ts", "") or ""),
+                    text=str(item.get("text", "") or ""),
+                    thread_topic=str(item.get("thread_topic", "") or ""),
+                    latest_focus=str(item.get("latest_focus", "") or ""),
+                )
+                for item in handoffs
+                if isinstance(item, dict) and str(item.get("person_id", "") or "")
+            ],
         )
 
     def save_thread_state(

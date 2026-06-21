@@ -268,7 +268,7 @@ PR review の判定:
 - 旧 `status_map`
 - `Task.get_available_modes()` の ticket workflow 依存
 - `identify_mode`
-- `identify_role`
+- role identification helper
 - `identify_next_tasks` の ticket workflow 利用
 - `workflows/modes/comment_mode`
 - `workflows/modes/edit_mode`
@@ -301,7 +301,7 @@ PR review の判定:
 
 削除または通常フローから除外する処理:
 
-- `identify_role`
+- role identification helper
 - `identify_mode`
 - `_mode_to_command_name`
 - `workflows/modes/comment_mode`

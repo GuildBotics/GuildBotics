@@ -20,7 +20,6 @@ def make_task(
         title="title",
         description="desc",
         workflow="wf",
-        role="role",
         priority=priority,
         due_date=due_date,
         created_at=created_at,

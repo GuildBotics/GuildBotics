@@ -1006,6 +1006,13 @@ def test_roles_endpoint_returns_template_roles(tmp_path: Path) -> None:
     assert isinstance(payload["roles"], list)
     role_ids = [role["role_id"] for role in payload["roles"]]
     assert "architect" in role_ids
+    assert "product" in role_ids
+    assert "customer_success" in role_ids
+    assert "growth" in role_ids
+    assert "operations" in role_ids
+    assert "programmer" not in role_ids
+    assert "professional" not in role_ids
+    assert "personal" not in role_ids
 
 
 def test_intelligence_config_endpoints_read_update_and_member_inherit(
@@ -1134,10 +1141,8 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 "  git_user: Alice Bot",
                 "  git_email: 123+alice@users.noreply.github.com",
                 "profile:",
-                "  professional:",
+                "  roles:",
                 "    architect: {}",
-                "  personal: {}",
-                "  programmer: {}",
                 "  character:",
                 "    archetype: strategic_project_manager_architect",
                 "    traits:",
@@ -1219,7 +1224,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         updated = safe_load(renamed_file.read_text())
         assert updated["person_id"] == "alice-renamed"
         assert updated["name"] == "Alice Updated"
-        assert "reviewer" in updated["profile"]["professional"]
+        assert "reviewer" in updated["profile"]["roles"]
         assert updated["profile"]["character"]["archetype"] == "creative_designer"
         assert updated["message_channels"][0]["name"] == "C0999"
         env_text = env_file.read_text()

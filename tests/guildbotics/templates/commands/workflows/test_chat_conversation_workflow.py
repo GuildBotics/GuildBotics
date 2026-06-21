@@ -5,7 +5,13 @@ import types
 import pytest
 
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.entities.team import Person, Role
 from guildbotics.integrations.chat_service import ChatEvent, ChatIdentity
+from guildbotics.integrations.chat_state_store import (
+    ThreadConversationState,
+    ThreadHandoffState,
+    ThreadMessageState,
+)
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
@@ -145,6 +151,7 @@ def _set_incoming_event(
     ctx: types.SimpleNamespace,
     *,
     event_id: str = "E1",
+    message_ts: str = "100.1",
     text: str = "<@U_ALICE> please check",
     mentions: list[str] | None = None,
 ) -> None:
@@ -154,7 +161,7 @@ def _set_incoming_event(
         event=ChatEvent(
             event_id=event_id,
             channel_id="C1",
-            message_ts="100.1",
+            message_ts=message_ts,
             thread_ts="100.1",
             author_id="U_USER",
             text=text,
@@ -185,6 +192,8 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert kwargs["channel_id"] == "C1"
     assert kwargs["cli_agent_env"]["GUILDBOTICS_RUN_ID"] == kwargs["workflow_run_id"]
     assert kwargs["cwd"].name == "alice"
+    assert kwargs["handoff_candidates"] == "[]"
+    assert "team_profiles" not in kwargs
     # The capability reference is no longer injected per-prompt; the agent reads
     # it from the mandatory `member context` call (the single source of truth).
     assert "chat_capability_help" not in kwargs
@@ -237,6 +246,247 @@ async def test_noop_completion_processes_without_visible_action(tmp_path, monkey
     # thread participant.
     thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     assert "alice" not in thread_state.participants
+
+
+@pytest.mark.asyncio
+async def test_unmentioned_new_thread_is_processed_without_agent(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("reply")
+    _set_incoming_event(ctx, text="please check", mentions=[])
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert ctx.invocations == []
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert channel_state.processed_event_ids == ["E1"]
+    thread_messages = state_store.load_thread_messages("slack", "alice", "C1", "100.1")
+    assert thread_messages == []
+
+
+@pytest.mark.asyncio
+async def test_unmentioned_followup_after_prior_mention_delegates(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    state_store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "100.1",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="100.1",
+            message_ts="100.1",
+            author_id="U_USER",
+            text="<@U_ALICE> please check",
+            mentions=["U_ALICE"],
+        ),
+    )
+    ctx = FakeInvokeContext("noop")
+    _set_incoming_event(
+        ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert ctx.invocations[0][0] == "functions/handle_chat_event"
+    kwargs = ctx.invocations[0][1]
+    assert kwargs["event_id"] == "E2"
+    assert kwargs["message_ts"] == "100.2"
+
+
+@pytest.mark.asyncio
+async def test_followup_mentioning_other_member_skips_even_after_prior_mention(
+    tmp_path,
+):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    state_store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "100.1",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="100.1",
+            message_ts="100.1",
+            author_id="U_USER",
+            text="<@U_ALICE> please check",
+            mentions=["U_ALICE"],
+        ),
+    )
+    ctx = FakeInvokeContext("reply")
+    _set_incoming_event(
+        ctx,
+        event_id="E2",
+        message_ts="100.2",
+        text="<@U_BOB> can you check?",
+        mentions=["U_BOB"],
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert ctx.invocations == []
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert channel_state.processed_event_ids == ["E2"]
+
+
+def test_author_labels_include_mentionable_team_members_not_in_thread():
+    ctx = types.SimpleNamespace(person=types.SimpleNamespace(person_id="alice"))
+    labels = chat_conversation_workflow._build_author_labels(
+        ctx,
+        "U_ALICE",
+        ChatEvent(
+            event_id="E1",
+            channel_id="C1",
+            message_ts="100.1",
+            thread_ts="100.1",
+            author_id="U_USER",
+            text="please check",
+        ),
+        [],
+        {"U_ALICE": "alice", "U_BOB": "bob"},
+    )
+
+    assert labels["U_ALICE"] == "alice"
+    assert labels["U_BOB"] == "bob"
+
+
+def test_handoff_candidates_include_only_mentionable_other_members_with_roles():
+    alice = Person(
+        person_id="alice",
+        name="Alice",
+        roles={"product": Role(id="product", summary="Product", description="")},
+    )
+    bob = Person(
+        person_id="bob",
+        name="Bob",
+        is_active=False,
+        roles={"design": Role(id="design", summary="Design", description="UX")},
+        speaking_style="verbose",
+        profile={"character": {"archetype": "designer"}},
+    )
+    carol = Person(
+        person_id="carol",
+        name="Carol",
+        roles={
+            "operations": Role(id="operations", summary="Operations", description="Ops")
+        },
+    )
+    ctx = types.SimpleNamespace(
+        person=alice, team=types.SimpleNamespace(members=[alice, bob, carol])
+    )
+
+    candidates = chat_conversation_workflow._build_handoff_candidates(
+        ctx, {"U_ALICE": "alice", "U_BOB": "bob"}
+    )
+
+    assert candidates == [
+        {
+            "person_id": "bob",
+            "name": "Bob",
+            "mention": "@bob",
+            "roles": {"design": {"summary": "Design", "description": "UX"}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_user_to_person_labels_uses_configured_slack_user_id():
+    alice = Person(person_id="alice", name="Alice")
+    bob = Person(
+        person_id="bob",
+        name="Bob",
+        account_info={"slack_user_id": "U_BOB"},
+    )
+    ctx = types.SimpleNamespace(
+        team=types.SimpleNamespace(members=[alice, bob]),
+        clone_for=lambda member: (_ for _ in ()).throw(
+            AssertionError(member.person_id)
+        ),
+    )
+
+    labels = await chat_conversation_workflow._chat_user_to_person_labels(ctx)
+
+    assert labels == {"U_BOB": "bob"}
+
+
+def test_record_handoffs_saves_mentions_to_known_members():
+    alice = Person(person_id="alice", name="Alice")
+    bob = Person(
+        person_id="bob",
+        name="Bob",
+        roles={"design": Role(id="design", summary="Design", description="")},
+    )
+    ctx = types.SimpleNamespace(team=types.SimpleNamespace(members=[alice, bob]))
+    thread_state = ThreadConversationState(channel_id="C1", thread_ts="100.1")
+
+    chat_conversation_workflow._record_handoffs(
+        context=ctx,
+        thread_state=thread_state,
+        participant_labels={"U_ALICE": "alice", "U_BOB": "bob"},
+        mentioned_user_ids=["U_BOB"],
+        source_person_id="alice",
+        message_ts="200.1",
+        text="<@U_BOB> design観点を見てもらえますか?",
+    )
+
+    assert len(thread_state.handoffs) == 1
+    handoff = thread_state.handoffs[0]
+    assert handoff.person_id == "bob"
+    assert handoff.roles == ["design"]
+    assert handoff.message_ts == "200.1"
+    assert handoff.text == "<@U_BOB> design観点を見てもらえますか?"
+
+
+@pytest.mark.asyncio
+async def test_prompt_payload_includes_existing_handoffs():
+    thread_state = ThreadConversationState(
+        channel_id="C1",
+        thread_ts="100.1",
+        handoffs=[
+            ThreadHandoffState(
+                person_id="bob",
+                roles=["design"],
+                message_ts="200.1",
+                text="@bob design観点を見てもらえますか?",
+            )
+        ],
+    )
+    ctx = FakeInvokeContext("noop")
+
+    payload = await chat_conversation_workflow._build_agent_prompt_payload(
+        context=ctx,
+        chat_service=FakeChatService(),
+        event=ChatEvent(
+            event_id="E2",
+            channel_id="C1",
+            message_ts="201.1",
+            thread_ts="100.1",
+            author_id="U_USER",
+            text="Any thoughts?",
+        ),
+        thread_messages=[],
+        self_user_id="U_ALICE",
+        thread_state=thread_state,
+    )
+
+    assert payload["previous_thread_context"]["handoffs"] == [
+        {
+            "person_id": "bob",
+            "roles": ["design"],
+            "message_ts": "200.1",
+            "text": "@bob design観点を見てもらえますか?",
+            "thread_topic": "",
+            "latest_focus": "",
+        }
+    ]
 
 
 @pytest.mark.asyncio

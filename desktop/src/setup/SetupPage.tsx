@@ -183,12 +183,19 @@ const CLI_AGENT_OPTIONS = [
 ] as const;
 const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "machine"] as const;
 type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
-const DEFAULT_MEMBER_ROLE = "professional";
 const MASKED_SECRET_PLACEHOLDER = "••••••••••••";
 
-const MEMBER_TYPE_OPTIONS = ["", "human", "machine_user", "github_apps", "proxy_agent"] as const;
+const MEMBER_TYPE_OPTIONS = ["agent", "human"] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
-type GitHubMemberType = Exclude<MemberType, "">;
+const GITHUB_ACCOUNT_TYPE_OPTIONS = [
+  "none",
+  "human",
+  "machine_user",
+  "github_apps",
+  "proxy_agent",
+] as const;
+type GitHubAccountType = (typeof GITHUB_ACCOUNT_TYPE_OPTIONS)[number];
+type GitHubMemberType = Exclude<GitHubAccountType, "none">;
 type MemberEditorTab = "basic" | "intelligence" | "patrol" | "github" | "slack" | "diagnostics";
 type CronPreset = "hourly" | "daily" | "weekly" | "custom";
 export type ScheduledCommandDraft = {
@@ -1546,7 +1553,13 @@ function MembersSection({
   onMemberActiveDelta,
 }: {
   activeMemberCount: number;
-  members: Array<{ person_id: string; name: string; is_active: boolean; roles: string[] }>;
+  members: Array<{
+    person_id: string;
+    name: string;
+    person_type?: string;
+    is_active: boolean;
+    roles: string[];
+  }>;
   config: ConfigStatus | undefined;
   workspaceDir: string;
   cliDetections: CliAgentDetection[];
@@ -1560,7 +1573,8 @@ function MembersSection({
   const [mode, setMode] = useState<"idle" | "add" | "edit">("idle");
   const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>(initialTab ?? "basic");
-  const [personType, setPersonType] = useState<MemberType>("");
+  const [personType, setPersonType] = useState<MemberType>("agent");
+  const [githubAccountType, setGithubAccountType] = useState<GitHubAccountType>("none");
   const [identity, setIdentity] = useState("");
   const [personId, setPersonId] = useState("");
   const [personName, setPersonName] = useState("");
@@ -1584,6 +1598,7 @@ function MembersSection({
   const [characterExtras, setCharacterExtras] = useState<Record<string, unknown>>({});
   const [slackBotToken, setSlackBotToken] = useState("");
   const [slackAppToken, setSlackAppToken] = useState("");
+  const [slackUserId, setSlackUserId] = useState("");
   const [slackChannelsText, setSlackChannelsText] = useState("");
   const [routineOverrideEnabled, setRoutineOverrideEnabled] = useState(false);
   const [routineCommands, setRoutineCommands] = useState<string[]>([]);
@@ -1655,6 +1670,7 @@ function MembersSection({
         .map((member) => ({
           person_id: member.person_id,
           name: member.person_name,
+          person_type: member.person_type,
           is_active: member.is_active,
           roles: member.roles,
         })),
@@ -1694,7 +1710,7 @@ function MembersSection({
     }
     if (!emptyAddDefaultsAppliedRef.current) {
       setSpeakingStylePreset("professional");
-      setRoles([DEFAULT_MEMBER_ROLE]);
+      setRoles([]);
       applyPresetFields("professional");
       emptyAddDefaultsAppliedRef.current = true;
     }
@@ -1706,7 +1722,7 @@ function MembersSection({
     setPersonName("");
     setGithubUsername("");
     setGitEmail("");
-    setRoles(withDefaults ? [DEFAULT_MEMBER_ROLE] : []);
+    setRoles([]);
     setGithubAccessToken("");
     setGithubInstallationId("");
     setGithubAppId("");
@@ -1725,7 +1741,10 @@ function MembersSection({
     setRoutineOverrideEnabled(false);
     setRoutineCommands([]);
     setScheduledCommands([]);
-    setPersonType("");
+    setPersonType("agent");
+    setGithubAccountType("none");
+    setIsActive(true);
+    setSlackUserId("");
     setStoredMemberSecrets({
       githubInstallationId: false,
       githubAppId: false,
@@ -1739,7 +1758,13 @@ function MembersSection({
   };
 
   const fillFormFromMember = (member: MemberConfig) => {
-    setPersonType(member.person_type);
+    const nextPersonType = member.person_type === "human" ? "human" : "agent";
+    setPersonType(nextPersonType);
+    setGithubAccountType(
+      nextPersonType === "human"
+        ? "human"
+        : toGitHubAccountType(member.github_account_type || member.person_type),
+    );
     setIdentity("");
     setPersonId(member.person_id);
     setPersonName(member.person_name);
@@ -1759,6 +1784,7 @@ function MembersSection({
     setCharacterContributionText(characterFields.contributionStyle.join("\n"));
     setCharacterExtras(characterFields.extras);
     setSlackChannelsText(member.slack_channels.join(", "));
+    setSlackUserId(member.slack_user_id ?? "");
     setGithubAccessToken("");
     setGithubInstallationId(member.github_installation_id?.toString() ?? "");
     setGithubAppId(member.github_app_id?.toString() ?? "");
@@ -1780,7 +1806,7 @@ function MembersSection({
       slackBotToken: member.has_slack_bot_token,
       slackAppToken: member.has_slack_app_token,
     });
-    setIsActive(member.is_active);
+    setIsActive(nextPersonType === "human" ? false : member.is_active);
   };
 
   const memberConfigMutation = useMutation({
@@ -1805,7 +1831,7 @@ function MembersSection({
           memberRequestToConfig(request),
         ]);
       }
-      onMemberActiveDelta(isActive ? 1 : 0);
+      onMemberActiveDelta(effectiveIsActive ? 1 : 0);
       queryClient.invalidateQueries({ queryKey: ["team"] });
       queryClient.invalidateQueries({ queryKey: ["command-options"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler"] });
@@ -1828,7 +1854,7 @@ function MembersSection({
         members.find((member) => member.person_id === variables.originalPersonId) ??
         draftMembers.find((member) => member.person_id === variables.originalPersonId);
       const previousActive = previous?.is_active ?? false;
-      const delta = Number(isActive) - Number(previousActive);
+      const delta = Number(effectiveIsActive) - Number(previousActive);
       if (!hasPersistedProject) {
         setDraftMembers((current) => [
           ...current.filter((member) => member.person_id !== variables.originalPersonId),
@@ -1874,11 +1900,13 @@ function MembersSection({
     },
   });
 
-  const usesGitHubMember = personType !== "";
+  const effectiveIsActive = personType === "human" ? false : isActive;
+  const usesGitHubMember = githubAccountType !== "none";
   const configDir = resolveConfigDir(workspaceDir);
   const envFilePath = joinPath(workspaceDir, ".env");
-  const requiresGitHubAuth = personType === "machine_user" || personType === "proxy_agent";
-  const requiresGitHubAppsAuth = personType === "github_apps";
+  const requiresGitHubAuth =
+    githubAccountType === "machine_user" || githubAccountType === "proxy_agent";
+  const requiresGitHubAppsAuth = githubAccountType === "github_apps";
   const authReady = requiresGitHubAuth
     ? githubAccessToken.trim().length > 0 || storedMemberSecrets.githubAccessToken
     : requiresGitHubAppsAuth
@@ -1891,6 +1919,7 @@ function MembersSection({
   const memberErrors = getMemberFieldErrors(
     {
       personType,
+      githubAccountType,
       identity,
       personId,
       personName,
@@ -1902,6 +1931,7 @@ function MembersSection({
       githubAccessToken,
       slackBotToken,
       slackAppToken,
+      slackUserId,
       storedMemberSecrets,
       slackChannelsText,
       roles,
@@ -1926,8 +1956,10 @@ function MembersSection({
     );
   const canResolveIdentity =
     usesGitHubMember &&
-    getGitHubResolveInput(personType, identity, githubUsername).trim().length > 0 &&
-    (personType === "github_apps" ? isGitHubAppsUrl(identity) : isGitHubUsername(githubUsername));
+    getGitHubResolveInput(githubAccountType, identity, githubUsername).trim().length > 0 &&
+    (githubAccountType === "github_apps"
+      ? isGitHubAppsUrl(identity)
+      : isGitHubUsername(githubUsername));
   const canSubmit =
     configDir.trim().length > 0 &&
     workspaceDir.trim().length > 0 &&
@@ -1969,18 +2001,23 @@ function MembersSection({
     "githubPrivateKeyPath",
     "githubAccessToken",
   ]);
-  const slackTabHasError = hasMemberError(["slackChannelsText", "slackBotToken", "slackAppToken"]);
+  const slackTabHasError = hasMemberError([
+    "slackUserId",
+    "slackChannelsText",
+    "slackBotToken",
+    "slackAppToken",
+  ]);
   const githubResolveLabel =
-    personType === "github_apps"
+    githubAccountType === "github_apps"
       ? t("setup.members.githubAppsUrl")
       : t("setup.members.githubUsername");
   const githubResolveDescription =
-    personType === "github_apps"
+    githubAccountType === "github_apps"
       ? t("setup.members.githubAppsUrlHint")
       : t("setup.members.githubUsernameHint");
-  const githubResolveValue = personType === "github_apps" ? identity : githubUsername;
+  const githubResolveValue = githubAccountType === "github_apps" ? identity : githubUsername;
   const githubResolveError =
-    personType === "github_apps"
+    githubAccountType === "github_apps"
       ? memberErrors.identity || identityResolveError
       : memberErrors.githubUsername || identityResolveError;
 
@@ -1991,8 +2028,8 @@ function MembersSection({
     setIdentityResolveError("");
     try {
       const resolved = await resolveMutation.mutateAsync({
-        person_type: personType as GitHubMemberType,
-        identity: getGitHubResolveInput(personType, identity, githubUsername).trim(),
+        person_type: githubAccountType as GitHubMemberType,
+        identity: getGitHubResolveInput(githubAccountType, identity, githubUsername).trim(),
       });
       if (
         !resolved.github_username.trim() ||
@@ -2015,9 +2052,10 @@ function MembersSection({
       env_file_path: envFilePath,
       append_env_file: Boolean(config?.env_file_exists),
       person_type: personType,
+      github_account_type: githubAccountType === "none" ? "" : githubAccountType,
       person_id: personId.trim(),
       person_name: personName.trim(),
-      is_active: isActive,
+      is_active: effectiveIsActive,
       github_username: githubUsername.trim(),
       git_email: gitEmail.trim(),
       roles,
@@ -2032,23 +2070,27 @@ function MembersSection({
         contributionStyle: splitLines(characterContributionText),
         extras: characterExtras,
       }),
-      slack_bot_token: slackBotToken.trim(),
-      slack_app_token: slackAppToken.trim(),
-      slack_channels: slackChannelsText
-        .split(",")
-        .map((channel) => channel.trim())
-        .filter(Boolean),
+      slack_user_id: personType === "human" ? slackUserId.trim() : "",
+      slack_bot_token: personType === "agent" ? slackBotToken.trim() : "",
+      slack_app_token: personType === "agent" ? slackAppToken.trim() : "",
+      slack_channels:
+        personType === "agent"
+          ? slackChannelsText
+              .split(",")
+              .map((channel) => channel.trim())
+              .filter(Boolean)
+          : [],
       routine_commands: routineOverrideEnabled ? routineCommands : [],
       task_schedules: buildTaskSchedules(scheduledCommands, commandOptionByValue),
     };
-    if (personType === "github_apps") {
+    if (githubAccountType === "github_apps") {
       request.github_installation_id = githubInstallationId
         ? Number(githubInstallationId)
         : undefined;
       request.github_app_id = githubAppId ? Number(githubAppId) : undefined;
       request.github_private_key_path = githubPrivateKeyPath || undefined;
     }
-    if (personType === "machine_user" || personType === "proxy_agent") {
+    if (githubAccountType === "machine_user" || githubAccountType === "proxy_agent") {
       request.github_access_token = githubAccessToken || undefined;
     }
     return request;
@@ -2066,7 +2108,7 @@ function MembersSection({
           const previous =
             draftMembers.find((member) => member.person_id === editingPersonId) ??
             members.find((member) => member.person_id === editingPersonId);
-          const delta = Number(isActive) - Number(previous?.is_active ?? false);
+          const delta = Number(effectiveIsActive) - Number(previous?.is_active ?? false);
           setDraftMembers((current) => [
             ...current.filter((member) => member.person_id !== editingPersonId),
             memberRequestToConfig({ ...request, original_person_id: editingPersonId }),
@@ -2174,10 +2216,17 @@ function MembersSection({
                   {member.name} ({member.person_id})
                 </Text>
                 <Group gap="xs">
-                  <Badge color={member.is_active ? "green" : "gray"} variant="light">
-                    {member.is_active
-                      ? t("setup.members.memberActive")
-                      : t("setup.members.memberInactive")}
+                  <Badge
+                    color={
+                      member.person_type === "human" ? "blue" : member.is_active ? "green" : "gray"
+                    }
+                    variant="light"
+                  >
+                    {member.person_type === "human"
+                      ? t("setup.members.memberHuman")
+                      : member.is_active
+                        ? t("setup.members.memberActive")
+                        : t("setup.members.memberInactive")}
                   </Badge>
                   <Button
                     size="xs"
@@ -2265,6 +2314,27 @@ function MembersSection({
                     value={personName}
                     onChange={(event) => setPersonName(event.currentTarget.value)}
                     error={memberErrors.personName}
+                  />
+                  <Select
+                    label={<RequiredLabel text={t("setup.members.type")} />}
+                    aria-label={t("setup.members.type")}
+                    aria-required
+                    description={t("setup.members.memberTypeHint")}
+                    data={MEMBER_TYPE_OPTIONS.map((option) => ({
+                      value: option,
+                      label: t(`setup.members.memberTypeOptions.${option}`),
+                    }))}
+                    value={personType}
+                    onChange={(value) => {
+                      const nextType = value === "human" ? "human" : "agent";
+                      setPersonType(nextType);
+                      if (nextType === "human") {
+                        setIsActive(false);
+                        setGithubAccountType("human");
+                      } else if (githubAccountType === "human") {
+                        setGithubAccountType("none");
+                      }
+                    }}
                   />
                   <MultiSelect
                     label={<RequiredLabel text={t("setup.members.roles")} />}
@@ -2454,7 +2524,11 @@ function MembersSection({
                   />
                   <Switch
                     label={t("setup.members.activeSwitch")}
-                    checked={isActive}
+                    description={
+                      personType === "human" ? t("setup.members.activeHumanHint") : undefined
+                    }
+                    checked={effectiveIsActive}
+                    disabled={personType === "human"}
                     onChange={(event) => setIsActive(event.currentTarget.checked)}
                   />
                 </Stack>
@@ -2497,17 +2571,16 @@ function MembersSection({
               <Tabs.Panel value="github" pt="md">
                 <Stack>
                   <Select
-                    label={t("setup.members.githubMode")}
-                    description={t("setup.members.githubModeHint")}
-                    data={MEMBER_TYPE_OPTIONS.map((option) => ({
-                      value: option || "none",
-                      label: t(`setup.members.typeOptions.${option || "none"}`),
+                    label={t("setup.members.githubAccountType")}
+                    description={t("setup.members.githubAccountTypeHint")}
+                    data={GITHUB_ACCOUNT_TYPE_OPTIONS.map((option) => ({
+                      value: option,
+                      label: t(`setup.members.githubAccountTypeOptions.${option}`),
                     }))}
-                    value={personType || "none"}
+                    value={githubAccountType}
+                    disabled={personType === "human"}
                     onChange={(value) => {
-                      const nextType = value === "none" ? "" : ((value ?? "") as MemberType);
-                      setPersonType(nextType);
-                      setIsActive(nextType !== "human");
+                      setGithubAccountType(toGitHubAccountType(value ?? "none"));
                       setIdentityResolveError("");
                     }}
                   />
@@ -2535,7 +2608,7 @@ function MembersSection({
                             aria-required
                             value={githubResolveValue}
                             onChange={(event) => {
-                              if (personType === "github_apps") {
+                              if (githubAccountType === "github_apps") {
                                 setIdentity(event.currentTarget.value);
                               } else {
                                 setGithubUsername(event.currentTarget.value);
@@ -2560,7 +2633,7 @@ function MembersSection({
                           </Text>
                         ) : null}
                       </Stack>
-                      {personType === "github_apps" ? (
+                      {githubAccountType === "github_apps" ? (
                         <TextInput
                           label={<RequiredLabel text={t("setup.members.githubResolvedIdentity")} />}
                           aria-label={t("setup.members.githubResolvedIdentity")}
@@ -2586,7 +2659,7 @@ function MembersSection({
                       />
                     </>
                   )}
-                  {personType === "github_apps" ? (
+                  {githubAccountType === "github_apps" ? (
                     <>
                       <TextInput
                         label={<RequiredLabel text={t("setup.members.installationId")} />}
@@ -2613,7 +2686,7 @@ function MembersSection({
                       />
                     </>
                   ) : null}
-                  {personType === "machine_user" || personType === "proxy_agent" ? (
+                  {githubAccountType === "machine_user" || githubAccountType === "proxy_agent" ? (
                     <PasswordInput
                       label={
                         storedMemberSecrets.githubAccessToken ? (
@@ -2634,7 +2707,7 @@ function MembersSection({
                       error={memberErrors.githubAccessToken}
                     />
                   ) : null}
-                  {personType === "human" ? (
+                  {githubAccountType === "human" ? (
                     <Text size="sm" c="dimmed">
                       {t("setup.members.githubAuthNotRequired")}
                     </Text>
@@ -2644,55 +2717,71 @@ function MembersSection({
 
               <Tabs.Panel value="slack" pt="md">
                 <Stack>
-                  <TextInput
-                    label={t("setup.members.slackChannels")}
-                    value={slackChannelsText}
-                    onChange={(event) => setSlackChannelsText(event.currentTarget.value)}
-                    description={t("setup.members.slackChannelsHint")}
-                    error={memberErrors.slackChannelsText}
-                  />
-                  <PasswordInput
-                    label={
-                      slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackBotToken ? (
-                        <RequiredLabel text={t("setup.members.slackBotToken")} />
-                      ) : (
-                        t("setup.members.slackBotToken")
-                      )
-                    }
-                    aria-label={t("setup.members.slackBotToken")}
-                    aria-required={
-                      slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackBotToken
-                    }
-                    placeholder={
-                      storedMemberSecrets.slackBotToken
-                        ? MASKED_SECRET_PLACEHOLDER
-                        : t("setup.members.slackBotTokenPlaceholder")
-                    }
-                    value={slackBotToken}
-                    onChange={(event) => setSlackBotToken(event.currentTarget.value)}
-                    error={memberErrors.slackBotToken}
-                  />
-                  <PasswordInput
-                    label={
-                      slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackAppToken ? (
-                        <RequiredLabel text={t("setup.members.slackAppToken")} />
-                      ) : (
-                        t("setup.members.slackAppToken")
-                      )
-                    }
-                    aria-label={t("setup.members.slackAppToken")}
-                    aria-required={
-                      slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackAppToken
-                    }
-                    placeholder={
-                      storedMemberSecrets.slackAppToken
-                        ? MASKED_SECRET_PLACEHOLDER
-                        : t("setup.members.slackAppTokenPlaceholder")
-                    }
-                    value={slackAppToken}
-                    onChange={(event) => setSlackAppToken(event.currentTarget.value)}
-                    error={memberErrors.slackAppToken}
-                  />
+                  {personType === "human" ? (
+                    <TextInput
+                      label={<RequiredLabel text={t("setup.members.slackUserId")} />}
+                      aria-label={t("setup.members.slackUserId")}
+                      aria-required
+                      value={slackUserId}
+                      onChange={(event) => setSlackUserId(event.currentTarget.value)}
+                      description={t("setup.members.slackUserIdHint")}
+                      error={memberErrors.slackUserId}
+                    />
+                  ) : (
+                    <>
+                      <TextInput
+                        label={t("setup.members.slackChannels")}
+                        value={slackChannelsText}
+                        onChange={(event) => setSlackChannelsText(event.currentTarget.value)}
+                        description={t("setup.members.slackChannelsHint")}
+                        error={memberErrors.slackChannelsText}
+                      />
+                      <PasswordInput
+                        label={
+                          slackChannelsText.trim().length > 0 &&
+                          !storedMemberSecrets.slackBotToken ? (
+                            <RequiredLabel text={t("setup.members.slackBotToken")} />
+                          ) : (
+                            t("setup.members.slackBotToken")
+                          )
+                        }
+                        aria-label={t("setup.members.slackBotToken")}
+                        aria-required={
+                          slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackBotToken
+                        }
+                        placeholder={
+                          storedMemberSecrets.slackBotToken
+                            ? MASKED_SECRET_PLACEHOLDER
+                            : t("setup.members.slackBotTokenPlaceholder")
+                        }
+                        value={slackBotToken}
+                        onChange={(event) => setSlackBotToken(event.currentTarget.value)}
+                        error={memberErrors.slackBotToken}
+                      />
+                      <PasswordInput
+                        label={
+                          slackChannelsText.trim().length > 0 &&
+                          !storedMemberSecrets.slackAppToken ? (
+                            <RequiredLabel text={t("setup.members.slackAppToken")} />
+                          ) : (
+                            t("setup.members.slackAppToken")
+                          )
+                        }
+                        aria-label={t("setup.members.slackAppToken")}
+                        aria-required={
+                          slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackAppToken
+                        }
+                        placeholder={
+                          storedMemberSecrets.slackAppToken
+                            ? MASKED_SECRET_PLACEHOLDER
+                            : t("setup.members.slackAppTokenPlaceholder")
+                        }
+                        value={slackAppToken}
+                        onChange={(event) => setSlackAppToken(event.currentTarget.value)}
+                        error={memberErrors.slackAppToken}
+                      />
+                    </>
+                  )}
                 </Stack>
               </Tabs.Panel>
               <Tabs.Panel value="diagnostics" pt="md">
@@ -3987,6 +4076,7 @@ type MemberFieldErrors = Partial<
     | "githubAppId"
     | "githubPrivateKeyPath"
     | "githubAccessToken"
+    | "slackUserId"
     | "slackBotToken"
     | "slackAppToken"
     | "slackChannelsText",
@@ -3997,6 +4087,7 @@ type MemberFieldErrors = Partial<
 export function getMemberFieldErrors(
   values: {
     personType: MemberType;
+    githubAccountType: GitHubAccountType;
     identity: string;
     personId: string;
     personName: string;
@@ -4006,6 +4097,7 @@ export function getMemberFieldErrors(
     githubAppId: string;
     githubPrivateKeyPath: string;
     githubAccessToken: string;
+    slackUserId: string;
     slackBotToken: string;
     slackAppToken: string;
     slackChannelsText: string;
@@ -4072,8 +4164,8 @@ export function getMemberFieldErrors(
     errors.characterContributionText = t("setup.validation.memberCharacterContributionRequired");
   }
 
-  const usesGitHubMember = values.personType !== "";
-  if (values.personType === "github_apps") {
+  const usesGitHubMember = values.githubAccountType !== "none";
+  if (values.githubAccountType === "github_apps") {
     const missingGitHubReference = !values.githubUsername.trim() || !values.gitEmail.trim();
     if (missingGitHubReference && !values.identity.trim()) {
       errors.identity = t("setup.validation.memberGithubAppsUrlRequired");
@@ -4096,7 +4188,7 @@ export function getMemberFieldErrors(
     errors.gitEmail = t("setup.validation.memberGitEmailInvalid");
   }
 
-  if (values.personType === "github_apps") {
+  if (values.githubAccountType === "github_apps") {
     if (!values.githubInstallationId.trim()) {
       errors.githubInstallationId = t("setup.validation.githubInstallationIdRequired");
     } else if (
@@ -4116,13 +4208,22 @@ export function getMemberFieldErrors(
   }
 
   if (
-    (values.personType === "machine_user" || values.personType === "proxy_agent") &&
+    (values.githubAccountType === "machine_user" || values.githubAccountType === "proxy_agent") &&
     !values.githubAccessToken.trim() &&
     !values.storedMemberSecrets.githubAccessToken
   ) {
     errors.githubAccessToken = t("setup.validation.githubAccessTokenRequired");
   } else if (values.githubAccessToken.trim() && !isGitHubAccessToken(values.githubAccessToken)) {
     errors.githubAccessToken = t("setup.validation.githubAccessTokenInvalid");
+  }
+
+  if (values.personType === "human") {
+    if (!values.slackUserId.trim()) {
+      errors.slackUserId = t("setup.validation.slackUserIdRequired");
+    } else if (!isSlackUserId(values.slackUserId)) {
+      errors.slackUserId = t("setup.validation.slackUserIdInvalid");
+    }
+    return errors;
   }
 
   if (values.slackBotToken.trim() && !isSlackBotToken(values.slackBotToken)) {
@@ -4184,11 +4285,17 @@ function isGitHubAppsUrl(value: string): boolean {
 }
 
 function getGitHubResolveInput(
-  personType: MemberType,
+  githubAccountType: GitHubAccountType,
   identity: string,
   githubUsername: string,
 ): string {
-  return personType === "github_apps" ? identity : githubUsername;
+  return githubAccountType === "github_apps" ? identity : githubUsername;
+}
+
+function toGitHubAccountType(value: string): GitHubAccountType {
+  return GITHUB_ACCOUNT_TYPE_OPTIONS.includes(value as GitHubAccountType)
+    ? (value as GitHubAccountType)
+    : "none";
 }
 
 function isGitHubUsername(value: string): boolean {
@@ -4201,6 +4308,10 @@ function isGitHubUsername(value: string): boolean {
 function isSlackChannelReference(value: string): boolean {
   const channel = value.trim();
   return /^[CGD][A-Z0-9]{8,}$/.test(channel) || /^#?[a-z0-9][a-z0-9_-]{0,79}$/.test(channel);
+}
+
+function isSlackUserId(value: string): boolean {
+  return /^U[A-Z0-9]{8,}$/.test(value.trim());
 }
 
 function isSlackBotToken(value: string): boolean {
@@ -4702,6 +4813,7 @@ function memberRequestToConfig(
     person_id: request.person_id,
     person_name: request.person_name,
     person_type: request.person_type,
+    github_account_type: request.github_account_type,
     is_active: request.is_active,
     github_username: request.github_username,
     git_email: request.git_email,
@@ -4716,6 +4828,7 @@ function memberRequestToConfig(
     has_github_app_id: Boolean(request.github_app_id),
     has_github_private_key_path: Boolean(request.github_private_key_path),
     has_github_access_token: Boolean(request.github_access_token),
+    slack_user_id: request.slack_user_id ?? "",
     has_slack_bot_token: Boolean(request.slack_bot_token),
     has_slack_app_token: Boolean(request.slack_app_token),
     slack_channels: request.slack_channels ?? [],
