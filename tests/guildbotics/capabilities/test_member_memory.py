@@ -8,6 +8,7 @@ from guildbotics.capabilities.member_memory import (
     MemberMemoryError,
     MemberMemoryService,
 )
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.observability import trace_scope
@@ -239,10 +240,61 @@ def test_memory_mutations_write_audit_events(
     assert events[0]["attributes"]["memory.scope"] == "personal"
     assert events[0]["attributes"]["run_id"] == "run-1"
     assert events[0]["attributes"]["task_run_id"] == "task-1"
+    assert events[0]["timestamp"].endswith("Z")
     assert events[0]["payload"]["source"] == [
         {"type": "ticket", "url": "https://example.test/issues/1"}
     ]
     assert events[2]["payload"]["changed_fields"] == ["summary"]
+
+
+def test_memory_audit_filters_timestamps_by_instant(tmp_path: Path) -> None:
+    store = MemoryAuditStore(tmp_path / "memory_events.jsonl")
+    store.record(
+        {
+            "timestamp": "2026-06-21T01:00:00Z",
+            "message": "first",
+            "attributes": {},
+            "payload": {},
+        }
+    )
+    store.record(
+        {
+            "timestamp": "2026-06-21T10:30:00+09:00",
+            "message": "second",
+            "attributes": {},
+            "payload": {},
+        }
+    )
+
+    assert [
+        event["message"]
+        for event in store.list_events(since="2026-06-21T09:30:00+09:00")
+    ] == ["second", "first"]
+    assert [
+        event["message"]
+        for event in store.list_events(until="2026-06-21T10:00:00+09:00")
+    ] == ["first"]
+
+
+def test_memory_audit_normalizes_document_path(
+    monkeypatch: pytest.MonkeyPatch, person: Person
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def fake_append_memory_event(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(member_memory, "append_memory_event", fake_append_memory_event)
+    monkeypatch.setattr(
+        member_memory,
+        "_document_path",
+        lambda _doc: "documents\\personal\\aiko\\doc-1",
+    )
+    service = MemberMemoryService(person)
+
+    service.record(scope="personal", title="Path note", body="body")
+
+    assert captured[0]["path"] == "documents/personal/aiko/doc-1"
 
 
 def test_team_memory_uses_member_recent_file_only(

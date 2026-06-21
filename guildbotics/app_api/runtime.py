@@ -8,6 +8,7 @@ import re
 import shlex
 import threading
 from collections.abc import Awaitable, Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -59,7 +60,10 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.verify import VerifyService
-from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
+from guildbotics.capabilities.member_memory_audit import (
+    MemoryAuditStore,
+    parse_memory_audit_timestamp,
+)
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.registry import get_command_extensions
 from guildbotics.drivers import (
@@ -494,7 +498,7 @@ class AppRuntime:
             )
         records.extend(self._memory_trace_records(trace_id))
         records.extend(self._prompt_trace_records(trace_id))
-        records.sort(key=lambda record: record.timestamp)
+        records.sort(key=_trace_record_sort_key)
         return TraceDetailResponse(trace_id=trace_id, summary=summary, records=records)
 
     def get_global_records(self, limit: int = 200) -> TraceDetailResponse:
@@ -1297,6 +1301,12 @@ def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
         message=str(item.get("message") or ""),
         attributes=attributes if isinstance(attributes, dict) else {},
         payload=payload if isinstance(payload, dict) else {},
+    )
+
+
+def _trace_record_sort_key(record: TraceRecord) -> datetime:
+    return parse_memory_audit_timestamp(record.timestamp) or datetime.min.replace(
+        tzinfo=UTC
     )
 
 

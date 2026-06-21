@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from guildbotics.utils.fileio import get_workspace_data_path
 
 MEMORY_AUDIT_FILE = "memory_events.jsonl"
 DEFAULT_MEMORY_AUDIT_LIMIT = 5000
+_MEMORY_AUDIT_LOCK = threading.Lock()
 
 
 def default_memory_audit_path() -> Path:
@@ -85,9 +87,12 @@ class MemoryAuditStore:
     def record(self, item: dict[str, Any]) -> None:
         path = self.path
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+            with _MEMORY_AUDIT_LOCK:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(item, ensure_ascii=False, default=str) + "\n"
+                    )
         except OSError:
             return
 
@@ -119,7 +124,7 @@ class MemoryAuditStore:
                 trace_id=trace_id,
             )
         ]
-        matches.sort(key=lambda item: str(item.get("timestamp", "")), reverse=True)
+        matches.sort(key=_timestamp_sort_key, reverse=True)
         return matches[: max(1, limit)]
 
     def _read_events(self) -> list[dict[str, Any]]:
@@ -127,7 +132,8 @@ class MemoryAuditStore:
         if not path.is_file():
             return []
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            with _MEMORY_AUDIT_LOCK:
+                lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:
             return []
         return [
@@ -152,6 +158,7 @@ def _matches_event(
     attributes = _dict(item.get("attributes"))
     payload = _dict(item.get("payload"))
     timestamp = str(item.get("timestamp") or "")
+    timestamp_value = parse_memory_audit_timestamp(timestamp)
     if person_id and item.get("person_id") != person_id:
         return False
     if doc_id and attributes.get("memory.doc_id") != doc_id:
@@ -160,9 +167,15 @@ def _matches_event(
         return False
     if trace_id and item.get("trace_id") != trace_id:
         return False
-    if since and timestamp < since:
+    since_value = parse_memory_audit_timestamp(since)
+    if since_value is not None and (
+        timestamp_value is None or timestamp_value < since_value
+    ):
         return False
-    if until and timestamp > until:
+    until_value = parse_memory_audit_timestamp(until)
+    if until_value is not None and (
+        timestamp_value is None or timestamp_value > until_value
+    ):
         return False
     if (
         source
@@ -204,5 +217,25 @@ def _json_object(raw: str) -> dict[str, Any] | None:
     return item if isinstance(item, dict) else None
 
 
+def _timestamp_sort_key(item: dict[str, Any]) -> datetime:
+    return parse_memory_audit_timestamp(
+        str(item.get("timestamp") or "")
+    ) or datetime.min.replace(tzinfo=UTC)
+
+
+def parse_memory_audit_timestamp(value: str | None) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def _now() -> str:
-    return datetime.now(UTC).astimezone().isoformat()
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")

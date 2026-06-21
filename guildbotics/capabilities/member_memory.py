@@ -413,7 +413,7 @@ class MemberMemoryService:
                 person_id=self.person.person_id,
                 scope=doc.scope,
                 doc_id=doc.doc_id,
-                path=path or _document_path(doc),
+                path=(path or _document_path(doc)).replace("\\", "/"),
                 title=str(doc.meta.get("title") or ""),
                 summary=str(doc.meta.get("summary") or ""),
                 kind=str(doc.meta.get("kind") or "note"),
