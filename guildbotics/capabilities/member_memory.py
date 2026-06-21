@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 import yaml  # type: ignore
 
+from guildbotics.capabilities.member_memory_audit import append_memory_event
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.utils.fileio import (
@@ -108,6 +109,7 @@ class MemberMemoryService:
             meta.update(params)
         self._write_doc(scope_dir / doc_id, meta, body)
         self._touch_recent(doc_id)
+        self._record_audit("record", self._read_doc(scope, scope_dir / doc_id))
         return self._document_result(scope, scope_dir / doc_id)
 
     def recall(
@@ -294,14 +296,21 @@ class MemberMemoryService:
             meta["kind"] = next_kind
         if params:
             meta.update(params)
+        changed_fields = _changed_fields(doc.meta, meta, body_changed=body is not None)
         meta["updated_at"] = _now()
         self._write_doc(doc.path, meta, doc.body if body is None else body)
         self._touch_recent(doc.doc_id)
+        self._record_audit(
+            "update",
+            self._read_doc(doc.scope, doc.path),
+            changed_fields=changed_fields,
+        )
         return self._document_result(doc.scope, doc.path)
 
     def touch(self, *, doc_id: str, scope: Scope | None = None) -> dict[str, Any]:
         doc = self._resolve_doc(doc_id, scope)
         self._touch_recent(doc.doc_id)
+        self._record_audit("touch", doc)
         return {"doc_id": doc.doc_id, "path": _document_path(doc)}
 
     def archive(
@@ -321,6 +330,11 @@ class MemberMemoryService:
             raise MemberMemoryError(f"Archived memory already exists: {doc.doc_id}")
         doc.path.rename(target)
         self._remove_recent(doc.doc_id)
+        self._record_audit(
+            "archive",
+            doc,
+            path=f"documents/{target.relative_to(self.root)}",
+        )
         return {
             "doc_id": doc.doc_id,
             "path": f"documents/{target.relative_to(self.root)}",
@@ -337,6 +351,11 @@ class MemberMemoryService:
             raise MemberMemoryError(f"Team memory already exists: {doc.doc_id}")
         doc.path.rename(target)
         self._touch_recent(doc.doc_id)
+        self._record_audit(
+            "promote",
+            self._read_doc("team", target),
+            changed_fields=["scope"],
+        )
         return self._document_result("team", target)
 
     def load_context_memory(self) -> dict[str, list[dict[str, Any]]]:
@@ -379,6 +398,30 @@ class MemberMemoryService:
     def _document_result(self, scope: Scope, doc_dir: Path) -> dict[str, Any]:
         doc = self._read_doc(scope, doc_dir)
         return _summary_payload(doc)
+
+    def _record_audit(
+        self,
+        action: str,
+        doc: _MemoryDoc,
+        *,
+        path: str | None = None,
+        changed_fields: list[str] | None = None,
+    ) -> None:
+        try:
+            append_memory_event(
+                action=action,
+                person_id=self.person.person_id,
+                scope=doc.scope,
+                doc_id=doc.doc_id,
+                path=(path or _document_path(doc)).replace("\\", "/"),
+                title=str(doc.meta.get("title") or ""),
+                summary=str(doc.meta.get("summary") or ""),
+                kind=str(doc.meta.get("kind") or "note"),
+                source_entries=_source_entries_from_meta(doc.meta),
+                changed_fields=changed_fields,
+            )
+        except OSError:
+            return
 
     def _iter_active_docs(self) -> list[tuple[Scope, Path]]:
         docs: list[tuple[Scope, Path]] = []
@@ -555,6 +598,26 @@ def _baseline_policy_payload() -> dict[str, Any]:
 
 def _document_path(doc: _MemoryDoc) -> str:
     return f"documents/{doc.path.relative_to(doc.root)}"
+
+
+def _changed_fields(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    body_changed: bool,
+) -> list[str]:
+    fields = ["body"] if body_changed else []
+    for key in sorted((set(before) | set(after)) - {"created_at", "updated_at"}):
+        if before.get(key) != after.get(key):
+            fields.append(key)
+    return fields
+
+
+def _source_entries_from_meta(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    source = meta.get("source")
+    if not isinstance(source, list):
+        return []
+    return [item for item in source if isinstance(item, dict)]
 
 
 def _now() -> str:

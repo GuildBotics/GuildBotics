@@ -9,6 +9,7 @@ import { App } from "./App";
 import {
   getConfigStatus,
   getGlobalRecords,
+  getMemoryEvents,
   getProjectConfig,
   getPromptTrace,
   getTeam,
@@ -20,6 +21,7 @@ import {
   updatePromptTrace,
   type ConfigStatus,
   type DiagnosticCheck,
+  type MemoryEvent,
   type ProjectConfig,
   type PromptTraceEntry,
   type PromptTraceStatus,
@@ -55,6 +57,7 @@ vi.mock("./api/client", async (importOriginal) => {
     })),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getPromptTrace: vi.fn(),
+    getMemoryEvents: vi.fn(),
     updatePromptTrace: vi.fn(),
     getRuntimeDebug: vi.fn(async () => ({
       enabled: false,
@@ -93,6 +96,18 @@ beforeEach(() => {
     });
   vi.mocked(getProjectConfig).mockReset().mockResolvedValue(projectConfig());
   vi.mocked(getPromptTrace).mockReset().mockResolvedValue(promptTrace());
+  vi.mocked(getMemoryEvents)
+    .mockReset()
+    .mockResolvedValue({
+      event_count: 1,
+      events: [
+        memoryEvent({
+          title: "Retry note",
+          summary: "Refresh before retry.",
+          body_preview: "Retry after refreshing the token.",
+        }),
+      ],
+    });
   vi.mocked(updatePromptTrace)
     .mockReset()
     .mockResolvedValue(promptTrace({ enabled: true, output_trace_file: "/workspace/trace.jsonl" }));
@@ -295,6 +310,82 @@ describe("Diagnostics prompt trace tab", () => {
   });
 });
 
+describe("Diagnostics memory tab", () => {
+  it("lists memory events and applies visible filters", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await openTab(user, t("diagnostics.tabs.memory"));
+
+    expect((await screen.findAllByText("Retry note")).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(t("diagnostics.memory.displayedValue", { count: 1, limit: 500 })),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Refresh before retry.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Retry after refreshing the token.")).toBeInTheDocument();
+
+    await user.click(screen.getAllByLabelText(t("diagnostics.memory.action"))[0]);
+    await user.click(await screen.findByText(t("diagnostics.memory.actions.touch")));
+
+    await waitFor(() => {
+      const calls = vi.mocked(getMemoryEvents).mock.calls;
+      expect(calls[calls.length - 1]?.[0]).toMatchObject({
+        action: "touch",
+      });
+    });
+
+    await user.type(screen.getByLabelText(t("diagnostics.memory.search")), "retry");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      const calls = vi.mocked(getMemoryEvents).mock.calls;
+      expect(calls[calls.length - 1]?.[0]).toMatchObject({
+        action: "touch",
+        query: "retry",
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: t("diagnostics.memory.searchClear") }));
+
+    await waitFor(() => {
+      const calls = vi.mocked(getMemoryEvents).mock.calls;
+      expect(calls[calls.length - 1]?.[0]).toMatchObject({
+        action: "touch",
+        query: undefined,
+      });
+    });
+  });
+
+  it("sorts memory events by timestamp descending", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemoryEvents).mockResolvedValue({
+      event_count: 2,
+      events: [
+        memoryEvent({
+          timestamp: "2026-06-21T09:30:00+09:00",
+          title: "Offset older",
+          doc_id: "doc-older",
+        }),
+        memoryEvent({
+          timestamp: "2026-06-21T01:00:00Z",
+          title: "UTC newer",
+          doc_id: "doc-newer",
+        }),
+      ],
+    });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.memory"));
+
+    await screen.findAllByText("UTC newer");
+    const rows = screen
+      .getAllByRole("button")
+      .filter((button) => button.classList.contains("memory-row"));
+    expect(rows[0]).toHaveTextContent("UTC newer");
+    expect(rows[1]).toHaveTextContent("Offset older");
+  });
+});
+
 describe("Diagnostics executions tab", () => {
   it("lists traces and shows the selected trace timeline", async () => {
     const user = userEvent.setup();
@@ -340,13 +431,16 @@ describe("Diagnostics executions tab", () => {
     await openTab(user, t("diagnostics.tabs.executions"));
 
     const traceButton = await screen.findByText("workflows/demo");
+    expect(
+      screen.getByText(t("diagnostics.executions.displayedValue", { count: 1, limit: 200 })),
+    ).toBeInTheDocument();
     await user.click(traceButton);
 
     expect(await screen.findByText("working on it")).toBeInTheDocument();
     expect(vi.mocked(getTraceDetail)).toHaveBeenCalledWith("trace-1");
 
     // The summary header shows the selected trace's id and computed duration.
-    expect(screen.getByText("trace-1")).toBeInTheDocument();
+    expect(screen.getAllByText("trace-1").length).toBeGreaterThan(0);
     expect(screen.getByText(/2\.0s/)).toBeInTheDocument();
 
     // The timeline is newest-first: the later log appears before the earlier
@@ -714,6 +808,27 @@ function traceEntry(overrides: Partial<PromptTraceEntry> = {}): PromptTraceEntry
     response: "",
     error: "",
     fields: {},
+    ...overrides,
+  };
+}
+
+function memoryEvent(overrides: Partial<MemoryEvent> = {}): MemoryEvent {
+  return {
+    timestamp: "2026-01-01T00:00:00Z",
+    action: "record",
+    person_id: "alice",
+    scope: "personal",
+    doc_id: "doc-1",
+    path: "documents/personal/alice/doc-1",
+    title: "Memory note",
+    summary: "Memory summary",
+    kind: "note",
+    trace_id: "trace-1",
+    run_id: "run-1",
+    task_run_id: "task-1",
+    source: [{ type: "ticket", url: "https://example.test/issues/1" }],
+    changed_fields: [],
+    body_preview: "Memory body",
     ...overrides,
   };
 }

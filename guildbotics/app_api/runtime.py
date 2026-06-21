@@ -8,6 +8,7 @@ import re
 import shlex
 import threading
 from collections.abc import Awaitable, Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -38,6 +39,8 @@ from guildbotics.app_api.models import (
     CommandRunResponse,
     ConfigStatus,
     MemberSummary,
+    MemoryEvent,
+    MemoryEventsResponse,
     ProjectStatusOptionsRequest,
     ProjectStatusOptionsResponse,
     ProjectSummary,
@@ -57,6 +60,10 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.verify import VerifyService
+from guildbotics.capabilities.member_memory_audit import (
+    MemoryAuditStore,
+    parse_memory_audit_timestamp,
+)
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.registry import get_command_extensions
 from guildbotics.drivers import (
@@ -99,6 +106,7 @@ WORKSPACE_DOTENV_PROTECTED_KEYS = {
     *HOME_ENV_PROTECTED_KEYS,
 }
 TICKET_DRIVEN_WORKFLOW = "workflows/ticket_driven_workflow"
+MIN_MEMORY_DOCUMENT_PATH_PARTS = 2
 
 
 class AppRuntime:
@@ -488,8 +496,9 @@ class AppRuntime:
                 _to_trace_record(item)
                 for item in self._diagnostics_store.get_records(trace_id)
             )
+        records.extend(self._memory_trace_records(trace_id))
         records.extend(self._prompt_trace_records(trace_id))
-        records.sort(key=lambda record: record.timestamp)
+        records.sort(key=_trace_record_sort_key)
         return TraceDetailResponse(trace_id=trace_id, summary=summary, records=records)
 
     def get_global_records(self, limit: int = 200) -> TraceDetailResponse:
@@ -501,6 +510,33 @@ class AppRuntime:
             )
         return TraceDetailResponse(trace_id="", summary=None, records=records)
 
+    def list_memory_events(
+        self,
+        *,
+        person_id: str | None = None,
+        doc_id: str | None = None,
+        action: str | None = None,
+        source: str | None = None,
+        query: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 200,
+    ) -> MemoryEventsResponse:
+        filters = {
+            "person_id": person_id,
+            "doc_id": doc_id,
+            "action": action,
+            "source": source,
+            "query": query,
+            "since": since,
+            "until": until,
+        }
+        raw_events = MemoryAuditStore().list_events(**filters, limit=limit)
+        return MemoryEventsResponse(
+            event_count=len(raw_events),
+            events=[_memory_event(item) for item in raw_events],
+        )
+
     def _prompt_trace_records(self, trace_id: str) -> list[TraceRecord]:
         records: list[TraceRecord] = []
         for item in self._read_all_prompt_trace_events():
@@ -508,6 +544,12 @@ class AppRuntime:
                 continue
             records.append(_prompt_trace_record(item))
         return records
+
+    def _memory_trace_records(self, trace_id: str) -> list[TraceRecord]:
+        return [
+            _to_trace_record(item)
+            for item in MemoryAuditStore().list_events(trace_id=trace_id, limit=1000)
+        ]
 
     def _prompt_trace_trace_ids(self) -> set[str]:
         return {
@@ -1248,6 +1290,7 @@ def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
         trace_id=item.get("trace_id"),
         span_id=item.get("span_id"),
         parent_id=item.get("parent_id"),
+        call_id=item.get("call_id"),
         span=str(item.get("span") or ""),
         source=str(item.get("source") or ""),
         person_id=str(item.get("person_id") or ""),
@@ -1259,6 +1302,68 @@ def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
         attributes=attributes if isinstance(attributes, dict) else {},
         payload=payload if isinstance(payload, dict) else {},
     )
+
+
+def _trace_record_sort_key(record: TraceRecord) -> datetime:
+    return parse_memory_audit_timestamp(record.timestamp) or datetime.min.replace(
+        tzinfo=UTC
+    )
+
+
+def _memory_event(item: dict[str, Any]) -> MemoryEvent:
+    raw_attributes = item.get("attributes")
+    raw_payload = item.get("payload")
+    attributes = (
+        cast(dict[str, Any], raw_attributes) if isinstance(raw_attributes, dict) else {}
+    )
+    payload = cast(dict[str, Any], raw_payload) if isinstance(raw_payload, dict) else {}
+    source = payload.get("source")
+    changed_fields = payload.get("changed_fields")
+    path = str(attributes.get("memory.path") or "")
+    action = str(
+        attributes.get("memory.action")
+        or str(item.get("type") or "").removeprefix("memory.")
+    )
+    return MemoryEvent(
+        timestamp=str(item.get("timestamp") or ""),
+        action=action,
+        person_id=str(item.get("person_id") or ""),
+        scope=str(attributes.get("memory.scope") or ""),
+        doc_id=str(attributes.get("memory.doc_id") or ""),
+        path=path,
+        title=str(payload.get("title") or ""),
+        summary=str(payload.get("summary") or ""),
+        kind=str(attributes.get("memory.kind") or ""),
+        trace_id=item.get("trace_id"),
+        run_id=str(attributes.get("run_id") or ""),
+        task_run_id=str(attributes.get("task_run_id") or ""),
+        source=[entry for entry in source if isinstance(entry, dict)]
+        if isinstance(source, list)
+        else [],
+        changed_fields=[
+            str(field) for field in changed_fields if isinstance(field, str)
+        ]
+        if isinstance(changed_fields, list)
+        else [],
+        body_preview=_memory_body_preview(path),
+    )
+
+
+def _memory_body_preview(path: str, *, limit: int = 800) -> str:
+    parts = path.split("/")
+    if len(parts) < MIN_MEMORY_DOCUMENT_PATH_PARTS or parts[0] != "documents":
+        return ""
+    relative_parts = parts[1:]
+    if any(part in {"", ".", ".."} for part in relative_parts):
+        return ""
+    body_path = get_workspace_data_path("documents", *relative_parts) / "body.md"
+    if not body_path.is_file():
+        return ""
+    try:
+        body = body_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return body[:limit]
 
 
 def _prompt_trace_record(item: dict[str, Any]) -> TraceRecord:

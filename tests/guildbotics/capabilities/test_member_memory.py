@@ -8,8 +8,10 @@ from guildbotics.capabilities.member_memory import (
     MemberMemoryError,
     MemberMemoryService,
 )
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
+from guildbotics.observability import trace_scope
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, load_yaml_file
 
 EXPECTED_DIGEST_N = 3
@@ -195,6 +197,104 @@ def test_update_touch_archive_and_promote_manage_recency(person: Person) -> None
     archived = service.archive(doc_id=first_id)
     assert archived["path"] == f"documents/personal/aiko/archived/{first_id}"
     assert service.recall(queries=["alpha"])["results"] == []
+
+
+def test_memory_mutations_write_audit_events(
+    monkeypatch: pytest.MonkeyPatch, person: Person, data_root: Path
+) -> None:
+    monkeypatch.setenv(RUN_ENV, "run-1")
+    monkeypatch.setenv(TASK_RUN_ENV, "task-1")
+    service = MemberMemoryService(person)
+
+    with trace_scope(
+        "manual",
+        trace_id="trace-1",
+        person_id="aiko",
+        command="workflows/demo",
+    ):
+        recorded = service.record(
+            scope="personal",
+            title="Audit note",
+            summary="Audit summary",
+            source=[{"type": "ticket", "url": "https://example.test/issues/1"}],
+            body="body",
+        )
+        service.touch(doc_id=recorded["doc_id"])
+        service.update(doc_id=recorded["doc_id"], summary="Updated summary")
+
+    audit_path = data_root / "documents" / "memory_events.jsonl"
+    events = [
+        json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert [event["type"] for event in events] == [
+        "memory.record",
+        "memory.touch",
+        "memory.update",
+    ]
+    assert events[0]["person_id"] == "aiko"
+    assert events[0]["trace_id"] == "trace-1"
+    assert events[0]["source"] == "manual"
+    assert events[0]["command"] == "workflows/demo"
+    assert events[0]["attributes"]["memory.doc_id"] == recorded["doc_id"]
+    assert events[0]["attributes"]["memory.scope"] == "personal"
+    assert events[0]["attributes"]["run_id"] == "run-1"
+    assert events[0]["attributes"]["task_run_id"] == "task-1"
+    assert events[0]["timestamp"].endswith("Z")
+    assert events[0]["payload"]["source"] == [
+        {"type": "ticket", "url": "https://example.test/issues/1"}
+    ]
+    assert events[2]["payload"]["changed_fields"] == ["summary"]
+
+
+def test_memory_audit_filters_timestamps_by_instant(tmp_path: Path) -> None:
+    store = MemoryAuditStore(tmp_path / "memory_events.jsonl")
+    store.record(
+        {
+            "timestamp": "2026-06-21T01:00:00Z",
+            "message": "first",
+            "attributes": {},
+            "payload": {},
+        }
+    )
+    store.record(
+        {
+            "timestamp": "2026-06-21T10:30:00+09:00",
+            "message": "second",
+            "attributes": {},
+            "payload": {},
+        }
+    )
+
+    assert [
+        event["message"]
+        for event in store.list_events(since="2026-06-21T09:30:00+09:00")
+    ] == ["second", "first"]
+    assert [
+        event["message"]
+        for event in store.list_events(until="2026-06-21T10:00:00+09:00")
+    ] == ["first"]
+
+
+def test_memory_audit_normalizes_document_path(
+    monkeypatch: pytest.MonkeyPatch, person: Person
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def fake_append_memory_event(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(member_memory, "append_memory_event", fake_append_memory_event)
+    monkeypatch.setattr(
+        member_memory,
+        "_document_path",
+        lambda _doc: "documents\\personal\\aiko\\doc-1",
+    )
+    service = MemberMemoryService(person)
+
+    service.record(scope="personal", title="Path note", body="body")
+
+    assert captured[0]["path"] == "documents/personal/aiko/doc-1"
 
 
 def test_team_memory_uses_member_recent_file_only(

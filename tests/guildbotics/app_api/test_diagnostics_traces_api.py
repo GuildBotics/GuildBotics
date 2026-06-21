@@ -11,7 +11,10 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.capabilities.member_memory import MemberMemoryService
+from guildbotics.entities.team import Person
 from guildbotics.observability import trace_scope
+from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
 HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
@@ -146,3 +149,67 @@ def test_global_endpoint_returns_unscoped_events_and_logs(tmp_path: Path) -> Non
     assert "global line" in messages
     assert "scheduler.running" in types
     assert "scoped line" not in messages
+
+
+def test_memory_events_endpoint_filters_and_returns_body_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
+    person = Person(person_id="alice", name="Alice", person_type="human")
+    service = MemberMemoryService(person)
+    with trace_scope("manual", trace_id="memory-trace", person_id="alice"):
+        recorded = service.record(
+            scope="personal",
+            title="Retry note",
+            summary="Refresh before retry.",
+            source=[{"type": "ticket", "url": "https://example.test/issues/42"}],
+            body="Retry after refreshing the token.",
+        )
+        service.touch(doc_id=recorded["doc_id"])
+    client, _bus = _app(tmp_path)
+
+    with client:
+        response = client.get(
+            "/diagnostics/memory-events",
+            params={
+                "person_id": "alice",
+                "action": "record",
+                "source": "issues/42",
+                "q": "Retry",
+            },
+            headers=HEADERS,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["event_count"] == 1
+    event = payload["events"][0]
+    assert event["action"] == "record"
+    assert event["person_id"] == "alice"
+    assert event["doc_id"] == recorded["doc_id"]
+    assert event["trace_id"] == "memory-trace"
+    assert event["source"] == [
+        {"type": "ticket", "url": "https://example.test/issues/42"}
+    ]
+    assert event["body_preview"] == "Retry after refreshing the token."
+
+
+def test_trace_detail_merges_memory_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
+    person = Person(person_id="alice", name="Alice", person_type="human")
+    service = MemberMemoryService(person)
+    client, bus = _app(tmp_path)
+    with trace_scope("manual", trace_id="memory-trace", person_id="alice"):
+        bus.publish_event("command.started", {"command": "demo"})
+        service.record(scope="personal", title="Trace memory", body="body")
+        bus.publish_event("command.finished", {"command": "demo"})
+
+    with client:
+        response = client.get("/diagnostics/traces/memory-trace", headers=HEADERS)
+
+    assert response.status_code == 200
+    records = response.json()["records"]
+    assert [record["kind"] for record in records] == ["event", "memory", "event"]
+    assert records[1]["type"] == "memory.record"

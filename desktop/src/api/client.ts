@@ -202,7 +202,7 @@ export type TraceSummary = {
 };
 
 export type TraceRecord = {
-  kind: "event" | "log" | "prompt_trace";
+  kind: "event" | "log" | "prompt_trace" | "memory";
   timestamp: string;
   trace_id: string | null;
   span_id: string | null;
@@ -228,6 +228,29 @@ export type TraceDetailResponse = {
   trace_id: string;
   summary: TraceSummary | null;
   records: TraceRecord[];
+};
+
+export type MemoryEvent = {
+  timestamp: string;
+  action: string;
+  person_id: string;
+  scope: string;
+  doc_id: string;
+  path: string;
+  title: string;
+  summary: string;
+  kind: string;
+  trace_id: string | null;
+  run_id: string;
+  task_run_id: string;
+  source: Array<Record<string, unknown>>;
+  changed_fields: string[];
+  body_preview: string;
+};
+
+export type MemoryEventsResponse = {
+  event_count: number;
+  events: MemoryEvent[];
 };
 
 export type CommandArgumentOption = {
@@ -638,6 +661,45 @@ export async function getTraceDetail(traceId: string): Promise<TraceDetailRespon
 
 export async function getGlobalRecords(limit = 200): Promise<TraceDetailResponse> {
   return request(`/diagnostics/global?limit=${encodeURIComponent(String(limit))}`);
+}
+
+export async function getMemoryEvents(params?: {
+  personId?: string;
+  docId?: string;
+  action?: string;
+  source?: string;
+  query?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+}): Promise<MemoryEventsResponse> {
+  const search = new URLSearchParams();
+  if (params?.personId) {
+    search.set("person_id", params.personId);
+  }
+  if (params?.docId) {
+    search.set("doc_id", params.docId);
+  }
+  if (params?.action) {
+    search.set("action", params.action);
+  }
+  if (params?.source) {
+    search.set("source", params.source);
+  }
+  if (params?.query) {
+    search.set("q", params.query);
+  }
+  if (params?.since) {
+    search.set("since", params.since);
+  }
+  if (params?.until) {
+    search.set("until", params.until);
+  }
+  if (params?.limit) {
+    search.set("limit", String(params.limit));
+  }
+  const suffix = search.toString();
+  return request(`/diagnostics/memory-events${suffix ? `?${suffix}` : ""}`);
 }
 
 export async function getCliAgentDetections(): Promise<CliAgentDetectionsResponse> {

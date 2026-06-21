@@ -172,6 +172,29 @@ class TraceDetailResponse(BaseModel):
     records: list[TraceRecord] = Field(default_factory=list)
 
 
+class MemoryEvent(BaseModel):
+    timestamp: str = ""
+    action: str = ""
+    person_id: str = ""
+    scope: str = ""
+    doc_id: str = ""
+    path: str = ""
+    title: str = ""
+    summary: str = ""
+    kind: str = ""
+    trace_id: str | None = None
+    run_id: str = ""
+    task_run_id: str = ""
+    source: list[dict[str, Any]] = Field(default_factory=list)
+    changed_fields: list[str] = Field(default_factory=list)
+    body_preview: str = ""
+
+
+class MemoryEventsResponse(BaseModel):
+    event_count: int = 0
+    events: list[MemoryEvent] = Field(default_factory=list)
+
+
 class SchedulerStartRequest(BaseModel):
     only: str | None = Field(default=None, pattern="^(scheduler|events)$")
     routine_commands: list[str] = Field(default_factory=list)
