@@ -10,6 +10,7 @@ from guildbotics.capabilities.member_memory import (
 )
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
+from guildbotics.observability import trace_scope
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, load_yaml_file
 
 EXPECTED_DIGEST_N = 3
@@ -195,6 +196,53 @@ def test_update_touch_archive_and_promote_manage_recency(person: Person) -> None
     archived = service.archive(doc_id=first_id)
     assert archived["path"] == f"documents/personal/aiko/archived/{first_id}"
     assert service.recall(queries=["alpha"])["results"] == []
+
+
+def test_memory_mutations_write_audit_events(
+    monkeypatch: pytest.MonkeyPatch, person: Person, data_root: Path
+) -> None:
+    monkeypatch.setenv(RUN_ENV, "run-1")
+    monkeypatch.setenv(TASK_RUN_ENV, "task-1")
+    service = MemberMemoryService(person)
+
+    with trace_scope(
+        "manual",
+        trace_id="trace-1",
+        person_id="aiko",
+        command="workflows/demo",
+    ):
+        recorded = service.record(
+            scope="personal",
+            title="Audit note",
+            summary="Audit summary",
+            source=[{"type": "ticket", "url": "https://example.test/issues/1"}],
+            body="body",
+        )
+        service.touch(doc_id=recorded["doc_id"])
+        service.update(doc_id=recorded["doc_id"], summary="Updated summary")
+
+    audit_path = data_root / "documents" / "memory_events.jsonl"
+    events = [
+        json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert [event["type"] for event in events] == [
+        "memory.record",
+        "memory.touch",
+        "memory.update",
+    ]
+    assert events[0]["person_id"] == "aiko"
+    assert events[0]["trace_id"] == "trace-1"
+    assert events[0]["source"] == "manual"
+    assert events[0]["command"] == "workflows/demo"
+    assert events[0]["attributes"]["memory.doc_id"] == recorded["doc_id"]
+    assert events[0]["attributes"]["memory.scope"] == "personal"
+    assert events[0]["attributes"]["run_id"] == "run-1"
+    assert events[0]["attributes"]["task_run_id"] == "task-1"
+    assert events[0]["payload"]["source"] == [
+        {"type": "ticket", "url": "https://example.test/issues/1"}
+    ]
+    assert events[2]["payload"]["changed_fields"] == ["summary"]
 
 
 def test_team_memory_uses_member_recent_file_only(

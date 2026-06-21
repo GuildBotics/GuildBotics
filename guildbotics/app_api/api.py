@@ -31,6 +31,7 @@ from guildbotics.app_api.models import (
     MemberDeleteRequest,
     MemberResolveRequest,
     MemberResolveResponse,
+    MemoryEventsResponse,
     ProjectConfigResponse,
     ProjectConfigUpdateRequest,
     ProjectStatusOptionsRequest,
@@ -371,6 +372,33 @@ def create_app(
         _: None = Depends(require_token),
     ) -> TraceDetailResponse:
         return app_runtime.get_global_records(limit=limit)
+
+    @app.get(
+        "/diagnostics/memory-events",
+        response_model=MemoryEventsResponse,
+        responses=error_responses,
+    )
+    def diagnostics_memory_events(
+        person_id: str | None = None,
+        doc_id: str | None = None,
+        action: str | None = None,
+        source: str | None = None,
+        q: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+        _: None = Depends(require_token),
+    ) -> MemoryEventsResponse:
+        return app_runtime.list_memory_events(
+            person_id=person_id,
+            doc_id=doc_id,
+            action=action,
+            source=source,
+            query=q,
+            since=since,
+            until=until,
+            limit=limit,
+        )
 
     @app.get(
         "/intelligences/cli-agents/detection",

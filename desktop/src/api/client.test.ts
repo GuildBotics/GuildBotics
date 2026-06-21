@@ -9,6 +9,7 @@ import {
   getCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
+  getMemoryEvents,
   getMemberConfig,
   getPromptTrace,
   getRuntimeDebug,
@@ -188,6 +189,31 @@ describe("GET query parameter encoding", () => {
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/scenario?person_id=alice%2Fdev");
     expect(calls[0].init.method).toBe("POST");
+  });
+
+  it("encodes filters for getMemoryEvents", async () => {
+    const { calls } = captureFetch(jsonResponse({ events: [] }));
+    await getMemoryEvents({
+      personId: "alice/dev",
+      docId: "doc 1",
+      action: "touch",
+      source: "https://example.test/issues/1",
+      query: "retry note",
+      since: "2026-06-21T00:00:00Z",
+      until: "2026-06-22T00:00:00Z",
+      limit: 50,
+    });
+
+    const url = new URL(calls[0].url);
+    expect(url.pathname).toBe("/diagnostics/memory-events");
+    expect(url.searchParams.get("person_id")).toBe("alice/dev");
+    expect(url.searchParams.get("doc_id")).toBe("doc 1");
+    expect(url.searchParams.get("action")).toBe("touch");
+    expect(url.searchParams.get("source")).toBe("https://example.test/issues/1");
+    expect(url.searchParams.get("q")).toBe("retry note");
+    expect(url.searchParams.get("since")).toBe("2026-06-21T00:00:00Z");
+    expect(url.searchParams.get("until")).toBe("2026-06-22T00:00:00Z");
+    expect(url.searchParams.get("limit")).toBe("50");
   });
 
   it("omits the query when runScenarioDiagnostics has no person id", async () => {

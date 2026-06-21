@@ -38,7 +38,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -46,6 +46,7 @@ import type { TFunction } from "i18next";
 import {
   type CommandOption,
   type DiagnosticCheck,
+  type MemoryEvent,
   type PromptTraceEntry,
   type RoutineOption,
   type RuntimeEvent,
@@ -55,6 +56,7 @@ import {
   getConfigStatus,
   getCommandOptions,
   getGlobalRecords,
+  getMemoryEvents,
   getProjectConfig,
   getPromptTrace,
   getRuntimeDebug,
@@ -78,6 +80,9 @@ import { buildTraceGroups, type PromptTraceGroup } from "./trace";
 
 const TICKET_ROUTINE = "workflows/ticket_driven_workflow";
 const PROMPT_TRACE_LIMIT = 500;
+const EXECUTION_LIMIT = 200;
+const MEMORY_EVENT_LIMIT = 500;
+const MEMORY_FILTER_ALL = "__all__";
 
 export function App() {
   const { t, i18n } = useTranslation();
@@ -487,6 +492,7 @@ function DiagnosticsPage() {
         <Tabs.List>
           <Tabs.Tab value="readiness">{t("diagnostics.tabs.readiness")}</Tabs.Tab>
           <Tabs.Tab value="executions">{t("diagnostics.tabs.executions")}</Tabs.Tab>
+          <Tabs.Tab value="memory">{t("diagnostics.tabs.memory")}</Tabs.Tab>
           <Tabs.Tab value="promptTrace">{t("diagnostics.tabs.promptTrace")}</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="readiness" pt="md">
@@ -558,13 +564,7 @@ function DiagnosticsPage() {
                 pickLabel={t("overview.promptTrace.chooseReadPath")}
               />
             </div>
-            <Group className="prompt-trace-counts" gap="xs">
-              <Text size="sm">
-                <b>{t("overview.promptTrace.eventCount")}</b> {promptTrace.data?.event_count ?? 0}
-              </Text>
-              <Text c="dimmed" size="sm">
-                /
-              </Text>
+            <div className="diagnostics-count">
               <Text size="sm">
                 <b>{t("overview.promptTrace.displayedCount")}</b>{" "}
                 {t("overview.promptTrace.displayedCountValue", {
@@ -572,12 +572,15 @@ function DiagnosticsPage() {
                   limit: PROMPT_TRACE_LIMIT,
                 })}
               </Text>
-            </Group>
+            </div>
             <PromptTraceList entries={promptTrace.data?.events ?? []} />
           </Card>
         </Tabs.Panel>
         <Tabs.Panel className="diagnostics-fill-panel" value="executions" pt="md">
           <TraceExplorer />
+        </Tabs.Panel>
+        <Tabs.Panel className="diagnostics-fill-panel" value="memory" pt="md">
+          <MemoryEventsPanel members={team.data?.members ?? []} />
         </Tabs.Panel>
       </Tabs>
     </Stack>
@@ -586,7 +589,7 @@ function DiagnosticsPage() {
 
 const TRACE_SOURCES = ["all", "manual", "routine", "scheduled", "event_listener"] as const;
 
-const RECORD_FILTERS = ["all", "error", "llm", "cli_agent", "event", "log"] as const;
+const RECORD_FILTERS = ["all", "error", "llm", "cli_agent", "event", "log", "memory"] as const;
 
 export type RecordScopeFilter = {
   kind: "span" | "call" | "subtree";
@@ -598,6 +601,238 @@ export type RecordScopeFilter = {
 // unscoped records (service lifecycle events + global logs) that do not belong
 // to any trace.
 const GLOBAL_TRACE_ID = "__global__";
+
+type MemoryEventFilters = {
+  personId: string;
+  action: string;
+  query: string;
+};
+
+function MemoryEventsPanel({ members }: { members: Array<{ person_id: string; name: string }> }) {
+  const { t } = useTranslation();
+  const [selectedId, setSelectedId] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [filters, setFilters] = useState<MemoryEventFilters>({
+    personId: MEMORY_FILTER_ALL,
+    action: MEMORY_FILTER_ALL,
+    query: "",
+  });
+  const memoryEvents = useQuery({
+    queryKey: ["diagnostics-memory-events", filters],
+    queryFn: () =>
+      getMemoryEvents({
+        personId: filters.personId === MEMORY_FILTER_ALL ? undefined : filters.personId,
+        action: filters.action === MEMORY_FILTER_ALL ? undefined : filters.action,
+        query: filters.query.trim() || undefined,
+        limit: MEMORY_EVENT_LIMIT,
+      }),
+    refetchInterval: 5000,
+  });
+  const events = memoryEvents.data?.events ?? [];
+  const selectedEvent =
+    events.find((event) => memoryEventKey(event) === selectedId) ?? events[0] ?? null;
+  const selectedKey = selectedEvent ? memoryEventKey(selectedEvent) : "";
+  const updateFilters = (next: MemoryEventFilters) => {
+    setFilters(next);
+    setSelectedId("");
+  };
+  const applySearch = () => {
+    updateFilters({ ...filters, query: searchInput });
+  };
+  const clearSearch = () => {
+    setSearchInput("");
+    updateFilters({ ...filters, query: "" });
+  };
+  const changePerson = (value: string | null) => {
+    updateFilters({ ...filters, personId: value ?? MEMORY_FILTER_ALL });
+  };
+  const changeAction = (value: string | null) => {
+    updateFilters({ ...filters, action: value ?? MEMORY_FILTER_ALL });
+  };
+  const submitOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      applySearch();
+    }
+  };
+  const hasSearch = Boolean(searchInput || filters.query);
+  return (
+    <Card className="diagnostics-fill-card memory-fill-card" withBorder radius="md" p="lg">
+      <div className="memory-header">
+        <div>
+          <Title order={3}>{t("diagnostics.memory.title")}</Title>
+          <Text c="dimmed" size="sm">
+            {t("diagnostics.memory.description")}
+          </Text>
+        </div>
+      </div>
+      <div className="memory-toolbar">
+        <Select
+          aria-label={t("diagnostics.memory.person")}
+          data={[
+            { value: MEMORY_FILTER_ALL, label: t("diagnostics.memory.allPeople") },
+            ...members.map((member) => ({
+              value: member.person_id,
+              label: `${member.name} (${member.person_id})`,
+            })),
+          ]}
+          value={filters.personId}
+          onChange={changePerson}
+        />
+        <Select
+          aria-label={t("diagnostics.memory.action")}
+          data={[
+            { value: MEMORY_FILTER_ALL, label: t("diagnostics.memory.allActions") },
+            ...["record", "touch", "update", "archive", "promote"].map((action) => ({
+              value: action,
+              label: memoryActionLabel(t, action),
+            })),
+          ]}
+          value={filters.action}
+          onChange={changeAction}
+        />
+        <TextInput
+          className="exec-search"
+          aria-label={t("diagnostics.memory.search")}
+          placeholder={t("diagnostics.memory.searchPlaceholder")}
+          leftSection={<Search size={15} />}
+          rightSection={
+            hasSearch ? (
+              <ActionIcon
+                size="sm"
+                variant="transparent"
+                color="gray"
+                aria-label={t("diagnostics.memory.searchClear")}
+                onClick={clearSearch}
+              >
+                <XCircle size={16} />
+              </ActionIcon>
+            ) : null
+          }
+          rightSectionPointerEvents="auto"
+          value={searchInput}
+          onChange={(event) => setSearchInput(event.currentTarget.value)}
+          onKeyDown={submitOnEnter}
+        />
+      </div>
+      <div className="diagnostics-count">
+        <Text size="sm">
+          <b>{t("diagnostics.memory.displayed")}</b>{" "}
+          {t("diagnostics.memory.displayedValue", {
+            count: events.length,
+            limit: MEMORY_EVENT_LIMIT,
+          })}
+        </Text>
+      </div>
+      <div className="memory-grid">
+        <div className="memory-list">
+          {memoryEvents.error ? (
+            <Alert color="red" title={t("diagnostics.memory.loadError")}>
+              {memoryEvents.error.message}
+            </Alert>
+          ) : events.length === 0 ? (
+            <div className="empty-row">{t("diagnostics.memory.empty")}</div>
+          ) : (
+            events.map((event) => (
+              <button
+                type="button"
+                className={
+                  memoryEventKey(event) === selectedKey
+                    ? "memory-row memory-row-active"
+                    : "memory-row"
+                }
+                key={memoryEventKey(event)}
+                onClick={() => setSelectedId(memoryEventKey(event))}
+              >
+                <div className="memory-row-top">
+                  <Badge color={memoryActionColor(event.action)} variant="light">
+                    {memoryActionLabel(t, event.action)}
+                  </Badge>
+                  <Badge variant="outline">{event.scope || "memory"}</Badge>
+                  <span className="memory-row-time">{formatDateTime(event.timestamp)}</span>
+                </div>
+                <Text className="memory-row-title" fw={600} size="sm" lineClamp={1}>
+                  {event.title || event.doc_id}
+                </Text>
+                <div className="memory-row-meta">
+                  <span>{event.person_id || "—"}</span>
+                  <span>{event.doc_id}</span>
+                </div>
+                {event.summary ? (
+                  <Text c="dimmed" size="xs" lineClamp={2}>
+                    {event.summary}
+                  </Text>
+                ) : null}
+              </button>
+            ))
+          )}
+        </div>
+        <div className="memory-detail">
+          {selectedEvent ? <MemoryEventDetail event={selectedEvent} /> : null}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function MemoryEventDetail({ event }: { event: MemoryEvent }) {
+  const { t } = useTranslation();
+  const sourceText = memorySourceSummary(event.source);
+  const rows = (
+    [
+      [t("diagnostics.memory.fields.person"), event.person_id],
+      [t("diagnostics.memory.fields.docId"), event.doc_id],
+      [t("diagnostics.memory.fields.scope"), event.scope],
+      [t("diagnostics.memory.fields.kind"), event.kind],
+      [t("diagnostics.memory.fields.path"), event.path],
+      [t("diagnostics.memory.fields.trace"), event.trace_id ?? ""],
+      [t("diagnostics.memory.fields.run"), event.run_id],
+      [t("diagnostics.memory.fields.taskRun"), event.task_run_id],
+      [t("diagnostics.memory.fields.changed"), event.changed_fields.join(", ")],
+      [t("diagnostics.memory.fields.source"), sourceText],
+    ] as [string, string][]
+  ).filter(([, value]) => value);
+  return (
+    <Stack gap="sm">
+      <div className="memory-detail-head">
+        <Group gap="xs">
+          <Badge color={memoryActionColor(event.action)} variant="light">
+            {memoryActionLabel(t, event.action)}
+          </Badge>
+          <Text c="dimmed" size="xs">
+            {formatDateTime(event.timestamp) || "—"}
+          </Text>
+        </Group>
+        <Title order={4}>{event.title || event.doc_id}</Title>
+        {event.summary ? (
+          <Text c="dimmed" size="sm">
+            {event.summary}
+          </Text>
+        ) : null}
+      </div>
+      {event.body_preview ? (
+        <div className="memory-preview">
+          <Text fw={600} size="sm">
+            {t("diagnostics.memory.bodyPreview")}
+          </Text>
+          <pre>{event.body_preview}</pre>
+        </div>
+      ) : null}
+      {rows.length > 0 ? (
+        <dl className="exec-record-meta memory-meta">
+          {rows.map(([label, value]) => (
+            <FragmentRow key={label} label={label} value={value} />
+          ))}
+        </dl>
+      ) : null}
+      {event.source.length > 0 ? (
+        <details className="exec-record-raw">
+          <summary>{t("diagnostics.memory.rawSource")}</summary>
+          <pre className="command-output">{JSON.stringify(event.source, null, 2)}</pre>
+        </details>
+      ) : null}
+    </Stack>
+  );
+}
 
 function TraceExplorer() {
   const { t } = useTranslation();
@@ -623,7 +858,7 @@ function TraceExplorer() {
         query: query.trim() || undefined,
         attrKey: attrFilter?.key,
         attrValue: attrFilter?.value,
-        limit: 200,
+        limit: EXECUTION_LIMIT,
       }),
     refetchInterval: 5000,
   });
@@ -754,6 +989,15 @@ function TraceExplorer() {
             {attrFilter.label}
           </Badge>
         ) : null}
+      </div>
+      <div className="diagnostics-count">
+        <Text size="sm">
+          <b>{t("diagnostics.executions.displayed")}</b>{" "}
+          {t("diagnostics.executions.displayedValue", {
+            count: traceItems.length,
+            limit: EXECUTION_LIMIT,
+          })}
+        </Text>
       </div>
       <div className="exec-grid">
         <div className="exec-list">
@@ -1307,6 +1551,44 @@ export function traceSourceLabel(t: TFunction, source: string): string {
   return t(`diagnostics.executions.sources.${source}`, { defaultValue: source });
 }
 
+function memoryActionLabel(t: TFunction, action: string): string {
+  return t(`diagnostics.memory.actions.${action}`, { defaultValue: action || "memory" });
+}
+
+function memoryActionColor(action: string): string {
+  if (action === "record") {
+    return "green";
+  }
+  if (action === "update") {
+    return "blue";
+  }
+  if (action === "touch") {
+    return "teal";
+  }
+  if (action === "archive") {
+    return "gray";
+  }
+  if (action === "promote") {
+    return "grape";
+  }
+  return "dark";
+}
+
+function memoryEventKey(event: MemoryEvent): string {
+  return `${event.timestamp}-${event.action}-${event.person_id}-${event.doc_id}`;
+}
+
+function memorySourceSummary(source: Array<Record<string, unknown>>): string {
+  return source
+    .map((entry) =>
+      [entry.type, entry.url, entry.channel_id, entry.thread_ts]
+        .filter((value): value is string => typeof value === "string" && Boolean(value))
+        .join(": "),
+    )
+    .filter(Boolean)
+    .join(" / ");
+}
+
 export type AttrFilter = { key: string; value: string; label: string };
 
 type TraceSearch = { query: string; attrFilter: AttrFilter | null };
@@ -1408,6 +1690,9 @@ export function recordDisplayMessage(record: TraceRecord): string {
   if (record.kind === "prompt_trace") {
     return record.message || record.type;
   }
+  if (record.kind === "memory") {
+    return record.message || record.type;
+  }
   const payload = record.payload ?? {};
   for (const key of ["message", "error", "code", "error_type"]) {
     const value = payload[key];
@@ -1449,6 +1734,13 @@ export function recordBadgeColor(record: TraceRecord): string {
   if (record.kind === "prompt_trace") {
     return "violet";
   }
+  if (record.kind === "memory") {
+    const action =
+      typeof record.attributes["memory.action"] === "string"
+        ? record.attributes["memory.action"]
+        : "";
+    return memoryActionColor(action);
+  }
   if (record.kind === "log") {
     return logBadgeColor(record.level);
   }
@@ -1458,6 +1750,13 @@ export function recordBadgeColor(record: TraceRecord): string {
 export function recordBadgeLabel(t: TFunction, record: TraceRecord): string {
   if (record.kind === "prompt_trace") {
     return record.type || t("diagnostics.executions.kinds.prompt_trace");
+  }
+  if (record.kind === "memory") {
+    const action =
+      typeof record.attributes["memory.action"] === "string"
+        ? record.attributes["memory.action"]
+        : record.type.replace(/^memory\./, "");
+    return memoryActionLabel(t, action);
   }
   if (record.kind === "log") {
     return record.level || "LOG";

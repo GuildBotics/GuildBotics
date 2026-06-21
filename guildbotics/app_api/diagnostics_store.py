@@ -232,6 +232,13 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
         message = item.get("message")
         if isinstance(message, str):
             summary["_text"].append(message)
+    elif kind == "memory":
+        summary["_text"].append(str(item.get("type", "")))
+        payload = item.get("payload")
+        if isinstance(payload, dict):
+            summary["_text"].append(
+                json.dumps(payload, ensure_ascii=False, default=str)
+            )
 
 
 def _finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:

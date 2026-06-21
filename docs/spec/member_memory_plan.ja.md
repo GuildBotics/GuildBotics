@@ -150,6 +150,8 @@ memory promote --person alice --id deploy-howto
 
 `digest` の並び（recency = 最近 `record`/`update`/`touch` した順）は **member ごとの MRU リスト**で決まる: `recent.txt`（`documents/personal/<person_id>/recent.txt`）に **1行 = doc-id、最新が先頭**で持つ。team 文書も、その member が `record`/`update`/`touch`/`promote` した場合は同じ `recent.txt` に doc-id を載せる。`record`/`update`/`touch` のたび当該行を先頭へ移して丸ごと書き直す（`recall`/`get` は触らない＝調査は recency にならない）。`promote` は doc-id を維持したまま同じ member MRU の先頭に上げ、`archive` は MRU から外す。digest は **先頭 N 行 + その meta** を読むだけで総文書数に依存しない。
 
+`record` / `update` / `touch` / `archive` / `promote` は、MRU とは別に `documents/memory_events.jsonl` へ構造化 audit event を追記する。event には `person_id`、`doc_id`、scope、path、action、title、summary、source、変更フィールド、trace/run/task-run 相関 ID を入れる。本文全文は audit に重複保存せず、desktop の診断画面は必要に応じて現在の `body.md` から preview を読む。
+
 この仕組みにより、直近で参照・更新した情報は自動的にコンテキスト内に展開されることになるため、特別な努力なしに情報にたどり着くことができる。
 
 **B. `memory recall`**
