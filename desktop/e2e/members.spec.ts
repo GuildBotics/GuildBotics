@@ -43,7 +43,7 @@ test("adds a second member through the UI and persists it to the backend", async
   await page.getByRole("button", { name: "Add new member" }).click();
   await page.getByLabel("Member ID").fill("local-agent-2");
   await page.getByLabel("Display name").fill("Second Agent");
-  await page.getByLabel("Roles").click();
+  await page.getByRole("textbox", { name: "Roles" }).click();
   await page.getByRole("option", { name: "product" }).click();
   await page.getByRole("button", { name: "Add member" }).click();
 
