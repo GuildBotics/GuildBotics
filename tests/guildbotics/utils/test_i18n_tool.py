@@ -31,14 +31,18 @@ def isolate_i18n_state() -> Generator[None, None, None]:
 
     settings_backup = deepcopy(i18n.config.settings)
     load_path_backup = list(i18n.load_path)
+    translations_backup = deepcopy(i18n.translations.container)
 
     try:
         yield
     finally:
         # Restore load path and all config settings
-        i18n.load_path[:] = load_path_backup
         i18n.config.settings.clear()
         i18n.config.settings.update(settings_backup)
+        i18n.config.settings["load_path"] = i18n.load_path
+        i18n.load_path[:] = load_path_backup
+        i18n.translations.container.clear()
+        i18n.translations.container.update(translations_backup)
 
 
 def test_set_and_get_language_roundtrip() -> None:
@@ -56,7 +60,7 @@ def test_set_and_get_language_roundtrip() -> None:
 
 def test_sets_fallback_to_english() -> None:
     """set_language always configures English ('en') as fallback."""
-    import i18n
+    import i18n  # type: ignore
 
     i18n_tool = _load_i18n_tool()
 
@@ -75,7 +79,7 @@ def _load_i18n_tool():
 
 def test_all_t_call_sites_produce_translated_strings() -> None:
     """Ensure every direct i18n_tool.t() call resolves to a translation."""
-    import i18n
+    import i18n  # type: ignore
 
     i18n_tool = _load_i18n_tool()
 
