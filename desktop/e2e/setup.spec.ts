@@ -63,6 +63,8 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("button", { name: "Members", exact: true }).click();
   await page.getByLabel("Member ID").fill("local-agent");
   await page.getByLabel("Display name").fill("Local Agent");
+  await page.getByRole("textbox", { name: "Roles" }).click();
+  await page.getByRole("option", { name: "product" }).click();
   await page.getByRole("button", { name: "Add member" }).click();
 
   // GitHub section (now last): provide the Project URL and override the lane
