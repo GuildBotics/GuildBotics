@@ -200,6 +200,41 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
     assert loaded[1].is_bot_message is True
 
 
+def test_list_thread_states_returns_known_threads_for_channel(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "100.1",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="100.1",
+            message_ts="100.1",
+            author_id="U1",
+            text="root",
+        ),
+    )
+    store.save_thread_state(
+        "slack",
+        "alice",
+        "C1",
+        "100.2",
+        ThreadConversationState(channel_id="C1", thread_ts="100.2"),
+    )
+    store.save_thread_state(
+        "slack",
+        "alice",
+        "C2",
+        "200.1",
+        ThreadConversationState(channel_id="C2", thread_ts="200.1"),
+    )
+
+    states = store.list_thread_states("slack", "alice", "C1")
+
+    assert [state.thread_ts for state in states] == ["100.1", "100.2"]
+
+
 def test_pending_events_roundtrip_dedupe_and_remove(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path, max_processed_events=3)
     event1 = ChatEvent(

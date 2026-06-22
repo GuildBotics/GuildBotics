@@ -104,6 +104,12 @@ class ConversationStateStore(ABC):
         """Load locally cached messages observed in a thread."""
 
     @abstractmethod
+    def list_thread_states(
+        self, service: str, person_id: str, channel_id: str
+    ) -> list[ThreadConversationState]:
+        """List locally known thread states for a channel."""
+
+    @abstractmethod
     def append_thread_message(
         self,
         service: str,

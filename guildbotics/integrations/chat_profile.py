@@ -86,6 +86,14 @@ def _channel_to_subscription(ch: Any) -> dict[str, Any] | None:
         "enabled": enabled,
         "event_source": event_source,
     }
+    for key in (
+        "startup_backfill_minutes",
+        "backfill_interval_seconds",
+        "backfill_overlap_seconds",
+        "backfill_limit",
+    ):
+        if key in chat_cfg:
+            item[key] = chat_cfg[key]
     return item
 
 

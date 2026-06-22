@@ -9,6 +9,7 @@ import pytest
 
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers.event_listener_runner import (
+    ChatBackfillPolicy,
     EventListenerRunner,
     SlackConnectionKey,
 )
@@ -16,9 +17,12 @@ from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import (
     ChatEvent,
+    ChatEventPage,
     ChatIdentity,
     ChatPostResult,
 )
+from guildbotics.integrations.chat_state_store import ThreadMessageState
+from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability import correlation_fields
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.event_listener import (
@@ -34,6 +38,8 @@ from tests.guildbotics.runtime.test_context import (
 
 EXPECTED_LISTENER_COUNT = 2
 WARNING_ARG_COUNT = 2
+DEFAULT_BACKFILL_LIMIT = 100
+EXPECTED_BACKFILL_ATTEMPTS = 2
 
 
 class _FakeContext:
@@ -65,6 +71,10 @@ class _FakeContext:
 
     async def aclose(self):
         self.closed = True
+
+
+async def _no_backfill(*args, **kwargs):
+    return 0
 
 
 class _WorkflowChatService:
@@ -119,6 +129,80 @@ class _WorkflowIntegrationFactory(IntegrationFactory):
 
     def create_chat_service(self, logger, person, team):
         return self.chat_service
+
+
+class _BackfillChatService:
+    def __init__(self) -> None:
+        self.channel_calls = 0
+        self.thread_calls: list[tuple[str, str]] = []
+
+    async def list_channel_events(
+        self,
+        channel_id: str,
+        *,
+        cursor: str | None = None,
+        oldest_ts: str | None = None,
+        latest_ts: str | None = None,
+        limit: int = 100,
+    ) -> ChatEventPage:
+        self.channel_calls += 1
+        assert channel_id == "C1"
+        assert cursor is None
+        assert oldest_ts is not None
+        assert latest_ts is None
+        assert limit == DEFAULT_BACKFILL_LIMIT
+        return ChatEventPage(
+            events=[
+                ChatEvent(
+                    event_id="C1:101.1",
+                    channel_id="C1",
+                    message_ts="101.1",
+                    thread_ts="101.1",
+                    author_id="U_USER",
+                    text="<@U_ALICE> startup backfill",
+                    mentions=["U_ALICE"],
+                )
+            ],
+            oldest_ts="101.1",
+        )
+
+    async def list_thread_events(
+        self,
+        channel_id: str,
+        *,
+        thread_ts: str,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> ChatEventPage:
+        self.thread_calls.append((channel_id, thread_ts))
+        assert cursor is None
+        assert limit == DEFAULT_BACKFILL_LIMIT
+        return ChatEventPage(
+            events=[
+                ChatEvent(
+                    event_id="C1:102.1",
+                    channel_id="C1",
+                    message_ts="102.1",
+                    thread_ts="100.1",
+                    author_id="U_USER",
+                    text="follow-up",
+                    mentions=[],
+                    is_thread_reply=True,
+                )
+            ],
+            oldest_ts="102.1",
+        )
+
+
+class _BackfillContext(_FakeContext):
+    def __init__(self, chat_service: _BackfillChatService) -> None:
+        super().__init__()
+        self.chat_service = chat_service
+
+    def clone_for(self, person):
+        clone = super().clone_for(person)
+        clone.get_chat_service = lambda: self.chat_service
+        return clone
 
 
 @pytest.mark.asyncio
@@ -375,7 +459,7 @@ def test_get_or_create_listener_splits_when_base_url_differs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_once_dispatches_events_and_marks_processed(monkeypatch):
+async def test_run_once_dispatches_events_and_marks_processed(monkeypatch, tmp_path):
     alice = Person(
         person_id="alice",
         name="Alice",
@@ -384,7 +468,9 @@ async def test_run_once_dispatches_events_and_marks_processed(monkeypatch):
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice])
-    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+    runner = EventListenerRunner(
+        ctx, state_store=FileConversationStateStore(base_dir=tmp_path)
+    )  # type: ignore[arg-type]
 
     class _FakeListener:
         def __init__(self):
@@ -449,6 +535,7 @@ async def test_run_once_dispatches_events_and_marks_processed(monkeypatch):
     monkeypatch.setattr(
         runner, "_is_processed_for_person", lambda person, incoming: False
     )
+    monkeypatch.setattr(runner, "_backfill_due_events", _no_backfill)
 
     await runner._run_once()
 
@@ -458,7 +545,7 @@ async def test_run_once_dispatches_events_and_marks_processed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_once_broadcasts_same_event_to_multiple_people(monkeypatch):
+async def test_run_once_broadcasts_same_event_to_multiple_people(monkeypatch, tmp_path):
     alice = Person(
         person_id="alice",
         name="Alice",
@@ -473,7 +560,9 @@ async def test_run_once_broadcasts_same_event_to_multiple_people(monkeypatch):
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice, bob])
-    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+    runner = EventListenerRunner(
+        ctx, state_store=FileConversationStateStore(base_dir=tmp_path)
+    )  # type: ignore[arg-type]
 
     class _FakeListener:
         def start(self):
@@ -535,6 +624,7 @@ async def test_run_once_broadcasts_same_event_to_multiple_people(monkeypatch):
             (person.person_id, incoming.event.event_id)
         ),
     )
+    monkeypatch.setattr(runner, "_backfill_due_events", _no_backfill)
 
     await runner._run_once()
 
@@ -543,7 +633,7 @@ async def test_run_once_broadcasts_same_event_to_multiple_people(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_once_skips_person_when_already_processed(monkeypatch):
+async def test_run_once_skips_person_when_already_processed(monkeypatch, tmp_path):
     alice = Person(
         person_id="alice",
         name="Alice",
@@ -558,7 +648,9 @@ async def test_run_once_skips_person_when_already_processed(monkeypatch):
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice, bob])
-    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+    runner = EventListenerRunner(
+        ctx, state_store=FileConversationStateStore(base_dir=tmp_path)
+    )  # type: ignore[arg-type]
 
     class _FakeListener:
         def start(self):
@@ -616,10 +708,194 @@ async def test_run_once_skips_person_when_already_processed(monkeypatch):
     monkeypatch.setattr(
         runner, "_mark_processed_for_person", lambda person, incoming: None
     )
+    monkeypatch.setattr(runner, "_backfill_due_events", _no_backfill)
 
     await runner._run_once()
 
     assert dispatched == ["alice"]
+
+
+@pytest.mark.asyncio
+async def test_run_once_backfills_channel_and_known_thread_events(
+    monkeypatch, tmp_path
+):
+    alice = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+    )
+    chat_service = _BackfillChatService()
+    ctx = _BackfillContext(chat_service)
+    ctx.team = types.SimpleNamespace(members=[alice])
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    state_store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "100.1",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="100.1",
+            message_ts="100.1",
+            author_id="U_USER",
+            text="<@U_ALICE> please check",
+            mentions=["U_ALICE"],
+        ),
+    )
+    runner = EventListenerRunner(ctx, state_store=state_store)  # type: ignore[arg-type]
+
+    class _FakeListener:
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def drain_events(self):
+            return []
+
+    async def _fake_resolve(person, subscriptions):
+        return subscriptions
+
+    dispatched = []
+
+    async def _fake_dispatch(person, item):
+        dispatched.append((person.person_id, item.event.event_id))
+        return "ok"
+
+    monkeypatch.setattr(runner, "_resolve_subscription_channels", _fake_resolve)
+    monkeypatch.setattr(
+        runner,
+        "_make_connection_key",
+        lambda person: (
+            SlackConnectionKey(
+                service="slack",
+                event_source="socket_mode",
+                app_token_hash="h" * 64,
+                base_url="https://slack.example/api",
+            ),
+            "xapp",
+        ),
+    )
+    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
+    monkeypatch.setattr(runner, "dispatch_incoming_event", _fake_dispatch)
+
+    await runner._run_once()
+    await runner._run_once()
+
+    assert dispatched == [
+        ("alice", "C1:101.1"),
+        ("alice", "C1:102.1"),
+    ]
+    assert chat_service.channel_calls == 1
+    assert chat_service.thread_calls == [("C1", "100.1")]
+    cursor = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert cursor.oldest_ts == "101.1"
+    assert state_store.load_pending_events("slack", "alice", "C1") == []
+
+
+@pytest.mark.asyncio
+async def test_run_once_uses_connection_service_for_backfill_and_pending_dispatch(
+    monkeypatch,
+):
+    alice = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+    )
+    ctx = _FakeContext()
+    ctx.team = types.SimpleNamespace(members=[alice])
+    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+
+    class _FakeListener:
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def drain_events(self):
+            return []
+
+    async def _fake_resolve(person, subscriptions):
+        return subscriptions
+
+    observed_backfill_services = []
+    observed_dispatch_services = []
+
+    async def _fake_backfill(person, service_name, channel_id, policy):
+        observed_backfill_services.append(service_name)
+        return 0
+
+    async def _fake_dispatch(person, service_name, channel_id):
+        observed_dispatch_services.append(service_name)
+        return 0, 0
+
+    monkeypatch.setattr(runner, "_resolve_subscription_channels", _fake_resolve)
+    monkeypatch.setattr(
+        runner,
+        "_make_connection_key",
+        lambda person: (
+            SlackConnectionKey(
+                service="slack-compatible",
+                event_source="socket_mode",
+                app_token_hash="h" * 64,
+                base_url="https://slack.example/api",
+            ),
+            "xapp",
+        ),
+    )
+    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
+    monkeypatch.setattr(runner, "_backfill_due_events", _fake_backfill)
+    monkeypatch.setattr(runner, "_dispatch_pending_events", _fake_dispatch)
+
+    await runner._run_once()
+
+    assert observed_backfill_services == ["slack-compatible"]
+    assert observed_dispatch_services == ["slack-compatible"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_tracking_is_scoped_by_service_name(monkeypatch):
+    ctx = _FakeContext()
+    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+    person = types.SimpleNamespace(person_id="alice")
+    calls = []
+
+    async def _fake_backfill(person, service_name, channel_id, policy):
+        calls.append((service_name, channel_id))
+        return 1
+
+    monkeypatch.setattr(runner, "_backfill_channel_and_threads", _fake_backfill)
+
+    policy = ChatBackfillPolicy(startup_minutes=60, interval_seconds=300.0)
+    assert await runner._backfill_due_events(person, "slack", "C1", policy) == 1
+    assert await runner._backfill_due_events(person, "mattermost", "C1", policy) == 1
+    assert await runner._backfill_due_events(person, "slack", "C1", policy) == 0
+    assert calls == [("slack", "C1"), ("mattermost", "C1")]
+
+
+@pytest.mark.asyncio
+async def test_backfill_failure_does_not_mark_startup_complete(monkeypatch):
+    ctx = _FakeContext()
+    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+    person = types.SimpleNamespace(person_id="alice")
+    calls = {"count": 0}
+
+    async def _fake_backfill(person, service_name, channel_id, policy):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("transient")
+        return 1
+
+    monkeypatch.setattr(runner, "_backfill_channel_and_threads", _fake_backfill)
+
+    policy = ChatBackfillPolicy(startup_minutes=60, interval_seconds=0.0)
+    assert await runner._backfill_due_events(person, "slack", "C1", policy) == 0
+    assert await runner._backfill_due_events(person, "slack", "C1", policy) == 1
+    assert calls["count"] == EXPECTED_BACKFILL_ATTEMPTS
 
 
 @pytest.mark.asyncio
