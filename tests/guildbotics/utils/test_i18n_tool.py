@@ -7,6 +7,7 @@ Each test isolates the global i18n state to avoid cross-test interference.
 from __future__ import annotations
 
 import ast
+import importlib
 import re
 from collections.abc import Generator
 from copy import deepcopy
@@ -42,8 +43,7 @@ def isolate_i18n_state() -> Generator[None, None, None]:
 
 def test_set_and_get_language_roundtrip() -> None:
     """set_language updates locale and get_language returns it."""
-    # Import inside test after the isolation fixture has started
-    from guildbotics.utils import i18n_tool
+    i18n_tool = _load_i18n_tool()
 
     # Set to a locale (may or may not exist in available_locales)
     i18n_tool.set_language("ja")
@@ -58,7 +58,7 @@ def test_sets_fallback_to_english() -> None:
     """set_language always configures English ('en') as fallback."""
     import i18n
 
-    from guildbotics.utils import i18n_tool
+    i18n_tool = _load_i18n_tool()
 
     i18n_tool.set_language("xx")  # arbitrary/unknown locale is fine
     assert i18n.get("fallback") == "en"
@@ -67,11 +67,17 @@ def test_sets_fallback_to_english() -> None:
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _load_i18n_tool():
+    from guildbotics.utils import i18n_tool
+
+    return importlib.reload(i18n_tool)
+
+
 def test_all_t_call_sites_produce_translated_strings() -> None:
     """Ensure every direct i18n_tool.t() call resolves to a translation."""
     import i18n
 
-    from guildbotics.utils import i18n_tool
+    i18n_tool = _load_i18n_tool()
 
     i18n_tool.set_language("en")
 

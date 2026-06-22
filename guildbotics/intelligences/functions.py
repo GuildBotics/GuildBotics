@@ -1,8 +1,4 @@
-import io
 import json
-import logging
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,14 +7,8 @@ import yaml  # type: ignore
 from pydantic import BaseModel
 
 from guildbotics.entities.message import Message
-from guildbotics.intelligences.common import (
-    AgentResponse,
-    DecisionResponse,
-    Labels,
-    MessageResponse,
-)
+from guildbotics.intelligences.common import MessageResponse
 from guildbotics.runtime import Context
-from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.import_utils import ClassResolver
 
 
@@ -68,20 +58,6 @@ def messages_to_json(messages: list[Message]) -> str:
         for message in messages
     ]
     return json.dumps(message_list, ensure_ascii=False, indent=2)
-
-
-def messages_to_simple_dicts(messages: list[Message]) -> list[dict]:
-    """
-    Convert the inputs to a simple dictionary format.
-    Args:
-        inputs (list[Message]): The list of messages to convert.
-    Returns:
-        dict: A dictionary representation of the inputs.
-    """
-    inputs: list[dict] = []
-    for message in messages:
-        inputs.append(message.to_simple_dict())
-    return inputs
 
 
 def to_dict[TBaseModel: BaseModel](
@@ -193,159 +169,3 @@ async def talk_as(
         params=session_state,
     )
     return reply.content.strip() if reply else ""
-
-
-async def reply_as(
-    context: Context,
-    messages: list[Message],
-    cwd: Path,
-    context_type: str = "",
-    message_type: str = "",
-) -> str:
-    session_state = {
-        "context_type": context_type or t("intelligences.functions.context_type"),
-        "message_type": message_type or t("intelligences.functions.message_type"),
-    }
-    reply: MessageResponse = await get_content(
-        context,
-        "functions/reply_as",
-        message=messages_to_json(messages),
-        params=session_state,
-        cwd=cwd,
-    )
-    return reply.content.strip() if reply else ""
-
-
-async def identify_output_type(context: Context, input: str) -> str:
-    """Identify the output type based on the input text."""
-    available_output_types = {
-        "code": "Code writing",
-        "markdown": "Documentation writing",
-    }
-    session_state = {
-        "item_type": "output type",
-        "candidates": str(Labels(available_output_types)),
-    }
-    response: DecisionResponse = await get_content(
-        context,
-        "functions/identify_item",
-        message=input,
-        params=session_state,
-    )
-    return response.label
-
-
-async def identify_message_type(context: Context, input: str) -> str:
-    available_message_types = {
-        "error": "Internal Error Message",
-        "normal": "Normal Message",
-    }
-    session_state = {
-        "item_type": "message type",
-        "candidates": str(Labels(available_message_types)),
-    }
-    response: DecisionResponse = await get_content(
-        context,
-        "functions/identify_item",
-        message=input,
-        params=session_state,
-    )
-    return response.label
-
-
-async def identify_pr_comment_action(context: Context, input: str) -> str:
-    """Identify whether a PR comment requests edits or just acknowledgment.
-
-    Returns one of:
-      - "edit": The comment requires code/document changes.
-      - "ack": No edits needed (e.g., thanks, LGTM, bot command).
-    """
-    available_actions = {
-        "edit": "Requires file edits or fixes",
-        "ack": "No edits required (thanks, LGTM, bot command)",
-    }
-    session_state = {
-        "item_type": "review action",
-        "candidates": str(Labels(available_actions)),
-    }
-    response: DecisionResponse = await get_content(
-        context,
-        "functions/identify_item",
-        message=input,
-        params=session_state,
-    )
-    return response.label
-
-
-async def analyze_log(context: Context, log_output: str) -> AgentResponse:
-    """
-    Analyze the log output and return an AgentResponse.
-    Args:
-        log_output (str): The log output to analyze.
-    Returns:
-        AgentResponse: The response containing the analysis of the log output.
-    """
-    response: AgentResponse = await get_content(
-        context, "functions/analyze_log", message=log_output
-    )
-    return response
-
-
-@contextmanager
-def capture_logs(context: Context, level: int = logging.ERROR) -> Iterator[io.StringIO]:
-    log_buffer = io.StringIO()
-    buffer_handler = logging.StreamHandler(log_buffer)
-    buffer_handler.setLevel(level)  # Capture only logs at or above this level
-    buffer_handler.setFormatter(logging.Formatter("%(message)s"))
-    context.logger.addHandler(buffer_handler)
-    try:
-        yield log_buffer
-    finally:
-        context.logger.removeHandler(buffer_handler)
-        buffer_handler.close()
-        log_buffer.close()
-
-
-async def to_agent_response(
-    context: Context, json_str: str | AgentResponse, log_output: str
-) -> AgentResponse:
-    if isinstance(json_str, AgentResponse):
-        return json_str
-
-    try:
-        return AgentResponse.model_validate_json(json_str)
-    except Exception:
-        if log_output:
-            message_type = await identify_message_type(context, log_output)
-            if message_type == "error":
-                message = await analyze_log(context, log_output)
-                return AgentResponse(
-                    status=AgentResponse.ASKING,
-                    message=f"{message}",
-                )
-        return await convert_object(context, json_str, AgentResponse)
-
-
-async def edit_files(context: Context, input: list[dict], cwd: Path) -> AgentResponse:
-    """
-    Edit files using the intelligence service.
-    Args:
-        input (str): The input for the editing operation.
-        cwd (Path): The current working directory where the files are located.
-    Returns:
-        AgentResponse: The response from the editing operation.
-    """
-    input_text = json.dumps(input, ensure_ascii=False, indent=2)
-
-    log_output = ""
-    with capture_logs(context) as log_buffer:
-        response = await _get_content(
-            context,
-            "functions/edit_files",
-            message=input_text,
-            params={},
-            cwd=cwd,
-        )
-        log_output = log_buffer.getvalue()
-
-    return await to_agent_response(context, response, log_output)
