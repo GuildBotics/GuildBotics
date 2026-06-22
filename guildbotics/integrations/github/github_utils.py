@@ -134,7 +134,7 @@ async def create_github_app_installation_token(
 
 async def get_person_github_token(person: Person, base_url: str) -> str:
     """Return the token that represents the configured GitHub identity for a member."""
-    if person.person_type == GitHubAppAuth.GITHUB_APPS:
+    if get_github_account_type(person) == GitHubAppAuth.GITHUB_APPS:
         return await create_github_app_installation_token(
             app_id=person.get_secret("github_app_id"),
             installation_id=person.get_secret("github_installation_id"),
@@ -155,7 +155,7 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
     """
     auth: httpx.Auth | None = None
 
-    if person.person_type == GitHubAppAuth.GITHUB_APPS:
+    if get_github_account_type(person) == GitHubAppAuth.GITHUB_APPS:
         # Use GitHub App authentication with auto-refresh
         app_id = person.get_secret("github_app_id")
         installation_id = person.get_secret("github_installation_id")
@@ -204,6 +204,21 @@ def get_github_username(person: Person, strict: bool = False) -> str:
     return person.account_info.get("github_username", "")
 
 
+def get_github_account_type(person: Person) -> str:
+    """Return the member's GitHub account mode, with legacy person_type fallback."""
+    account_type = str(person.account_info.get("github_account_type", "")).strip()
+    if account_type:
+        return account_type
+    if person.person_type in {
+        GitHubAppAuth.HUMAN,
+        GitHubAppAuth.MACHINE_USER,
+        GitHubAppAuth.GITHUB_APPS,
+        GitHubAppAuth.PROXY_AGENT,
+    }:
+        return person.person_type
+    return ""
+
+
 def get_person_name(members: list[Person], username: str, comment_body: str) -> str:
     """
     Get the person name associated with a GitHub username.
@@ -237,7 +252,7 @@ def is_proxy_agent(person: Person) -> bool:
     Returns:
         bool: True if the person is a proxy agent, False otherwise.
     """
-    return person.person_type == GitHubAppAuth.PROXY_AGENT
+    return get_github_account_type(person) == GitHubAppAuth.PROXY_AGENT
 
 
 def get_proxy_agent_signature(person: Person) -> str:

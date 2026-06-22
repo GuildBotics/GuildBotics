@@ -161,11 +161,11 @@ vi.mock("../api/client", async (importOriginal) => {
       has_anthropic_api_key: false,
     })),
     getRoleOptions: vi.fn(async () => ({
-      roles: [{ role_id: "professional", summary: "Professional", description: "" }],
+      roles: [{ role_id: "product", summary: "Product", description: "" }],
     })),
     getTeam: vi.fn(async () => ({
       project: { name: "Demo", language_code: "en", language_name: "English" },
-      members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["professional"] }],
+      members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
     })),
     initConfig: vi.fn(async () => configWriteResponse()),
     resolveMemberIdentity: vi.fn(async () => ({
@@ -196,7 +196,7 @@ beforeEach(() => {
   vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
   vi.mocked(getTeam).mockResolvedValue({
     project: { name: "Demo", language_code: "en", language_name: "English" },
-    members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["professional"] }],
+    members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
   });
   vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ description: "Demo project" }));
   vi.mocked(getCliAgentDetections).mockResolvedValue({
@@ -287,7 +287,7 @@ describe("SetupPage", () => {
     );
     vi.mocked(getTeam).mockResolvedValueOnce({
       project: { name: "Configured", language_code: "en", language_name: "English" },
-      members: [{ person_id: "bob", name: "Bob", is_active: true, roles: ["professional"] }],
+      members: [{ person_id: "bob", name: "Bob", is_active: true, roles: ["product"] }],
     });
 
     await user.click(screen.getByRole("button", { name: "Choose" }));
@@ -608,8 +608,7 @@ describe("SetupPage", () => {
     // Add one active member so the members section is complete; the add form is
     // shown by default and pre-filled with character defaults.
     await user.click(screen.getByRole("button", { name: "Members" }));
-    await user.type(await screen.findByLabelText("Member ID"), "alice");
-    await user.type(screen.getByLabelText("Display name"), "Alice");
+    await fillRequiredMemberBasics(user, { personId: "alice", personName: "Alice" });
     await user.click(screen.getByRole("button", { name: "Add member" }));
 
     const createButton = await screen.findByRole("button", { name: t("setup.saveInitial") });
@@ -689,11 +688,12 @@ function memberConfig() {
   return {
     person_id: "alice",
     person_name: "Alice",
-    person_type: "",
+    person_type: "agent",
+    github_account_type: "",
     is_active: true,
     github_username: "",
     git_email: "",
-    roles: ["professional"],
+    roles: ["product"],
     speaking_style: "Professional",
     relationships: "",
     character: {},
@@ -704,6 +704,7 @@ function memberConfig() {
     has_github_app_id: false,
     has_github_private_key_path: false,
     has_github_access_token: false,
+    slack_user_id: "",
     has_slack_bot_token: false,
     has_slack_app_token: false,
     slack_channels: [],
@@ -747,6 +748,7 @@ function baseProjectValues(overrides: Partial<ProjectFormValues> = {}): ProjectF
 function baseMemberValues(overrides: Partial<MemberFormValues> = {}): MemberFormValues {
   return {
     personType: "human",
+    githubAccountType: "human",
     identity: "",
     personId: "alice",
     personName: "Alice",
@@ -756,6 +758,7 @@ function baseMemberValues(overrides: Partial<MemberFormValues> = {}): MemberForm
     githubAppId: "",
     githubPrivateKeyPath: "",
     githubAccessToken: "",
+    slackUserId: "U012345678",
     slackBotToken: "",
     slackAppToken: "",
     slackChannelsText: "",
@@ -767,7 +770,7 @@ function baseMemberValues(overrides: Partial<MemberFormValues> = {}): MemberForm
       slackBotToken: false,
       slackAppToken: false,
     },
-    roles: ["professional"],
+    roles: ["product"],
     speakingStyle: "Professional",
     characterArchetype: "manager",
     characterTraits: ["organized"],
@@ -1127,7 +1130,8 @@ describe("getMemberFieldErrors", () => {
   it("flags missing core member fields", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
-        personType: "",
+        personType: "agent",
+        githubAccountType: "none",
         personId: "",
         personName: "",
         githubUsername: "",
@@ -1178,9 +1182,9 @@ describe("getMemberFieldErrors", () => {
   });
 
   it("requires an access token for machine_user and proxy_agent members", () => {
-    for (const personType of ["machine_user", "proxy_agent"] as const) {
+    for (const githubAccountType of ["machine_user", "proxy_agent"] as const) {
       const errors = getMemberFieldErrors(
-        baseMemberValues({ personType, githubAccessToken: "" }),
+        baseMemberValues({ personType: "agent", githubAccountType, githubAccessToken: "" }),
         t,
       );
       expect(errors.githubAccessToken).toBe(t("setup.validation.githubAccessTokenRequired"));
@@ -1190,7 +1194,8 @@ describe("getMemberFieldErrors", () => {
   it("accepts a stored access token for machine_user members", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
-        personType: "machine_user",
+        personType: "agent",
+        githubAccountType: "machine_user",
         githubAccessToken: "",
         storedMemberSecrets: {
           githubInstallationId: false,
@@ -1208,7 +1213,11 @@ describe("getMemberFieldErrors", () => {
 
   it("validates the format of a provided access token", () => {
     const errors = getMemberFieldErrors(
-      baseMemberValues({ personType: "machine_user", githubAccessToken: "bad-token" }),
+      baseMemberValues({
+        personType: "agent",
+        githubAccountType: "machine_user",
+        githubAccessToken: "bad-token",
+      }),
       t,
     );
     expect(errors.githubAccessToken).toBe(t("setup.validation.githubAccessTokenInvalid"));
@@ -1217,7 +1226,8 @@ describe("getMemberFieldErrors", () => {
   it("requires installation id, app id, and private key path for github_apps", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
-        personType: "github_apps",
+        personType: "agent",
+        githubAccountType: "github_apps",
         identity: "https://github.com/organizations/acme/settings/apps/my-app",
         githubInstallationId: "",
         githubAppId: "",
@@ -1233,6 +1243,8 @@ describe("getMemberFieldErrors", () => {
   it("validates Slack channels, bot token, and app token", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
+        personType: "agent",
+        githubAccountType: "none",
         slackChannelsText: "general, BAD CHANNEL",
         slackBotToken: "not-a-bot-token",
         slackAppToken: "not-an-app-token",
@@ -1245,9 +1257,24 @@ describe("getMemberFieldErrors", () => {
   });
 
   it("requires Slack tokens when channels are configured", () => {
-    const errors = getMemberFieldErrors(baseMemberValues({ slackChannelsText: "general" }), t);
+    const errors = getMemberFieldErrors(
+      baseMemberValues({
+        personType: "agent",
+        githubAccountType: "none",
+        slackChannelsText: "general",
+      }),
+      t,
+    );
     expect(errors.slackBotToken).toBe(t("setup.validation.slackBotTokenRequired"));
     expect(errors.slackAppToken).toBe(t("setup.validation.slackAppTokenRequired"));
+  });
+
+  it("requires a Slack User ID for human members", () => {
+    const errors = getMemberFieldErrors(baseMemberValues({ slackUserId: "" }), t);
+    expect(errors.slackUserId).toBe(t("setup.validation.slackUserIdRequired"));
+    expect(
+      getMemberFieldErrors(baseMemberValues({ slackUserId: "not-a-slack-id" }), t).slackUserId,
+    ).toBe(t("setup.validation.slackUserIdInvalid"));
   });
 });
 
@@ -1539,11 +1566,12 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
     person_name: "Alice",
     // No GitHub linking keeps the loaded member valid for save without extra
     // GitHub identity fields.
-    person_type: "",
+    person_type: "agent",
+    github_account_type: "",
     is_active: true,
     github_username: "",
     git_email: "",
-    roles: ["professional"],
+    roles: ["product"],
     speaking_style: "Professional and concise",
     relationships: "",
     character: {
@@ -1563,6 +1591,7 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
     has_github_app_id: false,
     has_github_private_key_path: false,
     has_github_access_token: false,
+    slack_user_id: "",
     has_slack_bot_token: false,
     has_slack_app_token: false,
     slack_channels: [],
@@ -1572,15 +1601,15 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
   };
 }
 
-// Fill the required Basic-tab fields so the member form can be submitted; the
-// add form is pre-populated with the "professional" preset, so only the member
-// id and display name are missing for a human member.
+// Fill the required Basic-tab fields so the member form can be submitted.
 async function fillRequiredMemberBasics(
   user: ReturnType<typeof userEvent.setup>,
   { personId = "bob", personName = "Bob" }: { personId?: string; personName?: string } = {},
 ) {
   await user.type(await screen.findByLabelText("Member ID"), personId);
   await user.type(screen.getByLabelText("Display name"), personName);
+  await user.type(screen.getByLabelText("Roles"), "product");
+  await user.click(await screen.findByRole("option", { name: /^product\b/ }));
 }
 
 function lastMemberAddRequest() {
@@ -1623,10 +1652,11 @@ describe("MembersSection", () => {
     expect(request).toMatchObject({
       person_id: "bob",
       person_name: "Bob",
-      // The default add form leaves GitHub linking unset (person_type "").
-      person_type: "",
+      // The default add form creates an agent without GitHub linking.
+      person_type: "agent",
+      github_account_type: "",
       is_active: true,
-      roles: ["professional"],
+      roles: ["product"],
       config_dir: "/workspace/.guildbotics/config",
       env_file_path: "/workspace/.env",
     });
@@ -1718,7 +1748,7 @@ describe("MembersSection", () => {
     await screen.findByLabelText("Member ID");
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
 
-    await selectMemberType(user, "Machine Account (Machine User)");
+    await selectGitHubAccountType(user, "Machine Account (Machine User)");
     const usernameField = await screen.findByLabelText(t("setup.members.githubUsername"));
     await user.type(usernameField, "octocat");
     await user.click(screen.getByRole("button", { name: t("setup.members.resolve") }));
@@ -1746,7 +1776,7 @@ describe("MembersSection", () => {
 
     await screen.findByLabelText("Member ID");
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
-    await selectMemberType(user, "Machine Account (Machine User)");
+    await selectGitHubAccountType(user, "Machine Account (Machine User)");
     await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "octocat");
     await user.click(screen.getByRole("button", { name: t("setup.members.resolve") }));
 
@@ -1766,22 +1796,53 @@ describe("MembersSection", () => {
     await screen.findByLabelText("Member ID");
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
 
-    // human: no GitHub auth required.
-    await selectMemberType(user, "Human");
-    expect(await screen.findByText(t("setup.members.githubAuthNotRequired"))).toBeInTheDocument();
+    // none: no GitHub auth required.
+    expect(
+      await screen.findByText(t("setup.members.githubDisabledMemberHint")),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.accessToken"))).not.toBeInTheDocument();
 
     // machine_user: an access token field appears.
-    await selectMemberType(user, "Machine Account (Machine User)");
+    await selectGitHubAccountType(user, "Machine Account (Machine User)");
     expect(await screen.findByLabelText(t("setup.members.accessToken"))).toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.installationId"))).not.toBeInTheDocument();
 
     // github_apps: installation id / app id / private key path appear instead.
-    await selectMemberType(user, "GitHub Apps");
+    await selectGitHubAccountType(user, "GitHub Apps");
     expect(await screen.findByLabelText(t("setup.members.installationId"))).toBeInTheDocument();
     expect(screen.getByLabelText(t("setup.members.appId"))).toBeInTheDocument();
     expect(screen.getByLabelText(t("setup.members.privateKeyPath"))).toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.accessToken"))).not.toBeInTheDocument();
+  });
+
+  it("locks human members inactive and uses Slack User ID settings", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await screen.findByLabelText("Member ID");
+    await selectBasicMemberType(user, "Human");
+
+    const activeSwitch = screen.getByRole("switch", {
+      name: new RegExp(t("setup.members.activeSwitch")),
+    });
+    expect(activeSwitch).toBeDisabled();
+    await waitFor(() => expect(activeSwitch).not.toBeChecked());
+
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    const accountType = await screen.findByRole("textbox", {
+      name: t("setup.members.githubAccountType"),
+    });
+    expect(accountType).toBeDisabled();
+    expect(accountType).toHaveValue("Human");
+
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    expect(await screen.findByLabelText(t("setup.members.slackUserId"))).toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.slackBotToken"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.slackAppToken"))).not.toBeInTheDocument();
   });
 
   it("blocks saving a machine_user member until a valid access token is provided", async () => {
@@ -1794,7 +1855,7 @@ describe("MembersSection", () => {
 
     await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
-    await selectMemberType(user, "Machine Account (Machine User)");
+    await selectGitHubAccountType(user, "Machine Account (Machine User)");
     await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
     await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
 
@@ -1904,10 +1965,23 @@ describe("MembersSection", () => {
   });
 });
 
-// Mantine Select renders a combobox whose accessible name matches the member
-// GitHub-mode label; open it and pick the option by its visible text.
-async function selectMemberType(user: ReturnType<typeof userEvent.setup>, optionLabel: string) {
-  await user.click(await screen.findByRole("textbox", { name: t("setup.members.githubMode") }));
+async function selectBasicMemberType(
+  user: ReturnType<typeof userEvent.setup>,
+  optionLabel: string,
+) {
+  await user.click(await screen.findByRole("textbox", { name: t("setup.members.type") }));
+  await user.click(await screen.findByRole("option", { name: optionLabel }));
+}
+
+// Mantine Select renders a combobox whose accessible name matches the GitHub
+// account type label; open it and pick the option by its visible text.
+async function selectGitHubAccountType(
+  user: ReturnType<typeof userEvent.setup>,
+  optionLabel: string,
+) {
+  await user.click(
+    await screen.findByRole("textbox", { name: t("setup.members.githubAccountType") }),
+  );
   await user.click(await screen.findByRole("option", { name: optionLabel }));
 }
 

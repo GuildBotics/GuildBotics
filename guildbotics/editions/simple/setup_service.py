@@ -250,6 +250,7 @@ class PersonSetupInput(BaseModel):
     env_file_path: Path
     append_env_file: bool = False
     person_type: str
+    github_account_type: str = ""
     person_id: str
     person_name: str
     is_active: bool
@@ -263,6 +264,7 @@ class PersonSetupInput(BaseModel):
     github_app_id: int | None = None
     github_private_key_path: Path | None = None
     github_access_token: str = ""
+    slack_user_id: str = ""
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_channels: list[str] = Field(default_factory=list)
@@ -303,6 +305,7 @@ class PersonConfigSnapshot(BaseModel):
     person_id: str
     person_name: str
     person_type: str
+    github_account_type: str = ""
     is_active: bool
     github_username: str
     git_email: str
@@ -317,6 +320,7 @@ class PersonConfigSnapshot(BaseModel):
     has_github_app_id: bool = False
     has_github_private_key_path: bool = False
     has_github_access_token: bool = False
+    slack_user_id: str = ""
     has_slack_bot_token: bool = False
     has_slack_app_token: bool = False
     slack_channels: list[str] = Field(default_factory=list)
@@ -639,11 +643,20 @@ class SimplePersonSetupService:
         person_data = cast(dict, load_yaml_file(person_file))
         account_info = person_data.get("account_info", {})
         profile = person_data.get("profile", {})
-        professional = (
-            profile.get("professional", {}) if isinstance(profile, dict) else {}
-        )
+        person_type = str(person_data.get("person_type", ""))
+        github_account_type = str(account_info.get("github_account_type", ""))
+        if not github_account_type and person_type in {
+            "human",
+            "machine_user",
+            "github_apps",
+            "proxy_agent",
+        }:
+            github_account_type = person_type
+        configured_roles = profile.get("roles", {}) if isinstance(profile, dict) else {}
         character = profile.get("character", {}) if isinstance(profile, dict) else {}
-        roles = list(professional.keys()) if isinstance(professional, dict) else []
+        roles = (
+            list(configured_roles.keys()) if isinstance(configured_roles, dict) else []
+        )
         character_data = character if isinstance(character, dict) else {}
 
         channels: list[str] = []
@@ -662,7 +675,8 @@ class SimplePersonSetupService:
         return PersonConfigSnapshot(
             person_id=str(person_data.get("person_id", person_id)),
             person_name=str(person_data.get("name", "")),
-            person_type=str(person_data.get("person_type", "")),
+            person_type=person_type,
+            github_account_type=github_account_type,
             is_active=bool(person_data.get("is_active", False)),
             github_username=str(account_info.get("github_username", "")),
             git_email=str(account_info.get("git_email", "")),
@@ -685,6 +699,7 @@ class SimplePersonSetupService:
                 env.get(f"{env_prefix}_GITHUB_PRIVATE_KEY_PATH")
             ),
             has_github_access_token=bool(env.get(f"{env_prefix}_GITHUB_ACCESS_TOKEN")),
+            slack_user_id=str(account_info.get("slack_user_id", "")),
             has_slack_bot_token=bool(env.get(f"{env_prefix}_SLACK_BOT_TOKEN")),
             has_slack_app_token=bool(env.get(f"{env_prefix}_SLACK_APP_TOKEN")),
             slack_channels=channels,
@@ -851,25 +866,25 @@ class SimplePersonSetupService:
         return PersonSetupResult(files=files, masked_environment_variables=[])
 
     def build_person_config(self, config: PersonSetupInput) -> dict:
-        professional_roles: dict[str, dict[str, str]] = {
+        role_overrides: dict[str, dict[str, str]] = {
             role.rstrip(":"): {} for role in config.roles
         }
         profile: dict[str, Any] = {
-            "professional": professional_roles,
-            "personal": {},
-            "programmer": {},
+            "roles": role_overrides,
         }
         if config.character:
             profile["character"] = config.character
         person_config = {
             "person_id": config.person_id,
             "name": config.person_name,
-            "is_active": config.is_active,
+            "is_active": False if config.person_type == "human" else config.is_active,
             "person_type": config.person_type,
             "account_info": {
+                "github_account_type": config.github_account_type,
                 "github_username": config.github_username,
                 "git_user": config.person_name,
                 "git_email": config.git_email,
+                "slack_user_id": config.slack_user_id,
             },
             "profile": profile,
             "speaking_style": config.speaking_style,

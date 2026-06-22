@@ -187,6 +187,7 @@ class AppRuntime:
                 MemberSummary(
                     person_id=member.person_id,
                     name=member.name,
+                    person_type=getattr(member, "person_type", ""),
                     is_active=member.is_active,
                     roles=sorted(member.roles.keys()),
                 )

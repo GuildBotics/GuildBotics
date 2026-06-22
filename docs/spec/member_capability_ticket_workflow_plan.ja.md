@@ -159,7 +159,7 @@ guildbotics member context --person <person_id> [--check-credentials] [--format 
 役割:
 
 - 指定 member の非 secret context を表示する。skill / desktop agent が最初に呼ぶ想定。
-- 出力に含める: `person_id` / `name` / `person_type` / active/default role summary・description / profile / `speaking_style` / LLM がそのまま従える `communication_style`（`interactive_replies` / `github_comments` / `neutral_documents` / `machine_outputs`）/ GitHub username / proxy agent signature（該当時）/ available member commands / safety note（GitHub/git writes は `guildbotics member ...` 経由のみ）。
+- 出力に含める: `person_id` / `name` / `person_type` / member に割り当てられた常設 role の summary・description / profile / `speaking_style` / LLM がそのまま従える `communication_style`（`interactive_replies` / `github_comments` / `neutral_documents` / `machine_outputs`）/ GitHub username / proxy agent signature（該当時）/ available member commands / safety note（GitHub/git writes は `guildbotics member ...` 経由のみ）。
 - `communication_style` は interactive reply と GitHub comment には member 口調を適用し、workflow `AgentResponse.message`、JSON、path、ID、commit message、PR title/body などには neutral / machine output style を適用することを明示する。これによりノンインタラクティブ workflow の JSON 応答が人格口調で壊れないようにする。
 - 含めない: access token / GitHub App private key path の中身 / env secret value / Slack token。
 - 既定では credential が無くても非 secret context を表示できる。`credential_status` は `unchecked` とする。

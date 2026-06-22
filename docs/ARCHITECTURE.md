@@ -237,7 +237,7 @@ Message
 
 **Common Models**: Response models for structured outputs (DecisionResponse, MessageResponse, etc.)
 
-**Functions**: Workflow utility functions (identify_role, talk_as, etc.)
+**Functions**: Workflow utility functions (talk_as, reply_as, output classification, etc.)
 
 #### Commands (`guildbotics/commands/`)
 
@@ -422,9 +422,9 @@ services:
 person_id: alice
 name: Alice
 is_active: true
-roles:
-  professional: {}
-  programmer: {}
+profile:
+  roles:
+    architect: {}
 account_info:
   github_username: alice
   git_user: alice

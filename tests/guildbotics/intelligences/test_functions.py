@@ -131,18 +131,6 @@ async def test_talk_as_and_reply_as_build_session_state(monkeypatch, fake_contex
 
 
 @pytest.mark.asyncio
-async def test_identify_role(monkeypatch, fake_context, stub_brain):
-    ctx = fake_context
-
-    async def fake_get_content(context, name, message, **kwargs):
-        return DecisionResponse(label="dev", reason="r", confidence=1.0)
-
-    monkeypatch.setattr(f, "get_content", fake_get_content)
-
-    assert await f.identify_role(ctx, "who") == "dev"
-
-
-@pytest.mark.asyncio
 async def test_identify_output_and_message_and_analyze_log(
     monkeypatch, fake_context, stub_brain
 ):

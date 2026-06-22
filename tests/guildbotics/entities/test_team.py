@@ -12,6 +12,8 @@ from guildbotics.entities.team import (
     Team,
 )
 
+EXPECTED_SCHEDULE_COUNT = 2
+
 # -----------------------------
 # Project tests
 # -----------------------------
@@ -102,28 +104,9 @@ def test_person_get_scheduled_tasks_expands_all_schedules():
 
     scheduled = person.get_scheduled_commands()
 
-    assert len(scheduled) == 2
+    assert len(scheduled) == EXPECTED_SCHEDULE_COUNT
     assert all(s.command == "demo" for s in scheduled)
     assert sorted(s.schedule for s in scheduled) == sorted(schedules)
-
-
-def test_person_get_role_resolution(monkeypatch):
-    # Prepare predefined roles
-    predefined = {"mentor": Role(id="mentor", summary="m", description="d")}
-    monkeypatch.setattr(Person, "DEFINED_ROLES", predefined, raising=False)
-
-    person = Person(
-        person_id="u1",
-        name="Alice",
-        roles={"dev": Role(id="dev", summary="s", description="d")},
-    )
-
-    # Existing role from person
-    assert person.get_role("dev").id == "dev"
-    # Missing role resolved from predefined
-    assert person.get_role("mentor").id == "mentor"
-    # None -> defaults to professional
-    assert person.get_role(None).id == "professional"
 
 
 def test_person_get_role_descriptions_filters_when_ids_provided():
@@ -185,7 +168,7 @@ def test_team_get_role_members_and_available_ids():
 
     role_members = team.get_role_members()
     assert set(role_members.keys()) == {"dev", "reviewer"}
-    assert set(p.person_id for p in role_members["dev"]) == {"u1", "u2"}
+    assert {p.person_id for p in role_members["dev"]} == {"u1", "u2"}
     assert [p.person_id for p in role_members["reviewer"]] == ["u1"]
 
     available_ids = team.get_available_role_ids()

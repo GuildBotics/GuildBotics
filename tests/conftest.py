@@ -43,10 +43,9 @@ class FakeContext:
             "git_email": "test@example.com",
         }
         # Default task with id and repository
-        self.task = Task(title="T", description="D", role="dev")
+        self.task = Task(title="T", description="D")
         self.task.id = "task-123"
         self.task.repository = "test-repo"
-        self.active_role = self.person.get_role(self.task.role)
         self.logger = logging.getLogger("test.context")
         # Registry for fake brains
         self._brains: dict[str, FakeBrain] = {}

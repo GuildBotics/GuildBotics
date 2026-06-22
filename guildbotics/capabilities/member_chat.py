@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from logging import Logger
 from typing import Any, cast
 
@@ -17,6 +19,7 @@ from guildbotics.integrations.chat_service import (
 
 SLACK_BOT_TOKEN_KEY = "SLACK_BOT_TOKEN"
 SLACK_APP_TOKEN_KEY = "SLACK_APP_TOKEN"
+CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
 
 
 class MemberChatCapabilityService:
@@ -178,8 +181,9 @@ class MemberChatCapabilityService:
         body: str,
     ) -> dict[str, Any]:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
+        rendered_body = self._render_participant_text(body)
         try:
-            result = await self._chat().post_message(resolved_channel_id, body)
+            result = await self._chat().post_message(resolved_channel_id, rendered_body)
         except Exception as exc:
             raise MemberCapabilityError(_safe_chat_error(exc)) from exc
         return {
@@ -187,7 +191,7 @@ class MemberChatCapabilityService:
             "channel_id": result.channel_id,
             "message_ts": result.message_ts,
             "thread_ts": result.thread_ts,
-            "text": body,
+            "text": rendered_body,
             "posted": True,
         }
 
@@ -200,9 +204,10 @@ class MemberChatCapabilityService:
         body: str,
     ) -> dict[str, Any]:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
+        rendered_body = self._render_participant_text(body)
         try:
             result = await self._chat().post_message(
-                resolved_channel_id, body, thread_ts=thread_ts
+                resolved_channel_id, rendered_body, thread_ts=thread_ts
             )
         except Exception as exc:
             raise MemberCapabilityError(_safe_chat_error(exc)) from exc
@@ -211,7 +216,7 @@ class MemberChatCapabilityService:
             "channel_id": result.channel_id,
             "message_ts": result.message_ts,
             "thread_ts": result.thread_ts,
-            "text": body,
+            "text": rendered_body,
             "posted": True,
         }
 
@@ -258,6 +263,15 @@ class MemberChatCapabilityService:
             raise MemberCapabilityError(f"Chat channel was not found: {channel_name}")
         return resolved
 
+    def _render_participant_text(self, body: str) -> str:
+        labels = _load_participant_labels()
+        if not labels:
+            return body
+        render = getattr(self._chat(), "render_participant_text", None)
+        if not callable(render):
+            return body
+        return str(render(body, labels))
+
 
 def _events_payload(events: list[ChatEvent]) -> list[dict[str, Any]]:
     return [
@@ -274,6 +288,23 @@ def _events_payload(events: list[ChatEvent]) -> list[dict[str, Any]]:
         }
         for event in sorted(events, key=lambda item: item.message_ts)
     ]
+
+
+def _load_participant_labels() -> dict[str, str]:
+    raw = os.getenv(CHAT_PARTICIPANT_LABELS_ENV, "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(user_id): str(label)
+        for user_id, label in value.items()
+        if str(user_id) and str(label)
+    }
 
 
 async def probe_slack_app_token(app_token: str, base_url: str | None) -> None:

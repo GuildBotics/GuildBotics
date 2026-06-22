@@ -12,7 +12,7 @@ Consider the character's profile, speaking style, and roles when composing the m
     ```
     {{ topic }}
     ```
-- Your role: {{ context.active_role }}
+- Your standing roles: {{ context.person.roles }}
 - Your language: {{ context.language_name }}
 - Your speaking style: {{ context.person.speaking_style }}
 {% if context.person.relationships %}
@@ -39,7 +39,7 @@ Consider the character's profile, speaking style, and roles when composing the m
 {% if relationships %}
 - Reflect your feelings and attitudes as described in your relationships with the audience.
 {% endif %}
-- If role information is provided, prioritize that role perspective in your response.
+- If standing role information is provided, naturally reflect those perspectives in your response.
 - Maintain your specified speaking style consistently throughout.
 - If you need to reference the current date or time, use the provided value.
 - Respond naturally and consistently as "{{ context.person.name }}", reflecting their personality and communication style.

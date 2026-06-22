@@ -184,7 +184,7 @@ function projectConfig(overrides: Record<string, unknown> = {}) {
 function team(overrides: Record<string, unknown> = {}) {
   return {
     project: { name: "Demo", language_code: "en", language_name: "English" },
-    members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["professional"] }],
+    members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
     ...overrides,
   };
 }
@@ -467,7 +467,7 @@ describe("Setup integration (real client + mock server)", () => {
         agents: [{ name: "codex", executable: "codex", detected: true, path: "/usr/bin/codex" }],
       })
       .json("GET", "/config/roles", {
-        roles: [{ role_id: "professional", summary: "Professional", description: "" }],
+        roles: [{ role_id: "product", summary: "Product", description: "" }],
       })
       .json("POST", "/config/members", configWriteResponse())
       .json("POST", "/config/init", configWriteResponse());
@@ -487,6 +487,8 @@ describe("Setup integration (real client + mock server)", () => {
     await user.click(screen.getByRole("button", { name: "Members" }));
     await user.type(await screen.findByLabelText("Member ID"), "alice");
     await user.type(screen.getByLabelText("Display name"), "Alice");
+    await user.type(screen.getByLabelText("Roles"), "product");
+    await user.click(await screen.findByRole("option", { name: /^product\b/ }));
     await user.click(screen.getByRole("button", { name: "Add member" }));
 
     // The real POST /config/members request is built and sent by the client.
@@ -497,7 +499,10 @@ describe("Setup integration (real client + mock server)", () => {
     expect(memberCall.body).toMatchObject({
       person_id: "alice",
       person_name: "Alice",
+      person_type: "agent",
+      github_account_type: "",
       is_active: true,
+      roles: ["product"],
       config_dir: "/workspace/.guildbotics/config",
       env_file_path: "/workspace/.env",
     });

@@ -51,6 +51,7 @@ class ProjectSummary(BaseModel):
 class MemberSummary(BaseModel):
     person_id: str
     name: str
+    person_type: str = ""
     is_active: bool
     roles: list[str]
 

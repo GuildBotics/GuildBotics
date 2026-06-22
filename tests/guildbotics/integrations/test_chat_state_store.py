@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ScheduledPostState,
     ThreadConversationState,
+    ThreadHandoffState,
     ThreadMessageState,
 )
-from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 
 
@@ -58,6 +59,16 @@ def test_thread_state_roundtrip(tmp_path):
         participants={"alice", "bob"},
         thread_topic="weekly AI news",
         latest_focus="business angle grounded in current-week items",
+        handoffs=[
+            ThreadHandoffState(
+                person_id="bob",
+                roles=["design"],
+                message_ts="124.000",
+                text="@bob UX wording check?",
+                thread_topic="weekly AI news",
+                latest_focus="business angle",
+            )
+        ],
     )
 
     store.save_thread_state("slack", "alice", "C1", "123.456", state)
@@ -68,6 +79,10 @@ def test_thread_state_roundtrip(tmp_path):
     assert loaded.participants == {"alice", "bob"}
     assert loaded.thread_topic == "weekly AI news"
     assert loaded.latest_focus == "business angle grounded in current-week items"
+    assert len(loaded.handoffs) == 1
+    assert loaded.handoffs[0].person_id == "bob"
+    assert loaded.handoffs[0].roles == ["design"]
+    assert loaded.handoffs[0].message_ts == "124.000"
 
 
 def test_load_missing_state_returns_defaults(tmp_path):
@@ -84,6 +99,7 @@ def test_load_missing_state_returns_defaults(tmp_path):
     assert thread.participants == set()
     assert thread.thread_topic == ""
     assert thread.latest_focus == ""
+    assert thread.handoffs == []
     assert store.load_thread_messages("slack", "alice", "C1", "100.1") == []
 
 

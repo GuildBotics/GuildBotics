@@ -318,13 +318,19 @@ const resources = {
             "GuildBotics cannot run without an active member. Add at least one member before finishing setup.",
           memberActive: "Active",
           memberInactive: "Inactive",
+          memberHuman: "Human",
           addTitle: "Add member",
           editTitle: "Edit member",
           type: "Member type",
-          githubMode: "GitHub integration for this member",
-          githubModeHint:
+          memberTypeHint: "Choose whether this member is an AI agent or a human teammate.",
+          memberTypeOptions: {
+            agent: "Agent",
+            human: "Human",
+          },
+          githubAccountType: "GitHub account type",
+          githubAccountTypeHint:
             "Required only when this member works with GitHub tickets, issues, or pull requests.",
-          typeOptions: {
+          githubAccountTypeOptions: {
             none: "Do not link GitHub",
             machine_user: "Machine Account (Machine User)",
             github_apps: "GitHub Apps",
@@ -382,6 +388,7 @@ const resources = {
           characterListHint: "One item per line.",
           relationships: "Relationship with other members",
           activeSwitch: "Active member",
+          activeHumanHint: "Human members are not run by the scheduler.",
           installationId: "GitHub Installation ID",
           appId: "GitHub App ID",
           privateKeyPath: "GitHub private key path",
@@ -390,6 +397,9 @@ const resources = {
           githubAuthNotRequired: "GitHub auth is not required for human members.",
           githubDisabledMemberHint:
             "GitHub is not linked for this member. You can still use local commands, LLM / CLI settings, and Slack settings.",
+          slackUserId: "Slack User ID",
+          slackUserIdHint:
+            "Enter the Slack member ID that starts with U. Open the user's Slack profile and choose Copy member ID from the more menu.",
           slackBotToken: "Slack Bot token",
           slackBotTokenPlaceholder: "xoxb-...",
           slackAppToken: "Slack App token",
@@ -565,6 +575,8 @@ const resources = {
           githubAccessTokenRequired: "GitHub access token is required.",
           githubAccessTokenInvalid:
             "Enter a GitHub access token starting with ghp_, gho_, ghu_, ghs_, ghr_, or github_pat_.",
+          slackUserIdRequired: "Slack User ID is required for human members.",
+          slackUserIdInvalid: "Enter a Slack User ID starting with U.",
           slackBotTokenRequired: "Slack Bot token is required when Slack channels are configured.",
           slackBotTokenInvalid: "Enter a Slack Bot token starting with xoxb-.",
           slackAppTokenRequired: "Slack App token is required when Slack channels are configured.",
@@ -1140,12 +1152,19 @@ const resources = {
             "有効メンバーが0人の状態ではGuildBoticsは実行できません。セットアップ完了前に1人以上追加してください。",
           memberActive: "有効",
           memberInactive: "無効",
+          memberHuman: "人間",
           addTitle: "メンバーを追加",
           editTitle: "メンバーを編集",
           type: "メンバー種別",
-          githubMode: "このメンバーの GitHub 連携",
-          githubModeHint: "GitHub のチケット、Issue、Pull Request を扱うメンバーだけ設定します。",
-          typeOptions: {
+          memberTypeHint: "このメンバーが AI エージェントか人間のチームメイトかを選びます。",
+          memberTypeOptions: {
+            agent: "エージェント",
+            human: "人間",
+          },
+          githubAccountType: "GitHub アカウント種別",
+          githubAccountTypeHint:
+            "GitHub のチケット、Issue、Pull Request を扱うメンバーだけ設定します。",
+          githubAccountTypeOptions: {
             none: "GitHub連携なし",
             machine_user: "マシンアカウント（マシンユーザー）",
             github_apps: "GitHub Apps",
@@ -1202,6 +1221,7 @@ const resources = {
           characterListHint: "1行に1項目で入力します。",
           relationships: "他のメンバーとの関係性",
           activeSwitch: "有効メンバーにする",
+          activeHumanHint: "人間メンバーはスケジューラでは実行されません。",
           installationId: "GitHub Installation ID",
           appId: "GitHub App ID",
           privateKeyPath: "GitHub秘密鍵パス",
@@ -1210,6 +1230,9 @@ const resources = {
           githubAuthNotRequired: "人間メンバーでは GitHub 認証は不要です。",
           githubDisabledMemberHint:
             "このメンバーは GitHub と連携しません。ローカルコマンド、LLM・CLI設定、Slack設定は利用できます。",
+          slackUserId: "Slack User ID",
+          slackUserIdHint:
+            "U で始まる Slack member ID を入力してください。Slack で対象ユーザーのプロフィールを開き、その他メニューから Copy member ID を選択して取得できます。",
           slackBotToken: "Slack Bot トークン",
           slackBotTokenPlaceholder: "xoxb-...",
           slackAppToken: "Slack App トークン",
@@ -1386,6 +1409,8 @@ const resources = {
           githubAccessTokenRequired: "GitHubアクセストークンは必須です。",
           githubAccessTokenInvalid:
             "GitHubアクセストークンは ghp_、gho_、ghu_、ghs_、ghr_、github_pat_ のいずれかで始まる値を入力してください。",
+          slackUserIdRequired: "人間メンバーには Slack User ID が必要です。",
+          slackUserIdInvalid: "Slack User ID は U で始まる値を入力してください。",
           slackBotTokenRequired:
             "参加するSlackチャンネルを設定する場合、Slack Bot トークンは必須です。",
           slackBotTokenInvalid: "Slack Bot トークンは xoxb- で始まる値を入力してください。",

@@ -14,12 +14,23 @@ class ChannelCursorState:
 
 
 @dataclass(slots=True)
+class ThreadHandoffState:
+    person_id: str
+    roles: list[str] = field(default_factory=list)
+    message_ts: str = ""
+    text: str = ""
+    thread_topic: str = ""
+    latest_focus: str = ""
+
+
+@dataclass(slots=True)
 class ThreadConversationState:
     channel_id: str
     thread_ts: str
     participants: set[str] = field(default_factory=set)  # person_id
     thread_topic: str = ""
     latest_focus: str = ""
+    handoffs: list[ThreadHandoffState] = field(default_factory=list)
 
 
 @dataclass(slots=True)
