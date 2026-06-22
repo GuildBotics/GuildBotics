@@ -81,8 +81,8 @@ class EventListenerRunner:
             str, tuple[SubscriptionSignature, ResolvedSubscriptions]
         ] = {}
         self._last_group_log_state: tuple[int, int] | None = None
-        self._last_backfill_at: dict[tuple[str, str], float] = {}
-        self._startup_backfilled: set[tuple[str, str]] = set()
+        self._last_backfill_at: dict[tuple[str, str, str], float] = {}
+        self._startup_backfilled: set[tuple[str, str, str]] = set()
         self._cycle_count = 0
         self._cycle_failure_count = 0
         self._events_drained_count = 0
@@ -251,10 +251,10 @@ class EventListenerRunner:
                     if self._stop_event.is_set():
                         break
                     backfilled_count += await self._backfill_due_events(
-                        person, "slack", channel_id, policy
+                        person, key.service, channel_id, policy
                     )
                     delivered, skipped = await self._dispatch_pending_events(
-                        person, "slack", channel_id
+                        person, key.service, channel_id
                     )
                     delivered_count += delivered
                     skipped_processed_count += skipped
@@ -546,7 +546,7 @@ class EventListenerRunner:
         channel_id: str,
         policy: ChatBackfillPolicy,
     ) -> int:
-        key = (person.person_id, channel_id)
+        key = (service_name, person.person_id, channel_id)
         now = time.monotonic()
         startup_due = key not in self._startup_backfilled
         periodic_due = (
@@ -556,10 +556,8 @@ class EventListenerRunner:
         )
         if not startup_due and not periodic_due:
             return 0
-        self._startup_backfilled.add(key)
-        self._last_backfill_at[key] = now
         try:
-            return await self._backfill_channel_and_threads(
+            count = await self._backfill_channel_and_threads(
                 person, service_name, channel_id, policy
             )
         except Exception as exc:
@@ -571,6 +569,9 @@ class EventListenerRunner:
                 exc,
             )
             return 0
+        self._startup_backfilled.add(key)
+        self._last_backfill_at[key] = now
+        return count
 
     async def _backfill_channel_and_threads(
         self,
