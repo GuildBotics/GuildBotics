@@ -622,6 +622,8 @@ message_channels:
     name: dev-chat
     chat:
       enabled: true
+      startup_backfill_minutes: 60
+      backfill_interval_seconds: 300
 
 task_schedules:
   - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
@@ -632,6 +634,7 @@ task_schedules:
 ポイント:
 
 - 監視対象チャネルは `person.yml` の `message_channels` で定義し、`chat.enabled: true` のものが対象
+- 起動時に Slack history から直近の channel message と既知 thread reply を backfill します。`startup_backfill_minutes` の既定値は `60`、`backfill_interval_seconds` の既定値は `300` で、`0` にすると起動後の定期 history 確認を無効化できます。
 - incoming reply / reaction / no-op / completion evidence は `guildbotics member chat reply|post|reaction add|noop|complete` 経由で記録される
 - 定期投稿は `task_schedules` + `workflows/chat_post_command` を使う（投稿本文は GuildBotics カスタムコマンドの出力）
 - 例: `examples/reports/ai_news_digest` は前段でニュースRSSを取得し、後段でLLMがSlack向けに要約整形するサンプル

@@ -48,6 +48,8 @@ def test_get_chat_subscriptions_prefers_message_channels():
                     "enabled": True,
                     "channel_id": "C1",
                     "event_source": "socket_mode",
+                    "startup_backfill_minutes": 60,
+                    "backfill_interval_seconds": 300,
                 },
             },
             {"service": "slack", "name": "ignored-no-chat"},
@@ -61,6 +63,8 @@ def test_get_chat_subscriptions_prefers_message_channels():
             "channel_name": "dev-chat",
             "enabled": True,
             "event_source": "socket_mode",
+            "startup_backfill_minutes": 60,
+            "backfill_interval_seconds": 300,
         }
     ]
 

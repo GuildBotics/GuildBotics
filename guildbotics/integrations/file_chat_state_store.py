@@ -163,6 +163,22 @@ class FileConversationStateStore(ConversationStateStore):
             )
         return out
 
+    def list_thread_states(
+        self, service: str, person_id: str, channel_id: str
+    ) -> list[ThreadConversationState]:
+        thread_dir = self._thread_file(service, person_id, channel_id, "_").parent
+        if not thread_dir.exists():
+            return []
+        out: list[ThreadConversationState] = []
+        with self._lock:
+            for path in sorted(thread_dir.glob("*.json")):
+                thread_ts = path.stem
+                state = self.load_thread_state(
+                    service, person_id, channel_id, thread_ts
+                )
+                out.append(state)
+        return out
+
     def append_thread_message(
         self,
         service: str,

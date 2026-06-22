@@ -600,6 +600,8 @@ message_channels:
     name: dev-chat
     chat:
       enabled: true
+      startup_backfill_minutes: 60
+      backfill_interval_seconds: 300
 
 task_schedules:
   - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
@@ -610,6 +612,7 @@ task_schedules:
 Points:
 
 - Monitored channels are defined in `message_channels`; entries with `chat.enabled: true` are monitored.
+- On startup, GuildBotics backfills recent channel messages and known thread replies from Slack history. `startup_backfill_minutes` defaults to `60`; `backfill_interval_seconds` defaults to `300` and can be set to `0` to disable periodic history checks after startup.
 - Incoming replies, reactions, no-op records, and completion evidence go through `guildbotics member chat reply|post|reaction add|noop|complete`.
 - For scheduled posting, use `task_schedules` + `workflows/chat_post_command` (the post body is generated from a GuildBotics custom command output).
 - Example: `examples/reports/ai_news_digest` gets candidate news from Google News RSS first, then an LLM formats it into a Slack-friendly summary.
