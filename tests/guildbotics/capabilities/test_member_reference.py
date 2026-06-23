@@ -19,6 +19,10 @@ def test_reference_states_cross_cutting_rules():
     # the shared reference.
     assert "git add" in text
     assert "git config" in text
+    assert "memory.pinned" in text
+    assert "ticket URL, PR URL, Slack thread URL" in text
+    assert "canonical current state" in text
+    assert "autonomous workflow runs must propose policy" in text
     assert "Never display, infer, store, or copy secrets" in text
 
 
