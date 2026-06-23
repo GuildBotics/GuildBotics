@@ -186,8 +186,8 @@ function ServicePage() {
   // so it can be flushed on unmount, ensuring a change followed by an immediate
   // navigation away is never dropped.
   const servicePreferencesRef = useRef(servicePreferences);
-  servicePreferencesRef.current = servicePreferences;
   useEffect(() => {
+    servicePreferencesRef.current = servicePreferences;
     const handle = window.setTimeout(() => saveServicePreferences(servicePreferences), 400);
     return () => window.clearTimeout(handle);
   }, [servicePreferences]);
