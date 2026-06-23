@@ -53,9 +53,27 @@ def test_handle_github_ticket_prompt_uses_member_capability_contract():
     assert "--pr-url" in prompt["body"]
     assert "communication style" in prompt["body"]
     assert "neutral workflow execution summary" in prompt["body"]
+    assert "If a PR was created, reused, or updated" in prompt["body"]
+    assert "Record separate reusable technical lessons" in prompt["body"]
     assert "guildbotics_execution_mode=workflow" in prompt["body"]
     assert "isolated member workspace" in prompt["body"]
     assert "--workspace-mode current" in prompt["body"]
+
+
+def test_handle_chat_event_prompt_records_secondary_pr_work_context():
+    prompt = load_markdown_with_frontmatter(
+        Path("guildbotics/templates/commands/functions/handle_chat_event.en.md")
+    )
+
+    assert prompt["response_class"] == "guildbotics.intelligences.common.AgentResponse"
+    assert "member chat complete" in prompt["body"]
+    assert (
+        "If a secondary GitHub action created, reused, or updated a PR"
+        in (prompt["body"])
+    )
+    assert "--pr <pr_url>" in prompt["body"]
+    assert "--thread <slack_thread_url>" in prompt["body"]
+    assert "Record separate reusable technical lessons" in prompt["body"]
 
 
 def test_guildbotics_skill_uses_member_persona_without_decorating_control_data():
@@ -80,6 +98,12 @@ def test_guildbotics_skill_uses_member_persona_without_decorating_control_data()
     assert "shared pair-programming workspace" in skill["body"]
     assert "--workspace-mode current" in skill["body"]
     assert "Do not run `member git prepare`" in skill["body"]
+    assert (
+        "If you create or update a PR outside the GitHub Issue Flow or PR Review Flow"
+        in skill["body"]
+    )
+    assert "--pr <pr_url>" in skill["body"]
+    assert "--thread <thread_url>" in skill["body"]
     assert (
         "After commit, push, PR creation, and final GitHub comment/reaction are done"
         in skill["body"]

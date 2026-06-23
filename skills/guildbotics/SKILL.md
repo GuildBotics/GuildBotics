@@ -84,6 +84,7 @@ EOF
 ```
 
 Run `member git commit` without `member git push` when the user asks for a local commit only.
+If you create or update a PR outside the GitHub Issue Flow or PR Review Flow, maintain memory after the PR exists and before the interactive final reply. Record durable PR work context with `--pr <pr_url>` when known and `--thread <thread_url>` when the work originated from a chat thread, including branch, commit, verification result, and remaining follow-up. Record separate technical lessons as separate memory documents when they are reusable beyond that PR.
 
 ## GitHub Issue Flow
 
@@ -106,7 +107,7 @@ EOF
 
 Omit `--base` only when the repository default branch is the intended PR target.
 9. Post the final issue comment in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github issue comment`, or leave a reaction if no action is needed.
-10. After commit, push, PR creation, and final GitHub comment/reaction are done, maintain memory according to the member capabilities before the interactive final reply. When a PR was created or updated, record durable context that would help resume the work later, including the issue URL, PR URL when known, branch, verification result, and remaining follow-up.
+10. After commit, push, PR creation, and final GitHub comment/reaction are done, maintain memory according to the member capabilities before the interactive final reply. When a PR was created or updated, record durable context that would help resume the work later with `--ticket <issue_url>` and `--pr <pr_url>` when known, including branch, verification result, and remaining follow-up.
 
 ## PR Review Flow
 
@@ -120,7 +121,7 @@ Omit `--base` only when the repository default branch is the intended PR target.
 8. Push updates with `"$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current`.
 9. Reply to inline review threads in the member's voice with `"$HOME/.guildbotics/bin/guildbotics" member github pr reply --reply-target-id <reply_target_id>`.
 10. If no change is needed, leave a reply or reaction so the workflow has observable evidence.
-11. After commit, push, and PR replies/reactions are done, maintain memory according to the member capabilities before the interactive final reply. When a PR was updated, record durable context that would help resume the review later, including the PR URL, branch, verification result, addressed threads, and remaining follow-up.
+11. After commit, push, and PR replies/reactions are done, maintain memory according to the member capabilities before the interactive final reply. When a PR was updated, record durable context that would help resume the review later with `--pr <pr_url>`, including branch, verification result, addressed threads, and remaining follow-up.
 
 ## Slack Chat Flow
 

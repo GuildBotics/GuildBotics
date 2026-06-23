@@ -57,7 +57,7 @@ description: Incoming chat event の対応を CLI エージェントへ委譲し
 11. 投稿も reaction も不要なら `guildbotics member chat noop --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --reason-file <file>` を実行してください。
 12. 追加情報が必要な場合は質問本文を Slack に reply/post してから、status `asking` で complete してください。
 13. credential 不足、access 不足、必要文脈不足などで処理できない場合は、safe summary を書いて status `blocked` で complete してください。
-14. `chat complete` の前に、member capabilities に従って memory を手入れしてください。自律 workflow で policy 変更が必要だと判断した場合は、Slack thread へ reply/post で提案し、直接 update しないでください。
+14. `chat complete` の前に、member capabilities に従って memory を手入れしてください。副次的な GitHub 操作で PR を作成・再利用・更新した場合は、利用できる範囲で `--pr <pr_url>` と `--thread <slack_thread_url>` を付けて、branch、検証結果、完了した対応、残 follow-up を含む PR 作業記録を残してください。再利用価値のある技術的な学びは、PR 作業記録とは別の memory document として記録してください。自律 workflow で policy 変更が必要だと判断した場合は、Slack thread へ reply/post で提案し、直接 update しないでください。
 15. 最後に必ず `guildbotics member chat complete --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --summary-file <file>` を実行してください。
 16. `member chat complete` が失敗した場合、成功応答を返してはいけません。不足している evidence を補うか、agent run を失敗させてください。
 17. secret を表示・推測・保存・コピーしないでください。
