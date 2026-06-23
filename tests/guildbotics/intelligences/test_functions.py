@@ -42,7 +42,8 @@ def test_handle_github_ticket_prompt_uses_member_capability_contract():
     assert "guildbotics member" in prompt["body"]
     assert "member task complete" in prompt["body"]
     assert "GitHubTicketAgentResult" not in prompt["body"]
-    assert "git push" in prompt["body"]
+    assert "capabilities section is the source of truth" in prompt["body"]
+    assert "Use `{ticket_url}` as this run's memory source key" in prompt["body"]
     # The workflow no longer injects issue content; the agent inspects it.
     assert "{issue_title}" not in prompt["body"]
     assert "{issue_description}" not in prompt["body"]
@@ -50,14 +51,8 @@ def test_handle_github_ticket_prompt_uses_member_capability_contract():
     # which carries --pr-url for PR review.
     assert "{prepare_command}" in prompt["body"]
     assert "--pr-url" in prompt["body"]
-    assert "persona" in prompt["body"]
     assert "communication style" in prompt["body"]
-    assert "conversational outputs" in prompt["body"]
-    assert "issue titles/bodies and PR titles/bodies" in prompt["body"]
-    assert (
-        "Keep `AgentResponse.message` as a neutral workflow execution summary"
-        in (prompt["body"])
-    )
+    assert "neutral workflow execution summary" in prompt["body"]
     assert "guildbotics_execution_mode=workflow" in prompt["body"]
     assert "isolated member workspace" in prompt["body"]
     assert "--workspace-mode current" in prompt["body"]
@@ -70,6 +65,8 @@ def test_guildbotics_skill_uses_member_persona_without_decorating_control_data()
     assert "member context" in skill["body"]
     assert "persona" in skill["body"]
     assert "communication style" in skill["body"]
+    assert "capabilities` section returned by `member context`" in skill["body"]
+    assert "source-vs-current-state handling" in skill["body"]
     assert "conversational outputs" in skill["body"]
     assert "issue titles/bodies, PR titles/bodies, commit messages" in skill["body"]
     assert "workflow `AgentResponse.message`" in skill["body"]
@@ -83,6 +80,12 @@ def test_guildbotics_skill_uses_member_persona_without_decorating_control_data()
     assert "shared pair-programming workspace" in skill["body"]
     assert "--workspace-mode current" in skill["body"]
     assert "Do not run `member git prepare`" in skill["body"]
+    assert (
+        "After commit, push, PR creation, and final GitHub comment/reaction are done"
+        in skill["body"]
+    )
+    assert "When a PR was created or updated, record durable context" in skill["body"]
+    assert "When a PR was updated, record durable context" in skill["body"]
 
 
 @pytest.mark.asyncio

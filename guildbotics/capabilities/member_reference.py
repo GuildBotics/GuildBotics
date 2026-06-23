@@ -212,10 +212,20 @@ _CROSS_CUTTING_RULES: list[str] = [
     "to that one commit without changing the repository git config.",
     "Apply the member voice from `communication_style` to conversational and document outputs; "
     "keep IDs, paths, command arguments, and machine-readable output factual.",
-    "Memory recall and get are read-only. Use touch only after a memory actually helped, update it "
-    "when reality proves it wrong, and record only durable reusable lessons. Policy memory "
-    "(`kind: policy`) requires human approval through `--policy-approved` and cannot be changed "
-    "from autonomous workflow runs.",
+    "`memory.pinned` from `member context` contains standing rules. `memory.digest` is only a hint "
+    "that a relevant note may exist.",
+    "Before work, recall prior memory by source whenever a ticket URL, PR URL, Slack thread URL, "
+    "or thread timestamp is known. Use topic recall only when prior notes seem likely, with "
+    "repeated `--query` options for synonyms and English/Japanese variants. Get only promising "
+    "hits; if nothing looks relevant, do not get.",
+    "Memory can carry prior context, rationale, and progress, but it is not the canonical current "
+    "state of GitHub, Slack, or code. Reality-check every memory you read against the current "
+    "owning system, and when sources differ prefer the owning system for canonical fields such "
+    "as GitHub state, assignees, labels, PR links, Slack thread contents, and code behavior.",
+    "Before finishing, touch memories that actually helped, update memories that reality proves "
+    "wrong, and record only durable reusable lessons. Policy memory (`kind: policy`) requires "
+    "human approval through `--policy-approved`; autonomous workflow runs must propose policy "
+    "changes in their normal output instead of updating policy directly.",
     "Never display, infer, store, or copy secrets or token values.",
 ]
 
