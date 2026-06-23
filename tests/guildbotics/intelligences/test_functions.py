@@ -65,7 +65,7 @@ def test_guildbotics_skill_uses_member_persona_without_decorating_control_data()
     assert "member context" in skill["body"]
     assert "persona" in skill["body"]
     assert "communication style" in skill["body"]
-    assert "capabilities` section returned by `member context`" in skill["body"]
+    assert "`capabilities` section returned by `member context`" in skill["body"]
     assert "source-vs-current-state handling" in skill["body"]
     assert "conversational outputs" in skill["body"]
     assert "issue titles/bodies, PR titles/bodies, commit messages" in skill["body"]
