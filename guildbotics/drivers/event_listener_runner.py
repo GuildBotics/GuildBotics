@@ -17,8 +17,10 @@ from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ConversationStateStore,
+    ThreadConversationState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.integrations.slack.slack_socket_listener import (
     SlackSocketEventListener,
 )
@@ -557,7 +559,7 @@ class EventListenerRunner:
         if not startup_due and not periodic_due:
             return 0
         try:
-            count = await self._backfill_channel_and_threads(
+            return await self._backfill_channel_and_threads(
                 person, service_name, channel_id, policy
             )
         except Exception as exc:
@@ -569,9 +571,9 @@ class EventListenerRunner:
                 exc,
             )
             return 0
-        self._startup_backfilled.add(key)
-        self._last_backfill_at[key] = now
-        return count
+        finally:
+            self._startup_backfilled.add(key)
+            self._last_backfill_at[key] = now
 
     async def _backfill_channel_and_threads(
         self,
@@ -589,14 +591,29 @@ class EventListenerRunner:
             for thread_state in self._state_store.list_thread_states(
                 service_name, person.person_id, channel_id
             ):
-                count += await self._backfill_thread_events(
-                    person,
-                    service_name,
-                    channel_id,
-                    thread_state.thread_ts,
-                    chat_service,
-                    policy,
-                )
+                if thread_state.backfill_disabled_reason:
+                    continue
+                try:
+                    count += await self._backfill_thread_events(
+                        person,
+                        service_name,
+                        channel_id,
+                        thread_state.thread_ts,
+                        chat_service,
+                        policy,
+                    )
+                except SlackApiError as exc:
+                    if exc.method != "conversations.replies" or (
+                        exc.error != "thread_not_found"
+                    ):
+                        raise
+                    self._disable_thread_backfill(
+                        person,
+                        service_name,
+                        channel_id,
+                        thread_state,
+                        exc.error,
+                    )
             return count
         finally:
             await person_context.aclose()
@@ -637,6 +654,33 @@ class EventListenerRunner:
             service_name, person.person_id, channel_id, state, highest_ts
         )
         return count
+
+    def _disable_thread_backfill(
+        self,
+        person: Person,
+        service_name: str,
+        channel_id: str,
+        thread_state: ThreadConversationState,
+        reason: str,
+    ) -> None:
+        thread_state.backfill_disabled_reason = reason
+        thread_state.backfill_error_count += 1
+        thread_state.last_backfill_error = reason
+        self._state_store.save_thread_state(
+            service_name,
+            person.person_id,
+            channel_id,
+            thread_state.thread_ts,
+            thread_state,
+        )
+        self._log_info(
+            "chat thread backfill disabled: person=%s service=%s channel=%s thread=%s reason=%s",
+            person.person_id,
+            service_name,
+            channel_id,
+            thread_state.thread_ts,
+            reason,
+        )
 
     async def _backfill_thread_events(
         self,

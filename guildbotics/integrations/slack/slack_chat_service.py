@@ -26,6 +26,15 @@ _SLACK_REACTION_MAP: dict[SemanticReaction, str] = {
 }
 
 
+class SlackApiError(RuntimeError):
+    """Raised when Slack returns ok=false for a Web API method."""
+
+    def __init__(self, method: str, error: str) -> None:
+        self.method = method
+        self.error = error
+        super().__init__(f"Slack API '{method}' failed: {error}")
+
+
 class SlackChatService(ChatService):
     """Slack Web API-backed chat service (MVP subset)."""
 
@@ -230,8 +239,8 @@ class SlackChatService(ChatService):
         if not isinstance(payload, dict):
             raise RuntimeError(f"Slack API '{method}' returned non-object JSON.")
         if not payload.get("ok", False):
-            error = payload.get("error", "unknown_error")
-            raise RuntimeError(f"Slack API '{method}' failed: {error}")
+            error = str(payload.get("error", "unknown_error") or "unknown_error")
+            raise SlackApiError(method, error)
         return payload
 
     def _get_client(self) -> httpx.AsyncClient:

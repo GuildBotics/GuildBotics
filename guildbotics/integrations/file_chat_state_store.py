@@ -119,6 +119,11 @@ class FileConversationStateStore(ConversationStateStore):
                 for item in handoffs
                 if isinstance(item, dict) and str(item.get("person_id", "") or "")
             ],
+            backfill_disabled_reason=str(
+                data.get("backfill_disabled_reason", "") or ""
+            ),
+            backfill_error_count=_to_non_negative_int(data.get("backfill_error_count")),
+            last_backfill_error=str(data.get("last_backfill_error", "") or ""),
         )
 
     def save_thread_state(
@@ -436,6 +441,16 @@ def _to_str_or_none(value: object) -> str | None:
         return None
     text = str(value)
     return text if text != "" else None
+
+
+def _to_non_negative_int(value: object) -> int:
+    if not isinstance(value, int | str | bytes | bytearray):
+        return 0
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, parsed)
 
 
 def _dedupe_keep_order(items: list[str]) -> list[str]:

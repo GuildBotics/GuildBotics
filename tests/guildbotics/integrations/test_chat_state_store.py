@@ -10,6 +10,8 @@ from guildbotics.integrations.chat_state_store import (
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 
+EXPECTED_BACKFILL_ERROR_COUNT = 2
+
 
 def test_channel_cursor_roundtrip(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
@@ -59,6 +61,9 @@ def test_thread_state_roundtrip(tmp_path):
         participants={"alice", "bob"},
         thread_topic="weekly AI news",
         latest_focus="business angle grounded in current-week items",
+        backfill_disabled_reason="thread_not_found",
+        backfill_error_count=EXPECTED_BACKFILL_ERROR_COUNT,
+        last_backfill_error="thread_not_found",
         handoffs=[
             ThreadHandoffState(
                 person_id="bob",
@@ -79,6 +84,9 @@ def test_thread_state_roundtrip(tmp_path):
     assert loaded.participants == {"alice", "bob"}
     assert loaded.thread_topic == "weekly AI news"
     assert loaded.latest_focus == "business angle grounded in current-week items"
+    assert loaded.backfill_disabled_reason == "thread_not_found"
+    assert loaded.backfill_error_count == EXPECTED_BACKFILL_ERROR_COUNT
+    assert loaded.last_backfill_error == "thread_not_found"
     assert len(loaded.handoffs) == 1
     assert loaded.handoffs[0].person_id == "bob"
     assert loaded.handoffs[0].roles == ["design"]
