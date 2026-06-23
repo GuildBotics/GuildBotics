@@ -38,7 +38,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -165,21 +165,33 @@ function ServicePage() {
   const [routineIntervalMinutes, setRoutineIntervalMinutes] = useState(
     initialPreferences.routineIntervalMinutes,
   );
-  useEffect(() => {
-    saveServicePreferences({
+  const servicePreferences = useMemo<ServicePreferences>(
+    () => ({
       schedulerEnabled,
       eventsEnabled,
       selectedRoutine,
       routineIntervalMinutes,
       maxConsecutiveErrors,
-    });
-  }, [
-    schedulerEnabled,
-    eventsEnabled,
-    selectedRoutine,
-    routineIntervalMinutes,
-    maxConsecutiveErrors,
-  ]);
+    }),
+    [
+      schedulerEnabled,
+      eventsEnabled,
+      selectedRoutine,
+      routineIntervalMinutes,
+      maxConsecutiveErrors,
+    ],
+  );
+  // Persist preferences, debounced so rapid edits (e.g. typing in a NumberInput)
+  // do not hammer localStorage on every keystroke. A ref holds the latest value
+  // so it can be flushed on unmount, ensuring a change followed by an immediate
+  // navigation away is never dropped.
+  const servicePreferencesRef = useRef(servicePreferences);
+  servicePreferencesRef.current = servicePreferences;
+  useEffect(() => {
+    const handle = window.setTimeout(() => saveServicePreferences(servicePreferences), 400);
+    return () => window.clearTimeout(handle);
+  }, [servicePreferences]);
+  useEffect(() => () => saveServicePreferences(servicePreferencesRef.current), []);
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const routines = useQuery({
