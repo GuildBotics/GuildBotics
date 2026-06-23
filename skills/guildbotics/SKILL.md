@@ -84,6 +84,7 @@ EOF
 ```
 
 Run `member git commit` without `member git push` when the user asks for a local commit only.
+If you create or update a PR outside the GitHub Issue Flow or PR Review Flow, maintain memory after the PR exists and before the interactive final reply. Record durable PR work context with the PR URL, branch, commit, verification result, and remaining follow-up. Record separate technical lessons as separate memory documents when they are reusable beyond that PR.
 
 ## GitHub Issue Flow
 

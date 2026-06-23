@@ -57,7 +57,7 @@ The member's standing roles are defined by the `roles` field in the member conte
 11. If no post or reaction is needed, run `guildbotics member chat noop --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --reason-file <file>`.
 12. If more information is needed, post a question to Slack first, then complete the run with status `asking`.
 13. If credentials, access, or required context are missing, write a safe summary and complete the run with status `blocked`.
-14. Before `chat complete`, maintain memory according to the member capabilities. If autonomous workflow policy should change, propose it in a Slack reply/post; do not update policy directly.
+14. Before `chat complete`, maintain memory according to the member capabilities. If a secondary GitHub action created, reused, or updated a PR, record durable PR work context with the PR URL and the Slack thread source when available, including branch, verification result, completed actions, and remaining follow-up. Record separate reusable technical lessons as separate memory documents. If autonomous workflow policy should change, propose it in a Slack reply/post; do not update policy directly.
 15. Last, always run `guildbotics member chat complete --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --summary-file <file>`.
 16. If `member chat complete` fails, do not return a success response. Add the missing evidence or fail the agent run.
 17. Never display, infer, store, or copy secrets.

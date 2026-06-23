@@ -38,7 +38,7 @@ then investigating, editing, and publishing as the assigned GuildBotics member.
 9. If the issue asks for follow-up work, create real repository issues with `guildbotics member github issue create`.
 10. If information is missing, ask on GitHub with `issue comment`, `pr comment`, or `pr reply`; do not guess.
 11. If no code change is needed, still leave evidence with a comment, reply, or reaction.
-12. Before `task complete`, maintain memory according to the member capabilities. Record durable lessons with `--ticket {ticket_url}`. If autonomous workflow policy should change, propose it in a ticket comment; do not create a new issue or update policy directly.
+12. Before `task complete`, maintain memory according to the member capabilities. If a PR was created, reused, or updated, record durable PR work context with `--ticket {ticket_url}` and `--pr <pr_url>` when known, including branch, verification result, completed actions, and remaining follow-up. Record separate reusable technical lessons as separate memory documents. If autonomous workflow policy should change, propose it in a ticket comment; do not create a new issue or update policy directly.
 13. Finish by running `guildbotics member task complete --person {person_id} --run-id {workflow_run_id} --ticket-url {ticket_url} --status done|asking|blocked --summary-file <file>`.
 14. If `member task complete` fails, do not return a successful response. Fix the missing evidence or fail the agent run.
 15. Never display, infer, store, or copy secrets.
