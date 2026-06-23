@@ -4,7 +4,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use tauri::{Manager, RunEvent};
+use tauri::{LogicalPosition, LogicalSize, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -482,6 +482,64 @@ mod tests {
     }
 }
 
+/// Preferred initial window height (logical px) chosen so the Service and
+/// Diagnostics screens fit without a vertical scrollbar when the display has the
+/// room for it.
+const PREFERRED_WINDOW_HEIGHT: f64 = 1040.0;
+
+/// Grow the main window toward `PREFERRED_WINDOW_HEIGHT` when the monitor's work
+/// area can accommodate it, then place it inside the work area. The window is
+/// only ever made taller (never shorter than the configured default) and the
+/// width is left untouched.
+///
+/// Positioning is done explicitly instead of `WebviewWindow::center` because
+/// `center` centers against the full monitor resolution, not the work area, so
+/// on a display with a dock/menu bar the window drifts low enough for its bottom
+/// edge to slip under the dock — which clips the content and brings back a
+/// vertical scrollbar. Centering within the work area (clamped to its top-left
+/// when the window is larger than the available space) keeps the whole window on
+/// screen.
+fn fit_main_window(window: &tauri::WebviewWindow) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    if scale <= 0.0 {
+        return;
+    }
+    let work_area = monitor.work_area();
+    let work_x = work_area.position.x as f64 / scale;
+    let work_y = work_area.position.y as f64 / scale;
+    let work_width = work_area.size.width as f64 / scale;
+    let work_height = work_area.size.height as f64 / scale;
+
+    let (Ok(inner), Ok(outer)) = (window.inner_size(), window.outer_size()) else {
+        return;
+    };
+    let inner_width = inner.width as f64 / scale;
+    let inner_height = inner.height as f64 / scale;
+    let outer_width = outer.width as f64 / scale;
+    // The chrome (title bar / borders) is the difference between the outer and
+    // inner size; the inner content must fit within the work area minus chrome.
+    let chrome_height = (outer.height as f64 / scale - inner_height).max(0.0);
+    let max_inner_height = (work_height - chrome_height).max(0.0);
+    let target_inner_height = PREFERRED_WINDOW_HEIGHT.min(max_inner_height);
+
+    let final_inner_height = if target_inner_height > inner_height {
+        let _ = window.set_size(LogicalSize::new(inner_width, target_inner_height));
+        target_inner_height
+    } else {
+        inner_height
+    };
+
+    // Centre within the work area using the resulting outer size, clamping so a
+    // window taller/wider than the work area sits at its top-left corner.
+    let final_outer_height = final_inner_height + chrome_height;
+    let pos_x = work_x + ((work_width - outer_width) / 2.0).max(0.0);
+    let pos_y = work_y + ((work_height - final_outer_height) / 2.0).max(0.0);
+    let _ = window.set_position(LogicalPosition::new(pos_x, pos_y));
+}
+
 pub fn run() {
     let token = uuid::Uuid::new_v4().to_string();
     let port = pick_free_port();
@@ -497,6 +555,10 @@ pub fn run() {
         .setup(move |app| {
             if let Err(error) = install_cli_agent_assets() {
                 eprintln!("failed to install GuildBotics CLI agent assets: {error}");
+            }
+
+            if let Some(window) = app.get_webview_window("main") {
+                fit_main_window(&window);
             }
 
             let port_arg = port.to_string();

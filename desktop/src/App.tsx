@@ -38,7 +38,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -155,11 +155,43 @@ function IndexRedirect() {
 function ServicePage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [selectedRoutine, setSelectedRoutine] = useState("");
-  const [schedulerEnabled, setSchedulerEnabled] = useState(true);
-  const [eventsEnabled, setEventsEnabled] = useState(true);
-  const [maxConsecutiveErrors, setMaxConsecutiveErrors] = useState(3);
-  const [routineIntervalMinutes, setRoutineIntervalMinutes] = useState(10);
+  const [initialPreferences] = useState(loadServicePreferences);
+  const [selectedRoutine, setSelectedRoutine] = useState(initialPreferences.selectedRoutine);
+  const [schedulerEnabled, setSchedulerEnabled] = useState(initialPreferences.schedulerEnabled);
+  const [eventsEnabled, setEventsEnabled] = useState(initialPreferences.eventsEnabled);
+  const [maxConsecutiveErrors, setMaxConsecutiveErrors] = useState(
+    initialPreferences.maxConsecutiveErrors,
+  );
+  const [routineIntervalMinutes, setRoutineIntervalMinutes] = useState(
+    initialPreferences.routineIntervalMinutes,
+  );
+  const servicePreferences = useMemo<ServicePreferences>(
+    () => ({
+      schedulerEnabled,
+      eventsEnabled,
+      selectedRoutine,
+      routineIntervalMinutes,
+      maxConsecutiveErrors,
+    }),
+    [
+      schedulerEnabled,
+      eventsEnabled,
+      selectedRoutine,
+      routineIntervalMinutes,
+      maxConsecutiveErrors,
+    ],
+  );
+  // Persist preferences, debounced so rapid edits (e.g. typing in a NumberInput)
+  // do not hammer localStorage on every keystroke. A ref holds the latest value
+  // so it can be flushed on unmount, ensuring a change followed by an immediate
+  // navigation away is never dropped.
+  const servicePreferencesRef = useRef(servicePreferences);
+  useEffect(() => {
+    servicePreferencesRef.current = servicePreferences;
+    const handle = window.setTimeout(() => saveServicePreferences(servicePreferences), 400);
+    return () => window.clearTimeout(handle);
+  }, [servicePreferences]);
+  useEffect(() => () => saveServicePreferences(servicePreferencesRef.current), []);
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const routines = useQuery({
@@ -3066,6 +3098,82 @@ export function commandOutputText(record: CommandRunRecord): string {
     return record.output?.trim() ? `${detail}\n---\n${record.output}` : detail;
   }
   return record.output ?? "";
+}
+
+export const SERVICE_PREFERENCES_KEY = "guildbotics.service.preferences";
+
+// The Service screen remembers the run targets and tuning the user last chose so
+// the next launch starts from the same configuration instead of resetting to the
+// built-in defaults.
+export type ServicePreferences = {
+  schedulerEnabled: boolean;
+  eventsEnabled: boolean;
+  selectedRoutine: string;
+  routineIntervalMinutes: number;
+  maxConsecutiveErrors: number;
+};
+
+export const DEFAULT_SERVICE_PREFERENCES: ServicePreferences = {
+  schedulerEnabled: true,
+  eventsEnabled: true,
+  selectedRoutine: "",
+  routineIntervalMinutes: 10,
+  maxConsecutiveErrors: 3,
+};
+
+function clampStoredInteger(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+export function loadServicePreferences(): ServicePreferences {
+  try {
+    const raw = window.localStorage.getItem(SERVICE_PREFERENCES_KEY);
+    if (!raw) {
+      return { ...DEFAULT_SERVICE_PREFERENCES };
+    }
+    const parsed = JSON.parse(raw) as Partial<ServicePreferences>;
+    return {
+      schedulerEnabled:
+        typeof parsed.schedulerEnabled === "boolean"
+          ? parsed.schedulerEnabled
+          : DEFAULT_SERVICE_PREFERENCES.schedulerEnabled,
+      eventsEnabled:
+        typeof parsed.eventsEnabled === "boolean"
+          ? parsed.eventsEnabled
+          : DEFAULT_SERVICE_PREFERENCES.eventsEnabled,
+      selectedRoutine:
+        typeof parsed.selectedRoutine === "string"
+          ? parsed.selectedRoutine
+          : DEFAULT_SERVICE_PREFERENCES.selectedRoutine,
+      // Clamp to the same bounds the NumberInput controls enforce so a tampered
+      // or outdated value cannot push the inputs out of range.
+      routineIntervalMinutes: clampStoredInteger(
+        parsed.routineIntervalMinutes,
+        1,
+        1440,
+        DEFAULT_SERVICE_PREFERENCES.routineIntervalMinutes,
+      ),
+      maxConsecutiveErrors: clampStoredInteger(
+        parsed.maxConsecutiveErrors,
+        1,
+        20,
+        DEFAULT_SERVICE_PREFERENCES.maxConsecutiveErrors,
+      ),
+    };
+  } catch {
+    return { ...DEFAULT_SERVICE_PREFERENCES };
+  }
+}
+
+export function saveServicePreferences(value: ServicePreferences): void {
+  try {
+    window.localStorage.setItem(SERVICE_PREFERENCES_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore persistence failures (e.g. storage disabled or full).
+  }
 }
 
 export const CUSTOM_COMMAND_HISTORY_KEY = "guildbotics.commands.customHistory";
