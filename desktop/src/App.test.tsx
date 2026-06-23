@@ -10,6 +10,10 @@ import {
   buildCommandArgs,
   buildCommandTimeline,
   commandFailureDetail,
+  DEFAULT_SERVICE_PREFERENCES,
+  loadServicePreferences,
+  saveServicePreferences,
+  SERVICE_PREFERENCES_KEY,
   decodeTraceText,
   eventBadgeColor,
   eventTypeLabel,
@@ -894,6 +898,59 @@ describe("file helpers outside Tauri runtime", () => {
     await expect(selectTraceFile("save", "/workspace/trace.log")).resolves.toBeNull();
     expect(openDialog).not.toHaveBeenCalled();
     expect(saveDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe("service preferences persistence", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("returns the defaults when nothing is stored", () => {
+    expect(loadServicePreferences()).toEqual(DEFAULT_SERVICE_PREFERENCES);
+  });
+
+  it("round-trips saved preferences", () => {
+    saveServicePreferences({
+      schedulerEnabled: false,
+      eventsEnabled: true,
+      selectedRoutine: "workflows/ticket_driven_workflow",
+      routineIntervalMinutes: 25,
+      maxConsecutiveErrors: 7,
+    });
+    expect(loadServicePreferences()).toEqual({
+      schedulerEnabled: false,
+      eventsEnabled: true,
+      selectedRoutine: "workflows/ticket_driven_workflow",
+      routineIntervalMinutes: 25,
+      maxConsecutiveErrors: 7,
+    });
+  });
+
+  it("falls back to defaults for missing or wrongly typed fields", () => {
+    window.localStorage.setItem(
+      SERVICE_PREFERENCES_KEY,
+      JSON.stringify({ schedulerEnabled: false, selectedRoutine: 42 }),
+    );
+    expect(loadServicePreferences()).toEqual({
+      ...DEFAULT_SERVICE_PREFERENCES,
+      schedulerEnabled: false,
+    });
+  });
+
+  it("clamps out-of-range numbers to the input bounds", () => {
+    window.localStorage.setItem(
+      SERVICE_PREFERENCES_KEY,
+      JSON.stringify({ routineIntervalMinutes: 5000, maxConsecutiveErrors: 0 }),
+    );
+    const prefs = loadServicePreferences();
+    expect(prefs.routineIntervalMinutes).toBe(1440);
+    expect(prefs.maxConsecutiveErrors).toBe(1);
+  });
+
+  it("returns the defaults when stored JSON is corrupt", () => {
+    window.localStorage.setItem(SERVICE_PREFERENCES_KEY, "{not json");
+    expect(loadServicePreferences()).toEqual(DEFAULT_SERVICE_PREFERENCES);
   });
 });
 

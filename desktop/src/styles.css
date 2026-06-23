@@ -68,14 +68,14 @@ body {
 }
 
 .nav-item.active {
-  background: #f7faf8;
-  box-shadow: 0 10px 24px rgb(0 0 0 / 18%);
-  color: #172026;
+  background: #214b45;
+  box-shadow: inset 2px 0 0 #0d9488;
+  color: #ffffff;
   font-weight: 700;
 }
 
 .nav-item.active:hover {
-  background: #ffffff;
+  background: #285750;
 }
 
 .sidebar-language {

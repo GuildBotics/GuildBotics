@@ -67,6 +67,9 @@ const getRuntimeDebugMock = vi.mocked(getRuntimeDebug);
 const updateRuntimeDebugMock = vi.mocked(updateRuntimeDebug);
 
 beforeEach(() => {
+  // The Service screen now persists run-target preferences, so clear storage
+  // between tests to keep each case starting from the built-in defaults.
+  window.localStorage.clear();
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getTeamMock.mockReset().mockResolvedValue({
     project: { name: "Demo", language_code: "en", language_name: "English" },
@@ -180,6 +183,22 @@ describe("Service Runtime screen", () => {
       routine_interval_minutes: 30,
       max_consecutive_errors: 7,
     });
+  });
+
+  it("remembers the run-target toggles across remounts", async () => {
+    const user = userEvent.setup();
+    const first = renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    await user.click(eventsSwitch());
+    await waitFor(() => expect(eventsSwitch()).not.toBeChecked());
+
+    first.unmount();
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    await waitFor(() => expect(eventsSwitch()).not.toBeChecked());
+    expect(schedulerSwitch()).toBeChecked();
   });
 
   it("blocks start when the selected routine requires GitHub but GitHub is disabled", async () => {
