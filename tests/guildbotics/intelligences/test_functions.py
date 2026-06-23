@@ -71,7 +71,8 @@ def test_handle_chat_event_prompt_records_secondary_pr_work_context():
         "If a secondary GitHub action created, reused, or updated a PR"
         in (prompt["body"])
     )
-    assert "Slack thread source" in prompt["body"]
+    assert "--pr <pr_url>" in prompt["body"]
+    assert "--thread <slack_thread_url>" in prompt["body"]
     assert "Record separate reusable technical lessons" in prompt["body"]
 
 
@@ -101,6 +102,8 @@ def test_guildbotics_skill_uses_member_persona_without_decorating_control_data()
         "If you create or update a PR outside the GitHub Issue Flow or PR Review Flow"
         in skill["body"]
     )
+    assert "--pr <pr_url>" in skill["body"]
+    assert "--thread <thread_url>" in skill["body"]
     assert (
         "After commit, push, PR creation, and final GitHub comment/reaction are done"
         in skill["body"]
