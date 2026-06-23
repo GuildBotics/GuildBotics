@@ -5,7 +5,10 @@ import logging
 import httpx
 import pytest
 
-from guildbotics.integrations.slack.slack_chat_service import SlackChatService
+from guildbotics.integrations.slack.slack_chat_service import (
+    SlackApiError,
+    SlackChatService,
+)
 
 
 def _client_for(handler):
@@ -280,6 +283,8 @@ async def test_slack_api_error_raises_runtime_error():
     svc = SlackChatService(
         logging.getLogger("test"), client=client, base_url="https://x.test"
     )
-    with pytest.raises(RuntimeError, match="invalid_auth"):
+    with pytest.raises(SlackApiError, match="invalid_auth") as exc_info:
         await svc.get_bot_identity()
+    assert exc_info.value.method == "auth.test"
+    assert exc_info.value.error == "invalid_auth"
     await client.aclose()

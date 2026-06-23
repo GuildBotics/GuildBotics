@@ -31,6 +31,9 @@ class ThreadConversationState:
     thread_topic: str = ""
     latest_focus: str = ""
     handoffs: list[ThreadHandoffState] = field(default_factory=list)
+    backfill_disabled_reason: str = ""
+    backfill_error_count: int = 0
+    last_backfill_error: str = ""
 
 
 @dataclass(slots=True)

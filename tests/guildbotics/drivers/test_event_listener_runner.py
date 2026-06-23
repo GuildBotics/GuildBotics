@@ -23,6 +23,7 @@ from guildbotics.integrations.chat_service import (
 )
 from guildbotics.integrations.chat_state_store import ThreadMessageState
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.observability import correlation_fields
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.event_listener import (
@@ -135,6 +136,7 @@ class _BackfillChatService:
     def __init__(self) -> None:
         self.channel_calls = 0
         self.thread_calls: list[tuple[str, str]] = []
+        self.thread_error: SlackApiError | None = None
 
     async def list_channel_events(
         self,
@@ -175,6 +177,8 @@ class _BackfillChatService:
         limit: int = 100,
     ) -> ChatEventPage:
         self.thread_calls.append((channel_id, thread_ts))
+        if self.thread_error is not None:
+            raise self.thread_error
         assert cursor is None
         assert limit == DEFAULT_BACKFILL_LIMIT
         return ChatEventPage(
@@ -796,6 +800,45 @@ async def test_run_once_backfills_channel_and_known_thread_events(
 
 
 @pytest.mark.asyncio
+async def test_thread_not_found_disables_future_thread_backfill(tmp_path):
+    alice = Person(person_id="alice", name="Alice", is_active=True)
+    chat_service = _BackfillChatService()
+    chat_service.thread_error = SlackApiError(
+        "conversations.replies", "thread_not_found"
+    )
+    ctx = _BackfillContext(chat_service)
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    state_store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "100.1",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="100.1",
+            message_ts="100.1",
+            author_id="U_USER",
+            text="<@U_ALICE> stale thread",
+            mentions=["U_ALICE"],
+        ),
+    )
+    runner = EventListenerRunner(ctx, state_store=state_store)  # type: ignore[arg-type]
+
+    await runner._backfill_channel_and_threads(
+        alice, "slack", "C1", ChatBackfillPolicy()
+    )
+    await runner._backfill_channel_and_threads(
+        alice, "slack", "C1", ChatBackfillPolicy()
+    )
+
+    state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
+    assert state.backfill_disabled_reason == "thread_not_found"
+    assert state.backfill_error_count == 1
+    assert state.last_backfill_error == "thread_not_found"
+    assert chat_service.thread_calls == [("C1", "100.1")]
+
+
+@pytest.mark.asyncio
 async def test_run_once_uses_connection_service_for_backfill_and_pending_dispatch(
     monkeypatch,
 ):
@@ -878,7 +921,7 @@ async def test_backfill_tracking_is_scoped_by_service_name(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_backfill_failure_does_not_mark_startup_complete(monkeypatch):
+async def test_backfill_failure_updates_attempt_cadence(monkeypatch):
     ctx = _FakeContext()
     runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
     person = types.SimpleNamespace(person_id="alice")
@@ -886,16 +929,14 @@ async def test_backfill_failure_does_not_mark_startup_complete(monkeypatch):
 
     async def _fake_backfill(person, service_name, channel_id, policy):
         calls["count"] += 1
-        if calls["count"] == 1:
-            raise RuntimeError("transient")
-        return 1
+        raise RuntimeError("transient")
 
     monkeypatch.setattr(runner, "_backfill_channel_and_threads", _fake_backfill)
 
     policy = ChatBackfillPolicy(startup_minutes=60, interval_seconds=0.0)
     assert await runner._backfill_due_events(person, "slack", "C1", policy) == 0
-    assert await runner._backfill_due_events(person, "slack", "C1", policy) == 1
-    assert calls["count"] == EXPECTED_BACKFILL_ATTEMPTS
+    assert await runner._backfill_due_events(person, "slack", "C1", policy) == 0
+    assert calls["count"] == 1
 
 
 @pytest.mark.asyncio
