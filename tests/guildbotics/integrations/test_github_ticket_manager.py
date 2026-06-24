@@ -375,6 +375,24 @@ async def test_open_pr_review_is_ignored_when_ticket_is_not_mine():
 
 
 @pytest.mark.asyncio
+async def test_merged_pr_does_not_move_ticket_when_ticket_is_not_mine():
+    manager = _Manager(items=[_item(number=1, status="In Progress", assignee="other")])
+    manager.related_pulls = [
+        {
+            "url": "https://github.com/GuildBotics/repo/pull/2",
+            "owner": "GuildBotics",
+            "repo": "repo",
+            "number": 2,
+            "state": "merged",
+            "updated_at": "2026-01-02T00:00:00Z",
+        }
+    ]
+
+    assert await manager.get_task_to_work_on() is None
+    assert manager.moved == []
+
+
+@pytest.mark.asyncio
 async def test_unresolved_review_thread_with_last_reviewer_comment_is_unhandled():
     manager = _Manager(items=[])
     manager.review_threads = [

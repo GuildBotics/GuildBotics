@@ -999,7 +999,7 @@ class GitHubTicketManager(TicketManager):
         self, task: Task, metadata: dict[str, Any]
     ) -> Task | None:
         issue_number = int(metadata["issue_number"])
-        assigned = bool(metadata.get("assigned"))
+        assigned = bool(metadata["assigned"])
         if not assigned:
             return None
 
