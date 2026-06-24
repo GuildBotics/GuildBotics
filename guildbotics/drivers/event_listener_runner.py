@@ -379,10 +379,7 @@ class EventListenerRunner:
                         str(sub.get("backfill_overlap_seconds", "")).strip(),
                     ),
                     ("backfill_limit", str(sub.get("backfill_limit", "")).strip()),
-                    (
-                        "participation",
-                        str(sub.get("participation", "")).strip().lower(),
-                    ),
+                    ("participation", _chat_participation(sub.get("participation"))),
                 )
             )
         return tuple(items)

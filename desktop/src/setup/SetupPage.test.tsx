@@ -1271,6 +1271,22 @@ describe("getMemberFieldErrors", () => {
     expect(errors.slackChannelsText).toBeUndefined();
   });
 
+  it("rejects Slack channel names that start with separators", () => {
+    for (const channel of ["_dev", "-dev", "#_dev", "#-dev"]) {
+      const errors = getMemberFieldErrors(
+        baseMemberValues({
+          personType: "agent",
+          githubAccountType: "none",
+          slackChannelsText: channel,
+          slackBotToken: "xoxb-valid-token",
+          slackAppToken: "xapp-valid-token",
+        }),
+        t,
+      );
+      expect(errors.slackChannelsText).toBe(t("setup.validation.slackChannelsInvalid"));
+    }
+  });
+
   it("requires Slack tokens when channels are configured", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({

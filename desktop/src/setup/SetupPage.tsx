@@ -4450,7 +4450,9 @@ function isSlackChannelReference(value: string): boolean {
   const channel = value.trim();
   return (
     /^[CGD][A-Z0-9]{8,}$/.test(channel) ||
-    /^#?[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}a-z0-9_-]{1,80}$/u.test(channel)
+    /^#?[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}a-z0-9][\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}a-z0-9_-]{0,79}$/u.test(
+      channel,
+    )
   );
 }
 

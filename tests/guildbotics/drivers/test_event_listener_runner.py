@@ -992,6 +992,31 @@ async def test_build_person_subscriptions_uses_cached_channel_resolution(monkeyp
     assert resolve_calls["count"] == 1
 
 
+def test_subscription_signature_normalizes_participation_defaults():
+    ctx = _FakeContext()
+    runner = EventListenerRunner(ctx)  # type: ignore[arg-type]
+
+    base_subscription = {
+        "service": "slack",
+        "channel_id": "C1",
+        "event_source": "socket_mode",
+    }
+
+    assert runner._subscription_signature(
+        [{**base_subscription, "participation": None}]
+    ) == runner._subscription_signature([{**base_subscription, "participation": "  "}])
+    assert runner._subscription_signature(
+        [{**base_subscription, "participation": "unknown"}]
+    ) == runner._subscription_signature(
+        [{**base_subscription, "participation": "strict"}]
+    )
+    assert runner._subscription_signature(
+        [{**base_subscription, "participation": "social"}]
+    ) != runner._subscription_signature(
+        [{**base_subscription, "participation": "strict"}]
+    )
+
+
 @pytest.mark.asyncio
 async def test_aclose_sources_stops_listeners_and_clears_caches():
     ctx = _FakeContext()
