@@ -17,6 +17,7 @@ from guildbotics.observability import trace_scope
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
 HEADERS = {"X-GuildBotics-Session-Token": "secret"}
+HTTP_OK = 200
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +46,7 @@ def test_traces_endpoint_lists_published_traces(tmp_path: Path) -> None:
     with client:
         response = client.get("/diagnostics/traces", headers=HEADERS)
 
-    assert response.status_code == 200
+    assert response.status_code == HTTP_OK
     traces = response.json()["traces"]
     assert len(traces) == 1
     assert traces[0]["trace_id"] == "t1"
@@ -97,7 +98,7 @@ def test_trace_detail_returns_ordered_records(tmp_path: Path) -> None:
     with client:
         response = client.get("/diagnostics/traces/t1", headers=HEADERS)
 
-    assert response.status_code == 200
+    assert response.status_code == HTTP_OK
     body = response.json()
     assert body["trace_id"] == "t1"
     assert body["summary"]["status"] == "success"
@@ -165,6 +166,7 @@ def test_memory_events_endpoint_filters_and_returns_body_preview(
             source=[{"type": "ticket", "url": "https://example.test/issues/42"}],
             body="Retry after refreshing the token.",
         )
+        service.recall(queries=["Retry"])
         service.touch(doc_id=recorded["doc_id"])
     client, _bus = _app(tmp_path)
 
@@ -180,7 +182,7 @@ def test_memory_events_endpoint_filters_and_returns_body_preview(
             headers=HEADERS,
         )
 
-    assert response.status_code == 200
+    assert response.status_code == HTTP_OK
     payload = response.json()
     assert payload["event_count"] == 1
     event = payload["events"][0]
@@ -192,6 +194,26 @@ def test_memory_events_endpoint_filters_and_returns_body_preview(
         {"type": "ticket", "url": "https://example.test/issues/42"}
     ]
     assert event["body_preview"] == "Retry after refreshing the token."
+
+    with client:
+        search_response = client.get(
+            "/diagnostics/memory-events",
+            params={
+                "person_id": "alice",
+                "action": "recall",
+                "q": "Retry",
+            },
+            headers=HEADERS,
+        )
+
+    assert search_response.status_code == HTTP_OK
+    search_payload = search_response.json()
+    assert search_payload["event_count"] == 1
+    search_event = search_payload["events"][0]
+    assert search_event["query_keywords"] == ["Retry"]
+    assert search_event["result_count"] == 1
+    assert isinstance(search_event["duration_ms"], float)
+    assert search_event["body_preview"] == ""
 
 
 def test_trace_detail_merges_memory_events(
@@ -209,7 +231,7 @@ def test_trace_detail_merges_memory_events(
     with client:
         response = client.get("/diagnostics/traces/memory-trace", headers=HEADERS)
 
-    assert response.status_code == 200
+    assert response.status_code == HTTP_OK
     records = response.json()["records"]
     assert [record["kind"] for record in records] == ["event", "memory", "event"]
     assert records[1]["type"] == "memory.record"

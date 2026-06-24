@@ -1320,6 +1320,7 @@ def _memory_event(item: dict[str, Any]) -> MemoryEvent:
     payload = cast(dict[str, Any], raw_payload) if isinstance(raw_payload, dict) else {}
     source = payload.get("source")
     changed_fields = payload.get("changed_fields")
+    query_keywords = payload.get("query_keywords")
     path = str(attributes.get("memory.path") or "")
     action = str(
         attributes.get("memory.action")
@@ -1346,8 +1347,27 @@ def _memory_event(item: dict[str, Any]) -> MemoryEvent:
         ]
         if isinstance(changed_fields, list)
         else [],
+        query_keywords=[
+            str(keyword) for keyword in query_keywords if isinstance(keyword, str)
+        ]
+        if isinstance(query_keywords, list)
+        else [],
+        result_count=_optional_int(payload.get("result_count")),
+        duration_ms=_optional_float(payload.get("duration_ms")),
         body_preview=_memory_body_preview(path),
     )
+
+
+def _optional_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def _memory_body_preview(path: str, *, limit: int = 800) -> str:

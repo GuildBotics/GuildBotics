@@ -828,6 +828,9 @@ function memoryEvent(overrides: Partial<MemoryEvent> = {}): MemoryEvent {
     task_run_id: "task-1",
     source: [{ type: "ticket", url: "https://example.test/issues/1" }],
     changed_fields: [],
+    query_keywords: [],
+    result_count: null,
+    duration_ms: null,
     body_preview: "Memory body",
     ...overrides,
   };

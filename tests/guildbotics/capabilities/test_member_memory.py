@@ -247,6 +247,42 @@ def test_memory_mutations_write_audit_events(
     assert events[2]["payload"]["changed_fields"] == ["summary"]
 
 
+def test_memory_recall_and_get_write_audit_events(
+    monkeypatch: pytest.MonkeyPatch, person: Person, data_root: Path
+) -> None:
+    monkeypatch.setattr(member_memory.shutil, "which", lambda _name: None)
+    service = MemberMemoryService(person)
+
+    recorded = service.record(
+        scope="personal",
+        title="Searchable note",
+        summary="Useful memory search summary.",
+        body="Searchable body",
+    )
+    recall = service.recall(queries=[" Searchable ", " "], limit=5)
+    full = service.get(doc_id=recorded["doc_id"])
+
+    assert [item["doc_id"] for item in recall["results"]] == [recorded["doc_id"]]
+    assert full["doc_id"] == recorded["doc_id"]
+
+    audit_path = data_root / "documents" / "memory_events.jsonl"
+    events = [
+        json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert [event["type"] for event in events] == [
+        "memory.record",
+        "memory.recall",
+        "memory.get",
+    ]
+    assert events[1]["payload"]["query_keywords"] == ["Searchable"]
+    assert events[1]["payload"]["result_count"] == 1
+    assert isinstance(events[1]["payload"]["duration_ms"], float)
+    assert events[1]["attributes"]["memory.result_count"] == 1
+    assert "Searchable" in events[1]["message"]
+    assert events[2]["attributes"]["memory.doc_id"] == recorded["doc_id"]
+
+
 def test_memory_audit_filters_timestamps_by_instant(tmp_path: Path) -> None:
     store = MemoryAuditStore(tmp_path / "memory_events.jsonl")
     store.record(
