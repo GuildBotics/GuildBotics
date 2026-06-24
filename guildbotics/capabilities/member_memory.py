@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 
 import yaml  # type: ignore
@@ -119,6 +120,7 @@ class MemberMemoryService:
         meta_only: bool = False,
         limit: int = DEFAULT_DIGEST_N,
     ) -> dict[str, Any]:
+        started_at = perf_counter()
         normalized_queries = [query.strip() for query in queries if query.strip()]
         if normalized_queries:
             results = self._recall_with_rg(
@@ -127,13 +129,22 @@ class MemberMemoryService:
                 limit=limit,
             )
             if results is not None:
+                self._record_recall_audit(
+                    queries=normalized_queries,
+                    result_count=len(results),
+                    started_at=started_at,
+                )
                 return {"results": results}
             LOGGER.warning(
                 "ripgrep executable 'rg' was not found; falling back to Python memory recall."
             )
-        return {
-            "results": self._recall_with_python(normalized_queries, meta_only, limit)
-        }
+        results = self._recall_with_python(normalized_queries, meta_only, limit)
+        self._record_recall_audit(
+            queries=normalized_queries,
+            result_count=len(results),
+            started_at=started_at,
+        )
+        return {"results": results}
 
     def _recall_with_rg(
         self,
@@ -244,6 +255,7 @@ class MemberMemoryService:
                 ],
             }
         )
+        self._record_audit("get", doc)
         return payload
 
     def update(
@@ -419,6 +431,31 @@ class MemberMemoryService:
                 kind=str(doc.meta.get("kind") or "note"),
                 source_entries=_source_entries_from_meta(doc.meta),
                 changed_fields=changed_fields,
+            )
+        except OSError:
+            return
+
+    def _record_recall_audit(
+        self,
+        *,
+        queries: list[str],
+        result_count: int,
+        started_at: float,
+    ) -> None:
+        try:
+            append_memory_event(
+                action="recall",
+                person_id=self.person.person_id,
+                scope="",
+                doc_id="",
+                path="",
+                title="Memory recall",
+                summary="",
+                kind="",
+                source_entries=[],
+                query_keywords=queries,
+                result_count=result_count,
+                duration_ms=(perf_counter() - started_at) * 1000,
             )
         except OSError:
             return

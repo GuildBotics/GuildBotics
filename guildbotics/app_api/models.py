@@ -188,6 +188,9 @@ class MemoryEvent(BaseModel):
     task_run_id: str = ""
     source: list[dict[str, Any]] = Field(default_factory=list)
     changed_fields: list[str] = Field(default_factory=list)
+    query_keywords: list[str] = Field(default_factory=list)
+    result_count: int | None = None
+    duration_ms: float | None = None
     body_preview: str = ""
 
 

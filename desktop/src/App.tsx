@@ -714,10 +714,12 @@ function MemoryEventsPanel({ members }: { members: Array<{ person_id: string; na
           aria-label={t("diagnostics.memory.action")}
           data={[
             { value: MEMORY_FILTER_ALL, label: t("diagnostics.memory.allActions") },
-            ...["record", "touch", "update", "archive", "promote"].map((action) => ({
-              value: action,
-              label: memoryActionLabel(t, action),
-            })),
+            ...["record", "recall", "get", "touch", "update", "archive", "promote"].map(
+              (action) => ({
+                value: action,
+                label: memoryActionLabel(t, action),
+              }),
+            ),
           ]}
           value={filters.action}
           onChange={changeAction}
@@ -783,11 +785,16 @@ function MemoryEventsPanel({ members }: { members: Array<{ person_id: string; na
                   <span className="memory-row-time">{formatDateTime(event.timestamp)}</span>
                 </div>
                 <Text className="memory-row-title" fw={600} size="sm" lineClamp={1}>
-                  {event.title || event.doc_id}
+                  {event.title || event.doc_id || memoryActionLabel(t, event.action)}
                 </Text>
                 <div className="memory-row-meta">
                   <span>{event.person_id || "—"}</span>
-                  <span>{event.doc_id}</span>
+                  <span>
+                    {event.doc_id ||
+                      (event.result_count !== null
+                        ? t("diagnostics.memory.searchHits", { count: event.result_count })
+                        : "—")}
+                  </span>
                 </div>
                 {event.summary ? (
                   <Text c="dimmed" size="xs" lineClamp={2}>
@@ -820,6 +827,15 @@ function MemoryEventDetail({ event }: { event: MemoryEvent }) {
       [t("diagnostics.memory.fields.run"), event.run_id],
       [t("diagnostics.memory.fields.taskRun"), event.task_run_id],
       [t("diagnostics.memory.fields.changed"), event.changed_fields.join(", ")],
+      [t("diagnostics.memory.fields.queryKeywords"), event.query_keywords.join(", ")],
+      [
+        t("diagnostics.memory.fields.resultCount"),
+        event.result_count === null ? "" : String(event.result_count),
+      ],
+      [
+        t("diagnostics.memory.fields.duration"),
+        event.duration_ms === null ? "" : memoryDuration(event.duration_ms),
+      ],
       [t("diagnostics.memory.fields.source"), sourceText],
     ] as [string, string][]
   ).filter(([, value]) => value);
@@ -834,7 +850,7 @@ function MemoryEventDetail({ event }: { event: MemoryEvent }) {
             {formatDateTime(event.timestamp) || "—"}
           </Text>
         </Group>
-        <Title order={4}>{event.title || event.doc_id}</Title>
+        <Title order={4}>{event.title || event.doc_id || memoryActionLabel(t, event.action)}</Title>
         {event.summary ? (
           <Text c="dimmed" size="sm">
             {event.summary}
@@ -1591,6 +1607,12 @@ function memoryActionColor(action: string): string {
   if (action === "record") {
     return "green";
   }
+  if (action === "recall") {
+    return "cyan";
+  }
+  if (action === "get") {
+    return "indigo";
+  }
   if (action === "update") {
     return "blue";
   }
@@ -1758,6 +1780,10 @@ export function traceDuration(summary: { started_at: string; updated_at: string 
   }
   const ms = end - start;
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+function memoryDuration(ms: number): string {
+  return ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
 export function traceStatusColor(status: string): string {

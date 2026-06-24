@@ -32,6 +32,9 @@ def append_memory_event(
     kind: str,
     source_entries: list[dict[str, Any]],
     changed_fields: list[str] | None = None,
+    query_keywords: list[str] | None = None,
+    result_count: int | None = None,
+    duration_ms: float | None = None,
 ) -> None:
     correlation = correlation_fields()
     attributes = _dict(correlation.get("attributes"))
@@ -50,6 +53,33 @@ def append_memory_event(
         attributes["run_id"] = run_id
     if task_run_id:
         attributes["task_run_id"] = task_run_id
+    if result_count is not None:
+        attributes["memory.result_count"] = result_count
+    if duration_ms is not None:
+        attributes["memory.duration_ms"] = duration_ms
+
+    payload: dict[str, Any] = {
+        "title": title,
+        "summary": summary,
+        "source": source_entries,
+        "changed_fields": changed_fields or [],
+    }
+    if query_keywords is not None:
+        payload["query_keywords"] = query_keywords
+    if result_count is not None:
+        payload["result_count"] = result_count
+    if duration_ms is not None:
+        payload["duration_ms"] = duration_ms
+
+    if action == "recall":
+        query_label = ", ".join(query_keywords or []) or "all documents"
+        hit_label = "hit" if result_count == 1 else "hits"
+        message = (
+            f"memory recall: {query_label} ({result_count or 0} {hit_label}"
+            f" in {duration_ms or 0:.2f}ms)"
+        )
+    else:
+        message = f"memory {action}: {title or doc_id}"
 
     item = {
         "kind": "memory",
@@ -64,14 +94,9 @@ def append_memory_event(
         "person_id": person_id,
         "command": str(correlation.get("command") or ""),
         "workflow": str(correlation.get("workflow") or ""),
-        "message": f"memory {action}: {title or doc_id}",
+        "message": message,
         "attributes": attributes,
-        "payload": {
-            "title": title,
-            "summary": summary,
-            "source": source_entries,
-            "changed_fields": changed_fields or [],
-        },
+        "payload": payload,
     }
     MemoryAuditStore().record(item)
 

@@ -246,6 +246,9 @@ export type MemoryEvent = {
   task_run_id: string;
   source: Array<Record<string, unknown>>;
   changed_fields: string[];
+  query_keywords: string[];
+  result_count: number | null;
+  duration_ms: number | null;
   body_preview: string;
 };
 
