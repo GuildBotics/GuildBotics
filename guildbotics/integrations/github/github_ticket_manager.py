@@ -998,10 +998,12 @@ class GitHubTicketManager(TicketManager):
     async def _select_actionable_task(
         self, task: Task, metadata: dict[str, Any]
     ) -> Task | None:
-        client = await self.login()
         issue_number = int(metadata["issue_number"])
         assigned = bool(metadata.get("assigned"))
+        if not assigned:
+            return None
 
+        client = await self.login()
         comments, mention_pending = await self._load_issue_comments(
             client, task, issue_number
         )
@@ -1013,10 +1015,8 @@ class GitHubTicketManager(TicketManager):
         if task.status == Task.READY:
             if last_comment_is_mine and not mention_pending:
                 return None
-            if assigned or mention_pending:
-                task.trigger_reason = "ready_lane"
-                return task
-            return None
+            task.trigger_reason = "ready_lane"
+            return task
 
         pull = await self._select_related_pull_request(task, issue_number)
         if pull:
@@ -1031,14 +1031,10 @@ class GitHubTicketManager(TicketManager):
                 return task
             return None
 
-        if (
-            task.comments
-            and task.comments[-1].author_type != Message.ASSISTANT
-            and (assigned or mention_pending)
-        ):
+        if task.comments and task.comments[-1].author_type != Message.ASSISTANT:
             task.trigger_reason = "issue_comment"
             return task
-        if not task.comments and (assigned or mention_pending):
+        if not task.comments:
             task.trigger_reason = "issue_mention" if mention_pending else "working_lane"
             return task
         return None

@@ -244,15 +244,12 @@ async def test_done_lane_and_other_assignee_are_ignored():
 
 
 @pytest.mark.asyncio
-async def test_mention_allows_unassigned_ready_ticket():
+async def test_mention_does_not_allow_unassigned_ready_ticket():
     manager = _Manager(
         items=[_item(number=1, status="Todo", assignee=None, body="Please ⚙aiko")]
     )
 
-    task = await manager.get_task_to_work_on()
-
-    assert task is not None
-    assert task.trigger_reason == "ready_lane"
+    assert await manager.get_task_to_work_on() is None
 
 
 @pytest.mark.asyncio
@@ -364,6 +361,17 @@ async def test_open_pr_with_unhandled_review_triggers_task():
     assert task is not None
     assert task.pull_request_url == "https://github.com/GuildBotics/repo/pull/2"
     assert task.trigger_reason == "pull_request_review"
+
+
+@pytest.mark.asyncio
+async def test_open_pr_review_is_ignored_when_ticket_is_not_mine():
+    manager = _Manager(items=[_item(number=1, status="In Progress", assignee="other")])
+    manager.related_pulls = [_pull()]
+    manager.review_threads = [
+        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
+    ]
+
+    assert await manager.get_task_to_work_on() is None
 
 
 @pytest.mark.asyncio
