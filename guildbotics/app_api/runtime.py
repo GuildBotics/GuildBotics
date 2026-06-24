@@ -1365,7 +1365,7 @@ def _optional_int(value: Any) -> int | None:
 def _optional_float(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         return float(value)
     return None
 
