@@ -1,7 +1,7 @@
 import { MantineProvider, createTheme } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -708,6 +708,7 @@ function memberConfig() {
     has_slack_bot_token: false,
     has_slack_app_token: false,
     slack_channels: [],
+    slack_channel_participation: {},
     routine_commands: [],
     task_schedules: [],
   };
@@ -1245,7 +1246,7 @@ describe("getMemberFieldErrors", () => {
       baseMemberValues({
         personType: "agent",
         githubAccountType: "none",
-        slackChannelsText: "general, BAD CHANNEL",
+        slackChannelsText: "general, Dev",
         slackBotToken: "not-a-bot-token",
         slackAppToken: "not-an-app-token",
       }),
@@ -1254,6 +1255,20 @@ describe("getMemberFieldErrors", () => {
     expect(errors.slackChannelsText).toBe(t("setup.validation.slackChannelsInvalid"));
     expect(errors.slackBotToken).toBe(t("setup.validation.slackBotTokenInvalid"));
     expect(errors.slackAppToken).toBe(t("setup.validation.slackAppTokenInvalid"));
+  });
+
+  it("accepts localized Slack channel names", () => {
+    const errors = getMemberFieldErrors(
+      baseMemberValues({
+        personType: "agent",
+        githubAccountType: "none",
+        slackChannelsText: "general, 開発, かいはつ, カイハツ, C0123456789",
+        slackBotToken: "xoxb-valid-token",
+        slackAppToken: "xapp-valid-token",
+      }),
+      t,
+    );
+    expect(errors.slackChannelsText).toBeUndefined();
   });
 
   it("requires Slack tokens when channels are configured", () => {
@@ -1595,6 +1610,7 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
     has_slack_bot_token: false,
     has_slack_app_token: false,
     slack_channels: [],
+    slack_channel_participation: {},
     routine_commands: [],
     task_schedules: [],
     ...overrides,
@@ -1688,6 +1704,43 @@ describe("MembersSection", () => {
       original_person_id: "alice",
       person_id: "alice",
       person_name: "Alice Cooper",
+    });
+  });
+
+  it("edits Slack channel participation policies", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        has_slack_bot_token: true,
+        has_slack_app_token: true,
+        slack_channels: ["general", "random"],
+        slack_channel_participation: { general: "strict", random: "social" },
+      }),
+    );
+    renderSetupPage("/setup?section=members&tab=slack");
+
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    await screen.findByText(t("setup.members.editingBadge", { id: "alice" }));
+    await screen.findByDisplayValue("general");
+    await screen.findByDisplayValue("random");
+
+    const policyInputs = screen.getAllByLabelText(t("setup.members.slackParticipationPolicy"));
+    expect(policyInputs[0]).toHaveValue("Join when needed");
+    expect(policyInputs[1]).toHaveValue("Join actively");
+
+    await user.click(policyInputs[1]);
+    expect(
+      (await screen.findAllByText(t("setup.members.slackParticipationDescriptions.social"))).length,
+    ).toBeGreaterThan(0);
+    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(updateMemberConfig).mock.calls[0][1];
+    expect(body.slack_channels).toEqual(["general", "random"]);
+    expect(body.slack_channel_participation).toEqual({
+      general: "strict",
+      random: "muted",
     });
   });
 
@@ -1884,11 +1937,20 @@ describe("MembersSection", () => {
     await screen.findByLabelText("Member ID");
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
 
-    await user.type(
-      await screen.findByLabelText(t("setup.members.slackChannels")),
-      "general, BAD CHANNEL",
+    const channelInput = await screen.findByLabelText(t("setup.members.slackChannelAdd"));
+    await user.type(channelInput, "Dev");
+    await user.click(
+      screen.getByRole("button", { name: t("setup.members.slackChannelAddButton") }),
     );
     expect(await screen.findByText(t("setup.validation.slackChannelsInvalid"))).toBeInTheDocument();
+    expect(screen.queryAllByLabelText(t("setup.members.slackParticipationPolicy"))).toHaveLength(0);
+
+    await user.clear(channelInput);
+    await user.type(channelInput, "開発");
+    fireEvent.keyDown(channelInput, { key: "Enter", isComposing: true });
+    expect(screen.queryAllByLabelText(t("setup.members.slackParticipationPolicy"))).toHaveLength(0);
+    fireEvent.keyDown(channelInput, { key: "Enter", isComposing: false });
+    await screen.findByDisplayValue("開発");
 
     await user.type(screen.getByLabelText(t("setup.members.slackBotToken")), "not-a-token");
     expect(await screen.findByText(t("setup.validation.slackBotTokenInvalid"))).toBeInTheDocument();

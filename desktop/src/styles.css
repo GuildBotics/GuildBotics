@@ -291,6 +291,14 @@ pre {
   margin-top: 25px;
 }
 
+.member-slack-channel-input {
+  flex: 1 1 220px;
+}
+
+.member-slack-policy-select {
+  flex: 1 1 300px;
+}
+
 .option-card-grid {
   display: grid;
   gap: 10px;

@@ -242,6 +242,7 @@ async def test_dispatch_incoming_event_sets_shared_state_and_runs_workflow(monke
             author_id="U1",
             text="hello",
         ),
+        chat_participation="social",
     )
 
     out = await runner.dispatch_incoming_event(person, item)
@@ -256,6 +257,7 @@ async def test_dispatch_incoming_event_sets_shared_state_and_runs_workflow(monke
     payload = ctx.shared_state[INCOMING_CHAT_EVENT_KEY]
     assert payload["service_name"] == "slack"
     assert payload["channel_id"] == "C1"
+    assert payload["chat_participation"] == "social"
     assert payload["event"]["event_id"] == "E1"
     assert ctx.closed is True
 
@@ -872,7 +874,7 @@ async def test_run_once_uses_connection_service_for_backfill_and_pending_dispatc
         observed_backfill_services.append(service_name)
         return 0
 
-    async def _fake_dispatch(person, service_name, channel_id):
+    async def _fake_dispatch(person, service_name, channel_id, policy):
         observed_dispatch_services.append(service_name)
         return 0, 0
 

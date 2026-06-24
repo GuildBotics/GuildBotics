@@ -87,6 +87,7 @@ def _channel_to_subscription(ch: Any) -> dict[str, Any] | None:
         "event_source": event_source,
     }
     for key in (
+        "participation",
         "startup_backfill_minutes",
         "backfill_interval_seconds",
         "backfill_overlap_seconds",

@@ -53,6 +53,7 @@ async def main(
             channel_id=incoming.channel_id,
             identity_user_id=identity.user_id,
             event=incoming.event,
+            chat_participation=incoming.chat_participation,
         )
 
 
@@ -65,6 +66,7 @@ async def _handle_event(
     channel_id: str,
     identity_user_id: str,
     event: ChatEvent,
+    chat_participation: str = "strict",
 ) -> None:
     person_id = context.person.person_id
     thread_state = state_store.load_thread_state(
@@ -93,12 +95,13 @@ async def _handle_event(
     thread_has_mentioned_self = _thread_has_mentioned_user(
         thread_messages, identity_user_id
     )
-    if event.mentions and not latest_mentions_self:
-        state_store.mark_processed_event(
-            service_name, person_id, channel_id, event.event_id
-        )
-        return
-    if not latest_mentions_self and not thread_has_mentioned_self:
+    participation = _chat_participation(chat_participation)
+    if _should_skip_event(
+        participation=participation,
+        mentions=list(event.mentions),
+        latest_mentions_self=latest_mentions_self,
+        thread_has_mentioned_self=thread_has_mentioned_self,
+    ):
         state_store.mark_processed_event(
             service_name, person_id, channel_id, event.event_id
         )
@@ -136,6 +139,7 @@ async def _handle_event(
         thread_messages=thread_messages,
         self_user_id=identity_user_id,
         thread_state=thread_state,
+        chat_participation=participation,
     )
 
     invoke = getattr(context, "invoke", None)
@@ -164,6 +168,7 @@ async def _handle_event(
         handoff_candidates=json.dumps(
             prompt_payload["handoff_candidates"], ensure_ascii=False, sort_keys=True
         ),
+        chat_participation=prompt_payload["chat_participation"],
         language=getattr(context, "language_name", ""),
         member_workspace=str(member_workspace),
         cli_agent_env={
@@ -252,6 +257,7 @@ async def _build_agent_prompt_payload(
     thread_messages: list[ThreadMessageState],
     self_user_id: str,
     thread_state: ThreadConversationState,
+    chat_participation: str = "strict",
 ) -> dict[str, Any]:
     person_labels = await _chat_user_to_person_labels(context)
     author_labels = _build_author_labels(
@@ -270,6 +276,7 @@ async def _build_agent_prompt_payload(
         "latest_message": _message_to_prompt_dict(prompt_latest_message),
         "participant_labels": author_labels,
         "handoff_candidates": _build_handoff_candidates(context, person_labels),
+        "chat_participation": _chat_participation(chat_participation),
         "previous_thread_context": previous_thread_context,
     }
 
@@ -383,6 +390,29 @@ def _thread_has_mentioned_user(
     if not user_id:
         return False
     return any(user_id in set(message.mentions) for message in thread_messages)
+
+
+def _should_skip_event(
+    *,
+    participation: str,
+    mentions: list[str],
+    latest_mentions_self: bool,
+    thread_has_mentioned_self: bool,
+) -> bool:
+    if participation == "muted":
+        return not latest_mentions_self
+    if mentions and not latest_mentions_self:
+        return True
+    if participation == "social":
+        return False
+    return not latest_mentions_self and not thread_has_mentioned_self
+
+
+def _chat_participation(value: Any) -> str:
+    participation = str(value or "strict").strip().lower()
+    if participation in {"strict", "social", "muted"}:
+        return participation
+    return "strict"
 
 
 def _get_chat_workspace_path(context: Any, workspace_data_root: Path) -> Path | None:

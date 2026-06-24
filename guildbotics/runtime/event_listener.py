@@ -13,12 +13,14 @@ class IncomingChatEvent:
     service_name: str
     channel_id: str
     event: ChatEvent
+    chat_participation: str = "strict"
 
     def to_shared_state(self) -> dict[str, object]:
         return {
             "service_name": self.service_name,
             "channel_id": self.channel_id,
             "event": asdict(self.event),
+            "chat_participation": self.chat_participation,
         }
 
     @classmethod
@@ -37,6 +39,7 @@ class IncomingChatEvent:
                 service_name=service_name,
                 channel_id=str(value.get("channel_id") or event.channel_id),
                 event=event,
+                chat_participation=str(value.get("chat_participation", "strict")),
             )
         except Exception:
             return None
