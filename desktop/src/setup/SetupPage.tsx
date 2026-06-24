@@ -63,6 +63,7 @@ import {
   type BrainAssignment,
   type IntelligenceConfig,
   type MemberSetupRequest,
+  type ChatParticipationPolicy,
   type MemberConfig,
   type LaneMap,
   type MemberConfigUpdateRequest,
@@ -194,6 +195,7 @@ const GITHUB_ACCOUNT_TYPE_OPTIONS = [
   "github_apps",
   "proxy_agent",
 ] as const;
+const CHAT_PARTICIPATION_OPTIONS = ["social", "strict", "muted"] as const;
 type GitHubAccountType = (typeof GITHUB_ACCOUNT_TYPE_OPTIONS)[number];
 type GitHubMemberType = Exclude<GitHubAccountType, "none">;
 type MemberEditorTab = "basic" | "intelligence" | "patrol" | "github" | "slack" | "diagnostics";
@@ -1600,6 +1602,11 @@ function MembersSection({
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackUserId, setSlackUserId] = useState("");
   const [slackChannelsText, setSlackChannelsText] = useState("");
+  const [slackChannelInput, setSlackChannelInput] = useState("");
+  const [slackChannelInputError, setSlackChannelInputError] = useState<string | null>(null);
+  const [slackChannelParticipation, setSlackChannelParticipation] = useState<
+    Record<string, ChatParticipationPolicy>
+  >({});
   const [routineOverrideEnabled, setRoutineOverrideEnabled] = useState(false);
   const [routineCommands, setRoutineCommands] = useState<string[]>([]);
   const [scheduledCommands, setScheduledCommands] = useState<ScheduledCommandDraft[]>([]);
@@ -1738,6 +1745,9 @@ function MembersSection({
     setSlackBotToken("");
     setSlackAppToken("");
     setSlackChannelsText("");
+    setSlackChannelInput("");
+    setSlackChannelInputError(null);
+    setSlackChannelParticipation({});
     setRoutineOverrideEnabled(false);
     setRoutineCommands([]);
     setScheduledCommands([]);
@@ -1784,6 +1794,9 @@ function MembersSection({
     setCharacterContributionText(characterFields.contributionStyle.join("\n"));
     setCharacterExtras(characterFields.extras);
     setSlackChannelsText(member.slack_channels.join(", "));
+    setSlackChannelInput("");
+    setSlackChannelInputError(null);
+    setSlackChannelParticipation(member.slack_channel_participation ?? {});
     setSlackUserId(member.slack_user_id ?? "");
     setGithubAccessToken("");
     setGithubInstallationId(member.github_installation_id?.toString() ?? "");
@@ -1901,6 +1914,8 @@ function MembersSection({
   });
 
   const effectiveIsActive = personType === "human" ? false : isActive;
+  const slackChannels = useMemo(() => parseSlackChannels(slackChannelsText), [slackChannelsText]);
+  const slackChannelsConfigured = slackChannels.length > 0;
   const usesGitHubMember = githubAccountType !== "none";
   const configDir = resolveConfigDir(workspaceDir);
   const envFilePath = joinPath(workspaceDir, ".env");
@@ -2021,6 +2036,60 @@ function MembersSection({
       ? memberErrors.identity || identityResolveError
       : memberErrors.githubUsername || identityResolveError;
 
+  const setSlackChannels = (channels: string[]) => {
+    setSlackChannelsText(channels.join(", "));
+  };
+
+  const addSlackChannel = () => {
+    const channel = slackChannelInput.trim();
+    if (!channel) {
+      return;
+    }
+    if (!isSlackChannelReference(channel)) {
+      setSlackChannelInputError(t("setup.validation.slackChannelsInvalid"));
+      return;
+    }
+    const channelRef = normalizeSlackChannelReference(channel);
+    const nextChannels = slackChannels.filter(
+      (existing) => normalizeSlackChannelReference(existing) !== channelRef,
+    );
+    setSlackChannels([...nextChannels, channel]);
+    setSlackChannelParticipation((current) => ({
+      ...current,
+      [channelRef]: current[channelRef] ?? "strict",
+    }));
+    setSlackChannelInput("");
+    setSlackChannelInputError(null);
+  };
+
+  const updateSlackChannel = (index: number, value: string) => {
+    const previousRef = normalizeSlackChannelReference(slackChannels[index] ?? "");
+    const nextRef = normalizeSlackChannelReference(value);
+    setSlackChannels(
+      slackChannels.map((channel, currentIndex) => (currentIndex === index ? value : channel)),
+    );
+    if (!nextRef || previousRef === nextRef) {
+      return;
+    }
+    setSlackChannelParticipation((current) => {
+      const { [previousRef]: previousPolicy, ...rest } = current;
+      return {
+        ...rest,
+        [nextRef]: previousPolicy ?? current[nextRef] ?? "strict",
+      };
+    });
+  };
+
+  const removeSlackChannel = (index: number) => {
+    const removedRef = normalizeSlackChannelReference(slackChannels[index] ?? "");
+    setSlackChannels(slackChannels.filter((_, currentIndex) => currentIndex !== index));
+    setSlackChannelParticipation((current) => {
+      const next = { ...current };
+      delete next[removedRef];
+      return next;
+    });
+  };
+
   const handleResolve = async () => {
     if (!canResolveIdentity) {
       return;
@@ -2073,13 +2142,16 @@ function MembersSection({
       slack_user_id: personType === "human" ? slackUserId.trim() : "",
       slack_bot_token: personType === "agent" ? slackBotToken.trim() : "",
       slack_app_token: personType === "agent" ? slackAppToken.trim() : "",
-      slack_channels:
+      slack_channels: personType === "agent" ? slackChannels : [],
+      slack_channel_participation:
         personType === "agent"
-          ? slackChannelsText
-              .split(",")
-              .map((channel) => channel.trim())
-              .filter(Boolean)
-          : [],
+          ? Object.fromEntries(
+              slackChannels.map((channel) => {
+                const channelRef = normalizeSlackChannelReference(channel);
+                return [channelRef, slackChannelParticipation[channelRef] ?? "strict"];
+              }),
+            )
+          : {},
       routine_commands: routineOverrideEnabled ? routineCommands : [],
       task_schedules: buildTaskSchedules(scheduledCommands, commandOptionByValue),
     };
@@ -2729,17 +2801,90 @@ function MembersSection({
                     />
                   ) : (
                     <>
-                      <TextInput
-                        label={t("setup.members.slackChannels")}
-                        value={slackChannelsText}
-                        onChange={(event) => setSlackChannelsText(event.currentTarget.value)}
-                        description={t("setup.members.slackChannelsHint")}
-                        error={memberErrors.slackChannelsText}
-                      />
+                      <Stack gap="xs">
+                        <Group align="end">
+                          <TextInput
+                            className="member-slack-channel-input"
+                            label={t("setup.members.slackChannelAdd")}
+                            description={t("setup.members.slackChannelAddHint")}
+                            value={slackChannelInput}
+                            onChange={(event) => {
+                              setSlackChannelInput(event.currentTarget.value);
+                              setSlackChannelInputError(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                                event.preventDefault();
+                                addSlackChannel();
+                              }
+                            }}
+                            error={slackChannelInputError ?? memberErrors.slackChannelsText}
+                          />
+                          <Button leftSection={<Plus size={16} />} onClick={addSlackChannel}>
+                            {t("setup.members.slackChannelAddButton")}
+                          </Button>
+                        </Group>
+                        {slackChannels.length === 0 ? (
+                          <div className="empty-row">{t("setup.members.slackChannelsEmpty")}</div>
+                        ) : (
+                          <Stack gap="sm">
+                            {slackChannels.map((channel, index) => {
+                              const channelRef = normalizeSlackChannelReference(channel);
+                              const selectedPolicy =
+                                slackChannelParticipation[channelRef] ?? "strict";
+                              return (
+                                <Group key={`${channelRef}-${index}`} align="start">
+                                  <TextInput
+                                    className="member-slack-channel-input"
+                                    label={t("setup.members.slackParticipationChannel")}
+                                    value={channel}
+                                    onChange={(event) =>
+                                      updateSlackChannel(index, event.currentTarget.value)
+                                    }
+                                  />
+                                  <Select
+                                    className="member-slack-policy-select"
+                                    label={t("setup.members.slackParticipationPolicy")}
+                                    data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
+                                      value: option,
+                                      label: t(`setup.members.slackParticipationOptions.${option}`),
+                                    }))}
+                                    value={selectedPolicy}
+                                    onChange={(value) =>
+                                      setSlackChannelParticipation((current) => ({
+                                        ...current,
+                                        [channelRef]: toChatParticipationPolicy(value),
+                                      }))
+                                    }
+                                    renderOption={({ option }) => (
+                                      <Stack gap={2}>
+                                        <Text size="sm">{option.label}</Text>
+                                        <Text size="xs" c="dimmed">
+                                          {t(
+                                            `setup.members.slackParticipationDescriptions.${option.value}`,
+                                          )}
+                                        </Text>
+                                      </Stack>
+                                    )}
+                                  />
+                                  <ActionIcon
+                                    aria-label={t("setup.members.slackChannelRemove")}
+                                    color="red"
+                                    mt={25}
+                                    variant="subtle"
+                                    onClick={() => removeSlackChannel(index)}
+                                  >
+                                    <Trash2 size={16} />
+                                  </ActionIcon>
+                                </Group>
+                              );
+                            })}
+                          </Stack>
+                        )}
+                      </Stack>
                       <PasswordInput
                         label={
-                          slackChannelsText.trim().length > 0 &&
-                          !storedMemberSecrets.slackBotToken ? (
+                          slackChannelsConfigured && !storedMemberSecrets.slackBotToken ? (
                             <RequiredLabel text={t("setup.members.slackBotToken")} />
                           ) : (
                             t("setup.members.slackBotToken")
@@ -2747,7 +2892,7 @@ function MembersSection({
                         }
                         aria-label={t("setup.members.slackBotToken")}
                         aria-required={
-                          slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackBotToken
+                          slackChannelsConfigured && !storedMemberSecrets.slackBotToken
                         }
                         placeholder={
                           storedMemberSecrets.slackBotToken
@@ -2760,8 +2905,7 @@ function MembersSection({
                       />
                       <PasswordInput
                         label={
-                          slackChannelsText.trim().length > 0 &&
-                          !storedMemberSecrets.slackAppToken ? (
+                          slackChannelsConfigured && !storedMemberSecrets.slackAppToken ? (
                             <RequiredLabel text={t("setup.members.slackAppToken")} />
                           ) : (
                             t("setup.members.slackAppToken")
@@ -2769,7 +2913,7 @@ function MembersSection({
                         }
                         aria-label={t("setup.members.slackAppToken")}
                         aria-required={
-                          slackChannelsText.trim().length > 0 && !storedMemberSecrets.slackAppToken
+                          slackChannelsConfigured && !storedMemberSecrets.slackAppToken
                         }
                         placeholder={
                           storedMemberSecrets.slackAppToken
@@ -4233,10 +4377,7 @@ export function getMemberFieldErrors(
     errors.slackAppToken = t("setup.validation.slackAppTokenInvalid");
   }
 
-  const slackChannels = values.slackChannelsText
-    .split(",")
-    .map((channel) => channel.trim())
-    .filter(Boolean);
+  const slackChannels = parseSlackChannels(values.slackChannelsText);
   if (
     slackChannels.length > 0 &&
     !values.slackBotToken.trim() &&
@@ -4307,7 +4448,30 @@ function isGitHubUsername(value: string): boolean {
 
 function isSlackChannelReference(value: string): boolean {
   const channel = value.trim();
-  return /^[CGD][A-Z0-9]{8,}$/.test(channel) || /^#?[a-z0-9][a-z0-9_-]{0,79}$/.test(channel);
+  return (
+    /^[CGD][A-Z0-9]{8,}$/.test(channel) ||
+    /^#?[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}a-z0-9][\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}a-z0-9_-]{0,79}$/u.test(
+      channel,
+    )
+  );
+}
+
+function parseSlackChannels(value: string): string[] {
+  return value
+    .split(",")
+    .map((channel) => channel.trim())
+    .filter(Boolean);
+}
+
+function normalizeSlackChannelReference(value: string): string {
+  return value.trim().replace(/^#/, "");
+}
+
+function toChatParticipationPolicy(value: string | null): ChatParticipationPolicy {
+  if (value === "social" || value === "muted") {
+    return value;
+  }
+  return "strict";
 }
 
 function isSlackUserId(value: string): boolean {
@@ -4832,6 +4996,7 @@ function memberRequestToConfig(
     has_slack_bot_token: Boolean(request.slack_bot_token),
     has_slack_app_token: Boolean(request.slack_app_token),
     slack_channels: request.slack_channels ?? [],
+    slack_channel_participation: request.slack_channel_participation ?? {},
     routine_commands: request.routine_commands ?? [],
     task_schedules: request.task_schedules ?? [],
   };

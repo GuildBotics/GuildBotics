@@ -367,6 +367,7 @@ export type ProjectConfigUpdateRequest = {
 
 export type MemberPersonType = "human" | "agent";
 export type MemberGitHubAccountType = "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
+export type ChatParticipationPolicy = "strict" | "social" | "muted";
 
 type MemberWriteRequestBase = {
   config_dir: string;
@@ -391,6 +392,7 @@ type MemberWriteRequestBase = {
   slack_bot_token?: string;
   slack_app_token?: string;
   slack_channels?: string[];
+  slack_channel_participation?: Record<string, ChatParticipationPolicy>;
   routine_commands?: string[];
   task_schedules?: MemberTaskSchedule[];
 };
@@ -432,6 +434,7 @@ export type MemberConfig = {
   has_slack_bot_token: boolean;
   has_slack_app_token: boolean;
   slack_channels: string[];
+  slack_channel_participation: Record<string, ChatParticipationPolicy>;
   routine_commands: string[];
   task_schedules: MemberTaskSchedule[];
 };

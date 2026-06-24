@@ -600,6 +600,7 @@ message_channels:
     name: dev-chat
     chat:
       enabled: true
+      participation: strict
       startup_backfill_minutes: 60
       backfill_interval_seconds: 300
 
@@ -612,6 +613,7 @@ task_schedules:
 Points:
 
 - Monitored channels are defined in `message_channels`; entries with `chat.enabled: true` are monitored.
+- `chat.participation` controls when the member joins a Slack thread: `strict` (default) handles direct mentions and follow-ups after the member was mentioned, `social` also allows unmentioned ambient participation for casual channels, and `muted` handles direct mentions only.
 - On startup, GuildBotics backfills recent channel messages and known thread replies from Slack history. `startup_backfill_minutes` defaults to `60`; `backfill_interval_seconds` defaults to `300` and can be set to `0` to disable periodic history checks after startup.
 - Incoming replies, reactions, no-op records, and completion evidence go through `guildbotics member chat reply|post|reaction add|noop|complete`.
 - For scheduled posting, use `task_schedules` + `workflows/chat_post_command` (the post body is generated from a GuildBotics custom command output).

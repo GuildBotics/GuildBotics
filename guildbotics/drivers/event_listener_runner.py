@@ -42,6 +42,7 @@ class ChatBackfillPolicy:
     interval_seconds: float = 300.0
     overlap_seconds: float = 60.0
     limit: int = 100
+    participation: str = "strict"
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,7 +257,7 @@ class EventListenerRunner:
                         person, key.service, channel_id, policy
                     )
                     delivered, skipped = await self._dispatch_pending_events(
-                        person, key.service, channel_id
+                        person, key.service, channel_id, policy
                     )
                     delivered_count += delivered
                     skipped_processed_count += skipped
@@ -378,6 +379,7 @@ class EventListenerRunner:
                         str(sub.get("backfill_overlap_seconds", "")).strip(),
                     ),
                     ("backfill_limit", str(sub.get("backfill_limit", "")).strip()),
+                    ("participation", _chat_participation(sub.get("participation"))),
                 )
             )
         return tuple(items)
@@ -401,6 +403,7 @@ class EventListenerRunner:
             limit=max(
                 1, _positive_int(subscription.get("backfill_limit"), default.limit)
             ),
+            participation=_chat_participation(subscription.get("participation")),
         )
 
     def _socket_subscriptions_for_person(self, person: Person) -> list[dict[str, Any]]:
@@ -513,7 +516,11 @@ class EventListenerRunner:
         )
 
     async def _dispatch_pending_events(
-        self, person: Person, service_name: str, channel_id: str
+        self,
+        person: Person,
+        service_name: str,
+        channel_id: str,
+        policy: ChatBackfillPolicy,
     ) -> tuple[int, int]:
         delivered_count = 0
         skipped_count = 0
@@ -525,7 +532,10 @@ class EventListenerRunner:
             if self._stop_event.is_set():
                 break
             incoming = IncomingChatEvent(
-                service_name=service_name, channel_id=channel_id, event=event
+                service_name=service_name,
+                channel_id=channel_id,
+                event=event,
+                chat_participation=policy.participation,
             )
             if self._is_processed_for_person(person, incoming):
                 self._state_store.remove_pending_event(
@@ -807,6 +817,13 @@ def _positive_float(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return max(0.0, parsed)
+
+
+def _chat_participation(value: Any) -> str:
+    participation = str(value or "strict").strip().lower()
+    if participation in {"strict", "social", "muted"}:
+        return participation
+    return "strict"
 
 
 def _format_slack_ts(value: float) -> str:

@@ -1152,6 +1152,9 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 "message_channels:",
                 "  - name: C012345",
                 "    service: slack",
+                "    chat:",
+                "      enabled: true",
+                "      participation: social",
             ]
         )
     )
@@ -1185,6 +1188,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         assert payload["has_github_access_token"] is True
         assert payload["has_slack_bot_token"] is True
         assert payload["slack_channels"] == ["C012345"]
+        assert payload["slack_channel_participation"] == {"C012345": "social"}
 
         put_response = client.put(
             "/config/members/alice",
@@ -1216,6 +1220,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 "slack_bot_token": "xoxb-b",
                 "slack_app_token": "xapp-b",
                 "slack_channels": ["C0999"],
+                "slack_channel_participation": {"C0999": "muted"},
             },
         )
         assert put_response.status_code == HTTP_OK
@@ -1227,6 +1232,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         assert "reviewer" in updated["profile"]["roles"]
         assert updated["profile"]["character"]["archetype"] == "creative_designer"
         assert updated["message_channels"][0]["name"] == "C0999"
+        assert updated["message_channels"][0]["chat"]["participation"] == "muted"
         env_text = env_file.read_text()
         assert "ALICE_GITHUB_ACCESS_TOKEN" not in env_text
         assert "ALICE_RENAMED_GITHUB_ACCESS_TOKEN=token-b" in env_text

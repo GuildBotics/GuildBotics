@@ -22,6 +22,7 @@ CRON_FIELD_COUNT = 5
 HTTP_OK = 200
 GITHUB_USER_LOOKUP_TIMEOUT_SECONDS = 10.0
 SLACK_CHANNEL_ID_PATTERN = re.compile(r"^[CGD][A-Z0-9]{8,}$")
+CHAT_PARTICIPATION_VALUES = {"strict", "social", "muted"}
 
 # Default GitHub Projects status names used when no custom lane mapping is set.
 DEFAULT_LANE_READY = "Todo"
@@ -268,6 +269,7 @@ class PersonSetupInput(BaseModel):
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_channels: list[str] = Field(default_factory=list)
+    slack_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
 
@@ -324,6 +326,7 @@ class PersonConfigSnapshot(BaseModel):
     has_slack_bot_token: bool = False
     has_slack_app_token: bool = False
     slack_channels: list[str] = Field(default_factory=list)
+    slack_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
 
@@ -660,15 +663,26 @@ class SimplePersonSetupService:
         character_data = character if isinstance(character, dict) else {}
 
         channels: list[str] = []
+        channel_participation: dict[str, str] = {}
         raw_channels = person_data.get("message_channels", [])
         if isinstance(raw_channels, list):
-            channels = [
-                str(channel.get("name", ""))
-                for channel in raw_channels
-                if isinstance(channel, dict)
-                and str(channel.get("service", "")).lower() == "slack"
-            ]
-            channels = [channel for channel in channels if channel]
+            for channel in raw_channels:
+                if (
+                    not isinstance(channel, dict)
+                    or str(channel.get("service", "")).lower() != "slack"
+                ):
+                    continue
+                channel_name = str(channel.get("name", "")).strip()
+                if not channel_name:
+                    continue
+                channels.append(channel_name)
+                chat = channel.get("chat", {})
+                participation = (
+                    chat.get("participation", "strict")
+                    if isinstance(chat, dict)
+                    else "strict"
+                )
+                channel_participation[channel_name] = _chat_participation(participation)
 
         env = self._read_env_values(env_file_path)
         env_prefix = self._person_env_prefix(person_id)
@@ -703,6 +717,7 @@ class SimplePersonSetupService:
             has_slack_bot_token=bool(env.get(f"{env_prefix}_SLACK_BOT_TOKEN")),
             has_slack_app_token=bool(env.get(f"{env_prefix}_SLACK_APP_TOKEN")),
             slack_channels=channels,
+            slack_channel_participation=channel_participation,
             routine_commands=[
                 str(command).strip()
                 for command in person_data.get("routine_commands", [])
@@ -891,8 +906,20 @@ class SimplePersonSetupService:
             "relationships": config.relationships,
         }
         if config.slack_channels:
+            slack_channel_participation = {
+                _normalize_slack_channel_ref(channel): _chat_participation(
+                    participation
+                )
+                for channel, participation in config.slack_channel_participation.items()
+            }
             person_config["message_channels"] = [
-                self._build_slack_message_channel(channel, person_id=config.person_id)
+                self._build_slack_message_channel(
+                    channel,
+                    person_id=config.person_id,
+                    participation=slack_channel_participation.get(
+                        _normalize_slack_channel_ref(channel), "strict"
+                    ),
+                )
                 for channel in config.slack_channels
                 if channel
             ]
@@ -911,10 +938,13 @@ class SimplePersonSetupService:
         return person_config
 
     def _build_slack_message_channel(
-        self, channel: str, *, person_id: str
+        self, channel: str, *, person_id: str, participation: str = "strict"
     ) -> dict[str, Any]:
         channel_ref = channel.strip().lstrip("#")
-        chat: dict[str, Any] = {"enabled": True}
+        chat: dict[str, Any] = {
+            "enabled": True,
+            "participation": _chat_participation(participation),
+        }
         channel_info: dict[str, Any] = {}
         if SLACK_CHANNEL_ID_PATTERN.fullmatch(channel_ref):
             chat["channel_id"] = channel_ref
@@ -1012,3 +1042,14 @@ class SimplePersonSetupService:
         env_file_path.parent.mkdir(parents=True, exist_ok=True)
         lines = [f"{key}={value}" for key, value in env_values.items()]
         env_file_path.write_text("\n".join(lines))
+
+
+def _normalize_slack_channel_ref(channel: str) -> str:
+    return channel.strip().lstrip("#")
+
+
+def _chat_participation(value: object) -> str:
+    participation = str(value or "strict").strip().lower()
+    if participation in CHAT_PARTICIPATION_VALUES:
+        return participation
+    return "strict"

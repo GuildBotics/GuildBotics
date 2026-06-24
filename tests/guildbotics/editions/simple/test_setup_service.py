@@ -173,6 +173,10 @@ def test_write_person_accepts_slack_channel_names_and_ids(tmp_path: Path) -> Non
             roles=["architect"],
             speaking_style="Professional.",
             slack_channels=["#general", "C0123456789"],
+            slack_channel_participation={
+                "general": "strict",
+                "C0123456789": "social",
+            },
         )
     )
 
@@ -182,9 +186,11 @@ def test_write_person_accepts_slack_channel_names_and_ids(tmp_path: Path) -> Non
     assert channels[0]["name"] == "general"
     assert channels[0]["chat"]["enabled"] is True
     assert channels[0]["chat"]["channel_name"] == "general"
+    assert channels[0]["chat"]["participation"] == "strict"
     assert channels[1]["name"] == "C0123456789"
     assert channels[1]["chat"]["enabled"] is True
     assert channels[1]["chat"]["channel_id"] == "C0123456789"
+    assert channels[1]["chat"]["participation"] == "social"
     assert channels[1]["channel_info"]["channel_id"] == "C0123456789"
 
 
@@ -329,6 +335,7 @@ def test_member_read_update_delete_with_slack(tmp_path: Path) -> None:
             slack_bot_token="xoxb-a",
             slack_app_token="xapp-a",
             slack_channels=["C1"],
+            slack_channel_participation={"C1": "muted"},
         )
     )
 
@@ -341,6 +348,7 @@ def test_member_read_update_delete_with_slack(tmp_path: Path) -> None:
     assert snapshot.has_github_access_token is True
     assert snapshot.has_slack_bot_token is True
     assert snapshot.slack_channels == ["C1"]
+    assert snapshot.slack_channel_participation == {"C1": "muted"}
     assert snapshot.character["archetype"] == "creative_designer"
 
 

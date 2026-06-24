@@ -154,6 +154,7 @@ def _set_incoming_event(
     message_ts: str = "100.1",
     text: str = "<@U_ALICE> please check",
     mentions: list[str] | None = None,
+    chat_participation: str = "strict",
 ) -> None:
     ctx.shared_state[INCOMING_CHAT_EVENT_KEY] = IncomingChatEvent(
         service_name="slack",
@@ -167,6 +168,7 @@ def _set_incoming_event(
             text=text,
             mentions=list(mentions if mentions is not None else ["U_ALICE"]),
         ),
+        chat_participation=chat_participation,
     ).to_shared_state()
 
 
@@ -193,6 +195,7 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert kwargs["cli_agent_env"]["GUILDBOTICS_RUN_ID"] == kwargs["workflow_run_id"]
     assert kwargs["cwd"].name == "alice"
     assert kwargs["handoff_candidates"] == "[]"
+    assert kwargs["chat_participation"] == "strict"
     assert "team_profiles" not in kwargs
     # The capability reference is no longer injected per-prompt; the agent reads
     # it from the mandatory `member context` call (the single source of truth).
@@ -267,6 +270,29 @@ async def test_unmentioned_new_thread_is_processed_without_agent(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_social_unmentioned_new_thread_delegates(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("noop")
+    _set_incoming_event(
+        ctx,
+        text="今日のランチどうします?",
+        mentions=[],
+        chat_participation="social",
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert ctx.invocations[0][0] == "functions/handle_chat_event"
+    kwargs = ctx.invocations[0][1]
+    assert kwargs["chat_participation"] == "social"
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert channel_state.processed_event_ids == ["E1"]
+
+
+@pytest.mark.asyncio
 async def test_unmentioned_followup_after_prior_mention_delegates(tmp_path):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
@@ -297,6 +323,43 @@ async def test_unmentioned_followup_after_prior_mention_delegates(tmp_path):
     kwargs = ctx.invocations[0][1]
     assert kwargs["event_id"] == "E2"
     assert kwargs["message_ts"] == "100.2"
+
+
+@pytest.mark.asyncio
+async def test_muted_unmentioned_followup_after_prior_mention_skips(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    state_store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "100.1",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="100.1",
+            message_ts="100.1",
+            author_id="U_USER",
+            text="<@U_ALICE> please check",
+            mentions=["U_ALICE"],
+        ),
+    )
+    ctx = FakeInvokeContext("noop")
+    _set_incoming_event(
+        ctx,
+        event_id="E2",
+        message_ts="100.2",
+        text="Any update?",
+        mentions=[],
+        chat_participation="muted",
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert ctx.invocations == []
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert channel_state.processed_event_ids == ["E2"]
 
 
 @pytest.mark.asyncio

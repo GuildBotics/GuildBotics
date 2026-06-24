@@ -622,6 +622,7 @@ message_channels:
     name: dev-chat
     chat:
       enabled: true
+      participation: strict
       startup_backfill_minutes: 60
       backfill_interval_seconds: 300
 
@@ -634,6 +635,7 @@ task_schedules:
 ポイント:
 
 - 監視対象チャネルは `person.yml` の `message_channels` で定義し、`chat.enabled: true` のものが対象
+- `chat.participation` で Slack thread への参加条件を制御できます。`strict`（既定）は明示メンションと一度呼ばれた thread の follow-up、`social` は雑談チャネル向けに未メンションの自然参加も許可、`muted` は明示メンションのみを処理します。
 - 起動時に Slack history から直近の channel message と既知 thread reply を backfill します。`startup_backfill_minutes` の既定値は `60`、`backfill_interval_seconds` の既定値は `300` で、`0` にすると起動後の定期 history 確認を無効化できます。
 - incoming reply / reaction / no-op / completion evidence は `guildbotics member chat reply|post|reaction add|noop|complete` 経由で記録される
 - 定期投稿は `task_schedules` + `workflows/chat_post_command` を使う（投稿本文は GuildBotics カスタムコマンドの出力）

@@ -410,9 +410,27 @@ const resources = {
           slackBotTokenPlaceholder: "xoxb-...",
           slackAppToken: "Slack App token",
           slackAppTokenPlaceholder: "xapp-...",
-          slackChannels: "Slack channels to join",
-          slackChannelsHint:
-            "Comma-separated channel names or IDs. Examples: general, random, C0123456789.",
+          slackChannelAdd: "Channel",
+          slackChannelAddHint:
+            "Enter a channel name or ID that the member joins. Examples: general, random, C0123456789",
+          slackChannelAddButton: "Add channel",
+          slackChannelRemove: "Remove channel",
+          slackChannelsEmpty: "No Slack channels configured.",
+          slackParticipationChannel: "Channel",
+          slackParticipationPolicy: "When to join",
+          slackParticipationOptions: {
+            social: "Join actively",
+            strict: "Join when needed",
+            muted: "Mentions only",
+          },
+          slackParticipationDescriptions: {
+            social:
+              "For casual channels. Allows the agent to briefly join even when it is not mentioned.",
+            strict:
+              "For work channels. Responds when mentioned or when following up in a thread where it was already invited.",
+            muted:
+              "For announcement or high-signal channels. Responds only to direct mentions and otherwise stays out of normal conversation.",
+          },
           addButton: "Add member",
           saveButton: "Save changes",
           newButton: "Add new member",
@@ -588,7 +606,7 @@ const resources = {
           slackAppTokenRequired: "Slack App token is required when Slack channels are configured.",
           slackAppTokenInvalid: "Enter a Slack App token starting with xapp-.",
           slackChannelsInvalid:
-            "Enter Slack channel names or IDs separated by commas. Use lowercase channel names such as general or Slack IDs such as C0123456789.",
+            "Enter a Slack channel name or ID. Channel names can use Japanese characters, lowercase letters, numbers, hyphens, and underscores. Examples: general, 開発, C0123456789.",
         },
       },
       overview: {
@@ -1243,9 +1261,27 @@ const resources = {
           slackBotTokenPlaceholder: "xoxb-...",
           slackAppToken: "Slack App トークン",
           slackAppTokenPlaceholder: "xapp-...",
-          slackChannels: "参加するSlackチャンネル",
-          slackChannelsHint:
-            "チャンネル名またはIDをカンマ区切りで入力します。例: general, random, C0123456789",
+          slackChannelAdd: "チャンネル",
+          slackChannelAddHint:
+            "メンバーが参加するチャンネル名またはIDを入力します。例: general, random, C0123456789",
+          slackChannelAddButton: "チャンネルを追加",
+          slackChannelRemove: "チャンネルを削除",
+          slackChannelsEmpty: "Slackチャンネルはまだ設定されていません。",
+          slackParticipationChannel: "チャンネル",
+          slackParticipationPolicy: "会話への参加条件",
+          slackParticipationOptions: {
+            social: "積極的に参加",
+            strict: "必要なときだけ参加",
+            muted: "メンションのみに対応",
+          },
+          slackParticipationDescriptions: {
+            social:
+              "雑談チャンネル向け。メンションされていない会話にも、エージェントが自然に一言だけ入る余地を作ります。",
+            strict:
+              "業務チャンネル向け。メンションされたとき、または一度呼ばれたスレッドの続きだけ対応し、不要な割り込みを避けます。",
+            muted:
+              "通知や重要連絡チャンネル向け。明示的にメンションされたときだけ対応し、通常の会話には参加しません。",
+          },
           addButton: "メンバーを追加",
           saveButton: "変更を保存",
           newButton: "新しいメンバーを追加",
@@ -1424,7 +1460,7 @@ const resources = {
             "参加するSlackチャンネルを設定する場合、Slack App トークンは必須です。",
           slackAppTokenInvalid: "Slack App トークンは xapp- で始まる値を入力してください。",
           slackChannelsInvalid:
-            "Slackチャンネル名またはIDをカンマ区切りで入力してください。チャンネル名は general のような小文字名、IDは C0123456789 のような形式です。",
+            "Slackチャンネル名またはIDを入力してください。チャンネル名には日本語、英小文字、数字、ハイフン、アンダーバーが使えます。例: general, 開発, C0123456789",
         },
       },
       service: {
