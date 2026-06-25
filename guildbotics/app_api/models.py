@@ -308,7 +308,7 @@ class ScenarioDiagnosticsResponse(BaseModel):
 
 
 class CliAgentDetection(BaseModel):
-    name: Literal["codex", "gemini", "claude", "copilot"]
+    name: Literal["codex", "antigravity", "claude", "copilot"]
     executable: str
     detected: bool
     path: str = ""
@@ -369,7 +369,7 @@ class ProjectConfigResponse(BaseModel):
     language: str
     description: str = ""
     llm_api_type: Literal["openai", "gemini", "anthropic"]
-    cli_agent: Literal["codex", "gemini", "claude", "copilot"]
+    cli_agent: Literal["codex", "antigravity", "claude", "copilot"]
     github_enabled: bool
     github_project_url: str = ""
     lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
@@ -431,7 +431,7 @@ class ProjectConfigUpdateRequest(GitHubProjectInput):
     language: Literal["en", "ja"]
     description: str = ""
     llm_api_type: Literal["openai", "gemini", "anthropic"]
-    cli_agent: Literal["codex", "gemini", "claude", "copilot"]
+    cli_agent: Literal["codex", "antigravity", "claude", "copilot"]
     github_enabled: bool
     google_api_key: str | None = None
     openai_api_key: str | None = None

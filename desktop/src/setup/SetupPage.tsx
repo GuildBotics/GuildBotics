@@ -112,7 +112,7 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
       language: z.enum(["en", "ja"]),
       description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
       llmApiType: z.enum(["openai", "gemini", "anthropic"]),
-      cliAgent: z.enum(["codex", "gemini", "claude", "copilot"]),
+      cliAgent: z.enum(["codex", "antigravity", "claude", "copilot"]),
       googleApiKey: z.string(),
       openaiApiKey: z.string(),
       anthropicApiKey: z.string(),
@@ -179,7 +179,7 @@ const LLM_PROVIDER_OPTIONS = [
 const CLI_AGENT_OPTIONS = [
   { value: "claude", label: "Claude Code" },
   { value: "codex", label: "OpenAI Codex CLI" },
-  { value: "gemini", label: "Gemini CLI" },
+  { value: "antigravity", label: "Antigravity CLI" },
   { value: "copilot", label: "GitHub Copilot CLI" },
 ] as const;
 const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "machine"] as const;

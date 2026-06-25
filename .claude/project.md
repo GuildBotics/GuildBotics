@@ -78,7 +78,7 @@ python -m black .
 ## プロジェクト固有の重要事項
 
 ### CLI エージェント統合
-- Google Gemini CLI、OpenAI Codex CLI、Claude Code に対応
+- Google Antigravity CLI、OpenAI Codex CLI、Claude Code に対応
 - CLI エージェント設定: `intelligences/cli_agents/*.yml`
 - CLI エージェントマッピング: `intelligences/cli_agent_mapping.yml`
 

@@ -85,7 +85,7 @@ GuildBotics でできること:
   - Pythonスクリプト（コンテキスト注入付き）
   - Shellスクリプト
   - YAMLワークフロー（コマンド合成）
-- **Brain抽象化**: LLMプロバイダーの切り替え、またはCLIエージェント（Gemini CLI、Codex CLI、Claude Code、GitHub Copilot CLI）への委譲
+- **Brain抽象化**: LLMプロバイダーの切り替え、またはCLIエージェント（Antigravity CLI、Codex CLI、Claude Code、GitHub Copilot CLI）への委譲
 - **拡張可能な統合**: 外部サービス向けプラガブルアダプター
 
 ## 組み込み機能
@@ -147,7 +147,7 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 
 以下のCLI エージェントのいずれかを事前にインストールして一度起動し、認証を行ってください。
 
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
+- [Antigravity CLI](https://github.com/google/antigravity)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Pro または Max サブスクリプションが必要)
 - [GitHub Copilot CLI](https://docs.github.com/ja/copilot/concepts/agents/about-copilot-cli)
@@ -162,7 +162,7 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 
 - `~/.guildbotics/bin/guildbotics`: CLI エージェント / スキルが使う管理用 GuildBotics CLI
 - `~/.local/bin/guildbotics`: 未作成、または既存の管理用 shim の場合だけ更新される小さな shim
-- 検出済みの Codex / Claude Code / Gemini CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の
+- 検出済みの Codex / Claude Code / Antigravity CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の
   GuildBotics スキル。ユーザーが作成・編集したスキルは上書きしません。
 
 **単体 CLI（ヘッドレス / 非デスクトップ環境）:** デスクトップアプリを使わない環境、または別管理の CLI を明示的に使いたい場合だけ `uv tool install guildbotics` を使います。

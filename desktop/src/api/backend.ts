@@ -15,7 +15,7 @@ export type CliAgentSkillStatus =
   | "error";
 
 export type CliAgentSkillState = {
-  agent: "codex" | "gemini" | "claude" | "copilot";
+  agent: "codex" | "antigravity" | "claude" | "copilot";
   agent_home: string | null;
   skill_path: string | null;
   status: CliAgentSkillStatus;

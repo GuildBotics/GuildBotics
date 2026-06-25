@@ -875,7 +875,7 @@ def test_detect_cli_agents_falls_back_when_mapping_load_fails(
 
     assert [agent.name for agent in response.agents] == [
         "codex",
-        "gemini",
+        "antigravity",
         "claude",
         "copilot",
     ]
@@ -891,7 +891,7 @@ def test_detect_cli_agents_resolves_executable_and_path(
         "guildbotics.app_api.runtime.load_yaml_file",
         lambda path: {
             "codex": "codex-cli.yml",
-            "gemini": "gemini-cli.yml",
+            "antigravity": "antigravity-cli.yml",
             "claude": "claude-cli.yml",
             "copilot": "copilot-cli.yml",
         },
@@ -918,9 +918,9 @@ def test_detect_cli_agents_resolves_executable_and_path(
     assert agents["codex"].executable == "codex"
     assert agents["codex"].detected is True
     assert agents["codex"].path == "/usr/local/bin/codex"
-    assert agents["gemini"].executable == "gemini"
-    assert agents["gemini"].detected is False
-    assert agents["gemini"].path == ""
+    assert agents["antigravity"].executable == "antigravity"
+    assert agents["antigravity"].detected is False
+    assert agents["antigravity"].path == ""
 
 
 def test_detect_cli_agents_marks_undetected_when_executable_missing(

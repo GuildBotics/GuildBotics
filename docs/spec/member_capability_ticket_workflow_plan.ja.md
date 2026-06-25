@@ -30,7 +30,7 @@ GuildBotics member capability
 本計画で特に重要なのは次の3点であり、Final Architecture の冒頭でまとめて確定させる。
 
 1. **Credential / config 解決**: agent subprocess の環境変数は剥奪される（Codex は `*TOKEN*` を全削除する）。そのため `guildbotics member ...` は agent の cwd や env 手渡しに依存せず、active workspace または明示 workspace から config / `.env` を自力ロードする。
-2. **managed CLI / skill 配布**: Mac 版 desktop app は同梱済み `guildbotics-cli` と GuildBotics skill を初回起動時に安定した場所へ配置する。Codex / Claude Code / Gemini CLI / GitHub Copilot CLI からは `~/.guildbotics/bin/guildbotics` と user skill を使う。
+2. **managed CLI / skill 配布**: Mac 版 desktop app は同梱済み `guildbotics-cli` と GuildBotics skill を初回起動時に安定した場所へ配置する。Codex / Claude Code / Antigravity CLI / GitHub Copilot CLI からは `~/.guildbotics/bin/guildbotics` と user skill を使う。
 3. **ガードレールは経路別**: 「CLI agent が `gh` など内部標準コマンドを直接使って *利用者自身のアカウント* で操作してしまう」ことを防ぐ仕組みは、ノンインタラクティブ経路（GuildBotics が agent を spawn）とインタラクティブ経路（利用者がデスクトップアプリを起動）で別物になる。1つの「強力なガードレール」で両経路を覆えると考えない。
 4. **workflow の薄型化に伴う既存ガードの撤去**: 現行 `ticket_driven_workflow._main` は「agent が直接 commit したら `RuntimeError`」というインラインガードを持つ。新方式では agent が publish 経由で commit するため、このガードは撤去する。
 
@@ -443,7 +443,7 @@ def resolve_member_context(person_identifier: str) -> tuple[Context, Person]
 
 目的:
 
-- Codex / Claude Code / Gemini CLI / GitHub Copilot CLI / desktop app から同じ考え方で使える薄い skill source。実処理はすべて `guildbotics member ...` に委譲する。
+- Codex / Claude Code / Antigravity CLI / GitHub Copilot CLI / desktop app から same-concept で使える薄い skill source。実処理はすべて `guildbotics member ...` に委譲する。
 
 内容:
 
@@ -462,12 +462,12 @@ def resolve_member_context(person_identifier: str) -> tuple[Context, Person]
 - `~/.local/bin/guildbotics` は存在しない場合、または既存ファイルが GuildBotics managed shim の場合だけ作成・更新する。利用者が手動で入れた CLI は上書きしない。
 - Codex 向け: `$CODEX_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.codex/skills/guildbotics/SKILL.md` へ desktop app が配置する。**併せて、Codex の承認ポリシーで `gh` / `git push` を承認必須/拒否にする設定例を書く。**
 - Claude Code 向け: `$CLAUDE_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.claude/skills/guildbotics/SKILL.md` へ desktop app が配置する。**併せて、`gh` / `git push` / 直接 token/API 書き込みを拒否または承認必須にするクライアント権限設定例を書く。**
-- Gemini CLI 向け: `$GEMINI_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.gemini/skills/guildbotics/SKILL.md` へ desktop app が配置する。
+- Antigravity CLI 向け: `$ANTIGRAVITY_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.gemini/config/skills/guildbotics/SKILL.md` へ desktop app が配置する。
 - GitHub Copilot CLI 向け: `$COPILOT_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.copilot/skills/guildbotics/SKILL.md` へ desktop app が配置する。
 - user skill は GuildBotics desktop が配置した未編集 skill だけを更新し、ユーザー作成またはユーザー編集済みの `SKILL.md` は上書きしない。
 - skill は thin wrapper とし、GitHub API schema や token 取り扱いの詳細を持たせない。操作詳細は `guildbotics member ... --help` と GuildBotics 実装を正とする。
 - skill 内のコマンド例は `"$HOME/.guildbotics/bin/guildbotics" member ...` を優先する。bare `guildbotics` は shim / PATH が使える場合の fallback とする。
-- **互換検証**: Codex / Claude Code / Gemini CLI / GitHub Copilot CLI で単一 `SKILL.md` が認識されることを導入確認項目に含める。クライアント差異がある場合は、共通本文 + クライアント別の最小ラッパー、という形に分けることを許容する。
+- **互換検証**: Codex / Claude Code / Antigravity CLI / GitHub Copilot CLI で単一 `SKILL.md` が認識されることを導入確認項目に含める。クライアント差異がある場合は、共通本文 + クライアント別の最小ラッパー、という形に分けることを許容する。
 
 導入前提として docs に明記するもの:
 
@@ -634,7 +634,7 @@ ticket workflow 実装時点での将来対応:
 
 ### Step 5: Skill source and command prompt
 
-- `skills/guildbotics/SKILL.md` 追加。desktop app による Codex / Claude Code / Gemini CLI / GitHub Copilot CLI user skill への自動配置 + **クライアント拒否設定例**（`gh`/`git push`）を docs に追加。
+- `skills/guildbotics/SKILL.md` 追加。desktop app による Codex / Claude Code / Antigravity CLI / GitHub Copilot CLI user skill への自動配置 + **クライアント拒否設定例**（`gh`/`git push`）を docs に追加。
 - desktop app に同梱する `guildbotics-cli` と first-launch install（`~/.guildbotics/bin/guildbotics` / managed shim / skills）を追加。
 - active workspace（desktop app / `guildbotics workspace use` / `member --workspace`）の導入前提を docs に追加。env 手渡しは fallback として説明する。
 - skill 導入 smoke check（`~/.guildbotics/bin/guildbotics workspace status` と `member context --check-credentials`）を docs に追加。
@@ -777,7 +777,7 @@ desktop は基本触らず docs/spec 更新に留める。触った場合のみ 
 
 ### 1. 導入テスト
 
-目的: Codex / Claude Code / Gemini CLI / GitHub Copilot CLI から GuildBotics skill と `guildbotics member ...` CLI を利用できる状態を確認する。
+目的: Codex / Claude Code / Antigravity CLI / GitHub Copilot CLI から GuildBotics skill と `guildbotics member ...` CLI を利用できる状態を確認する。
 
 事前準備:
 
@@ -826,7 +826,7 @@ GuildBotics 設定確認:
 
 合格条件:
 
-- Codex / Claude Code / Gemini CLI / GitHub Copilot CLI で skill を認識でき、各クライアントから managed CLI の `member context --check-credentials` が動く。
+- Codex / Claude Code / Antigravity CLI / GitHub Copilot CLI で skill を認識でき、各クライアントから managed CLI の `member context --check-credentials` が動く。
 - GuildBotics CLI が member credential を使える。
 - secret が CLI output / logs / prompt trace に出ない。
 - member workspace が想定パスに作られる。

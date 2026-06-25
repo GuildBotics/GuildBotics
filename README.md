@@ -83,7 +83,7 @@ GuildBotics enables you to:
   - Python scripts (with context injection)
   - Shell scripts
   - YAML workflows (command composition)
-- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Gemini CLI, Codex CLI, Claude Code, GitHub Copilot CLI)
+- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Antigravity CLI, Codex CLI, Claude Code, GitHub Copilot CLI)
 - **Extensible Integrations**: Pluggable adapters for external services
 
 ## Built-in Capabilities
@@ -137,7 +137,7 @@ Please obtain one of the following API keys:
 ## 3.4. CLI Agent
 Please install one of the following CLI agents and authenticate:
 
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli/)
+- [Antigravity CLI](https://github.com/google/antigravity)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
 - [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
@@ -154,7 +154,7 @@ Setup is performed with the **GuildBotics Desktop app**; command execution uses 
 
 - `~/.guildbotics/bin/guildbotics`: managed GuildBotics CLI used by CLI agents and skills
 - `~/.local/bin/guildbotics`: a small shim, only when the path is missing or already managed
-- GuildBotics skill files for detected Codex, Claude Code, Gemini CLI, and GitHub Copilot CLI
+- GuildBotics skill files for detected Codex, Claude Code, Antigravity CLI, and GitHub Copilot CLI
   user skill directories. User-created or user-edited skills are not overwritten.
 
 **Standalone CLI (headless / non-desktop environments):** Use `uv tool install guildbotics`

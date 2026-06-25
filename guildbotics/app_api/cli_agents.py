@@ -7,11 +7,11 @@ from typing import Any, Literal, cast
 
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
-CliAgentName = Literal["codex", "gemini", "claude", "copilot"]
+CliAgentName = Literal["codex", "antigravity", "claude", "copilot"]
 
 CLI_AGENT_EXECUTABLES: tuple[CliAgentName, ...] = (
     "codex",
-    "gemini",
+    "antigravity",
     "claude",
     "copilot",
 )
@@ -48,7 +48,8 @@ def get_cli_agent_search_path(path: str | None = None) -> str:
 
 
 def resolve_cli_agent_path(executable: str, path: str | None = None) -> str:
-    return shutil.which(executable, path=get_cli_agent_search_path(path)) or ""
+    actual_executable = "agy" if executable == "antigravity" else executable
+    return shutil.which(actual_executable, path=get_cli_agent_search_path(path)) or ""
 
 
 def load_cli_agent_script(config_root: Path, executable_info_file: str) -> str:
@@ -68,7 +69,10 @@ def load_cli_agent_script(config_root: Path, executable_info_file: str) -> str:
 
 def resolve_cli_executable(script: str) -> str:
     for executable in CLI_AGENT_EXECUTABLES:
-        if executable in script:
+        if executable == "antigravity":
+            if "antigravity" in script or "agy" in script:
+                return "antigravity"
+        elif executable in script:
             return executable
     return ""
 

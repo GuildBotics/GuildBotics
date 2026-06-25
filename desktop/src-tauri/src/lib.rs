@@ -24,7 +24,7 @@ struct BackendState {
 const CLI_AGENT_HOMES: [(&str, &str, &str); 4] = [
     ("codex", "CODEX_HOME", ".codex"),
     ("claude", "CLAUDE_HOME", ".claude"),
-    ("gemini", "GEMINI_HOME", ".gemini"),
+    ("antigravity", "ANTIGRAVITY_HOME", ".gemini/config"),
     ("copilot", "COPILOT_HOME", ".copilot"),
 ];
 const GUILDBOTICS_SKILL: &str = include_str!("../../../skills/guildbotics/SKILL.md");

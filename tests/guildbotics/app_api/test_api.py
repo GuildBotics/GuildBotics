@@ -885,7 +885,7 @@ def test_config_project_endpoints_read_and_update_non_destructively(
             [
                 "default: claude-cli.yml",
                 "codex: codex-cli.yml",
-                "gemini: gemini-cli.yml",
+                "antigravity: antigravity-cli.yml",
                 "claude: claude-cli.yml",
                 "copilot: copilot-cli.yml",
             ]
