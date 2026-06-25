@@ -106,7 +106,7 @@ def test_resolve_cli_executable_parses_script(script: str, expected: str) -> Non
 
 
 def test_resolve_cli_executable_returns_first_match() -> None:
-    # CLI_AGENT_EXECUTABLES order is codex, gemini, claude, copilot.
+    # CLI_AGENT_EXECUTABLES order is codex, antigravity, claude, copilot.
     assert resolve_cli_executable("codex then agy") == "codex"
     assert resolve_cli_executable("agy then claude") == "antigravity"
 

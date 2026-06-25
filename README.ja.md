@@ -147,7 +147,7 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 
 以下のCLI エージェントのいずれかを事前にインストールして一度起動し、認証を行ってください。
 
-- [Antigravity CLI](https://github.com/google/antigravity)
+- [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Pro または Max サブスクリプションが必要)
 - [GitHub Copilot CLI](https://docs.github.com/ja/copilot/concepts/agents/about-copilot-cli)

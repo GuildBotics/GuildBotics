@@ -137,7 +137,7 @@ Please obtain one of the following API keys:
 ## 3.4. CLI Agent
 Please install one of the following CLI agents and authenticate:
 
-- [Antigravity CLI](https://github.com/google/antigravity)
+- [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
 - [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
