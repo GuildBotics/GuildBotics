@@ -93,7 +93,7 @@ def test_resolve_cli_agent_path_returns_empty_when_missing(
     [
         ("codex", "codex"),
         ("codex exec", "codex"),
-        ("FOO=bar gemini --yolo", "gemini"),
+        ("FOO=bar agy --yolo", "antigravity"),
         ('claude "with quoted args"', "claude"),
         ("npx copilot --print", "copilot"),
         ("env CODEX_HOME=/tmp codex exec --json", "codex"),
@@ -106,9 +106,9 @@ def test_resolve_cli_executable_parses_script(script: str, expected: str) -> Non
 
 
 def test_resolve_cli_executable_returns_first_match() -> None:
-    # CLI_AGENT_EXECUTABLES order is codex, gemini, claude, copilot.
-    assert resolve_cli_executable("codex then gemini") == "codex"
-    assert resolve_cli_executable("gemini then claude") == "gemini"
+    # CLI_AGENT_EXECUTABLES order is codex, antigravity, claude, copilot.
+    assert resolve_cli_executable("codex then agy") == "codex"
+    assert resolve_cli_executable("agy then claude") == "antigravity"
 
 
 def _write_agent(config_root: Path, name: str, body: str) -> None:
@@ -149,10 +149,10 @@ def test_resolve_default_cli_executable_maps_mapping_to_executable(
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
     mapping.parent.mkdir(parents=True, exist_ok=True)
-    mapping.write_text("default: gemini-cli.yml\n", encoding="utf-8")
-    _write_agent(tmp_path, "gemini-cli.yml", "script: gemini --yolo\n")
+    mapping.write_text("default: antigravity-cli.yml\n", encoding="utf-8")
+    _write_agent(tmp_path, "antigravity-cli.yml", "script: agy --yolo\n")
 
-    assert resolve_default_cli_executable() == "gemini"
+    assert resolve_default_cli_executable() == "antigravity"
 
 
 def test_resolve_default_cli_executable_maps_codex(tmp_path: Path, monkeypatch) -> None:

@@ -1,5 +1,5 @@
-default: gemini-cli.yml
-gemini: gemini-cli.yml
+default: antigravity-cli.yml
+antigravity: antigravity-cli.yml
 codex: codex-cli.yml
 claude: claude-cli.yml
 copilot: copilot-cli.yml

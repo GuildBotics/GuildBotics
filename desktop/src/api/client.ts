@@ -153,7 +153,7 @@ export type ScenarioDiagnosticsResponse = {
 };
 
 export type CliAgentDetection = {
-  name: "codex" | "gemini" | "claude" | "copilot";
+  name: "codex" | "antigravity" | "claude" | "copilot";
   executable: string;
   detected: boolean;
   path: string;
@@ -327,7 +327,7 @@ export type ProjectSetupRequest = {
   github_project_url?: string;
   lane_map?: LaneMap;
   llm_api_type: "openai" | "gemini" | "anthropic";
-  cli_agent: "codex" | "gemini" | "claude" | "copilot";
+  cli_agent: "codex" | "antigravity" | "claude" | "copilot";
   google_api_key?: string;
   openai_api_key?: string;
   anthropic_api_key?: string;
@@ -339,7 +339,7 @@ export type ProjectConfig = {
   language: "en" | "ja";
   description: string;
   llm_api_type: "openai" | "gemini" | "anthropic";
-  cli_agent: "codex" | "gemini" | "claude" | "copilot";
+  cli_agent: "codex" | "antigravity" | "claude" | "copilot";
   github_enabled: boolean;
   github_project_url: string;
   lane_map: LaneMap;
@@ -354,7 +354,7 @@ export type ProjectConfigUpdateRequest = {
   language: "en" | "ja";
   description?: string;
   llm_api_type: "openai" | "gemini" | "anthropic";
-  cli_agent: "codex" | "gemini" | "claude" | "copilot";
+  cli_agent: "codex" | "antigravity" | "claude" | "copilot";
   github_enabled: boolean;
   owner?: string;
   project_id?: string;

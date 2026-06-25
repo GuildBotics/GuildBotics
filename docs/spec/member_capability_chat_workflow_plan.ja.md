@@ -135,7 +135,7 @@ Personal memory は chat workflow の責務から外す。
 `guildbotics member chat ...` は public member capability として提供する。
 
 - Workflow run では自動実行される。
-- Interactive run では Codex / Claude Code / Gemini CLI などから、利用者の承認フローに乗せて実行できる。
+- Interactive run では Codex / Claude Code / Antigravity CLI などから、利用者の承認フローに乗せて実行できる。
 - これにより「CLI agent 上で GuildBotics member として Slack に返信する」機能を workflow なしでも利用できる。
 
 ### scheduled post は別対象にする

@@ -139,7 +139,7 @@ Team members:
 
 ## 3. Using the CLI agent
 
-Specify `brain: cli` in YAML front matter to invoke a CLI agent such as OpenAI Codex or Google Gemini CLI. With a CLI agent, you can instruct the AI to read files, run system commands, and perform more advanced operations.
+Specify `brain: cli` in YAML front matter to invoke a CLI agent such as OpenAI Codex or Google Antigravity CLI. With a CLI agent, you can instruct the AI to read files, run system commands, and perform more advanced operations.
 
 For example, create a file `summarize.md` with the following content:
 

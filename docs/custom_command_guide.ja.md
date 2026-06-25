@@ -143,7 +143,7 @@ ID: {{ context.person.person_id }}
 
 ## 3. CLIエージェントの利用
 
-YAML フロントマターで `brain: cli` を指定すると、OpenAI Codex や Gemini CLI などといったCLIエージェントの呼び出しができます。CLIエージェントを用いると、ファイルの読み込みやシステムコマンドの実行など、より高度な操作をAIに指示できます。
+YAML フロントマターで `brain: cli` を指定すると、OpenAI Codex や Antigravity CLI などといったCLIエージェントの呼び出しができます。CLIエージェントを用いると、ファイルの読み込みやシステムコマンドの実行など、より高度な操作をAIに指示できます。
 
 例えば、`summarize.md` というファイルを作成し、次のように記述します。
 

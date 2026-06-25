@@ -123,7 +123,7 @@ class ProjectSetupInput(GitHubProjectInput):
     language: str
     description: str = ""
     llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
-    cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
+    cli_agent: str = Field(pattern="^(codex|antigravity|claude|copilot)$")
     google_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
@@ -167,7 +167,7 @@ class ProjectConfigSnapshot(BaseModel):
     language: str
     description: str = ""
     llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
-    cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
+    cli_agent: str = Field(pattern="^(codex|antigravity|claude|copilot)$")
     github_enabled: bool
     github_project_url: str = ""
     lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
@@ -182,7 +182,7 @@ class ProjectUpdateInput(GitHubProjectInput):
     language: str
     description: str = ""
     llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
-    cli_agent: str = Field(pattern="^(codex|gemini|claude|copilot)$")
+    cli_agent: str = Field(pattern="^(codex|antigravity|claude|copilot)$")
     github_enabled: bool = False
     google_api_key: str | None = None
     openai_api_key: str | None = None
@@ -624,7 +624,7 @@ class SimpleProjectSetupService:
 
     def _infer_cli_agent(self, mapping: dict) -> str:
         default = str(mapping.get("default", ""))
-        for agent in ("codex", "gemini", "claude", "copilot"):
+        for agent in ("codex", "antigravity", "claude", "copilot"):
             if default == str(mapping.get(agent, "")):
                 return agent
         if "codex" in default:
@@ -633,7 +633,7 @@ class SimpleProjectSetupService:
             return "claude"
         if "copilot" in default:
             return "copilot"
-        return "gemini"
+        return "antigravity"
 
 
 class SimplePersonSetupService:

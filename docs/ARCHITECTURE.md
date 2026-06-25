@@ -26,7 +26,7 @@ GuildBotics is a multi-agent task scheduling and command execution framework. It
 
 - **Ticket-Driven Workflow** (default): Processes tasks from GitHub Projects/Issues
 - **Custom Workflows**: Any scheduled automation tasks using the command framework
-- **CLI Agent Integration**: Delegates complex tasks to Google Gemini CLI, OpenAI Codex CLI, or Claude Code
+- **CLI Agent Integration**: Delegates complex tasks to Google Antigravity CLI, OpenAI Codex CLI, or Claude Code
 
 ---
 

@@ -15,7 +15,7 @@ GuildBotics の既存 CLI 体験を維持しながら、macOS 向けのデスク
 - Python backend は desktop app に完全同梱する。
 - UI と backend は `127.0.0.1` の Local API で接続し、REST と WebSocket を使う。
 - Local API は起動時 session token を必須にし、GUI からの接続だけを許可する。
-- Codex CLI、Gemini CLI、Claude Code などの外部 CLI agent は同梱しない。GUI は検出、状態表示、設定支援、verify のみを提供する。
+- Codex CLI、Antigravity CLI、Claude Code などの外部 CLI agent は同梱しない。GUI は検出、状態表示、設定支援、verify のみを提供する。
 - secrets は v1 では既存 CLI 互換の `.env` を正とする。OS Keychain 対応は将来課題とする。
 - Setup UI は Wizard 専用画面を別に作らず、単一の設定画面に初回ガイド層を重ねる。
 - GitHub 連携そのものは任意だが、初期設定では「使う / 使わない」の判断を明示入力にする。Setup の導線は `プロジェクト → LLM・CLIエージェント → GitHub → メンバー` の順に統一する。
