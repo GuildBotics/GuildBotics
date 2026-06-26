@@ -1983,11 +1983,11 @@ describe("MembersSection", () => {
     // The archetype field's label embeds a "Set default value" action button, so
     // target the input by its preset placeholder instead of the label text.
     const archetype = (await screen.findByPlaceholderText(
-      "strategic_project_manager",
+      "rapid_prototyper_and_accelerator",
     )) as HTMLInputElement;
-    // The default add form applies the "professional" preset, so the archetype
+    // The default add form applies the "energetic" preset, so the archetype
     // is pre-filled.
-    await waitFor(() => expect(archetype.value).toBe("strategic_project_manager"));
+    await waitFor(() => expect(archetype.value).toBe("rapid_prototyper_and_accelerator"));
 
     await user.click(screen.getByRole("button", { name: t("setup.members.clearDefaults") }));
     await waitFor(() => expect(archetype).toHaveValue(""));

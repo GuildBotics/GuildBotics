@@ -182,7 +182,7 @@ const CLI_AGENT_OPTIONS = [
   { value: "antigravity", label: "Antigravity CLI" },
   { value: "copilot", label: "GitHub Copilot CLI" },
 ] as const;
-const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "machine"] as const;
+const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "energetic"] as const;
 type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
 const MASKED_SECRET_PLACEHOLDER = "••••••••••••";
 
@@ -1587,8 +1587,7 @@ function MembersSection({
   const [githubInstallationId, setGithubInstallationId] = useState("");
   const [githubAppId, setGithubAppId] = useState("");
   const [githubPrivateKeyPath, setGithubPrivateKeyPath] = useState("");
-  const [speakingStylePreset, setSpeakingStylePreset] =
-    useState<SpeakingStylePreset>("professional");
+  const [speakingStylePreset, setSpeakingStylePreset] = useState<SpeakingStylePreset>("energetic");
   const [speakingStyle, setSpeakingStyle] = useState("");
   const [relationships, setRelationships] = useState("");
   const [characterArchetype, setCharacterArchetype] = useState("");
@@ -1716,9 +1715,9 @@ function MembersSection({
       return;
     }
     if (!emptyAddDefaultsAppliedRef.current) {
-      setSpeakingStylePreset("professional");
+      setSpeakingStylePreset("energetic");
       setRoles([]);
-      applyPresetFields("professional");
+      applyPresetFields("energetic");
       emptyAddDefaultsAppliedRef.current = true;
     }
   }, [applyPresetFields, displayedMembers.length, mode]);
@@ -1734,9 +1733,9 @@ function MembersSection({
     setGithubInstallationId("");
     setGithubAppId("");
     setGithubPrivateKeyPath("");
-    setSpeakingStylePreset("professional");
+    setSpeakingStylePreset("energetic");
     if (withDefaults) {
-      applyPresetFields("professional");
+      applyPresetFields("energetic");
     } else {
       clearPresetFields();
     }
@@ -2444,7 +2443,7 @@ function MembersSection({
                     }))}
                     value={speakingStylePreset}
                     onChange={(value) => {
-                      const preset = (value as SpeakingStylePreset) ?? "professional";
+                      const preset = (value as SpeakingStylePreset) ?? "energetic";
                       setSpeakingStylePreset(preset);
                       applyPresetFields(preset);
                     }}
@@ -4636,7 +4635,7 @@ function getSpeakingStyleTemplates(t: TFunction): Record<SpeakingStylePreset, st
   return {
     friendly: t("setup.members.speakingStyleDescriptions.friendly"),
     professional: t("setup.members.speakingStyleDescriptions.professional"),
-    machine: t("setup.members.speakingStyleDescriptions.machine"),
+    energetic: t("setup.members.speakingStyleDescriptions.energetic"),
   };
 }
 
@@ -4646,14 +4645,14 @@ function inferSpeakingStylePreset(
 ): SpeakingStylePreset {
   const normalized = speakingStyle.trim();
   if (!normalized) {
-    return "professional";
+    return "energetic";
   }
   for (const preset of SPEAKING_STYLE_OPTIONS) {
     if (templates[preset] === normalized) {
       return preset;
     }
   }
-  return "professional";
+  return "energetic";
 }
 
 type CharacterPresetExample = {
@@ -4706,21 +4705,25 @@ function getCharacterPresetExamples(
         relationships:
           "例:\n他メンバーAに対して: 意思決定を尊重し、議論を計画と実行可能性に接続する。\n他メンバーBに対して: 創造性を活かしつつ、実現可能な形に落とし込む支援を行う。\nチームに対して: 品質・設計整合性・リスク管理の観点を担う。",
       },
-      machine: {
-        archetype: "正確性重視の実行支援エージェント",
-        traits: ["正確", "簡潔", "再現性重視"],
-        interests: ["仕様確認", "ログ分析", "手順最適化"],
+      energetic: {
+        archetype: "爆速プロトタイパー / 行動重視の推進役",
+        traits: ["行動的", "情熱的", "スピード重視"],
+        interests: ["プロトタイピング", "新規機能開発", "実験的実装"],
         joinWhen: [
-          "事実確認、手順化、エラー切り分けが必要なとき",
-          "結論を実行タスクに分解したいとき",
+          "議論を実際のコードや動くプロトタイプ（PoC）で具体化したいとき",
+          "新しい技術の導入や、実験的な試みを検討しているとき",
+          "プロジェクトの進行スピードを上げ、開発の勢いを生み出したいとき",
         ],
         avoidWhen: [
-          "感情的な雑談が中心で、判断材料が不足しているとき",
-          "仮説だけで具体データがないとき",
+          "長期的な保守性やライセンス・規約など、慎重な検討が最優先されるとき",
+          "仮説検証よりも、極めて高いセキュリティや安定性が求められるデリケートな作業のとき",
         ],
-        contributionStyle: ["根拠と前提を明示して提案する", "手順と期待結果をセットで示す"],
+        contributionStyle: [
+          "「まずはやってみる」ための最初のアクションを具体的に提示する",
+          "最小限の動くプロトタイプ（PoC）をすばやく作成して議論を前に進める",
+        ],
         relationships:
-          "例:\n他メンバーAに対して: 意思決定を実行手順へ落とし込む。\n他メンバーBに対して: アイデアを検証可能なタスクへ変換する。",
+          "例:\n他メンバーAに対して: 長期的な設計や品質管理をリスペクトしつつ、検証を加速するためのPoC提案で支援する。\n他メンバーBに対して: アイデアに共鳴し、それをすぐに動くプロトタイプへ落とし込む実装アプローチを一緒に考える。",
       },
     };
   }
@@ -4760,24 +4763,25 @@ function getCharacterPresetExamples(
       relationships:
         "Example:\nWith member A: connect leadership decisions to executable plans.\nWith member B: keep creativity while shaping feasible implementation.",
     },
-    machine: {
-      archetype: "precision_execution_assistant",
-      traits: ["precise", "concise", "reproducible"],
-      interests: ["spec validation", "log analysis", "workflow optimization"],
+    energetic: {
+      archetype: "rapid_prototyper_and_accelerator",
+      traits: ["active", "passionate", "speed-oriented"],
+      interests: ["prototyping", "feature development", "experimental implementation"],
       joinWhen: [
-        "When facts, diagnostics, or procedures are needed",
-        "When decisions need concrete execution steps",
+        "When the discussion needs to transition to concrete code or a working prototype (PoC)",
+        "When exploring new technologies or experimental approaches",
+        "When the team needs to accelerate development speed and build momentum",
       ],
       avoidWhen: [
-        "When context is emotional only and lacks actionable details",
-        "When there is no reliable data for decision support",
+        "When long-term maintenance, licensing, or legal compliance is the primary concern",
+        "When high security and absolute stability are required, leaving no room for rapid experimentation",
       ],
       contributionStyle: [
-        "State assumptions and evidence explicitly",
-        "Provide steps with expected outcomes",
+        "Propose immediate actions to get things started without hesitation",
+        "Build and share minimal working prototypes quickly to make ideas tangible",
       ],
       relationships:
-        "Example:\nWith member A: convert decisions into concrete steps.\nWith member B: turn ideas into testable tasks.",
+        "Example:\nWith member A: respect long-term planning and support by providing quick proof-of-concepts.\nWith member B: align with creative ideas and collaborate to build a working prototype instantly.",
     },
   };
 }
