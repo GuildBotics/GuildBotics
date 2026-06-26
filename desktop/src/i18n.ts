@@ -373,15 +373,15 @@ const resources = {
           speakingStyleOptions: {
             friendly: "Friendly",
             professional: "Professional",
-            machine: "Machine",
+            energetic: "Energetic",
           },
           speakingStyleDescriptions: {
             professional:
               "Calm and logical, with restrained emotional expression. Emphasizes conveying necessary information clearly and concisely while maintaining a professional yet approachable tone.",
             friendly:
               "Energetic and friendly tone with expressive emotion. Approaches like a friend while remaining respectful and considerate.",
-            machine:
-              "Prioritizes mechanical and precise expression, excluding emotional elements. Aims to provide necessary information quickly and efficiently.",
+            energetic:
+              "Enthusiastic and forward-looking tone with high energy. Focuses on action, speed, and motivating the team to take on new challenges.",
           },
           characterArchetype: "Character archetype",
           characterArchetypeHint:
@@ -1225,15 +1225,15 @@ const resources = {
           speakingStyleOptions: {
             friendly: "フレンドリー",
             professional: "プロフェッショナル",
-            machine: "マシン",
+            energetic: "エネルギッシュ",
           },
           speakingStyleDescriptions: {
             professional:
               "冷静で論理的、感情的な表現は控えめです。必要な情報を明確かつ簡潔に伝えることを重視し、プロフェッショナルな態度を保ちながらも親しみやすい雰囲気を持ちます。",
             friendly:
               "元気で親しみやすい口調で感情豊かに話します。友達感覚で接しつつも相手へのリスペクトや思いやりを忘れません。",
-            machine:
-              "機械的で正確な表現を重視し、感情的な要素は排除します。必要な情報を迅速かつ効率的に提供することを目指します。",
+            energetic:
+              "前向きで熱意にあふれ、行動を促すような活発なトーンで話します。新しい挑戦やスピード感を重視し、チームのモチベーションを高めるコミュニケーションを行います。",
           },
           characterArchetype: "会話上の立ち位置",
           characterArchetypeHint: "このメンバーがどんな視点で会話に入るかを一言で表します。",
