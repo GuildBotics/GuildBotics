@@ -218,14 +218,11 @@ class RuntimeUnitStatus(BaseModel):
     routine_interval_minutes: int | None = None
     active_member_count: int | None = None
     worker_count: int | None = None
-    workflow_command: str | None = None
     subscription_count: int | None = None
     listener_count: int | None = None
     cycle_count: int | None = None
     cycle_failure_count: int | None = None
     events_drained_count: int | None = None
-    events_delivered_count: int | None = None
-    events_skipped_processed_count: int | None = None
     events_auth_failed_count: int | None = None
     events_auth_failed_persons: list[str] = Field(default_factory=list)
 

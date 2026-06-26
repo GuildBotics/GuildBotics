@@ -850,13 +850,11 @@ const resources = {
         },
         eventsCard: {
           title: "Event listener",
-          description: "Receives external events and dispatches the configured workflow.",
-          workflow: "Handler workflow",
+          description: "Receives external events and queues them for the member workers.",
           listeners: "Listeners",
           subscriptions: "Subscriptions",
-          processed: "Processed events",
-          processedValue:
-            "processed {{delivered}} / received {{drained}} / skipped {{skipped}} / failures {{failures}}",
+          processed: "Received events",
+          processedValue: "received {{drained}} / failures {{failures}}",
           authFailedTitle: "Slack authentication failed",
           authFailedBody:
             "Slack rejected the app-level token (Socket Mode) for: {{persons}}. These members cannot receive events until their SLACK_APP_TOKEN is fixed and the service is restarted.",
@@ -924,9 +922,6 @@ const resources = {
         },
         routines: {
           ticketDriven: "Ticket-driven workflow",
-        },
-        workflows: {
-          chatConversation: "Chat conversation workflow",
         },
         feedFilters: {
           all: "All",
@@ -1873,13 +1868,11 @@ const resources = {
         },
         eventsCard: {
           title: "イベント起動",
-          description: "外部イベントを受信し、設定されたワークフローへ渡します。",
-          workflow: "対応ワークフロー",
+          description: "外部イベントを受信し、メンバーワーカー向けにキューへ保存します。",
           listeners: "リスナー",
           subscriptions: "購読チャンネル",
-          processed: "イベント処理",
-          processedValue:
-            "処理 {{delivered}} / 受信 {{drained}} / スキップ {{skipped}} / 失敗 {{failures}}",
+          processed: "受信イベント",
+          processedValue: "受信 {{drained}} / 失敗 {{failures}}",
           authFailedTitle: "Slack 認証に失敗しました",
           authFailedBody:
             "Slack が Socket Mode の App Token を拒否しました: {{persons}}。これらのメンバーは SLACK_APP_TOKEN を修正してサービスを再起動するまでイベントを受信できません。",
@@ -1947,9 +1940,6 @@ const resources = {
         },
         routines: {
           ticketDriven: "チケット駆動ワークフロー",
-        },
-        workflows: {
-          chatConversation: "チャット応答ワークフロー",
         },
         feedFilters: {
           all: "すべて",

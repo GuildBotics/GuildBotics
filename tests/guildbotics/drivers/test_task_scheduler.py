@@ -1,10 +1,19 @@
 import datetime as dt
 from types import SimpleNamespace
 
+import pytest
+
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
 
 EXPECTED_ROUTINE_CALL_COUNT = 2
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(monkeypatch, tmp_path):
+    # Keep the per-member chat dispatcher pointed at an empty temp workspace so it
+    # is a no-op (no queued chat events) in these scheduler timing tests.
+    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path / "data"))
 
 
 class _Logger:
@@ -129,3 +138,49 @@ def test_task_scheduler_measures_routine_interval_after_routine_finishes(
 
     assert first_finished_at is not None
     assert calls[1] >= first_finished_at + dt.timedelta(minutes=3)
+
+
+@pytest.mark.asyncio
+async def test_process_pending_chat_delegates_to_dispatcher() -> None:
+    scheduler = TaskScheduler(_Context(_Person()), [])
+    calls: list[str] = []
+
+    async def _fake_process(person, stop_event=None):
+        calls.append(person.person_id)
+        return 1
+
+    scheduler._chat_dispatcher.process_person = _fake_process  # type: ignore[assignment]
+
+    ok = await scheduler._process_pending_chat(_Person())
+
+    assert ok is True
+    assert calls == ["alice"]
+
+
+@pytest.mark.asyncio
+async def test_run_cancellable_cancels_long_task_on_stop() -> None:
+    import asyncio
+
+    scheduler = TaskScheduler(_Context(_Person()), [])
+    cancelled = {"value": False}
+    started = asyncio.Event()
+
+    async def _long():
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled["value"] = True
+            raise
+        return True
+
+    task = asyncio.ensure_future(scheduler._run_cancellable(_long()))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    scheduler._stop_event.set()
+
+    result = await asyncio.wait_for(task, timeout=1.0)
+    # The long task is cancelled (which kills any running agent) and the runner
+    # returns promptly instead of blocking until the task finishes.
+    assert result is False
+    assert cancelled["value"] is True

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
+from guildbotics.capabilities.completion_retry import (
+    CLI_AGENT_CONVERSATION_FILE_ENV,
+    CompletionRetryExhausted,
+    run_with_completion_retry,
+)
 from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
 from guildbotics.entities.message import Message
 from guildbotics.integrations.chat_service import (
@@ -28,10 +33,36 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
     get_workspace_data_root,
 )
+from guildbotics.utils.i18n_tool import t
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
+CHAT_MAX_ATTEMPTS_ENV = "GUILDBOTICS_CHAT_MAX_ATTEMPTS"
 _SLACK_MENTION_RE = re.compile(r"<@([^>|]+)(?:\|[^>]+)?>")
 _MAX_HANDOFF_TEXT_LENGTH = 240
+_DEFAULT_MAX_ATTEMPTS = 5
+
+
+def _max_agent_attempts() -> int:
+    """Number of times one chat event may be (re)dispatched before escalating.
+
+    A turn that leaves no terminal completion record is retried so a slow or
+    multi-turn CLI agent can finish; the budget bounds that so a permanently
+    failing turn cannot loop forever.
+    """
+    raw = os.getenv(CHAT_MAX_ATTEMPTS_ENV, "").strip()
+    try:
+        return max(1, int(raw)) if raw else _DEFAULT_MAX_ATTEMPTS
+    except ValueError:
+        return _DEFAULT_MAX_ATTEMPTS
+
+
+async def _escalate_incomplete(
+    chat_service: ChatService, channel_id: str, thread_ts: str
+) -> None:
+    """Post a thread reply when the agent could not complete within the budget."""
+    message = t("commands.workflows.chat_conversation_workflow.incomplete_escalation")
+    with suppress(Exception):
+        await chat_service.post_message(channel_id, message, thread_ts=thread_ts)
 
 
 async def main(
@@ -127,7 +158,6 @@ async def _handle_event(
     thread_messages = state_store.load_thread_messages(
         service_name, person_id, channel_id, event.thread_ts
     )
-    workflow_run_id = uuid4().hex
     workspace_data_root = get_workspace_data_root()
     member_workspace = _get_chat_workspace_path(context, workspace_data_root)
     if member_workspace is None:
@@ -145,47 +175,76 @@ async def _handle_event(
     invoke = getattr(context, "invoke", None)
     if not callable(invoke):
         raise RuntimeError("Invoker function is not set.")
-    await invoke(
-        "functions/handle_chat_event",
-        person_id=person_id,
-        workflow_run_id=workflow_run_id,
-        service_name=service_name,
-        channel_id=channel_id,
-        event_id=event.event_id,
-        message_ts=event.message_ts,
-        thread_ts=event.thread_ts,
-        latest_message=json.dumps(
-            prompt_payload["latest_message"], ensure_ascii=False, sort_keys=True
-        ),
-        participant_labels=json.dumps(
-            prompt_payload["participant_labels"], ensure_ascii=False, sort_keys=True
-        ),
-        previous_thread_context=json.dumps(
-            prompt_payload["previous_thread_context"],
-            ensure_ascii=False,
-            sort_keys=True,
-        ),
-        handoff_candidates=json.dumps(
-            prompt_payload["handoff_candidates"], ensure_ascii=False, sort_keys=True
-        ),
-        chat_participation=prompt_payload["chat_participation"],
-        language=getattr(context, "language_name", ""),
-        member_workspace=str(member_workspace),
-        cli_agent_env={
-            RUN_ENV: workflow_run_id,
+
+    async def _invoke_chat_turn(run_id: str, _attempt: int) -> None:
+        # Pin this dispatch's agent conversation to a per-run file so retries
+        # resume the same conversation by id (not whatever last ran in this cwd).
+        # Ensure the parent exists so the agent can write the file even when the
+        # first attempt records no evidence (task-runs not created yet).
+        conversation_file = (
+            workspace_data_root / "task-runs" / f"{run_id}.agy-conversation"
+        )
+        conversation_file.parent.mkdir(parents=True, exist_ok=True)
+        cli_agent_env = {
+            RUN_ENV: run_id,
             GUILDBOTICS_DATA_DIR: str(workspace_data_root),
             CHAT_PARTICIPANT_LABELS_ENV: json.dumps(
                 prompt_payload["participant_labels"],
                 ensure_ascii=False,
                 sort_keys=True,
             ),
-        },
-        cwd=member_workspace,
-    )
+            CLI_AGENT_CONVERSATION_FILE_ENV: str(conversation_file),
+        }
+        await invoke(
+            "functions/handle_chat_event",
+            person_id=person_id,
+            workflow_run_id=run_id,
+            service_name=service_name,
+            channel_id=channel_id,
+            event_id=event.event_id,
+            message_ts=event.message_ts,
+            thread_ts=event.thread_ts,
+            latest_message=json.dumps(
+                prompt_payload["latest_message"], ensure_ascii=False, sort_keys=True
+            ),
+            participant_labels=json.dumps(
+                prompt_payload["participant_labels"],
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            previous_thread_context=json.dumps(
+                prompt_payload["previous_thread_context"],
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            handoff_candidates=json.dumps(
+                prompt_payload["handoff_candidates"], ensure_ascii=False, sort_keys=True
+            ),
+            chat_participation=prompt_payload["chat_participation"],
+            language=getattr(context, "language_name", ""),
+            member_workspace=str(member_workspace),
+            cli_agent_env=cli_agent_env,
+            cwd=member_workspace,
+        )
 
-    completion, evidence = _chat_run_status(
-        workflow_run_id, workspace_data_root / "task-runs", member_workspace
-    )
+    # Retry the agent in-process until it records a terminal completion, then
+    # escalate to the thread and stop. This is the single retry mechanism (the
+    # ticket workflow uses the same helper); the outer pending queue is left only
+    # as a crash-recovery net.
+    try:
+        (completion, evidence), _run_id = await run_with_completion_retry(
+            invoke=_invoke_chat_turn,
+            check_completion=lambda rid: _chat_run_status(
+                rid, workspace_data_root / "task-runs", member_workspace
+            ),
+            max_attempts=_max_agent_attempts(),
+        )
+    except CompletionRetryExhausted:
+        await _escalate_incomplete(chat_service, channel_id, event.thread_ts)
+        state_store.mark_processed_event(
+            service_name, person_id, channel_id, event.event_id
+        )
+        return
     if hasattr(context, "logger"):
         with suppress(Exception):
             context.logger.info(

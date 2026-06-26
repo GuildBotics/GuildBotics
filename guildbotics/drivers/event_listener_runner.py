@@ -4,10 +4,10 @@ import asyncio
 import hashlib
 import threading
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
-from guildbotics.drivers.command_runner import CommandRunner
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_profile import (
     get_chat_slack_base_url,
@@ -24,10 +24,8 @@ from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.integrations.slack.slack_socket_listener import (
     SlackSocketEventListener,
 )
-from guildbotics.observability import trace_scope
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.event_listener import (
-    INCOMING_CHAT_EVENT_KEY,
     EventListener,
     IncomingChatEvent,
 )
@@ -59,7 +57,6 @@ class EventListenerRunner:
     def __init__(
         self,
         context: Context,
-        workflow_command: str = "workflows/chat_conversation_workflow",
         poll_interval_seconds: float = 5.0,
         service_run_id: str | None = None,
         state_store: ConversationStateStore | None = None,
@@ -67,7 +64,6 @@ class EventListenerRunner:
         backfill_interval_seconds: float = 300.0,
     ) -> None:
         self.context = context
-        self.workflow_command = workflow_command
         self.service_run_id = service_run_id
         self.poll_interval_seconds = max(0.1, float(poll_interval_seconds))
         self._default_backfill_policy = ChatBackfillPolicy(
@@ -77,6 +73,12 @@ class EventListenerRunner:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._thread_lock = threading.Lock()
+        # Set inside the worker thread so stop() can cancel an in-flight cycle.
+        # The cycle only drains/backfills, but backfill awaits Slack HTTP requests
+        # that the stop event cannot interrupt; cancelling the cycle aborts those
+        # awaits so a stop overlapping a backfill does not exceed the stop timeout.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._active_cycle: asyncio.Task[None] | None = None
         self._listeners: dict[SlackConnectionKey, EventListener] = {}
         self._listener_tokens: dict[SlackConnectionKey, str] = {}
         self._connection_person_ids: dict[SlackConnectionKey, list[str]] = {}
@@ -89,8 +91,6 @@ class EventListenerRunner:
         self._cycle_count = 0
         self._cycle_failure_count = 0
         self._events_drained_count = 0
-        self._events_delivered_count = 0
-        self._events_skipped_processed_count = 0
         self._events_pending_count = 0
         self._events_backfilled_count = 0
         self._state_store = state_store or FileConversationStateStore()
@@ -109,6 +109,14 @@ class EventListenerRunner:
 
     def stop(self) -> None:
         self._stop_event.set()
+        # Cancel an in-flight cycle so a stop overlapping a backfill aborts the
+        # awaited Slack request instead of waiting it out past the stop timeout.
+        # Scheduled onto the worker loop because stop() runs on another thread.
+        loop = self._loop
+        cycle = self._active_cycle
+        if loop is not None and cycle is not None:
+            with suppress(RuntimeError):
+                loop.call_soon_threadsafe(cycle.cancel)
 
     def join(self, timeout: float | None = None) -> None:
         thread = self._thread
@@ -133,51 +141,25 @@ class EventListenerRunner:
                 auth_failed_count += 1
                 auth_failed_persons.extend(self._connection_person_ids.get(key, []))
         return {
-            "workflow_command": self.workflow_command,
             "subscription_count": subscription_count,
             "listener_count": len(self._listeners),
             "cycle_count": self._cycle_count,
             "cycle_failure_count": self._cycle_failure_count,
             "events_drained_count": self._events_drained_count,
-            "events_delivered_count": self._events_delivered_count,
-            "events_skipped_processed_count": self._events_skipped_processed_count,
             "events_pending_count": self._events_pending_count,
             "events_backfilled_count": self._events_backfilled_count,
             "events_auth_failed_count": auth_failed_count,
             "events_auth_failed_persons": sorted(set(auth_failed_persons)),
         }
 
-    async def dispatch_incoming_event(
-        self, person: Person, item: IncomingChatEvent
-    ) -> str:
-        """Dispatch a single incoming event to the workflow for one person."""
-        with trace_scope(
-            "event_listener",
-            person_id=person.person_id,
-            command=self.workflow_command,
-            attributes={
-                "service_run_id": self.service_run_id,
-                "event.provider": item.service_name,
-                "slack.channel": item.channel_id,
-                "slack.thread_ts": item.event.thread_ts,
-                "slack.ts": item.event.message_ts,
-                "event_id": item.event.event_id,
-            },
-        ):
-            context = self.context.clone_for(person)
-            context.shared_state[INCOMING_CHAT_EVENT_KEY] = item.to_shared_state()
-            runner = CommandRunner(context, self.workflow_command, [])
-            try:
-                return await runner.run()
-            finally:
-                await context.aclose()
-
     def _thread_main(self) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        self._loop = loop
         try:
             loop.run_until_complete(self._run_loop())
         finally:
+            self._loop = None
             try:
                 loop.run_until_complete(self.context.aclose())
             finally:
@@ -187,27 +169,32 @@ class EventListenerRunner:
         while not self._stop_event.is_set():
             self._cycle_count += 1
             try:
-                await self._run_once()
+                self._active_cycle = asyncio.ensure_future(self._run_once())
+                await self._active_cycle
+            except asyncio.CancelledError:
+                # stop() cancelled the in-flight cycle; exit promptly.
+                break
             except Exception as exc:  # pragma: no cover - defensive worker guard
                 self._cycle_failure_count += 1
                 self._log_warning("event runner cycle failed: %s", exc)
+            finally:
+                self._active_cycle = None
             await asyncio.sleep(self.poll_interval_seconds)
         self._log_info(
-            "event listener runner summary: cycles=%d cycle_failures=%d drained=%d delivered=%d skipped_processed=%d pending=%d backfilled=%d",
+            "event listener runner summary: cycles=%d cycle_failures=%d drained=%d "
+            "pending=%d backfilled=%d",
             self._cycle_count,
             self._cycle_failure_count,
             self._events_drained_count,
-            self._events_delivered_count,
-            self._events_skipped_processed_count,
             self._events_pending_count,
             self._events_backfilled_count,
         )
         await self._aclose_sources()
 
     async def _run_once(self) -> None:
-        await self._drain_and_dispatch_grouped()
+        await self._drain_backfill_and_queue()
 
-    async def _drain_and_dispatch_grouped(self) -> None:
+    async def _drain_backfill_and_queue(self) -> None:
         grouped = await self._build_person_subscriptions_by_connection()
         if grouped:
             group_log_state = (len(grouped), len(self._listeners))
@@ -229,10 +216,7 @@ class EventListenerRunner:
             listener = self._get_or_create_listener(key)
             listener.start()
             drained_events = listener.drain_events()
-            delivered_count = 0
             pending_count = 0
-            backfilled_count = 0
-            skipped_processed_count = 0
             for incoming in drained_events:
                 if self._stop_event.is_set():
                     break
@@ -240,49 +224,59 @@ class EventListenerRunner:
                     if incoming.channel_id not in subscriptions:
                         continue
                     if self._is_processed_for_person(person, incoming):
-                        skipped_processed_count += 1
                         continue
                     self._state_store.upsert_pending_event(
                         incoming.service_name,
                         person.person_id,
                         incoming.channel_id,
                         incoming.event,
+                        subscriptions[incoming.channel_id].participation,
                     )
                     pending_count += 1
-            for person, subscriptions in person_subs:
-                for channel_id, policy in subscriptions.items():
-                    if self._stop_event.is_set():
-                        break
-                    backfilled_count += await self._backfill_due_events(
-                        person, key.service, channel_id, policy
-                    )
-                    delivered, skipped = await self._dispatch_pending_events(
-                        person, key.service, channel_id, policy
-                    )
-                    delivered_count += delivered
-                    skipped_processed_count += skipped
+            # Backfill members concurrently (Slack I/O only). The actual chat
+            # workflow runs later in each member's scheduler worker, which keeps
+            # a member's chat/ticket/scheduled work on one serial queue.
+            backfilled_results = await asyncio.gather(
+                *(
+                    self._backfill_person(person, key.service, subscriptions)
+                    for person, subscriptions in person_subs
+                )
+            )
+            backfilled_count = sum(backfilled_results)
             self._events_drained_count += len(drained_events)
-            self._events_delivered_count += delivered_count
             self._events_pending_count += pending_count
             self._events_backfilled_count += backfilled_count
-            self._events_skipped_processed_count += skipped_processed_count
-            if drained_events or delivered_count or backfilled_count:
+            if drained_events or backfilled_count:
                 self._log_info(
-                    "listener dispatch summary: base_url=%s token_hash=%s drained=%d pending=%d backfilled=%d delivered=%d skipped_processed=%d subscribers=%d total_drained=%d total_pending=%d total_backfilled=%d total_delivered=%d total_skipped_processed=%d",
+                    "listener queue summary: base_url=%s token_hash=%s drained=%d "
+                    "pending=%d backfilled=%d subscribers=%d total_drained=%d "
+                    "total_pending=%d total_backfilled=%d",
                     key.base_url,
                     key.app_token_hash[:12],
                     len(drained_events),
                     pending_count,
                     backfilled_count,
-                    delivered_count,
-                    skipped_processed_count,
                     len(person_subs),
                     self._events_drained_count,
                     self._events_pending_count,
                     self._events_backfilled_count,
-                    self._events_delivered_count,
-                    self._events_skipped_processed_count,
                 )
+
+    async def _backfill_person(
+        self,
+        person: Person,
+        service: str,
+        subscriptions: ResolvedSubscriptions,
+    ) -> int:
+        """Backfill one member's channels into the pending queue (no execution)."""
+        backfilled = 0
+        for channel_id, policy in subscriptions.items():
+            if self._stop_event.is_set():
+                break
+            backfilled += await self._backfill_due_events(
+                person, service, channel_id, policy
+            )
+        return backfilled
 
     async def _build_person_subscriptions_by_connection(
         self,
@@ -505,52 +499,6 @@ class EventListenerRunner:
             incoming.event.event_id,
         )
 
-    def _mark_processed_for_person(
-        self, person: Person, incoming: IncomingChatEvent
-    ) -> None:
-        self._state_store.mark_processed_event(
-            incoming.service_name,
-            person.person_id,
-            incoming.channel_id,
-            incoming.event.event_id,
-        )
-
-    async def _dispatch_pending_events(
-        self,
-        person: Person,
-        service_name: str,
-        channel_id: str,
-        policy: ChatBackfillPolicy,
-    ) -> tuple[int, int]:
-        delivered_count = 0
-        skipped_count = 0
-        events = self._state_store.load_pending_events(
-            service_name, person.person_id, channel_id
-        )
-        events.sort(key=lambda event: event.message_ts)
-        for event in events:
-            if self._stop_event.is_set():
-                break
-            incoming = IncomingChatEvent(
-                service_name=service_name,
-                channel_id=channel_id,
-                event=event,
-                chat_participation=policy.participation,
-            )
-            if self._is_processed_for_person(person, incoming):
-                self._state_store.remove_pending_event(
-                    service_name, person.person_id, channel_id, event.event_id
-                )
-                skipped_count += 1
-                continue
-            await self.dispatch_incoming_event(person, incoming)
-            self._mark_processed_for_person(person, incoming)
-            self._state_store.remove_pending_event(
-                service_name, person.person_id, channel_id, event.event_id
-            )
-            delivered_count += 1
-        return delivered_count, skipped_count
-
     async def _backfill_due_events(
         self,
         person: Person,
@@ -654,7 +602,7 @@ class EventListenerRunner:
             )
             for event in page.events:
                 count += self._upsert_backfilled_event(
-                    service_name, person, channel_id, event
+                    service_name, person, channel_id, event, policy.participation
                 )
             highest_ts = _max_slack_ts(highest_ts, page.oldest_ts)
             cursor = page.cursor
@@ -721,7 +669,7 @@ class EventListenerRunner:
                 if _compare_slack_ts(event.message_ts, oldest_ts) < 0:
                     continue
                 count += self._upsert_backfilled_event(
-                    service_name, person, channel_id, event
+                    service_name, person, channel_id, event, policy.participation
                 )
             cursor = page.cursor
             if not cursor:
@@ -729,7 +677,12 @@ class EventListenerRunner:
         return count
 
     def _upsert_backfilled_event(
-        self, service_name: str, person: Person, channel_id: str, event: ChatEvent
+        self,
+        service_name: str,
+        person: Person,
+        channel_id: str,
+        event: ChatEvent,
+        participation: str,
     ) -> int:
         incoming = IncomingChatEvent(
             service_name=service_name, channel_id=channel_id, event=event
@@ -737,7 +690,7 @@ class EventListenerRunner:
         if self._is_processed_for_person(person, incoming):
             return 0
         self._state_store.upsert_pending_event(
-            service_name, person.person_id, channel_id, event
+            service_name, person.person_id, channel_id, event, participation
         )
         return 1
 

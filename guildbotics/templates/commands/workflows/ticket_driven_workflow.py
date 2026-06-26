@@ -1,8 +1,12 @@
+import os
 import re
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
+from guildbotics.capabilities.completion_retry import (
+    CLI_AGENT_CONVERSATION_FILE_ENV,
+    run_with_completion_retry,
+)
 from guildbotics.capabilities.task_runs import (
     TASK_RUN_ENV,
     TaskRunError,
@@ -19,6 +23,23 @@ from guildbotics.utils.fileio import (
     get_workspace_data_root,
 )
 from guildbotics.utils.i18n_tool import t
+
+TICKET_MAX_ATTEMPTS_ENV = "GUILDBOTICS_TICKET_MAX_ATTEMPTS"
+_DEFAULT_MAX_ATTEMPTS = 5
+
+
+def _max_agent_attempts() -> int:
+    """Number of agent turns per ticket dispatch before giving up.
+
+    A turn that leaves no terminal completion record is retried (resuming the
+    previous conversation) so a slow, multi-turn CLI agent can finish; the budget
+    bounds that so a permanently failing turn cannot loop.
+    """
+    raw = os.getenv(TICKET_MAX_ATTEMPTS_ENV, "").strip()
+    try:
+        return max(1, int(raw)) if raw else _DEFAULT_MAX_ATTEMPTS
+    except ValueError:
+        return _DEFAULT_MAX_ATTEMPTS
 
 
 async def _move_task_to_working_if_ready(
@@ -106,35 +127,58 @@ async def _main(context: Context, ticket_manager: TicketManager) -> AgentRespons
     await _move_task_to_working_if_ready(context, ticket_manager)
 
     ticket_url = await ticket_manager.get_ticket_url(context.task, markdown=False)
-    workflow_run_id = uuid4().hex
     workspace_data_root = get_workspace_data_root()
     member_workspace = workspace_data_root / "workspaces" / context.person.person_id
     member_workspace.mkdir(parents=True, exist_ok=True)
-    response = await context.invoke(
-        "functions/handle_github_ticket",
-        person_id=context.person.person_id,
-        ticket_url=ticket_url,
-        pull_request_url=context.task.pull_request_url or "",
-        work_type=_work_type(context.task),
-        trigger_reason=context.task.trigger_reason or "",
-        language=context.language_name,
-        member_workspace=str(member_workspace),
-        workflow_run_id=workflow_run_id,
-        prepare_command=_prepare_command(context, ticket_url),
+
+    last_response: list[Any] = []
+
+    async def _invoke_ticket_turn(run_id: str, _attempt: int) -> None:
         # Scope the run id to this agent subprocess only. Mutating the
         # process-global os.environ would race across the scheduler's
         # per-member worker threads; the brain merges this overlay into the
         # subprocess env so child ``guildbotics member`` calls record evidence
-        # under the correct run id.
-        cli_agent_env={
-            TASK_RUN_ENV: workflow_run_id,
+        # under the correct run id. The conversation file pins this dispatch's
+        # agent conversation so retries resume it by id (not whatever last ran in
+        # this cwd). Ensure its parent exists so the agent can write it even when
+        # the first attempt records no evidence (task-runs not created yet).
+        conversation_file = (
+            workspace_data_root / "task-runs" / f"{run_id}.agy-conversation"
+        )
+        conversation_file.parent.mkdir(parents=True, exist_ok=True)
+        cli_agent_env = {
+            TASK_RUN_ENV: run_id,
             GUILDBOTICS_DATA_DIR: str(workspace_data_root),
-        },
-        cwd=member_workspace,
+            CLI_AGENT_CONVERSATION_FILE_ENV: str(conversation_file),
+        }
+        response = await context.invoke(
+            "functions/handle_github_ticket",
+            person_id=context.person.person_id,
+            ticket_url=ticket_url,
+            pull_request_url=context.task.pull_request_url or "",
+            work_type=_work_type(context.task),
+            trigger_reason=context.task.trigger_reason or "",
+            language=context.language_name,
+            member_workspace=str(member_workspace),
+            workflow_run_id=run_id,
+            prepare_command=_prepare_command(context, ticket_url),
+            cli_agent_env=cli_agent_env,
+            cwd=member_workspace,
+        )
+        last_response.append(response)
+
+    # Retry the agent in-process until it records a terminal completion. On
+    # exhaustion this raises CompletionRetryExhausted, which main() turns into a
+    # ticket comment; that comment then stops the ticket from being re-selected.
+    completion, _run_id = await run_with_completion_retry(
+        invoke=_invoke_ticket_turn,
+        check_completion=lambda rid: _task_run_status(
+            rid, workspace_data_root / "task-runs", member_workspace
+        ),
+        max_attempts=_max_agent_attempts(),
     )
-    agent_response = _normalize_agent_response(response)
-    completion = _task_run_status(
-        workflow_run_id, workspace_data_root / "task-runs", member_workspace
+    agent_response = _normalize_agent_response(
+        last_response[-1] if last_response else None
     )
     return AgentResponse(
         status=(

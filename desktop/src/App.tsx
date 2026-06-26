@@ -405,10 +405,6 @@ function ServicePage() {
               onEnabledChange={setEventsEnabled}
               rows={[
                 [
-                  t("overview.eventsCard.workflow"),
-                  workflowLabel(t, scheduler.data?.events.workflow_command),
-                ],
-                [
                   t("overview.eventsCard.listeners"),
                   String(scheduler.data?.events.listener_count ?? 0),
                 ],
@@ -419,9 +415,7 @@ function ServicePage() {
                 [
                   t("overview.eventsCard.processed"),
                   t("overview.eventsCard.processedValue", {
-                    delivered: scheduler.data?.events.events_delivered_count ?? 0,
                     drained: scheduler.data?.events.events_drained_count ?? 0,
-                    skipped: scheduler.data?.events.events_skipped_processed_count ?? 0,
                     failures: scheduler.data?.events.cycle_failure_count ?? 0,
                   }),
                 ],
@@ -2441,16 +2435,6 @@ function routineLabel(t: TFunction, command: string | undefined) {
   }
   if (command === TICKET_ROUTINE) {
     return t("overview.routines.ticketDriven");
-  }
-  return command;
-}
-
-function workflowLabel(t: TFunction, command: string | null | undefined) {
-  if (!command) {
-    return t("overview.workflows.chatConversation");
-  }
-  if (command === "workflows/chat_conversation_workflow") {
-    return t("overview.workflows.chatConversation");
   }
   return command;
 }

@@ -202,14 +202,11 @@ function runtimeUnit(target: "scheduler" | "events", overrides: Record<string, u
     routine_interval_minutes: null,
     active_member_count: 1,
     worker_count: 0,
-    workflow_command: null,
     subscription_count: 0,
     listener_count: 0,
     cycle_count: 0,
     cycle_failure_count: 0,
     events_drained_count: 0,
-    events_delivered_count: 0,
-    events_skipped_processed_count: 0,
     ...overrides,
   };
 }

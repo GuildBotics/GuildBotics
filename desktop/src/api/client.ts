@@ -55,14 +55,11 @@ export type RuntimeUnitStatus = {
   routine_interval_minutes: number | null;
   active_member_count: number | null;
   worker_count: number | null;
-  workflow_command: string | null;
   subscription_count: number | null;
   listener_count: number | null;
   cycle_count: number | null;
   cycle_failure_count: number | null;
   events_drained_count: number | null;
-  events_delivered_count: number | null;
-  events_skipped_processed_count: number | null;
   events_auth_failed_count: number | null;
   events_auth_failed_persons: string[];
 };

@@ -473,3 +473,73 @@ async def test_asking_response_omits_log_reference_when_output_dir_unset(
     assert output.status == AgentResponse.ASKING
     assert output.message == "need input"
     assert "See:" not in output.message
+
+
+class _BlockingProcess:
+    """Fake subprocess whose communicate() blocks until the task is cancelled."""
+
+    def __init__(self) -> None:
+        self.returncode = None
+        self.killed = False
+        self.started = __import__("asyncio").Event()
+
+    async def communicate(self):
+        self.started.set()
+        await __import__("asyncio").sleep(30)
+        return b"", b""
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        return self.returncode if self.returncode is not None else 0
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_kills_subprocess_on_cancellation(monkeypatch, tmp_path):
+    import asyncio
+
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="sleep 30", env={})
+    }
+
+    proc = _BlockingProcess()
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        return proc
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        task = asyncio.create_task(
+            brain.run_with_execution_details("hello", cwd=tmp_path)
+        )
+        await asyncio.wait_for(proc.started.wait(), timeout=1.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # The in-flight agent subprocess must be killed, not left running.
+        assert proc.killed is True
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)

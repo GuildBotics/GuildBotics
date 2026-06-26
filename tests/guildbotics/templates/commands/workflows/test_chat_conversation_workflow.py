@@ -42,6 +42,10 @@ class FakeChatService:
     async def get_bot_identity(self) -> ChatIdentity:
         return self.identity
 
+    async def post_message(self, channel_id, text, *, thread_ts=None):
+        self.posts.append((channel_id, text, thread_ts))
+        return "300.1"
+
     def normalize_participant_text(self, text, participant_labels):
         for user_id, label in participant_labels.items():
             text = text.replace(f"<@{user_id}>", f"@{label}")
@@ -66,11 +70,25 @@ class FakeInvokeContext(types.SimpleNamespace):
         )
         self.action = action
         self.invocations: list[tuple[str, dict]] = []
+        # When set, only the Nth handle_chat_event call records a completion, so
+        # earlier attempts fail the gate and the workflow retries.
+        self.complete_on_attempt: int | None = None
+        self._handle_calls = 0
 
     async def invoke(self, name: str, /, **kwargs):
         self.invocations.append((name, kwargs))
         if name != "functions/handle_chat_event":
             return {}
+        self._handle_calls += 1
+        if self.action == "crash":
+            # Simulate the CLI agent exiting non-zero (the brain raises).
+            raise RuntimeError("agent exited non-zero")
+        if (
+            self.complete_on_attempt is not None
+            and self._handle_calls < self.complete_on_attempt
+        ):
+            # This attempt records nothing, so the completion gate fails.
+            return {"status": "working", "message": "still working"}
         run_id = kwargs["workflow_run_id"]
         store = RunStore()
         if self.action == "reply":
@@ -571,19 +589,112 @@ async def test_prompt_payload_includes_existing_handoffs():
 
 
 @pytest.mark.asyncio
-async def test_missing_completion_is_not_processed(tmp_path):
+async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
+    from guildbotics.capabilities.completion_retry import (
+        CLI_AGENT_CONVERSATION_FILE_ENV,
+    )
+    from guildbotics.utils.i18n_tool import t
+
+    monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "3")
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("missing")
     _set_incoming_event(ctx)
 
-    with pytest.raises(Exception, match="not found|not completed"):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
+    # A single dispatch retries the agent in-process up to the budget, then
+    # escalates and stops (no exception bubbles out).
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
 
-    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
-    assert channel_state.processed_event_ids == []
+    handle_calls = [
+        kwargs
+        for name, kwargs in ctx.invocations
+        if name == "functions/handle_chat_event"
+    ]
+    assert len(handle_calls) == 3
+    # All attempts share one run id and one conversation file so partial evidence
+    # accumulates and retries resume the same agent conversation by id.
+    run_ids = {kwargs["workflow_run_id"] for kwargs in handle_calls}
+    assert len(run_ids) == 1
+    conv_files = {
+        kwargs["cli_agent_env"][CLI_AGENT_CONVERSATION_FILE_ENV]
+        for kwargs in handle_calls
+    }
+    assert len(conv_files) == 1
+    assert next(iter(run_ids)) in next(iter(conv_files))
+
+    # Escalated to the thread and stopped (event marked processed, no re-dispatch).
+    assert state_store.load_channel_cursor(
+        "slack", "alice", "C1"
+    ).processed_event_ids == ["E1"]
+    assert len(service.posts) == 1
+    channel_id, text, thread_ts = service.posts[0]
+    assert channel_id == "C1"
+    assert thread_ts == "100.1"
+    assert text == t(
+        "commands.workflows.chat_conversation_workflow.incomplete_escalation"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_run_failure_escalates_and_stops(tmp_path, monkeypatch):
+    monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "2")
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("crash")  # the agent run raises every attempt
+    _set_incoming_event(ctx)
+
+    # A failing agent run must be bounded and escalated, NOT raise out of the
+    # workflow (which would leave the event queued for infinite retry).
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    handle_calls = [
+        kwargs
+        for name, kwargs in ctx.invocations
+        if name == "functions/handle_chat_event"
+    ]
+    assert len(handle_calls) == 2  # bounded by the attempt budget
+    assert len(service.posts) == 1  # escalated to the thread
+    assert state_store.load_channel_cursor(
+        "slack", "alice", "C1"
+    ).processed_event_ids == ["E1"]
+
+
+@pytest.mark.asyncio
+async def test_completion_on_retry_stops_early(tmp_path, monkeypatch):
+    from guildbotics.capabilities.completion_retry import (
+        CLI_AGENT_CONVERSATION_FILE_ENV,
+    )
+
+    monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "5")
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    # Completes only on the second attempt (the continuation turn).
+    ctx = FakeInvokeContext("reply")
+    ctx.complete_on_attempt = 2
+    _set_incoming_event(ctx)
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    handle_calls = [
+        kwargs
+        for name, kwargs in ctx.invocations
+        if name == "functions/handle_chat_event"
+    ]
+    # Stops as soon as a turn records a terminal completion: no extra retries.
+    assert len(handle_calls) == 2
+    # Both attempts reuse the same run id and conversation file.
+    assert handle_calls[0]["workflow_run_id"] == handle_calls[1]["workflow_run_id"]
+    assert CLI_AGENT_CONVERSATION_FILE_ENV in handle_calls[1]["cli_agent_env"]
+    assert service.posts == []  # no escalation; it completed
+    assert state_store.load_channel_cursor(
+        "slack", "alice", "C1"
+    ).processed_event_ids == ["E1"]
 
 
 @pytest.mark.asyncio

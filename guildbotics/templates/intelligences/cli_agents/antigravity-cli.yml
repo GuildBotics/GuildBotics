@@ -2,7 +2,30 @@ env:
 script: |
   res=$(mktemp)
   log=$(mktemp)
-  agy --print "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions < /dev/null > "$res" 2> "$log"
+  agylog=$(mktemp)
+  # Resume this dispatch's own conversation on retries. The workflow points
+  # GUILDBOTICS_CLI_AGENT_CONVERSATION_FILE at a per-run file: if it already holds
+  # an id (a previous attempt of the same dispatch) we resume that exact
+  # conversation; otherwise we start fresh. We never use --continue, which would
+  # resume whatever conversation last ran in this workspace (possibly a different
+  # workflow such as the ticket runner).
+  conv_arg=""
+  conv_file="${GUILDBOTICS_CLI_AGENT_CONVERSATION_FILE:-}"
+  if [ -n "$conv_file" ] && [ -s "$conv_file" ]; then
+    conv_arg="--conversation $(cat "$conv_file")"
+  fi
+  agy --print "$(cat "$PROMPT_FILE")" $conv_arg --print-timeout "${GUILDBOTICS_AGY_PRINT_TIMEOUT:-30m}" --log-file "$agylog" --dangerously-skip-permissions < /dev/null > "$res" 2> "$log"
+  status=$?
+  # Best-effort capture of the conversation id for the next retry. If it cannot be
+  # found we simply cold-start next time (never fall back to --continue). -h keeps
+  # grep from prefixing the match with the file name (multi-file input).
+  if [ -n "$conv_file" ] && [ ! -s "$conv_file" ]; then
+    cid=$(grep -hoiE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$agylog" "$log" 2>/dev/null | head -n1)
+    [ -n "$cid" ] && printf '%s' "$cid" > "$conv_file"
+  fi
   cat "$log" >&2
   cat "$res"
-  rm -f "$res" "$log"
+  rm -f "$res" "$log" "$agylog"
+  # Preserve agy's exit code so CliAgentBrain detects a failed run (the cleanup
+  # commands above would otherwise make the script exit 0).
+  exit "$status"

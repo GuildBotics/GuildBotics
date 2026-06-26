@@ -57,6 +57,10 @@ class StubContext:
         self.invocations = []
         self.invoke_response = AgentResponse(status=AgentResponse.DONE, message="done")
         self.complete_task_run = True
+        # When set, only the Nth agent turn records a completion so earlier turns
+        # fail the gate and the workflow retries.
+        self.complete_on_attempt = None
+        self._invoke_calls = 0
         self.task_run_status = "done"
         self.evidence_type = "issue_comment"
         self.task_run_store_root = None
@@ -81,7 +85,12 @@ class StubContext:
         )
         if isinstance(self.invoke_response, Exception):
             raise self.invoke_response
-        if self.complete_task_run:
+        self._invoke_calls += 1
+        should_complete = self.complete_task_run and (
+            self.complete_on_attempt is None
+            or self._invoke_calls >= self.complete_on_attempt
+        )
+        if should_complete:
             run_id = kwargs["workflow_run_id"]
             store = TaskRunStore(self.task_run_store_root)
             store.append_evidence(
@@ -125,9 +134,17 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
     assert args == ()
     # Run id is scoped to the agent subprocess via a per-invocation overlay,
     # not the process-global os.environ.
+    from guildbotics.capabilities.completion_retry import (
+        CLI_AGENT_CONVERSATION_FILE_ENV,
+    )
+
+    data_dir = Path(tmp_path) / ".guildbotics" / "data"
     assert cli_agent_env == {
         TASK_RUN_ENV: kwargs["workflow_run_id"],
-        GUILDBOTICS_DATA_DIR: str(Path(tmp_path) / ".guildbotics" / "data"),
+        GUILDBOTICS_DATA_DIR: str(data_dir),
+        CLI_AGENT_CONVERSATION_FILE_ENV: str(
+            data_dir / "task-runs" / f"{kwargs['workflow_run_id']}.agy-conversation"
+        ),
     }
     assert os.environ.get(TASK_RUN_ENV) is None
     assert kwargs["person_id"] == "aiko"
@@ -290,6 +307,10 @@ async def test_agent_done_without_task_completion_is_not_success(monkeypatch):
 async def test_run_posts_safe_error_message_without_leaking_details(
     monkeypatch,
 ):
+    from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
+
+    # One attempt so the failing agent run escalates immediately.
+    monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "1")
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
@@ -300,7 +321,9 @@ async def test_run_posts_safe_error_message_without_leaking_details(
 
     monkeypatch.setattr("guildbotics.intelligences.functions.talk_as", fake_talk_as)
 
-    with pytest.raises(RuntimeError, match="secret-token-123"):
+    # The failing agent run is bounded and re-raised (so the scheduler counts the
+    # error), while the ticket comment stays a safe, reader-facing message.
+    with pytest.raises(CompletionRetryExhausted):
         await ticket_driven_workflow.main(ctx)
 
     assert len(tm.commented) == 1
@@ -340,3 +363,61 @@ def test_ticket_trace_attributes_for_issue_and_pull_request():
         "github.url": "https://github.com/owner/repo/pull/7",
         "github.number": "7",
     }
+
+
+@pytest.mark.asyncio
+async def test_ticket_retries_with_continuation_until_completion(monkeypatch):
+    from guildbotics.capabilities.completion_retry import (
+        CLI_AGENT_CONVERSATION_FILE_ENV,
+    )
+
+    monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "5")
+    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
+    tm = StubTicketManager(task)
+    ctx = StubContext(task, tm)
+    # Completes only on the second (continuation) turn.
+    ctx.complete_on_attempt = 2
+
+    response = await ticket_driven_workflow.main(ctx)
+
+    assert response.status == AgentResponse.DONE
+    handle_calls = [
+        kwargs
+        for name, _args, kwargs, _env in ctx.invocations
+        if name == "functions/handle_github_ticket"
+    ]
+    assert len(handle_calls) == 2
+    # Both attempts reuse one run id and conversation file so evidence
+    # accumulates and the retry resumes the same agent conversation by id.
+    assert len({kwargs["workflow_run_id"] for kwargs in handle_calls}) == 1
+    conv_files = {
+        kwargs["cli_agent_env"][CLI_AGENT_CONVERSATION_FILE_ENV]
+        for kwargs in handle_calls
+    }
+    assert len(conv_files) == 1
+    # Completed within budget: no error comment, no give-up.
+    assert tm.commented == []
+
+
+@pytest.mark.asyncio
+async def test_ticket_exhaustion_posts_error_comment_and_raises(monkeypatch):
+    from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
+
+    monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "2")
+    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
+    tm = StubTicketManager(task)
+    ctx = StubContext(task, tm)
+    ctx.complete_task_run = False  # the agent never records a completion
+
+    with pytest.raises(CompletionRetryExhausted):
+        await ticket_driven_workflow.main(ctx)
+
+    handle_calls = [
+        name
+        for name, _args, _kwargs, _env in ctx.invocations
+        if name == "functions/handle_github_ticket"
+    ]
+    assert len(handle_calls) == 2  # retried up to the budget
+    # An error comment is posted; being the member's last comment, it stops the
+    # ticket from being re-selected on the next poll.
+    assert len(tm.commented) == 1

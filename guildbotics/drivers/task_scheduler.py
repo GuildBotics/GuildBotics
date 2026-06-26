@@ -2,13 +2,18 @@ import asyncio
 import datetime
 import threading
 import time
+from collections.abc import Coroutine
+from contextlib import suppress
+from typing import Any
 
+from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
 from guildbotics.observability import trace_scope
 from guildbotics.runtime import Context
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
+DEFAULT_CHAT_POLL_INTERVAL_SECONDS = 5.0
 
 
 class TaskScheduler:
@@ -42,6 +47,13 @@ class TaskScheduler:
         }
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
+        # Queued chat events are executed here, in each member's single worker
+        # thread, so a member's chat / ticket / scheduled / routine work shares
+        # one serial queue and never runs two agents in the same workspace.
+        self._chat_poll_interval = DEFAULT_CHAT_POLL_INTERVAL_SECONDS
+        self._chat_dispatcher = PendingChatDispatcher(
+            context, service_run_id=service_run_id
+        )
 
     def start(self):
         """
@@ -135,10 +147,11 @@ class TaskScheduler:
                             command=scheduled_task.command,
                             attributes={"service_run_id": self.service_run_id},
                         ):
-                            ok = loop.run_until_complete(
+                            ok = self._run(
+                                loop,
                                 run_command(
                                     context, scheduled_task.command, "scheduled"
-                                )
+                                ),
                             )
                         consecutive_errors, should_stop = (
                             self._update_consecutive_errors(
@@ -174,8 +187,8 @@ class TaskScheduler:
                         command=routine_command,
                         attributes={"service_run_id": self.service_run_id},
                     ):
-                        ok = loop.run_until_complete(
-                            run_command(context, routine_command, "routine")
+                        ok = self._run(
+                            loop, run_command(context, routine_command, "routine")
                         )
                     next_routine_time = datetime.datetime.now() + datetime.timedelta(
                         minutes=self.routine_interval_minutes
@@ -196,16 +209,13 @@ class TaskScheduler:
                         )
                     self._sleep_interruptible(1)
 
-                # Sleep until the next minute
+                # Wait out the rest of the minute while polling queued chat
+                # events on a short cadence, so chat stays responsive without
+                # speeding up the cron-granular scheduled/routine checks.
                 end_time = datetime.datetime.now()
                 running_time = (end_time - start_time).total_seconds()
-                sleep_sec = 60 - running_time
-                if sleep_sec > 0 and not self._stop_event.is_set():
-                    next_check_time = end_time + datetime.timedelta(seconds=sleep_sec)
-                    self.context.logger.debug(
-                        f"Sleeping until {next_check_time:%Y-%m-%d %H:%M:%S}."
-                    )
-                    self._sleep_interruptible(sleep_sec)
+                sleep_sec = max(0.0, 60 - running_time)
+                self._sleep_with_chat(loop, person, sleep_sec)
                 self.last_checked = start_time
         finally:
             try:
@@ -217,6 +227,59 @@ class TaskScheduler:
         """Sleep in small steps so the stop event can interrupt waits."""
         # Use wait to allow immediate wake-up on shutdown.
         self._stop_event.wait(timeout=seconds)
+
+    def _run(self, loop: asyncio.AbstractEventLoop, coro: Coroutine) -> Any:
+        """Run a coroutine to completion, cancelling it when a stop is requested.
+
+        Cancellation propagates into a running agent subprocess (which the CLI
+        agent brain kills), so a long agent turn cannot block shutdown past the
+        stop timeout.
+        """
+        return loop.run_until_complete(self._run_cancellable(coro))
+
+    async def _run_cancellable(self, coro: Coroutine) -> Any:
+        task: asyncio.Task = asyncio.ensure_future(coro)
+        stop_waiter = asyncio.ensure_future(self._wait_for_stop())
+        try:
+            await asyncio.wait({task, stop_waiter}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop_waiter.cancel()
+            with suppress(asyncio.CancelledError):
+                await stop_waiter
+        if task.done():
+            return task.result()
+        task.cancel()
+        with suppress(BaseException):
+            await task
+        return False
+
+    async def _wait_for_stop(self) -> None:
+        while not self._stop_event.is_set():
+            await asyncio.sleep(0.2)
+
+    async def _process_pending_chat(self, person: Person) -> bool:
+        try:
+            await self._chat_dispatcher.process_person(person, self._stop_event)
+            return True
+        except Exception as exc:
+            self.context.logger.error(
+                f"Error processing chat events for '{person.person_id}': {exc}"
+            )
+            return False
+
+    def _sleep_with_chat(
+        self, loop: asyncio.AbstractEventLoop, person: Person, total_seconds: float
+    ) -> None:
+        """Process queued chat events, then wait, repeating until the minute ends."""
+        deadline = datetime.datetime.now() + datetime.timedelta(
+            seconds=max(0.0, total_seconds)
+        )
+        while not self._stop_event.is_set():
+            self._run(loop, self._process_pending_chat(person))
+            remaining = (deadline - datetime.datetime.now()).total_seconds()
+            if remaining <= 0:
+                break
+            self._sleep_interruptible(min(self._chat_poll_interval, remaining))
 
     def _update_consecutive_errors(
         self, ok: bool, *, source: str, consecutive_errors: int

@@ -307,6 +307,7 @@ class CliAgentBrain(Brain):
             temp_file_name = tmp_file.name
         env["PROMPT_FILE"] = temp_file_name
 
+        process: asyncio.subprocess.Process | None = None
         try:
             # Launch subprocess in the cloned repository directory
             process = await asyncio.create_subprocess_shell(
@@ -348,7 +349,17 @@ class CliAgentBrain(Brain):
                 returncode=process.returncode or 0,
             )
         finally:
-            # Clean up temporary prompt file
+            # If the await was cancelled (e.g. the service is stopping) before the
+            # agent finished, kill the subprocess so a multi-minute agent turn does
+            # not keep running detached and block a clean shutdown, and reap it so
+            # it does not linger as a zombie.
+            if process is not None and process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
+                with suppress(BaseException):
+                    # Shield so the reap completes even though our own task is
+                    # being cancelled.
+                    await asyncio.shield(process.wait())
             self.remove_temp_file(temp_file_name)
             shutil.rmtree(gh_config_dir, ignore_errors=True)
 

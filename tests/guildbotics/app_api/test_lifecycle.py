@@ -104,14 +104,11 @@ class FakeRunner:
         self.join_calls: list[float | None] = []
         self.block_stop = False
         self.summary: dict[str, Any] = {
-            "workflow_command": "workflows/event_driven_workflow",
             "subscription_count": 1,
             "listener_count": 1,
             "cycle_count": 0,
             "cycle_failure_count": 0,
             "events_drained_count": 0,
-            "events_delivered_count": 0,
-            "events_skipped_processed_count": 0,
         }
         FakeRunner.instances.append(self)
 
@@ -337,7 +334,6 @@ def test_events_metadata_reflects_summary(context_factory: Any) -> None:
     try:
         service.start(SchedulerStartRequest(only="events"))
         status = service.get_status().events
-        assert status.workflow_command == "workflows/event_driven_workflow"
         assert status.subscription_count == 1
         assert status.listener_count == 1
         assert status.cycle_count == 0

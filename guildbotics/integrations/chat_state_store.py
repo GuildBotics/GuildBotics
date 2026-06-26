@@ -52,6 +52,19 @@ class ScheduledPostState:
     last_run_slot: str | None = None
 
 
+@dataclass(slots=True)
+class PendingChatEvent:
+    """A queued chat event plus the participation policy of its channel.
+
+    Participation comes from the channel subscription (resolved by the event
+    listener) and is persisted so the consumer (the member worker) can rebuild
+    the IncomingChatEvent without re-resolving subscriptions.
+    """
+
+    event: ChatEvent
+    chat_participation: str = "strict"
+
+
 class ConversationStateStore(ABC):
     """Persistent store for chat polling cursors and per-thread state."""
 
@@ -142,12 +155,17 @@ class ConversationStateStore(ABC):
     @abstractmethod
     def load_pending_events(
         self, service: str, person_id: str, channel_id: str
-    ) -> list[ChatEvent]:
-        """Load durable unprocessed chat events for a channel."""
+    ) -> list[PendingChatEvent]:
+        """Load durable unprocessed chat events (with participation) for a channel."""
 
     @abstractmethod
     def upsert_pending_event(
-        self, service: str, person_id: str, channel_id: str, event: ChatEvent
+        self,
+        service: str,
+        person_id: str,
+        channel_id: str,
+        event: ChatEvent,
+        chat_participation: str = "strict",
     ) -> None:
         """Durably store an unprocessed event (idempotent by event_id)."""
 
@@ -156,3 +174,9 @@ class ConversationStateStore(ABC):
         self, service: str, person_id: str, channel_id: str, event_id: str
     ) -> None:
         """Remove a durable pending event after successful processing."""
+
+    @abstractmethod
+    def list_pending_channels(self, person_id: str) -> list[tuple[str, str]]:
+        """List (service, channel_id) pairs that currently hold pending events
+        for a person, so a consumer can drain them without resolving
+        subscriptions."""
