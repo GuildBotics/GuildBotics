@@ -2,7 +2,7 @@ env:
 script: |
   res=$(mktemp)
   log=$(mktemp)
-  agy --print "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions > "$res" 2> "$log"
+  agy --print "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions < /dev/null > "$res" 2> "$log"
   cat "$log" >&2
   cat "$res"
   rm -f "$res" "$log"
