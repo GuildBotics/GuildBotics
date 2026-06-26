@@ -1587,8 +1587,7 @@ function MembersSection({
   const [githubInstallationId, setGithubInstallationId] = useState("");
   const [githubAppId, setGithubAppId] = useState("");
   const [githubPrivateKeyPath, setGithubPrivateKeyPath] = useState("");
-  const [speakingStylePreset, setSpeakingStylePreset] =
-    useState<SpeakingStylePreset>("energetic");
+  const [speakingStylePreset, setSpeakingStylePreset] = useState<SpeakingStylePreset>("energetic");
   const [speakingStyle, setSpeakingStyle] = useState("");
   const [relationships, setRelationships] = useState("");
   const [characterArchetype, setCharacterArchetype] = useState("");
