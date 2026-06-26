@@ -379,7 +379,7 @@ const resources = {
             professional:
               "Calm and logical, with restrained emotional expression. Emphasizes conveying necessary information clearly and concisely while maintaining a professional yet approachable tone.",
             friendly:
-              "Energetic and friendly tone with expressive emotion. Approaches like a friend while remaining respectful and considerate.",
+              "Warm and friendly tone with expressive emotion. Approaches like a friend while remaining respectful and considerate.",
             energetic:
               "Enthusiastic and forward-looking tone with high energy. Focuses on action, speed, and motivating the team to take on new challenges.",
           },

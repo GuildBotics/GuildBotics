@@ -1588,7 +1588,7 @@ function MembersSection({
   const [githubAppId, setGithubAppId] = useState("");
   const [githubPrivateKeyPath, setGithubPrivateKeyPath] = useState("");
   const [speakingStylePreset, setSpeakingStylePreset] =
-    useState<SpeakingStylePreset>("professional");
+    useState<SpeakingStylePreset>("energetic");
   const [speakingStyle, setSpeakingStyle] = useState("");
   const [relationships, setRelationships] = useState("");
   const [characterArchetype, setCharacterArchetype] = useState("");
@@ -1716,9 +1716,9 @@ function MembersSection({
       return;
     }
     if (!emptyAddDefaultsAppliedRef.current) {
-      setSpeakingStylePreset("professional");
+      setSpeakingStylePreset("energetic");
       setRoles([]);
-      applyPresetFields("professional");
+      applyPresetFields("energetic");
       emptyAddDefaultsAppliedRef.current = true;
     }
   }, [applyPresetFields, displayedMembers.length, mode]);
@@ -1734,9 +1734,9 @@ function MembersSection({
     setGithubInstallationId("");
     setGithubAppId("");
     setGithubPrivateKeyPath("");
-    setSpeakingStylePreset("professional");
+    setSpeakingStylePreset("energetic");
     if (withDefaults) {
-      applyPresetFields("professional");
+      applyPresetFields("energetic");
     } else {
       clearPresetFields();
     }
@@ -2444,7 +2444,7 @@ function MembersSection({
                     }))}
                     value={speakingStylePreset}
                     onChange={(value) => {
-                      const preset = (value as SpeakingStylePreset) ?? "professional";
+                      const preset = (value as SpeakingStylePreset) ?? "energetic";
                       setSpeakingStylePreset(preset);
                       applyPresetFields(preset);
                     }}
@@ -4646,14 +4646,14 @@ function inferSpeakingStylePreset(
 ): SpeakingStylePreset {
   const normalized = speakingStyle.trim();
   if (!normalized) {
-    return "professional";
+    return "energetic";
   }
   for (const preset of SPEAKING_STYLE_OPTIONS) {
     if (templates[preset] === normalized) {
       return preset;
     }
   }
-  return "professional";
+  return "energetic";
 }
 
 type CharacterPresetExample = {
