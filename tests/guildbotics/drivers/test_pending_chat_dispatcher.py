@@ -60,7 +60,7 @@ async def test_dispatcher_runs_workflow_and_clears_pending(monkeypatch, tmp_path
             return "ok"
 
     monkeypatch.setattr(
-        "guildbotics.drivers.pending_chat_dispatcher.CommandRunner", _FakeRunner
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
     )
 
     context = _FakeContext()
@@ -98,7 +98,7 @@ async def test_dispatcher_skips_already_processed(monkeypatch, tmp_path):
             return "ok"
 
     monkeypatch.setattr(
-        "guildbotics.drivers.pending_chat_dispatcher.CommandRunner", _FakeRunner
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
     )
 
     context = _FakeContext()
@@ -125,7 +125,7 @@ async def test_dispatcher_leaves_event_queued_on_error(monkeypatch, tmp_path):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "guildbotics.drivers.pending_chat_dispatcher.CommandRunner", _FailingRunner
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FailingRunner
     )
 
     context = _FakeContext()

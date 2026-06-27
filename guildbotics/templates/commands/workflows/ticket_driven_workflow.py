@@ -215,7 +215,29 @@ async def main(context: Context) -> AgentResponse | None:
     actual GitHub/git/PR work to the configured CLI agent.
     """
     ticket_manager = context.get_ticket_manager()
-    task = await ticket_manager.get_task_to_work_on()
+
+    task = None
+    shared_state = getattr(context, "shared_state", None)
+    if isinstance(shared_state, dict):
+        from guildbotics.runtime.workflow_invocation import (
+            WORKFLOW_INVOCATION_KEY,
+            WorkflowInvocation,
+        )
+
+        invocation = shared_state.get(WORKFLOW_INVOCATION_KEY)
+        if invocation is not None:
+            payload = None
+            if isinstance(invocation, dict) and invocation.get("trigger_type") == "ticket":
+                payload = invocation.get("payload")
+            elif isinstance(invocation, WorkflowInvocation) and invocation.trigger_type == "ticket":
+                payload = invocation.payload
+
+            if payload and "task" in payload:
+                task = Task(**payload["task"])
+
+    if task is None:
+        task = await ticket_manager.get_task_to_work_on()
+
     if task is None:
         return None
 

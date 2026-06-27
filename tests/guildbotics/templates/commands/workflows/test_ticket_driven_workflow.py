@@ -417,7 +417,40 @@ async def test_ticket_exhaustion_posts_error_comment_and_raises(monkeypatch):
         for name, _args, _kwargs, _env in ctx.invocations
         if name == "functions/handle_github_ticket"
     ]
-    assert len(handle_calls) == 2  # retried up to the budget
-    # An error comment is posted; being the member's last comment, it stops the
-    # ticket from being re-selected on the next poll.
+    assert len(handle_calls) == 2
     assert len(tm.commented) == 1
+
+
+@pytest.mark.asyncio
+async def test_ticket_driven_workflow_reads_from_invocation(monkeypatch):
+    from guildbotics.runtime.workflow_invocation import (
+        WORKFLOW_INVOCATION_KEY,
+        WorkflowInvocation,
+    )
+
+    task = Task(
+        id="999",
+        title="Payload Task",
+        description="Selected via invocation payload",
+        status=Task.READY,
+    )
+    tm = StubTicketManager(None)  # No task on manager
+    ctx = StubContext(None, tm)
+
+    inv = WorkflowInvocation(
+        command="workflows/ticket_driven_workflow",
+        person_id="aiko",
+        source="routine",
+        trigger_type="ticket",
+        payload={"task": task.model_dump()},
+    )
+    ctx.shared_state = {WORKFLOW_INVOCATION_KEY: inv}
+
+    response = await ticket_driven_workflow.main(ctx)
+
+    assert response is not None
+    assert response.status == AgentResponse.DONE
+    assert ctx.task.id == "999"
+    assert ctx.task.title == "Payload Task"
+    assert len(tm.moved) == 1
+    assert tm.moved[0][0].id == "999"
