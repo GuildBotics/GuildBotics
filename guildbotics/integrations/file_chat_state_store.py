@@ -13,6 +13,7 @@ from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ConversationStateStore,
+    PendingChatEvent,
     ScheduledPostState,
     ThreadConversationState,
     ThreadHandoffState,
@@ -254,7 +255,7 @@ class FileConversationStateStore(ConversationStateStore):
 
     def load_pending_events(
         self, service: str, person_id: str, channel_id: str
-    ) -> list[ChatEvent]:
+    ) -> list[PendingChatEvent]:
         with self._lock:
             data = self._read_json(
                 self._pending_events_file(service, person_id, channel_id)
@@ -262,7 +263,7 @@ class FileConversationStateStore(ConversationStateStore):
             raw_items = data.get("events") or []
             if not isinstance(raw_items, list):
                 return []
-            out: list[ChatEvent] = []
+            out: list[PendingChatEvent] = []
             for item in raw_items:
                 if not isinstance(item, dict):
                     continue
@@ -275,23 +276,35 @@ class FileConversationStateStore(ConversationStateStore):
                 if not isinstance(mentions, list):
                     mentions = []
                 out.append(
-                    ChatEvent(
-                        event_id=event_id,
-                        channel_id=str(item.get("channel_id", channel_id)),
-                        message_ts=message_ts,
-                        thread_ts=thread_ts,
-                        author_id=_to_str_or_none(item.get("author_id")),
-                        text=str(item.get("text", "") or ""),
-                        mentions=[str(x) for x in mentions if str(x)],
-                        is_edit_or_delete=bool(item.get("is_edit_or_delete", False)),
-                        is_bot_message=bool(item.get("is_bot_message", False)),
-                        is_thread_reply=bool(item.get("is_thread_reply", False)),
+                    PendingChatEvent(
+                        event=ChatEvent(
+                            event_id=event_id,
+                            channel_id=str(item.get("channel_id", channel_id)),
+                            message_ts=message_ts,
+                            thread_ts=thread_ts,
+                            author_id=_to_str_or_none(item.get("author_id")),
+                            text=str(item.get("text", "") or ""),
+                            mentions=[str(x) for x in mentions if str(x)],
+                            is_edit_or_delete=bool(
+                                item.get("is_edit_or_delete", False)
+                            ),
+                            is_bot_message=bool(item.get("is_bot_message", False)),
+                            is_thread_reply=bool(item.get("is_thread_reply", False)),
+                        ),
+                        chat_participation=str(
+                            item.get("chat_participation", "strict") or "strict"
+                        ),
                     )
                 )
             return out
 
     def upsert_pending_event(
-        self, service: str, person_id: str, channel_id: str, event: ChatEvent
+        self,
+        service: str,
+        person_id: str,
+        channel_id: str,
+        event: ChatEvent,
+        chat_participation: str = "strict",
     ) -> None:
         with self._lock:
             path = self._pending_events_file(service, person_id, channel_id)
@@ -310,6 +323,7 @@ class FileConversationStateStore(ConversationStateStore):
                 "is_edit_or_delete": bool(event.is_edit_or_delete),
                 "is_bot_message": bool(event.is_bot_message),
                 "is_thread_reply": bool(event.is_thread_reply),
+                "chat_participation": chat_participation,
             }
             merged: list[dict] = []
             replaced = False
@@ -351,6 +365,22 @@ class FileConversationStateStore(ConversationStateStore):
                 except Exception:
                     data["events"] = []
                     self._write_json(path, data)
+
+    def list_pending_channels(self, person_id: str) -> list[tuple[str, str]]:
+        with self._lock:
+            out: list[tuple[str, str]] = []
+            if not self._base_dir.exists():
+                return out
+            safe_person = _safe_segment(person_id)
+            for service_dir in sorted(self._base_dir.iterdir()):
+                if not service_dir.is_dir():
+                    continue
+                pending_dir = service_dir / safe_person / "pending_events"
+                if not pending_dir.is_dir():
+                    continue
+                for pending_file in sorted(pending_dir.glob("*.json")):
+                    out.append((service_dir.name, pending_file.stem))
+            return out
 
     def _root(self, service: str, person_id: str) -> Path:
         return self._base_dir / _safe_segment(service) / _safe_segment(person_id)

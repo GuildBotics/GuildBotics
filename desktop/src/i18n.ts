@@ -29,9 +29,9 @@ const resources = {
       service: {
         title: "Service Runtime",
         refresh: "Refresh",
-        startTarget: "Start target",
+        sourceTarget: "Source target",
         noTargetTitle: "No service selected",
-        noTargetBody: "Select auto patrol, event listener, or both before starting.",
+        noTargetBody: "Select patrol/scheduled work, event listener, or both before starting.",
       },
       diagnostics: {
         title: "Diagnostics",
@@ -840,23 +840,43 @@ const resources = {
           startedAt: "Started",
           stoppedAt: "Stopped",
         },
-        schedulerCard: {
-          title: "Auto patrol",
+        workerCard: {
+          title: "Member workers",
           description:
-            "Runs recurring work for active members. Members without their own patrol workflow use the shared default below.",
-          routine: "Workflow",
+            "Runs enabled work sources serially for each active member. Workers start when at least one source is enabled.",
           workers: "Workers",
           workerValue: "{{workers}} / {{members}}",
+          sources: "Sources",
+          scheduledSource: "Scheduled",
+          routineSource: "Routine",
+          eventQueueSource: "Event queue",
+          maxConsecutiveErrors: "Failure limit",
+        },
+        routineSourceCard: {
+          title: "Routine workflow",
+          description: "Runs the selected routine workflow on each member worker interval.",
+          status: "Source",
+          interval: "Interval (minutes)",
+        },
+        scheduledSourceCard: {
+          title: "Scheduled commands",
+          description: "Runs member-level scheduled commands defined in member settings.",
+          status: "Source",
+          members: "Active members",
+          settingsTitle: "Member schedules",
+          settingsBody:
+            "Scheduled commands are configured per member together with member patrol settings.",
         },
         eventsCard: {
           title: "Event listener",
-          description: "Receives external events and dispatches the configured workflow.",
-          workflow: "Handler workflow",
+          description: "Receives external events and queues them for the member workers.",
+          sourceStatus: "Queue source",
           listeners: "Listeners",
           subscriptions: "Subscriptions",
-          processed: "Processed events",
-          processedValue:
-            "processed {{delivered}} / received {{drained}} / skipped {{skipped}} / failures {{failures}}",
+          workers: "Event workers",
+          workerValue: "{{workers}}",
+          processed: "Received events",
+          processedValue: "received {{drained}} / failures {{failures}}",
           authFailedTitle: "Slack authentication failed",
           authFailedBody:
             "Slack rejected the app-level token (Socket Mode) for: {{persons}}. These members cannot receive events until their SLACK_APP_TOKEN is fixed and the service is restarted.",
@@ -925,14 +945,11 @@ const resources = {
         routines: {
           ticketDriven: "Ticket-driven workflow",
         },
-        workflows: {
-          chatConversation: "Chat conversation workflow",
-        },
         feedFilters: {
           all: "All",
           error: "Errors",
           command: "Commands",
-          scheduler: "Auto patrol",
+          scheduler: "Member workers",
           events: "Event listener",
         },
         eventTypes: {
@@ -940,13 +957,13 @@ const resources = {
           command_log: "Run log",
           command_finished: "Finished",
           command_failed: "Failed",
-          scheduler: "Auto patrol",
+          scheduler: "Member workers",
           events: "Event listener",
         },
         eventSummaries: {
           command: "Command: {{command}}",
-          schedulerRunning: "Auto patrol started.",
-          schedulerStopped: "Auto patrol stopped.",
+          schedulerRunning: "Member workers started.",
+          schedulerStopped: "Member workers stopped.",
           eventsRunning: "Event listener started.",
           eventsStopped: "Event listener stopped.",
           failed: "Runtime failed. Check the error card or logs.",
@@ -1466,9 +1483,9 @@ const resources = {
       service: {
         title: "サービス実行",
         refresh: "更新",
-        startTarget: "開始対象",
+        sourceTarget: "作業ソース対象",
         noTargetTitle: "開始対象が選択されていません",
-        noTargetBody: "自動巡回またはイベント起動を選択してから開始してください。",
+        noTargetBody: "巡回・定期実行またはイベント起動を選択してから開始してください。",
       },
       diagnostics: {
         title: "診断",
@@ -1863,23 +1880,44 @@ const resources = {
           startedAt: "起動時刻",
           stoppedAt: "停止時刻",
         },
-        schedulerCard: {
-          title: "自動巡回",
+        workerCard: {
+          title: "メンバーワーカー",
           description:
-            "有効メンバーごとに繰り返し作業を実行します。個別設定がないメンバーは下の共通既定値を使います。",
-          routine: "巡回ワークフロー",
+            "有効メンバーごとに有効な作業ソースを直列実行します。1つ以上の source が有効な場合に worker が起動します。",
           workers: "稼働ワーカー",
           workerValue: "{{workers}} / {{members}}",
+          sources: "作業ソース",
+          scheduledSource: "スケジュール",
+          routineSource: "巡回",
+          eventQueueSource: "イベントキュー",
+          maxConsecutiveErrors: "失敗上限",
+        },
+        routineSourceCard: {
+          title: "巡回ワークフロー",
+          description:
+            "選択した巡回ワークフローを、各メンバーワーカー上で指定間隔ごとに実行します。",
+          status: "source",
+          interval: "間隔（分）",
+        },
+        scheduledSourceCard: {
+          title: "定期実行コマンド",
+          description: "メンバー設定に定義された定期実行コマンドを実行します。",
+          status: "source",
+          members: "有効メンバー",
+          settingsTitle: "メンバー別定期実行設定",
+          settingsBody:
+            "定期実行コマンドは、メンバー別巡回設定と同じメンバー設定画面で設定します。",
         },
         eventsCard: {
           title: "イベント起動",
-          description: "外部イベントを受信し、設定されたワークフローへ渡します。",
-          workflow: "対応ワークフロー",
+          description: "外部イベントを受信し、メンバーワーカー向けにキューへ保存します。",
+          sourceStatus: "キュー source",
           listeners: "リスナー",
           subscriptions: "購読チャンネル",
-          processed: "イベント処理",
-          processedValue:
-            "処理 {{delivered}} / 受信 {{drained}} / スキップ {{skipped}} / 失敗 {{failures}}",
+          workers: "イベント処理ワーカー",
+          workerValue: "{{workers}}",
+          processed: "受信イベント",
+          processedValue: "受信 {{drained}} / 失敗 {{failures}}",
           authFailedTitle: "Slack 認証に失敗しました",
           authFailedBody:
             "Slack が Socket Mode の App Token を拒否しました: {{persons}}。これらのメンバーは SLACK_APP_TOKEN を修正してサービスを再起動するまでイベントを受信できません。",
@@ -1948,14 +1986,11 @@ const resources = {
         routines: {
           ticketDriven: "チケット駆動ワークフロー",
         },
-        workflows: {
-          chatConversation: "チャット応答ワークフロー",
-        },
         feedFilters: {
           all: "すべて",
           error: "エラー",
           command: "コマンド",
-          scheduler: "自動巡回",
+          scheduler: "メンバーワーカー",
           events: "イベント起動",
         },
         eventTypes: {
@@ -1963,13 +1998,13 @@ const resources = {
           command_log: "実行ログ",
           command_finished: "完了",
           command_failed: "失敗",
-          scheduler: "自動巡回",
+          scheduler: "メンバーワーカー",
           events: "イベント起動",
         },
         eventSummaries: {
           command: "コマンド: {{command}}",
-          schedulerRunning: "自動巡回を開始しました。",
-          schedulerStopped: "自動巡回を停止しました。",
+          schedulerRunning: "メンバーワーカーを開始しました。",
+          schedulerStopped: "メンバーワーカーを停止しました。",
           eventsRunning: "イベント起動を開始しました。",
           eventsStopped: "イベント起動を停止しました。",
           failed: "実行がエラー停止しました。状態カードまたはログを確認してください。",

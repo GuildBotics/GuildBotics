@@ -125,7 +125,7 @@ guildbotics/
 - `__init__.py`: Click-based CLI command definitions
 
 **Commands**:
-- `start`: Launch scheduler / event listener runner
+- `start`: Launch member workers / event listener runner
 - `run`: Execute custom commands
 - `stop`/`kill`: Process management
 - `version`: Print version
@@ -157,9 +157,9 @@ unsupported GUI environments. See `docs/desktop_app_plan.ja.md` for packaging an
 support policy.
 
 Runtime lifecycle differs between CLI and desktop. `guildbotics start` owns the
-user-level daemon pidfile and starts the scheduler / event listener runner as a
+user-level daemon pidfile and starts the member workers / event listener runner as a
 CLI process. The App API sidecar does not write that pidfile; it manages
-scheduler and event-listener lifecycles inside the sidecar process and reports
+member-worker and event-listener lifecycles inside the sidecar process and reports
 `starting` / `running` / `stopping` / `stopped` / `failed` states to the desktop
 client.
 
@@ -203,7 +203,8 @@ Message
 **Responsibility**: Workflow execution engine
 
 **Key Classes**:
-- `TaskScheduler`: Cron-based task scheduler with per-person threads
+- `TaskScheduler`: Per-person member worker that serially runs scheduled,
+  routine, and queued event sources
 - `CommandRunner`: Command execution engine with recursive invocation
 
 #### Loader (`guildbotics/loader/`)

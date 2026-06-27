@@ -55,14 +55,14 @@ export type RuntimeUnitStatus = {
   routine_interval_minutes: number | null;
   active_member_count: number | null;
   worker_count: number | null;
-  workflow_command: string | null;
+  scheduled_source_enabled: boolean | null;
+  routine_source_enabled: boolean | null;
+  event_queue_source_enabled: boolean | null;
   subscription_count: number | null;
   listener_count: number | null;
   cycle_count: number | null;
   cycle_failure_count: number | null;
   events_drained_count: number | null;
-  events_delivered_count: number | null;
-  events_skipped_processed_count: number | null;
   events_auth_failed_count: number | null;
   events_auth_failed_persons: string[];
 };
@@ -70,6 +70,19 @@ export type RuntimeUnitStatus = {
 export type RuntimeStatus = {
   scheduler: RuntimeUnitStatus;
   events: RuntimeUnitStatus;
+};
+
+export type RuntimeSourceSelection = {
+  scheduled: boolean;
+  routine: boolean;
+  event_queue: boolean;
+};
+
+export type SchedulerStartRequest = {
+  sources?: RuntimeSourceSelection;
+  routine_commands?: string[];
+  max_consecutive_errors?: number;
+  routine_interval_minutes?: number;
 };
 
 export type PromptTraceEntry = {
@@ -574,7 +587,7 @@ export async function getRoleOptions(language: "en" | "ja"): Promise<RoleOptions
   return request(`/config/roles?language=${encodeURIComponent(language)}`);
 }
 
-export async function startScheduler(body: Record<string, unknown>): Promise<RuntimeStatus> {
+export async function startScheduler(body: SchedulerStartRequest): Promise<RuntimeStatus> {
   return request("/scheduler/start", { method: "POST", body });
 }
 

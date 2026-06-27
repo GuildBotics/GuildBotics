@@ -2,13 +2,18 @@ import asyncio
 import datetime
 import threading
 import time
+from collections.abc import Coroutine
+from contextlib import suppress
+from typing import Any
 
+from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
 from guildbotics.observability import trace_scope
 from guildbotics.runtime import Context
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
+DEFAULT_CHAT_POLL_INTERVAL_SECONDS = 5.0
 
 
 class TaskScheduler:
@@ -19,6 +24,9 @@ class TaskScheduler:
         consecutive_error_limit: int = 3,
         routine_interval_minutes: int = DEFAULT_ROUTINE_INTERVAL_MINUTES,
         service_run_id: str | None = None,
+        scheduled_source_enabled: bool = True,
+        routine_source_enabled: bool = True,
+        event_queue_source_enabled: bool = True,
     ):
         """
         Initialize the TaskScheduler with a list of jobs.
@@ -29,6 +37,9 @@ class TaskScheduler:
                 before stopping the worker loop.
             routine_interval_minutes (int): Minimum interval between routine command
                 executions for each worker.
+            scheduled_source_enabled (bool): Whether to run scheduled commands.
+            routine_source_enabled (bool): Whether to run routine commands.
+            event_queue_source_enabled (bool): Whether to drain queued chat events.
         """
         self.context = context
         self.default_routine_commands = default_routine_commands
@@ -37,11 +48,21 @@ class TaskScheduler:
         self.consecutive_error_limit = max(1, int(consecutive_error_limit))
         self.routine_interval_minutes = max(1, int(routine_interval_minutes))
         self.service_run_id = service_run_id
+        self.scheduled_source_enabled = bool(scheduled_source_enabled)
+        self.routine_source_enabled = bool(routine_source_enabled)
+        self.event_queue_source_enabled = bool(event_queue_source_enabled)
         self.scheduled_tasks_list = {
             p: p.get_scheduled_commands() for p in context.team.members
         }
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
+        # Queued chat events are executed here, in each member's single worker
+        # thread, so a member's chat / ticket / scheduled / routine work shares
+        # one serial queue and never runs two agents in the same workspace.
+        self._chat_poll_interval = DEFAULT_CHAT_POLL_INTERVAL_SECONDS
+        self._chat_dispatcher = PendingChatDispatcher(
+            context, service_run_id=service_run_id
+        )
 
     def start(self):
         """
@@ -84,7 +105,7 @@ class TaskScheduler:
                     remaining = max(0.0, deadline - time.monotonic())
                     t.join(timeout=remaining)
 
-    def get_status_summary(self) -> dict[str, int]:
+    def get_status_summary(self) -> dict[str, Any]:
         """Return lightweight runtime counters for GUI status displays."""
         active_member_count = sum(
             1 for person in self.context.team.members if person.is_active
@@ -94,6 +115,9 @@ class TaskScheduler:
             "active_member_count": active_member_count,
             "worker_count": worker_count,
             "routine_interval_minutes": self.routine_interval_minutes,
+            "scheduled_source_enabled": self.scheduled_source_enabled,
+            "routine_source_enabled": self.routine_source_enabled,
+            "event_queue_source_enabled": self.event_queue_source_enabled,
         }
 
     def _process_tasks_list(
@@ -124,34 +148,36 @@ class TaskScheduler:
                     f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}."
                 )
 
-                # Run scheduled tasks
-                for scheduled_task in scheduled_tasks:
-                    if self._stop_event.is_set():
-                        break
-                    if scheduled_task.should_run(start_time):
-                        with trace_scope(
-                            "scheduled",
-                            person_id=person.person_id,
-                            command=scheduled_task.command,
-                            attributes={"service_run_id": self.service_run_id},
-                        ):
-                            ok = loop.run_until_complete(
-                                run_command(
-                                    context, scheduled_task.command, "scheduled"
+                if self.scheduled_source_enabled:
+                    # Run scheduled tasks
+                    for scheduled_task in scheduled_tasks:
+                        if self._stop_event.is_set():
+                            break
+                        if scheduled_task.should_run(start_time):
+                            with trace_scope(
+                                "scheduled",
+                                person_id=person.person_id,
+                                command=scheduled_task.command,
+                                attributes={"service_run_id": self.service_run_id},
+                            ):
+                                ok = self._run(
+                                    loop,
+                                    run_command(
+                                        context, scheduled_task.command, "scheduled"
+                                    ),
+                                )
+                            consecutive_errors, should_stop = (
+                                self._update_consecutive_errors(
+                                    ok,
+                                    source="scheduled",
+                                    consecutive_errors=consecutive_errors,
                                 )
                             )
-                        consecutive_errors, should_stop = (
-                            self._update_consecutive_errors(
-                                ok,
-                                source="scheduled",
-                                consecutive_errors=consecutive_errors,
-                            )
-                        )
-                        if should_stop:
-                            return
-                    if self._stop_event.is_set():
-                        break
-                    self._sleep_interruptible(1)
+                            if should_stop:
+                                return
+                        if self._stop_event.is_set():
+                            break
+                        self._sleep_interruptible(1)
 
                 # Check for tasks to work on
                 if self._stop_event.is_set():
@@ -161,7 +187,7 @@ class TaskScheduler:
                     next_routine_time is None or start_time >= next_routine_time
                 )
                 routine_command = ""
-                if routine_commands and routine_due:
+                if self.routine_source_enabled and routine_commands and routine_due:
                     routine_command = routine_commands[
                         routine_command_index % len(routine_commands)
                     ]
@@ -174,8 +200,8 @@ class TaskScheduler:
                         command=routine_command,
                         attributes={"service_run_id": self.service_run_id},
                     ):
-                        ok = loop.run_until_complete(
-                            run_command(context, routine_command, "routine")
+                        ok = self._run(
+                            loop, run_command(context, routine_command, "routine")
                         )
                     next_routine_time = datetime.datetime.now() + datetime.timedelta(
                         minutes=self.routine_interval_minutes
@@ -196,11 +222,15 @@ class TaskScheduler:
                         )
                     self._sleep_interruptible(1)
 
-                # Sleep until the next minute
+                # Wait out the rest of the minute while polling queued chat
+                # events on a short cadence, so chat stays responsive without
+                # speeding up the cron-granular scheduled/routine checks.
                 end_time = datetime.datetime.now()
                 running_time = (end_time - start_time).total_seconds()
-                sleep_sec = 60 - running_time
-                if sleep_sec > 0 and not self._stop_event.is_set():
+                sleep_sec = max(0.0, 60 - running_time)
+                if self.event_queue_source_enabled:
+                    self._sleep_with_chat(loop, person, sleep_sec)
+                elif sleep_sec > 0 and not self._stop_event.is_set():
                     next_check_time = end_time + datetime.timedelta(seconds=sleep_sec)
                     self.context.logger.debug(
                         f"Sleeping until {next_check_time:%Y-%m-%d %H:%M:%S}."
@@ -217,6 +247,59 @@ class TaskScheduler:
         """Sleep in small steps so the stop event can interrupt waits."""
         # Use wait to allow immediate wake-up on shutdown.
         self._stop_event.wait(timeout=seconds)
+
+    def _run(self, loop: asyncio.AbstractEventLoop, coro: Coroutine) -> Any:
+        """Run a coroutine to completion, cancelling it when a stop is requested.
+
+        Cancellation propagates into a running agent subprocess (which the CLI
+        agent brain kills), so a long agent turn cannot block shutdown past the
+        stop timeout.
+        """
+        return loop.run_until_complete(self._run_cancellable(coro))
+
+    async def _run_cancellable(self, coro: Coroutine) -> Any:
+        task: asyncio.Task = asyncio.ensure_future(coro)
+        stop_waiter = asyncio.ensure_future(self._wait_for_stop())
+        try:
+            await asyncio.wait({task, stop_waiter}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop_waiter.cancel()
+            with suppress(asyncio.CancelledError):
+                await stop_waiter
+        if task.done():
+            return task.result()
+        task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await task
+        return False
+
+    async def _wait_for_stop(self) -> None:
+        while not self._stop_event.is_set():
+            await asyncio.sleep(0.2)
+
+    async def _process_pending_chat(self, person: Person) -> bool:
+        try:
+            await self._chat_dispatcher.process_person(person, self._stop_event)
+            return True
+        except Exception as exc:
+            self.context.logger.error(
+                f"Error processing chat events for '{person.person_id}': {exc}"
+            )
+            return False
+
+    def _sleep_with_chat(
+        self, loop: asyncio.AbstractEventLoop, person: Person, total_seconds: float
+    ) -> None:
+        """Process queued chat events, then wait, repeating until the minute ends."""
+        deadline = datetime.datetime.now() + datetime.timedelta(
+            seconds=max(0.0, total_seconds)
+        )
+        while not self._stop_event.is_set():
+            self._run(loop, self._process_pending_chat(person))
+            remaining = (deadline - datetime.datetime.now()).total_seconds()
+            if remaining <= 0:
+                break
+            self._sleep_interruptible(min(self._chat_poll_interval, remaining))
 
     def _update_consecutive_errors(
         self, ok: bool, *, source: str, consecutive_errors: int

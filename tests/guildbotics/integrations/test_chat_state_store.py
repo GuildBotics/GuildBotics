@@ -273,14 +273,49 @@ def test_pending_events_roundtrip_dedupe_and_remove(tmp_path):
         mentions=[],
         is_thread_reply=True,
     )
-    store.upsert_pending_event("slack", "alice", "C1", event1)
-    store.upsert_pending_event("slack", "alice", "C1", event1_updated)
-    store.upsert_pending_event("slack", "alice", "C1", event2)
+    store.upsert_pending_event("slack", "alice", "C1", event1, "social")
+    store.upsert_pending_event("slack", "alice", "C1", event1_updated, "social")
+    store.upsert_pending_event("slack", "alice", "C1", event2, "strict")
     loaded = store.load_pending_events("slack", "alice", "C1")
-    assert [e.event_id for e in loaded] == ["C1:100.1", "C1:100.2"]
-    assert loaded[0].text == "hello updated"
-    assert loaded[0].mentions == ["U2"]
+    assert [pe.event.event_id for pe in loaded] == ["C1:100.1", "C1:100.2"]
+    assert loaded[0].event.text == "hello updated"
+    assert loaded[0].event.mentions == ["U2"]
+    # Participation is persisted per pending event.
+    assert loaded[0].chat_participation == "social"
+    assert loaded[1].chat_participation == "strict"
 
     store.remove_pending_event("slack", "alice", "C1", "C1:100.1")
     loaded2 = store.load_pending_events("slack", "alice", "C1")
-    assert [e.event_id for e in loaded2] == ["C1:100.2"]
+    assert [pe.event.event_id for pe in loaded2] == ["C1:100.2"]
+
+
+def test_list_pending_channels(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    event = ChatEvent(
+        event_id="C1:100.1",
+        channel_id="C1",
+        message_ts="100.1",
+        thread_ts="100.1",
+        author_id="U1",
+        text="hi",
+    )
+    assert store.list_pending_channels("alice") == []
+    store.upsert_pending_event("slack", "alice", "C1", event)
+    store.upsert_pending_event(
+        "slack",
+        "alice",
+        "C2",
+        ChatEvent(
+            event_id="C2:1",
+            channel_id="C2",
+            message_ts="1",
+            thread_ts="1",
+            author_id="U1",
+            text="hi",
+        ),
+    )
+    # Only the requested person's pending channels are listed.
+    store.upsert_pending_event("slack", "bob", "C9", event)
+
+    assert store.list_pending_channels("alice") == [("slack", "C1"), ("slack", "C2")]
+    assert store.list_pending_channels("bob") == [("slack", "C9")]

@@ -157,20 +157,24 @@ def start(
 
     edition = get_edition()
 
-    routine_commands = list(default_routine_commands)
-    if not routine_commands:
-        routine_commands = edition.get_default_routines()
-
-    start_scheduler = only_target in (None, "scheduler")
+    scheduler_sources_enabled = only_target in (None, "scheduler")
     start_events = only_target in (None, "events")
+    start_member_worker = scheduler_sources_enabled or start_events
+
+    routine_commands = list(default_routine_commands)
+    if scheduler_sources_enabled and not routine_commands:
+        routine_commands = edition.get_default_routines()
 
     scheduler = (
         TaskScheduler(
             edition.get_context(),
-            routine_commands,
+            routine_commands if scheduler_sources_enabled else [],
             consecutive_error_limit=max_consecutive_errors,
+            scheduled_source_enabled=scheduler_sources_enabled,
+            routine_source_enabled=scheduler_sources_enabled,
+            event_queue_source_enabled=start_events,
         )
-        if start_scheduler
+        if start_member_worker
         else None
     )
     event_runner = EventListenerRunner(edition.get_context()) if start_events else None
@@ -194,9 +198,8 @@ def start(
             event_runner.start()
         if scheduler is not None:
             scheduler.start()
-        elif event_runner is not None:
-            while event_runner.is_alive():
-                time.sleep(0.5)
+        if event_runner is not None:
+            _wait_for_event_runner(event_runner)
     except KeyboardInterrupt:
         _handle_signal(signal.SIGINT, None)  # type: ignore[arg-type]
     finally:
@@ -204,6 +207,11 @@ def start(
             event_runner.stop()
             event_runner.join(timeout=5.0)
         _remove_pidfile(pid_path)
+
+
+def _wait_for_event_runner(event_runner: EventListenerRunner) -> None:
+    while event_runner.is_alive():
+        time.sleep(1.0)
 
 
 @main.command()

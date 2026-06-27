@@ -48,18 +48,36 @@ class RuntimeLifecycleService:
         )
 
     def start(self, request: SchedulerStartRequest) -> RuntimeStatus:
-        for target in _selected_targets(request.only):
-            if target == "scheduler":
-                routine_commands = (
-                    request.routine_commands or self._scheduler.default_routines()
-                )
-                self._scheduler.start(
-                    routine_commands=routine_commands,
-                    max_consecutive_errors=request.max_consecutive_errors,
-                    routine_interval_minutes=request.routine_interval_minutes,
-                )
-            else:
+        sources = request.sources
+        scheduled_source_enabled = sources.scheduled
+        routine_source_enabled = sources.routine
+        event_queue_source_enabled = sources.event_queue
+        scheduler_was_running = self._scheduler.get_status().running
+        if (
+            scheduled_source_enabled
+            or routine_source_enabled
+            or event_queue_source_enabled
+        ):
+            routine_commands = (
+                (request.routine_commands or self._scheduler.default_routines())
+                if routine_source_enabled
+                else []
+            )
+            self._scheduler.start(
+                routine_commands=routine_commands,
+                max_consecutive_errors=request.max_consecutive_errors,
+                routine_interval_minutes=request.routine_interval_minutes,
+                scheduled_source_enabled=scheduled_source_enabled,
+                routine_source_enabled=routine_source_enabled,
+                event_queue_source_enabled=event_queue_source_enabled,
+            )
+        if event_queue_source_enabled:
+            try:
                 self._events.start()
+            except Exception:
+                if not scheduler_was_running:
+                    self._scheduler.stop()
+                raise
         return self.get_status()
 
     def stop(self) -> RuntimeStatus:
@@ -177,6 +195,9 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         routine_commands: list[str],
         max_consecutive_errors: int,
         routine_interval_minutes: int,
+        scheduled_source_enabled: bool = True,
+        routine_source_enabled: bool = True,
+        event_queue_source_enabled: bool = True,
     ) -> RuntimeUnitStatus:
         with self._lock:
             self._refresh_locked()
@@ -192,6 +213,9 @@ class SchedulerLifecycle(_RuntimeLifecycle):
                 consecutive_error_limit=max_consecutive_errors,
                 routine_interval_minutes=routine_interval_minutes,
                 service_run_id=self._service_run_id,
+                scheduled_source_enabled=scheduled_source_enabled,
+                routine_source_enabled=routine_source_enabled,
+                event_queue_source_enabled=event_queue_source_enabled,
             )
         except Exception as exc:
             self._mark_failed(exc)
@@ -211,6 +235,9 @@ class SchedulerLifecycle(_RuntimeLifecycle):
                     "routine_commands": list(routine_commands),
                     "max_consecutive_errors": max_consecutive_errors,
                     "routine_interval_minutes": routine_interval_minutes,
+                    "scheduled_source_enabled": scheduled_source_enabled,
+                    "routine_source_enabled": routine_source_enabled,
+                    "event_queue_source_enabled": event_queue_source_enabled,
                     **_runtime_summary(scheduler),
                 }
             )
@@ -356,14 +383,6 @@ class EventListenerLifecycle(_RuntimeLifecycle):
                 self._transition_locked("stopped", running=False)
         elif self._runner is not None:
             self._update_metadata_locked(_runtime_summary(self._runner))
-
-
-def _selected_targets(only: str | None) -> list[RuntimeTarget]:
-    if only == "scheduler":
-        return ["scheduler"]
-    if only == "events":
-        return ["events"]
-    return ["events", "scheduler"]
 
 
 def _timestamp() -> str:
