@@ -198,6 +198,8 @@ def start(
             event_runner.start()
         if scheduler is not None:
             scheduler.start()
+        if event_runner is not None:
+            _wait_for_event_runner(event_runner)
     except KeyboardInterrupt:
         _handle_signal(signal.SIGINT, None)  # type: ignore[arg-type]
     finally:
@@ -205,6 +207,11 @@ def start(
             event_runner.stop()
             event_runner.join(timeout=5.0)
         _remove_pidfile(pid_path)
+
+
+def _wait_for_event_runner(event_runner: EventListenerRunner) -> None:
+    while event_runner.is_alive():
+        time.sleep(1.0)
 
 
 @main.command()

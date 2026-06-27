@@ -269,7 +269,7 @@ class TaskScheduler:
         if task.done():
             return task.result()
         task.cancel()
-        with suppress(BaseException):
+        with suppress(asyncio.CancelledError, Exception):
             await task
         return False
 

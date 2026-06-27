@@ -356,7 +356,7 @@ class CliAgentBrain(Brain):
             if process is not None and process.returncode is None:
                 with suppress(ProcessLookupError):
                     process.kill()
-                with suppress(BaseException):
+                with suppress(asyncio.CancelledError, Exception):
                     # Shield so the reap completes even though our own task is
                     # being cancelled.
                     await asyncio.shield(process.wait())

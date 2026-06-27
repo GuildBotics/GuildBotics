@@ -190,6 +190,55 @@ def test_start_only_events(monkeypatch, tmp_path):
     assert created["events"].join_called >= 1
 
 
+def test_start_only_events_waits_for_listener_when_scheduler_has_no_workers(
+    monkeypatch, tmp_path
+):
+    created, handlers, call_order = _patch_start_dependencies(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    class _AliveEventListenerRunner(_FakeEventListenerRunner):
+        def __init__(self, context):
+            super().__init__(context)
+            self.alive = False
+
+        def start(self):
+            call_order.append("events.start")
+            self.start_called += 1
+            self.alive = True
+
+        def stop(self):
+            call_order.append("events.stop")
+            self.stop_called += 1
+            self.alive = False
+
+        def join(self, timeout=None):
+            call_order.append("events.join")
+            self.join_called += 1
+
+        def is_alive(self):
+            return self.alive
+
+    def _events_factory(context):
+        inst = _AliveEventListenerRunner(context)
+        created["events"] = inst
+        return inst
+
+    def _sleep(_seconds):
+        handlers[__import__("signal").SIGTERM](__import__("signal").SIGTERM, None)
+
+    monkeypatch.setattr("guildbotics.cli.EventListenerRunner", _events_factory)
+    monkeypatch.setattr("guildbotics.cli.time.sleep", _sleep)
+
+    result = runner.invoke(cli_main, ["start", "--only", "events"])
+
+    assert result.exit_code == 0, result.output
+    assert created["scheduler"].start_called == 1
+    assert created["events"].start_called == 1
+    assert created["events"].stop_called >= 1
+    assert "events.start" in call_order
+    assert "events.stop" in call_order
+
+
 def test_start_defaults_to_scheduler_and_events(monkeypatch, tmp_path):
     created, _handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
     runner = CliRunner()
