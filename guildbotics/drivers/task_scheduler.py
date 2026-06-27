@@ -149,78 +149,38 @@ class TaskScheduler:
                 )
 
                 if self.scheduled_source_enabled:
-                    # Run scheduled tasks
-                    for scheduled_task in scheduled_tasks:
-                        if self._stop_event.is_set():
-                            break
-                        if scheduled_task.should_run(start_time):
-                            with trace_scope(
-                                "scheduled",
-                                person_id=person.person_id,
-                                command=scheduled_task.command,
-                                attributes={"service_run_id": self.service_run_id},
-                            ):
-                                ok = self._run(
-                                    loop,
-                                    run_command(
-                                        context, scheduled_task.command, "scheduled"
-                                    ),
-                                )
-                            consecutive_errors, should_stop = (
-                                self._update_consecutive_errors(
-                                    ok,
-                                    source="scheduled",
-                                    consecutive_errors=consecutive_errors,
-                                )
-                            )
-                            if should_stop:
-                                return
-                        if self._stop_event.is_set():
-                            break
-                        self._sleep_interruptible(1)
+                    consecutive_errors, should_stop = self._process_scheduled_tasks(
+                        loop,
+                        context,
+                        person,
+                        scheduled_tasks,
+                        start_time,
+                        consecutive_errors,
+                    )
+                    if should_stop:
+                        return
 
                 # Check for tasks to work on
                 if self._stop_event.is_set():
                     break
 
-                routine_due = (
-                    next_routine_time is None or start_time >= next_routine_time
+                (
+                    routine_command_index,
+                    consecutive_errors,
+                    next_routine_time,
+                    should_stop,
+                ) = self._process_routine_tasks(
+                    loop,
+                    context,
+                    person,
+                    routine_commands,
+                    routine_command_index,
+                    next_routine_time,
+                    start_time,
+                    consecutive_errors,
                 )
-                routine_command = ""
-                if self.routine_source_enabled and routine_commands and routine_due:
-                    routine_command = routine_commands[
-                        routine_command_index % len(routine_commands)
-                    ]
-                    routine_command_index += 1
-
-                if routine_command and not self._stop_event.is_set():
-                    with trace_scope(
-                        "routine",
-                        person_id=person.person_id,
-                        command=routine_command,
-                        attributes={"service_run_id": self.service_run_id},
-                    ):
-                        ok = self._run(
-                            loop, run_command(context, routine_command, "routine")
-                        )
-                    next_routine_time = datetime.datetime.now() + datetime.timedelta(
-                        minutes=self.routine_interval_minutes
-                    )
-                    if not ok and not self._stop_event.is_set():
-                        consecutive_errors, should_stop = (
-                            self._update_consecutive_errors(
-                                ok,
-                                source="routine",
-                                consecutive_errors=consecutive_errors,
-                            )
-                        )
-                        if should_stop:
-                            return
-                    else:
-                        consecutive_errors, _ = self._update_consecutive_errors(
-                            ok, source="routine", consecutive_errors=consecutive_errors
-                        )
-                    self._sleep_interruptible(1)
+                if should_stop:
+                    return
 
                 # Wait out the rest of the minute while polling queued chat
                 # events on a short cadence, so chat stays responsive without
@@ -242,6 +202,131 @@ class TaskScheduler:
                 loop.run_until_complete(context.aclose())
             finally:
                 loop.close()
+
+    def _process_scheduled_tasks(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        context: Context,
+        person: Person,
+        scheduled_tasks: list[ScheduledCommand],
+        start_time: datetime.datetime,
+        consecutive_errors: int,
+    ) -> tuple[int, bool]:
+        """Check and execute scheduled tasks."""
+        for scheduled_task in scheduled_tasks:
+            if self._stop_event.is_set():
+                break
+            if scheduled_task.should_run(start_time):
+                with trace_scope(
+                    "scheduled",
+                    person_id=person.person_id,
+                    command=scheduled_task.command,
+                    attributes={"service_run_id": self.service_run_id},
+                ):
+                    ok = self._run(
+                        loop,
+                        run_command(context, scheduled_task.command, "scheduled"),
+                    )
+                consecutive_errors, should_stop = self._update_consecutive_errors(
+                    ok,
+                    source="scheduled",
+                    consecutive_errors=consecutive_errors,
+                )
+                if should_stop:
+                    return consecutive_errors, True
+            if self._stop_event.is_set():
+                break
+            self._sleep_interruptible(1)
+        return consecutive_errors, False
+
+    def _process_routine_tasks(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        context: Context,
+        person: Person,
+        routine_commands: list[str],
+        routine_command_index: int,
+        next_routine_time: datetime.datetime | None,
+        start_time: datetime.datetime,
+        consecutive_errors: int,
+    ) -> tuple[int, int, datetime.datetime | None, bool]:
+        """Check and execute routine tasks, routing ticket workflows through the selector."""
+        routine_due = next_routine_time is None or start_time >= next_routine_time
+        routine_command = ""
+        if self.routine_source_enabled and routine_commands and routine_due:
+            routine_command = routine_commands[
+                routine_command_index % len(routine_commands)
+            ]
+            routine_command_index += 1
+
+        if routine_command and not self._stop_event.is_set():
+            if routine_command == "workflows/ticket_driven_workflow":
+                ok = self._run(
+                    loop,
+                    self._run_routine_ticket_workflow(context, person, routine_command),
+                )
+            else:
+                with trace_scope(
+                    "routine",
+                    person_id=person.person_id,
+                    command=routine_command,
+                    attributes={"service_run_id": self.service_run_id},
+                ):
+                    ok = self._run(
+                        loop, run_command(context, routine_command, "routine")
+                    )
+            next_routine_time = datetime.datetime.now() + datetime.timedelta(
+                minutes=self.routine_interval_minutes
+            )
+            if not ok and self._stop_event.is_set():
+                pass
+            else:
+                consecutive_errors, should_stop = self._update_consecutive_errors(
+                    ok,
+                    source="routine",
+                    consecutive_errors=consecutive_errors,
+                )
+                if should_stop:
+                    return (
+                        routine_command_index,
+                        consecutive_errors,
+                        next_routine_time,
+                        True,
+                    )
+            self._sleep_interruptible(1)
+
+        return routine_command_index, consecutive_errors, next_routine_time, False
+
+    async def _run_routine_ticket_workflow(
+        self, context: Context, person: Person, command: str
+    ) -> bool:
+        """Run routine ticket workflow via selector and dispatcher."""
+        from guildbotics.drivers.ticket_selector import TicketSelector
+        from guildbotics.drivers.utils import run_with_logging
+        from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
+        from guildbotics.observability import span_scope
+
+        async def _action() -> None:
+            with span_scope("routine_select"):
+                selector = TicketSelector(context)
+                invocation = await selector.select(person)
+
+            if invocation is None:
+                context.logger.info(
+                    f"No active ticket task found for person '{person.person_id}'."
+                )
+                return
+
+            dispatcher = WorkflowDispatcher(context, service_run_id=self.service_run_id)
+            await dispatcher.dispatch(invocation, person)
+
+        with trace_scope(
+            "routine",
+            person_id=person.person_id,
+            command=command,
+            attributes={"service_run_id": self.service_run_id},
+        ):
+            return await run_with_logging(context, command, "routine", _action)
 
     def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep in small steps so the stop event can interrupt waits."""

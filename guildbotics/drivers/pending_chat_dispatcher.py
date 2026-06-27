@@ -2,19 +2,16 @@ from __future__ import annotations
 
 import threading
 
-from guildbotics.drivers.command_runner import CommandRunner
+from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
     PendingChatEvent,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.observability import trace_scope
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.event_listener import (
-    INCOMING_CHAT_EVENT_KEY,
-    IncomingChatEvent,
-)
+from guildbotics.runtime.event_listener import IncomingChatEvent
+from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 
 
 class PendingChatDispatcher:
@@ -126,22 +123,15 @@ class PendingChatDispatcher:
             event=pending.event,
             chat_participation=pending.chat_participation,
         )
-        with trace_scope(
-            "event_listener",
-            person_id=person.person_id,
+        invocation = WorkflowInvocation(
             command=self._workflow_command,
-            attributes={
-                "service_run_id": self._service_run_id,
-                "event.provider": service,
-                "slack.channel": channel_id,
-                "slack.thread_ts": pending.event.thread_ts,
-                "slack.ts": pending.event.message_ts,
-                "event_id": pending.event.event_id,
-            },
-        ):
-            context = self._context.clone_for(person)
-            context.shared_state[INCOMING_CHAT_EVENT_KEY] = incoming.to_shared_state()
-            try:
-                await CommandRunner(context, self._workflow_command, []).run()
-            finally:
-                await context.aclose()
+            person_id=person.person_id,
+            source="event_queue",
+            trigger_type="chat",
+            payload=incoming.to_shared_state(),
+            idempotency_key=f"{service}:message:{channel_id}:{pending.event.event_id}",
+        )
+        dispatcher = WorkflowDispatcher(
+            self._context, service_run_id=self._service_run_id
+        )
+        await dispatcher.dispatch(invocation, person)

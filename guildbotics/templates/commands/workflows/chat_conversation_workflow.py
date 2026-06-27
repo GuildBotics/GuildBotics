@@ -728,6 +728,24 @@ def _read_incoming_event_from_context(context: Any) -> IncomingChatEvent | None:
     shared_state = getattr(context, "shared_state", None)
     if not isinstance(shared_state, dict):
         return None
+
+    # Try reading from WORKFLOW_INVOCATION_KEY
+    from guildbotics.runtime.workflow_invocation import (
+        WORKFLOW_INVOCATION_KEY,
+        WorkflowInvocation,
+    )
+
+    invocation = shared_state.get(WORKFLOW_INVOCATION_KEY)
+    if invocation is not None:
+        if isinstance(invocation, dict) and invocation.get("trigger_type") == "chat":
+            return IncomingChatEvent.from_shared_state(invocation.get("payload"))
+        elif (
+            isinstance(invocation, WorkflowInvocation)
+            and invocation.trigger_type == "chat"
+        ):
+            return IncomingChatEvent.from_shared_state(invocation.payload)
+
+    # Fallback to INCOMING_CHAT_EVENT_KEY
     return IncomingChatEvent.from_shared_state(
         shared_state.get(INCOMING_CHAT_EVENT_KEY)
     )

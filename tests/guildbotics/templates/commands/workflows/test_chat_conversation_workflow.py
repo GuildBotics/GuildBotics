@@ -722,3 +722,53 @@ async def test_obvious_self_message_is_marked_processed_without_agent(tmp_path):
     assert ctx.invocations == []
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E_SELF"]
+
+
+@pytest.mark.asyncio
+async def test_chat_conversation_workflow_reads_from_invocation(tmp_path):
+    from guildbotics.runtime.workflow_invocation import (
+        WORKFLOW_INVOCATION_KEY,
+        WorkflowInvocation,
+    )
+
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("reply")
+
+    incoming = IncomingChatEvent(
+        service_name="slack",
+        channel_id="C1",
+        event=ChatEvent(
+            event_id="E_INVOCATION",
+            channel_id="C1",
+            message_ts="100.1",
+            thread_ts="100.1",
+            author_id="U_BOB",
+            text="hello bot",
+            mentions=["U_ALICE"],
+        ),
+    )
+
+    inv = WorkflowInvocation(
+        command="workflows/chat_conversation_workflow",
+        person_id="alice",
+        source="event_queue",
+        trigger_type="chat",
+        payload=incoming.to_shared_state(),
+    )
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY] = inv
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert len(ctx.invocations) == 1
+    assert ctx.invocations[0][0] == "functions/handle_chat_event"
+
+    import json
+
+    latest_msg = json.loads(ctx.invocations[0][1].get("latest_message", "{}"))
+    assert latest_msg.get("content") == "hello bot"
+
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert "E_INVOCATION" in channel_state.processed_event_ids
