@@ -690,16 +690,12 @@ class SimplePersonSetupService:
         env_prefix = self._person_env_prefix(person_id)
 
         avatar_timestamp = 0
-        from guildbotics.app_api.avatar import SUPPORTED_EXTENSIONS
+        from guildbotics.app_api.avatar import find_avatar_file
 
-        member_dir = config_dir / "team" / "members" / person_id
-        if member_dir.exists():
-            for ext in SUPPORTED_EXTENSIONS:
-                avatar_path = member_dir / f"avatar{ext}"
-                if avatar_path.exists() and avatar_path.is_file():
-                    with contextlib.suppress(Exception):
-                        avatar_timestamp = int(avatar_path.stat().st_mtime)
-                    break
+        avatar_path = find_avatar_file(config_dir, person_id)
+        if avatar_path is not None:
+            with contextlib.suppress(Exception):
+                avatar_timestamp = int(avatar_path.stat().st_mtime)
 
         return PersonConfigSnapshot(
             person_id=str(person_data.get("person_id", person_id)),

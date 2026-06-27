@@ -15,6 +15,17 @@ def _get_member_dir(config_dir: Path, person_id: str) -> Path:
     return config_dir / "team" / "members" / person_id
 
 
+def find_avatar_file(config_dir: Path, person_id: str) -> Path | None:
+    member_dir = _get_member_dir(config_dir, person_id)
+    if not member_dir.exists():
+        return None
+    for ext in SUPPORTED_EXTENSIONS:
+        avatar_path = member_dir / f"avatar{ext}"
+        if avatar_path.is_file():
+            return avatar_path
+    return None
+
+
 def clean_existing_avatars(member_dir: Path) -> None:
     if not member_dir.exists():
         return

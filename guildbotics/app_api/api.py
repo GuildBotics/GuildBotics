@@ -695,16 +695,13 @@ def create_app(
                 "Project config was not found.",
                 status_code=400,
             )
-        from guildbotics.app_api.avatar import SUPPORTED_EXTENSIONS
+        from guildbotics.app_api.avatar import find_avatar_file
 
-        member_dir = config_dir / "team" / "members" / person_id
-        if member_dir.exists():
-            for ext in SUPPORTED_EXTENSIONS:
-                avatar_path = member_dir / f"avatar{ext}"
-                if avatar_path.exists() and avatar_path.is_file():
-                    resp = FileResponse(avatar_path)
-                    resp.headers["Cache-Control"] = "no-cache"
-                    return resp
+        avatar_path = find_avatar_file(config_dir, person_id)
+        if avatar_path is not None:
+            resp = FileResponse(avatar_path)
+            resp.headers["Cache-Control"] = "no-cache"
+            return resp
         raise AppApiError("avatar_not_found", "Avatar file not found.", status_code=404)
 
     @app.post(
