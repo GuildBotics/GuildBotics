@@ -33,6 +33,14 @@ If the user asks to verify credentials or include a credential check, run:
 
 This credential check is allowed: it performs a read-only GuildBotics member credential probe and does not perform GitHub or git writes.
 
+## Definition of Done (DOD)
+
+Before sending your final interactive reply to the user, ensure all of the following steps are completed:
+1. **Verification**: When code changes are made, run all relevant automated tests, linter, and static analysis checks to ensure correctness.
+2. **Staging & Commit**: When code changes are meant to be published, stage your changes (`git add`) and commit, push, or publish using the member capabilities (such as `guildbotics member git commit`, `guildbotics member git push`, or `guildbotics member git publish`).
+3. **Durable Actions**: Perform requested external writes (create PRs, issue comments, or Slack replies) if applicable.
+4. **Memory Preservation**: When a PR or significant changes are published, record or update a memory document with the work details (PR URL, branch name, commit SHA, test results). For other tasks, follow the memory reference guidelines (record durable reusable lessons, touch helped memories, or update incorrect memories).
+
 ## Active Member Session Rules
 
 After running `guildbotics member context --person <person_id>`, treat that member as the active GuildBotics member for the rest of the conversation/session.
@@ -53,6 +61,12 @@ Do not switch to another member unless the user explicitly asks to switch member
 ## Memory Flow
 
 Follow the memory rules in the `capabilities` section returned by `member context`; that section is the source of truth for recall/get/touch/update/record and source-vs-current-state handling.
+
+### Memory Record/Update Guidelines (DOD Requirement)
+Maintain memory when appropriate to preserve work context and lessons:
+- **PR Creation/Update**: After a PR is created or updated, record a durable work context using `guildbotics member memory record` with `--pr <pr_url>` (and `--ticket <issue_url>` if resolving a ticket, or `--thread <thread_url>` when the work originated from a chat thread) including the branch, commit SHA, verification result, and remaining follow-up. Do this before the interactive final reply.
+- **Slack Interaction**: Follow the general memory rules for chat threads: check for existing relevant memory, touch helped memories, and record only when a new durable reusable lesson is learned. Do not create raw duplicates of chat discussions.
+- **Technical Lessons**: Record separate technical lessons as reusable memory documents only when they are valuable beyond a single PR or issue.
 
 Interactive sessions have two extra obligations:
 
