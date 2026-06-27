@@ -113,7 +113,7 @@ those files over.
 # Run a custom command
 echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 
-# Or start scheduler (runs default workflow: ticket_driven_workflow)
+# Or start the member workers and event listener
 ~/.guildbotics/bin/guildbotics start
 ```
 
@@ -266,7 +266,7 @@ Example:
 echo "Hello" | guildbotics run translate English Japanese
 ```
 
-**Automated execution with scheduler**:
+**Automated execution with member workers**:
 
 ```bash
 guildbotics start [routine_commands...]
@@ -274,10 +274,10 @@ guildbotics start [routine_commands...]
 
 By default, this starts:
 
-- Task scheduler (routine commands / scheduled tasks)
+- Member workers (routine commands / scheduled tasks / queued events)
 - Event listener runner (event-driven receivers such as Slack Socket Mode)
 
-If no command is specified, the scheduler runs `workflows/ticket_driven_workflow` as the default routine command.
+If no command is specified, the member workers run `workflows/ticket_driven_workflow` as the default routine command.
 
 You can also limit startup to one side:
 
@@ -286,7 +286,7 @@ guildbotics start --only scheduler
 guildbotics start --only events
 ```
 
-To stop the running scheduler:
+To stop the running service:
 
 ```bash
 guildbotics stop [--timeout <seconds>] [--force]
@@ -531,7 +531,7 @@ In the Slack chat workflow, channels configured in `message_channels` of `person
 
 Scheduled command output posting remains separate: use `task_schedules` + `workflows/chat_post_command` for scheduled posts.
 
-Incoming chat handling is performed by the event listener runner started with `guildbotics start`. If you start only the scheduler with `--only scheduler`, incoming chat events are not received.
+Incoming chat events are received by the event listener runner started with `guildbotics start`, then handled serially by each member worker's event queue source. If you start only scheduled/routine work with `--only scheduler`, incoming chat events are not received. If you start only events with `--only events`, scheduled and routine commands are disabled, but member workers still drain queued chat events.
 
 For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent work directory. By default, that directory is `<workspace>/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through evidence recorded by `guildbotics member chat complete`; natural-language agent stdout alone is not treated as proof that Slack was updated.
 You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the CLI agent.

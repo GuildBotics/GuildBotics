@@ -326,7 +326,7 @@ class AppRuntime:
         return output
 
     def start_scheduler(self, request: SchedulerStartRequest) -> RuntimeStatus:
-        if request.only != "events":
+        if request.sources.routine:
             routine_commands = (
                 request.routine_commands or get_edition().get_default_routines()
             )

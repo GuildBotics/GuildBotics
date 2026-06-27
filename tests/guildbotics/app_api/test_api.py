@@ -176,9 +176,15 @@ class RuntimeStub:
         return _runtime_status()
 
     def start_scheduler(self, request) -> RuntimeStatus:
-        if request.only == "events":
-            return _runtime_status(events_state="running")
-        return _runtime_status(scheduler_state="running", events_state="running")
+        scheduler_running = (
+            request.sources.scheduled
+            or request.sources.routine
+            or request.sources.event_queue
+        )
+        return _runtime_status(
+            scheduler_state="running" if scheduler_running else "stopped",
+            events_state="running" if request.sources.event_queue else "stopped",
+        )
 
     def get_prompt_trace_status(
         self, limit: int = 20, read_path: str | None = None
@@ -376,7 +382,7 @@ def test_app_runtime_command_options_describe_workspace_commands(
             [
                 "from guildbotics.integrations.ticket_manager import TicketManager",
                 "",
-                "async def main(context, title, *, dry_run='false'):",
+                "async def main(context, title, *, dry_run='False'):",
                 '    """Run a demo workflow."""',
                 "    return title",
             ]
@@ -694,19 +700,21 @@ def test_command_error_uses_stable_error_shape(tmp_path: Path) -> None:
     }
 
 
-def test_scheduler_start_only_events_uses_runtime(tmp_path: Path) -> None:
+def test_scheduler_start_event_queue_source_uses_runtime(tmp_path: Path) -> None:
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
 
     with TestClient(app) as client:
         response = client.post(
             "/scheduler/start",
             headers={"X-GuildBotics-Session-Token": "secret"},
-            json={"only": "events"},
+            json={
+                "sources": {"scheduled": False, "routine": False, "event_queue": True}
+            },
         )
 
     assert response.status_code == HTTP_OK
     assert response.json()["events"]["state"] == "running"
-    assert response.json()["scheduler"]["state"] == "stopped"
+    assert response.json()["scheduler"]["state"] == "running"
 
 
 def test_prompt_trace_status_endpoint_uses_runtime(tmp_path: Path) -> None:
@@ -753,7 +761,9 @@ def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
         response = client.post(
             "/scheduler/start",
             headers={"X-GuildBotics-Session-Token": "secret"},
-            json={"only": "invalid-value"},
+            json={
+                "sources": {"scheduled": False, "routine": False, "event_queue": False}
+            },
         )
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
@@ -1134,7 +1144,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
             [
                 "person_id: alice",
                 "name: Alice Bot",
-                "is_active: true",
+                "is_active: True",
                 "person_type: machine_user",
                 "account_info:",
                 "  github_username: alice",
@@ -1153,7 +1163,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 "  - name: C012345",
                 "    service: slack",
                 "    chat:",
-                "      enabled: true",
+                "      enabled: True",
                 "      participation: social",
             ]
         )
@@ -1472,11 +1482,17 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             consecutive_error_limit: int,
             routine_interval_minutes: int,
             service_run_id: str | None = None,
+            scheduled_source_enabled: bool = True,
+            routine_source_enabled: bool = True,
+            event_queue_source_enabled: bool = True,
         ) -> None:
             self.shutdown_calls = 0
             self.routine_commands = routine_commands
             self.consecutive_error_limit = consecutive_error_limit
             self.routine_interval_minutes = routine_interval_minutes
+            self.scheduled_source_enabled = scheduled_source_enabled
+            self.routine_source_enabled = routine_source_enabled
+            self.event_queue_source_enabled = event_queue_source_enabled
             BlockingScheduler.instances.append(self)
 
         def start(self) -> None:
@@ -1499,7 +1515,11 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
 
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=default_stop_timeout)
 
-    first = runtime.start_scheduler(SchedulerStartRequest(only="scheduler"))
+    first = runtime.start_scheduler(
+        SchedulerStartRequest(
+            sources={"scheduled": True, "routine": True, "event_queue": False}
+        )
+    )
     assert first.scheduler.state == "running"
     assert first.scheduler.routine_commands == ["routine"]
     assert first.scheduler.max_consecutive_errors == DEFAULT_MAX_CONSECUTIVE_ERRORS
@@ -1510,7 +1530,11 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
     )
     assert started.wait(THREAD_WAIT_SECONDS)
 
-    second = runtime.start_scheduler(SchedulerStartRequest(only="scheduler"))
+    second = runtime.start_scheduler(
+        SchedulerStartRequest(
+            sources={"scheduled": True, "routine": True, "event_queue": False}
+        )
+    )
     assert second.scheduler.state == "running"
     assert len(BlockingScheduler.instances) == 1
 
@@ -1543,6 +1567,9 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
             consecutive_error_limit: int,
             routine_interval_minutes: int,
             service_run_id: str | None = None,
+            scheduled_source_enabled: bool = True,
+            routine_source_enabled: bool = True,
+            event_queue_source_enabled: bool = True,
         ) -> None:
             self.shutdown_timeout: float | None = None
 
@@ -1564,7 +1591,11 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
 
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=0.01)
 
-    first = runtime.start_scheduler(SchedulerStartRequest(only="scheduler"))
+    first = runtime.start_scheduler(
+        SchedulerStartRequest(
+            sources={"scheduled": True, "routine": True, "event_queue": False}
+        )
+    )
     assert first.scheduler.state == "running"
     assert started.wait(THREAD_WAIT_SECONDS)
 
@@ -1604,9 +1635,43 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
         def is_alive(self) -> bool:
             return self.alive
 
+    scheduler_release = threading.Event()
+
+    class RunningScheduler:
+        instances: ClassVar[list["RunningScheduler"]] = []
+
+        def __init__(
+            self,
+            context: object,
+            routine_commands: list[str],
+            consecutive_error_limit: int,
+            routine_interval_minutes: int,
+            service_run_id: str | None = None,
+            scheduled_source_enabled: bool = True,
+            routine_source_enabled: bool = True,
+            event_queue_source_enabled: bool = True,
+        ) -> None:
+            self.routine_commands = routine_commands
+            self.scheduled_source_enabled = scheduled_source_enabled
+            self.routine_source_enabled = routine_source_enabled
+            self.event_queue_source_enabled = event_queue_source_enabled
+            self.shutdown_calls = 0
+            RunningScheduler.instances.append(self)
+
+        def start(self) -> None:
+            scheduler_release.wait(THREAD_WAIT_SECONDS)
+
+        def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
+            self.shutdown_calls += 1
+            scheduler_release.set()
+
     monkeypatch.setattr(
         "guildbotics.app_api.runtime.get_edition",
         lambda: EditionStub(),
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.lifecycle.TaskScheduler",
+        RunningScheduler,
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.EventListenerRunner",
@@ -1615,19 +1680,38 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
 
     runtime = AppRuntime(EventBus())
 
-    first = runtime.start_scheduler(SchedulerStartRequest(only="events"))
+    first = runtime.start_scheduler(
+        SchedulerStartRequest(
+            sources={"scheduled": False, "routine": False, "event_queue": True}
+        )
+    )
+    assert first.scheduler.state == "running"
     assert first.events.state == "running"
+    assert RunningScheduler.instances[0].routine_commands == []
+    assert RunningScheduler.instances[0].scheduled_source_enabled is False
+    assert RunningScheduler.instances[0].routine_source_enabled is False
+    assert RunningScheduler.instances[0].event_queue_source_enabled is True
 
-    second = runtime.start_scheduler(SchedulerStartRequest(only="events"))
+    second = runtime.start_scheduler(
+        SchedulerStartRequest(
+            sources={"scheduled": False, "routine": False, "event_queue": True}
+        )
+    )
+    assert second.scheduler.state == "running"
     assert second.events.state == "running"
     assert len(RunningEventListener.instances) == 1
+    assert len(RunningScheduler.instances) == 1
 
     stopped = runtime.stop_scheduler()
+    assert stopped.scheduler.state == "stopped"
     assert stopped.events.state == "stopped"
+    assert RunningScheduler.instances[0].shutdown_calls == 1
     assert RunningEventListener.instances[0].stop_calls == 1
 
     stopped_again = runtime.stop_scheduler()
+    assert stopped_again.scheduler.state == "stopped"
     assert stopped_again.events.state == "stopped"
+    assert RunningScheduler.instances[0].shutdown_calls == 1
     assert RunningEventListener.instances[0].stop_calls == 1
 
 
@@ -1647,10 +1731,16 @@ def test_app_runtime_marks_event_listener_failed_on_start_error(monkeypatch) -> 
     runtime = AppRuntime(EventBus())
 
     with pytest.raises(AppApiError) as exc_info:
-        runtime.start_scheduler(SchedulerStartRequest(only="events"))
+        runtime.start_scheduler(
+            SchedulerStartRequest(
+                sources={"scheduled": False, "routine": False, "event_queue": True}
+            )
+        )
 
     assert exc_info.value.code == "config_not_found"
-    assert runtime.get_scheduler_status().events.state == "failed"
+    status = runtime.get_scheduler_status()
+    assert status.scheduler.state == "failed"
+    assert status.events.state == "stopped"
 
 
 def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) -> None:
@@ -1680,9 +1770,35 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
         def is_alive(self) -> bool:
             return self.alive
 
+    scheduler_release = threading.Event()
+
+    class RunningScheduler:
+        def __init__(
+            self,
+            context: object,
+            routine_commands: list[str],
+            consecutive_error_limit: int,
+            routine_interval_minutes: int,
+            service_run_id: str | None = None,
+            scheduled_source_enabled: bool = True,
+            routine_source_enabled: bool = True,
+            event_queue_source_enabled: bool = True,
+        ) -> None:
+            return
+
+        def start(self) -> None:
+            scheduler_release.wait(THREAD_WAIT_SECONDS)
+
+        def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
+            scheduler_release.set()
+
     monkeypatch.setattr(
         "guildbotics.app_api.runtime.get_edition",
         lambda: EditionStub(),
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.lifecycle.TaskScheduler",
+        RunningScheduler,
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.EventListenerRunner",
@@ -1691,10 +1807,16 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
 
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=0.01)
 
-    started = runtime.start_scheduler(SchedulerStartRequest(only="events"))
+    started = runtime.start_scheduler(
+        SchedulerStartRequest(
+            sources={"scheduled": False, "routine": False, "event_queue": True}
+        )
+    )
+    assert started.scheduler.state == "running"
     assert started.events.state == "running"
 
     stopped = runtime.stop_scheduler()
+    assert stopped.scheduler.state == "stopped"
     assert stopped.events.state == "failed"
     assert stopped.events.running is True
     assert stopped.events.error == "Event listener runner did not stop before timeout."
@@ -2215,18 +2337,18 @@ def test_config_intelligences_update_maps_setup_service_error(
 # --- scheduler -----------------------------------------------------------
 
 
-def test_scheduler_start_only_scheduler_endpoint(tmp_path: Path) -> None:
+def test_scheduler_start_scheduled_and_routine_sources_endpoint(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
     response = client.post(
         "/scheduler/start",
         headers=AUTH_HEADERS,
-        json={"only": "scheduler"},
+        json={"sources": {"scheduled": True, "routine": True, "event_queue": False}},
     )
 
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "running"
-    assert response.json()["events"]["state"] == "running"
+    assert response.json()["events"]["state"] == "stopped"
 
 
 def test_scheduler_start_both_endpoint(tmp_path: Path) -> None:

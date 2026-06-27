@@ -211,7 +211,7 @@ def test_command_options_extract_python_signature_arguments(
         config_dir / "commands/run_job.py",
         "\n".join(
             [
-                "async def main(context, title, count='3', *, dry_run='false'):",
+                "async def main(context, title, count='3', *, dry_run='False'):",
                 '    """Run a job."""',
                 "    return title",
             ]
@@ -233,7 +233,7 @@ def test_command_options_extract_python_signature_arguments(
     ] == [
         ("title", "positional", True, ""),
         ("count", "positional", False, "3"),
-        ("dry_run", "keyword", False, "false"),
+        ("dry_run", "keyword", False, "False"),
     ]
 
 
@@ -766,6 +766,10 @@ def test_start_scheduler_skips_routine_check_for_events_only(
     monkeypatch.setattr(runtime, "is_github_integration_enabled", lambda: False)
     monkeypatch.setattr(runtime._lifecycle, "start", lambda request: "events-status")
 
-    result = runtime.start_scheduler(SchedulerStartRequest(only="events"))
+    result = runtime.start_scheduler(
+        SchedulerStartRequest(
+            sources={"scheduled": False, "routine": False, "event_queue": True}
+        )
+    )
 
     assert result == "events-status"

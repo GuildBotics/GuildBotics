@@ -912,15 +912,17 @@ describe("service preferences persistence", () => {
 
   it("round-trips saved preferences", () => {
     saveServicePreferences({
-      schedulerEnabled: false,
-      eventsEnabled: true,
+      scheduledSourceEnabled: false,
+      routineSourceEnabled: true,
+      eventQueueSourceEnabled: true,
       selectedRoutine: "workflows/ticket_driven_workflow",
       routineIntervalMinutes: 25,
       maxConsecutiveErrors: 7,
     });
     expect(loadServicePreferences()).toEqual({
-      schedulerEnabled: false,
-      eventsEnabled: true,
+      scheduledSourceEnabled: false,
+      routineSourceEnabled: true,
+      eventQueueSourceEnabled: true,
       selectedRoutine: "workflows/ticket_driven_workflow",
       routineIntervalMinutes: 25,
       maxConsecutiveErrors: 7,
@@ -934,7 +936,8 @@ describe("service preferences persistence", () => {
     );
     expect(loadServicePreferences()).toEqual({
       ...DEFAULT_SERVICE_PREFERENCES,
-      schedulerEnabled: false,
+      scheduledSourceEnabled: false,
+      routineSourceEnabled: false,
     });
   });
 
@@ -986,6 +989,9 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     routine_interval_minutes: null,
     active_member_count: 1,
     worker_count: 0,
+    scheduled_source_enabled: null,
+    routine_source_enabled: null,
+    event_queue_source_enabled: null,
     subscription_count: 0,
     listener_count: 0,
     cycle_count: 0,

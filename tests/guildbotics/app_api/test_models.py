@@ -97,22 +97,28 @@ def test_task_schedule_requires_command() -> None:
 
 def test_scheduler_start_request_defaults() -> None:
     request = SchedulerStartRequest()
-    assert request.only is None
+    assert request.sources.scheduled is True
+    assert request.sources.routine is True
+    assert request.sources.event_queue is True
     assert request.routine_commands == []
     assert request.max_consecutive_errors == DEFAULT_MAX_CONSECUTIVE_ERRORS
     assert request.routine_interval_minutes == DEFAULT_ROUTINE_INTERVAL_MINUTES
 
 
-@pytest.mark.parametrize("only", ["scheduler", "events"])
-def test_scheduler_start_request_accepts_known_only_values(only: str) -> None:
-    request = SchedulerStartRequest(only=only)
-    assert request.only == only
+def test_scheduler_start_request_accepts_source_selection() -> None:
+    request = SchedulerStartRequest(
+        sources={"scheduled": False, "routine": False, "event_queue": True}
+    )
+    assert request.sources.scheduled is False
+    assert request.sources.routine is False
+    assert request.sources.event_queue is True
 
 
-@pytest.mark.parametrize("only", ["both", "scheduler ", "Scheduler", "log"])
-def test_scheduler_start_request_rejects_unknown_only_values(only: str) -> None:
+def test_scheduler_start_request_rejects_empty_source_selection() -> None:
     with pytest.raises(ValidationError):
-        SchedulerStartRequest(only=only)
+        SchedulerStartRequest(
+            sources={"scheduled": False, "routine": False, "event_queue": False}
+        )
 
 
 @pytest.mark.parametrize("value", [0, -1, -100])

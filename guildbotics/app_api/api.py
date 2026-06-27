@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any, cast
 
 from fastapi import Depends, FastAPI, Header, Query, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -148,7 +149,7 @@ def create_app(
             422,
             "validation_error",
             "Request validation failed.",
-            {"errors": exc.errors()},
+            {"errors": jsonable_encoder(exc.errors())},
         )
 
     def require_token(

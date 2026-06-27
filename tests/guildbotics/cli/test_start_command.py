@@ -19,10 +19,23 @@ class _FakeEdition:
 
 
 class _FakeScheduler:
-    def __init__(self, context, routine_commands, consecutive_error_limit):
+    def __init__(
+        self,
+        context,
+        routine_commands,
+        consecutive_error_limit,
+        routine_interval_minutes=10,
+        scheduled_source_enabled=True,
+        routine_source_enabled=True,
+        event_queue_source_enabled=True,
+    ):
         self.context = context
         self.routine_commands = list(routine_commands)
         self.consecutive_error_limit = consecutive_error_limit
+        self.routine_interval_minutes = routine_interval_minutes
+        self.scheduled_source_enabled = scheduled_source_enabled
+        self.routine_source_enabled = routine_source_enabled
+        self.event_queue_source_enabled = event_queue_source_enabled
         self.start_called = 0
         self.shutdown_called = 0
 
@@ -153,6 +166,9 @@ def test_start_only_scheduler(monkeypatch, tmp_path):
     assert "scheduler" in created
     assert "events" not in created
     assert created["scheduler"].start_called == 1
+    assert created["scheduler"].scheduled_source_enabled is True
+    assert created["scheduler"].routine_source_enabled is True
+    assert created["scheduler"].event_queue_source_enabled is False
 
 
 def test_start_only_events(monkeypatch, tmp_path):
@@ -163,7 +179,12 @@ def test_start_only_events(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "events" in created
-    assert "scheduler" not in created
+    assert "scheduler" in created
+    assert created["scheduler"].routine_commands == []
+    assert created["scheduler"].scheduled_source_enabled is False
+    assert created["scheduler"].routine_source_enabled is False
+    assert created["scheduler"].event_queue_source_enabled is True
+    assert created["scheduler"].start_called == 1
     assert created["events"].start_called == 1
     assert created["events"].stop_called >= 1
     assert created["events"].join_called >= 1
@@ -196,9 +217,25 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
     original_factory = None
 
     # Replace TaskScheduler factory again to inject the special start behavior.
-    def _task_scheduler_factory(context, routine_commands, consecutive_error_limit):
+    def _task_scheduler_factory(
+        context,
+        routine_commands,
+        consecutive_error_limit,
+        routine_interval_minutes=10,
+        scheduled_source_enabled=True,
+        routine_source_enabled=True,
+        event_queue_source_enabled=True,
+    ):
         nonlocal original_factory
-        inst = _FakeScheduler(context, routine_commands, consecutive_error_limit)
+        inst = _FakeScheduler(
+            context,
+            routine_commands,
+            consecutive_error_limit,
+            routine_interval_minutes,
+            scheduled_source_enabled,
+            routine_source_enabled,
+            event_queue_source_enabled,
+        )
         original_factory = inst
         created["scheduler"] = inst
 

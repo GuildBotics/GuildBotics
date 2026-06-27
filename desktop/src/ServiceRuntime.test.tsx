@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 
 describe("Service Runtime screen", () => {
-  it("sends only=scheduler when only the scheduler target is enabled", async () => {
+  it("sends source selection when only scheduled and routine sources are enabled", async () => {
     const user = userEvent.setup();
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
@@ -94,7 +94,9 @@ describe("Service Runtime screen", () => {
     await user.click(screen.getByRole("button", { name: t("overview.start") }));
 
     await waitFor(() => expect(startSchedulerMock).toHaveBeenCalledTimes(1));
-    expect(startSchedulerMock.mock.calls[0][0]).toMatchObject({ only: "scheduler" });
+    expect(startSchedulerMock.mock.calls[0][0]).toMatchObject({
+      sources: { scheduled: true, routine: true, event_queue: false },
+    });
   });
 
   it("includes the selected routine in routine_commands when scheduler is enabled", async () => {
@@ -123,17 +125,20 @@ describe("Service Runtime screen", () => {
     expect(updateRuntimeDebugMock.mock.calls[0][0]).toEqual({ enabled: true });
   });
 
-  it("omits routine_commands and sends only=events when events-only is selected", async () => {
+  it("omits routine_commands and sends only the event queue source when event-only is selected", async () => {
     const user = userEvent.setup();
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    await user.click(schedulerSwitch());
+    await user.click(routineSourceSwitch());
+    await user.click(scheduledSourceSwitch());
     await user.click(screen.getByRole("button", { name: t("overview.start") }));
 
     await waitFor(() => expect(startSchedulerMock).toHaveBeenCalledTimes(1));
     const body = startSchedulerMock.mock.calls[0][0];
-    expect(body).toMatchObject({ only: "events" });
+    expect(body).toMatchObject({
+      sources: { scheduled: false, routine: false, event_queue: true },
+    });
     expect(body).not.toHaveProperty("routine_commands");
   });
 
@@ -142,7 +147,8 @@ describe("Service Runtime screen", () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    await user.click(schedulerSwitch());
+    await user.click(routineSourceSwitch());
+    await user.click(scheduledSourceSwitch());
     await user.click(eventsSwitch());
 
     expect(screen.getByRole("button", { name: t("overview.start") })).toBeDisabled();
@@ -185,20 +191,23 @@ describe("Service Runtime screen", () => {
     });
   });
 
-  it("remembers the run-target toggles across remounts", async () => {
+  it("remembers the source toggles across remounts", async () => {
     const user = userEvent.setup();
     const first = renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
     await user.click(eventsSwitch());
+    await user.click(scheduledSourceSwitch());
     await waitFor(() => expect(eventsSwitch()).not.toBeChecked());
+    await waitFor(() => expect(scheduledSourceSwitch()).not.toBeChecked());
 
     first.unmount();
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
     await waitFor(() => expect(eventsSwitch()).not.toBeChecked());
-    expect(schedulerSwitch()).toBeChecked();
+    await waitFor(() => expect(scheduledSourceSwitch()).not.toBeChecked());
+    expect(routineSourceSwitch()).toBeChecked();
   });
 
   it("blocks start when the selected routine requires GitHub but GitHub is disabled", async () => {
@@ -219,7 +228,12 @@ describe("Service Runtime screen", () => {
   it("renders the running state and offers a stop action", async () => {
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
-        scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
+        scheduler: runtimeUnit("scheduler", {
+          state: "running",
+          running: true,
+          scheduled_source_enabled: true,
+          routine_source_enabled: true,
+        }),
       }),
     );
     renderApp("/service");
@@ -227,6 +241,40 @@ describe("Service Runtime screen", () => {
 
     await screen.findByRole("button", { name: t("overview.stop") });
     expect(screen.getAllByText(t("overview.runtimeStates.running")).length).toBeGreaterThan(0);
+  });
+
+  it("shows scheduled/routine sources as stopped when only event queue workers are active", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", {
+          state: "running",
+          running: true,
+          worker_count: 1,
+          active_member_count: 1,
+          scheduled_source_enabled: false,
+          routine_source_enabled: false,
+          event_queue_source_enabled: true,
+        }),
+        events: runtimeUnit("events", { state: "running", running: true }),
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    const sourcePanel = panelFor(t("overview.routineSourceCard.title"));
+    expect(
+      within(sourcePanel).getAllByText(t("overview.runtimeStates.stopped")).length,
+    ).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(within(sourcePanel).getByText(t("overview.disabled"))).toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(
+        within(panelFor(t("overview.eventsCard.title"))).getByText(
+          t("overview.eventsCard.workerValue", { workers: 1 }),
+        ),
+      ).toBeInTheDocument(),
+    );
   });
 
   it("renders the failed state with the runtime error message", async () => {
@@ -238,8 +286,10 @@ describe("Service Runtime screen", () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    expect(await screen.findByText(t("overview.runtimeStates.failed"))).toBeInTheDocument();
-    expect(screen.getByText("worker crashed")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getAllByText(t("overview.runtimeStates.failed")).length).toBeGreaterThan(0),
+    );
+    expect(screen.getAllByText("worker crashed").length).toBeGreaterThan(0);
   });
 
   it("surfaces a Slack auth failure with the affected member id in the events card", async () => {
@@ -275,7 +325,9 @@ describe("Service Runtime screen", () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    expect(await screen.findByText(t("overview.stopDelayHint"))).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getAllByText(t("overview.stopDelayHint")).length).toBeGreaterThan(0),
+    );
     expect(screen.getAllByText(t("overview.runtimeStates.stopping")).length).toBeGreaterThan(0);
   });
 
@@ -368,15 +420,21 @@ function renderApp(initialPath: string) {
   );
 }
 
-function schedulerSwitch() {
-  return within(panelFor(t("overview.schedulerCard.title"))).getByRole("switch", {
-    name: t("service.startTarget"),
+function routineSourceSwitch() {
+  return within(panelFor(t("overview.routineSourceCard.title"))).getByRole("switch", {
+    name: t("service.sourceTarget"),
+  });
+}
+
+function scheduledSourceSwitch() {
+  return within(panelFor(t("overview.scheduledSourceCard.title"))).getByRole("switch", {
+    name: t("service.sourceTarget"),
   });
 }
 
 function eventsSwitch() {
   return within(panelFor(t("overview.eventsCard.title"))).getByRole("switch", {
-    name: t("service.startTarget"),
+    name: t("service.sourceTarget"),
   });
 }
 
@@ -452,6 +510,9 @@ function runtimeUnit(
     routine_interval_minutes: null,
     active_member_count: 1,
     worker_count: 0,
+    scheduled_source_enabled: null,
+    routine_source_enabled: null,
+    event_queue_source_enabled: null,
     subscription_count: 0,
     listener_count: 0,
     cycle_count: 0,

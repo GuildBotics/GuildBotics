@@ -24,6 +24,9 @@ class TaskScheduler:
         consecutive_error_limit: int = 3,
         routine_interval_minutes: int = DEFAULT_ROUTINE_INTERVAL_MINUTES,
         service_run_id: str | None = None,
+        scheduled_source_enabled: bool = True,
+        routine_source_enabled: bool = True,
+        event_queue_source_enabled: bool = True,
     ):
         """
         Initialize the TaskScheduler with a list of jobs.
@@ -34,6 +37,9 @@ class TaskScheduler:
                 before stopping the worker loop.
             routine_interval_minutes (int): Minimum interval between routine command
                 executions for each worker.
+            scheduled_source_enabled (bool): Whether to run scheduled commands.
+            routine_source_enabled (bool): Whether to run routine commands.
+            event_queue_source_enabled (bool): Whether to drain queued chat events.
         """
         self.context = context
         self.default_routine_commands = default_routine_commands
@@ -42,6 +48,9 @@ class TaskScheduler:
         self.consecutive_error_limit = max(1, int(consecutive_error_limit))
         self.routine_interval_minutes = max(1, int(routine_interval_minutes))
         self.service_run_id = service_run_id
+        self.scheduled_source_enabled = bool(scheduled_source_enabled)
+        self.routine_source_enabled = bool(routine_source_enabled)
+        self.event_queue_source_enabled = bool(event_queue_source_enabled)
         self.scheduled_tasks_list = {
             p: p.get_scheduled_commands() for p in context.team.members
         }
@@ -96,7 +105,7 @@ class TaskScheduler:
                     remaining = max(0.0, deadline - time.monotonic())
                     t.join(timeout=remaining)
 
-    def get_status_summary(self) -> dict[str, int]:
+    def get_status_summary(self) -> dict[str, Any]:
         """Return lightweight runtime counters for GUI status displays."""
         active_member_count = sum(
             1 for person in self.context.team.members if person.is_active
@@ -106,6 +115,9 @@ class TaskScheduler:
             "active_member_count": active_member_count,
             "worker_count": worker_count,
             "routine_interval_minutes": self.routine_interval_minutes,
+            "scheduled_source_enabled": self.scheduled_source_enabled,
+            "routine_source_enabled": self.routine_source_enabled,
+            "event_queue_source_enabled": self.event_queue_source_enabled,
         }
 
     def _process_tasks_list(
@@ -136,35 +148,36 @@ class TaskScheduler:
                     f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}."
                 )
 
-                # Run scheduled tasks
-                for scheduled_task in scheduled_tasks:
-                    if self._stop_event.is_set():
-                        break
-                    if scheduled_task.should_run(start_time):
-                        with trace_scope(
-                            "scheduled",
-                            person_id=person.person_id,
-                            command=scheduled_task.command,
-                            attributes={"service_run_id": self.service_run_id},
-                        ):
-                            ok = self._run(
-                                loop,
-                                run_command(
-                                    context, scheduled_task.command, "scheduled"
-                                ),
+                if self.scheduled_source_enabled:
+                    # Run scheduled tasks
+                    for scheduled_task in scheduled_tasks:
+                        if self._stop_event.is_set():
+                            break
+                        if scheduled_task.should_run(start_time):
+                            with trace_scope(
+                                "scheduled",
+                                person_id=person.person_id,
+                                command=scheduled_task.command,
+                                attributes={"service_run_id": self.service_run_id},
+                            ):
+                                ok = self._run(
+                                    loop,
+                                    run_command(
+                                        context, scheduled_task.command, "scheduled"
+                                    ),
+                                )
+                            consecutive_errors, should_stop = (
+                                self._update_consecutive_errors(
+                                    ok,
+                                    source="scheduled",
+                                    consecutive_errors=consecutive_errors,
+                                )
                             )
-                        consecutive_errors, should_stop = (
-                            self._update_consecutive_errors(
-                                ok,
-                                source="scheduled",
-                                consecutive_errors=consecutive_errors,
-                            )
-                        )
-                        if should_stop:
-                            return
-                    if self._stop_event.is_set():
-                        break
-                    self._sleep_interruptible(1)
+                            if should_stop:
+                                return
+                        if self._stop_event.is_set():
+                            break
+                        self._sleep_interruptible(1)
 
                 # Check for tasks to work on
                 if self._stop_event.is_set():
@@ -174,7 +187,7 @@ class TaskScheduler:
                     next_routine_time is None or start_time >= next_routine_time
                 )
                 routine_command = ""
-                if routine_commands and routine_due:
+                if self.routine_source_enabled and routine_commands and routine_due:
                     routine_command = routine_commands[
                         routine_command_index % len(routine_commands)
                     ]
@@ -215,7 +228,14 @@ class TaskScheduler:
                 end_time = datetime.datetime.now()
                 running_time = (end_time - start_time).total_seconds()
                 sleep_sec = max(0.0, 60 - running_time)
-                self._sleep_with_chat(loop, person, sleep_sec)
+                if self.event_queue_source_enabled:
+                    self._sleep_with_chat(loop, person, sleep_sec)
+                elif sleep_sec > 0 and not self._stop_event.is_set():
+                    next_check_time = end_time + datetime.timedelta(seconds=sleep_sec)
+                    self.context.logger.debug(
+                        f"Sleeping until {next_check_time:%Y-%m-%d %H:%M:%S}."
+                    )
+                    self._sleep_interruptible(sleep_sec)
                 self.last_checked = start_time
         finally:
             try:

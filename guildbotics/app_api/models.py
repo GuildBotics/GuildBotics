@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
 
@@ -199,8 +199,20 @@ class MemoryEventsResponse(BaseModel):
     events: list[MemoryEvent] = Field(default_factory=list)
 
 
+class RuntimeSourceSelection(BaseModel):
+    scheduled: bool = True
+    routine: bool = True
+    event_queue: bool = True
+
+    @model_validator(mode="after")
+    def require_one_enabled(self) -> RuntimeSourceSelection:
+        if not (self.scheduled or self.routine or self.event_queue):
+            raise ValueError("at least one runtime source must be enabled")
+        return self
+
+
 class SchedulerStartRequest(BaseModel):
-    only: str | None = Field(default=None, pattern="^(scheduler|events)$")
+    sources: RuntimeSourceSelection = Field(default_factory=RuntimeSourceSelection)
     routine_commands: list[str] = Field(default_factory=list)
     max_consecutive_errors: int = Field(default=3, ge=1)
     routine_interval_minutes: int = Field(default=10, ge=1)
@@ -218,6 +230,9 @@ class RuntimeUnitStatus(BaseModel):
     routine_interval_minutes: int | None = None
     active_member_count: int | None = None
     worker_count: int | None = None
+    scheduled_source_enabled: bool | None = None
+    routine_source_enabled: bool | None = None
+    event_queue_source_enabled: bool | None = None
     subscription_count: int | None = None
     listener_count: int | None = None
     cycle_count: int | None = None

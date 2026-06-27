@@ -202,6 +202,9 @@ function runtimeUnit(target: "scheduler" | "events", overrides: Record<string, u
     routine_interval_minutes: null,
     active_member_count: 1,
     worker_count: 0,
+    scheduled_source_enabled: null,
+    routine_source_enabled: null,
+    event_queue_source_enabled: null,
     subscription_count: 0,
     listener_count: 0,
     cycle_count: 0,
@@ -339,7 +342,7 @@ afterEach(() => {
 });
 
 describe("Service Runtime integration (real client + mock server)", () => {
-  it("sends the real POST /scheduler/start with token, JSON body, only and routine_commands", async () => {
+  it("sends the real POST /scheduler/start with token, JSON body, sources and routine_commands", async () => {
     const server = serviceServer();
     const user = userEvent.setup();
     renderApp(server, "/service");
@@ -353,15 +356,14 @@ describe("Service Runtime integration (real client + mock server)", () => {
     expect(call.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
     expect(call.headers["Content-Type"]).toBe("application/json");
     expect(call.body).toMatchObject({
+      sources: { scheduled: true, routine: true, event_queue: true },
       routine_commands: ["workflows/ticket_driven_workflow"],
       routine_interval_minutes: expect.any(Number),
       max_consecutive_errors: expect.any(Number),
     });
-    // Both targets enabled by default -> no `only` selector.
-    expect(call.body).not.toHaveProperty("only");
   });
 
-  it("encodes only=scheduler and the edited interval / max errors into the start body", async () => {
+  it("encodes sources and the edited interval / max errors into the start body", async () => {
     const server = serviceServer();
     const user = userEvent.setup();
     renderApp(server, "/service");
@@ -384,30 +386,37 @@ describe("Service Runtime integration (real client + mock server)", () => {
 
     await waitFor(() => expect(server.requestsFor("POST", "/scheduler/start")).toHaveLength(1));
     expect(server.lastBody("POST", "/scheduler/start")).toMatchObject({
-      only: "scheduler",
+      sources: { scheduled: true, routine: true, event_queue: false },
       routine_interval_minutes: 30,
       max_consecutive_errors: 7,
       routine_commands: ["workflows/ticket_driven_workflow"],
     });
   });
 
-  it("omits routine_commands and sends only=events for the events-only target", async () => {
+  it("omits routine_commands and sends only the event queue source for the event-only target", async () => {
     const server = serviceServer();
     const user = userEvent.setup();
     renderApp(server, "/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    const schedulerSwitch = screen
-      .getByText(t("overview.schedulerCard.title"))
+    const routineSwitch = screen
+      .getByText(t("overview.routineSourceCard.title"))
       .closest(".service-unit-panel")
       ?.querySelector('[role="switch"]') as HTMLElement;
-    await user.click(schedulerSwitch);
+    const scheduledSwitch = screen
+      .getByText(t("overview.scheduledSourceCard.title"))
+      .closest(".service-unit-panel")
+      ?.querySelector('[role="switch"]') as HTMLElement;
+    await user.click(routineSwitch);
+    await user.click(scheduledSwitch);
 
     await user.click(screen.getByRole("button", { name: t("overview.start") }));
 
     await waitFor(() => expect(server.requestsFor("POST", "/scheduler/start")).toHaveLength(1));
     const body = server.lastBody("POST", "/scheduler/start") as Record<string, unknown>;
-    expect(body).toMatchObject({ only: "events" });
+    expect(body).toMatchObject({
+      sources: { scheduled: false, routine: false, event_queue: true },
+    });
     expect(body).not.toHaveProperty("routine_commands");
   });
 

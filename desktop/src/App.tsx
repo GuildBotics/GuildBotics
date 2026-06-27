@@ -51,6 +51,7 @@ import {
   type RoutineOption,
   type RuntimeEvent,
   type RuntimeLog,
+  type SchedulerStartRequest,
   type RuntimeUnitStatus,
   type TraceRecord,
   getConfigStatus,
@@ -157,8 +158,15 @@ function ServicePage() {
   const queryClient = useQueryClient();
   const [initialPreferences] = useState(loadServicePreferences);
   const [selectedRoutine, setSelectedRoutine] = useState(initialPreferences.selectedRoutine);
-  const [schedulerEnabled, setSchedulerEnabled] = useState(initialPreferences.schedulerEnabled);
-  const [eventsEnabled, setEventsEnabled] = useState(initialPreferences.eventsEnabled);
+  const [scheduledSourceEnabled, setScheduledSourceEnabled] = useState(
+    initialPreferences.scheduledSourceEnabled,
+  );
+  const [routineSourceEnabled, setRoutineSourceEnabled] = useState(
+    initialPreferences.routineSourceEnabled,
+  );
+  const [eventQueueSourceEnabled, setEventQueueSourceEnabled] = useState(
+    initialPreferences.eventQueueSourceEnabled,
+  );
   const [maxConsecutiveErrors, setMaxConsecutiveErrors] = useState(
     initialPreferences.maxConsecutiveErrors,
   );
@@ -167,15 +175,17 @@ function ServicePage() {
   );
   const servicePreferences = useMemo<ServicePreferences>(
     () => ({
-      schedulerEnabled,
-      eventsEnabled,
+      scheduledSourceEnabled,
+      routineSourceEnabled,
+      eventQueueSourceEnabled,
       selectedRoutine,
       routineIntervalMinutes,
       maxConsecutiveErrors,
     }),
     [
-      schedulerEnabled,
-      eventsEnabled,
+      scheduledSourceEnabled,
+      routineSourceEnabled,
+      eventQueueSourceEnabled,
       selectedRoutine,
       routineIntervalMinutes,
       maxConsecutiveErrors,
@@ -239,17 +249,16 @@ function ServicePage() {
 
   const startMutation = useMutation({
     mutationFn: () => {
-      const body: Record<string, unknown> = {
+      const body: SchedulerStartRequest = {
+        sources: {
+          scheduled: scheduledSourceEnabled,
+          routine: routineSourceEnabled,
+          event_queue: eventQueueSourceEnabled,
+        },
         max_consecutive_errors: maxConsecutiveErrors,
         routine_interval_minutes: routineIntervalMinutes,
       };
-      if (schedulerEnabled && !eventsEnabled) {
-        body.only = "scheduler";
-      }
-      if (!schedulerEnabled && eventsEnabled) {
-        body.only = "events";
-      }
-      if (schedulerEnabled && effectiveSelectedRoutine) {
+      if (routineSourceEnabled && effectiveSelectedRoutine) {
         body.routine_commands = [effectiveSelectedRoutine];
       }
       return startScheduler(body);
@@ -277,8 +286,9 @@ function ServicePage() {
   const runtimeBusy = Boolean(runtimeStarting || runtimeStopping);
   const runtimeActive = Boolean(runtimeRunning || runtimeBusy);
   const showStopAction = Boolean(runtimeRunning || runtimeStopping);
-  const noStartTarget = !schedulerEnabled && !eventsEnabled;
-  const startNeedsRoutine = schedulerEnabled;
+  const noStartTarget =
+    !scheduledSourceEnabled && !routineSourceEnabled && !eventQueueSourceEnabled;
+  const startNeedsRoutine = routineSourceEnabled;
   const startBlockedByGithub = startNeedsRoutine && !canStartRoutine;
   const startDisabled = !hasProjectConfig || runtimeActive || startBlockedByGithub || noStartTarget;
   const stopDisabled = !runtimeActive;
@@ -331,25 +341,36 @@ function ServicePage() {
           ) : null}
           <div className="service-unit-grid">
             <ServiceRuntimeSection
-              title={t("overview.schedulerCard.title")}
-              description={t("overview.schedulerCard.description")}
+              title={t("overview.routineSourceCard.title")}
+              description={t("overview.routineSourceCard.description")}
               unit={scheduler.data?.scheduler}
-              enabled={schedulerEnabled}
+              state={sourceState(
+                scheduler.data?.scheduler,
+                scheduler.data?.scheduler.routine_source_enabled,
+              )}
+              enabled={routineSourceEnabled}
               disabled={runtimeActive}
-              onEnabledChange={setSchedulerEnabled}
+              switchLabel={t("service.sourceTarget")}
+              onEnabledChange={setRoutineSourceEnabled}
               rows={[
                 [
-                  t("overview.schedulerCard.workers"),
-                  t("overview.schedulerCard.workerValue", {
-                    workers: scheduler.data?.scheduler.worker_count ?? 0,
-                    members: scheduler.data?.scheduler.active_member_count ?? activeMembers.length,
-                  }),
+                  t("overview.routineSourceCard.status"),
+                  sourceEnabledLabel(
+                    t,
+                    scheduler.data?.scheduler.routine_source_enabled ?? routineSourceEnabled,
+                  ),
+                ],
+                [
+                  t("overview.routineSourceCard.interval"),
+                  String(
+                    scheduler.data?.scheduler.routine_interval_minutes ?? routineIntervalMinutes,
+                  ),
                 ],
               ]}
             >
               <Select
                 label={t("overview.routine")}
-                disabled={!schedulerEnabled || runtimeActive}
+                disabled={!routineSourceEnabled || runtimeActive}
                 value={routineSelectValue}
                 onChange={(value) => setSelectedRoutine(value ?? "")}
                 data={routineSelectOptions}
@@ -360,25 +381,11 @@ function ServicePage() {
                 max={1440}
                 step={1}
                 allowDecimal={false}
-                disabled={!schedulerEnabled || runtimeActive}
+                disabled={!routineSourceEnabled || runtimeActive}
                 value={routineIntervalMinutes}
                 onChange={(value) => {
                   if (typeof value === "number") {
                     setRoutineIntervalMinutes(value);
-                  }
-                }}
-              />
-              <NumberInput
-                label={t("overview.maxConsecutiveErrors")}
-                min={1}
-                max={20}
-                step={1}
-                allowDecimal={false}
-                disabled={!schedulerEnabled || runtimeActive}
-                value={maxConsecutiveErrors}
-                onChange={(value) => {
-                  if (typeof value === "number") {
-                    setMaxConsecutiveErrors(value);
                   }
                 }}
               />
@@ -400,10 +407,19 @@ function ServicePage() {
               title={t("overview.eventsCard.title")}
               description={t("overview.eventsCard.description")}
               unit={scheduler.data?.events}
-              enabled={eventsEnabled}
+              state={eventSourceState(scheduler.data?.scheduler, scheduler.data?.events)}
+              enabled={eventQueueSourceEnabled}
               disabled={runtimeActive}
-              onEnabledChange={setEventsEnabled}
+              switchLabel={t("service.sourceTarget")}
+              onEnabledChange={setEventQueueSourceEnabled}
               rows={[
+                [
+                  t("overview.eventsCard.sourceStatus"),
+                  sourceEnabledLabel(
+                    t,
+                    scheduler.data?.scheduler.event_queue_source_enabled ?? eventQueueSourceEnabled,
+                  ),
+                ],
                 [
                   t("overview.eventsCard.listeners"),
                   String(scheduler.data?.events.listener_count ?? 0),
@@ -419,8 +435,95 @@ function ServicePage() {
                     failures: scheduler.data?.events.cycle_failure_count ?? 0,
                   }),
                 ],
+                [
+                  t("overview.eventsCard.workers"),
+                  t("overview.eventsCard.workerValue", {
+                    workers: scheduler.data?.scheduler.event_queue_source_enabled
+                      ? (scheduler.data?.scheduler.worker_count ?? 0)
+                      : 0,
+                  }),
+                ],
               ]}
             />
+            <ServiceRuntimeSection
+              title={t("overview.scheduledSourceCard.title")}
+              description={t("overview.scheduledSourceCard.description")}
+              unit={scheduler.data?.scheduler}
+              state={sourceState(
+                scheduler.data?.scheduler,
+                scheduler.data?.scheduler.scheduled_source_enabled,
+              )}
+              enabled={scheduledSourceEnabled}
+              disabled={runtimeActive}
+              switchLabel={t("service.sourceTarget")}
+              onEnabledChange={setScheduledSourceEnabled}
+              rows={[
+                [
+                  t("overview.scheduledSourceCard.status"),
+                  sourceEnabledLabel(
+                    t,
+                    scheduler.data?.scheduler.scheduled_source_enabled ?? scheduledSourceEnabled,
+                  ),
+                ],
+                [
+                  t("overview.scheduledSourceCard.members"),
+                  String(scheduler.data?.scheduler.active_member_count ?? activeMembers.length),
+                ],
+              ]}
+            >
+              <Alert color="blue" title={t("overview.scheduledSourceCard.settingsTitle")}>
+                <Stack gap="xs">
+                  <Text size="sm">{t("overview.scheduledSourceCard.settingsBody")}</Text>
+                  <Button
+                    component={NavLink}
+                    size="xs"
+                    to="/setup?section=members&tab=patrol"
+                    variant="light"
+                  >
+                    {t("overview.openMemberPatrolSettings")}
+                  </Button>
+                </Stack>
+              </Alert>
+            </ServiceRuntimeSection>
+            <ServiceRuntimeSection
+              title={t("overview.workerCard.title")}
+              description={t("overview.workerCard.description")}
+              unit={scheduler.data?.scheduler}
+              state={scheduler.data?.scheduler.state}
+              rows={[
+                [
+                  t("overview.workerCard.workers"),
+                  t("overview.workerCard.workerValue", {
+                    workers: scheduler.data?.scheduler.worker_count ?? 0,
+                    members: scheduler.data?.scheduler.active_member_count ?? activeMembers.length,
+                  }),
+                ],
+                [
+                  t("overview.workerCard.sources"),
+                  workerSourceStatusLabel(t, scheduler.data?.scheduler, {
+                    scheduled: scheduledSourceEnabled,
+                    routine: routineSourceEnabled,
+                    eventQueue: eventQueueSourceEnabled,
+                  }),
+                ],
+                [t("overview.workerCard.maxConsecutiveErrors"), String(maxConsecutiveErrors)],
+              ]}
+            >
+              <NumberInput
+                label={t("overview.maxConsecutiveErrors")}
+                min={1}
+                max={20}
+                step={1}
+                allowDecimal={false}
+                disabled={runtimeActive}
+                value={maxConsecutiveErrors}
+                onChange={(value) => {
+                  if (typeof value === "number") {
+                    setMaxConsecutiveErrors(value);
+                  }
+                }}
+              />
+            </ServiceRuntimeSection>
           </div>
           <PromptTraceOutputSettings />
           <RuntimeDebugSettings />
@@ -1831,8 +1934,10 @@ function ServiceRuntimeSection({
   title,
   description,
   unit,
+  state,
   enabled,
   disabled,
+  switchLabel,
   onEnabledChange,
   rows,
   children,
@@ -1840,14 +1945,16 @@ function ServiceRuntimeSection({
   title: string;
   description: string;
   unit: RuntimeUnitStatus | undefined;
-  enabled: boolean;
-  disabled: boolean;
-  onEnabledChange: (enabled: boolean) => void;
+  state?: RuntimeUnitStatus["state"];
+  enabled?: boolean;
+  disabled?: boolean;
+  switchLabel?: string;
+  onEnabledChange?: (enabled: boolean) => void;
   rows: Array<[string, string]>;
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const status = unit?.state ?? "stopped";
+  const status = state ?? unit?.state ?? "stopped";
   return (
     <div className="service-unit-panel">
       <div className="service-unit-heading">
@@ -1862,13 +1969,15 @@ function ServiceRuntimeSection({
             <Text fw={700}>{title}</Text>
             <RuntimeStateBadge state={isStopTimeoutPending(unit) ? "stopping" : status} />
           </Group>
-          <Switch
-            className="service-unit-switch"
-            checked={enabled}
-            disabled={disabled}
-            label={t("service.startTarget")}
-            onChange={(event) => onEnabledChange(event.currentTarget.checked)}
-          />
+          {onEnabledChange && switchLabel ? (
+            <Switch
+              className="service-unit-switch"
+              checked={enabled ?? false}
+              disabled={disabled}
+              label={switchLabel}
+              onChange={(event) => onEnabledChange(event.currentTarget.checked)}
+            />
+          ) : null}
         </Group>
         <Text c="dimmed" size="sm">
           {description}
@@ -2437,6 +2546,48 @@ function routineLabel(t: TFunction, command: string | undefined) {
     return t("overview.routines.ticketDriven");
   }
   return command;
+}
+
+function sourceState(
+  unit: RuntimeUnitStatus | undefined,
+  sourceEnabled: boolean | null | undefined,
+) {
+  if (unit?.running && !sourceEnabled) {
+    return "stopped";
+  }
+  return unit?.state ?? "stopped";
+}
+
+function eventSourceState(
+  worker: RuntimeUnitStatus | undefined,
+  events: RuntimeUnitStatus | undefined,
+) {
+  if (events?.state === "failed" || events?.state === "starting" || events?.state === "stopping") {
+    return events.state;
+  }
+  return sourceState(worker, worker?.event_queue_source_enabled);
+}
+
+function workerSourceStatusLabel(
+  t: TFunction,
+  unit: RuntimeUnitStatus | undefined,
+  fallback: { scheduled: boolean; routine: boolean; eventQueue: boolean },
+) {
+  const enabled: string[] = [];
+  if (unit?.scheduled_source_enabled ?? fallback.scheduled) {
+    enabled.push(t("overview.workerCard.scheduledSource"));
+  }
+  if (unit?.routine_source_enabled ?? fallback.routine) {
+    enabled.push(t("overview.workerCard.routineSource"));
+  }
+  if (unit?.event_queue_source_enabled ?? fallback.eventQueue) {
+    enabled.push(t("overview.workerCard.eventQueueSource"));
+  }
+  return enabled.length ? enabled.join(" / ") : t("overview.none");
+}
+
+function sourceEnabledLabel(t: TFunction, enabled: boolean | null | undefined) {
+  return enabled ? t("overview.enabled") : t("overview.disabled");
 }
 
 function traceEventLabel(t: TFunction, event: string) {
@@ -3116,16 +3267,18 @@ export const SERVICE_PREFERENCES_KEY = "guildbotics.service.preferences";
 // the next launch starts from the same configuration instead of resetting to the
 // built-in defaults.
 export type ServicePreferences = {
-  schedulerEnabled: boolean;
-  eventsEnabled: boolean;
+  scheduledSourceEnabled: boolean;
+  routineSourceEnabled: boolean;
+  eventQueueSourceEnabled: boolean;
   selectedRoutine: string;
   routineIntervalMinutes: number;
   maxConsecutiveErrors: number;
 };
 
 export const DEFAULT_SERVICE_PREFERENCES: ServicePreferences = {
-  schedulerEnabled: true,
-  eventsEnabled: true,
+  scheduledSourceEnabled: true,
+  routineSourceEnabled: true,
+  eventQueueSourceEnabled: true,
   selectedRoutine: "",
   routineIntervalMinutes: 10,
   maxConsecutiveErrors: 3,
@@ -3145,15 +3298,31 @@ export function loadServicePreferences(): ServicePreferences {
       return { ...DEFAULT_SERVICE_PREFERENCES };
     }
     const parsed = JSON.parse(raw) as Partial<ServicePreferences>;
+    const legacySchedulerEnabled =
+      "schedulerEnabled" in parsed
+        ? (parsed as { schedulerEnabled?: unknown }).schedulerEnabled
+        : undefined;
+    const legacyEventsEnabled =
+      "eventsEnabled" in parsed ? (parsed as { eventsEnabled?: unknown }).eventsEnabled : undefined;
     return {
-      schedulerEnabled:
-        typeof parsed.schedulerEnabled === "boolean"
-          ? parsed.schedulerEnabled
-          : DEFAULT_SERVICE_PREFERENCES.schedulerEnabled,
-      eventsEnabled:
-        typeof parsed.eventsEnabled === "boolean"
-          ? parsed.eventsEnabled
-          : DEFAULT_SERVICE_PREFERENCES.eventsEnabled,
+      scheduledSourceEnabled:
+        typeof parsed.scheduledSourceEnabled === "boolean"
+          ? parsed.scheduledSourceEnabled
+          : typeof legacySchedulerEnabled === "boolean"
+            ? legacySchedulerEnabled
+            : DEFAULT_SERVICE_PREFERENCES.scheduledSourceEnabled,
+      routineSourceEnabled:
+        typeof parsed.routineSourceEnabled === "boolean"
+          ? parsed.routineSourceEnabled
+          : typeof legacySchedulerEnabled === "boolean"
+            ? legacySchedulerEnabled
+            : DEFAULT_SERVICE_PREFERENCES.routineSourceEnabled,
+      eventQueueSourceEnabled:
+        typeof parsed.eventQueueSourceEnabled === "boolean"
+          ? parsed.eventQueueSourceEnabled
+          : typeof legacyEventsEnabled === "boolean"
+            ? legacyEventsEnabled
+            : DEFAULT_SERVICE_PREFERENCES.eventQueueSourceEnabled,
       selectedRoutine:
         typeof parsed.selectedRoutine === "string"
           ? parsed.selectedRoutine
