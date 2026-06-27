@@ -1699,8 +1699,8 @@ function MembersSection({
     setImportingAvatar(true);
     setAvatarError(null);
     try {
-      await uploadMemberAvatar(editingPersonId, file);
-      setAvatarTimestamp(Date.now());
+      const result = await uploadMemberAvatar(editingPersonId, file);
+      setAvatarTimestamp(result.avatar_timestamp);
       notifications.show({
         color: "green",
         title: t("setup.members.avatar.uploadSuccessTitle", "Success"),
@@ -1719,8 +1719,8 @@ function MembersSection({
     setImportingAvatar(true);
     setAvatarError(null);
     try {
-      await importAvatarFromGithub(editingPersonId);
-      setAvatarTimestamp(Date.now());
+      const result = await importAvatarFromGithub(editingPersonId);
+      setAvatarTimestamp(result.avatar_timestamp);
       notifications.show({
         color: "green",
         title: t("setup.members.avatar.importSuccessTitle", "Success"),
@@ -1739,8 +1739,8 @@ function MembersSection({
     setImportingAvatar(true);
     setAvatarError(null);
     try {
-      await importAvatarFromSlack(editingPersonId);
-      setAvatarTimestamp(Date.now());
+      const result = await importAvatarFromSlack(editingPersonId);
+      setAvatarTimestamp(result.avatar_timestamp);
       notifications.show({
         color: "green",
         title: t("setup.members.avatar.importSuccessTitle", "Success"),
@@ -1897,6 +1897,9 @@ function MembersSection({
 
   const fillFormFromMember = (member: MemberConfig) => {
     const nextPersonType = member.person_type === "human" ? "human" : "agent";
+    // Seed the cache-buster from the persisted avatar mtime so the URL stays
+    // deterministic across reloads (changes only when the avatar changes).
+    setAvatarTimestamp(member.avatar_timestamp ?? 0);
     setPersonType(nextPersonType);
     setGithubAccountType(
       nextPersonType === "human"

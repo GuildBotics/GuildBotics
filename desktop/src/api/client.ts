@@ -821,10 +821,14 @@ export async function deleteMemberConfig(
   });
 }
 
+export type AvatarMutationResponse = {
+  avatar_timestamp: number;
+};
+
 export async function uploadMemberAvatar(
   personId: string,
   file: File,
-): Promise<ConfigWriteResponse> {
+): Promise<AvatarMutationResponse> {
   const formData = new FormData();
   formData.append("file", file);
   const response = await fetch(`${apiBase}/config/members/${encodeURIComponent(personId)}/avatar`, {
@@ -840,13 +844,13 @@ export async function uploadMemberAvatar(
   return response.json();
 }
 
-export async function importAvatarFromGithub(personId: string): Promise<ConfigWriteResponse> {
+export async function importAvatarFromGithub(personId: string): Promise<AvatarMutationResponse> {
   return request(`/config/members/${encodeURIComponent(personId)}/avatar/github`, {
     method: "POST",
   });
 }
 
-export async function importAvatarFromSlack(personId: string): Promise<ConfigWriteResponse> {
+export async function importAvatarFromSlack(personId: string): Promise<AvatarMutationResponse> {
   return request(`/config/members/${encodeURIComponent(personId)}/avatar/slack`, {
     method: "POST",
   });

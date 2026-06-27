@@ -690,7 +690,7 @@ class SimplePersonSetupService:
         env_prefix = self._person_env_prefix(person_id)
 
         avatar_timestamp = 0
-        from guildbotics.app_api.avatar import find_avatar_file
+        from guildbotics.utils.avatar import find_avatar_file
 
         avatar_path = find_avatar_file(config_dir, person_id)
         if avatar_path is not None:

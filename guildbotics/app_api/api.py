@@ -84,11 +84,19 @@ from guildbotics.utils.fileio import get_template_path, load_yaml_file
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
 
+logger = logging.getLogger("guildbotics.app_api")
+
 
 class ConfigWriteResponse(BaseModel):
     project: ProjectSetupResult | None = None
     member: PersonSetupResult | None = None
     intelligence: dict[str, Any] | None = None
+
+
+class AvatarMutationResponse(BaseModel):
+    # File mtime of the saved avatar, used by the client as a deterministic
+    # cache-buster so the URL only changes when the avatar actually changes.
+    avatar_timestamp: int
 
 
 def create_app(
@@ -706,14 +714,14 @@ def create_app(
 
     @app.post(
         "/config/members/{person_id}/avatar",
-        response_model=ConfigWriteResponse,
+        response_model=AvatarMutationResponse,
         responses=error_responses,
     )
     async def config_member_avatar_upload(
         person_id: str,
         file: UploadFile = File(...),  # noqa: B008
         _: None = Depends(require_token),
-    ) -> ConfigWriteResponse:
+    ) -> AvatarMutationResponse:
         status = app_runtime.get_config_status()
         config_dir = _get_existing_config_dir(status)
         if config_dir is None:
@@ -725,24 +733,28 @@ def create_app(
         from guildbotics.app_api.avatar import save_avatar_file
 
         try:
-            save_avatar_file(config_dir, person_id, file)
+            dest_path = save_avatar_file(config_dir, person_id, file)
+        except ValueError as exc:
+            # Validation failures (e.g. too large) carry a safe, stable message.
+            raise AppApiError("avatar_invalid", str(exc), status_code=400) from exc
         except Exception as exc:
+            logger.exception("Failed to save avatar for %s", person_id)
             raise AppApiError(
                 "avatar_save_failed",
-                f"Failed to save avatar: {exc}",
+                "Failed to save avatar.",
                 status_code=500,
             ) from exc
-        return ConfigWriteResponse()
+        return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @app.post(
         "/config/members/{person_id}/avatar/github",
-        response_model=ConfigWriteResponse,
+        response_model=AvatarMutationResponse,
         responses=error_responses,
     )
     async def config_member_avatar_github(
         person_id: str,
         _: None = Depends(require_token),
-    ) -> ConfigWriteResponse:
+    ) -> AvatarMutationResponse:
         status = app_runtime.get_config_status()
         config_dir = _get_existing_config_dir(status)
         if config_dir is None:
@@ -775,24 +787,25 @@ def create_app(
 
         try:
             avatar_url = await get_github_avatar_url(github_username)
-            await import_avatar_from_url(config_dir, person_id, avatar_url)
+            dest_path = await import_avatar_from_url(config_dir, person_id, avatar_url)
         except Exception as exc:
+            logger.exception("Failed to import avatar from GitHub for %s", person_id)
             raise AppApiError(
                 "avatar_import_failed",
-                f"Failed to import avatar from GitHub: {exc}",
+                "Failed to import avatar from GitHub.",
                 status_code=500,
             ) from exc
-        return ConfigWriteResponse()
+        return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @app.post(
         "/config/members/{person_id}/avatar/slack",
-        response_model=ConfigWriteResponse,
+        response_model=AvatarMutationResponse,
         responses=error_responses,
     )
     async def config_member_avatar_slack(
         person_id: str,
         _: None = Depends(require_token),
-    ) -> ConfigWriteResponse:
+    ) -> AvatarMutationResponse:
         status = app_runtime.get_config_status()
         config_dir = _get_existing_config_dir(status)
         if config_dir is None:
@@ -849,7 +862,7 @@ def create_app(
 
         try:
             avatar_url = await get_slack_avatar_url(slack_user_id, slack_bot_token)
-            await import_avatar_from_url(config_dir, person_id, avatar_url)
+            dest_path = await import_avatar_from_url(config_dir, person_id, avatar_url)
         except Exception as exc:
             if "missing_scope" in str(exc):
                 raise AppApiError(
@@ -858,12 +871,13 @@ def create_app(
                     "Add it under OAuth & Permissions and reinstall the app.",
                     status_code=400,
                 ) from exc
+            logger.exception("Failed to import avatar from Slack for %s", person_id)
             raise AppApiError(
                 "avatar_import_failed",
-                f"Failed to import avatar from Slack: {exc}",
+                "Failed to import avatar from Slack.",
                 status_code=500,
             ) from exc
-        return ConfigWriteResponse()
+        return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @app.websocket("/events")
     async def events(websocket: WebSocket, token_query: str = Query(alias="token")):

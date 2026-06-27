@@ -6,24 +6,30 @@ from pathlib import Path
 import httpx
 from fastapi import UploadFile
 
+from guildbotics.utils.avatar import (
+    SUPPORTED_EXTENSIONS,
+    find_avatar_file,
+    get_member_avatar_dir,
+)
+
 logger = logging.getLogger("guildbotics.app_api.avatar")
 
-SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+# Outbound avatar downloads must time out so a stalled remote endpoint cannot
+# hang the API worker indefinitely.
+AVATAR_DOWNLOAD_TIMEOUT = 15.0
+# Reject avatar uploads larger than this to avoid persisting huge payloads.
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
 
-
-def _get_member_dir(config_dir: Path, person_id: str) -> Path:
-    return config_dir / "team" / "members" / person_id
-
-
-def find_avatar_file(config_dir: Path, person_id: str) -> Path | None:
-    member_dir = _get_member_dir(config_dir, person_id)
-    if not member_dir.exists():
-        return None
-    for ext in SUPPORTED_EXTENSIONS:
-        avatar_path = member_dir / f"avatar{ext}"
-        if avatar_path.is_file():
-            return avatar_path
-    return None
+__all__ = [
+    "MAX_AVATAR_BYTES",
+    "SUPPORTED_EXTENSIONS",
+    "clean_existing_avatars",
+    "find_avatar_file",
+    "get_github_avatar_url",
+    "get_slack_avatar_url",
+    "import_avatar_from_url",
+    "save_avatar_file",
+]
 
 
 def clean_existing_avatars(member_dir: Path) -> None:
@@ -42,7 +48,13 @@ def clean_existing_avatars(member_dir: Path) -> None:
 
 
 def save_avatar_file(config_dir: Path, person_id: str, upload_file: UploadFile) -> Path:
-    member_dir = _get_member_dir(config_dir, person_id)
+    content = upload_file.file.read()
+    if len(content) > MAX_AVATAR_BYTES:
+        raise ValueError(
+            f"Avatar file is too large (max {MAX_AVATAR_BYTES // (1024 * 1024)} MB)."
+        )
+
+    member_dir = get_member_avatar_dir(config_dir, person_id)
     member_dir.mkdir(parents=True, exist_ok=True)
 
     orig_suffix = Path(upload_file.filename or "").suffix.lower()
@@ -52,17 +64,19 @@ def save_avatar_file(config_dir: Path, person_id: str, upload_file: UploadFile) 
 
     dest_path = member_dir / f"avatar{suffix}"
     with open(dest_path, "wb") as f:
-        f.write(upload_file.file.read())
+        f.write(content)
 
     return dest_path
 
 
 async def import_avatar_from_url(config_dir: Path, person_id: str, url: str) -> Path:
-    member_dir = _get_member_dir(config_dir, person_id)
+    member_dir = get_member_avatar_dir(config_dir, person_id)
     member_dir.mkdir(parents=True, exist_ok=True)
 
     async with httpx.AsyncClient() as client:
-        response = await client.get(url, follow_redirects=True)
+        response = await client.get(
+            url, follow_redirects=True, timeout=AVATAR_DOWNLOAD_TIMEOUT
+        )
         response.raise_for_status()
 
     content_type = response.headers.get("Content-Type", "").lower()

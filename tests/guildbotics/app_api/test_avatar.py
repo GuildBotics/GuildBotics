@@ -100,6 +100,21 @@ def test_post_avatar_upload(client: TestClient, test_workspace: Path) -> None:
     saved_avatar = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
     assert saved_avatar.exists()
     assert saved_avatar.read_bytes() == file_data
+    # The response carries the saved file mtime as a deterministic cache-buster.
+    assert response.json()["avatar_timestamp"] == int(saved_avatar.stat().st_mtime)
+
+
+def test_post_avatar_upload_rejects_large_file(client: TestClient) -> None:
+    from guildbotics.app_api.avatar import MAX_AVATAR_BYTES
+
+    oversized = b"x" * (MAX_AVATAR_BYTES + 1)
+    files = {"file": ("avatar.png", io.BytesIO(oversized), "image/png")}
+
+    response = client.post(
+        "/config/members/alice/avatar", files=files, headers=AUTH_HEADERS
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "avatar_invalid"
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
@@ -150,13 +165,44 @@ def test_import_avatar_from_github(
         timeout=10.0,
     )
     mock_client.get.assert_any_call(
-        "https://github.com/avatar/alice.png", follow_redirects=True
+        "https://github.com/avatar/alice.png", follow_redirects=True, timeout=15.0
     )
 
     # Verify image saved
     saved_avatar = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
     assert saved_avatar.exists()
     assert saved_avatar.read_bytes() == b"github image binary"
+    assert response.json()["avatar_timestamp"] == int(saved_avatar.stat().st_mtime)
+
+
+@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
+@patch(
+    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
+)
+def test_import_avatar_from_github_error_message_is_stable(
+    mock_read_config: MagicMock,
+    mock_async_client_cls: MagicMock,
+    client: TestClient,
+) -> None:
+    mock_read_config.return_value = PersonConfigSnapshot(
+        person_id="alice",
+        person_name="Alice",
+        person_type="human",
+        is_active=True,
+        github_username="alice-git",
+        git_email="alice@example.com",
+    )
+    mock_client = MagicMock()
+    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
+    # Raw exception text must not leak into the client-facing message.
+    mock_client.get = AsyncMock(side_effect=RuntimeError("secret internal detail"))
+
+    response = client.post("/config/members/alice/avatar/github", headers=AUTH_HEADERS)
+    assert response.status_code == 500
+    payload = response.json()
+    assert payload["code"] == "avatar_import_failed"
+    assert payload["message"] == "Failed to import avatar from GitHub."
+    assert "secret internal detail" not in payload["message"]
 
 
 @patch("guildbotics.app_api.api.dotenv_values")
