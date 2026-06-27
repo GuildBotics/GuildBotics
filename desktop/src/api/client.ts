@@ -12,6 +12,20 @@ export function getApiBase(): string {
   return apiBase;
 }
 
+export function memberAvatarUrl(personId: string, cacheBust?: number | string): string {
+  const params = new URLSearchParams();
+  if (sessionToken) {
+    params.set("token", sessionToken);
+  }
+  if (cacheBust !== undefined) {
+    params.set("t", String(cacheBust));
+  }
+  const query = params.toString();
+  return `${apiBase}/config/members/${encodeURIComponent(personId)}/avatar${
+    query ? `?${query}` : ""
+  }`;
+}
+
 export type ConfigStatus = {
   cwd: string;
   env_file: string;
@@ -450,6 +464,7 @@ export type MemberConfig = {
   slack_channel_participation: Record<string, ChatParticipationPolicy>;
   routine_commands: string[];
   task_schedules: MemberTaskSchedule[];
+  avatar_timestamp?: number;
 };
 
 export type MemberTaskSchedule = {
@@ -803,6 +818,41 @@ export async function deleteMemberConfig(
   return request(`/config/members/${encodeURIComponent(personId)}`, {
     method: "DELETE",
     body,
+  });
+}
+
+export type AvatarMutationResponse = {
+  avatar_timestamp: number;
+};
+
+export async function uploadMemberAvatar(
+  personId: string,
+  file: File,
+): Promise<AvatarMutationResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${apiBase}/config/members/${encodeURIComponent(personId)}/avatar`, {
+    method: "POST",
+    headers: {
+      "X-GuildBotics-Session-Token": sessionToken,
+    },
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new ApiRequestError(await readError(response));
+  }
+  return response.json();
+}
+
+export async function importAvatarFromGithub(personId: string): Promise<AvatarMutationResponse> {
+  return request(`/config/members/${encodeURIComponent(personId)}/avatar/github`, {
+    method: "POST",
+  });
+}
+
+export async function importAvatarFromSlack(personId: string): Promise<AvatarMutationResponse> {
+  return request(`/config/members/${encodeURIComponent(personId)}/avatar/slack`, {
+    method: "POST",
   });
 }
 

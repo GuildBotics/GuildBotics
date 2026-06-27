@@ -315,6 +315,26 @@ const resources = {
           script: "Script",
         },
         members: {
+          avatar: {
+            upload: "Upload File",
+            github: "Import from GitHub",
+            slack: "Import from Slack",
+            githubTooltip: "Configure GitHub username to import avatar",
+            slackTooltip: "Configure Slack user ID to import avatar",
+            addFirstTooltip: "You can set the avatar after adding the member.",
+            uploadSuccessTitle: "Success",
+            uploadSuccess: "Avatar uploaded successfully.",
+            importSuccessTitle: "Success",
+            githubSuccess: "Avatar imported from GitHub.",
+            slackSuccess: "Avatar imported from Slack.",
+            errors: {
+              slackTokenMissing: "Slack Bot Token is not configured in this workspace.",
+              slackMissingScope:
+                "Slack Bot Token is missing the 'users:read' scope. Add it under OAuth & Permissions and reinstall the app.",
+              slackUserIdMissing: "Slack user ID is required for human members.",
+              githubUsernameMissing: "GitHub username is not configured.",
+            },
+          },
           title: "Members",
           subtitle: "Manage team members and their roles.",
           activeCountLabel: "Active members",
@@ -1184,6 +1204,26 @@ const resources = {
           script: "スクリプト",
         },
         members: {
+          avatar: {
+            upload: "ファイルをアップロード",
+            github: "GitHubからインポート",
+            slack: "Slackからインポート",
+            githubTooltip: "GitHubユーザー名を設定するとインポート可能になります",
+            slackTooltip: "SlackユーザーIDを設定するとインポート可能になります",
+            addFirstTooltip: "メンバーを追加後に設定ができます",
+            uploadSuccessTitle: "成功",
+            uploadSuccess: "アバターをアップロードしました。",
+            importSuccessTitle: "成功",
+            githubSuccess: "GitHubからアバターをインポートしました。",
+            slackSuccess: "Slackからアバターをインポートしました。",
+            errors: {
+              slackTokenMissing: "ワークスペースに Slack ボットトークンが設定されていません。",
+              slackMissingScope:
+                "Slack ボットトークンに 'users:read' スコープがありません。OAuth & Permissions で追加し、アプリを再インストールしてください。",
+              slackUserIdMissing: "人間のメンバーの場合、Slack ユーザーIDの指定が必要です。",
+              githubUsernameMissing: "GitHub ユーザー名が設定されていません。",
+            },
+          },
           title: "メンバー",
           subtitle: "チームメンバーと役割を管理します。",
           activeCountLabel: "有効メンバー",

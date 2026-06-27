@@ -13,6 +13,7 @@ import {
   getMemberConfig,
   getPromptTrace,
   getRuntimeDebug,
+  memberAvatarUrl,
   runScenarioDiagnostics,
   setWorkspace,
   subscribeEvents,
@@ -79,6 +80,30 @@ describe("configureApi", () => {
   it("keeps the existing base URL when none is provided", () => {
     configureApi("only-token");
     expect(getApiBase()).toBe("http://127.0.0.1:8765");
+  });
+});
+
+describe("memberAvatarUrl", () => {
+  it("embeds the session token and cache-buster as query parameters", () => {
+    configureApi("avatar-token", "http://example.test:9000");
+    const url = new URL(memberAvatarUrl("alice", 12345));
+    expect(url.pathname).toBe("/config/members/alice/avatar");
+    expect(url.searchParams.get("token")).toBe("avatar-token");
+    expect(url.searchParams.get("t")).toBe("12345");
+  });
+
+  it("encodes the person id and omits the cache-buster when absent", () => {
+    configureApi("avatar-token", "http://example.test:9000");
+    const url = new URL(memberAvatarUrl("a/b"));
+    expect(url.pathname).toBe("/config/members/a%2Fb/avatar");
+    expect(url.searchParams.has("t")).toBe(false);
+  });
+
+  it("omits the token query when no session token is configured", () => {
+    configureApi("", "http://example.test:9000");
+    const url = new URL(memberAvatarUrl("alice", 1));
+    expect(url.searchParams.has("token")).toBe(false);
+    expect(url.searchParams.get("t")).toBe("1");
   });
 });
 

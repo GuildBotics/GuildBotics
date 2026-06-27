@@ -1,4 +1,5 @@
 import {
+  Avatar,
   ActionIcon,
   Alert,
   Anchor,
@@ -7,6 +8,7 @@ import {
   Button,
   Card,
   CopyButton,
+  Divider,
   Drawer,
   Group,
   NumberInput,
@@ -74,6 +76,7 @@ import {
   subscribeLogs,
   updatePromptTrace,
   updateRuntimeDebug,
+  memberAvatarUrl,
 } from "./api/client";
 import { type AppLanguage, normalizeLanguage, setAppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
@@ -885,7 +888,16 @@ function MemoryEventsPanel({ members }: { members: Array<{ person_id: string; na
                   {event.title || event.doc_id || memoryActionLabel(t, event.action)}
                 </Text>
                 <div className="memory-row-meta">
-                  <span>{event.person_id || "—"}</span>
+                  <Group gap={4} align="center" style={{ display: "inline-flex" }}>
+                    <Avatar
+                      src={event.person_id ? memberAvatarUrl(event.person_id) : undefined}
+                      size={16}
+                      radius="xl"
+                    >
+                      {event.person_id ? event.person_id.substring(0, 2).toUpperCase() : "—"}
+                    </Avatar>
+                    <span>{event.person_id || "—"}</span>
+                  </Group>
                   <span>
                     {event.doc_id ||
                       (event.result_count !== null
@@ -938,22 +950,40 @@ function MemoryEventDetail({ event }: { event: MemoryEvent }) {
   ).filter(([, value]) => value);
   return (
     <Stack gap="sm">
-      <div className="memory-detail-head">
-        <Group gap="xs">
-          <Badge color={memoryActionColor(event.action)} variant="light">
-            {memoryActionLabel(t, event.action)}
-          </Badge>
-          <Text c="dimmed" size="xs">
-            {formatDateTime(event.timestamp) || "—"}
-          </Text>
-        </Group>
-        <Title order={4}>{event.title || event.doc_id || memoryActionLabel(t, event.action)}</Title>
-        {event.summary ? (
-          <Text c="dimmed" size="sm">
-            {event.summary}
-          </Text>
-        ) : null}
-      </div>
+      <Group justify="space-between" align="flex-start" style={{ width: "100%" }}>
+        <div
+          className="memory-detail-head"
+          style={{ borderBottom: "none", flex: 1, minWidth: 0, paddingBottom: 0 }}
+        >
+          <Group gap="xs">
+            <Badge color={memoryActionColor(event.action)} variant="light">
+              {memoryActionLabel(t, event.action)}
+            </Badge>
+            <Text c="dimmed" size="xs">
+              {formatDateTime(event.timestamp) || "—"}
+            </Text>
+          </Group>
+          <Title order={4}>
+            {event.title || event.doc_id || memoryActionLabel(t, event.action)}
+          </Title>
+          {event.summary ? (
+            <Text c="dimmed" size="sm">
+              {event.summary}
+            </Text>
+          ) : null}
+        </div>
+        {event.person_id && (
+          <Avatar
+            src={memberAvatarUrl(event.person_id)}
+            size="lg"
+            radius="md"
+            style={{ marginLeft: "16px", flexShrink: 0 }}
+          >
+            {event.person_id.substring(0, 2).toUpperCase()}
+          </Avatar>
+        )}
+      </Group>
+      <Divider />
       {event.body_preview ? (
         <div className="memory-preview">
           <Text fw={600} size="sm">
@@ -1206,7 +1236,16 @@ function TraceExplorer() {
                   </Text>
                 </Tooltip>
                 <div className="exec-row-meta">
-                  <span className="exec-row-person">{trace.person_id || "—"}</span>
+                  <Group gap={4} align="center" style={{ display: "inline-flex" }}>
+                    <Avatar
+                      src={trace.person_id ? memberAvatarUrl(trace.person_id) : undefined}
+                      size={16}
+                      radius="xl"
+                    >
+                      {trace.person_id ? trace.person_id.substring(0, 2).toUpperCase() : "—"}
+                    </Avatar>
+                    <span className="exec-row-person">{trace.person_id || "—"}</span>
+                  </Group>
                   <span className="exec-row-counts">
                     {t("diagnostics.executions.counts", {
                       events: trace.event_count,
@@ -1246,123 +1285,151 @@ function TraceExplorer() {
             </>
           ) : selectedTraceId && selectedSummary ? (
             <>
-              <div className="exec-summary">
-                <div className="exec-summary-head">
-                  <Group gap="xs">
-                    <Badge color={traceStatusColor(selectedSummary.status)} variant="light">
-                      {t(`diagnostics.executions.status.${selectedSummary.status}`, {
-                        defaultValue: selectedSummary.status,
-                      })}
-                    </Badge>
-                    <Badge variant="outline">
-                      {traceSourceLabel(t, selectedSummary.source || "unknown")}
-                    </Badge>
-                    {(() => {
-                      const chip = ticketChipInfo(selectedSummary.attributes);
-                      if (!chip) {
-                        return null;
-                      }
-                      return (
-                        <Tooltip label={t("diagnostics.executions.ticket.filterTo")} withArrow>
-                          <Badge
-                            color="grape"
-                            variant="light"
-                            style={{ cursor: "pointer" }}
-                            onClick={() =>
-                              applyAttrFilter({
-                                key: chip.key,
-                                value: chip.value,
-                                label: chip.label,
-                              })
-                            }
-                            rightSection={
-                              chip.url ? (
-                                <ActionIcon
-                                  size="xs"
-                                  variant="transparent"
-                                  color="grape"
-                                  aria-label={t("diagnostics.executions.ticket.open")}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void openExternal(chip.url);
-                                  }}
-                                >
-                                  <ExternalLink size={12} />
-                                </ActionIcon>
-                              ) : null
-                            }
-                          >
-                            {chip.label}
-                          </Badge>
-                        </Tooltip>
-                      );
-                    })()}
-                  </Group>
-                </div>
-                <Tooltip
-                  label={selectedSummary.command || selectedSummary.trace_id}
-                  openDelay={400}
-                  withArrow
-                  multiline
+              <div
+                className="exec-summary"
+                style={{
+                  display: "flex",
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                }}
+              >
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px",
+                  }}
                 >
-                  <Text fw={700} size="sm" lineClamp={1}>
-                    {selectedSummary.command || selectedSummary.trace_id}
-                  </Text>
-                </Tooltip>
-                <div className="exec-summary-meta">
-                  <span className="exec-summary-id">
-                    {t("diagnostics.executions.meta.trace")}:{" "}
-                    <Tooltip label={selectedSummary.trace_id} withArrow>
-                      <code>{shortTraceId(selectedSummary.trace_id)}</code>
-                    </Tooltip>
-                    <CopyButton value={selectedSummary.trace_id} timeout={1500}>
-                      {({ copied, copy }) => (
-                        <Tooltip
-                          label={
-                            copied
-                              ? t("diagnostics.executions.copied")
-                              : t("diagnostics.executions.copy")
-                          }
-                          withArrow
-                        >
-                          <ActionIcon
-                            variant="subtle"
-                            size="sm"
-                            color={copied ? "teal" : "gray"}
-                            onClick={copy}
+                  <div className="exec-summary-head">
+                    <Group gap="xs">
+                      <Badge color={traceStatusColor(selectedSummary.status)} variant="light">
+                        {t(`diagnostics.executions.status.${selectedSummary.status}`, {
+                          defaultValue: selectedSummary.status,
+                        })}
+                      </Badge>
+                      <Badge variant="outline">
+                        {traceSourceLabel(t, selectedSummary.source || "unknown")}
+                      </Badge>
+                      {(() => {
+                        const chip = ticketChipInfo(selectedSummary.attributes);
+                        if (!chip) {
+                          return null;
+                        }
+                        return (
+                          <Tooltip label={t("diagnostics.executions.ticket.filterTo")} withArrow>
+                            <Badge
+                              color="grape"
+                              variant="light"
+                              style={{ cursor: "pointer" }}
+                              onClick={() =>
+                                applyAttrFilter({
+                                  key: chip.key,
+                                  value: chip.value,
+                                  label: chip.label,
+                                })
+                              }
+                              rightSection={
+                                chip.url ? (
+                                  <ActionIcon
+                                    size="xs"
+                                    variant="transparent"
+                                    color="grape"
+                                    aria-label={t("diagnostics.executions.ticket.open")}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void openExternal(chip.url);
+                                    }}
+                                  >
+                                    <ExternalLink size={12} />
+                                  </ActionIcon>
+                                ) : null
+                              }
+                            >
+                              {chip.label}
+                            </Badge>
+                          </Tooltip>
+                        );
+                      })()}
+                    </Group>
+                  </div>
+                  <Tooltip
+                    label={selectedSummary.command || selectedSummary.trace_id}
+                    openDelay={400}
+                    withArrow
+                    multiline
+                  >
+                    <Text fw={700} size="sm" lineClamp={1}>
+                      {selectedSummary.command || selectedSummary.trace_id}
+                    </Text>
+                  </Tooltip>
+                  <div className="exec-summary-meta">
+                    <span className="exec-summary-id">
+                      {t("diagnostics.executions.meta.trace")}:{" "}
+                      <Tooltip label={selectedSummary.trace_id} withArrow>
+                        <code>{shortTraceId(selectedSummary.trace_id)}</code>
+                      </Tooltip>
+                      <CopyButton value={selectedSummary.trace_id} timeout={1500}>
+                        {({ copied, copy }) => (
+                          <Tooltip
+                            label={
+                              copied
+                                ? t("diagnostics.executions.copied")
+                                : t("diagnostics.executions.copy")
+                            }
+                            withArrow
                           >
-                            {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                          </ActionIcon>
-                        </Tooltip>
-                      )}
-                    </CopyButton>
-                  </span>
-                  {selectedSummary.person_id ? (
-                    <span>
-                      {t("diagnostics.executions.meta.member")}: {selectedSummary.person_id}
+                            <ActionIcon
+                              variant="subtle"
+                              size="sm"
+                              color={copied ? "teal" : "gray"}
+                              onClick={copy}
+                            >
+                              {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                      </CopyButton>
                     </span>
-                  ) : null}
-                  <span>
-                    {t("diagnostics.executions.meta.started")}:{" "}
-                    {formatDateTime(selectedSummary.started_at) || "—"}
-                  </span>
-                  <span>
-                    {t("diagnostics.executions.meta.duration")}: {traceDuration(selectedSummary)}
-                  </span>
-                  <span>
-                    {t("diagnostics.executions.counts", {
-                      events: selectedSummary.event_count,
-                      logs: selectedSummary.log_count,
-                    })}
-                  </span>
-                  {selectedSummary.error_count > 0 ? (
-                    <span className="exec-row-errors">
-                      {t("diagnostics.executions.errorChip", {
-                        count: selectedSummary.error_count,
+                    {selectedSummary.person_id ? (
+                      <span>
+                        {t("diagnostics.executions.meta.member")}: {selectedSummary.person_id}
+                      </span>
+                    ) : null}
+                    <span>
+                      {t("diagnostics.executions.meta.started")}:{" "}
+                      {formatDateTime(selectedSummary.started_at) || "—"}
+                    </span>
+                    <span>
+                      {t("diagnostics.executions.meta.duration")}: {traceDuration(selectedSummary)}
+                    </span>
+                    <span>
+                      {t("diagnostics.executions.counts", {
+                        events: selectedSummary.event_count,
+                        logs: selectedSummary.log_count,
                       })}
                     </span>
-                  ) : null}
+                    {selectedSummary.error_count > 0 ? (
+                      <span className="exec-row-errors">
+                        {t("diagnostics.executions.errorChip", {
+                          count: selectedSummary.error_count,
+                        })}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
+                {selectedSummary.person_id && (
+                  <Avatar
+                    src={memberAvatarUrl(selectedSummary.person_id)}
+                    size="lg"
+                    radius="md"
+                    style={{ marginLeft: "16px", flexShrink: 0 }}
+                  >
+                    {selectedSummary.person_id.substring(0, 2).toUpperCase()}
+                  </Avatar>
+                )}
               </div>
               <ExecTimeline
                 records={records}
@@ -2291,7 +2358,18 @@ function PromptTraceList({ entries }: { entries: PromptTraceEntry[] }) {
                 {traceKindLabel(t, group.kind)}
               </Badge>
             </span>
-            <span>{group.personId || "-"}</span>
+            <span>
+              <Group gap={4} align="center" style={{ display: "inline-flex" }}>
+                <Avatar
+                  src={group.personId ? memberAvatarUrl(group.personId) : undefined}
+                  size={16}
+                  radius="xl"
+                >
+                  {group.personId ? group.personId.substring(0, 2).toUpperCase() : "-"}
+                </Avatar>
+                {group.personId || "-"}
+              </Group>
+            </span>
             <span>{group.timestamp ? formatTime(group.timestamp) : "-"}</span>
             <span title={group.brain}>{traceBrainLabel(group.brain)}</span>
             <span className="trace-io">
@@ -2338,7 +2416,7 @@ function PromptTraceDetails({ group }: { group: PromptTraceGroup }) {
   const metadata = traceGroupMetadata(group);
   return (
     <div className="trace-detail">
-      <Group justify="space-between" align="flex-start">
+      <Group justify="space-between" align="flex-start" style={{ width: "100%" }}>
         <div>
           <Text fw={700}>
             {traceKindLabel(t, group.kind)} / {traceBrainLabel(group.brain)}
@@ -2346,12 +2424,17 @@ function PromptTraceDetails({ group }: { group: PromptTraceGroup }) {
           <Text c="dimmed" size="xs">
             {group.personId || "-"} · {group.timestamp ? formatDateTime(group.timestamp) : "-"}
           </Text>
+          <Badge color={traceKindColor(group.kind)} variant="light" mt={6}>
+            {group.request && group.response
+              ? t("overview.promptTrace.requestResponse")
+              : t("overview.promptTrace.singleEvent")}
+          </Badge>
         </div>
-        <Badge color={traceKindColor(group.kind)} variant="light">
-          {group.request && group.response
-            ? t("overview.promptTrace.requestResponse")
-            : t("overview.promptTrace.singleEvent")}
-        </Badge>
+        {group.personId && (
+          <Avatar src={memberAvatarUrl(group.personId)} size="lg" radius="md">
+            {group.personId.substring(0, 2).toUpperCase()}
+          </Avatar>
+        )}
       </Group>
       <div className="trace-detail-meta">
         {metadata.map(([label, value]) => (

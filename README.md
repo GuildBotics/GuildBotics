@@ -555,11 +555,14 @@ Create a Slack App that acts as the AI agent (send + receive).
    - If you want to configure via `channel_name`, also add name resolution scopes (`conversations.list`)
      - `channels:read` (public channels)
      - `groups:read` (private channels)
+   - If you want to import member avatars from Slack (Setup screen), also add
+     - `users:read` (for `users.info`)
    - Reference URLs (official Slack docs)
      - `conversations.history`: `https://api.slack.com/methods/conversations.history`
      - `conversations.list`: `https://api.slack.com/methods/conversations.list`
      - `chat.postMessage`: `https://api.slack.com/methods/chat.postMessage`
      - `reactions.add`: `https://api.slack.com/methods/reactions.add`
+     - `users.info`: `https://api.slack.com/methods/users.info`
 3. Install the app to your workspace (reinstall may be required after scope changes)
 4. Set Bot Token (`xoxb-...`) in environment variable `{PERSON_ID}_SLACK_BOT_TOKEN`
    - Example: for `alice`, set `ALICE_SLACK_BOT_TOKEN`
