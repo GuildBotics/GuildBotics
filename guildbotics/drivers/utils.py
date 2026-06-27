@@ -47,6 +47,8 @@ async def run_command(context: Context, command: str, task_type: str) -> bool:
 
     async def _action() -> None:
         words = shlex.split(command)
+        if not words:
+            raise ValueError(f"Empty or whitespace command string: {command!r}")
         await CommandRunner(context, words[0], words[1:]).run()
 
     return await run_with_logging(context, command, task_type, _action)

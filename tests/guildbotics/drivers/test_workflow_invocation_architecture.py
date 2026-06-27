@@ -513,3 +513,12 @@ async def test_dispatcher_creates_new_trace_when_none_active(monkeypatch):
     assert seen["trace_id"] is not None
     assert seen["source"] == "routine"
     assert seen["attributes"].get("service_run_id") == "run-123"
+
+
+@pytest.mark.asyncio
+async def test_run_command_empty():
+    from guildbotics.drivers.utils import run_command
+
+    context = _FakeContext()
+    ok = await run_command(context, "   ", "scheduled")
+    assert ok is False
