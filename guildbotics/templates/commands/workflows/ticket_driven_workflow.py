@@ -227,9 +227,15 @@ async def main(context: Context) -> AgentResponse | None:
         invocation = shared_state.get(WORKFLOW_INVOCATION_KEY)
         if invocation is not None:
             payload = None
-            if isinstance(invocation, dict) and invocation.get("trigger_type") == "ticket":
+            if (
+                isinstance(invocation, dict)
+                and invocation.get("trigger_type") == "ticket"
+            ):
                 payload = invocation.get("payload")
-            elif isinstance(invocation, WorkflowInvocation) and invocation.trigger_type == "ticket":
+            elif (
+                isinstance(invocation, WorkflowInvocation)
+                and invocation.trigger_type == "ticket"
+            ):
                 payload = invocation.payload
 
             if payload and "task" in payload:

@@ -739,7 +739,10 @@ def _read_incoming_event_from_context(context: Any) -> IncomingChatEvent | None:
     if invocation is not None:
         if isinstance(invocation, dict) and invocation.get("trigger_type") == "chat":
             return IncomingChatEvent.from_shared_state(invocation.get("payload"))
-        elif isinstance(invocation, WorkflowInvocation) and invocation.trigger_type == "chat":
+        elif (
+            isinstance(invocation, WorkflowInvocation)
+            and invocation.trigger_type == "chat"
+        ):
             return IncomingChatEvent.from_shared_state(invocation.payload)
 
     # Fallback to INCOMING_CHAT_EVENT_KEY
