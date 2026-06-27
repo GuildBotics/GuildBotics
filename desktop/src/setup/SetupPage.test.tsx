@@ -119,6 +119,11 @@ vi.mock("../api/client", async (importOriginal) => {
           model_id: "gpt-5",
         },
       ],
+      provider_defaults: [
+        { provider: "openai", model_class: "OpenAIModel", model_id: "gpt-5-mini" },
+        { provider: "gemini", model_class: "GeminiModel", model_id: "gemini-3-flash" },
+        { provider: "anthropic", model_class: "ClaudeModel", model_id: "claude-haiku" },
+      ],
       cli_agent_mapping: { default: "codex-cli.yml", codex: "codex-cli.yml" },
       cli_agents: [
         {
@@ -1399,6 +1404,7 @@ describe("toIntelligenceUpdatePayload", () => {
         model_id: "gpt-5",
       },
     ],
+    provider_defaults: [],
     cli_agent_mapping: { default: "codex-cli.yml" },
     cli_agents: [
       {
@@ -2267,16 +2273,21 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
     config_dir: "/workspace/.guildbotics/config",
     person_id: null,
     inherited: false,
-    model_mapping: { default: "models/openai.yml", openai: "models/openai.yml" },
+    model_mapping: { default: "models/openai/default.yml" },
     models: [
       {
-        path: "models/openai.yml",
+        path: "models/openai/default.yml",
         provider: "openai",
         model_class: "OpenAIModel",
         model_id: "gpt-5",
       },
     ],
-    cli_agent_mapping: { default: "codex-cli.yml", codex: "codex-cli.yml" },
+    provider_defaults: [
+      { provider: "openai", model_class: "OpenAIModel", model_id: "gpt-5-mini" },
+      { provider: "gemini", model_class: "GeminiModel", model_id: "gemini-3-flash" },
+      { provider: "anthropic", model_class: "ClaudeModel", model_id: "claude-haiku" },
+    ],
+    cli_agent_mapping: { default: "codex-cli.yml" },
     cli_agents: [
       {
         path: "codex-cli.yml",
@@ -2352,7 +2363,7 @@ async function openTeamIntelligenceAdvanced(user: ReturnType<typeof userEvent.se
   await user.click(await screen.findByRole("button", { name: t("setup.nav.intelligence") }));
   await user.click(await screen.findByRole("button", { name: t("setup.intelligence.advanced") }));
   // The advanced editor loads its config lazily; wait for a unique label.
-  await screen.findByText(t("setup.intelligence.modelMapping"));
+  await screen.findByText(t("setup.intelligence.tabs.models"));
 }
 
 async function openMemberIntelligenceTab(user: ReturnType<typeof userEvent.setup>) {
@@ -2375,9 +2386,9 @@ describe("IntelligenceEditor (team default)", () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const modelClass = await screen.findByLabelText(t("setup.intelligence.modelClass"));
-    await user.clear(modelClass);
-    await user.type(modelClass, "CustomModel");
+    const modelId = await screen.findByLabelText(t("setup.intelligence.modelId"));
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-6");
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -2385,8 +2396,8 @@ describe("IntelligenceEditor (team default)", () => {
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body).toMatchObject({ person_id: null, inherit_team_defaults: false });
     expect(body.models?.[0]).toMatchObject({
-      path: "models/openai.yml",
-      model_class: "CustomModel",
+      path: "models/openai/default.yml",
+      model_id: "gpt-6",
     });
   });
 
@@ -2442,7 +2453,7 @@ describe("IntelligenceEditor (team default)", () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    await screen.findByText(t("setup.intelligence.cliDefinitions"));
+    await screen.findByText(t("setup.intelligence.tabs.cli"));
     expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
   });
 
@@ -2451,9 +2462,9 @@ describe("IntelligenceEditor (team default)", () => {
     vi.mocked(updateIntelligenceConfig).mockRejectedValueOnce(new Error("write blew up"));
     await openTeamIntelligenceAdvanced(user);
 
-    const modelClass = await screen.findByLabelText(t("setup.intelligence.modelClass"));
-    await user.clear(modelClass);
-    await user.type(modelClass, "BrokenModel");
+    const modelId = await screen.findByLabelText(t("setup.intelligence.modelId"));
+    await user.clear(modelId);
+    await user.type(modelId, "broken-model");
 
     expect(await screen.findByText(t("setup.intelligence.saveAdvancedError"))).toBeInTheDocument();
     expect(screen.getByText("write blew up")).toBeInTheDocument();

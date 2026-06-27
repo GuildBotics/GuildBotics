@@ -532,12 +532,19 @@ export type BrainAssignment = {
   target: string;
 };
 
+export type ModelProviderDefault = {
+  provider: string;
+  model_class: string;
+  model_id: string;
+};
+
 export type IntelligenceConfig = {
   config_dir: string;
   person_id: string | null;
   inherited: boolean;
   model_mapping: Record<string, string>;
   models: ModelDefinition[];
+  provider_defaults: ModelProviderDefault[];
   cli_agent_mapping: Record<string, string>;
   cli_agents: CliAgentDefinition[];
   brain_mapping: BrainAssignment[];

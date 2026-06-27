@@ -353,12 +353,19 @@ class BrainAssignment(BaseModel):
     target: str
 
 
+class ModelProviderDefault(BaseModel):
+    provider: str
+    model_class: str = ""
+    model_id: str = ""
+
+
 class IntelligenceConfigResponse(BaseModel):
     config_dir: Path
     person_id: str | None = None
     inherited: bool = False
     model_mapping: dict[str, str] = Field(default_factory=dict)
     models: list[ModelDefinition] = Field(default_factory=list)
+    provider_defaults: list[ModelProviderDefault] = Field(default_factory=list)
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
     cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
     brain_mapping: list[BrainAssignment] = Field(default_factory=list)

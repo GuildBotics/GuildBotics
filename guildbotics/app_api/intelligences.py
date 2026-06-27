@@ -11,6 +11,7 @@ from guildbotics.app_api.models import (
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
+    ModelProviderDefault,
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.editions.simple.setup_service import CreatedFile
@@ -20,6 +21,7 @@ from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yam
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
 CLI_BRAIN_CLASS = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
 MODEL_PATH_PROVIDER_INDEX = 1
+LLM_PROVIDERS = ("openai", "gemini", "anthropic")
 
 
 class IntelligenceConfigResult:
@@ -50,6 +52,7 @@ class IntelligenceConfigService:
             inherited=inherited,
             model_mapping=model_mapping,
             models=self._read_models(config_dir, person_id, model_mapping),
+            provider_defaults=self._read_provider_defaults(config_dir, person_id),
             cli_agent_mapping=cli_agent_mapping,
             cli_agents=self._read_cli_agents(config_dir, person_id, cli_agent_mapping),
             brain_mapping=self._read_brain_assignments(brain_mapping),
@@ -102,13 +105,20 @@ class IntelligenceConfigService:
         cli_agents_dir.mkdir(parents=True, exist_ok=True)
         for agent in request.cli_agents:
             agent_file = cli_agents_dir / agent.path
-            save_yaml_file(
-                agent_file,
-                {
-                    "env": agent.env,
-                    "script": agent.script,
-                },
-            )
+            # Preserve the existing/template script when the request does not
+            # carry one. The editor only loads the mapped agent's script, so a
+            # newly selected agent would otherwise overwrite a real script with
+            # an empty one. Mirrors how model files are merged above.
+            agent_data = self._read_optional_yaml(agent_file)
+            if not agent_data:
+                agent_data = self._read_optional_yaml(
+                    get_template_path() / "intelligences/cli_agents" / agent.path
+                )
+            agent_data["env"] = agent.env
+            if agent.script:
+                agent_data["script"] = agent.script
+            agent_data.setdefault("script", "")
+            save_yaml_file(agent_file, agent_data)
             files.append(CreatedFile(path=agent_file, action="update"))
 
         brain_mapping_file = target_dir / "brain_mapping.yml"
@@ -198,6 +208,30 @@ class IntelligenceConfigService:
                 )
             )
         return models
+
+    def _read_provider_defaults(
+        self, config_dir: Path, person_id: str | None
+    ) -> list[ModelProviderDefault]:
+        # The default model for each provider lives in
+        # ``models/<provider>/default.yml`` (config override or shipped template).
+        # Exposing it lets the desktop editor seed a slot when its provider
+        # changes without duplicating model ids/classes in the frontend.
+        defaults: list[ModelProviderDefault] = []
+        for provider in LLM_PROVIDERS:
+            data = self._read_scoped_yaml(
+                config_dir, person_id, f"models/{provider}/default.yml"
+            )
+            parameters = data.get("parameters", {}) if isinstance(data, dict) else {}
+            if not isinstance(parameters, dict):
+                parameters = {}
+            defaults.append(
+                ModelProviderDefault(
+                    provider=provider,
+                    model_class=str(data.get("model_class", "")) if data else "",
+                    model_id=str(parameters.get("id", "")),
+                )
+            )
+        return defaults
 
     def _read_cli_agents(
         self,

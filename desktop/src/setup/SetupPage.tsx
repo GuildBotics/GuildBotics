@@ -61,9 +61,11 @@ import {
   type CommandOption,
   type DiagnosticCheck,
   type CliAgentDetection,
+  type CliAgentDefinition,
   type ConfigStatus,
   type BrainAssignment,
   type IntelligenceConfig,
+  type ModelDefinition,
   type MemberSetupRequest,
   type ChatParticipationPolicy,
   type MemberConfig,
@@ -840,95 +842,117 @@ function IntelligenceSection({
         saveState={autosaveEnabled ? saveState : undefined}
         badge={t("setup.intelligence.teamDefault")}
       />
-      <Stack mt="md">
-        <Text size="sm" fw={700}>
-          {t("setup.intelligence.defaultProvider")}
-        </Text>
-        <Text size="sm" c="dimmed">
-          {t("setup.intelligence.providerDescription")}
-        </Text>
-        <div className="option-card-grid">
-          {LLM_PROVIDER_OPTIONS.map((option) => {
-            const active = form.values.llmApiType === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                className={`option-card ${active ? "active" : ""}`}
-                onClick={() => form.setFieldValue("llmApiType", option.value)}
-              >
-                <span className="title">{option.label}</span>
-                <span className="caption">{option.family}</span>
-              </button>
-            );
-          })}
-        </div>
-        <PasswordInput
-          label={<RequiredLabel text={selectedProviderKeyLabel} />}
-          aria-label={selectedProviderKeyLabel}
-          aria-required
-          description={
-            selectedProviderKeyConfigured
-              ? t("setup.intelligence.keyConfiguredDescription")
-              : undefined
-          }
-          placeholder={
-            selectedProviderKeyConfigured
-              ? MASKED_SECRET_PLACEHOLDER
-              : t("setup.intelligence.keyPlaceholder")
-          }
-          value={selectedProviderKey}
-          onChange={(event) =>
-            form.setFieldValue(selectedProviderKeyField, event.currentTarget.value)
-          }
-        />
-        <Divider />
-        <Text size="sm" fw={700}>
-          {t("setup.intelligence.defaultCliAgent")}
-        </Text>
-        <div className="option-card-grid">
-          {CLI_AGENT_OPTIONS.map((option) => {
-            const detection = detections.find((entry) => entry.name === option.value);
-            const detected = detectionLoading
-              ? form.values.cliAgent === option.value
-              : Boolean(detection?.detected);
-            const active = form.values.cliAgent === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                className={`option-card ${active ? "active" : ""}`}
-                disabled={!detected}
-                onClick={() => form.setFieldValue("cliAgent", option.value)}
-              >
-                <span className="title">{option.label}</span>
-                <span className="caption">{option.value}</span>
-                <span className={`detection ${detected ? "ok" : "ng"}`}>
-                  <i />
-                  {detected
-                    ? t("setup.intelligence.detected")
-                    : t("setup.intelligence.notDetected")}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <Text size="sm" c="dimmed">
-          {t("setup.intelligence.cliHint")}
-        </Text>
-        <CliAgentSkillStatusList
-          detections={detections}
-          statuses={skillStatuses.data?.agents ?? []}
-          loading={skillStatuses.isLoading}
-          onForceUpdate={(agent) => forceSkillUpdate.mutate(agent)}
-          updatingAgent={forceSkillUpdate.isPending ? forceSkillUpdate.variables : undefined}
-        />
+      <Stack mt="md" gap="md">
+        {/* LLM Settings Section */}
+        <Card withBorder radius="sm" p="md">
+          <Stack gap="xs">
+            <Text size="sm" fw={700}>
+              {t("setup.intelligence.defaultProvider")}
+            </Text>
+            <Text size="sm" c="dimmed">
+              {t("setup.intelligence.providerDescription")}
+            </Text>
+            <div className="option-card-grid">
+              {LLM_PROVIDER_OPTIONS.map((option) => {
+                const active = form.values.llmApiType === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`option-card ${active ? "active" : ""}`}
+                    onClick={() => form.setFieldValue("llmApiType", option.value)}
+                  >
+                    <span className="title">{option.label}</span>
+                    <span className="caption">{option.family}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <PasswordInput
+              label={<RequiredLabel text={selectedProviderKeyLabel} />}
+              aria-label={selectedProviderKeyLabel}
+              aria-required
+              description={
+                selectedProviderKeyConfigured
+                  ? t("setup.intelligence.keyConfiguredDescription")
+                  : undefined
+              }
+              placeholder={
+                selectedProviderKeyConfigured
+                  ? MASKED_SECRET_PLACEHOLDER
+                  : t("setup.intelligence.keyPlaceholder")
+              }
+              value={selectedProviderKey}
+              onChange={(event) =>
+                form.setFieldValue(selectedProviderKeyField, event.currentTarget.value)
+              }
+            />
+          </Stack>
+        </Card>
+
+        {/* CLI Settings Section */}
+        <Card withBorder radius="sm" p="md">
+          <Stack gap="xs">
+            <Text size="sm" fw={700}>
+              {t("setup.intelligence.defaultCliAgent")}
+            </Text>
+            <Text size="sm" c="dimmed">
+              {t("setup.intelligence.cliHint")}
+            </Text>
+            <div className="option-card-grid">
+              {CLI_AGENT_OPTIONS.map((option) => {
+                const detection = detections.find((entry) => entry.name === option.value);
+                const detected = detectionLoading
+                  ? form.values.cliAgent === option.value
+                  : Boolean(detection?.detected);
+                const active = form.values.cliAgent === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`option-card ${active ? "active" : ""}`}
+                    disabled={!detected}
+                    onClick={() => form.setFieldValue("cliAgent", option.value)}
+                  >
+                    <span className="title">{option.label}</span>
+                    <span className="caption">{option.value}</span>
+                    <span className={`detection ${detected ? "ok" : "ng"}`}>
+                      <i />
+                      {detected
+                        ? t("setup.intelligence.detected")
+                        : t("setup.intelligence.notDetected")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <CliAgentSkillStatusList
+              detections={detections}
+              statuses={skillStatuses.data?.agents ?? []}
+              loading={skillStatuses.isLoading}
+              onForceUpdate={(agent) => forceSkillUpdate.mutate(agent)}
+              updatingAgent={forceSkillUpdate.isPending ? forceSkillUpdate.variables : undefined}
+            />
+          </Stack>
+        </Card>
+
         {autosaveEnabled ? (
           <Accordion variant="contained">
             <Accordion.Item value="advanced-intelligence">
               <Accordion.Control>{t("setup.intelligence.advanced")}</Accordion.Control>
               <Accordion.Panel>
-                <IntelligenceEditor enabled={autosaveEnabled} detections={detections} />
+                <IntelligenceEditor
+                  enabled={autosaveEnabled}
+                  detections={detections}
+                  teamLlmApiType={form.values.llmApiType}
+                  teamCliAgent={form.values.cliAgent}
+                  onTeamLlmApiTypeChange={(val) =>
+                    form.setFieldValue("llmApiType", val as ProjectFormValues["llmApiType"])
+                  }
+                  onTeamCliAgentChange={(val) =>
+                    form.setFieldValue("cliAgent", val as ProjectFormValues["cliAgent"])
+                  }
+                />
               </Accordion.Panel>
             </Accordion.Item>
           </Accordion>
@@ -1066,6 +1090,70 @@ function upsertByAgent(
   return statuses.map((status) => (status.agent === updated.agent ? updated : status));
 }
 
+const DEFAULT_LLM_PROVIDER = "openai";
+const LLM_PROVIDERS = ["openai", "gemini", "anthropic"] as const;
+
+function isLlmProvider(provider: string): boolean {
+  return (LLM_PROVIDERS as readonly string[]).includes(provider);
+}
+
+type ProviderDefaults = Record<string, { model_class: string; model_id: string }>;
+
+// Per-provider default model_class/model_id, sourced from the backend
+// (`models/<provider>/default.yml`). Keeping it server-side means swapping a
+// provider's default model is a data change, not a frontend code change.
+function providerDefaultsMap(config: IntelligenceConfig): ProviderDefaults {
+  return Object.fromEntries(
+    (config.provider_defaults ?? []).map((entry) => [
+      entry.provider,
+      { model_class: entry.model_class, model_id: entry.model_id },
+    ]),
+  );
+}
+
+// The backend derives the provider from the model file's directory
+// (`models/<provider>/<file>.yml`), so the path alone identifies the provider.
+function providerFromModelPath(path: string | undefined): string {
+  return path ? (path.split("/")[1] ?? "") : "";
+}
+
+// Each slot owns a distinct model file keyed by its slot name. Without this,
+// slots that resolve to the same path would share a single model definition and
+// edits to one would leak into another (e.g. the default + gemini slots).
+function slotModelPath(provider: string, slotKey: string): string {
+  return `models/${provider}/${slotKey}.yml`;
+}
+
+function providerDefaultModel(
+  provider: string,
+  slotKey: string,
+  defaults: ProviderDefaults,
+): ModelDefinition {
+  const def = defaults[provider];
+  return {
+    path: slotModelPath(provider, slotKey),
+    provider,
+    model_class: def?.model_class ?? "",
+    model_id: def?.model_id ?? "",
+  };
+}
+
+// Assigns `model` to `slotKey` and drops any model definition no longer
+// referenced by a slot, keeping the slot ↔ model relationship one-to-one.
+function withSlotModel(
+  current: IntelligenceConfig,
+  slotKey: string,
+  model: ModelDefinition,
+): IntelligenceConfig {
+  const model_mapping = { ...current.model_mapping, [slotKey]: model.path };
+  const usedPaths = new Set(Object.values(model_mapping));
+  const models = [
+    ...current.models.filter((m) => m.path !== model.path && usedPaths.has(m.path)),
+    model,
+  ];
+  return { ...current, model_mapping, models };
+}
+
 function IntelligenceEditor({
   personId,
   savePersonId,
@@ -1074,6 +1162,10 @@ function IntelligenceEditor({
   llmProviderAvailability,
   saveMode = "auto",
   onRegisterSave,
+  teamLlmApiType,
+  teamCliAgent,
+  onTeamLlmApiTypeChange,
+  onTeamCliAgentChange,
 }: {
   personId?: string;
   savePersonId?: string;
@@ -1082,6 +1174,10 @@ function IntelligenceEditor({
   llmProviderAvailability?: LlmProviderAvailability;
   saveMode?: "auto" | "external";
   onRegisterSave?: (save: (() => Promise<void>) | null) => void;
+  teamLlmApiType?: string;
+  teamCliAgent?: string;
+  onTeamLlmApiTypeChange?: (val: string) => void;
+  onTeamCliAgentChange?: (val: string) => void;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -1130,6 +1226,22 @@ function IntelligenceEditor({
     }
   }, [draftKey, envErrors, mutation, payload, serializedPayload]);
 
+  const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
+    setDraftState((current) => {
+      const currentConfig = current?.key === draftKey ? current.config : query.data;
+      if (!currentConfig) {
+        return current;
+      }
+      return {
+        key: draftKey,
+        config: recipe(currentConfig),
+        savedSerialized:
+          current?.key === draftKey ? current.savedSerialized : querySerializedPayload,
+      };
+    });
+    setSaveState("idle");
+  };
+
   useEffect(() => {
     if (!enabled || saveMode !== "auto" || !canSave) {
       return;
@@ -1147,6 +1259,101 @@ function IntelligenceEditor({
     onRegisterSave(saveDraft);
     return () => onRegisterSave(null);
   }, [enabled, onRegisterSave, saveDraft, saveMode]);
+
+  // Sync basic settings (props) -> advanced settings (draftState)
+  useEffect(() => {
+    if (personId || !teamLlmApiType || !draft) return;
+
+    // Only realign when the provider actually differs, otherwise we would reset
+    // the default slot's model on every mount. The guards above keep this from
+    // cascading, so reconciling the draft here is intentional.
+    if (providerFromModelPath(draft.model_mapping.default) === teamLlmApiType) return;
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded prop→draft sync
+    updateDraft((current) =>
+      withSlotModel(
+        current,
+        "default",
+        providerDefaultModel(teamLlmApiType, "default", providerDefaultsMap(current)),
+      ),
+    );
+  }, [teamLlmApiType, personId]);
+
+  useEffect(() => {
+    if (personId || !teamCliAgent || !draft) return;
+
+    const currentPath = draft.cli_agent_mapping.default;
+    const matchedAgent = draft.cli_agents.find((a) => a.name === teamCliAgent);
+    const expectedPath = matchedAgent ? matchedAgent.path : `${teamCliAgent}-cli.yml`;
+
+    if (currentPath !== expectedPath) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded prop→draft sync
+      updateDraft((current) => {
+        const nextCliAgents = [...current.cli_agents];
+        const exists = nextCliAgents.some((a) => a.path === expectedPath);
+        if (!exists) {
+          nextCliAgents.push({
+            path: expectedPath,
+            name: teamCliAgent,
+            env: {},
+            script: "",
+            detected: false,
+            detected_path: "",
+          });
+        }
+        return {
+          ...current,
+          cli_agent_mapping: {
+            ...current.cli_agent_mapping,
+            default: expectedPath,
+          },
+          cli_agents: nextCliAgents,
+        };
+      });
+    }
+  }, [teamCliAgent, personId]);
+
+  // Sync advanced settings (draftState) -> basic settings (props callback)
+  const prevDefaultModelPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (personId || !draft || !onTeamLlmApiTypeChange) return;
+
+    const currentPath = draft.model_mapping.default;
+    if (prevDefaultModelPathRef.current === null) {
+      prevDefaultModelPathRef.current = currentPath;
+      return;
+    }
+    if (prevDefaultModelPathRef.current !== currentPath) {
+      prevDefaultModelPathRef.current = currentPath;
+
+      const provider = providerFromModelPath(currentPath);
+      if (isLlmProvider(provider) && provider !== teamLlmApiType) {
+        onTeamLlmApiTypeChange(provider);
+      }
+    }
+  }, [draft?.model_mapping?.default, teamLlmApiType, onTeamLlmApiTypeChange, personId]);
+
+  const prevDefaultCliPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (personId || !draft || !onTeamCliAgentChange) return;
+
+    const currentPath = draft.cli_agent_mapping.default;
+    if (prevDefaultCliPathRef.current === null) {
+      prevDefaultCliPathRef.current = currentPath;
+      return;
+    }
+    if (prevDefaultCliPathRef.current !== currentPath) {
+      prevDefaultCliPathRef.current = currentPath;
+
+      const matchedAgent = draft.cli_agents.find((a) => a.name === teamCliAgent);
+      const agentName = matchedAgent
+        ? matchedAgent.name
+        : currentPath.replace("-cli.yml", "").replace(".yml", "");
+      if (agentName && agentName !== teamCliAgent) {
+        onTeamCliAgentChange(agentName);
+      }
+    }
+  }, [draft?.cli_agent_mapping?.default, teamCliAgent, onTeamCliAgentChange, personId]);
 
   if (!enabled) {
     return (
@@ -1172,34 +1379,297 @@ function IntelligenceEditor({
 
   const modelSlots = Object.keys(draft.model_mapping);
   const cliSlots = Object.keys(draft.cli_agent_mapping);
-  const modelOptions = draft.models.map((model) => ({
-    value: model.path,
-    label: `${model.provider || "model"} / ${model.model_id || model.path}`,
-  }));
-  const cliFileOptions = draft.cli_agents.map((agent) => ({
-    value: agent.path,
-    label: agent.name,
-  }));
-  const cliSlotOptions = cliSlots.map((slot) => ({ value: slot, label: slot }));
-  const modelSlotOptions = modelSlots.map((slot) => ({ value: slot, label: slot }));
+  // Offer every known CLI agent as a choice, not just the ones still mapped to a
+  // slot. Deriving the options from `draft.cli_agents` (which the backend builds
+  // only from currently-mapped paths) would otherwise leave a single option once
+  // the other slots are deleted.
+  const cliFileOptions = [
+    ...detections.map((agent) => ({
+      value: `${agent.name}-cli.yml`,
+      label: agent.name,
+    })),
+    ...draft.cli_agents
+      .filter((agent) => !detections.some((d) => `${d.name}-cli.yml` === agent.path))
+      .map((agent) => ({ value: agent.path, label: agent.name })),
+  ];
   const detectedByPath = Object.fromEntries(
     detections.map((entry) => [`${entry.name}-cli.yml`, entry]),
   ) as Record<string, CliAgentDetection>;
 
-  const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
-    setDraftState((current) => {
-      const currentConfig = current?.key === draftKey ? current.config : query.data;
-      if (!currentConfig) {
-        return current;
+  // --- LLM Slot Helpers ---
+  const handleAddLlmSlot = () => {
+    updateDraft((current) => {
+      let baseName = "new_llm_slot";
+      let counter = 1;
+      while (current.model_mapping[baseName]) {
+        baseName = `new_llm_slot_${counter}`;
+        counter++;
       }
+      return withSlotModel(
+        current,
+        baseName,
+        providerDefaultModel(DEFAULT_LLM_PROVIDER, baseName, providerDefaultsMap(current)),
+      );
+    });
+  };
+
+  const handleDeleteLlmSlot = (slotKey: string) => {
+    if (slotKey === "default") return;
+    updateDraft((current) => {
+      const nextMapping = { ...current.model_mapping };
+      delete nextMapping[slotKey];
+
+      const nextBrainMapping = current.brain_mapping.map((brain) => {
+        if (brain.engine === "llm" && brain.target === slotKey) {
+          return { ...brain, target: "default" };
+        }
+        return brain;
+      });
+
       return {
-        key: draftKey,
-        config: recipe(currentConfig),
-        savedSerialized:
-          current?.key === draftKey ? current.savedSerialized : querySerializedPayload,
+        ...current,
+        model_mapping: nextMapping,
+        brain_mapping: nextBrainMapping,
       };
     });
-    setSaveState("idle");
+  };
+
+  const handleRenameLlmSlot = (oldKey: string, newKey: string) => {
+    if (oldKey === "default" || !newKey.trim() || oldKey === newKey) return;
+    updateDraft((current) => {
+      if (current.model_mapping[newKey]) return current;
+
+      const nextMapping = { ...current.model_mapping };
+      const path = nextMapping[oldKey];
+      delete nextMapping[oldKey];
+      nextMapping[newKey] = path;
+
+      const nextBrainMapping = current.brain_mapping.map((brain) => {
+        if (brain.engine === "llm" && brain.target === oldKey) {
+          return { ...brain, target: newKey };
+        }
+        return brain;
+      });
+
+      return {
+        ...current,
+        model_mapping: nextMapping,
+        brain_mapping: nextBrainMapping,
+      };
+    });
+  };
+
+  const handleUpdateLlmSlotProvider = (slotKey: string, provider: string) => {
+    updateDraft((current) =>
+      withSlotModel(
+        current,
+        slotKey,
+        providerDefaultModel(provider, slotKey, providerDefaultsMap(current)),
+      ),
+    );
+  };
+
+  const handleUpdateLlmSlotModelId = (slotKey: string, modelId: string) => {
+    updateDraft((current) => {
+      const currentPath = current.model_mapping[slotKey];
+      const currentDef = current.models.find((m) => m.path === currentPath);
+      const provider =
+        currentDef?.provider || providerFromModelPath(currentPath) || DEFAULT_LLM_PROVIDER;
+      return withSlotModel(current, slotKey, {
+        path: slotModelPath(provider, slotKey),
+        provider,
+        model_class:
+          currentDef?.model_class || providerDefaultsMap(current)[provider]?.model_class || "",
+        model_id: modelId,
+      });
+    });
+  };
+
+  // --- CLI Slot Helpers ---
+  const handleAddCliSlot = () => {
+    updateDraft((current) => {
+      let baseName = "new_cli_slot";
+      let counter = 1;
+      while (current.cli_agent_mapping[baseName]) {
+        baseName = `new_cli_slot_${counter}`;
+        counter++;
+      }
+      return {
+        ...current,
+        cli_agent_mapping: {
+          ...current.cli_agent_mapping,
+          [baseName]: "codex-cli.yml",
+        },
+      };
+    });
+  };
+
+  const handleDeleteCliSlot = (slotKey: string) => {
+    if (slotKey === "default") return;
+    updateDraft((current) => {
+      const nextMapping = { ...current.cli_agent_mapping };
+      delete nextMapping[slotKey];
+
+      const nextBrainMapping = current.brain_mapping.map((brain) => {
+        if (brain.engine === "cli" && brain.target === slotKey) {
+          return { ...brain, target: "default" };
+        }
+        return brain;
+      });
+
+      return {
+        ...current,
+        cli_agent_mapping: nextMapping,
+        brain_mapping: nextBrainMapping,
+      };
+    });
+  };
+
+  const handleRenameCliSlot = (oldKey: string, newKey: string) => {
+    if (oldKey === "default" || !newKey.trim() || oldKey === newKey) return;
+    updateDraft((current) => {
+      if (current.cli_agent_mapping[newKey]) return current;
+
+      const nextMapping = { ...current.cli_agent_mapping };
+      const path = nextMapping[oldKey];
+      delete nextMapping[oldKey];
+      nextMapping[newKey] = path;
+
+      const nextBrainMapping = current.brain_mapping.map((brain) => {
+        if (brain.engine === "cli" && brain.target === oldKey) {
+          return { ...brain, target: newKey };
+        }
+        return brain;
+      });
+
+      return {
+        ...current,
+        cli_agent_mapping: nextMapping,
+        brain_mapping: nextBrainMapping,
+      };
+    });
+  };
+
+  const handleUpdateCliSlotAgentPath = (slotKey: string, agentPath: string) => {
+    updateDraft((current) => {
+      const nextCliAgents = [...current.cli_agents];
+      const exists = nextCliAgents.some((a) => a.path === agentPath);
+      if (!exists) {
+        const name = agentPath.replace(".yml", "");
+        nextCliAgents.push({
+          path: agentPath,
+          name: name,
+          env: {},
+          script: "",
+          detected: false,
+          detected_path: "",
+        });
+      }
+
+      return {
+        ...current,
+        cli_agent_mapping: {
+          ...current.cli_agent_mapping,
+          [slotKey]: agentPath,
+        },
+        cli_agents: nextCliAgents,
+      };
+    });
+  };
+
+  const handleUpdateCliAgentDef = (path: string, updates: Partial<CliAgentDefinition>) => {
+    updateDraft((current) => {
+      return {
+        ...current,
+        cli_agents: current.cli_agents.map((agent) => {
+          if (agent.path === path) {
+            return { ...agent, ...updates };
+          }
+          return agent;
+        }),
+      };
+    });
+  };
+
+  // --- Brain Assignment Helpers ---
+  const handleAddBrain = () => {
+    updateDraft((current) => {
+      let baseName = "new_brain_function";
+      let counter = 1;
+      const exists = (name: string) => current.brain_mapping.some((b) => b.name === name);
+      while (exists(baseName)) {
+        baseName = `new_brain_function_${counter}`;
+        counter++;
+      }
+      return {
+        ...current,
+        brain_mapping: [
+          ...current.brain_mapping,
+          {
+            name: baseName,
+            brain_class: "guildbotics.intelligences.agno_agent.AgnoAgentDefaultBrain",
+            engine: "llm",
+            target: "default",
+          },
+        ],
+      };
+    });
+  };
+
+  const handleDeleteBrain = (index: number) => {
+    const target = draft.brain_mapping[index];
+    if (!target || target.name === "default" || target.name === "file_editor") return;
+    updateDraft((current) => {
+      return {
+        ...current,
+        brain_mapping: current.brain_mapping.filter((_, i) => i !== index),
+      };
+    });
+  };
+
+  const handleUpdateBrain = (index: number, updates: Partial<BrainAssignment>) => {
+    updateDraft((current) => {
+      const updated = [...current.brain_mapping];
+      const currentAssignment = updated[index];
+      if (!currentAssignment) return current;
+
+      let nextClass = currentAssignment.brain_class;
+      let nextTarget = updates.target !== undefined ? updates.target : currentAssignment.target;
+
+      if (updates.engine !== undefined && updates.engine !== currentAssignment.engine) {
+        if (updates.engine === "cli") {
+          nextClass = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain";
+          const firstCliSlot = Object.keys(current.cli_agent_mapping)[0] ?? "default";
+          nextTarget = firstCliSlot;
+        } else {
+          nextClass = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain";
+          const firstLlmSlot = Object.keys(current.model_mapping)[0] ?? "default";
+          nextTarget = firstLlmSlot;
+        }
+      }
+
+      updated[index] = {
+        ...currentAssignment,
+        ...updates,
+        brain_class: nextClass,
+        target: nextTarget,
+      };
+      return { ...current, brain_mapping: updated };
+    });
+  };
+
+  const handleRenameBrain = (index: number, newName: string) => {
+    const target = draft.brain_mapping[index];
+    if (!target || target.name === "default" || target.name === "file_editor" || !newName.trim())
+      return;
+    updateDraft((current) => {
+      const exists = current.brain_mapping.some((b, i) => i !== index && b.name === newName);
+      if (exists) return current;
+
+      const updated = [...current.brain_mapping];
+      updated[index] = { ...target, name: newName };
+      return { ...current, brain_mapping: updated };
+    });
   };
 
   if (personId) {
@@ -1339,236 +1809,274 @@ function IntelligenceEditor({
           {t("setup.intelligence.inheritingBody")}
         </InfoCallout>
       ) : (
-        <>
+        <Stack gap="lg">
+          {/* Section 1: Brain Assignment */}
           <Card withBorder radius="sm" p="md">
             <Stack gap="sm">
-              <Text fw={700} size="sm">
-                {t("setup.intelligence.modelMapping")}
-              </Text>
-              {modelSlots.map((slot) => (
-                <Group key={slot} align="flex-end">
-                  <TextInput value={slot} label={t("setup.intelligence.slot")} readOnly flex={1} />
-                  <Select
-                    label={t("setup.intelligence.model")}
-                    data={modelOptions}
-                    value={draft.model_mapping[slot] ?? ""}
-                    onChange={(value) =>
-                      updateDraft((current) => ({
-                        ...current,
-                        model_mapping: {
-                          ...current.model_mapping,
-                          [slot]: value ?? current.model_mapping[slot],
-                        },
-                      }))
-                    }
-                    flex={2}
-                  />
-                </Group>
-              ))}
-            </Stack>
-          </Card>
+              <Group justify="space-between">
+                <Text fw={700} size="sm">
+                  {t("setup.intelligence.brainMapping")}
+                </Text>
+                <Button
+                  size="xs"
+                  variant="light"
+                  leftSection={<Plus size={14} />}
+                  onClick={handleAddBrain}
+                >
+                  {t("setup.intelligence.addBrain")}
+                </Button>
+              </Group>
 
-          <Card withBorder radius="sm" p="md">
-            <Stack gap="sm">
-              <Text fw={700} size="sm">
-                {t("setup.intelligence.modelDefinitions")}
-              </Text>
-              {draft.models.map((model) => (
-                <Group key={model.path} align="flex-end">
-                  <TextInput
-                    label={t("setup.intelligence.path")}
-                    value={model.path}
-                    readOnly
-                    flex={1.3}
-                  />
-                  <TextInput
-                    label={t("setup.intelligence.modelClass")}
-                    value={model.model_class}
-                    onChange={(event) =>
-                      updateDraft((current) => ({
-                        ...current,
-                        models: updateByPath(current.models, model.path, {
-                          model_class: event.currentTarget.value,
-                        }),
-                      }))
-                    }
-                    flex={2}
-                  />
-                  <TextInput
-                    label={t("setup.intelligence.modelId")}
-                    value={model.model_id}
-                    onChange={(event) =>
-                      updateDraft((current) => ({
-                        ...current,
-                        models: updateByPath(current.models, model.path, {
-                          model_id: event.currentTarget.value,
-                        }),
-                      }))
-                    }
-                    flex={1.4}
-                  />
-                </Group>
-              ))}
-            </Stack>
-          </Card>
+              {draft.brain_mapping.map((assignment, index) => {
+                const targetOptions =
+                  assignment.engine === "cli"
+                    ? cliSlots.map((s) => ({ value: s, label: s }))
+                    : modelSlots.map((s) => ({ value: s, label: s }));
 
-          <Card withBorder radius="sm" p="md">
-            <Stack gap="sm">
-              <Text fw={700} size="sm">
-                {t("setup.intelligence.cliMapping")}
-              </Text>
-              {cliSlots.map((slot) => (
-                <Group key={slot} align="flex-end">
-                  <TextInput value={slot} label={t("setup.intelligence.slot")} readOnly flex={1} />
-                  <Select
-                    label={t("setup.intelligence.cliAgent")}
-                    data={cliFileOptions}
-                    value={draft.cli_agent_mapping[slot] ?? ""}
-                    onChange={(value) =>
-                      updateDraft((current) => ({
-                        ...current,
-                        cli_agent_mapping: {
-                          ...current.cli_agent_mapping,
-                          [slot]: value ?? current.cli_agent_mapping[slot],
-                        },
-                      }))
-                    }
-                    flex={2}
-                  />
-                </Group>
-              ))}
-            </Stack>
-          </Card>
-
-          <Card withBorder radius="sm" p="md">
-            <Stack gap="sm">
-              <Text fw={700} size="sm">
-                {t("setup.intelligence.brainMapping")}
-              </Text>
-              {draft.brain_mapping.map((assignment) => (
-                <Group key={assignment.name} align="flex-end">
-                  <TextInput
-                    label={t("setup.intelligence.feature")}
-                    value={assignment.name}
-                    readOnly
-                    flex={1}
-                  />
-                  <Select
-                    label={t("setup.intelligence.engine")}
-                    data={[
-                      { value: "llm", label: "LLM" },
-                      { value: "cli", label: "CLI" },
-                    ]}
-                    value={assignment.engine}
-                    onChange={(value) =>
-                      updateDraft((current) => ({
-                        ...current,
-                        brain_mapping: updateBrain(current.brain_mapping, assignment.name, {
-                          engine: (value as "llm" | "cli") ?? assignment.engine,
-                          target:
-                            value === "cli"
-                              ? (cliSlots[0] ?? "default")
-                              : (modelSlots[0] ?? "default"),
-                        }),
-                      }))
-                    }
-                    flex={1}
-                  />
-                  <Select
-                    label={t("setup.intelligence.target")}
-                    data={assignment.engine === "cli" ? cliSlotOptions : modelSlotOptions}
-                    value={assignment.target}
-                    onChange={(value) =>
-                      updateDraft((current) => ({
-                        ...current,
-                        brain_mapping: updateBrain(current.brain_mapping, assignment.name, {
-                          target: value ?? assignment.target,
-                        }),
-                      }))
-                    }
-                    flex={1.5}
-                  />
-                </Group>
-              ))}
-            </Stack>
-          </Card>
-
-          <Card withBorder radius="sm" p="md">
-            <Stack gap="md">
-              <Text fw={700} size="sm">
-                {t("setup.intelligence.cliDefinitions")}
-              </Text>
-              {draft.cli_agents.map((agent) => {
-                const detection = detectedByPath[agent.path];
                 return (
-                  <Card key={agent.path} withBorder radius="sm" p="sm">
-                    <Stack gap="sm">
-                      <Group justify="space-between">
-                        <Text fw={600} size="sm">
-                          {agent.name}
-                        </Text>
-                        <Badge
-                          color={detection?.detected || agent.detected ? "green" : "red"}
-                          variant="light"
-                        >
-                          {detection?.detected || agent.detected
-                            ? t("setup.intelligence.detected")
-                            : t("setup.intelligence.notDetected")}
-                        </Badge>
-                      </Group>
-                      <Textarea
-                        label={t("setup.intelligence.envJson")}
-                        autosize
-                        minRows={2}
-                        value={JSON.stringify(agent.env ?? {}, null, 2)}
-                        error={envErrors[agent.path]}
-                        onChange={(event) => {
-                          const nextText = event.currentTarget.value;
-                          try {
-                            const parsed = JSON.parse(nextText || "{}") as unknown;
-                            if (!isRecord(parsed)) {
-                              throw new Error("env must be an object");
-                            }
-                            setEnvErrors((current) => {
-                              const next = { ...current };
-                              delete next[agent.path];
-                              return next;
-                            });
-                            updateDraft((current) => ({
-                              ...current,
-                              cli_agents: updateByPath(current.cli_agents, agent.path, {
-                                env: parsed,
-                              }),
-                            }));
-                          } catch {
-                            setEnvErrors((current) => ({
-                              ...current,
-                              [agent.path]: t("setup.intelligence.envJsonError"),
-                            }));
-                          }
-                        }}
-                      />
-                      <Textarea
-                        label={t("setup.intelligence.script")}
-                        autosize
-                        minRows={5}
-                        value={agent.script}
-                        onChange={(event) =>
-                          updateDraft((current) => ({
-                            ...current,
-                            cli_agents: updateByPath(current.cli_agents, agent.path, {
-                              script: event.currentTarget.value,
-                            }),
-                          }))
-                        }
-                      />
-                    </Stack>
-                  </Card>
+                  <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
+                    <TextInput
+                      label={t("setup.intelligence.feature")}
+                      value={assignment.name}
+                      readOnly={assignment.name === "default" || assignment.name === "file_editor"}
+                      onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
+                      flex={2}
+                    />
+                    <Select
+                      label={t("setup.intelligence.engine")}
+                      data={[
+                        { value: "llm", label: "LLM" },
+                        { value: "cli", label: "CLI" },
+                      ]}
+                      value={assignment.engine}
+                      onChange={(value) =>
+                        handleUpdateBrain(index, { engine: (value as "llm" | "cli") ?? "llm" })
+                      }
+                      flex={1}
+                    />
+                    <Select
+                      label={t("setup.intelligence.target")}
+                      data={targetOptions}
+                      value={assignment.target}
+                      onChange={(value) => handleUpdateBrain(index, { target: value ?? "default" })}
+                      flex={1.5}
+                    />
+                    {assignment.name !== "default" && assignment.name !== "file_editor" ? (
+                      <ActionIcon
+                        color="red"
+                        variant="subtle"
+                        onClick={() => handleDeleteBrain(index)}
+                        mb="xs"
+                      >
+                        <Trash2 size={16} />
+                      </ActionIcon>
+                    ) : (
+                      <Box w={28} />
+                    )}
+                  </Group>
                 );
               })}
             </Stack>
           </Card>
-        </>
+
+          {/* Section 2: LLM Slots Definitions */}
+          <Card withBorder radius="sm" p="md">
+            <Stack gap="md">
+              <Group justify="space-between">
+                <Text fw={700} size="sm">
+                  {t("setup.intelligence.tabs.models")}
+                </Text>
+                <Button
+                  size="xs"
+                  variant="light"
+                  leftSection={<Plus size={14} />}
+                  onClick={handleAddLlmSlot}
+                >
+                  {t("setup.intelligence.addLlmSlot")}
+                </Button>
+              </Group>
+
+              <Stack gap="sm">
+                {modelSlots.map((slotKey) => {
+                  const path = draft.model_mapping[slotKey];
+                  const modelDef = draft.models.find((m) => m.path === path);
+                  if (!modelDef) return null;
+
+                  return (
+                    <Group key={slotKey} align="flex-end" gap="xs" wrap="nowrap">
+                      <TextInput
+                        label={t("setup.intelligence.slot")}
+                        value={slotKey}
+                        readOnly={slotKey === "default"}
+                        onChange={(e) => handleRenameLlmSlot(slotKey, e.currentTarget.value)}
+                        flex={1.5}
+                      />
+                      <Select
+                        label={t("setup.intelligence.provider")}
+                        data={[
+                          { value: "openai", label: "OpenAI" },
+                          { value: "gemini", label: "Google Gemini" },
+                          { value: "anthropic", label: "Anthropic" },
+                        ]}
+                        value={modelDef.provider}
+                        onChange={(val) =>
+                          handleUpdateLlmSlotProvider(slotKey, val ?? DEFAULT_LLM_PROVIDER)
+                        }
+                        flex={1.5}
+                      />
+                      <TextInput
+                        label={t("setup.intelligence.modelId")}
+                        value={modelDef.model_id}
+                        onChange={(e) => handleUpdateLlmSlotModelId(slotKey, e.currentTarget.value)}
+                        flex={2}
+                      />
+                      {slotKey !== "default" ? (
+                        <ActionIcon
+                          color="red"
+                          variant="subtle"
+                          onClick={() => handleDeleteLlmSlot(slotKey)}
+                          mb="xs"
+                        >
+                          <Trash2 size={16} />
+                        </ActionIcon>
+                      ) : (
+                        <Box w={28} />
+                      )}
+                    </Group>
+                  );
+                })}
+              </Stack>
+            </Stack>
+          </Card>
+
+          {/* Section 3: CLI Slots Definitions */}
+          <Card withBorder radius="sm" p="md">
+            <Stack gap="md">
+              <Group justify="space-between">
+                <Text fw={700} size="sm">
+                  {t("setup.intelligence.tabs.cli")}
+                </Text>
+                <Button
+                  size="xs"
+                  variant="light"
+                  leftSection={<Plus size={14} />}
+                  onClick={handleAddCliSlot}
+                >
+                  {t("setup.intelligence.addCliSlot")}
+                </Button>
+              </Group>
+
+              <Accordion variant="separated">
+                {cliSlots.map((slotKey) => {
+                  const path = draft.cli_agent_mapping[slotKey];
+                  const agentDef = draft.cli_agents.find((a) => a.path === path);
+                  if (!agentDef) return null;
+
+                  const detection = detectedByPath[agentDef.path];
+                  const isDetected = detection?.detected || agentDef.detected;
+
+                  return (
+                    <Accordion.Item key={slotKey} value={slotKey}>
+                      <Accordion.Control>
+                        <Group justify="space-between" pr="md" align="center" wrap="nowrap">
+                          <Group gap="xs" align="center">
+                            <Text fw={600} size="sm">
+                              {slotKey}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              ➔ {agentDef.name}
+                            </Text>
+                          </Group>
+                          <Group gap="xs" wrap="nowrap">
+                            <Badge color={isDetected ? "green" : "red"} variant="light">
+                              {isDetected
+                                ? t("setup.intelligence.detected")
+                                : t("setup.intelligence.notDetected")}
+                            </Badge>
+                            {slotKey !== "default" ? (
+                              <ActionIcon
+                                color="red"
+                                variant="subtle"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteCliSlot(slotKey);
+                                }}
+                                size="sm"
+                              >
+                                <Trash2 size={14} />
+                              </ActionIcon>
+                            ) : null}
+                          </Group>
+                        </Group>
+                      </Accordion.Control>
+                      <Accordion.Panel>
+                        <Stack gap="sm" pt="xs">
+                          <Group gap="xs" grow>
+                            <TextInput
+                              label={t("setup.intelligence.slot")}
+                              value={slotKey}
+                              readOnly={slotKey === "default"}
+                              onChange={(e) => handleRenameCliSlot(slotKey, e.currentTarget.value)}
+                              size="xs"
+                              fw={600}
+                            />
+                            <Select
+                              label={t("setup.intelligence.cliAgent")}
+                              data={cliFileOptions}
+                              value={path}
+                              onChange={(val) =>
+                                handleUpdateCliSlotAgentPath(slotKey, val ?? "codex-cli.yml")
+                              }
+                              size="xs"
+                            />
+                          </Group>
+                          <Textarea
+                            label={t("setup.intelligence.envJson")}
+                            autosize
+                            minRows={2}
+                            value={JSON.stringify(agentDef.env ?? {}, null, 2)}
+                            error={envErrors[agentDef.path]}
+                            onChange={(event) => {
+                              const nextText = event.currentTarget.value;
+                              try {
+                                const parsed = JSON.parse(nextText || "{}") as unknown;
+                                if (!isRecord(parsed)) {
+                                  throw new Error("env must be an object");
+                                }
+                                setEnvErrors((current) => {
+                                  const next = { ...current };
+                                  delete next[agentDef.path];
+                                  return next;
+                                });
+                                handleUpdateCliAgentDef(agentDef.path, { env: parsed });
+                              } catch {
+                                setEnvErrors((current) => ({
+                                  ...current,
+                                  [agentDef.path]: t("setup.intelligence.envJsonError"),
+                                }));
+                              }
+                            }}
+                          />
+                          <Textarea
+                            label={t("setup.intelligence.script")}
+                            autosize
+                            minRows={5}
+                            value={agentDef.script}
+                            onChange={(event) =>
+                              handleUpdateCliAgentDef(agentDef.path, {
+                                script: event.currentTarget.value,
+                              })
+                            }
+                          />
+                        </Stack>
+                      </Accordion.Panel>
+                    </Accordion.Item>
+                  );
+                })}
+              </Accordion>
+            </Stack>
+          </Card>
+        </Stack>
       )}
       {mutation.error ? (
         <Alert color="red" title={t("setup.intelligence.saveAdvancedError")}>
@@ -5188,24 +5696,6 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
     cli_agents: config.cli_agents,
     brain_mapping: config.brain_mapping,
   };
-}
-
-function updateByPath<T extends { path: string }>(
-  items: T[],
-  path: string,
-  patch: Partial<T>,
-): T[] {
-  return items.map((item) => (item.path === path ? { ...item, ...patch } : item));
-}
-
-function updateBrain(
-  assignments: BrainAssignment[],
-  name: string,
-  patch: Partial<BrainAssignment>,
-): BrainAssignment[] {
-  return assignments.map((assignment) =>
-    assignment.name === name ? { ...assignment, ...patch } : assignment,
-  );
 }
 
 function stringOrEmpty(value: unknown): string {

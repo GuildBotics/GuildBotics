@@ -677,16 +677,12 @@ class AppRuntime:
             await context.aclose()
 
     def detect_cli_agents(self) -> CliAgentDetectionsResponse:
-        mapping: dict[str, Any] = {}
-        try:
-            mapping_file = get_template_path() / "intelligences/cli_agent_mapping.yml"
-            mapping = cast(dict[str, Any], load_yaml_file(mapping_file))
-        except Exception:
-            mapping = {}
         agents: list[CliAgentDetection] = []
         for name in CLI_AGENT_EXECUTABLES:
-            executable_info_file = str(mapping.get(name, ""))
-            script = load_cli_agent_script(get_template_path(), executable_info_file)
+            # Each agent's script lives in its own ``<name>-cli.yml`` template;
+            # the mapping only carries the ``default`` slot, so it cannot be used
+            # to look agents up by name.
+            script = load_cli_agent_script(get_template_path(), f"{name}-cli.yml")
             executable = resolve_cli_executable(script)
             path = resolve_cli_agent_path(executable) if executable else ""
             agents.append(

@@ -1,0 +1,6 @@
+model_class: agno.models.openai.OpenAIChat
+parameters:
+  id: gpt-5-mini
+rate_limit:
+  max_requests_per_minute: 20
+  max_requests_per_day: 1000

@@ -1044,7 +1044,8 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
         payload = get_response.json()
         assert payload["model_mapping"]["default"].startswith("models/")
         assert payload["brain_mapping"][0]["name"] == "default"
-        assert any(agent["path"] == "codex-cli.yml" for agent in payload["cli_agents"])
+        default_cli_path = payload["cli_agent_mapping"]["default"]
+        assert any(agent["path"] == default_cli_path for agent in payload["cli_agents"])
 
         payload["model_mapping"]["default"] = "models/openai/gpt-5-mini.yml"
         payload["brain_mapping"][0] = {

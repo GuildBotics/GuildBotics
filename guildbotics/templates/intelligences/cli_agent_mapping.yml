@@ -1,5 +1,1 @@
 default: antigravity-cli.yml
-antigravity: antigravity-cli.yml
-codex: codex-cli.yml
-claude: claude-cli.yml
-copilot: copilot-cli.yml
