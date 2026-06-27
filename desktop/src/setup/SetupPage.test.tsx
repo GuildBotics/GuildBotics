@@ -1666,6 +1666,31 @@ describe("MembersSection", () => {
     expect(
       screen.queryByRole("button", { name: t("setup.members.newButton") }),
     ).not.toBeInTheDocument();
+    // The avatar controls are visible but disabled until the member is saved.
+    expect(screen.getByRole("button", { name: "Upload File" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Import from GitHub" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Import from Slack" })).toBeDisabled();
+  });
+
+  it("sorts members by name and shows the CLI agent badge only for agents", async () => {
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      members: [
+        { person_id: "charlie", name: "Charlie", person_type: "agent", is_active: true, roles: [] },
+        { person_id: "bob", name: "Bob", person_type: "human", is_active: false, roles: [] },
+        { person_id: "alice", name: "Alice", person_type: "agent", is_active: true, roles: [] },
+      ],
+    });
+    renderSetupPage("/setup?section=members");
+
+    // Members are rendered in ascending name order (Alice, Bob, Charlie).
+    const labels = (await screen.findAllByText(/\([a-z]+\)$/)).map((el) => el.textContent);
+    expect(labels).toEqual(["Alice (alice)", "Bob (bob)", "Charlie (charlie)"]);
+
+    // Both agents show the effective CLI agent badge; the human member does not.
+    expect(screen.getAllByText("OpenAI Codex CLI")).toHaveLength(2);
+    // The human member is labelled "Human" instead of a CLI agent badge.
+    expect(screen.getByText("Human")).toBeInTheDocument();
   });
 
   it("adds a member through addMemberConfig with the built payload", async () => {
@@ -1706,6 +1731,24 @@ describe("MembersSection", () => {
     await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
     expect(await screen.findByText(t("setup.members.editingBadge", { id: "alice" })));
     await waitFor(() => expect(vi.mocked(getMemberConfig).mock.calls[0]?.[0]).toBe("alice"));
+
+    expect(screen.getAllByText("Alice (alice)").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Upload File" })).toBeInTheDocument();
+    const githubBtn = screen.getByRole("button", { name: "Import from GitHub" });
+    expect(githubBtn).toBeInTheDocument();
+    expect(githubBtn).toBeDisabled();
+    // For agent (default), Slack button is enabled even without user_id
+    const slackBtn = screen.getByRole("button", { name: "Import from Slack" });
+    expect(slackBtn).toBeInTheDocument();
+    expect(slackBtn).not.toBeDisabled();
+
+    // Switch type to human to verify it becomes disabled without slackUserId
+    await selectBasicMemberType(user, "Human");
+    expect(slackBtn).toBeDisabled();
+
+    // Switch back to Agent to restore form validity
+    await selectBasicMemberType(user, "Agent");
+    expect(slackBtn).not.toBeDisabled();
 
     const nameInput = await screen.findByLabelText("Display name");
     await waitFor(() => expect(nameInput).toHaveValue("Alice"));

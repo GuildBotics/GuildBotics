@@ -577,11 +577,14 @@ AIエージェントとして振る舞う Slack App（送信 + 受信）を Slac
    - `channel_name` で設定したい場合は、名前解決（`conversations.list`）用に以下も追加
      - `channels:read`（public channel）
      - `groups:read`（private channel）
+   - Slack からメンバーのアバターをインポートしたい場合（セットアップ画面）は以下も追加
+     - `users:read`（`users.info` 用）
    - 参考URL（Slack公式）
      - `conversations.history`: `https://api.slack.com/methods/conversations.history`
      - `conversations.list`: `https://api.slack.com/methods/conversations.list`
      - `chat.postMessage`: `https://api.slack.com/methods/chat.postMessage`
      - `reactions.add`: `https://api.slack.com/methods/reactions.add`
+     - `users.info`: `https://api.slack.com/methods/users.info`
 3. App を Workspace にインストールする（scope変更後は再インストールが必要な場合あり）
 4. Bot Token（`xoxb-...`）を環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` に設定する
    - 例: `alice` 用なら `ALICE_SLACK_BOT_TOKEN`

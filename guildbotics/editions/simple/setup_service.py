@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
 from pathlib import Path
@@ -329,6 +330,7 @@ class PersonConfigSnapshot(BaseModel):
     slack_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
+    avatar_timestamp: int = 0
 
 
 class PersonUpdateInput(PersonSetupInput):
@@ -686,6 +688,19 @@ class SimplePersonSetupService:
 
         env = self._read_env_values(env_file_path)
         env_prefix = self._person_env_prefix(person_id)
+
+        avatar_timestamp = 0
+        from guildbotics.app_api.avatar import SUPPORTED_EXTENSIONS
+
+        member_dir = config_dir / "team" / "members" / person_id
+        if member_dir.exists():
+            for ext in SUPPORTED_EXTENSIONS:
+                avatar_path = member_dir / f"avatar{ext}"
+                if avatar_path.exists() and avatar_path.is_file():
+                    with contextlib.suppress(Exception):
+                        avatar_timestamp = int(avatar_path.stat().st_mtime)
+                    break
+
         return PersonConfigSnapshot(
             person_id=str(person_data.get("person_id", person_id)),
             person_name=str(person_data.get("name", "")),
@@ -724,6 +739,7 @@ class SimplePersonSetupService:
                 if str(command).strip()
             ],
             task_schedules=_read_task_schedules(person_data.get("task_schedules", [])),
+            avatar_timestamp=avatar_timestamp,
         )
 
     def parse_github_apps_url(self, url: str) -> str:

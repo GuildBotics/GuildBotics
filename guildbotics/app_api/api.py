@@ -1,17 +1,29 @@
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, cast
 
-from fastapi import Depends, FastAPI, Header, Query, WebSocket, WebSocketDisconnect
+from dotenv import dotenv_values
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    Query,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from guildbotics.app_api.diagnostics_store import DiagnosticsStore
@@ -657,6 +669,204 @@ def create_app(
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
         return MemberResolveResponse.model_validate(reference.model_dump())
+
+    @app.get(
+        "/config/members/{person_id}/avatar",
+        responses={**error_responses, 404: {"model": ApiError}},
+    )
+    def config_member_avatar(
+        person_id: str,
+        token_query: str | None = Query(default=None, alias="token"),
+        provided: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
+    ) -> Response:
+        # Image is loaded via a plain <img> tag, which cannot set custom
+        # headers, so the session token is also accepted as a query parameter.
+        if token not in (provided, token_query):
+            raise AppApiError(
+                "invalid_session_token",
+                "Invalid session token.",
+                status_code=401,
+            )
+        status = app_runtime.get_config_status()
+        config_dir = _get_existing_config_dir(status)
+        if config_dir is None:
+            raise AppApiError(
+                "project_not_found",
+                "Project config was not found.",
+                status_code=400,
+            )
+        from guildbotics.app_api.avatar import SUPPORTED_EXTENSIONS
+
+        member_dir = config_dir / "team" / "members" / person_id
+        if member_dir.exists():
+            for ext in SUPPORTED_EXTENSIONS:
+                avatar_path = member_dir / f"avatar{ext}"
+                if avatar_path.exists() and avatar_path.is_file():
+                    resp = FileResponse(avatar_path)
+                    resp.headers["Cache-Control"] = "no-cache"
+                    return resp
+        raise AppApiError("avatar_not_found", "Avatar file not found.", status_code=404)
+
+    @app.post(
+        "/config/members/{person_id}/avatar",
+        response_model=ConfigWriteResponse,
+        responses=error_responses,
+    )
+    async def config_member_avatar_upload(
+        person_id: str,
+        file: UploadFile = File(...),  # noqa: B008
+        _: None = Depends(require_token),
+    ) -> ConfigWriteResponse:
+        status = app_runtime.get_config_status()
+        config_dir = _get_existing_config_dir(status)
+        if config_dir is None:
+            raise AppApiError(
+                "project_not_found",
+                "Project config was not found.",
+                status_code=400,
+            )
+        from guildbotics.app_api.avatar import save_avatar_file
+
+        try:
+            save_avatar_file(config_dir, person_id, file)
+        except Exception as exc:
+            raise AppApiError(
+                "avatar_save_failed",
+                f"Failed to save avatar: {exc}",
+                status_code=500,
+            ) from exc
+        return ConfigWriteResponse()
+
+    @app.post(
+        "/config/members/{person_id}/avatar/github",
+        response_model=ConfigWriteResponse,
+        responses=error_responses,
+    )
+    async def config_member_avatar_github(
+        person_id: str,
+        _: None = Depends(require_token),
+    ) -> ConfigWriteResponse:
+        status = app_runtime.get_config_status()
+        config_dir = _get_existing_config_dir(status)
+        if config_dir is None:
+            raise AppApiError(
+                "project_not_found",
+                "Project config was not found.",
+                status_code=400,
+            )
+        try:
+            member_config = SimplePersonSetupService().read_person_config(
+                config_dir=config_dir,
+                person_id=person_id,
+                env_file_path=status.env_file,
+            )
+        except SetupServiceError as exc:
+            raise AppApiError(exc.code, exc.message) from exc
+
+        github_username = member_config.github_username
+        if not github_username:
+            raise AppApiError(
+                "github_username_missing",
+                "GitHub username is not configured for this member.",
+                status_code=400,
+            )
+
+        from guildbotics.app_api.avatar import (
+            get_github_avatar_url,
+            import_avatar_from_url,
+        )
+
+        try:
+            avatar_url = await get_github_avatar_url(github_username)
+            await import_avatar_from_url(config_dir, person_id, avatar_url)
+        except Exception as exc:
+            raise AppApiError(
+                "avatar_import_failed",
+                f"Failed to import avatar from GitHub: {exc}",
+                status_code=500,
+            ) from exc
+        return ConfigWriteResponse()
+
+    @app.post(
+        "/config/members/{person_id}/avatar/slack",
+        response_model=ConfigWriteResponse,
+        responses=error_responses,
+    )
+    async def config_member_avatar_slack(
+        person_id: str,
+        _: None = Depends(require_token),
+    ) -> ConfigWriteResponse:
+        status = app_runtime.get_config_status()
+        config_dir = _get_existing_config_dir(status)
+        if config_dir is None:
+            raise AppApiError(
+                "project_not_found",
+                "Project config was not found.",
+                status_code=400,
+            )
+        try:
+            member_config = SimplePersonSetupService().read_person_config(
+                config_dir=config_dir,
+                person_id=person_id,
+                env_file_path=status.env_file,
+            )
+        except SetupServiceError as exc:
+            raise AppApiError(exc.code, exc.message) from exc
+
+        slack_user_id = member_config.slack_user_id
+        is_human = member_config.person_type == "human"
+        if is_human and not slack_user_id:
+            raise AppApiError(
+                "slack_user_id_missing",
+                "Slack user ID is not configured for this member.",
+                status_code=400,
+            )
+
+        env_values = (
+            dict(dotenv_values(status.env_file)) if status.env_file.exists() else {}
+        )
+        all_env = {**dict(os.environ), **env_values}
+        sanitized = person_id.upper().replace("-", "_")
+        slack_bot_token = all_env.get(f"{sanitized}_SLACK_BOT_TOKEN")
+
+        if not slack_bot_token:
+            slack_bot_token = all_env.get("SLACK_BOT_TOKEN")
+
+        if not slack_bot_token:
+            for key, val in all_env.items():
+                if key.endswith("_SLACK_BOT_TOKEN") and val:
+                    slack_bot_token = val
+                    break
+
+        if not slack_bot_token:
+            raise AppApiError(
+                "slack_token_missing",
+                "Slack Bot Token is not configured in this workspace.",
+                status_code=400,
+            )
+
+        from guildbotics.app_api.avatar import (
+            get_slack_avatar_url,
+            import_avatar_from_url,
+        )
+
+        try:
+            avatar_url = await get_slack_avatar_url(slack_user_id, slack_bot_token)
+            await import_avatar_from_url(config_dir, person_id, avatar_url)
+        except Exception as exc:
+            if "missing_scope" in str(exc):
+                raise AppApiError(
+                    "slack_missing_scope",
+                    "Slack Bot Token is missing the 'users:read' scope. "
+                    "Add it under OAuth & Permissions and reinstall the app.",
+                    status_code=400,
+                ) from exc
+            raise AppApiError(
+                "avatar_import_failed",
+                f"Failed to import avatar from Slack: {exc}",
+                status_code=500,
+            ) from exc
+        return ConfigWriteResponse()
 
     @app.websocket("/events")
     async def events(websocket: WebSocket, token_query: str = Query(alias="token")):

@@ -299,6 +299,42 @@ def test_update_project_is_non_destructive_for_env_and_cli_agents(
     assert "EXTRA=value" in env_text
 
 
+def test_read_person_config_exposes_avatar_timestamp(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file = tmp_path / ".env"
+    env_file.write_text("")
+    service = SimplePersonSetupService()
+    service.write_person(
+        PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            append_env_file=False,
+            person_type="machine_user",
+            person_id="alice",
+            person_name="Alice",
+            is_active=True,
+            github_username="alice",
+            git_email="1+alice@users.noreply.github.com",
+            roles=["architect"],
+            speaking_style="style-a",
+        )
+    )
+
+    # Without an avatar file the timestamp defaults to 0.
+    snapshot = service.read_person_config(
+        config_dir=config_dir, person_id="alice", env_file_path=env_file
+    )
+    assert snapshot.avatar_timestamp == 0
+
+    # Once an avatar file exists, its mtime is exposed as an int timestamp.
+    avatar_path = config_dir / "team/members/alice/avatar.png"
+    avatar_path.write_bytes(b"image-bytes")
+    snapshot = service.read_person_config(
+        config_dir=config_dir, person_id="alice", env_file_path=env_file
+    )
+    assert snapshot.avatar_timestamp == int(avatar_path.stat().st_mtime)
+
+
 def test_member_read_update_delete_with_slack(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     env_file = tmp_path / ".env"

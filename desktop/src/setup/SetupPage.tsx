@@ -1,4 +1,6 @@
 import {
+  Avatar,
+  FileButton,
   ActionIcon,
   Accordion,
   Alert,
@@ -94,6 +96,10 @@ import {
   updateMemberConfig,
   updateIntelligenceConfig,
   updateProjectConfig,
+  memberAvatarUrl,
+  uploadMemberAvatar,
+  importAvatarFromGithub,
+  importAvatarFromSlack,
 } from "../api/client";
 import {
   type CliAgentSkillState,
@@ -182,6 +188,35 @@ const CLI_AGENT_OPTIONS = [
   { value: "antigravity", label: "Antigravity CLI" },
   { value: "copilot", label: "GitHub Copilot CLI" },
 ] as const;
+
+// Resolve the human-friendly CLI agent label from an effective intelligence
+// config (member override already falls back to the team default server-side).
+function cliAgentLabelFromConfig(config: IntelligenceConfig | undefined): string | null {
+  const mapping = config?.cli_agent_mapping ?? {};
+  const file = mapping["default"] ?? Object.values(mapping)[0];
+  if (!file) {
+    return null;
+  }
+  const value = file.replace(/\.yml$/, "").replace(/-cli$/, "");
+  return CLI_AGENT_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
+function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
+  const query = useQuery({
+    queryKey: ["intelligence-config", personId],
+    queryFn: () => getIntelligenceConfig(personId),
+    enabled,
+  });
+  const label = cliAgentLabelFromConfig(query.data);
+  if (!label) {
+    return null;
+  }
+  return (
+    <Badge variant="light" color="grape" style={{ flexShrink: 0 }}>
+      {label}
+    </Badge>
+  );
+}
 const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "energetic"] as const;
 type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
 const MASKED_SECRET_PLACEHOLDER = "••••••••••••";
@@ -1625,6 +1660,100 @@ function MembersSection({
   const memberIntelligenceSaveRef = useRef<(() => Promise<void>) | null>(null);
   const emptyAddDefaultsAppliedRef = useRef(false);
   const hasPersistedProject = Boolean(config?.project_file_exists);
+  const [avatarTimestamp, setAvatarTimestamp] = useState(Date.now());
+  const [importingAvatar, setImportingAvatar] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+
+  // Effective CLI agent for the member (member override falls back to the team
+  // default automatically), shown as a badge on the avatar header row.
+  const cliAgentBadgeQuery = useQuery({
+    queryKey: ["intelligence-config", editingPersonId ?? "team"],
+    queryFn: () => getIntelligenceConfig(editingPersonId ?? undefined),
+    enabled: hasPersistedProject,
+  });
+  const cliAgentLabel = useMemo(
+    () => cliAgentLabelFromConfig(cliAgentBadgeQuery.data),
+    [cliAgentBadgeQuery.data],
+  );
+
+  const getAvatarErrorMessage = (err: unknown, defaultMsg: string): string => {
+    if (err instanceof ApiRequestError) {
+      if (err.code === "slack_token_missing") {
+        return t("setup.members.avatar.errors.slackTokenMissing");
+      }
+      if (err.code === "slack_missing_scope") {
+        return t("setup.members.avatar.errors.slackMissingScope");
+      }
+      if (err.code === "slack_user_id_missing") {
+        return t("setup.members.avatar.errors.slackUserIdMissing");
+      }
+      if (err.code === "github_username_missing") {
+        return t("setup.members.avatar.errors.githubUsernameMissing");
+      }
+    }
+    return err instanceof Error ? err.message : defaultMsg;
+  };
+
+  const handleAvatarUpload = async (file: File | null) => {
+    if (!file || !editingPersonId) return;
+    setImportingAvatar(true);
+    setAvatarError(null);
+    try {
+      await uploadMemberAvatar(editingPersonId, file);
+      setAvatarTimestamp(Date.now());
+      notifications.show({
+        color: "green",
+        title: t("setup.members.avatar.uploadSuccessTitle", "Success"),
+        message: t("setup.members.avatar.uploadSuccess", "Avatar uploaded successfully."),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["team"] });
+    } catch (err) {
+      setAvatarError(getAvatarErrorMessage(err, "Failed to upload avatar"));
+    } finally {
+      setImportingAvatar(false);
+    }
+  };
+
+  const handleImportFromGithub = async () => {
+    if (!editingPersonId) return;
+    setImportingAvatar(true);
+    setAvatarError(null);
+    try {
+      await importAvatarFromGithub(editingPersonId);
+      setAvatarTimestamp(Date.now());
+      notifications.show({
+        color: "green",
+        title: t("setup.members.avatar.importSuccessTitle", "Success"),
+        message: t("setup.members.avatar.githubSuccess", "Avatar imported from GitHub."),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["team"] });
+    } catch (err) {
+      setAvatarError(getAvatarErrorMessage(err, "Failed to import avatar from GitHub"));
+    } finally {
+      setImportingAvatar(false);
+    }
+  };
+
+  const handleImportFromSlack = async () => {
+    if (!editingPersonId) return;
+    setImportingAvatar(true);
+    setAvatarError(null);
+    try {
+      await importAvatarFromSlack(editingPersonId);
+      setAvatarTimestamp(Date.now());
+      notifications.show({
+        color: "green",
+        title: t("setup.members.avatar.importSuccessTitle", "Success"),
+        message: t("setup.members.avatar.slackSuccess", "Avatar imported from Slack."),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["team"] });
+    } catch (err) {
+      setAvatarError(getAvatarErrorMessage(err, "Failed to import avatar from Slack"));
+    } finally {
+      setImportingAvatar(false);
+    }
+  };
+
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
   const rolesQuery = useQuery({
     queryKey: ["member-role-options", appLanguage],
@@ -1680,7 +1809,7 @@ function MembersSection({
           is_active: member.is_active,
           roles: member.roles,
         })),
-    ];
+    ].sort((a, b) => a.name.localeCompare(b.name));
   }, [draftMembers, members]);
   const formVisible = mode !== "idle" || displayedMembers.length === 0;
   const formMode = mode === "edit" ? "edit" : "add";
@@ -2283,22 +2412,44 @@ function MembersSection({
           <Stack gap={6}>
             {displayedMembers.map((member) => (
               <Group key={member.person_id} justify="space-between">
-                <Text size="sm">
-                  {member.name} ({member.person_id})
-                </Text>
-                <Group gap="xs">
-                  <Badge
-                    color={
-                      member.person_type === "human" ? "blue" : member.is_active ? "green" : "gray"
-                    }
-                    variant="light"
+                <Group gap="xs" align="center">
+                  <Avatar
+                    src={memberAvatarUrl(member.person_id, avatarTimestamp)}
+                    size="sm"
+                    radius="xl"
                   >
-                    {member.person_type === "human"
-                      ? t("setup.members.memberHuman")
-                      : member.is_active
-                        ? t("setup.members.memberActive")
-                        : t("setup.members.memberInactive")}
-                  </Badge>
+                    {member.name.substring(0, 2).toUpperCase()}
+                  </Avatar>
+                  <Text size="sm">
+                    {member.name} ({member.person_id})
+                  </Text>
+                </Group>
+                <Group gap="xs" wrap="nowrap">
+                  <Group w={160} justify="flex-end" gap="xs" wrap="nowrap">
+                    {member.person_type === "human" ? (
+                      <Badge color="blue" variant="light" style={{ flexShrink: 0 }}>
+                        {t("setup.members.memberHuman")}
+                      </Badge>
+                    ) : (
+                      <MemberCliAgentBadge
+                        personId={member.person_id}
+                        enabled={hasPersistedProject}
+                      />
+                    )}
+                  </Group>
+                  <Group w={56} justify="flex-end" gap="xs" wrap="nowrap">
+                    {member.person_type !== "human" && (
+                      <Badge
+                        color={member.is_active ? "green" : "gray"}
+                        variant="light"
+                        style={{ flexShrink: 0 }}
+                      >
+                        {member.is_active
+                          ? t("setup.members.memberActive")
+                          : t("setup.members.memberInactive")}
+                      </Badge>
+                    )}
+                  </Group>
                   <Button
                     size="xs"
                     variant="default"
@@ -2370,6 +2521,117 @@ function MembersSection({
 
               <Tabs.Panel value="basic" pt="md">
                 <Stack>
+                  <Group align="stretch" gap="md" mb="sm">
+                    <Tooltip
+                      label={t(
+                        "setup.members.avatar.addFirstTooltip",
+                        "You can set the avatar after adding the member.",
+                      )}
+                      disabled={!!editingPersonId}
+                      position="top"
+                      withArrow
+                    >
+                      <Avatar
+                        src={
+                          editingPersonId
+                            ? memberAvatarUrl(editingPersonId, avatarTimestamp)
+                            : undefined
+                        }
+                        size="xl"
+                        radius="md"
+                      >
+                        {personName ? personName.substring(0, 2).toUpperCase() : "MB"}
+                      </Avatar>
+                    </Tooltip>
+                    <Stack gap="xs" justify="space-between" style={{ flex: 1, minWidth: 0 }}>
+                      <Group justify="space-between" align="center" wrap="nowrap" gap="xs">
+                        <Text size="sm" fw={500}>
+                          {personName || "—"} ({personId || "—"})
+                        </Text>
+                        {personType === "human" ? (
+                          <Badge color="blue" variant="light" style={{ flexShrink: 0 }}>
+                            {t("setup.members.memberHuman")}
+                          </Badge>
+                        ) : (
+                          cliAgentLabel && (
+                            <Badge variant="light" color="grape" style={{ flexShrink: 0 }}>
+                              {cliAgentLabel}
+                            </Badge>
+                          )
+                        )}
+                      </Group>
+                      <Stack gap="xs">
+                        <Group gap="xs">
+                          <FileButton
+                            onChange={handleAvatarUpload}
+                            accept="image/*"
+                            disabled={!editingPersonId}
+                          >
+                            {(props) => (
+                              <Button
+                                {...props}
+                                size="xs"
+                                variant="default"
+                                loading={importingAvatar}
+                                disabled={!editingPersonId}
+                              >
+                                {t("setup.members.avatar.upload", "Upload File")}
+                              </Button>
+                            )}
+                          </FileButton>
+
+                          <Tooltip
+                            label={t(
+                              "setup.members.avatar.githubTooltip",
+                              "Configure GitHub username to import avatar",
+                            )}
+                            disabled={!editingPersonId || !!githubUsername}
+                            withArrow
+                          >
+                            <span>
+                              <Button
+                                size="xs"
+                                variant="default"
+                                onClick={handleImportFromGithub}
+                                loading={importingAvatar}
+                                disabled={!editingPersonId || !githubUsername}
+                              >
+                                {t("setup.members.avatar.github", "Import from GitHub")}
+                              </Button>
+                            </span>
+                          </Tooltip>
+
+                          <Tooltip
+                            label={t(
+                              "setup.members.avatar.slackTooltip",
+                              "Configure Slack user ID to import avatar",
+                            )}
+                            disabled={!editingPersonId || personType !== "human" || !!slackUserId}
+                            withArrow
+                          >
+                            <span>
+                              <Button
+                                size="xs"
+                                variant="default"
+                                onClick={handleImportFromSlack}
+                                loading={importingAvatar}
+                                disabled={
+                                  !editingPersonId || (personType === "human" && !slackUserId)
+                                }
+                              >
+                                {t("setup.members.avatar.slack", "Import from Slack")}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        </Group>
+                        {avatarError && (
+                          <Text size="xs" color="red">
+                            {avatarError}
+                          </Text>
+                        )}
+                      </Stack>
+                    </Stack>
+                  </Group>
                   <TextInput
                     label={<RequiredLabel text={t("setup.members.personId")} />}
                     aria-label={t("setup.members.personId")}
