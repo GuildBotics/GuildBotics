@@ -6,7 +6,3 @@ file_editor:
   class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain
   args:
     cli_agent: default
-cli:
-  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain
-  args:
-    cli_agent: default
