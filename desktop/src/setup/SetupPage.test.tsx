@@ -380,7 +380,9 @@ describe("SetupPage", () => {
     expect(screen.getByRole("button", { name: /^OpenAI$/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Anthropic Claude$/ })).toBeInTheDocument();
 
-    const keyInput = screen.getByLabelText("OpenAI API key");
+    await user.click(screen.getByRole("button", { name: "Configure OpenAI API Key" }));
+
+    const keyInput = await screen.findByLabelText("OpenAI API key");
     await user.type(keyInput, "sk-test");
     expect(keyInput).toHaveValue("sk-test");
 
@@ -409,10 +411,11 @@ describe("SetupPage", () => {
 
     await screen.findByRole("heading", { name: "First setup" });
     await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    const magicWand = await screen.findByRole("button", { name: "🪄" });
+    await user.hover(magicWand);
 
-    expect(await screen.findByText(t("setup.intelligence.skillStatusTitle"))).toBeInTheDocument();
     expect(
-      screen.getByText(t("setup.intelligence.skillStatusMessages.user_modified")),
+      await screen.findByText(t("setup.intelligence.skillStatusMessages.user_modified")),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: t("setup.intelligence.skillOverwrite") }));
@@ -545,7 +548,11 @@ describe("SetupPage", () => {
     });
     renderSetupPage("/setup");
 
-    await screen.findByLabelText("Project description");
+    // Wait for the saved project config to be reflected in the form before
+    // opening the GitHub section, otherwise the agent field has no Project URL
+    // target yet.
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Existing project"));
     await user.click(screen.getByRole("button", { name: "GitHub" }));
 
     // Registered and not-yet-registered members are both surfaced.
@@ -656,6 +663,7 @@ describe("SetupPage", () => {
     await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    await user.click(await screen.findByRole("button", { name: "Configure OpenAI API Key" }));
     await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     // Add one active member so the members section is complete; the add form is

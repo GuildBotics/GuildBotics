@@ -518,6 +518,7 @@ describe("Setup integration (real client + mock server)", () => {
     await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    await user.click(await screen.findByRole("button", { name: "Configure OpenAI API Key" }));
     await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     await user.click(screen.getByRole("button", { name: "Members" }));

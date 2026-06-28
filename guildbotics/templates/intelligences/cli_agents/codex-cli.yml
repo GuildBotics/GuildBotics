@@ -1,4 +1,4 @@
-label: OpenAI Codex
+label: Codex
 order: 10
 executable: codex
 env:

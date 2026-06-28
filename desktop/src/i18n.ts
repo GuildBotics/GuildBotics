@@ -253,7 +253,7 @@ const resources = {
           teamDefault: "Team default",
           provider: "LLM provider",
           defaultProvider: "Default LLM provider",
-          providerDescription: "Choose one provider used by default.",
+          providerDescription: "Choose the default LLM provider.",
           defaultCliAgent: "Default CLI agent",
           apiKeyLabel: "{{provider}} API key",
           keyPlaceholder: "Saved to .env after input",
@@ -269,7 +269,7 @@ const resources = {
           skillStatusDescription:
             "Shows whether each CLI agent has the bundled GuildBotics skill installed.",
           skillStatusLoading: "Checking",
-          skillOverwrite: "Overwrite with latest",
+          skillOverwrite: "Install latest version",
           skillUpdatedTitle: "GuildBotics skill updated",
           skillUpdatedBody: "The latest GuildBotics skill was applied.",
           skillUpdateFailedTitle: "GuildBotics skill update failed",
@@ -300,18 +300,14 @@ const resources = {
           saveAdvancedError: "Failed to save advanced settings",
           teamAdvancedDescription:
             "Configure team-wide model, CLI agent, and feature assignment defaults.",
-          memberOverrideDescription:
-            "Override only the default LLM provider and CLI agent for this member when needed.",
+          memberOverrideDescription: "Set the default LLM provider and CLI agent for this member.",
           inheritTeamDefaults: "Use team defaults",
           inheritingTitle: "Using team defaults",
-          inheritingBody:
-            "This member does not have individual intelligence files. Team settings are used.",
+          inheritingBody: "Uses team settings directly instead of individual configurations.",
           memberDefaultProvider: "Default LLM provider",
-          memberDefaultProviderDescription:
-            "Use a different default LLM provider for this member instead of the team default.",
+          memberDefaultProviderDescription: "Set the default LLM provider used by this member.",
           memberDefaultCliAgent: "Default CLI agent",
-          memberDefaultCliAgentDescription:
-            "Use a different default CLI agent for this member instead of the team default.",
+          memberDefaultCliAgentDescription: "Set the default CLI agent used by this member.",
           modelMapping: "Model slots",
           modelDefinitions: "Model definitions",
           cliMapping: "CLI agent slots",
@@ -1157,7 +1153,7 @@ const resources = {
           teamDefault: "チーム既定",
           provider: "LLMプロバイダ",
           defaultProvider: "デフォルトの LLM プロバイダ",
-          providerDescription: "利用する1つを選択します。",
+          providerDescription: "デフォルトの LLM プロバイダを選択します。",
           defaultCliAgent: "デフォルトの CLI エージェント",
           apiKeyLabel: "{{provider}} APIキー",
           keyPlaceholder: "入力後 .env に保存",
@@ -1173,7 +1169,7 @@ const resources = {
           skillStatusDescription:
             "各CLIエージェントに同梱版のGuildBoticsスキルが適用されているかを表示します。",
           skillStatusLoading: "確認中",
-          skillOverwrite: "最新版で上書きする",
+          skillOverwrite: "最新版をインストールする",
           skillUpdatedTitle: "GuildBoticsスキルを更新しました",
           skillUpdatedBody: "最新版のGuildBoticsスキルを適用しました。",
           skillUpdateFailedTitle: "GuildBoticsスキルの更新に失敗しました",
@@ -1206,17 +1202,16 @@ const resources = {
           teamAdvancedDescription:
             "チーム全体で使うモデル、CLIエージェント、機能ごとの割り当てを設定します。",
           memberOverrideDescription:
-            "必要な場合だけ、このメンバー専用のデフォルト LLM プロバイダと CLI エージェントを上書きします。",
+            "このメンバー専用のデフォルト LLM プロバイダと CLI エージェントを設定できます。",
           inheritTeamDefaults: "チーム既定を使う",
           inheritingTitle: "チーム既定を使用中",
-          inheritingBody:
-            "このメンバー専用の intelligence 設定ファイルは作成せず、チーム設定を使います。",
+          inheritingBody: "メンバー専用設定は行わず、チーム設定をそのまま使います。",
           memberDefaultProvider: "デフォルトの LLM プロバイダ",
           memberDefaultProviderDescription:
-            "チーム共通の既定値とは別に、このメンバーだけで使う既定の LLM プロバイダを設定します。",
+            "このメンバーが使うデフォルトの LLM プロバイダを設定します。",
           memberDefaultCliAgent: "デフォルトの CLI エージェント",
           memberDefaultCliAgentDescription:
-            "チーム共通の既定値とは別に、このメンバーだけで使う既定の CLI エージェントを設定します。",
+            "このメンバーが使うデフォルトの CLI エージェントを設定します。",
           modelMapping: "モデルスロット",
           modelDefinitions: "モデル定義",
           cliMapping: "CLIエージェントスロット",

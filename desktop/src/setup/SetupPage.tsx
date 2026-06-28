@@ -12,10 +12,13 @@ import {
   Divider,
   Fieldset,
   Group,
+  HoverCard,
+  Indicator,
   Modal,
   MultiSelect,
   NumberInput,
   PasswordInput,
+  Popover,
   Progress,
   Select,
   SegmentedControl,
@@ -778,16 +781,7 @@ function IntelligenceSection({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const selectedProvider = form.values.llmApiType;
-  const selectedProviderLabel =
-    providers.find((provider) => provider.provider === selectedProvider)?.label || selectedProvider;
-  const selectedProviderKey = form.values.providerApiKeys[selectedProvider] ?? "";
-  const selectedProviderKeyLabel = t("setup.intelligence.apiKeyLabel", {
-    provider: selectedProviderLabel,
-  });
-  const selectedProviderKeyConfigured =
-    selectedProviderKey.trim().length > 0 ||
-    Boolean(projectConfig?.provider_api_keys?.[selectedProvider]);
+
   const detectedCliAgents = useMemo(
     () => new Set(detections.filter((agent) => agent.detected).map((agent) => agent.name)),
     [detections],
@@ -856,41 +850,112 @@ function IntelligenceSection({
             </Text>
             <div className="option-card-grid">
               {providers.map((option) => {
+                const available =
+                  (form.values.providerApiKeys[option.provider] ?? "").trim().length > 0 ||
+                  Boolean(projectConfig?.provider_api_keys?.[option.provider]);
                 const active = form.values.llmApiType === option.provider;
-                return (
-                  <button
-                    key={option.provider}
-                    type="button"
-                    className={`option-card ${active ? "active" : ""}`}
-                    onClick={() => form.setFieldValue("llmApiType", option.provider)}
+
+                const cardElement = (
+                  <div
+                    style={{
+                      position: "relative",
+                      display: "block",
+                      width: "100%",
+                    }}
                   >
-                    <span className="title">{option.label}</span>
-                  </button>
+                    <button
+                      type="button"
+                      aria-label={option.label}
+                      disabled={!available}
+                      className={`option-card ${active ? "active" : ""}`}
+                      style={{
+                        background: available ? "#fff" : "#f7f9f8",
+                        color: available ? "#202124" : "#7f8b85",
+                        cursor: available ? "pointer" : "default",
+                        paddingRight: "40px",
+                        width: "100%",
+                        textAlign: "left",
+                      }}
+                      onClick={() => {
+                        if (available) {
+                          form.setFieldValue("llmApiType", option.provider);
+                        }
+                      }}
+                    >
+                      <span className="title" style={{ userSelect: "none" }}>
+                        {option.label}
+                      </span>
+                      <span
+                        className={`detection ${available ? "ok" : "ng"}`}
+                        style={{ userSelect: "none" }}
+                      >
+                        <i />
+                        {available
+                          ? t("setup.intelligence.apiKeyConfigured")
+                          : t("setup.intelligence.apiKeyMissing")}
+                      </span>
+                    </button>
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "10px",
+                        right: "10px",
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Popover position="bottom" withArrow shadow="md" trapFocus>
+                        <Popover.Target>
+                          <ActionIcon
+                            variant="subtle"
+                            color="gray"
+                            size="sm"
+                            aria-label={`Configure ${option.label} API Key`}
+                            style={{ fontSize: "12px" }}
+                          >
+                            🔑
+                          </ActionIcon>
+                        </Popover.Target>
+                        <Popover.Dropdown p="md" w={340}>
+                          <PasswordInput
+                            size="sm"
+                            label={t("setup.intelligence.apiKeyLabel", { provider: option.label })}
+                            description={
+                              projectConfig?.provider_api_keys?.[option.provider]
+                                ? t("setup.intelligence.keyConfiguredDescription")
+                                : undefined
+                            }
+                            placeholder={
+                              projectConfig?.provider_api_keys?.[option.provider]
+                                ? MASKED_SECRET_PLACEHOLDER
+                                : t("setup.intelligence.keyPlaceholder")
+                            }
+                            value={form.values.providerApiKeys[option.provider] ?? ""}
+                            onChange={(event) =>
+                              form.setFieldValue("providerApiKeys", {
+                                ...form.values.providerApiKeys,
+                                [option.provider]: event.currentTarget.value,
+                              })
+                            }
+                          />
+                        </Popover.Dropdown>
+                      </Popover>
+                    </div>
+                  </div>
+                );
+
+                return (
+                  <Tooltip
+                    key={option.provider}
+                    label="🔑をクリックしてAPIキーを設定してください"
+                    position="top"
+                    withArrow
+                    disabled={available}
+                  >
+                    {cardElement}
+                  </Tooltip>
                 );
               })}
             </div>
-            <PasswordInput
-              label={<RequiredLabel text={selectedProviderKeyLabel} />}
-              aria-label={selectedProviderKeyLabel}
-              aria-required
-              description={
-                selectedProviderKeyConfigured
-                  ? t("setup.intelligence.keyConfiguredDescription")
-                  : undefined
-              }
-              placeholder={
-                selectedProviderKeyConfigured
-                  ? MASKED_SECRET_PLACEHOLDER
-                  : t("setup.intelligence.keyPlaceholder")
-              }
-              value={selectedProviderKey}
-              onChange={(event) =>
-                form.setFieldValue("providerApiKeys", {
-                  ...form.values.providerApiKeys,
-                  [selectedProvider]: event.currentTarget.value,
-                })
-              }
-            />
           </Stack>
         </Card>
 
@@ -909,33 +974,155 @@ function IntelligenceSection({
                   ? form.values.cliAgent === agent.name
                   : agent.detected;
                 const active = form.values.cliAgent === agent.name;
-                return (
-                  <button
-                    key={agent.name}
-                    type="button"
-                    className={`option-card ${active ? "active" : ""}`}
-                    disabled={!detected}
-                    onClick={() => form.setFieldValue("cliAgent", agent.name)}
+
+                const status = (skillStatuses.data?.agents ?? []).find(
+                  (s) => s.agent === agent.name,
+                );
+                const statusKey = status?.status ?? "agent_home_missing";
+                const canForceUpdate = Boolean(status?.can_force_update);
+
+                const cardElement = (
+                  <div
+                    style={{
+                      position: "relative",
+                      display: "block",
+                      width: "100%",
+                    }}
                   >
-                    <span className="title">{agent.label}</span>
-                    <span className="caption">{agent.name}</span>
-                    <span className={`detection ${detected ? "ok" : "ng"}`}>
-                      <i />
-                      {detected
-                        ? t("setup.intelligence.detected")
-                        : t("setup.intelligence.notDetected")}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      aria-label={agent.label}
+                      disabled={!detected}
+                      className={`option-card ${active ? "active" : ""}`}
+                      style={{
+                        background: detected ? "#fff" : "#f7f9f8",
+                        color: detected ? "#202124" : "#7f8b85",
+                        cursor: detected ? "pointer" : "default",
+                        paddingRight: "40px",
+                        width: "100%",
+                        textAlign: "left",
+                      }}
+                      onClick={() => {
+                        if (detected) {
+                          form.setFieldValue("cliAgent", agent.name);
+                        }
+                      }}
+                    >
+                      <span className="title" style={{ userSelect: "none" }}>
+                        {agent.label}
+                      </span>
+                      <span
+                        className={`detection ${detected ? "ok" : "ng"}`}
+                        style={{ userSelect: "none" }}
+                      >
+                        <i />
+                        {detected
+                          ? t("setup.intelligence.detected")
+                          : t("setup.intelligence.notDetected")}
+                      </span>
+                    </button>
+                    {detected ? (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "10px",
+                          right: "10px",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <HoverCard
+                          width={340}
+                          shadow="md"
+                          withArrow
+                          openDelay={200}
+                          closeDelay={400}
+                        >
+                          <HoverCard.Target>
+                            <Indicator
+                              disabled={!canForceUpdate}
+                              color="blue"
+                              size={6}
+                              offset={3}
+                              processing
+                            >
+                              <ActionIcon
+                                variant="subtle"
+                                color="gray"
+                                size="sm"
+                                style={{ fontSize: "12px" }}
+                              >
+                                🪄
+                              </ActionIcon>
+                            </Indicator>
+                          </HoverCard.Target>
+                          <HoverCard.Dropdown p="md">
+                            <Stack gap="xs">
+                              <Group justify="space-between">
+                                <Text fw={700} size="sm">
+                                  {t("setup.intelligence.skillStatusTitle")}
+                                </Text>
+                                <Badge
+                                  color={skillStatusColor(statusKey)}
+                                  variant="light"
+                                  size="sm"
+                                >
+                                  {t(`setup.intelligence.skillStatusLabels.${statusKey}`)}
+                                </Badge>
+                              </Group>
+                              <Text size="sm">
+                                {t(`setup.intelligence.skillStatusMessages.${statusKey}`)}
+                              </Text>
+                              {status?.skill_path ? (
+                                <Text
+                                  size="xs"
+                                  c="dimmed"
+                                  className="mono-text"
+                                  style={{ wordBreak: "break-all" }}
+                                >
+                                  {status.skill_path}
+                                </Text>
+                              ) : null}
+                              {status?.error ? (
+                                <Text size="xs" c="red" style={{ wordBreak: "break-all" }}>
+                                  {status.error}
+                                </Text>
+                              ) : null}
+                              {canForceUpdate ? (
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  leftSection={<WandSparkles size={14} />}
+                                  loading={
+                                    forceSkillUpdate.isPending &&
+                                    forceSkillUpdate.variables === agent.name
+                                  }
+                                  onClick={() => forceSkillUpdate.mutate(agent.name)}
+                                  mt="xs"
+                                >
+                                  {t("setup.intelligence.skillOverwrite")}
+                                </Button>
+                              ) : null}
+                            </Stack>
+                          </HoverCard.Dropdown>
+                        </HoverCard>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+
+                return (
+                  <Tooltip
+                    key={agent.name}
+                    label="このエージェントは PATH 上に検出されていません"
+                    position="top"
+                    withArrow
+                    disabled={detected}
+                  >
+                    {cardElement}
+                  </Tooltip>
                 );
               })}
             </div>
-            <CliAgentSkillStatusList
-              detections={detections}
-              statuses={skillStatuses.data?.agents ?? []}
-              loading={skillStatuses.isLoading}
-              onForceUpdate={(agent) => forceSkillUpdate.mutate(agent)}
-              updatingAgent={forceSkillUpdate.isPending ? forceSkillUpdate.variables : undefined}
-            />
           </Stack>
         </Card>
 
@@ -957,106 +1144,6 @@ function IntelligenceSection({
             </Accordion.Item>
           </Accordion>
         ) : null}
-      </Stack>
-    </Card>
-  );
-}
-
-function CliAgentSkillStatusList({
-  detections,
-  statuses,
-  loading,
-  updatingAgent,
-  onForceUpdate,
-}: {
-  detections: CliAgentDetection[];
-  statuses: CliAgentSkillState[];
-  loading: boolean;
-  updatingAgent?: CliAgentSkillState["agent"];
-  onForceUpdate: (agent: CliAgentSkillState["agent"]) => void;
-}) {
-  const { t } = useTranslation();
-  const statusByAgent = useMemo(
-    () => new Map(statuses.map((status) => [status.agent, status])),
-    [statuses],
-  );
-
-  return (
-    <Card withBorder radius="sm" p="md">
-      <Stack gap="sm">
-        <Group justify="space-between" align="flex-start">
-          <Box>
-            <Text fw={700} size="sm">
-              {t("setup.intelligence.skillStatusTitle")}
-            </Text>
-            <Text size="sm" c="dimmed">
-              {t("setup.intelligence.skillStatusDescription")}
-            </Text>
-          </Box>
-          {loading ? (
-            <Badge color="gray" variant="light">
-              {t("setup.intelligence.skillStatusLoading")}
-            </Badge>
-          ) : null}
-        </Group>
-        <Stack gap="xs">
-          {detections.map((agent) => {
-            const status = statusByAgent.get(agent.name);
-            const detected = agent.detected;
-            const statusKey = status?.status ?? "agent_home_missing";
-            const canForceUpdate = Boolean(status?.can_force_update);
-            return (
-              <Group
-                key={agent.name}
-                justify="space-between"
-                align="flex-start"
-                gap="sm"
-                wrap="nowrap"
-                className="skill-status-row"
-              >
-                <Box>
-                  <Group gap="xs">
-                    <Text fw={600} size="sm">
-                      {agent.label}
-                    </Text>
-                    <Badge color={detected ? "green" : "gray"} variant="light" size="sm">
-                      {detected
-                        ? t("setup.intelligence.detected")
-                        : t("setup.intelligence.notDetected")}
-                    </Badge>
-                    <Badge color={skillStatusColor(statusKey)} variant="light" size="sm">
-                      {t(`setup.intelligence.skillStatusLabels.${statusKey}`)}
-                    </Badge>
-                  </Group>
-                  <Text size="sm" c={statusKey === "up_to_date" ? "dimmed" : undefined}>
-                    {t(`setup.intelligence.skillStatusMessages.${statusKey}`)}
-                  </Text>
-                  {status?.skill_path ? (
-                    <Text size="xs" c="dimmed" className="mono-text">
-                      {status.skill_path}
-                    </Text>
-                  ) : null}
-                  {status?.error ? (
-                    <Text size="xs" c="red">
-                      {status.error}
-                    </Text>
-                  ) : null}
-                </Box>
-                {canForceUpdate ? (
-                  <Button
-                    size="xs"
-                    variant="light"
-                    leftSection={<WandSparkles size={14} />}
-                    loading={updatingAgent === agent.name}
-                    onClick={() => onForceUpdate(agent.name)}
-                  >
-                    {t("setup.intelligence.skillOverwrite")}
-                  </Button>
-                ) : null}
-              </Group>
-            );
-          })}
-        </Stack>
       </Stack>
     </Card>
   );
@@ -1758,7 +1845,6 @@ function IntelligenceEditor({
                       }
                     >
                       <span className="title">{agent.label}</span>
-                      <span className="caption">{agent.name}</span>
                       <span className={`detection ${available ? "ok" : "ng"}`}>
                         <i />
                         {available
@@ -2116,7 +2202,9 @@ function MembersSection({
   const [githubInstallationId, setGithubInstallationId] = useState("");
   const [githubAppId, setGithubAppId] = useState("");
   const [githubPrivateKeyPath, setGithubPrivateKeyPath] = useState("");
-  const [speakingStylePreset, setSpeakingStylePreset] = useState<SpeakingStylePreset>("energetic");
+  const [speakingStylePreset, setSpeakingStylePreset] = useState<SpeakingStylePreset | "">(
+    "energetic",
+  );
   const [speakingStyle, setSpeakingStyle] = useState("");
   const [relationships, setRelationships] = useState("");
   const [characterArchetype, setCharacterArchetype] = useState("");
@@ -2330,6 +2418,7 @@ function MembersSection({
     setCharacterJoinWhenText("");
     setCharacterAvoidWhenText("");
     setCharacterContributionText("");
+    setSpeakingStylePreset("");
   };
 
   useEffect(() => {
@@ -2356,10 +2445,11 @@ function MembersSection({
     setGithubInstallationId("");
     setGithubAppId("");
     setGithubPrivateKeyPath("");
-    setSpeakingStylePreset("energetic");
     if (withDefaults) {
+      setSpeakingStylePreset("energetic");
       applyPresetFields("energetic");
     } else {
+      setSpeakingStylePreset("");
       clearPresetFields();
     }
     setRelationships("");
@@ -2617,7 +2707,7 @@ function MembersSection({
     authReady &&
     patrolSettingsValid &&
     Object.keys(memberErrors).length === 0;
-  const activePresetSample = characterPresetExamples[speakingStylePreset];
+  const activePresetSample = characterPresetExamples[speakingStylePreset || "energetic"];
   const hasMemberError = (keys: Array<keyof MemberFieldErrors>) =>
     keys.some((key) => Boolean(memberErrors[key]));
   const basicTabHasError = hasMemberError([
@@ -2892,14 +2982,6 @@ function MembersSection({
       </Modal>
       <PanelHeader title={t("setup.members.title")} subtitle={t("setup.members.subtitle")} />
       <Stack mt="md">
-        <Group justify="space-between">
-          <Text size="sm" fw={500}>
-            {t("setup.members.activeCountLabel")}
-          </Text>
-          <Badge color={hasActiveMember ? "green" : "yellow"} variant="light">
-            {t("setup.members.activeCountValue", { count: activeMemberCount })}
-          </Badge>
-        </Group>
         {!hasActiveMember ? (
           <InfoCallout title={t("setup.members.requiredTitle")}>
             {t("setup.members.requiredBody")}
@@ -3253,7 +3335,9 @@ function MembersSection({
                         text={t("setup.members.speakingStyle")}
                         tooltip={t("setup.members.applyDefaultTooltip")}
                         onApply={() =>
-                          setSpeakingStyle(speakingStyleTemplates[speakingStylePreset])
+                          setSpeakingStyle(
+                            speakingStyleTemplates[speakingStylePreset || "energetic"],
+                          )
                         }
                         required
                       />
@@ -3263,7 +3347,7 @@ function MembersSection({
                     minRows={3}
                     value={speakingStyle}
                     onChange={(event) => setSpeakingStyle(event.currentTarget.value)}
-                    placeholder={speakingStyleTemplates[speakingStylePreset]}
+                    placeholder={speakingStyleTemplates[speakingStylePreset || "energetic"]}
                     error={memberErrors.speakingStyle}
                   />
                   <TextInput
@@ -4773,6 +4857,14 @@ function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+function sameFormErrors(current: ProjectForm["errors"], next: Record<string, string>): boolean {
+  const currentKeys = Object.keys(current);
+  const nextKeys = Object.keys(next);
+  return (
+    currentKeys.length === nextKeys.length && nextKeys.every((key) => current[key] === next[key])
+  );
+}
+
 function useAutosave(
   form: ProjectForm,
   config: ConfigStatus | undefined,
@@ -4782,6 +4874,8 @@ function useAutosave(
   enabled: boolean,
 ) {
   const previous = useRef("");
+  const timerRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!enabled) {
       return;
@@ -4791,10 +4885,17 @@ function useAutosave(
       previous.current = serialized;
       return;
     }
-    if (previous.current === serialized) {
-      return;
+
+    const isValueChanged = previous.current !== serialized;
+
+    if (isValueChanged) {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      previous.current = serialized;
     }
-    previous.current = serialized;
+
     if (!form.isDirty()) {
       setSaveState("idle");
       return;
@@ -4803,22 +4904,51 @@ function useAutosave(
       setSaveState("idle");
       return;
     }
+
     const validation = schema.safeParse(form.values);
     if (!validation.success) {
+      const errors: Record<string, string> = {};
+      for (const [key, messages] of Object.entries(validation.error.flatten().fieldErrors)) {
+        if (messages && messages.length > 0) {
+          errors[key] = messages[0];
+        }
+      }
+      // Only write when the errors actually change. `form` is a fresh object on
+      // every render, so this effect re-runs each render; setting a new errors
+      // object unconditionally would re-render → re-run → loop indefinitely.
+      if (!sameFormErrors(form.errors, errors)) {
+        form.setErrors(errors);
+      }
       setSaveState("idle");
       return;
     }
-    const timer = window.setTimeout(async () => {
-      setSaveState("saving");
-      try {
-        await save(validation.data);
-        setSaveState("saved");
-      } catch {
-        setSaveState("error");
-      }
-    }, 700);
-    return () => window.clearTimeout(timer);
+
+    if (Object.keys(form.errors).length > 0) {
+      form.clearErrors();
+    }
+
+    if (isValueChanged && timerRef.current === null) {
+      timerRef.current = window.setTimeout(async () => {
+        setSaveState("saving");
+        try {
+          await save(validation.data);
+          setSaveState("saved");
+        } catch {
+          setSaveState("error");
+        } finally {
+          timerRef.current = null;
+        }
+      }, 700);
+    }
   }, [enabled, form, form.values, config, save, schema, setSaveState]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+      }
+    };
+  }, []);
 }
 
 function useSetupStatus(
@@ -5354,17 +5484,17 @@ function getSpeakingStyleTemplates(t: TFunction): Record<SpeakingStylePreset, st
 function inferSpeakingStylePreset(
   speakingStyle: string,
   templates: Record<SpeakingStylePreset, string>,
-): SpeakingStylePreset {
+): SpeakingStylePreset | "" {
   const normalized = speakingStyle.trim();
   if (!normalized) {
-    return "energetic";
+    return "";
   }
   for (const preset of SPEAKING_STYLE_OPTIONS) {
     if (templates[preset] === normalized) {
       return preset;
     }
   }
-  return "energetic";
+  return "";
 }
 
 type CharacterPresetExample = {
