@@ -175,10 +175,10 @@ def test_command_run_request_requires_non_empty_command() -> None:
         CommandRunRequest(command="")
 
 
-# --- Optional secret empty-string handling ---------------------------------
+# --- provider_api_keys handling --------------------------------------------
 
 
-def test_project_config_update_request_secrets_default_to_none() -> None:
+def test_project_config_update_request_provider_api_keys_default_empty() -> None:
     request = ProjectConfigUpdateRequest(
         config_dir=Path("/cfg"),
         env_file_path=Path("/cfg/.env"),
@@ -187,12 +187,10 @@ def test_project_config_update_request_secrets_default_to_none() -> None:
         cli_agent="codex",
         github_enabled=False,
     )
-    assert request.google_api_key is None
-    assert request.openai_api_key is None
-    assert request.anthropic_api_key is None
+    assert request.provider_api_keys == {}
 
 
-def test_project_config_update_request_preserves_empty_string_secret() -> None:
+def test_project_config_update_request_keeps_provider_api_keys() -> None:
     request = ProjectConfigUpdateRequest(
         config_dir=Path("/cfg"),
         env_file_path=Path("/cfg/.env"),
@@ -200,30 +198,23 @@ def test_project_config_update_request_preserves_empty_string_secret() -> None:
         llm_api_type="openai",
         cli_agent="codex",
         github_enabled=False,
-        openai_api_key="",
-        google_api_key="value",
+        provider_api_keys={"openai": "token", "gemini": ""},
     )
-    # Empty string is preserved distinctly from None (callers treat "" as
-    # "clear the secret" and None as "leave unchanged").
-    assert request.openai_api_key == ""
-    assert request.google_api_key == "value"
-    assert request.anthropic_api_key is None
+    assert request.provider_api_keys == {"openai": "token", "gemini": ""}
 
 
-def test_project_update_input_secrets_default_to_none() -> None:
+def test_project_update_input_provider_api_keys_default_empty() -> None:
     request = ProjectUpdateInput(**_project_update_kwargs())
-    assert request.google_api_key is None
-    assert request.openai_api_key is None
-    assert request.anthropic_api_key is None
+    assert request.provider_api_keys == {}
 
 
-def test_project_update_input_preserves_empty_string_secret() -> None:
+def test_project_update_input_keeps_provider_api_keys() -> None:
     request = ProjectUpdateInput(
-        **_project_update_kwargs(anthropic_api_key="", openai_api_key="token")
+        **_project_update_kwargs(
+            provider_api_keys={"anthropic": "", "openai": "token"}
+        )
     )
-    assert request.anthropic_api_key == ""
-    assert request.openai_api_key == "token"
-    assert request.google_api_key is None
+    assert request.provider_api_keys == {"anthropic": "", "openai": "token"}
 
 
 def test_project_update_input_serializes_path_to_json_string() -> None:

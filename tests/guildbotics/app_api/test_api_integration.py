@@ -62,7 +62,7 @@ def _init_project(
             "description": description,
             "llm_api_type": "openai",
             "cli_agent": "codex",
-            "openai_api_key": "test-openai-key",
+            "provider_api_keys": {"openai": "test-openai-key"},
         },
     )
     assert response.status_code == HTTP_OK
@@ -85,7 +85,7 @@ def test_temp_workspace_init_project_member_team_flow(
         assert project_payload["language"] == "en"
         assert project_payload["description"] == "Temp automation workspace"
         assert project_payload["llm_api_type"] == "openai"
-        assert project_payload["has_openai_api_key"] is True
+        assert project_payload["provider_api_keys"]["openai"] is True
         assert project_payload["github_enabled"] is False
 
         member = client.post(

@@ -1,3 +1,6 @@
+label: Antigravity
+order: 30
+executable: agy
 env:
 script: |
   res=$(mktemp)

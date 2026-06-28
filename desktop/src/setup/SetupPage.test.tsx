@@ -90,12 +90,46 @@ vi.mock("../api/client", async (importOriginal) => {
       agents: [
         {
           name: "codex",
+          label: "OpenAI Codex CLI",
           executable: "codex",
           detected: true,
           path: "/usr/local/bin/codex",
         },
+        {
+          name: "claude",
+          label: "Claude Code",
+          executable: "claude",
+          detected: false,
+          path: "",
+        },
       ],
     })),
+    getLlmProviders: vi.fn(async () => [
+      {
+        provider: "openai",
+        label: "OpenAI",
+        order: 10,
+        api_key_env: "OPENAI_API_KEY",
+        model_class: "OpenAIModel",
+        model_id: "gpt-5-mini",
+      },
+      {
+        provider: "gemini",
+        label: "Google Gemini",
+        order: 20,
+        api_key_env: "GOOGLE_API_KEY",
+        model_class: "GeminiModel",
+        model_id: "gemini-3-flash",
+      },
+      {
+        provider: "anthropic",
+        label: "Anthropic Claude",
+        order: 30,
+        api_key_env: "ANTHROPIC_API_KEY",
+        model_class: "ClaudeModel",
+        model_id: "claude-haiku",
+      },
+    ]),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getConfigStatus: vi.fn(async () => ({
       cwd: "/workspace",
@@ -156,9 +190,7 @@ vi.mock("../api/client", async (importOriginal) => {
       github_enabled: false,
       github_project_url: "",
       lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-      has_google_api_key: false,
-      has_openai_api_key: true,
-      has_anthropic_api_key: false,
+      provider_api_keys: { openai: true, gemini: false, anthropic: false },
     })),
     getRoleOptions: vi.fn(async () => ({
       roles: [{ role_id: "product", summary: "Product", description: "" }],
@@ -200,7 +232,22 @@ beforeEach(() => {
   });
   vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ description: "Demo project" }));
   vi.mocked(getCliAgentDetections).mockResolvedValue({
-    agents: [{ name: "codex", executable: "codex", detected: true, path: "/usr/local/bin/codex" }],
+    agents: [
+      {
+        name: "codex",
+        label: "OpenAI Codex CLI",
+        executable: "codex",
+        detected: true,
+        path: "/usr/local/bin/codex",
+      },
+      {
+        name: "claude",
+        label: "Claude Code",
+        executable: "claude",
+        detected: false,
+        path: "",
+      },
+    ],
   });
 });
 
@@ -327,17 +374,23 @@ describe("SetupPage", () => {
     await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
 
     expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
-    // The provider buttons expose "<label><family>" as their accessible name
-    // (e.g. "OpenAIGPT"); anchor the match so the OpenAI provider is not
-    // confused with the "OpenAI Codex CLI" agent button.
-    expect(screen.getByRole("button", { name: /^OpenAIGPT$/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Anthropic ClaudeClaude$/ })).toBeInTheDocument();
+    // The provider buttons expose the provider label as their accessible name;
+    // anchor the OpenAI match so it is not confused with the "OpenAI Codex CLI"
+    // agent button.
+    expect(screen.getByRole("button", { name: /^OpenAI$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Anthropic Claude$/ })).toBeInTheDocument();
 
-    const keyInput = screen.getByLabelText("OpenAI API key");
+    await user.click(
+      screen.getByRole("button", {
+        name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
+      }),
+    );
+
+    const keyInput = await screen.findByLabelText("OpenAI API key");
     await user.type(keyInput, "sk-test");
     expect(keyInput).toHaveValue("sk-test");
 
-    expect(screen.getByRole("button", { name: /OpenAI Codex CLI/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "OpenAI Codex CLI" })).toBeEnabled();
     expect(screen.getByRole("button", { name: /Claude Code/ })).toBeDisabled();
   });
 
@@ -362,10 +415,13 @@ describe("SetupPage", () => {
 
     await screen.findByRole("heading", { name: "First setup" });
     await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    const magicWand = await screen.findByRole("button", {
+      name: t("setup.intelligence.skillStatusButtonLabel", { agent: "OpenAI Codex CLI" }),
+    });
+    await user.hover(magicWand);
 
-    expect(await screen.findByText(t("setup.intelligence.skillStatusTitle"))).toBeInTheDocument();
     expect(
-      screen.getByText(t("setup.intelligence.skillStatusMessages.user_modified")),
+      await screen.findByText(t("setup.intelligence.skillStatusMessages.user_modified")),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: t("setup.intelligence.skillOverwrite") }));
@@ -498,7 +554,11 @@ describe("SetupPage", () => {
     });
     renderSetupPage("/setup");
 
-    await screen.findByLabelText("Project description");
+    // Wait for the saved project config to be reflected in the form before
+    // opening the GitHub section, otherwise the agent field has no Project URL
+    // target yet.
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Existing project"));
     await user.click(screen.getByRole("button", { name: "GitHub" }));
 
     // Registered and not-yet-registered members are both surfaced.
@@ -584,7 +644,13 @@ describe("SetupPage", () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     vi.mocked(getCliAgentDetections).mockResolvedValue({
       agents: [
-        { name: "codex", executable: "codex", detected: true, path: "/usr/local/bin/codex" },
+        {
+          name: "codex",
+          label: "OpenAI Codex CLI",
+          executable: "codex",
+          detected: true,
+          path: "/usr/local/bin/codex",
+        },
       ],
     });
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
@@ -603,6 +669,11 @@ describe("SetupPage", () => {
     await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
+      }),
+    );
     await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     // Add one active member so the members section is complete; the add form is
@@ -623,7 +694,7 @@ describe("SetupPage", () => {
       cli_agent: "codex",
       owner: "",
       github_project_url: "",
-      openai_api_key: "sk-test",
+      provider_api_keys: { openai: "sk-test" },
     });
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/workspace"));
     expect(localStorage.getItem("guildbotics.workspace")).toBe("/workspace");
@@ -733,9 +804,7 @@ function baseProjectValues(overrides: Partial<ProjectFormValues> = {}): ProjectF
     description: "Demo project",
     llmApiType: "openai",
     cliAgent: "codex",
-    googleApiKey: "",
-    openaiApiKey: "",
-    anthropicApiKey: "",
+    providerApiKeys: {},
     githubDecision: "disabled",
     githubEnabled: false,
     githubProjectUrl: "",
@@ -811,9 +880,7 @@ function projectConfig(overrides: Record<string, unknown> = {}): ProjectConfigVa
     github_enabled: false,
     github_project_url: "",
     lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-    has_google_api_key: false,
-    has_openai_api_key: true,
-    has_anthropic_api_key: false,
+    provider_api_keys: { openai: true, gemini: false, anthropic: false },
     ...overrides,
   } as ProjectConfigValue;
 }
@@ -995,9 +1062,7 @@ describe("initialProjectValues", () => {
     expect(values.description).toBe("Existing");
     expect(values.githubDecision).toBe("enabled");
     expect(values.githubEnabled).toBe(true);
-    expect(values.googleApiKey).toBe("");
-    expect(values.openaiApiKey).toBe("");
-    expect(values.anthropicApiKey).toBe("");
+    expect(values.providerApiKeys).toEqual({});
   });
 });
 
@@ -1079,22 +1144,20 @@ describe("toProjectUpdateRequest", () => {
 
   it("omits empty API keys so existing secrets are preserved", () => {
     const request = toProjectUpdateRequest(
-      baseProjectValues({ openaiApiKey: "", googleApiKey: "", anthropicApiKey: "" }),
+      baseProjectValues({ providerApiKeys: { openai: "", gemini: "" } }),
       configStatus(),
       snapshot,
     );
-    expect(request.openai_api_key).toBeUndefined();
-    expect(request.google_api_key).toBeUndefined();
-    expect(request.anthropic_api_key).toBeUndefined();
+    expect(request.provider_api_keys).toEqual({});
   });
 
   it("forwards non-empty API keys", () => {
     const request = toProjectUpdateRequest(
-      baseProjectValues({ openaiApiKey: "sk-new" }),
+      baseProjectValues({ providerApiKeys: { openai: "sk-new" } }),
       configStatus(),
       snapshot,
     );
-    expect(request.openai_api_key).toBe("sk-new");
+    expect(request.provider_api_keys).toEqual({ openai: "sk-new" });
   });
 
   it("disables GitHub and clears related fields", () => {
@@ -2267,16 +2330,16 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
     config_dir: "/workspace/.guildbotics/config",
     person_id: null,
     inherited: false,
-    model_mapping: { default: "models/openai.yml", openai: "models/openai.yml" },
+    model_mapping: { default: "models/openai/default.yml" },
     models: [
       {
-        path: "models/openai.yml",
+        path: "models/openai/default.yml",
         provider: "openai",
         model_class: "OpenAIModel",
         model_id: "gpt-5",
       },
     ],
-    cli_agent_mapping: { default: "codex-cli.yml", codex: "codex-cli.yml" },
+    cli_agent_mapping: { default: "codex-cli.yml" },
     cli_agents: [
       {
         path: "codex-cli.yml",
@@ -2352,7 +2415,7 @@ async function openTeamIntelligenceAdvanced(user: ReturnType<typeof userEvent.se
   await user.click(await screen.findByRole("button", { name: t("setup.nav.intelligence") }));
   await user.click(await screen.findByRole("button", { name: t("setup.intelligence.advanced") }));
   // The advanced editor loads its config lazily; wait for a unique label.
-  await screen.findByText(t("setup.intelligence.modelMapping"));
+  await screen.findByText(t("setup.intelligence.tabs.models"));
 }
 
 async function openMemberIntelligenceTab(user: ReturnType<typeof userEvent.setup>) {
@@ -2366,7 +2429,13 @@ describe("IntelligenceEditor (team default)", () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
     vi.mocked(getCliAgentDetections).mockResolvedValue({
       agents: [
-        { name: "codex", executable: "codex", detected: true, path: "/usr/local/bin/codex" },
+        {
+          name: "codex",
+          label: "OpenAI Codex CLI",
+          executable: "codex",
+          detected: true,
+          path: "/usr/local/bin/codex",
+        },
       ],
     });
   });
@@ -2375,9 +2444,9 @@ describe("IntelligenceEditor (team default)", () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const modelClass = await screen.findByLabelText(t("setup.intelligence.modelClass"));
-    await user.clear(modelClass);
-    await user.type(modelClass, "CustomModel");
+    const modelId = await screen.findByLabelText(t("setup.intelligence.modelId"));
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-6");
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -2385,8 +2454,8 @@ describe("IntelligenceEditor (team default)", () => {
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body).toMatchObject({ person_id: null, inherit_team_defaults: false });
     expect(body.models?.[0]).toMatchObject({
-      path: "models/openai.yml",
-      model_class: "CustomModel",
+      path: "models/openai/default.yml",
+      model_id: "gpt-6",
     });
   });
 
@@ -2442,7 +2511,7 @@ describe("IntelligenceEditor (team default)", () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    await screen.findByText(t("setup.intelligence.cliDefinitions"));
+    await screen.findByText(t("setup.intelligence.tabs.cli"));
     expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
   });
 
@@ -2451,9 +2520,9 @@ describe("IntelligenceEditor (team default)", () => {
     vi.mocked(updateIntelligenceConfig).mockRejectedValueOnce(new Error("write blew up"));
     await openTeamIntelligenceAdvanced(user);
 
-    const modelClass = await screen.findByLabelText(t("setup.intelligence.modelClass"));
-    await user.clear(modelClass);
-    await user.type(modelClass, "BrokenModel");
+    const modelId = await screen.findByLabelText(t("setup.intelligence.modelId"));
+    await user.clear(modelId);
+    await user.type(modelId, "broken-model");
 
     expect(await screen.findByText(t("setup.intelligence.saveAdvancedError"))).toBeInTheDocument();
     expect(screen.getByText("write blew up")).toBeInTheDocument();
@@ -2467,14 +2536,25 @@ describe("IntelligenceEditor (member override)", () => {
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({
         description: "Demo project",
-        has_openai_api_key: true,
-        has_google_api_key: true,
+        provider_api_keys: { openai: true, gemini: true, anthropic: false },
       }),
     );
     vi.mocked(getCliAgentDetections).mockResolvedValue({
       agents: [
-        { name: "codex", executable: "codex", detected: true, path: "/usr/local/bin/codex" },
-        { name: "claude", executable: "claude", detected: true, path: "/usr/local/bin/claude" },
+        {
+          name: "codex",
+          label: "OpenAI Codex CLI",
+          executable: "codex",
+          detected: true,
+          path: "/usr/local/bin/codex",
+        },
+        {
+          name: "claude",
+          label: "Claude Code",
+          executable: "claude",
+          detected: true,
+          path: "/usr/local/bin/claude",
+        },
       ],
     });
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
@@ -2498,7 +2578,7 @@ describe("IntelligenceEditor (member override)", () => {
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body).toMatchObject({ person_id: "alice", inherit_team_defaults: false });
-    expect(body.model_mapping?.default).toBe("models/gemini.yml");
+    expect(body.model_mapping?.default).toBe("models/gemini/default.yml");
     // Member overrides do not resend full model/cli/brain definitions.
     expect("models" in body).toBe(false);
     expect("brain_mapping" in body).toBe(false);

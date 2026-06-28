@@ -1,3 +1,6 @@
+label: Codex
+order: 10
+executable: codex
 env:
 script: |
   res=$(mktemp)

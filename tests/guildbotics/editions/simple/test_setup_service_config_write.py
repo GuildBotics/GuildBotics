@@ -32,7 +32,11 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
-from guildbotics.utils.fileio import load_yaml_file
+from guildbotics.utils.fileio import (
+    get_template_path,
+    load_markdown_with_frontmatter,
+    load_yaml_file,
+)
 
 # Relative config-dir layout produced by ``write_project`` independent of the
 # absolute config location (workspace / home / custom).
@@ -57,7 +61,7 @@ def _project_input(
         "language": "en",
         "llm_api_type": "openai",
         "cli_agent": "codex",
-        "openai_api_key": "test-openai-key",
+        "provider_api_keys": {"openai": "test-openai-key"},
     }
     payload.update(overrides)
     return ProjectSetupInput(**payload)
@@ -145,6 +149,24 @@ def test_write_project_file_set_is_location_independent(
     assert env_file_path.exists()
 
 
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_sample_command_brains_exist_in_template_mapping(language: str) -> None:
+    sample_dir = (
+        Path("guildbotics/editions/simple/templates/sample_commands") / language
+    )
+    brain_mapping = load_yaml_file(
+        get_template_path() / "intelligences/brain_mapping.yml"
+    )
+
+    referenced = {
+        str(load_markdown_with_frontmatter(path).get("brain", "default"))
+        for path in sample_dir.glob("*.md")
+    }
+    enabled = {brain for brain in referenced if brain not in {"none", "-", "null"}}
+
+    assert enabled <= set(brain_mapping)
+
+
 # --------------------------------------------------------------------------- #
 # .env skip / append / overwrite
 # --------------------------------------------------------------------------- #
@@ -204,6 +226,28 @@ def test_project_input_append_requires_existing_env_file(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="append requires an existing env file"):
         _github_project_input(config_dir, env_file_path, env_file_option="append")
+
+
+def test_write_project_empty_intelligence_selection_keeps_template_defaults(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+
+    SimpleProjectSetupService().write_project(
+        _project_input(
+            config_dir,
+            env_file_path,
+            llm_api_type="",
+            cli_agent="",
+            provider_api_keys={},
+        )
+    )
+
+    model_mapping = load_yaml_file(config_dir / "intelligences/model_mapping.yml")
+    cli_mapping = load_yaml_file(config_dir / "intelligences/cli_agent_mapping.yml")
+    assert model_mapping["default"] == "models/openai/default.yml"
+    assert cli_mapping["default"] == "codex-cli.yml"
 
 
 # --------------------------------------------------------------------------- #
@@ -293,6 +337,38 @@ def test_update_project_enables_github_from_project_url(tmp_path: Path) -> None:
         config_dir=config_dir, env_file_path=env_file_path
     )
     assert snapshot.github_enabled is True
+
+
+def test_update_project_empty_intelligence_selection_preserves_existing_defaults(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    SimpleProjectSetupService().write_project(
+        _project_input(
+            config_dir,
+            env_file_path,
+            llm_api_type="gemini",
+            cli_agent="claude",
+            provider_api_keys={},
+        )
+    )
+
+    SimpleProjectSetupService().update_project(
+        ProjectUpdateInput(
+            config_dir=config_dir,
+            env_file_path=env_file_path,
+            language="en",
+            llm_api_type="",
+            cli_agent="",
+            github_enabled=False,
+        )
+    )
+
+    model_mapping = load_yaml_file(config_dir / "intelligences/model_mapping.yml")
+    cli_mapping = load_yaml_file(config_dir / "intelligences/cli_agent_mapping.yml")
+    assert model_mapping["default"] == "models/gemini/default.yml"
+    assert cli_mapping["default"] == "claude-cli.yml"
 
 
 # --------------------------------------------------------------------------- #

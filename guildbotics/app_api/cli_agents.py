@@ -3,18 +3,17 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast
 
-from guildbotics.utils.fileio import get_config_path, load_yaml_file
-
-CliAgentName = Literal["codex", "antigravity", "claude", "copilot"]
-
-CLI_AGENT_EXECUTABLES: tuple[CliAgentName, ...] = (
-    "codex",
-    "antigravity",
-    "claude",
-    "copilot",
+from guildbotics.app_api.models import CliAgentInfo
+from guildbotics.utils.fileio import (
+    get_config_path,
+    get_intelligence_roots,
+    load_yaml_dict,
+    load_yaml_file,
 )
+
+_DEFAULT_ORDER = 1000
 
 GUI_APP_PATHS = (
     "/opt/homebrew/bin",
@@ -48,44 +47,60 @@ def get_cli_agent_search_path(path: str | None = None) -> str:
 
 
 def resolve_cli_agent_path(executable: str, path: str | None = None) -> str:
-    actual_executable = "agy" if executable == "antigravity" else executable
-    return shutil.which(actual_executable, path=get_cli_agent_search_path(path)) or ""
-
-
-def load_cli_agent_script(config_root: Path, executable_info_file: str) -> str:
-    if not executable_info_file:
+    if not executable:
         return ""
-    try:
-        executable_info = cast(
-            dict[str, Any],
-            load_yaml_file(
-                config_root / f"intelligences/cli_agents/{executable_info_file}"
-            ),
+    return shutil.which(executable, path=get_cli_agent_search_path(path)) or ""
+
+
+def discover_cli_agents(
+    config_dir: Path, person_id: str | None = None
+) -> list[CliAgentInfo]:
+    """Discover selectable CLI agents from ``cli_agents/<name>-cli.yml``.
+
+    A CLI agent is any ``*.yml`` (member, team, or template scope); the file in
+    the highest-priority scope wins. This is the only place that enumerates the
+    CLI agent catalog, so adding an agent is just a matter of dropping in
+    ``cli_agents/<name>-cli.yml`` with ``label``/``order``/``executable``.
+    """
+    files: dict[str, Path] = {}
+    for root in get_intelligence_roots(config_dir, person_id, "cli_agents"):
+        if root.is_dir():
+            for path in sorted(root.glob("*.yml")):
+                name = path.name.removesuffix(".yml").removesuffix("-cli")
+                files.setdefault(name, path)
+
+    agents: list[CliAgentInfo] = []
+    for name, path in files.items():
+        data = load_yaml_dict(path)
+        try:
+            order = int(data.get("order", _DEFAULT_ORDER))
+        except (TypeError, ValueError):
+            order = _DEFAULT_ORDER
+        agents.append(
+            CliAgentInfo(
+                name=name,
+                label=str(data.get("label", "") or name),
+                order=order,
+                executable=str(data.get("executable", "") or name),
+            )
         )
-        return str(executable_info.get("script", ""))
-    except Exception:
-        return ""
-
-
-def resolve_cli_executable(script: str) -> str:
-    for executable in CLI_AGENT_EXECUTABLES:
-        if executable == "antigravity":
-            if "antigravity" in script or "agy" in script:
-                return "antigravity"
-        elif executable in script:
-            return executable
-    return ""
+    agents.sort(key=lambda agent: (agent.order, agent.name))
+    return agents
 
 
 def resolve_default_cli_executable() -> str:
+    """Return the executable (binary) of the team's default CLI agent."""
     try:
         mapping = cast(
             dict[str, Any],
             load_yaml_file(get_config_path("intelligences/cli_agent_mapping.yml")),
         )
-        executable_info_file = str(mapping.get("default", ""))
+        default_file = str(mapping.get("default", ""))
     except Exception:
         return ""
 
-    script = load_cli_agent_script(get_config_path(""), executable_info_file)
-    return resolve_cli_executable(script)
+    default_name = default_file.removesuffix(".yml").removesuffix("-cli")
+    for agent in discover_cli_agents(get_config_path("")):
+        if agent.name == default_name:
+            return agent.executable
+    return ""

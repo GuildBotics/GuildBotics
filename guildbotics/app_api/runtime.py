@@ -15,10 +15,8 @@ from typing import Any, cast
 from dotenv import dotenv_values
 
 from guildbotics.app_api.cli_agents import (
-    CLI_AGENT_EXECUTABLES,
-    load_cli_agent_script,
+    discover_cli_agents,
     resolve_cli_agent_path,
-    resolve_cli_executable,
 )
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.diagnostics_store import DiagnosticsStore
@@ -85,7 +83,6 @@ from guildbotics.utils.fileio import (
     get_machine_state_root,
     get_person_config_path,
     get_primary_config_path,
-    get_template_path,
     get_workspace_data_path,
     get_workspace_data_root,
     load_markdown_with_frontmatter,
@@ -677,22 +674,16 @@ class AppRuntime:
             await context.aclose()
 
     def detect_cli_agents(self) -> CliAgentDetectionsResponse:
-        mapping: dict[str, Any] = {}
-        try:
-            mapping_file = get_template_path() / "intelligences/cli_agent_mapping.yml"
-            mapping = cast(dict[str, Any], load_yaml_file(mapping_file))
-        except Exception:
-            mapping = {}
+        from guildbotics.utils.fileio import get_config_path
+
         agents: list[CliAgentDetection] = []
-        for name in CLI_AGENT_EXECUTABLES:
-            executable_info_file = str(mapping.get(name, ""))
-            script = load_cli_agent_script(get_template_path(), executable_info_file)
-            executable = resolve_cli_executable(script)
-            path = resolve_cli_agent_path(executable) if executable else ""
+        for info in discover_cli_agents(get_config_path("")):
+            path = resolve_cli_agent_path(info.executable)
             agents.append(
                 CliAgentDetection(
-                    name=name,
-                    executable=executable,
+                    name=info.name,
+                    label=info.label,
+                    executable=info.executable,
                     detected=bool(path),
                     path=path,
                 )
@@ -1217,19 +1208,23 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[str]:
 
 
 def _requirement_satisfied(kind: str, github_enabled: bool) -> bool:
+    from guildbotics.utils.fileio import get_config_path
+
     if kind == "github":
         return github_enabled
     if kind == "slack":
         return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"))
     if kind == "llm":
-        return bool(
-            os.getenv("OPENAI_API_KEY")
-            or os.getenv("GOOGLE_API_KEY")
-            or os.getenv("ANTHROPIC_API_KEY")
+        from guildbotics.app_api.llm_providers import provider_env_keys
+
+        return any(
+            os.getenv(env_var)
+            for env_var in provider_env_keys(get_config_path("")).values()
         )
     if kind == "cli_agent":
         return any(
-            resolve_cli_agent_path(executable) for executable in CLI_AGENT_EXECUTABLES
+            resolve_cli_agent_path(agent.executable)
+            for agent in discover_cli_agents(get_config_path(""))
         )
     return True
 

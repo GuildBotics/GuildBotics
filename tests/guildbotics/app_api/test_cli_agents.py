@@ -1,15 +1,15 @@
 from pathlib import Path
 
-import pytest
-
 from guildbotics.app_api import cli_agents
 from guildbotics.app_api.cli_agents import (
+    discover_cli_agents,
     get_cli_agent_search_path,
-    load_cli_agent_script,
     resolve_cli_agent_path,
-    resolve_cli_executable,
     resolve_default_cli_executable,
 )
+
+CUSTOM_ORDER = 5
+DEFAULT_ORDER = 1000
 
 
 def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
@@ -88,27 +88,8 @@ def test_resolve_cli_agent_path_returns_empty_when_missing(
     assert resolve_cli_agent_path("does-not-exist", str(tmp_path)) == ""
 
 
-@pytest.mark.parametrize(
-    ("script", "expected"),
-    [
-        ("codex", "codex"),
-        ("codex exec", "codex"),
-        ("FOO=bar agy --yolo", "antigravity"),
-        ('claude "with quoted args"', "claude"),
-        ("npx copilot --print", "copilot"),
-        ("env CODEX_HOME=/tmp codex exec --json", "codex"),
-        ("", ""),
-        ("python run.py", ""),
-    ],
-)
-def test_resolve_cli_executable_parses_script(script: str, expected: str) -> None:
-    assert resolve_cli_executable(script) == expected
-
-
-def test_resolve_cli_executable_returns_first_match() -> None:
-    # CLI_AGENT_EXECUTABLES order is codex, antigravity, claude, copilot.
-    assert resolve_cli_executable("codex then agy") == "codex"
-    assert resolve_cli_executable("agy then claude") == "antigravity"
+def test_resolve_cli_agent_path_empty_executable() -> None:
+    assert resolve_cli_agent_path("") == ""
 
 
 def _write_agent(config_root: Path, name: str, body: str) -> None:
@@ -117,52 +98,79 @@ def _write_agent(config_root: Path, name: str, body: str) -> None:
     agent.write_text(body, encoding="utf-8")
 
 
-def test_load_cli_agent_script_returns_script(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "codex-cli.yml", "script: codex exec\n")
+def test_discover_cli_agents_reads_metadata(tmp_path: Path) -> None:
+    _write_agent(
+        tmp_path,
+        "myagent-cli.yml",
+        "label: My Agent\norder: 5\nexecutable: mybin\nscript: mybin\n",
+    )
 
-    assert load_cli_agent_script(tmp_path, "codex-cli.yml") == "codex exec"
+    agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
 
-
-def test_load_cli_agent_script_empty_info_file(tmp_path: Path) -> None:
-    assert load_cli_agent_script(tmp_path, "") == ""
-
-
-def test_load_cli_agent_script_missing_file(tmp_path: Path) -> None:
-    assert load_cli_agent_script(tmp_path, "missing.yml") == ""
-
-
-def test_load_cli_agent_script_malformed_yaml(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "broken.yml", "script: codex exec\n  bad: : :\n")
-
-    assert load_cli_agent_script(tmp_path, "broken.yml") == ""
+    assert agents["myagent"].label == "My Agent"
+    assert agents["myagent"].order == CUSTOM_ORDER
+    assert agents["myagent"].executable == "mybin"
 
 
-def test_load_cli_agent_script_missing_script_key(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "noscript.yml", "name: codex\n")
+def test_discover_cli_agents_defaults_to_name_and_sorts(tmp_path: Path) -> None:
+    _write_agent(tmp_path, "zeta-cli.yml", "script: zeta\n")
 
-    assert load_cli_agent_script(tmp_path, "noscript.yml") == ""
+    agents = discover_cli_agents(tmp_path)
+    zeta = next(agent for agent in agents if agent.name == "zeta")
+
+    # Missing metadata falls back to the agent name / a low priority order.
+    assert zeta.label == "zeta"
+    assert zeta.executable == "zeta"
+    assert zeta.order == DEFAULT_ORDER
+    assert [agent.order for agent in agents] == sorted(agent.order for agent in agents)
 
 
-def test_resolve_default_cli_executable_maps_mapping_to_executable(
+def test_discover_cli_agents_config_overrides_template(tmp_path: Path) -> None:
+    # antigravity ships as a template; a config-scoped file wins.
+    _write_agent(
+        tmp_path,
+        "antigravity-cli.yml",
+        "label: Custom\norder: 1\nexecutable: custom\nscript: custom\n",
+    )
+
+    agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
+
+    assert agents["antigravity"].label == "Custom"
+    assert agents["antigravity"].executable == "custom"
+
+
+def test_discover_cli_agents_tolerates_malformed_yaml(tmp_path: Path) -> None:
+    _write_agent(tmp_path, "broken-cli.yml", "label: [broken\n")
+
+    agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
+
+    assert agents["broken"].label == "broken"
+    assert agents["broken"].order == DEFAULT_ORDER
+    assert agents["broken"].executable == "broken"
+
+
+def test_resolve_default_cli_executable_returns_declared_executable(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
     mapping.parent.mkdir(parents=True, exist_ok=True)
     mapping.write_text("default: antigravity-cli.yml\n", encoding="utf-8")
-    _write_agent(tmp_path, "antigravity-cli.yml", "script: agy --yolo\n")
+    _write_agent(tmp_path, "antigravity-cli.yml", "executable: agy\nscript: agy\n")
 
-    assert resolve_default_cli_executable() == "antigravity"
+    assert resolve_default_cli_executable() == "agy"
 
 
-def test_resolve_default_cli_executable_maps_codex(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_default_cli_executable_uses_template_when_not_overridden(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
     mapping.parent.mkdir(parents=True, exist_ok=True)
-    mapping.write_text("default: codex-cli.yml\n", encoding="utf-8")
-    _write_agent(tmp_path, "codex-cli.yml", "script: codex exec\n")
+    mapping.write_text("default: antigravity-cli.yml\n", encoding="utf-8")
 
-    assert resolve_default_cli_executable() == "codex"
+    # No config-scoped agent file: the shipped template declares ``executable: agy``.
+    assert resolve_default_cli_executable() == "agy"
 
 
 def test_resolve_default_cli_executable_mapping_load_failure(monkeypatch) -> None:
@@ -177,11 +185,10 @@ def test_resolve_default_cli_executable_mapping_load_failure(monkeypatch) -> Non
 def test_resolve_default_cli_executable_missing_definition(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # Mapping resolves but the referenced definition yields no script,
-    # so no executable can be inferred.
-    monkeypatch.setattr(
-        cli_agents, "load_yaml_file", lambda _file: {"default": "ghost-cli.yml"}
-    )
-    monkeypatch.setattr(cli_agents, "load_cli_agent_script", lambda *_a: "")
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
+    mapping.parent.mkdir(parents=True, exist_ok=True)
+    mapping.write_text("default: ghost-cli.yml\n", encoding="utf-8")
 
+    # No agent named "ghost" in config or template.
     assert resolve_default_cli_executable() == ""

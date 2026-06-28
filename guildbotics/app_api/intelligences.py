@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Any, cast
 
-from guildbotics.app_api.cli_agents import resolve_cli_agent_path
+from guildbotics.app_api.cli_agents import discover_cli_agents, resolve_cli_agent_path
 from guildbotics.app_api.models import (
     BrainAssignment,
     CliAgentDefinition,
@@ -102,13 +102,20 @@ class IntelligenceConfigService:
         cli_agents_dir.mkdir(parents=True, exist_ok=True)
         for agent in request.cli_agents:
             agent_file = cli_agents_dir / agent.path
-            save_yaml_file(
-                agent_file,
-                {
-                    "env": agent.env,
-                    "script": agent.script,
-                },
-            )
+            # Preserve the existing/template script when the request does not
+            # carry one. The editor only loads the mapped agent's script, so a
+            # newly selected agent would otherwise overwrite a real script with
+            # an empty one. Mirrors how model files are merged above.
+            agent_data = self._read_optional_yaml(agent_file)
+            if not agent_data:
+                agent_data = self._read_optional_yaml(
+                    get_template_path() / "intelligences/cli_agents" / agent.path
+                )
+            agent_data["env"] = agent.env
+            if agent.script:
+                agent_data["script"] = agent.script
+            agent_data.setdefault("script", "")
+            save_yaml_file(agent_file, agent_data)
             files.append(CreatedFile(path=agent_file, action="update"))
 
         brain_mapping_file = target_dir / "brain_mapping.yml"
@@ -205,6 +212,12 @@ class IntelligenceConfigService:
         person_id: str | None,
         cli_agent_mapping: dict[str, str],
     ) -> list[CliAgentDefinition]:
+        # The executable to look up on PATH is declared in each agent's yaml
+        # (e.g. antigravity -> agy), so resolve it via the discovered catalog.
+        executables = {
+            agent.name: agent.executable
+            for agent in discover_cli_agents(config_dir, person_id)
+        }
         agents: list[CliAgentDefinition] = []
         seen: set[str] = set()
         for agent_path in cli_agent_mapping.values():
@@ -218,8 +231,10 @@ class IntelligenceConfigService:
             if not isinstance(env, dict):
                 env = {}
             name = agent_path.removesuffix(".yml")
-            executable = name.removesuffix("-cli")
-            detected_path = resolve_cli_agent_path(executable)
+            agent_key = name.removesuffix("-cli")
+            detected_path = resolve_cli_agent_path(
+                executables.get(agent_key, agent_key)
+            )
             agents.append(
                 CliAgentDefinition(
                     path=agent_path,

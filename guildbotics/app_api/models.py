@@ -319,8 +319,22 @@ class ScenarioDiagnosticsResponse(BaseModel):
     errors: list[DiagnosticCheck]
 
 
+class CliAgentInfo(BaseModel):
+    """A selectable CLI agent, discovered from ``cli_agents/<name>-cli.yml``.
+
+    Single source of truth for the CLI agent catalog: ``name`` is the file stem
+    (without ``-cli``), and the rest comes from that file.
+    """
+
+    name: str
+    label: str = ""
+    order: int = 1000
+    executable: str = ""
+
+
 class CliAgentDetection(BaseModel):
-    name: Literal["codex", "antigravity", "claude", "copilot"]
+    name: str
+    label: str = ""
     executable: str
     detected: bool
     path: str = ""
@@ -353,6 +367,25 @@ class BrainAssignment(BaseModel):
     target: str
 
 
+class LlmProviderInfo(BaseModel):
+    """A selectable LLM provider, discovered from ``models/<provider>/default.yml``.
+
+    This is the single source of truth for the provider catalog: ``provider`` is
+    the directory name, and the remaining fields come from that ``default.yml``.
+    """
+
+    provider: str
+    label: str = ""
+    order: int = 1000
+    api_key_env: str = ""
+    model_class: str = ""
+    model_id: str = ""
+
+
+class LlmProvidersResponse(BaseModel):
+    providers: list[LlmProviderInfo] = Field(default_factory=list)
+
+
 class IntelligenceConfigResponse(BaseModel):
     config_dir: Path
     person_id: str | None = None
@@ -380,14 +413,13 @@ class ProjectConfigResponse(BaseModel):
     env_file_path: Path
     language: str
     description: str = ""
-    llm_api_type: Literal["openai", "gemini", "anthropic"]
-    cli_agent: Literal["codex", "antigravity", "claude", "copilot"]
+    llm_api_type: str
+    cli_agent: str
     github_enabled: bool
     github_project_url: str = ""
     lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
-    has_google_api_key: bool
-    has_openai_api_key: bool
-    has_anthropic_api_key: bool
+    # provider id -> whether its API key is configured in the .env
+    provider_api_keys: dict[str, bool] = Field(default_factory=dict)
 
 
 class ProjectStatusOptionsRequest(BaseModel):
@@ -442,12 +474,11 @@ class ProjectConfigUpdateRequest(GitHubProjectInput):
     env_file_path: Path
     language: Literal["en", "ja"]
     description: str = ""
-    llm_api_type: Literal["openai", "gemini", "anthropic"]
-    cli_agent: Literal["codex", "antigravity", "claude", "copilot"]
+    llm_api_type: str
+    cli_agent: str
     github_enabled: bool
-    google_api_key: str | None = None
-    openai_api_key: str | None = None
-    anthropic_api_key: str | None = None
+    # provider id -> new API key value to write to the .env (empty/absent = leave as is)
+    provider_api_keys: dict[str, str] = Field(default_factory=dict)
 
 
 class MemberResolveRequest(BaseModel):

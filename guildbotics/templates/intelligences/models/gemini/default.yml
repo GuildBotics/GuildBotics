@@ -1,9 +1,9 @@
+label: Google Gemini
+order: 30
+api_key_env: GOOGLE_API_KEY
 model_class: agno.models.google.Gemini
 parameters:
-  id: gemini-3-flash-preview
-  #generation_config:
-  #  thinking_config:
-  #    thinking_budget: 1
+  id: gemini-3.1-flash-lite
 rate_limit:
   max_requests_per_minute: 5
   max_requests_per_day: 20
