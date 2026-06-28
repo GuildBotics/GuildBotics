@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, cast
 
 from guildbotics.app_api.models import CliAgentInfo
-from guildbotics.utils.fileio import get_config_path, get_template_path, load_yaml_file
+from guildbotics.utils.fileio import (
+    get_config_path,
+    get_intelligence_roots,
+    load_yaml_dict,
+    load_yaml_file,
+)
 
 _DEFAULT_ORDER = 1000
 
@@ -47,25 +52,6 @@ def resolve_cli_agent_path(executable: str, path: str | None = None) -> str:
     return shutil.which(executable, path=get_cli_agent_search_path(path)) or ""
 
 
-def _cli_agent_roots(config_dir: Path, person_id: str | None) -> list[Path]:
-    """Member, team, and template ``cli_agents/`` roots, in priority order."""
-    roots: list[Path] = []
-    if person_id:
-        roots.append(
-            config_dir / "team/members" / person_id / "intelligences/cli_agents"
-        )
-    roots.append(config_dir / "intelligences/cli_agents")
-    roots.append(get_template_path() / "intelligences/cli_agents")
-    return roots
-
-
-def _read_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    data = load_yaml_file(path)
-    return cast(dict[str, Any], data) if isinstance(data, dict) else {}
-
-
 def discover_cli_agents(
     config_dir: Path, person_id: str | None = None
 ) -> list[CliAgentInfo]:
@@ -77,7 +63,7 @@ def discover_cli_agents(
     ``cli_agents/<name>-cli.yml`` with ``label``/``order``/``executable``.
     """
     files: dict[str, Path] = {}
-    for root in _cli_agent_roots(config_dir, person_id):
+    for root in get_intelligence_roots(config_dir, person_id, "cli_agents"):
         if root.is_dir():
             for path in sorted(root.glob("*.yml")):
                 name = path.name.removesuffix(".yml").removesuffix("-cli")
@@ -85,7 +71,7 @@ def discover_cli_agents(
 
     agents: list[CliAgentInfo] = []
     for name, path in files.items():
-        data = _read_yaml(path)
+        data = load_yaml_dict(path)
         try:
             order = int(data.get("order", _DEFAULT_ORDER))
         except (TypeError, ValueError):

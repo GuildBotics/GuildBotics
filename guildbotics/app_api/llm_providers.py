@@ -1,35 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from guildbotics.app_api.models import LlmProviderInfo
-from guildbotics.utils.fileio import get_template_path, load_yaml_file
+from guildbotics.utils.fileio import (
+    get_intelligence_roots,
+    load_yaml_dict,
+)
 
 PROVIDER_DEFAULT_FILENAME = "default.yml"
 _DEFAULT_ORDER = 1000
 
 
-def _models_roots(config_dir: Path, person_id: str | None) -> list[Path]:
-    """Member, team, and template ``models/`` roots, in priority order."""
-    roots: list[Path] = []
-    if person_id:
-        roots.append(config_dir / "team/members" / person_id / "intelligences/models")
-    roots.append(config_dir / "intelligences/models")
-    roots.append(get_template_path() / "intelligences/models")
-    return roots
-
-
-def _read_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    data = load_yaml_file(path)
-    return cast(dict[str, Any], data) if isinstance(data, dict) else {}
-
-
 def _read_provider_default(roots: list[Path], provider: str) -> dict[str, Any]:
     for root in roots:
-        data = _read_yaml(root / provider / PROVIDER_DEFAULT_FILENAME)
+        data = load_yaml_dict(root / provider / PROVIDER_DEFAULT_FILENAME)
         if data:
             return data
     return {}
@@ -45,7 +31,7 @@ def discover_llm_providers(
     place that enumerates the provider catalog, so adding a provider is just a
     matter of dropping in ``models/<provider>/default.yml``.
     """
-    roots = _models_roots(config_dir, person_id)
+    roots = get_intelligence_roots(config_dir, person_id, "models")
     names: set[str] = set()
     for root in roots:
         if root.is_dir():

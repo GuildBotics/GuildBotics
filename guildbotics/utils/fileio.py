@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Any
 
 import yaml  # type: ignore
 from dotenv import dotenv_values
@@ -292,3 +293,25 @@ def _clean_data(data):
     if isinstance(data, list):
         return [_clean_data(item) for item in data]
     return data
+
+
+def get_intelligence_roots(
+    config_dir: Path, person_id: str | None, sub_dir: str
+) -> list[Path]:
+    """Resolve member, team, and template intelligence configuration roots in priority order."""
+    roots: list[Path] = []
+    if person_id:
+        roots.append(
+            config_dir / "team/members" / person_id / "intelligences" / sub_dir
+        )
+    roots.append(config_dir / "intelligences" / sub_dir)
+    roots.append(get_template_path() / "intelligences" / sub_dir)
+    return roots
+
+
+def load_yaml_dict(path: Path) -> dict[str, Any]:
+    """Safely load a YAML file as a dictionary, returning empty dict if not found or invalid."""
+    if not path.exists():
+        return {}
+    data = load_yaml_file(path)
+    return data if isinstance(data, dict) else {}
