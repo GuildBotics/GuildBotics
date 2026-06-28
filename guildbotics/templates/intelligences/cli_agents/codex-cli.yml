@@ -1,5 +1,5 @@
-label: OpenAI Codex CLI
-order: 20
+label: OpenAI Codex
+order: 10
 executable: codex
 env:
 script: |

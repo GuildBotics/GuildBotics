@@ -1,5 +1,5 @@
 label: Claude Code
-order: 10
+order: 20
 executable: claude
 env:
 script: |

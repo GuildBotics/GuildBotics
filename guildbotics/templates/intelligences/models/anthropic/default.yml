@@ -1,5 +1,5 @@
 label: Anthropic Claude
-order: 30
+order: 20
 api_key_env: ANTHROPIC_API_KEY
 model_class: agno.models.anthropic.Claude
 parameters:

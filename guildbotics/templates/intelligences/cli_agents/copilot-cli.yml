@@ -1,4 +1,4 @@
-label: GitHub Copilot CLI
+label: GitHub Copilot
 order: 40
 executable: copilot
 env:

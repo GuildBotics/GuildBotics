@@ -1,4 +1,4 @@
-label: Antigravity CLI
+label: Antigravity
 order: 30
 executable: agy
 env:

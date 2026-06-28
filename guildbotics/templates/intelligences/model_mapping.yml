@@ -1,1 +1,1 @@
-default: models/gemini/gemini-3-flash.yml
+default: models/openai/default.yml
