@@ -2309,6 +2309,16 @@ def test_config_intelligences_reports_project_not_found(tmp_path: Path) -> None:
     assert response.json()["code"] == "project_not_found"
 
 
+def test_model_providers_available_before_project_init(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get("/intelligences/model-providers", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_OK
+    providers = {entry["provider"]: entry for entry in response.json()["providers"]}
+    assert providers["openai"]["api_key_env"] == "OPENAI_API_KEY"
+
+
 def test_config_intelligences_update_maps_setup_service_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

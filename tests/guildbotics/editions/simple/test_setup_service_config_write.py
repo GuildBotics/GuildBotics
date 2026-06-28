@@ -32,7 +32,11 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
-from guildbotics.utils.fileio import load_yaml_file
+from guildbotics.utils.fileio import (
+    get_template_path,
+    load_markdown_with_frontmatter,
+    load_yaml_file,
+)
 
 # Relative config-dir layout produced by ``write_project`` independent of the
 # absolute config location (workspace / home / custom).
@@ -143,6 +147,24 @@ def test_write_project_file_set_is_location_independent(
     # The env file lives wherever the caller pointed it, even outside config_dir.
     assert env_file_path in created_paths
     assert env_file_path.exists()
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_sample_command_brains_exist_in_template_mapping(language: str) -> None:
+    sample_dir = (
+        Path("guildbotics/editions/simple/templates/sample_commands") / language
+    )
+    brain_mapping = load_yaml_file(
+        get_template_path() / "intelligences/brain_mapping.yml"
+    )
+
+    referenced = {
+        str(load_markdown_with_frontmatter(path).get("brain", "default"))
+        for path in sample_dir.glob("*.md")
+    }
+    enabled = {brain for brain in referenced if brain not in {"none", "-", "null"}}
+
+    assert enabled <= set(brain_mapping)
 
 
 # --------------------------------------------------------------------------- #

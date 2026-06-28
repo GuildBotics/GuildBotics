@@ -441,7 +441,7 @@ def create_app(
     def list_model_providers(
         _: None = Depends(require_token),
     ) -> LlmProvidersResponse:
-        config_dir = _resolve_existing_config_dir(app_runtime)
+        config_dir = app_runtime.get_config_status().config_dir
         return LlmProvidersResponse(providers=discover_llm_providers(config_dir))
 
     @app.get(
