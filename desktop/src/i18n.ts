@@ -255,6 +255,7 @@ const resources = {
           defaultProvider: "Default LLM provider",
           providerDescription: "Choose one provider used by default.",
           defaultCliAgent: "Default CLI agent",
+          apiKeyLabel: "{{provider}} API key",
           keyPlaceholder: "Saved to .env after input",
           keyConfiguredPlaceholder: "Configured",
           keyConfiguredDescription:
@@ -1158,6 +1159,7 @@ const resources = {
           defaultProvider: "デフォルトの LLM プロバイダ",
           providerDescription: "利用する1つを選択します。",
           defaultCliAgent: "デフォルトの CLI エージェント",
+          apiKeyLabel: "{{provider}} APIキー",
           keyPlaceholder: "入力後 .env に保存",
           keyConfiguredPlaceholder: "設定済み",
           keyConfiguredDescription:

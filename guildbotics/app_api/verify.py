@@ -10,6 +10,7 @@ from guildbotics.app_api.cli_agents import (
     resolve_cli_agent_path,
     resolve_default_cli_executable,
 )
+from guildbotics.app_api.llm_providers import provider_env_keys
 from guildbotics.app_api.models import ConfigStatus, VerifyCheck, VerifyResponse
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.github_utils import (
@@ -18,34 +19,23 @@ from guildbotics.integrations.github.github_utils import (
 )
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
-PROVIDER_ENV_KEYS: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "gemini": "GOOGLE_API_KEY",
-    "google": "GOOGLE_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-}
-
 
 def resolve_default_model_provider() -> str:
     """Return the default LLM provider name from the team's intelligence config.
 
-    Returns an empty string when the mapping cannot be parsed or the default
-    model does not match a known provider. Shared with the scenario diagnostics
-    service so missing-key short-circuits stay consistent with the static
-    verify checks.
+    The default model path is ``models/<provider>/<file>.yml``, so the provider
+    is the second path segment. Returns an empty string when the mapping cannot
+    be parsed. Shared with the scenario diagnostics service so missing-key
+    short-circuits stay consistent with the static verify checks.
     """
     try:
         mapping = cast(
             dict[str, Any],
             load_yaml_file(get_config_path("intelligences/model_mapping.yml")),
         )
-        default_model = str(mapping.get("default", ""))
-        if "openai" in default_model:
-            return "openai"
-        if "gemini" in default_model or "google" in default_model:
-            return "gemini"
-        if "anthropic" in default_model or "claude" in default_model:
-            return "anthropic"
+        parts = str(mapping.get("default", "")).split("/")
+        if len(parts) > 1:
+            return parts[1]
     except Exception:
         pass
 
@@ -159,9 +149,9 @@ class VerifyService:
         self, team: Team, env: dict[str, str | None]
     ) -> list[VerifyCheck]:
         provider = self._resolve_default_model_provider(team)
-        key = PROVIDER_ENV_KEYS.get(provider)
+        key = provider_env_keys(get_config_path("")).get(provider)
 
-        if key is None:
+        if not key:
             return [
                 VerifyCheck(
                     code="llm_provider",

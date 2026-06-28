@@ -836,7 +836,7 @@ def test_config_init_endpoint_writes_project_without_github(tmp_path: Path) -> N
                 "description": "Local automation workspace",
                 "llm_api_type": "openai",
                 "cli_agent": "codex",
-                "openai_api_key": "test-openai-key",
+                "provider_api_keys": {"openai": "test-openai-key"},
             },
         )
 
@@ -912,8 +912,8 @@ def test_config_project_endpoints_read_and_update_non_destructively(
         assert payload["language"] == "en"
         assert payload["llm_api_type"] == "openai"
         assert payload["cli_agent"] == "claude"
-        assert payload["has_openai_api_key"] is True
-        assert payload["has_google_api_key"] is False
+        assert payload["provider_api_keys"]["openai"] is True
+        assert payload["provider_api_keys"]["gemini"] is False
 
         put_response = client.put(
             "/config/project",
@@ -2033,7 +2033,7 @@ def test_config_init_maps_setup_service_error(
             "description": "desc",
             "llm_api_type": "openai",
             "cli_agent": "codex",
-            "openai_api_key": "k",
+            "provider_api_keys": {"openai": "k"},
         },
     )
 

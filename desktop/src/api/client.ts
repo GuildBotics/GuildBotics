@@ -180,7 +180,8 @@ export type ScenarioDiagnosticsResponse = {
 };
 
 export type CliAgentDetection = {
-  name: "codex" | "antigravity" | "claude" | "copilot";
+  name: string;
+  label: string;
   executable: string;
   detected: boolean;
   path: string;
@@ -353,11 +354,10 @@ export type ProjectSetupRequest = {
   project_id?: string;
   github_project_url?: string;
   lane_map?: LaneMap;
-  llm_api_type: "openai" | "gemini" | "anthropic";
-  cli_agent: "codex" | "antigravity" | "claude" | "copilot";
-  google_api_key?: string;
-  openai_api_key?: string;
-  anthropic_api_key?: string;
+  llm_api_type: string;
+  cli_agent: string;
+  // provider id -> new API key value to write to the .env
+  provider_api_keys?: Record<string, string>;
 };
 
 export type ProjectConfig = {
@@ -365,14 +365,13 @@ export type ProjectConfig = {
   env_file_path: string;
   language: "en" | "ja";
   description: string;
-  llm_api_type: "openai" | "gemini" | "anthropic";
-  cli_agent: "codex" | "antigravity" | "claude" | "copilot";
+  llm_api_type: string;
+  cli_agent: string;
   github_enabled: boolean;
   github_project_url: string;
   lane_map: LaneMap;
-  has_google_api_key: boolean;
-  has_openai_api_key: boolean;
-  has_anthropic_api_key: boolean;
+  // provider id -> whether its API key is configured in the .env
+  provider_api_keys: Record<string, boolean>;
 };
 
 export type ProjectConfigUpdateRequest = {
@@ -380,16 +379,15 @@ export type ProjectConfigUpdateRequest = {
   env_file_path: string;
   language: "en" | "ja";
   description?: string;
-  llm_api_type: "openai" | "gemini" | "anthropic";
-  cli_agent: "codex" | "antigravity" | "claude" | "copilot";
+  llm_api_type: string;
+  cli_agent: string;
   github_enabled: boolean;
   owner?: string;
   project_id?: string;
   github_project_url?: string;
   lane_map?: LaneMap;
-  google_api_key?: string;
-  openai_api_key?: string;
-  anthropic_api_key?: string;
+  // provider id -> new API key value to write to the .env
+  provider_api_keys?: Record<string, string>;
 };
 
 export type MemberPersonType = "human" | "agent";
@@ -532,8 +530,13 @@ export type BrainAssignment = {
   target: string;
 };
 
-export type ModelProviderDefault = {
+// A selectable LLM provider, discovered server-side from
+// `models/<provider>/default.yml`. Single source of truth for the catalog.
+export type LlmProviderInfo = {
   provider: string;
+  label: string;
+  order: number;
+  api_key_env: string;
   model_class: string;
   model_id: string;
 };
@@ -544,7 +547,6 @@ export type IntelligenceConfig = {
   inherited: boolean;
   model_mapping: Record<string, string>;
   models: ModelDefinition[];
-  provider_defaults: ModelProviderDefault[];
   cli_agent_mapping: Record<string, string>;
   cli_agents: CliAgentDefinition[];
   brain_mapping: BrainAssignment[];
@@ -734,6 +736,13 @@ export async function getMemoryEvents(params?: {
 
 export async function getCliAgentDetections(): Promise<CliAgentDetectionsResponse> {
   return request("/intelligences/cli-agents/detection");
+}
+
+export async function getLlmProviders(): Promise<LlmProviderInfo[]> {
+  const response = await request<{ providers: LlmProviderInfo[] }>(
+    "/intelligences/model-providers",
+  );
+  return response.providers;
 }
 
 export async function getIntelligenceConfig(personId?: string): Promise<IntelligenceConfig> {

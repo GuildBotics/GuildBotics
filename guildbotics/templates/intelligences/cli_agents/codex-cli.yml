@@ -1,3 +1,6 @@
+label: OpenAI Codex CLI
+order: 20
+executable: codex
 env:
 script: |
   res=$(mktemp)

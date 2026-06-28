@@ -123,11 +123,9 @@ class ProjectSetupInput(GitHubProjectInput):
     env_file_option: str = Field(pattern="^(skip|append|overwrite)$")
     language: str
     description: str = ""
-    llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
-    cli_agent: str = Field(pattern="^(codex|antigravity|claude|copilot)$")
-    google_api_key: str = ""
-    openai_api_key: str = ""
-    anthropic_api_key: str = ""
+    llm_api_type: str = ""
+    cli_agent: str = ""
+    provider_api_keys: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("language")
     @classmethod
@@ -167,14 +165,12 @@ class ProjectConfigSnapshot(BaseModel):
     env_file_path: Path
     language: str
     description: str = ""
-    llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
-    cli_agent: str = Field(pattern="^(codex|antigravity|claude|copilot)$")
+    llm_api_type: str = ""
+    cli_agent: str = ""
     github_enabled: bool
     github_project_url: str = ""
     lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
-    has_google_api_key: bool = False
-    has_openai_api_key: bool = False
-    has_anthropic_api_key: bool = False
+    provider_api_keys: dict[str, bool] = Field(default_factory=dict)
 
 
 class ProjectUpdateInput(GitHubProjectInput):
@@ -182,12 +178,10 @@ class ProjectUpdateInput(GitHubProjectInput):
     env_file_path: Path
     language: str
     description: str = ""
-    llm_api_type: str = Field(pattern="^(openai|gemini|anthropic)$")
-    cli_agent: str = Field(pattern="^(codex|antigravity|claude|copilot)$")
+    llm_api_type: str = ""
+    cli_agent: str = ""
     github_enabled: bool = False
-    google_api_key: str | None = None
-    openai_api_key: str | None = None
-    anthropic_api_key: str | None = None
+    provider_api_keys: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("language")
     @classmethod
@@ -365,9 +359,15 @@ class SimpleProjectSetupService:
         github_enabled = bool(owner and project_id and github_project_url)
         lane_map = LaneMapInput.from_config(ticket_manager.get("lane_map"))
 
+        from guildbotics.app_api.llm_providers import provider_env_keys
+
         env_values = (
             dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
         )
+        provider_api_keys = {
+            provider: bool(env_values.get(env_var))
+            for provider, env_var in provider_env_keys(config_dir).items()
+        }
         return ProjectConfigSnapshot(
             config_dir=config_dir,
             env_file_path=env_file_path,
@@ -378,9 +378,7 @@ class SimpleProjectSetupService:
             github_enabled=github_enabled,
             github_project_url=github_project_url,
             lane_map=lane_map,
-            has_google_api_key=bool(env_values.get("GOOGLE_API_KEY")),
-            has_openai_api_key=bool(env_values.get("OPENAI_API_KEY")),
-            has_anthropic_api_key=bool(env_values.get("ANTHROPIC_API_KEY")),
+            provider_api_keys=provider_api_keys,
         )
 
     def parse_github_project_url(self, url: str) -> GitHubProjectReference:
@@ -556,19 +554,20 @@ class SimpleProjectSetupService:
         save_yaml_file(cli_mapping_file, cli_mapping)
         files.append(CreatedFile(path=cli_mapping_file, action="update"))
 
+        from guildbotics.app_api.llm_providers import provider_env_keys
+
+        env_keys = provider_env_keys(config.config_dir)
         env_updates = {
-            "GOOGLE_API_KEY": config.google_api_key,
-            "OPENAI_API_KEY": config.openai_api_key,
-            "ANTHROPIC_API_KEY": config.anthropic_api_key,
+            env_keys[provider]: value
+            for provider, value in config.provider_api_keys.items()
+            if value and provider in env_keys
         }
-        if any(value for value in env_updates.values() if value):
+        if env_updates:
             env_file_existed = config.env_file_path.exists()
             env_values = (
                 dict(dotenv_values(config.env_file_path)) if env_file_existed else {}
             )
-            for key, value in env_updates.items():
-                if value:
-                    env_values[key] = value
+            env_values.update(env_updates)
             lines = [
                 f"{key}={value}"
                 for key, value in env_values.items()
@@ -609,12 +608,15 @@ class SimpleProjectSetupService:
         return project
 
     def render_env_file(self, config: ProjectSetupInput) -> str:
-        env_file_template = (TEMPLATE_PATH / ".env.example").read_text()
-        return env_file_template.format(
-            google_api_key=f"GOOGLE_API_KEY={config.google_api_key}",
-            openai_api_key=f"OPENAI_API_KEY={config.openai_api_key}",
-            anthropic_api_key=f"ANTHROPIC_API_KEY={config.anthropic_api_key}",
-        )
+        from guildbotics.app_api.llm_providers import discover_llm_providers
+
+        key_lines = [
+            f"{provider.api_key_env}={config.provider_api_keys.get(provider.provider, '')}"
+            for provider in discover_llm_providers(config.config_dir)
+            if provider.api_key_env
+        ]
+        tail = (TEMPLATE_PATH / ".env.example").read_text()
+        return "\n".join(key_lines) + "\n\n" + tail
 
     def _load_mapping(self, file_path: Path, template_path: Path) -> dict:
         if file_path.exists():
@@ -634,28 +636,17 @@ class SimpleProjectSetupService:
         return f"models/{provider}/default.yml"
 
     def _infer_llm_api_type(self, mapping: dict) -> str:
-        default = str(mapping.get("default", ""))
-        for provider in ("openai", "gemini", "anthropic"):
-            if default == str(mapping.get(provider, "")):
-                return provider
-        if "openai" in default:
-            return "openai"
-        if "anthropic" in default or "claude" in default:
-            return "anthropic"
-        return "gemini"
+        # The default model path is ``models/<provider>/<file>.yml``, so the
+        # provider is simply the second path segment (matches how the rest of the
+        # stack derives provider from a model path).
+        parts = str(mapping.get("default", "")).split("/")
+        return parts[1] if len(parts) > 1 else ""
 
     def _infer_cli_agent(self, mapping: dict) -> str:
-        default = str(mapping.get("default", ""))
-        for agent in ("codex", "antigravity", "claude", "copilot"):
-            if default == str(mapping.get(agent, "")):
-                return agent
-        if "codex" in default:
-            return "codex"
-        if "claude" in default:
-            return "claude"
-        if "copilot" in default:
-            return "copilot"
-        return "antigravity"
+        # The default points at ``<agent>-cli.yml``, so the agent name is the
+        # file stem without the ``-cli`` suffix.
+        name = str(mapping.get("default", "")).removesuffix(".yml")
+        return name.removesuffix("-cli")
 
 
 class SimplePersonSetupService:

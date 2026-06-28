@@ -771,9 +771,7 @@ function projectConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
     github_enabled: true,
     github_project_url: "",
     lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-    has_google_api_key: false,
-    has_openai_api_key: true,
-    has_anthropic_api_key: false,
+    provider_api_keys: { openai: true, gemini: false, anthropic: false },
     ...overrides,
   };
 }

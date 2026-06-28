@@ -30,6 +30,7 @@ from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.intelligences import IntelligenceConfigService
+from guildbotics.app_api.llm_providers import discover_llm_providers
 from guildbotics.app_api.models import (
     AgentFieldStateResponse,
     ApiError,
@@ -41,6 +42,7 @@ from guildbotics.app_api.models import (
     HealthResponse,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
+    LlmProvidersResponse,
     MemberDeleteRequest,
     MemberResolveRequest,
     MemberResolveResponse,
@@ -430,6 +432,17 @@ def create_app(
         _: None = Depends(require_token),
     ) -> CliAgentDetectionsResponse:
         return app_runtime.detect_cli_agents()
+
+    @app.get(
+        "/intelligences/model-providers",
+        response_model=LlmProvidersResponse,
+        responses=error_responses,
+    )
+    def list_model_providers(
+        _: None = Depends(require_token),
+    ) -> LlmProvidersResponse:
+        config_dir = _resolve_existing_config_dir(app_runtime)
+        return LlmProvidersResponse(providers=discover_llm_providers(config_dir))
 
     @app.get(
         "/config/intelligences",

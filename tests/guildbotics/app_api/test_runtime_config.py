@@ -18,6 +18,7 @@ import pytest
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
+    CliAgentInfo,
     ProjectStatusOptionsRequest,
     PromptTraceUpdateRequest,
     RuntimeDebugUpdateRequest,
@@ -855,54 +856,22 @@ def test_update_runtime_debug_disables_both_debug_flags(
 # --- detect_cli_agents() ----------------------------------------------------
 
 
-def test_detect_cli_agents_falls_back_when_mapping_load_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _raise(_path: object) -> object:
-        raise RuntimeError("broken mapping")
-
-    monkeypatch.setattr("guildbotics.app_api.runtime.load_yaml_file", _raise)
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.load_cli_agent_script",
-        lambda root, info: "",
-    )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.resolve_cli_executable", lambda script: ""
-    )
-    runtime = AppRuntime(EventBus())
-
-    response = runtime.detect_cli_agents()
-
-    assert [agent.name for agent in response.agents] == [
-        "codex",
-        "antigravity",
-        "claude",
-        "copilot",
+def _cli_infos(*items: tuple[str, str, int, str]) -> list[CliAgentInfo]:
+    return [
+        CliAgentInfo(name=name, label=label, order=order, executable=executable)
+        for name, label, order, executable in items
     ]
-    assert all(agent.executable == "" for agent in response.agents)
-    assert all(agent.detected is False for agent in response.agents)
-    assert all(agent.path == "" for agent in response.agents)
 
 
 def test_detect_cli_agents_resolves_executable_and_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.load_yaml_file",
-        lambda path: {
-            "codex": "codex-cli.yml",
-            "antigravity": "antigravity-cli.yml",
-            "claude": "claude-cli.yml",
-            "copilot": "copilot-cli.yml",
-        },
-    )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.load_cli_agent_script",
-        lambda root, info: f"run {info.split('-', 1)[0]} now",
-    )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.resolve_cli_executable",
-        lambda script: script.split(" ")[1],
+        "guildbotics.app_api.runtime.discover_cli_agents",
+        lambda _config_dir: _cli_infos(
+            ("codex", "OpenAI Codex CLI", 10, "codex"),
+            ("antigravity", "Antigravity CLI", 20, "agy"),
+        ),
     )
 
     def _resolve_path(executable: str) -> str:
@@ -915,10 +884,13 @@ def test_detect_cli_agents_resolves_executable_and_path(
 
     agents = {agent.name: agent for agent in runtime.detect_cli_agents().agents}
 
+    assert agents["codex"].label == "OpenAI Codex CLI"
     assert agents["codex"].executable == "codex"
     assert agents["codex"].detected is True
     assert agents["codex"].path == "/usr/local/bin/codex"
-    assert agents["antigravity"].executable == "antigravity"
+    # The agent name and binary differ for antigravity (agy); detection uses the
+    # declared executable.
+    assert agents["antigravity"].executable == "agy"
     assert agents["antigravity"].detected is False
     assert agents["antigravity"].path == ""
 
@@ -926,23 +898,27 @@ def test_detect_cli_agents_resolves_executable_and_path(
 def test_detect_cli_agents_marks_undetected_when_executable_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("guildbotics.app_api.runtime.load_yaml_file", lambda path: {})
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.load_cli_agent_script",
-        lambda root, info: "",
+        "guildbotics.app_api.runtime.discover_cli_agents",
+        lambda _config_dir: _cli_infos(("codex", "OpenAI Codex CLI", 10, "codex")),
     )
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.resolve_cli_executable", lambda script: ""
-    )
-    resolve_calls: list[str] = []
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.resolve_cli_agent_path",
-        lambda executable: resolve_calls.append(executable) or "",
+        "guildbotics.app_api.runtime.resolve_cli_agent_path", lambda _executable: ""
     )
     runtime = AppRuntime(EventBus())
 
     response = runtime.detect_cli_agents()
 
-    # With no executable resolved, path resolution is skipped entirely.
-    assert resolve_calls == []
     assert all(agent.detected is False for agent in response.agents)
+    assert all(agent.path == "" for agent in response.agents)
+
+
+def test_detect_cli_agents_returns_empty_for_empty_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.discover_cli_agents", lambda _config_dir: []
+    )
+    runtime = AppRuntime(EventBus())
+
+    assert runtime.detect_cli_agents().agents == []

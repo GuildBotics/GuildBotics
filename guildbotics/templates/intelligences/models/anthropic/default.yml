@@ -1,3 +1,6 @@
+label: Anthropic Claude
+order: 30
+api_key_env: ANTHROPIC_API_KEY
 model_class: agno.models.anthropic.Claude
 parameters:
   id: claude-haiku-4-5

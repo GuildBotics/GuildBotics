@@ -323,7 +323,9 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
     model_data = load_yaml_file(model_file)
     assert model_data["model_class"] == "openai.Class"
     assert model_data["parameters"]["id"] == "gpt-test"
-    assert load_yaml_file(cli_file) == {"env": {"KEY": "value"}, "script": "codex exec"}
+    cli_data = load_yaml_file(cli_file)
+    assert cli_data["env"] == {"KEY": "value"}
+    assert cli_data["script"] == "codex exec"
 
     brain_data = load_yaml_file(base / "brain_mapping.yml")
     assert brain_data["default"] == {

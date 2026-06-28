@@ -9,9 +9,9 @@ from guildbotics.app_api.cli_agents import (
     resolve_cli_agent_path,
     resolve_default_cli_executable,
 )
+from guildbotics.app_api.llm_providers import provider_env_keys
 from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsResponse
 from guildbotics.app_api.verify import (
-    PROVIDER_ENV_KEYS,
     resolve_default_model_provider,
 )
 from guildbotics.capabilities.member_chat import probe_slack_app_token
@@ -151,9 +151,11 @@ class ScenarioDiagnosticsService:
         # conflicts with the repo's "no external service calls in tests"
         # policy. The static verify check has long behaved this way; the
         # scenario diagnostics now match.
+        from guildbotics.utils.fileio import get_config_path
+
         provider = resolve_default_model_provider()
-        env_key = PROVIDER_ENV_KEYS.get(provider)
-        if env_key is not None and not os.environ.get(env_key):
+        env_key = provider_env_keys(get_config_path("")).get(provider)
+        if env_key and not os.environ.get(env_key):
             return [
                 self._check(
                     "llm",

@@ -57,7 +57,7 @@ def _project_input(
         "language": "en",
         "llm_api_type": "openai",
         "cli_agent": "codex",
-        "openai_api_key": "test-openai-key",
+        "provider_api_keys": {"openai": "test-openai-key"},
     }
     payload.update(overrides)
     return ProjectSetupInput(**payload)

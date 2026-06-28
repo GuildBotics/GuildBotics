@@ -154,9 +154,7 @@ def test_verify_multiple_active_members(tmp_path: Path) -> None:
     [
         ("models/openai/gpt-5-mini.yml", "OPENAI_API_KEY"),
         ("models/gemini/gemini-2.5-pro.yml", "GOOGLE_API_KEY"),
-        ("models/google/gemini-2.5-pro.yml", "GOOGLE_API_KEY"),
         ("models/anthropic/claude.yml", "ANTHROPIC_API_KEY"),
-        ("models/claude/claude.yml", "ANTHROPIC_API_KEY"),
     ],
 )
 def test_verify_llm_provider_api_key_present(
@@ -215,7 +213,7 @@ def test_verify_llm_provider_unknown_is_warning(
 
     check = _checks_by_code(response)["llm_provider"]
     assert check.status == "warning"
-    assert check.context == {"provider": ""}
+    assert check.context == {"provider": "unknown"}
 
 
 def test_verify_cli_agent_executable_found(
@@ -280,8 +278,11 @@ def test_verify_cli_agent_mapping_missing_warns(
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    # Mapping points to a definition whose script names no known executable.
-    _write_cli_agent(tmp_path, "ghost-cli.yml", "python run.py")
+    # Mapping points to an agent that exists in neither config nor template, so
+    # no executable can be inferred.
+    cli_mapping = tmp_path / ".guildbotics/config/intelligences/cli_agent_mapping.yml"
+    cli_mapping.parent.mkdir(parents=True, exist_ok=True)
+    cli_mapping.write_text("default: ghost-cli.yml\n")
 
     team = Team(
         project=Project(name="demo"),

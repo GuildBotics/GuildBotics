@@ -1,3 +1,6 @@
+label: GitHub Copilot CLI
+order: 40
+executable: copilot
 env:
 script: |
   res=$(mktemp)

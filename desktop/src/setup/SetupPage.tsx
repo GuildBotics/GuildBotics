@@ -86,6 +86,8 @@ import {
   getCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
+  getLlmProviders,
+  type LlmProviderInfo,
   getMemberConfig,
   getProjectConfig,
   getProjectStatusOptions,
@@ -119,11 +121,10 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
       envFileOption: z.enum(["skip", "append", "overwrite"]),
       language: z.enum(["en", "ja"]),
       description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
-      llmApiType: z.enum(["openai", "gemini", "anthropic"]),
-      cliAgent: z.enum(["codex", "antigravity", "claude", "copilot"]),
-      googleApiKey: z.string(),
-      openaiApiKey: z.string(),
-      anthropicApiKey: z.string(),
+      llmApiType: z.string(),
+      cliAgent: z.string(),
+      // provider id -> API key value typed in the form (server maps to env vars)
+      providerApiKeys: z.record(z.string(), z.string()),
       githubDecision: z.enum(["", "disabled", "enabled"]),
       githubEnabled: z.boolean(),
       githubProjectUrl: z.string(),
@@ -169,7 +170,7 @@ export const DEFAULT_LANE_DONE = "Done";
 
 type ProjectFormValues = z.infer<ReturnType<typeof createProjectSchema>>;
 type ProjectForm = UseFormReturnType<ProjectFormValues>;
-type LlmProviderAvailability = Record<ProjectFormValues["llmApiType"], boolean>;
+type LlmProviderAvailability = Record<string, boolean>;
 type IntelligenceDraftState = {
   key: string;
   config: IntelligenceConfig;
@@ -178,29 +179,20 @@ type IntelligenceDraftState = {
 const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "members", "github"] as const;
 const CORE_SETUP_SECTIONS_CONFIGURED = ["project", "intelligence", "members", "github"] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
-const LLM_PROVIDER_OPTIONS = [
-  { value: "openai", label: "OpenAI", family: "GPT" },
-  { value: "gemini", label: "Google Gemini", family: "Gemini" },
-  { value: "anthropic", label: "Anthropic Claude", family: "Claude" },
-] as const;
-
-const CLI_AGENT_OPTIONS = [
-  { value: "claude", label: "Claude Code" },
-  { value: "codex", label: "OpenAI Codex CLI" },
-  { value: "antigravity", label: "Antigravity CLI" },
-  { value: "copilot", label: "GitHub Copilot CLI" },
-] as const;
-
 // Resolve the human-friendly CLI agent label from an effective intelligence
 // config (member override already falls back to the team default server-side).
-function cliAgentLabelFromConfig(config: IntelligenceConfig | undefined): string | null {
+// Labels come from the backend CLI agent catalog (the detection endpoint).
+function cliAgentLabelFromConfig(
+  config: IntelligenceConfig | undefined,
+  detections: CliAgentDetection[],
+): string | null {
   const mapping = config?.cli_agent_mapping ?? {};
   const file = mapping["default"] ?? Object.values(mapping)[0];
   if (!file) {
     return null;
   }
   const value = file.replace(/\.yml$/, "").replace(/-cli$/, "");
-  return CLI_AGENT_OPTIONS.find((option) => option.value === value)?.label ?? value;
+  return detections.find((agent) => agent.name === value)?.label ?? value;
 }
 
 function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
@@ -209,7 +201,11 @@ function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled:
     queryFn: () => getIntelligenceConfig(personId),
     enabled,
   });
-  const label = cliAgentLabelFromConfig(query.data);
+  const detections = useQuery({
+    queryKey: ["cli-agent-detections"],
+    queryFn: getCliAgentDetections,
+  });
+  const label = cliAgentLabelFromConfig(query.data, detections.data?.agents ?? []);
   if (!label) {
     return null;
   }
@@ -265,6 +261,11 @@ export function SetupPage() {
   const cliDetections = useQuery({
     queryKey: ["cli-agent-detections"],
     queryFn: getCliAgentDetections,
+    retry: false,
+  });
+  const llmProviders = useQuery({
+    queryKey: ["llm-providers"],
+    queryFn: getLlmProviders,
     retry: false,
   });
   const hasExistingProject = Boolean(config.data?.project_file_exists);
@@ -337,23 +338,16 @@ export function SetupPage() {
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
   const workspaceSwitchId = useRef(0);
   const canAutosave = hasExistingProject && projectConfig.isSuccess;
-  const llmProviderAvailability = useMemo(
-    () => ({
-      openai: Boolean(form.values.openaiApiKey.trim() || projectConfig.data?.has_openai_api_key),
-      gemini: Boolean(form.values.googleApiKey.trim() || projectConfig.data?.has_google_api_key),
-      anthropic: Boolean(
-        form.values.anthropicApiKey.trim() || projectConfig.data?.has_anthropic_api_key,
-      ),
-    }),
-    [
-      form.values.anthropicApiKey,
-      form.values.googleApiKey,
-      form.values.openaiApiKey,
-      projectConfig.data?.has_anthropic_api_key,
-      projectConfig.data?.has_google_api_key,
-      projectConfig.data?.has_openai_api_key,
-    ],
-  );
+  const llmProviderAvailability = useMemo(() => {
+    const result: Record<string, boolean> = {};
+    for (const provider of llmProviders.data ?? []) {
+      result[provider.provider] = Boolean(
+        (form.values.providerApiKeys[provider.provider] ?? "").trim() ||
+        projectConfig.data?.provider_api_keys?.[provider.provider],
+      );
+    }
+    return result;
+  }, [llmProviders.data, form.values.providerApiKeys, projectConfig.data?.provider_api_keys]);
   const effectiveActiveMemberCount = hasExistingProject
     ? activeMemberCount
     : draftActiveMemberCount;
@@ -535,6 +529,7 @@ export function SetupPage() {
               detections={cliDetections.data?.agents ?? []}
               detectionLoading={cliDetections.isLoading}
               projectConfig={projectConfig.data}
+              providers={llmProviders.data ?? []}
             />
           ) : null}
           {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
@@ -546,6 +541,7 @@ export function SetupPage() {
               workspaceDir={form.values.workspaceDir}
               cliDetections={cliDetections.data?.agents ?? []}
               llmProviderAvailability={llmProviderAvailability}
+              providers={llmProviders.data ?? []}
               initialTab={focusMemberTab}
               onMemberActiveDelta={(delta) => {
                 if (!hasExistingProject && delta !== 0) {
@@ -770,6 +766,7 @@ function IntelligenceSection({
   detections,
   detectionLoading,
   projectConfig,
+  providers,
 }: {
   form: ProjectForm;
   saveState: "idle" | "saving" | "saved" | "error";
@@ -777,15 +774,20 @@ function IntelligenceSection({
   detections: CliAgentDetection[];
   detectionLoading: boolean;
   projectConfig: ProjectConfig | undefined;
+  providers: LlmProviderInfo[];
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const selectedProviderKeyField = getProviderKeyField(form.values.llmApiType);
-  const selectedProviderKeyLabel = getProviderKeyLabel(form.values.llmApiType);
-  const selectedProviderKey = form.values[selectedProviderKeyField];
+  const selectedProvider = form.values.llmApiType;
+  const selectedProviderLabel =
+    providers.find((provider) => provider.provider === selectedProvider)?.label || selectedProvider;
+  const selectedProviderKey = form.values.providerApiKeys[selectedProvider] ?? "";
+  const selectedProviderKeyLabel = t("setup.intelligence.apiKeyLabel", {
+    provider: selectedProviderLabel,
+  });
   const selectedProviderKeyConfigured =
     selectedProviderKey.trim().length > 0 ||
-    isProjectProviderKeyConfigured(projectConfig, form.values.llmApiType);
+    Boolean(projectConfig?.provider_api_keys?.[selectedProvider]);
   const detectedCliAgents = useMemo(
     () => new Set(detections.filter((agent) => agent.detected).map((agent) => agent.name)),
     [detections],
@@ -829,11 +831,11 @@ function IntelligenceSection({
     if (detectedCliAgents.has(form.values.cliAgent)) {
       return;
     }
-    const fallback = CLI_AGENT_OPTIONS.find((option) => detectedCliAgents.has(option.value));
+    const fallback = detections.find((agent) => agent.detected);
     if (fallback) {
-      form.setFieldValue("cliAgent", fallback.value);
+      form.setFieldValue("cliAgent", fallback.name);
     }
-  }, [detectionLoading, detectedCliAgents, form]);
+  }, [detectionLoading, detectedCliAgents, detections, form]);
   return (
     <Card withBorder radius="md" p="lg">
       <PanelHeader
@@ -853,17 +855,16 @@ function IntelligenceSection({
               {t("setup.intelligence.providerDescription")}
             </Text>
             <div className="option-card-grid">
-              {LLM_PROVIDER_OPTIONS.map((option) => {
-                const active = form.values.llmApiType === option.value;
+              {providers.map((option) => {
+                const active = form.values.llmApiType === option.provider;
                 return (
                   <button
-                    key={option.value}
+                    key={option.provider}
                     type="button"
                     className={`option-card ${active ? "active" : ""}`}
-                    onClick={() => form.setFieldValue("llmApiType", option.value)}
+                    onClick={() => form.setFieldValue("llmApiType", option.provider)}
                   >
                     <span className="title">{option.label}</span>
-                    <span className="caption">{option.family}</span>
                   </button>
                 );
               })}
@@ -884,7 +885,10 @@ function IntelligenceSection({
               }
               value={selectedProviderKey}
               onChange={(event) =>
-                form.setFieldValue(selectedProviderKeyField, event.currentTarget.value)
+                form.setFieldValue("providerApiKeys", {
+                  ...form.values.providerApiKeys,
+                  [selectedProvider]: event.currentTarget.value,
+                })
               }
             />
           </Stack>
@@ -900,22 +904,21 @@ function IntelligenceSection({
               {t("setup.intelligence.cliHint")}
             </Text>
             <div className="option-card-grid">
-              {CLI_AGENT_OPTIONS.map((option) => {
-                const detection = detections.find((entry) => entry.name === option.value);
+              {detections.map((agent) => {
                 const detected = detectionLoading
-                  ? form.values.cliAgent === option.value
-                  : Boolean(detection?.detected);
-                const active = form.values.cliAgent === option.value;
+                  ? form.values.cliAgent === agent.name
+                  : agent.detected;
+                const active = form.values.cliAgent === agent.name;
                 return (
                   <button
-                    key={option.value}
+                    key={agent.name}
                     type="button"
                     className={`option-card ${active ? "active" : ""}`}
                     disabled={!detected}
-                    onClick={() => form.setFieldValue("cliAgent", option.value)}
+                    onClick={() => form.setFieldValue("cliAgent", agent.name)}
                   >
-                    <span className="title">{option.label}</span>
-                    <span className="caption">{option.value}</span>
+                    <span className="title">{agent.label}</span>
+                    <span className="caption">{agent.name}</span>
                     <span className={`detection ${detected ? "ok" : "ng"}`}>
                       <i />
                       {detected
@@ -944,14 +947,11 @@ function IntelligenceSection({
                 <IntelligenceEditor
                   enabled={autosaveEnabled}
                   detections={detections}
+                  providers={providers}
                   teamLlmApiType={form.values.llmApiType}
                   teamCliAgent={form.values.cliAgent}
-                  onTeamLlmApiTypeChange={(val) =>
-                    form.setFieldValue("llmApiType", val as ProjectFormValues["llmApiType"])
-                  }
-                  onTeamCliAgentChange={(val) =>
-                    form.setFieldValue("cliAgent", val as ProjectFormValues["cliAgent"])
-                  }
+                  onTeamLlmApiTypeChange={(val) => form.setFieldValue("llmApiType", val)}
+                  onTeamCliAgentChange={(val) => form.setFieldValue("cliAgent", val)}
                 />
               </Accordion.Panel>
             </Accordion.Item>
@@ -980,10 +980,6 @@ function CliAgentSkillStatusList({
     () => new Map(statuses.map((status) => [status.agent, status])),
     [statuses],
   );
-  const detectedByAgent = useMemo(
-    () => new Map(detections.map((detection) => [detection.name, detection])),
-    [detections],
-  );
 
   return (
     <Card withBorder radius="sm" p="md">
@@ -1004,14 +1000,14 @@ function CliAgentSkillStatusList({
           ) : null}
         </Group>
         <Stack gap="xs">
-          {CLI_AGENT_OPTIONS.map((option) => {
-            const status = statusByAgent.get(option.value);
-            const detected = Boolean(detectedByAgent.get(option.value)?.detected);
+          {detections.map((agent) => {
+            const status = statusByAgent.get(agent.name);
+            const detected = agent.detected;
             const statusKey = status?.status ?? "agent_home_missing";
             const canForceUpdate = Boolean(status?.can_force_update);
             return (
               <Group
-                key={option.value}
+                key={agent.name}
                 justify="space-between"
                 align="flex-start"
                 gap="sm"
@@ -1021,7 +1017,7 @@ function CliAgentSkillStatusList({
                 <Box>
                   <Group gap="xs">
                     <Text fw={600} size="sm">
-                      {option.label}
+                      {agent.label}
                     </Text>
                     <Badge color={detected ? "green" : "gray"} variant="light" size="sm">
                       {detected
@@ -1051,8 +1047,8 @@ function CliAgentSkillStatusList({
                     size="xs"
                     variant="light"
                     leftSection={<WandSparkles size={14} />}
-                    loading={updatingAgent === option.value}
-                    onClick={() => onForceUpdate(option.value)}
+                    loading={updatingAgent === agent.name}
+                    onClick={() => onForceUpdate(agent.name)}
                   >
                     {t("setup.intelligence.skillOverwrite")}
                   </Button>
@@ -1091,20 +1087,15 @@ function upsertByAgent(
 }
 
 const DEFAULT_LLM_PROVIDER = "openai";
-const LLM_PROVIDERS = ["openai", "gemini", "anthropic"] as const;
-
-function isLlmProvider(provider: string): boolean {
-  return (LLM_PROVIDERS as readonly string[]).includes(provider);
-}
 
 type ProviderDefaults = Record<string, { model_class: string; model_id: string }>;
 
-// Per-provider default model_class/model_id, sourced from the backend
-// (`models/<provider>/default.yml`). Keeping it server-side means swapping a
-// provider's default model is a data change, not a frontend code change.
-function providerDefaultsMap(config: IntelligenceConfig): ProviderDefaults {
+// Per-provider default model_class/model_id, sourced from the backend provider
+// catalog (`models/<provider>/default.yml`). Keeping it server-side means
+// swapping a provider's default model is a data change, not a frontend change.
+function providerDefaultsMap(providers: LlmProviderInfo[]): ProviderDefaults {
   return Object.fromEntries(
-    (config.provider_defaults ?? []).map((entry) => [
+    providers.map((entry) => [
       entry.provider,
       { model_class: entry.model_class, model_id: entry.model_id },
     ]),
@@ -1160,6 +1151,7 @@ function IntelligenceEditor({
   enabled,
   detections,
   llmProviderAvailability,
+  providers,
   saveMode = "auto",
   onRegisterSave,
   teamLlmApiType,
@@ -1172,6 +1164,7 @@ function IntelligenceEditor({
   enabled: boolean;
   detections: CliAgentDetection[];
   llmProviderAvailability?: LlmProviderAvailability;
+  providers: LlmProviderInfo[];
   saveMode?: "auto" | "external";
   onRegisterSave?: (save: (() => Promise<void>) | null) => void;
   teamLlmApiType?: string;
@@ -1181,6 +1174,9 @@ function IntelligenceEditor({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const providerDefaults = useMemo(() => providerDefaultsMap(providers), [providers]);
+  const isLlmProvider = (provider: string) =>
+    providers.some((entry) => entry.provider === provider);
   const query = useQuery({
     queryKey: ["intelligence-config", personId ?? "team"],
     queryFn: () => getIntelligenceConfig(personId),
@@ -1274,7 +1270,7 @@ function IntelligenceEditor({
       withSlotModel(
         current,
         "default",
-        providerDefaultModel(teamLlmApiType, "default", providerDefaultsMap(current)),
+        providerDefaultModel(teamLlmApiType, "default", providerDefaults),
       ),
     );
   }, [teamLlmApiType, personId]);
@@ -1408,7 +1404,7 @@ function IntelligenceEditor({
       return withSlotModel(
         current,
         baseName,
-        providerDefaultModel(DEFAULT_LLM_PROVIDER, baseName, providerDefaultsMap(current)),
+        providerDefaultModel(DEFAULT_LLM_PROVIDER, baseName, providerDefaults),
       );
     });
   };
@@ -1461,11 +1457,7 @@ function IntelligenceEditor({
 
   const handleUpdateLlmSlotProvider = (slotKey: string, provider: string) => {
     updateDraft((current) =>
-      withSlotModel(
-        current,
-        slotKey,
-        providerDefaultModel(provider, slotKey, providerDefaultsMap(current)),
-      ),
+      withSlotModel(current, slotKey, providerDefaultModel(provider, slotKey, providerDefaults)),
     );
   };
 
@@ -1478,8 +1470,7 @@ function IntelligenceEditor({
       return withSlotModel(current, slotKey, {
         path: slotModelPath(provider, slotKey),
         provider,
-        model_class:
-          currentDef?.model_class || providerDefaultsMap(current)[provider]?.model_class || "",
+        model_class: currentDef?.model_class || providerDefaults[provider]?.model_class || "",
         model_id: modelId,
       });
     });
@@ -1673,8 +1664,6 @@ function IntelligenceEditor({
   };
 
   if (personId) {
-    const defaultModel = draft.model_mapping.default ?? "";
-    const defaultCliAgent = draft.cli_agent_mapping.default ?? "";
     return (
       <Stack gap="md">
         <Group justify="space-between">
@@ -1707,28 +1696,27 @@ function IntelligenceEditor({
                 {t("setup.intelligence.memberDefaultProviderDescription")}
               </Text>
               <div className="option-card-grid">
-                {LLM_PROVIDER_OPTIONS.map((option) => {
-                  const modelPath = draft.model_mapping[option.value];
-                  const available = Boolean(modelPath && llmProviderAvailability?.[option.value]);
-                  const active = defaultModel === modelPath;
+                {providers.map((option) => {
+                  const available = Boolean(llmProviderAvailability?.[option.provider]);
+                  const active =
+                    providerFromModelPath(draft.model_mapping.default) === option.provider;
                   return (
                     <button
-                      key={option.value}
+                      key={option.provider}
                       type="button"
                       className={`option-card ${active ? "active" : ""}`}
                       disabled={!available}
                       onClick={() =>
-                        updateDraft((current) => ({
-                          ...current,
-                          model_mapping: {
-                            ...current.model_mapping,
-                            default: modelPath ?? defaultModel,
-                          },
-                        }))
+                        updateDraft((current) =>
+                          withSlotModel(
+                            current,
+                            "default",
+                            providerDefaultModel(option.provider, "default", providerDefaults),
+                          ),
+                        )
                       }
                     >
                       <span className="title">{option.label}</span>
-                      <span className="caption">{option.family}</span>
                       <span className={`detection ${available ? "ok" : "ng"}`}>
                         <i />
                         {available
@@ -1749,16 +1737,13 @@ function IntelligenceEditor({
                 {t("setup.intelligence.memberDefaultCliAgentDescription")}
               </Text>
               <div className="option-card-grid">
-                {CLI_AGENT_OPTIONS.map((option) => {
-                  const agentPath = draft.cli_agent_mapping[option.value];
-                  const detected = Boolean(
-                    detections.find((entry) => entry.name === option.value)?.detected,
-                  );
-                  const available = Boolean(agentPath && detected);
-                  const active = defaultCliAgent === agentPath;
+                {detections.map((agent) => {
+                  const agentPath = `${agent.name}-cli.yml`;
+                  const available = agent.detected;
+                  const active = draft.cli_agent_mapping.default === agentPath;
                   return (
                     <button
-                      key={option.value}
+                      key={agent.name}
                       type="button"
                       className={`option-card ${active ? "active" : ""}`}
                       disabled={!available}
@@ -1767,13 +1752,13 @@ function IntelligenceEditor({
                           ...current,
                           cli_agent_mapping: {
                             ...current.cli_agent_mapping,
-                            default: agentPath ?? defaultCliAgent,
+                            default: agentPath,
                           },
                         }))
                       }
                     >
-                      <span className="title">{option.label}</span>
-                      <span className="caption">{option.value}</span>
+                      <span className="title">{agent.label}</span>
+                      <span className="caption">{agent.name}</span>
                       <span className={`detection ${available ? "ok" : "ng"}`}>
                         <i />
                         {available
@@ -1913,11 +1898,10 @@ function IntelligenceEditor({
                       />
                       <Select
                         label={t("setup.intelligence.provider")}
-                        data={[
-                          { value: "openai", label: "OpenAI" },
-                          { value: "gemini", label: "Google Gemini" },
-                          { value: "anthropic", label: "Anthropic" },
-                        ]}
+                        data={providers.map((provider) => ({
+                          value: provider.provider,
+                          label: provider.label,
+                        }))}
                         value={modelDef.provider}
                         onChange={(val) =>
                           handleUpdateLlmSlotProvider(slotKey, val ?? DEFAULT_LLM_PROVIDER)
@@ -2094,6 +2078,7 @@ function MembersSection({
   workspaceDir,
   cliDetections,
   llmProviderAvailability,
+  providers,
   initialTab,
   onMemberActiveDelta,
 }: {
@@ -2109,6 +2094,7 @@ function MembersSection({
   workspaceDir: string;
   cliDetections: CliAgentDetection[];
   llmProviderAvailability: LlmProviderAvailability;
+  providers: LlmProviderInfo[];
   initialTab?: MemberEditorTab;
   onMemberActiveDelta: (delta: number) => void;
 }) {
@@ -2180,8 +2166,8 @@ function MembersSection({
     enabled: hasPersistedProject,
   });
   const cliAgentLabel = useMemo(
-    () => cliAgentLabelFromConfig(cliAgentBadgeQuery.data),
-    [cliAgentBadgeQuery.data],
+    () => cliAgentLabelFromConfig(cliAgentBadgeQuery.data, cliDetections),
+    [cliAgentBadgeQuery.data, cliDetections],
   );
 
   const getAvatarErrorMessage = (err: unknown, defaultMsg: string): string => {
@@ -3386,6 +3372,7 @@ function MembersSection({
                     enabled={Boolean(configDir)}
                     detections={cliDetections}
                     llmProviderAvailability={llmProviderAvailability}
+                    providers={providers}
                     saveMode="external"
                     onRegisterSave={(save) => {
                       memberIntelligenceSaveRef.current = save;
@@ -4892,28 +4879,6 @@ function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialP
   return false;
 }
 
-function getProviderKeyField(
-  provider: ProjectFormValues["llmApiType"],
-): "openaiApiKey" | "googleApiKey" | "anthropicApiKey" {
-  if (provider === "openai") {
-    return "openaiApiKey";
-  }
-  if (provider === "gemini") {
-    return "googleApiKey";
-  }
-  return "anthropicApiKey";
-}
-
-function getProviderKeyLabel(provider: ProjectFormValues["llmApiType"]): string {
-  if (provider === "openai") {
-    return "OpenAI API key";
-  }
-  if (provider === "gemini") {
-    return "Google API key";
-  }
-  return "Anthropic API key";
-}
-
 function getInitialCoreStatus(
   values: ProjectFormValues,
   activeMemberCount: number,
@@ -5262,30 +5227,8 @@ function isGitHubAccessToken(value: string): boolean {
   return /^(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})$/.test(value.trim());
 }
 
-function isProjectProviderKeyConfigured(
-  projectConfig: ProjectConfig | undefined,
-  provider: ProjectFormValues["llmApiType"],
-): boolean {
-  if (!projectConfig) {
-    return false;
-  }
-  if (provider === "openai") {
-    return projectConfig.has_openai_api_key;
-  }
-  if (provider === "gemini") {
-    return projectConfig.has_google_api_key;
-  }
-  return projectConfig.has_anthropic_api_key;
-}
-
 function isProviderKeyProvided(values: ProjectFormValues): boolean {
-  if (values.llmApiType === "openai") {
-    return values.openaiApiKey.trim().length > 0;
-  }
-  if (values.llmApiType === "gemini") {
-    return values.googleApiKey.trim().length > 0;
-  }
-  return values.anthropicApiKey.trim().length > 0;
+  return (values.providerApiKeys[values.llmApiType] ?? "").trim().length > 0;
 }
 
 function getInitialEnvFileOption(
@@ -5317,9 +5260,7 @@ export function initialProjectValues(
       description: projectConfig.description ?? "",
       llmApiType: projectConfig.llm_api_type,
       cliAgent: projectConfig.cli_agent,
-      googleApiKey: "",
-      openaiApiKey: "",
-      anthropicApiKey: "",
+      providerApiKeys: {},
       githubDecision: projectConfig.github_enabled ? "enabled" : "disabled",
       githubEnabled: projectConfig.github_enabled,
       githubProjectUrl: projectConfig.github_project_url ?? "",
@@ -5336,9 +5277,7 @@ export function initialProjectValues(
     description: "",
     llmApiType: "openai",
     cliAgent: "codex",
-    googleApiKey: "",
-    openaiApiKey: "",
-    anthropicApiKey: "",
+    providerApiKeys: {},
     githubDecision: "",
     githubEnabled: false,
     githubProjectUrl: "",
@@ -5366,9 +5305,7 @@ export function toProjectSetupRequest(
     lane_map: github ? toLaneMap(values) : undefined,
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
-    google_api_key: values.googleApiKey,
-    openai_api_key: values.openaiApiKey,
-    anthropic_api_key: values.anthropicApiKey,
+    provider_api_keys: values.providerApiKeys,
   };
 }
 
@@ -5398,9 +5335,11 @@ export function toProjectUpdateRequest(
     project_id: github?.projectId ?? "",
     github_project_url: github?.projectUrl ?? "",
     lane_map: github ? toLaneMap(values) : undefined,
-    google_api_key: values.googleApiKey.trim() ? values.googleApiKey : undefined,
-    openai_api_key: values.openaiApiKey.trim() ? values.openaiApiKey : undefined,
-    anthropic_api_key: values.anthropicApiKey.trim() ? values.anthropicApiKey : undefined,
+    // Only send providers the user actually typed a key for; empty = leave the
+    // existing .env value unchanged.
+    provider_api_keys: Object.fromEntries(
+      Object.entries(values.providerApiKeys).filter(([, value]) => value.trim().length > 0),
+    ),
   };
 }
 

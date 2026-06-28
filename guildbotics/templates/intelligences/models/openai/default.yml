@@ -1,3 +1,6 @@
+label: OpenAI
+order: 10
+api_key_env: OPENAI_API_KEY
 model_class: agno.models.openai.OpenAIChat
 parameters:
   id: gpt-5-mini

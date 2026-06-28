@@ -174,10 +174,39 @@ function projectConfig(overrides: Record<string, unknown> = {}) {
     cli_agent: "codex",
     github_enabled: false,
     github_project_url: "",
-    has_google_api_key: false,
-    has_openai_api_key: true,
-    has_anthropic_api_key: false,
+    provider_api_keys: { openai: true, gemini: false, anthropic: false },
     ...overrides,
+  };
+}
+
+function llmProviders() {
+  return {
+    providers: [
+      {
+        provider: "openai",
+        label: "OpenAI",
+        order: 10,
+        api_key_env: "OPENAI_API_KEY",
+        model_class: "agno.models.openai.OpenAIChat",
+        model_id: "gpt-5-mini",
+      },
+      {
+        provider: "gemini",
+        label: "Google Gemini",
+        order: 20,
+        api_key_env: "GOOGLE_API_KEY",
+        model_class: "agno.models.google.Gemini",
+        model_id: "gemini-3-flash-preview",
+      },
+      {
+        provider: "anthropic",
+        label: "Anthropic Claude",
+        order: 30,
+        api_key_env: "ANTHROPIC_API_KEY",
+        model_class: "agno.models.anthropic.Claude",
+        model_id: "claude-haiku-4-5",
+      },
+    ],
   };
 }
 
@@ -472,6 +501,7 @@ describe("Setup integration (real client + mock server)", () => {
       .json("GET", "/intelligences/cli-agents/detection", {
         agents: [{ name: "codex", executable: "codex", detected: true, path: "/usr/bin/codex" }],
       })
+      .json("GET", "/intelligences/model-providers", llmProviders())
       .json("GET", "/config/roles", {
         roles: [{ role_id: "product", summary: "Product", description: "" }],
       })
@@ -526,7 +556,7 @@ describe("Setup integration (real client + mock server)", () => {
       cli_agent: "codex",
       owner: "",
       github_project_url: "",
-      openai_api_key: "sk-test",
+      provider_api_keys: { openai: "sk-test" },
     });
 
     // restartBackend -> setWorkspace fires a real POST /workspace.

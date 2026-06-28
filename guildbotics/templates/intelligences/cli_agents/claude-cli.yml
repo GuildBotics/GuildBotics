@@ -1,3 +1,6 @@
+label: Claude Code
+order: 10
+executable: claude
 env:
 script: |
   res=$(mktemp)

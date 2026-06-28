@@ -4,14 +4,13 @@ import shutil
 from pathlib import Path
 from typing import Any, cast
 
-from guildbotics.app_api.cli_agents import resolve_cli_agent_path
+from guildbotics.app_api.cli_agents import discover_cli_agents, resolve_cli_agent_path
 from guildbotics.app_api.models import (
     BrainAssignment,
     CliAgentDefinition,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
-    ModelProviderDefault,
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.editions.simple.setup_service import CreatedFile
@@ -21,7 +20,6 @@ from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yam
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
 CLI_BRAIN_CLASS = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
 MODEL_PATH_PROVIDER_INDEX = 1
-LLM_PROVIDERS = ("openai", "gemini", "anthropic")
 
 
 class IntelligenceConfigResult:
@@ -52,7 +50,6 @@ class IntelligenceConfigService:
             inherited=inherited,
             model_mapping=model_mapping,
             models=self._read_models(config_dir, person_id, model_mapping),
-            provider_defaults=self._read_provider_defaults(config_dir, person_id),
             cli_agent_mapping=cli_agent_mapping,
             cli_agents=self._read_cli_agents(config_dir, person_id, cli_agent_mapping),
             brain_mapping=self._read_brain_assignments(brain_mapping),
@@ -209,36 +206,18 @@ class IntelligenceConfigService:
             )
         return models
 
-    def _read_provider_defaults(
-        self, config_dir: Path, person_id: str | None
-    ) -> list[ModelProviderDefault]:
-        # The default model for each provider lives in
-        # ``models/<provider>/default.yml`` (config override or shipped template).
-        # Exposing it lets the desktop editor seed a slot when its provider
-        # changes without duplicating model ids/classes in the frontend.
-        defaults: list[ModelProviderDefault] = []
-        for provider in LLM_PROVIDERS:
-            data = self._read_scoped_yaml(
-                config_dir, person_id, f"models/{provider}/default.yml"
-            )
-            parameters = data.get("parameters", {}) if isinstance(data, dict) else {}
-            if not isinstance(parameters, dict):
-                parameters = {}
-            defaults.append(
-                ModelProviderDefault(
-                    provider=provider,
-                    model_class=str(data.get("model_class", "")) if data else "",
-                    model_id=str(parameters.get("id", "")),
-                )
-            )
-        return defaults
-
     def _read_cli_agents(
         self,
         config_dir: Path,
         person_id: str | None,
         cli_agent_mapping: dict[str, str],
     ) -> list[CliAgentDefinition]:
+        # The executable to look up on PATH is declared in each agent's yaml
+        # (e.g. antigravity -> agy), so resolve it via the discovered catalog.
+        executables = {
+            agent.name: agent.executable
+            for agent in discover_cli_agents(config_dir, person_id)
+        }
         agents: list[CliAgentDefinition] = []
         seen: set[str] = set()
         for agent_path in cli_agent_mapping.values():
@@ -252,8 +231,10 @@ class IntelligenceConfigService:
             if not isinstance(env, dict):
                 env = {}
             name = agent_path.removesuffix(".yml")
-            executable = name.removesuffix("-cli")
-            detected_path = resolve_cli_agent_path(executable)
+            agent_key = name.removesuffix("-cli")
+            detected_path = resolve_cli_agent_path(
+                executables.get(agent_key, agent_key)
+            )
             agents.append(
                 CliAgentDefinition(
                     path=agent_path,

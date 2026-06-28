@@ -29,7 +29,7 @@ def test_write_project_creates_cli_compatible_files(tmp_path: Path) -> None:
             github_project_url="https://github.com/orgs/GuildBotics/projects/1",
             llm_api_type="openai",
             cli_agent="codex",
-            openai_api_key="test-openai-key",
+            provider_api_keys={"openai": "test-openai-key"},
         )
     )
 
@@ -60,7 +60,7 @@ def test_write_project_without_github_creates_loadable_core_config(
             description="Local automation workspace",
             llm_api_type="gemini",
             cli_agent="claude",
-            google_api_key="test-google-key",
+            provider_api_keys={"gemini": "test-google-key"},
         )
     )
 
@@ -90,7 +90,7 @@ def test_write_project_does_not_copy_samples_when_commands_exist(
             language="ja",
             llm_api_type="gemini",
             cli_agent="claude",
-            google_api_key="test-google-key",
+            provider_api_keys={"gemini": "test-google-key"},
         )
     )
 
