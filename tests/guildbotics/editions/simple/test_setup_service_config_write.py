@@ -206,6 +206,28 @@ def test_project_input_append_requires_existing_env_file(tmp_path: Path) -> None
         _github_project_input(config_dir, env_file_path, env_file_option="append")
 
 
+def test_write_project_empty_intelligence_selection_keeps_template_defaults(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+
+    SimpleProjectSetupService().write_project(
+        _project_input(
+            config_dir,
+            env_file_path,
+            llm_api_type="",
+            cli_agent="",
+            provider_api_keys={},
+        )
+    )
+
+    model_mapping = load_yaml_file(config_dir / "intelligences/model_mapping.yml")
+    cli_mapping = load_yaml_file(config_dir / "intelligences/cli_agent_mapping.yml")
+    assert model_mapping["default"] == "models/openai/default.yml"
+    assert cli_mapping["default"] == "codex-cli.yml"
+
+
 # --------------------------------------------------------------------------- #
 # GitHub disabled -> enabled -> disabled diff + repo access https / ssh
 # --------------------------------------------------------------------------- #
@@ -293,6 +315,38 @@ def test_update_project_enables_github_from_project_url(tmp_path: Path) -> None:
         config_dir=config_dir, env_file_path=env_file_path
     )
     assert snapshot.github_enabled is True
+
+
+def test_update_project_empty_intelligence_selection_preserves_existing_defaults(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    SimpleProjectSetupService().write_project(
+        _project_input(
+            config_dir,
+            env_file_path,
+            llm_api_type="gemini",
+            cli_agent="claude",
+            provider_api_keys={},
+        )
+    )
+
+    SimpleProjectSetupService().update_project(
+        ProjectUpdateInput(
+            config_dir=config_dir,
+            env_file_path=env_file_path,
+            language="en",
+            llm_api_type="",
+            cli_agent="",
+            github_enabled=False,
+        )
+    )
+
+    model_mapping = load_yaml_file(config_dir / "intelligences/model_mapping.yml")
+    cli_mapping = load_yaml_file(config_dir / "intelligences/cli_agent_mapping.yml")
+    assert model_mapping["default"] == "models/gemini/default.yml"
+    assert cli_mapping["default"] == "claude-cli.yml"
 
 
 # --------------------------------------------------------------------------- #

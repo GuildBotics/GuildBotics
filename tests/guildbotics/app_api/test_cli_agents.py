@@ -8,6 +8,9 @@ from guildbotics.app_api.cli_agents import (
     resolve_default_cli_executable,
 )
 
+CUSTOM_ORDER = 5
+DEFAULT_ORDER = 1000
+
 
 def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
     assert get_cli_agent_search_path("") == ""
@@ -105,7 +108,7 @@ def test_discover_cli_agents_reads_metadata(tmp_path: Path) -> None:
     agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
 
     assert agents["myagent"].label == "My Agent"
-    assert agents["myagent"].order == 5
+    assert agents["myagent"].order == CUSTOM_ORDER
     assert agents["myagent"].executable == "mybin"
 
 
@@ -118,7 +121,7 @@ def test_discover_cli_agents_defaults_to_name_and_sorts(tmp_path: Path) -> None:
     # Missing metadata falls back to the agent name / a low priority order.
     assert zeta.label == "zeta"
     assert zeta.executable == "zeta"
-    assert zeta.order == 1000
+    assert zeta.order == DEFAULT_ORDER
     assert [agent.order for agent in agents] == sorted(agent.order for agent in agents)
 
 
@@ -134,6 +137,16 @@ def test_discover_cli_agents_config_overrides_template(tmp_path: Path) -> None:
 
     assert agents["antigravity"].label == "Custom"
     assert agents["antigravity"].executable == "custom"
+
+
+def test_discover_cli_agents_tolerates_malformed_yaml(tmp_path: Path) -> None:
+    _write_agent(tmp_path, "broken-cli.yml", "label: [broken\n")
+
+    agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
+
+    assert agents["broken"].label == "broken"
+    assert agents["broken"].order == DEFAULT_ORDER
+    assert agents["broken"].executable == "broken"
 
 
 def test_resolve_default_cli_executable_returns_declared_executable(

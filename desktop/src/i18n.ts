@@ -256,6 +256,8 @@ const resources = {
           providerDescription: "Choose the default LLM provider.",
           defaultCliAgent: "Default CLI agent",
           apiKeyLabel: "{{provider}} API key",
+          apiKeyButtonLabel: "Configure {{provider}} API key",
+          apiKeyMissingTooltip: "Click the key button to configure the API key.",
           keyPlaceholder: "Saved to .env after input",
           keyConfiguredPlaceholder: "Configured",
           keyConfiguredDescription:
@@ -268,6 +270,7 @@ const resources = {
           skillStatusTitle: "GuildBotics skill",
           skillStatusDescription:
             "Shows whether each CLI agent has the bundled GuildBotics skill installed.",
+          skillStatusButtonLabel: "View {{agent}} GuildBotics skill status",
           skillStatusLoading: "Checking",
           skillOverwrite: "Install latest version",
           skillUpdatedTitle: "GuildBotics skill updated",
@@ -1156,6 +1159,8 @@ const resources = {
           providerDescription: "デフォルトの LLM プロバイダを選択します。",
           defaultCliAgent: "デフォルトの CLI エージェント",
           apiKeyLabel: "{{provider}} APIキー",
+          apiKeyButtonLabel: "{{provider}} APIキーを設定",
+          apiKeyMissingTooltip: "キーのボタンからAPIキーを設定してください。",
           keyPlaceholder: "入力後 .env に保存",
           keyConfiguredPlaceholder: "設定済み",
           keyConfiguredDescription:
@@ -1168,6 +1173,7 @@ const resources = {
           skillStatusTitle: "GuildBoticsスキル",
           skillStatusDescription:
             "各CLIエージェントに同梱版のGuildBoticsスキルが適用されているかを表示します。",
+          skillStatusButtonLabel: "{{agent}} のGuildBoticsスキル状態を表示",
           skillStatusLoading: "確認中",
           skillOverwrite: "最新版をインストールする",
           skillUpdatedTitle: "GuildBoticsスキルを更新しました",

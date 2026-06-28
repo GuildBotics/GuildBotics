@@ -414,9 +414,7 @@ class SimpleProjectSetupService:
 
         model_mapping_template = get_template_path() / "intelligences/model_mapping.yml"
         model_mapping: dict = cast(dict, load_yaml_file(model_mapping_template))
-        model_mapping["default"] = self._resolve_model_default(
-            model_mapping, config.llm_api_type
-        )
+        self._set_default_model_mapping(model_mapping, config.llm_api_type)
         model_mapping_file = config.config_dir / "intelligences/model_mapping.yml"
         model_mapping_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(model_mapping_file, model_mapping)
@@ -426,9 +424,7 @@ class SimpleProjectSetupService:
             get_template_path() / "intelligences/cli_agent_mapping.yml"
         )
         cli_mapping: dict = cast(dict, load_yaml_file(cli_mapping_template))
-        cli_mapping["default"] = cli_mapping.get(
-            config.cli_agent, f"{config.cli_agent}-cli.yml"
-        )
+        self._set_default_cli_mapping(cli_mapping, config.cli_agent)
         cli_mapping_file = config.config_dir / "intelligences/cli_agent_mapping.yml"
         save_yaml_file(cli_mapping_file, cli_mapping)
         files.append(CreatedFile(path=cli_mapping_file, action="create"))
@@ -535,9 +531,7 @@ class SimpleProjectSetupService:
             model_mapping_file,
             get_template_path() / "intelligences/model_mapping.yml",
         )
-        model_mapping["default"] = self._resolve_model_default(
-            model_mapping, config.llm_api_type
-        )
+        self._set_default_model_mapping(model_mapping, config.llm_api_type)
         model_mapping_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(model_mapping_file, model_mapping)
         files.append(CreatedFile(path=model_mapping_file, action="update"))
@@ -547,9 +541,7 @@ class SimpleProjectSetupService:
             cli_mapping_file,
             get_template_path() / "intelligences/cli_agent_mapping.yml",
         )
-        cli_mapping["default"] = cli_mapping.get(
-            config.cli_agent, f"{config.cli_agent}-cli.yml"
-        )
+        self._set_default_cli_mapping(cli_mapping, config.cli_agent)
         cli_mapping_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(cli_mapping_file, cli_mapping)
         files.append(CreatedFile(path=cli_mapping_file, action="update"))
@@ -622,6 +614,14 @@ class SimpleProjectSetupService:
         if file_path.exists():
             return cast(dict, load_yaml_file(file_path))
         return cast(dict, load_yaml_file(template_path))
+
+    def _set_default_model_mapping(self, mapping: dict, provider: str) -> None:
+        if provider:
+            mapping["default"] = self._resolve_model_default(mapping, provider)
+
+    def _set_default_cli_mapping(self, mapping: dict, agent: str) -> None:
+        if agent:
+            mapping["default"] = mapping.get(agent, f"{agent}-cli.yml")
 
     def _resolve_model_default(self, mapping: dict, provider: str) -> str:
         # Honor an explicit per-provider slot when one exists, otherwise fall back

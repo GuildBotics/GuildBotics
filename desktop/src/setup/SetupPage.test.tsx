@@ -380,13 +380,17 @@ describe("SetupPage", () => {
     expect(screen.getByRole("button", { name: /^OpenAI$/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Anthropic Claude$/ })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Configure OpenAI API Key" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
+      }),
+    );
 
     const keyInput = await screen.findByLabelText("OpenAI API key");
     await user.type(keyInput, "sk-test");
     expect(keyInput).toHaveValue("sk-test");
 
-    expect(screen.getByRole("button", { name: /OpenAI Codex CLI/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "OpenAI Codex CLI" })).toBeEnabled();
     expect(screen.getByRole("button", { name: /Claude Code/ })).toBeDisabled();
   });
 
@@ -411,7 +415,9 @@ describe("SetupPage", () => {
 
     await screen.findByRole("heading", { name: "First setup" });
     await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
-    const magicWand = await screen.findByRole("button", { name: "🪄" });
+    const magicWand = await screen.findByRole("button", {
+      name: t("setup.intelligence.skillStatusButtonLabel", { agent: "OpenAI Codex CLI" }),
+    });
     await user.hover(magicWand);
 
     expect(
@@ -663,7 +669,11 @@ describe("SetupPage", () => {
     await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
-    await user.click(await screen.findByRole("button", { name: "Configure OpenAI API Key" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
+      }),
+    );
     await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     // Add one active member so the members section is complete; the add form is

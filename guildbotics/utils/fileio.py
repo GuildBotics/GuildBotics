@@ -313,5 +313,8 @@ def load_yaml_dict(path: Path) -> dict[str, Any]:
     """Safely load a YAML file as a dictionary, returning empty dict if not found or invalid."""
     if not path.exists():
         return {}
-    data = load_yaml_file(path)
+    try:
+        data = load_yaml_file(path)
+    except (OSError, yaml.YAMLError):
+        return {}
     return data if isinstance(data, dict) else {}

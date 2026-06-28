@@ -909,7 +909,9 @@ function IntelligenceSection({
                             variant="subtle"
                             color="gray"
                             size="sm"
-                            aria-label={`Configure ${option.label} API Key`}
+                            aria-label={t("setup.intelligence.apiKeyButtonLabel", {
+                              provider: option.label,
+                            })}
                             style={{ fontSize: "12px" }}
                           >
                             🔑
@@ -946,7 +948,7 @@ function IntelligenceSection({
                 return (
                   <Tooltip
                     key={option.provider}
-                    label="🔑をクリックしてAPIキーを設定してください"
+                    label={t("setup.intelligence.apiKeyMissingTooltip")}
                     position="top"
                     withArrow
                     disabled={available}
@@ -1049,6 +1051,9 @@ function IntelligenceSection({
                                 variant="subtle"
                                 color="gray"
                                 size="sm"
+                                aria-label={t("setup.intelligence.skillStatusButtonLabel", {
+                                  agent: agent.label,
+                                })}
                                 style={{ fontSize: "12px" }}
                               >
                                 🪄
