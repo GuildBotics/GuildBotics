@@ -578,3 +578,33 @@ async def main(context: Context):
 ```
 
 - invoke は非同期関数なので、`await` を付けて呼び出します。そのため、`main` 関数も `async def` として定義する必要があります。
+
+## 8. 巡回（routine）コマンドの宣言
+
+コマンドは、自身をメンバーの巡回（routine）実行の候補として宣言できます。巡回候補はメンバーの巡回設定で選択肢として表示され、選択されたものをスケジューラが定期的に実行します。
+
+宣言はコマンド自身のメタデータで行います。これにより、巡回候補を追加する際に edition 側のリストを編集する必要がなくなります。
+
+- Markdown / YAML コマンド: YAML フロントマターに `routine: true` を追加する。
+- Python コマンド: `<command>.metadata.yml` という sidecar metadata ファイルに `routine: true` を追加する。従来のモジュールレベル `ROUTINE = True` も fallback として引き続き利用できます。
+
+```markdown
+---
+description: 未対応チケットを定期的に確認する。
+routine: true
+---
+...
+```
+
+```yaml
+# commands/workflows/reconcile_tickets.metadata.yml
+name:
+  en: Reconcile tickets
+  ja: チケット確認
+description:
+  en: Periodically reconcile open tickets.
+  ja: 未対応チケットを定期的に確認します。
+routine: true
+```
+
+スケジューラは巡回コマンドを呼び出し側からの入力なしで実行するため、巡回候補は引数なしで実行できる必要があります。`routine: true` を宣言していても必須引数（または必須の `${...}` プレースホルダ）が残っているコマンドは、巡回設定の一覧から黙って消えるのではなく、理由付きで「実行不可」として表示されます。

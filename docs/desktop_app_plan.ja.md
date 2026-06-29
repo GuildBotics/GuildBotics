@@ -131,8 +131,8 @@ frontend は `message` を表示し、分岐や復旧導線には `code` と `co
 - `GET /config/members/{person_id}`、`PUT /config/members/{person_id}`、`DELETE /config/members/{person_id}` を追加し、member の詳細取得・更新・削除を API 化した。
 - `SimplePersonSetupService` に member 読み取り/更新/削除を追加し、person rename 時の directory 移動と `.env` の person-secret キー差し替え（GitHub/Slack）を実装済み。
 - Setup UI の `MembersSection` で追加だけでなく編集/削除を実装し、タブ構成（基本 / GitHub 認証 / Slack）で member 単位設定を更新できるようにした。
-- `GET /scheduler/routines` を追加し、routine ごとの `requires_github` を frontend に提供するようにした。
-- runtime の scheduler start に GitHub 連携ガードを追加し、`ticket_driven_workflow` を GitHub 未設定のまま起動できないようにした。
+- 巡回 routine 候補は各コマンドの `routine` 宣言（frontmatter / sidecar metadata、`.py` の `ROUTINE` は legacy fallback）から発見し、`GET /commands/routine-options` で候補一覧と既定コマンドを frontend に提供する（旧 `GET /scheduler/routines` は廃止）。
+- runtime の scheduler start に GitHub 連携ガードを追加し、GitHub 連携を要する routine を未設定のまま起動できないようにした（GitHub 必須判定は対象コマンド自身の検出要件から導出する）。
 - Overview/Commands 画面に routine 選択、GitHub 未設定ガード表示、member 指定実行、events/logs viewer を追加した。
 - GitHub 未設定でも `project.yml` を生成できるように `SimpleProjectSetupService` を更新済み。
 - Setup UI から GitHub 未設定の fresh workspace に project config と `.env` を生成できることを確認済み。
@@ -528,7 +528,7 @@ uv run --no-sync mypy guildbotics
 
 現状:
 
-- `/overview` route は存在し、`GET /config/status`、`GET /team`、`GET /config/project`、`GET /scheduler/status`、`GET /scheduler/routines`、`POST /scheduler/start`、`POST /scheduler/stop`、`POST /verify`、`WS /events`、`WS /logs` に接続済み。
+- `/overview` route は存在し、`GET /config/status`、`GET /team`、`GET /config/project`、`GET /scheduler/status`、`POST /scheduler/start`、`POST /scheduler/stop`、`POST /verify`、`WS /events`、`WS /logs` に接続済み。
 - サイドメニューは「サービス実行」「コマンド実行」「診断」「設定」に分ける。`/overview` は互換用に `/service` へ redirect する。
 - ただし `scheduler.data` を raw JSON の `<pre>` で表示している。
 - Events / Logs は最新行を並べるだけで、空状態、接続状態、フィルタ、request id との対応、エラー時表示が不足している。
@@ -653,10 +653,10 @@ uv run --no-sync python -m pytest tests/guildbotics/app_api tests/guildbotics/cl
 現状:
 
 - `Person` model には `routine_commands` と `task_schedules` がある。
-- `TaskScheduler` はメンバーに `routine_commands` があればそれを使い、なければ起動時に渡された default routine commands を使う。
+- `TaskScheduler` はメンバーの `routine_commands` を使う。未設定のメンバーは巡回実行しない。
 - `TaskScheduler` は各メンバーの `task_schedules` を cron schedule として展開し、該当時刻に scheduled command として実行する。
-- 現在のサービス実行画面では、共通既定値としてのルーチンワークフロー、巡回間隔（分）、連続失敗上限を設定できるが、メンバー別 `routine_commands` / `task_schedules` の編集 UI はない。
-- サービス実行画面の主操作は右上の `実行` / `停止` 排他ボタンに整理済みであり、自動巡回カード内には共通既定値の設定だけを置いている。
+- 現在のサービス実行画面では、巡回実行をサービス実行に含めるか、巡回間隔（分）、連続失敗上限を設定できる。実行する巡回コマンドはメンバー設定側の `routine_commands` で決まる。
+- サービス実行画面の主操作は右上の `実行` / `停止` 排他ボタンに整理済みであり、自動巡回カード内には runtime tuning だけを置いている。
 - Commands 画面では command 候補 API、説明付き候補表示、必要条件バッジ、引数入力支援、スクリプト path 表示/コピー/オープンが実装済みである。
 - command 候補一覧は `guildbotics/templates/commands` の部品的な組み込み command をそのまま表示せず、workspace / home commands を中心に扱う。初期 project commands が空の場合は sample commands を配置する方針である。
 - 診断基盤の本格的な相関 ID / trace UI 再設計は Session 8.4 の範囲外とし、`docs/runtime_diagnostics_todo.ja.md` で別 TODO として扱う。

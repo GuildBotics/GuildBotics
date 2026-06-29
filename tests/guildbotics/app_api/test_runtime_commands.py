@@ -327,9 +327,11 @@ def test_command_options_ignore_invalid_metadata_without_crashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    # Broken YAML and unparseable Python must not abort discovery.
+    # Broken YAML, unparseable Python and broken sidecar metadata must not abort
+    # discovery.
     _write(config_dir / "commands/broken.yml", "::: not: valid: yaml:::\n- [")
     _write(config_dir / "commands/broken.py", "def main(:\n    pass")
+    _write(config_dir / "commands/ok.metadata.yml", "::: not: valid: yaml:::\n- [")
     _write(
         config_dir / "commands/ok.md",
         "\n".join(["---", "name: Ok", "brain: none", "---", "Body."]),
@@ -343,6 +345,29 @@ def test_command_options_ignore_invalid_metadata_without_crashing(
     # Invalid files are still listed but yield empty metadata / no requirements.
     assert options["broken"].requirements == []
     assert options["broken"].arguments == []
+
+
+def test_command_options_exclude_sidecar_metadata_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/report.py",
+        "\n".join(
+            ["async def main(context):", '    """Run a report."""', "    return None"]
+        ),
+    )
+    _write(
+        config_dir / "commands/report.metadata.yml",
+        "\n".join(["name: Report", "description: Report metadata."]),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    options = {item.command for item in runtime.get_command_options().options}
+
+    assert "report" in options
+    assert "report.metadata" not in options
 
 
 def test_command_options_person_not_found_raises(
@@ -382,6 +407,281 @@ def test_command_options_member_scope_uses_cloned_context(
 
     assert "private" not in bot_commands
     assert "private" in alice_commands
+
+
+# ---------------------------------------------------------------------------
+# get_routine_command_options
+# ---------------------------------------------------------------------------
+
+
+def test_routine_command_options_discover_only_declared_routines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only commands that self-declare ``routine: true`` are candidates. A plain
+    # command is excluded, and the built-in template workflow (which declares
+    # routine metadata in a sidecar file) is discovered through the same single
+    # pass.
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/my_routine.md",
+        "\n".join(
+            ["---", "name: My Routine", "routine: true", "brain: none", "---", "Body."]
+        ),
+    )
+    _write(
+        config_dir / "commands/plain.md",
+        "\n".join(["---", "name: Plain", "brain: none", "---", "Body."]),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    routine = {
+        item.command: item for item in runtime.get_routine_command_options().options
+    }
+
+    assert "my_routine" in routine
+    assert "plain" not in routine
+    ticket = routine["workflows/ticket_driven_workflow"]
+    assert ticket.source == "template"
+    assert ticket.category == "workflow"
+    assert ticket.routine_eligible is True
+
+
+def test_routine_command_options_read_python_sidecar_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/my_routine.py",
+        "\n".join(
+            [
+                "async def main(context):",
+                '    """Fallback English description."""',
+                "    return None",
+            ]
+        ),
+    )
+    _write(
+        config_dir / "commands/my_routine.metadata.yml",
+        "\n".join(
+            [
+                "name:",
+                "  en: My Routine",
+                "  ja: 私の巡回",
+                "description:",
+                "  en: Run my routine.",
+                "  ja: 私の巡回処理を実行します。",
+                "routine: true",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()], language_code="ja")
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    option = next(
+        item
+        for item in runtime.get_routine_command_options().options
+        if item.command == "my_routine"
+    )
+
+    assert option.label == "私の巡回"
+    assert option.description == "私の巡回処理を実行します。"
+    assert option.routine_eligible is True
+
+
+def test_routine_command_options_keep_legacy_python_routine_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/legacy_routine.py",
+        "\n".join(
+            [
+                "ROUTINE = True",
+                "",
+                "async def main(context):",
+                '    """Legacy routine."""',
+                "    return None",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    routine = {item.command for item in runtime.get_routine_command_options().options}
+
+    assert "legacy_routine" in routine
+
+
+def test_routine_command_options_localize_builtin_sidecar_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    context = _make_context([_make_person()], language_code="ja")
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    ticket = next(
+        item
+        for item in runtime.get_routine_command_options().options
+        if item.command == "workflows/ticket_driven_workflow"
+    )
+
+    assert ticket.label == "チケット駆動ワークフロー"
+    assert (
+        ticket.description
+        == "対応可能な GitHub issue または PR を1件取得し、CLIエージェントへ委譲します。"
+    )
+
+
+def test_routine_command_options_default_prefers_edition_when_multiple(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With several eligible candidates, the edition's declared default wins.
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/my_routine.md",
+        "\n".join(
+            ["---", "name: My Routine", "routine: true", "brain: none", "---", "Body."]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    response = runtime.get_routine_command_options()
+
+    assert len(response.options) > 1
+    assert response.default_command == "workflows/ticket_driven_workflow"
+
+
+def test_routine_command_options_default_is_sole_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With exactly one eligible candidate, it is the default on its own — the
+    # edition's declared default is not consulted.
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/workflows/ticket_driven_workflow.md",
+        "\n".join(
+            [
+                "---",
+                "name: Only Routine",
+                "routine: true",
+                "brain: none",
+                "---",
+                "Body.",
+            ]
+        ),
+    )
+
+    class EditionStub:
+        def get_default_routines(self) -> list[str]:
+            return ["workflows/some_other_default"]
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.get_edition", lambda: EditionStub()
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    response = runtime.get_routine_command_options()
+
+    assert [option.command for option in response.options] == [
+        "workflows/ticket_driven_workflow"
+    ]
+    assert response.default_command == "workflows/ticket_driven_workflow"
+
+
+def test_routine_command_options_flag_ineligible_when_input_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A declared routine that still needs caller input stays listed but is
+    # flagged ineligible rather than silently dropped.
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/needs_input.md",
+        "\n".join(
+            ["---", "name: Needs Input", "routine: true", "---", "Summarize ${input}."]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    option = next(
+        item
+        for item in runtime.get_routine_command_options().options
+        if item.command == "needs_input"
+    )
+
+    assert option.routine_eligible is False
+
+
+def test_routine_command_options_prefer_workspace_definition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A workspace override of a built-in routine wins over the template copy and
+    # keeps its routine declaration via the effective (highest-priority) file.
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/workflows/ticket_driven_workflow.md",
+        "\n".join(
+            [
+                "---",
+                "name: Local Ticket",
+                "routine: true",
+                "brain: none",
+                "---",
+                "Body.",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    matches = [
+        item
+        for item in runtime.get_routine_command_options().options
+        if item.command == "workflows/ticket_driven_workflow"
+    ]
+
+    assert len(matches) == 1
+    assert matches[0].source == "workspace"
+    assert matches[0].label == "Local Ticket"
+
+
+def test_routine_command_options_exclude_general_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: the routine catalog must not reuse the general command catalog.
+    # An ordinary workspace command appears in /commands/options but never as a
+    # routine candidate unless it declares itself one.
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/summarize.md",
+        "\n".join(
+            ["---", "name: Summarize", "brain: none", "---", "Summarize ${file}."]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    plain = {item.command for item in runtime.get_command_options().options}
+    routine = {item.command for item in runtime.get_routine_command_options().options}
+
+    assert "summarize" in plain
+    assert "summarize" not in routine
+
+
+def test_routine_command_options_person_not_found_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    context = _make_context([_make_person("bot", "Bot")])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    with pytest.raises(AppApiError) as exc_info:
+        runtime.get_routine_command_options(person="missing")
+
+    assert exc_info.value.code == "person_not_found"
 
 
 # ---------------------------------------------------------------------------
@@ -724,7 +1024,7 @@ def test_start_scheduler_allows_non_github_custom_routine(
     assert started["routines"] == ["workflows/local_only"]
 
 
-def test_start_scheduler_uses_default_routines_when_none_requested(
+def test_start_scheduler_does_not_consult_default_routines_when_none_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = AppRuntime(EventBus())
@@ -747,8 +1047,7 @@ def test_start_scheduler_uses_default_routines_when_none_requested(
 
     runtime.start_scheduler(SchedulerStartRequest())
 
-    # Default routines are consulted for requirement detection.
-    assert checked == ["workflows/ticket_driven_workflow"]
+    assert checked == []
 
 
 def test_start_scheduler_skips_routine_check_for_events_only(

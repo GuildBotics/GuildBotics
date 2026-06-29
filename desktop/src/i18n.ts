@@ -29,9 +29,10 @@ const resources = {
       service: {
         title: "Service Runtime",
         refresh: "Refresh",
-        sourceTarget: "Source target",
+        sourceTarget: "Include in service run",
         noTargetTitle: "No service selected",
-        noTargetBody: "Select patrol/scheduled work, event listener, or both before starting.",
+        noTargetBody:
+          "Select patrol commands, scheduled commands, or event triggers before starting.",
       },
       diagnostics: {
         title: "Diagnostics",
@@ -486,23 +487,23 @@ const resources = {
             "Save this member before configuring individual LLM / CLI settings.",
           patrol: {
             title: "Patrol settings",
-            description:
-              "Choose this member's recurring workflow and scheduled one-off commands. When no workflow is set here, Service Runtime uses the shared default.",
-            overrideRoutine: "Use a member-specific patrol workflow",
+            description: "Choose recurring commands and scheduled commands for this member.",
+            overrideRoutine: "Configure patrol commands for this member",
             overrideRoutineHint:
-              "Turn this on only when this member should run different recurring work from the shared Service Runtime default.",
-            routineCommands: "Patrol workflows",
-            routineRequired:
-              "Select at least one workflow or turn off the member-specific setting.",
-            usesServiceDefault:
-              "This member uses the shared patrol workflow selected on Service Runtime.",
+              "Turn this on when this member should run recurring work at the patrol interval.",
+            routineCommands: "Patrol commands",
+            routineRequired: "Select at least one command or turn off patrol commands.",
+            routineIneligible: "Cannot run on a schedule because it requires input arguments.",
+            noRoutineCommands:
+              "No patrol commands are configured. This member will not run patrol work.",
             scheduledCommands: "Scheduled commands",
             scheduledCommandsHint:
-              "Run saved commands at fixed times in addition to the recurring patrol workflow.",
+              "Run saved commands at fixed times in addition to the patrol commands.",
             addSchedule: "Add schedule",
             removeSchedule: "Remove schedule",
             noSchedules: "No scheduled commands.",
             loadingCommands: "Loading command candidates...",
+            routineLoadError: "Failed to load patrol command candidates.",
             cron: "Detailed schedule",
             cronHint: "Use five-field cron notation: minute hour day-of-month month day-of-week.",
             cronInvalid: "Enter a five-field cron schedule.",
@@ -839,12 +840,12 @@ const resources = {
         setupRequiredTitle: "Setup is not complete",
         setupRequiredBody: "Create the workspace settings before starting automatic operation.",
         openSetup: "Open setup",
-        routine: "Routine command",
+        routine: "Command to run",
         routineIntervalMinutes: "Patrol interval (minutes)",
         maxConsecutiveErrors: "Stop after consecutive failures",
         memberPatrolSettings: "Member patrol settings",
         memberPatrolSettingsBody:
-          "The workflow below is the shared default. Individual members can override it or add scheduled commands in member settings.",
+          "Configure which patrol commands each member runs. Members without patrol commands do not run patrol work.",
         openMemberPatrolSettings: "Edit member settings",
         requiresGithub: "GitHub required",
         startGuardTitle: "This routine requires GitHub integration",
@@ -878,34 +879,38 @@ const resources = {
         workerCard: {
           title: "Member workers",
           description:
-            "Runs enabled work sources serially for each active member. Workers start when at least one source is enabled.",
+            "Runs enabled execution paths serially for each active member. Workers start when at least one path is included.",
           workers: "Workers",
           workerValue: "{{workers}} / {{members}}",
-          sources: "Sources",
+          sources: "Execution paths",
           scheduledSource: "Scheduled",
           routineSource: "Routine",
           eventQueueSource: "Event queue",
           maxConsecutiveErrors: "Failure limit",
         },
         routineSourceCard: {
-          title: "Routine workflow",
-          description: "Runs the selected routine workflow on each member worker interval.",
-          status: "Source",
+          title: "Patrol commands",
+          description: "Runs each member's configured patrol commands at the selected interval.",
+          status: "Execution state",
           interval: "Interval (minutes)",
         },
         scheduledSourceCard: {
           title: "Scheduled commands",
           description: "Runs member-level scheduled commands defined in member settings.",
-          status: "Source",
+          status: "Execution state",
           members: "Active members",
           settingsTitle: "Member schedules",
-          settingsBody:
-            "Scheduled commands are configured per member together with member patrol settings.",
+          settingsBody: "You can also configure member-specific scheduled commands.",
         },
         eventsCard: {
-          title: "Event listener",
-          description: "Receives external events and queues them for the member workers.",
-          sourceStatus: "Queue source",
+          title: "Event triggers",
+          description:
+            "Receives external events and routes them to workflows. Currently supports chat events only.",
+          sourceStatus: "Event queue",
+          supportedEvents: "Supported events",
+          supportedEventsValue: "Chat messages",
+          workflow: "Workflow",
+          workflowValue: "Chat conversation workflow (fixed)",
           listeners: "Listeners",
           subscriptions: "Subscriptions",
           workers: "Event workers",
@@ -1050,7 +1055,7 @@ const resources = {
         failedWithCode: "Failed: {{code}}",
         githubRequiredTitle: "GitHub integration is required",
         githubRequiredBody:
-          "ticket_driven_workflow cannot run until GitHub integration is configured.",
+          "The selected routine command cannot run until GitHub integration is configured.",
         openScript: "Open script",
         openScriptUnavailable: "Available in the desktop app.",
         copyScriptPath: "Copy script path",
@@ -1393,22 +1398,23 @@ const resources = {
           patrol: {
             title: "巡回設定",
             description:
-              "このメンバーが繰り返し実行するワークフローと、時刻指定で実行するコマンドを設定します。ワークフローを個別指定しない場合は、サービス実行画面の共通既定値を使います。",
-            overrideRoutine: "このメンバー専用の巡回ワークフローを使う",
+              "このメンバーが繰り返し実行するコマンドと、時刻指定で実行するコマンドを設定します。",
+            overrideRoutine: "このメンバーの巡回実行コマンドを設定する",
             overrideRoutineHint:
-              "共通既定値とは違う繰り返し作業をこのメンバーに担当させる場合だけ有効にします。",
-            routineCommands: "巡回ワークフロー",
+              "このメンバーに巡回間隔ごとの繰り返し作業を担当させる場合に有効にします。",
+            routineCommands: "巡回実行コマンド",
             routineRequired:
-              "1つ以上のワークフローを選択するか、メンバー専用設定をオフにしてください。",
-            usesServiceDefault:
-              "このメンバーはサービス実行画面で選ぶ共通の巡回ワークフローを使います。",
+              "1つ以上のコマンドを選択するか、巡回実行コマンドをオフにしてください。",
+            routineIneligible: "入力引数が必要なため、巡回実行では実行できません。",
+            noRoutineCommands: "巡回実行コマンドは未設定です。このメンバーは巡回実行しません。",
             scheduledCommands: "定期実行コマンド",
             scheduledCommandsHint:
-              "巡回ワークフローとは別に、保存済みコマンドを指定時刻に実行します。",
+              "巡回実行コマンドとは別に、保存済みコマンドを指定時刻に実行します。",
             addSchedule: "定期実行を追加",
             removeSchedule: "定期実行を削除",
             noSchedules: "定期実行コマンドはありません。",
             loadingCommands: "コマンド候補を読み込み中...",
+            routineLoadError: "巡回実行コマンド候補の読み込みに失敗しました。",
             cron: "詳細スケジュール",
             cronHint: "5フィールドの cron 表記で入力します: 分 時 日 月 曜日。",
             cronInvalid: "5フィールドの cron 表記で入力してください。",
@@ -1556,7 +1562,7 @@ const resources = {
       service: {
         title: "サービス実行",
         refresh: "更新",
-        sourceTarget: "作業ソース対象",
+        sourceTarget: "サービス実行に含める",
         noTargetTitle: "開始対象が選択されていません",
         noTargetBody: "巡回・定期実行またはイベント起動を選択してから開始してください。",
       },
@@ -1916,12 +1922,12 @@ const resources = {
         setupRequiredBody:
           "自動運用を開始する前に、ワークスペースの設定ファイルを作成してください。",
         openSetup: "設定を開く",
-        routine: "ルーチンコマンド",
+        routine: "実行するコマンド",
         routineIntervalMinutes: "巡回間隔（分）",
         maxConsecutiveErrors: "連続失敗で停止する回数",
         memberPatrolSettings: "メンバー別巡回設定",
         memberPatrolSettingsBody:
-          "下のワークフローは共通既定値です。メンバーごとに別の巡回ワークフローや定期実行コマンドを設定できます。",
+          "メンバーごとに巡回実行コマンドを設定します。未設定のメンバーは巡回実行しません。",
         openMemberPatrolSettings: "メンバー設定を編集",
         requiresGithub: "GitHub必須",
         startGuardTitle: "このルーチンには GitHub 連携が必要です",
@@ -1956,35 +1962,38 @@ const resources = {
         workerCard: {
           title: "メンバーワーカー",
           description:
-            "有効メンバーごとに有効な作業ソースを直列実行します。1つ以上の source が有効な場合に worker が起動します。",
+            "有効メンバーごとに、サービス実行に含めた経路を直列実行します。1つ以上の経路が含まれる場合に worker が起動します。",
           workers: "稼働ワーカー",
           workerValue: "{{workers}} / {{members}}",
-          sources: "作業ソース",
+          sources: "実行経路",
           scheduledSource: "スケジュール",
           routineSource: "巡回",
           eventQueueSource: "イベントキュー",
           maxConsecutiveErrors: "失敗上限",
         },
         routineSourceCard: {
-          title: "巡回ワークフロー",
-          description:
-            "選択した巡回ワークフローを、各メンバーワーカー上で指定間隔ごとに実行します。",
-          status: "source",
+          title: "巡回実行コマンド",
+          description: "メンバーごとに設定された巡回実行コマンドを、指定間隔ごとに実行します。",
+          status: "実行状態",
           interval: "間隔（分）",
         },
         scheduledSourceCard: {
           title: "定期実行コマンド",
           description: "メンバー設定に定義された定期実行コマンドを実行します。",
-          status: "source",
+          status: "実行状態",
           members: "有効メンバー",
           settingsTitle: "メンバー別定期実行設定",
-          settingsBody:
-            "定期実行コマンドは、メンバー別巡回設定と同じメンバー設定画面で設定します。",
+          settingsBody: "メンバー固有の定期実行コマンドを設定することもできます。",
         },
         eventsCard: {
           title: "イベント起動",
-          description: "外部イベントを受信し、メンバーワーカー向けにキューへ保存します。",
-          sourceStatus: "キュー source",
+          description:
+            "外部イベントを受信し、対応するワークフローへ渡します。現在はチャットイベントのみ対応しています。",
+          sourceStatus: "イベントキュー",
+          supportedEvents: "対応イベント",
+          supportedEventsValue: "チャットメッセージ",
+          workflow: "起動ワークフロー",
+          workflowValue: "チャット会話ワークフロー（固定）",
           listeners: "リスナー",
           subscriptions: "購読チャンネル",
           workers: "イベント処理ワーカー",
@@ -2130,7 +2139,7 @@ const resources = {
         failedWithCode: "失敗: {{code}}",
         githubRequiredTitle: "GitHub 連携が必要です",
         githubRequiredBody:
-          "ticket_driven_workflow は GitHub 連携設定が完了するまで実行できません。",
+          "選択された巡回コマンドは GitHub 連携設定が完了するまで実行できません。",
         openScript: "スクリプトを開く",
         openScriptUnavailable: "デスクトップアプリで利用できます。",
         copyScriptPath: "スクリプトのパスをコピー",

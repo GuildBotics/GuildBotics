@@ -45,6 +45,7 @@ from guildbotics.app_api.models import (
     PromptTraceEntry,
     PromptTraceStatus,
     PromptTraceUpdateRequest,
+    RoutineCommandOptionsResponse,
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
@@ -83,6 +84,7 @@ from guildbotics.utils.fileio import (
     get_machine_state_root,
     get_person_config_path,
     get_primary_config_path,
+    get_template_path,
     get_workspace_data_path,
     get_workspace_data_root,
     load_markdown_with_frontmatter,
@@ -102,7 +104,6 @@ WORKSPACE_DOTENV_PROTECTED_KEYS = {
     GUILDBOTICS_DATA_DIR,
     *HOME_ENV_PROTECTED_KEYS,
 }
-TICKET_DRIVEN_WORKFLOW = "workflows/ticket_driven_workflow"
 MIN_MEMORY_DOCUMENT_PATH_PARTS = 2
 
 
@@ -128,7 +129,6 @@ class AppRuntime:
         self._lifecycle = RuntimeLifecycleService(
             event_bus=event_bus,
             context_factory=self._get_context,
-            default_routines_factory=lambda: get_edition().get_default_routines(),
             stop_timeout_seconds=stop_timeout_seconds,
         )
 
@@ -193,6 +193,64 @@ class AppRuntime:
         )
 
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
+        context = self._command_options_context(person)
+        options = self._collect_command_options(context)
+        return CommandOptionsResponse(
+            options=sorted(options.values(), key=lambda option: option.command)
+        )
+
+    def get_routine_command_options(
+        self, person: str | None = None
+    ) -> RoutineCommandOptionsResponse:
+        """Return the catalog of commands selectable as member routine commands.
+
+        A command is a routine candidate when it self-declares ``routine: true``
+        in its metadata (frontmatter for ``.md`` / ``.yml``; sidecar metadata
+        for ``.py`` with the legacy module-level ``ROUTINE = True`` flag kept as
+        a fallback). Discovery scans member, workspace and package-template
+        command roots through a single pass, so both built-in routine workflows
+        (such as ``workflows/ticket_driven_workflow``) and workspace-defined
+        ones surface without an edition-maintained file list.
+
+        The "runs with no caller-supplied input" rule is not used to hide
+        candidates: a declared routine that still has required arguments is
+        returned with ``routine_eligible=False`` so the UI can explain why it
+        cannot run, instead of silently dropping it.
+        """
+        context = self._command_options_context(person)
+        github_enabled = self.is_github_integration_enabled()
+        effective: dict[str, tuple[Path, str]] = {}
+        for command, path, source in _iter_command_files(
+            context, roots=_routine_command_roots(context.person.person_id)
+        ):
+            effective.setdefault(command, (path, source))
+
+        options: dict[str, CommandOption] = {}
+        for command, (path, source) in effective.items():
+            metadata = _command_metadata(path, context.team.project.get_language_code())
+            if not _is_routine_command(metadata):
+                continue
+            option = _command_option(
+                command=command,
+                path=path,
+                source=source,
+                github_enabled=github_enabled,
+                context=context,
+            )
+            options[command] = option.model_copy(
+                update={
+                    "routine_eligible": not any(
+                        argument.required for argument in option.arguments
+                    )
+                }
+            )
+        ordered = sorted(options.values(), key=lambda option: option.command)
+        return RoutineCommandOptionsResponse(
+            options=ordered,
+            default_command=_default_routine_command(ordered),
+        )
+
+    def _command_options_context(self, person: str | None) -> Context:
         context = self._get_context()
         status = self.get_config_status()
         if status.project_file_exists:
@@ -200,29 +258,31 @@ class AppRuntime:
                 status.config_dir,
                 context.team.project.get_language_code(),
             )
-        if person:
-            member = next(
-                (
-                    team_member
-                    for team_member in context.team.members
-                    if person in {team_member.person_id, team_member.name}
-                ),
-                None,
+        if not person:
+            return context
+        member = next(
+            (
+                team_member
+                for team_member in context.team.members
+                if person in {team_member.person_id, team_member.name}
+            ),
+            None,
+        )
+        if member is None:
+            raise AppApiError(
+                "person_not_found",
+                f"Person '{person}' not found.",
+                context={
+                    "identifier": person,
+                    "available": [
+                        team_member.person_id for team_member in context.team.members
+                    ],
+                },
             )
-            if member is None:
-                raise AppApiError(
-                    "person_not_found",
-                    f"Person '{person}' not found.",
-                    context={
-                        "identifier": person,
-                        "available": [
-                            team_member.person_id
-                            for team_member in context.team.members
-                        ],
-                    },
-                )
-            context = context.clone_for(member)
+        return context.clone_for(member)
 
+    def _collect_command_options(self, context: Context) -> dict[str, CommandOption]:
+        github_enabled = self.is_github_integration_enabled()
         options: dict[str, CommandOption] = {}
         for command, path, source in _iter_command_files(context):
             if command in options:
@@ -231,12 +291,10 @@ class AppRuntime:
                 command=command,
                 path=path,
                 source=source,
-                github_enabled=self.is_github_integration_enabled(),
+                github_enabled=github_enabled,
                 context=context,
             )
-        return CommandOptionsResponse(
-            options=sorted(options.values(), key=lambda option: option.command)
-        )
+        return options
 
     async def run_command(self, request: CommandRunRequest) -> CommandRunResponse:
         trace_id = new_id()
@@ -323,19 +381,19 @@ class AppRuntime:
         return output
 
     def start_scheduler(self, request: SchedulerStartRequest) -> RuntimeStatus:
-        if request.sources.routine:
-            routine_commands = (
-                request.routine_commands or get_edition().get_default_routines()
-            )
-            if not self.is_github_integration_enabled():
-                for command in routine_commands:
-                    if self.requires_github_for_routine(command):
-                        raise AppApiError(
-                            "github_integration_required_for_routine",
-                            "GitHub integration is required for the selected routine command.",
-                            context={"command": command},
-                            status_code=400,
-                        )
+        if (
+            request.sources.routine
+            and request.routine_commands
+            and not self.is_github_integration_enabled()
+        ):
+            for command in request.routine_commands:
+                if self.requires_github_for_routine(command):
+                    raise AppApiError(
+                        "github_integration_required_for_routine",
+                        "GitHub integration is required for the selected routine command.",
+                        context={"command": command},
+                        status_code=400,
+                    )
         return self._lifecycle.start(request)
 
     def stop_scheduler(self) -> RuntimeStatus:
@@ -690,9 +748,6 @@ class AppRuntime:
             )
         return CliAgentDetectionsResponse(agents=agents)
 
-    def get_default_routines(self) -> list[str]:
-        return list(get_edition().get_default_routines())
-
     def is_github_integration_enabled(self) -> bool:
         try:
             return self._get_context().team.project.is_available_service(
@@ -702,17 +757,22 @@ class AppRuntime:
             return False
 
     def requires_github_for_routine(self, command: str) -> bool:
-        if command == TICKET_DRIVEN_WORKFLOW:
-            return True
-        try:
-            options = self.get_command_options()
-        except Exception:
-            return False
-        return any(
-            option.command == command
-            and any(requirement.kind == "github" for requirement in option.requirements)
-            for option in options.options
-        )
+        # Derive the GitHub dependency from the command's own detected
+        # requirements. Routine workflows (e.g. the ticket workflow) live only in
+        # the templates, so consult the routine catalog first, then the general
+        # one for custom workspace routine commands.
+        for getter in (self.get_routine_command_options, self.get_command_options):
+            try:
+                options = getter().options
+            except Exception:
+                continue
+            for option in options:
+                if option.command == command:
+                    return any(
+                        requirement.kind == "github"
+                        for requirement in option.requirements
+                    )
+        return False
 
     def _get_context(self, message: str = "") -> Context:
         self._load_workspace_env(apply_data_root=False)
@@ -772,9 +832,12 @@ class AppRuntime:
                 self._running_command_id = None
 
 
-def _iter_command_files(context: Context) -> Iterator[tuple[str, Path, str]]:
+def _iter_command_files(
+    context: Context, roots: list[tuple[Path, str]] | None = None
+) -> Iterator[tuple[str, Path, str]]:
     language_code = context.team.project.get_language_code()
-    roots = _command_roots(context.person.person_id)
+    if roots is None:
+        roots = _command_roots(context.person.person_id)
     extensions = set(get_command_extensions())
     candidates: list[tuple[int, str, Path, str]] = []
     for order, (root, source) in enumerate(roots):
@@ -782,6 +845,8 @@ def _iter_command_files(context: Context) -> Iterator[tuple[str, Path, str]]:
             continue
         for path in root.rglob("*"):
             if path.suffix.lower() not in extensions or not path.is_file():
+                continue
+            if _is_command_metadata_sidecar(path):
                 continue
             command = _command_name(root, path, language_code)
             if not command:
@@ -799,6 +864,39 @@ def _command_roots(person_id: str) -> list[tuple[Path, str]]:
         (primary / "team" / "members" / person_id / "commands", "workspace"),
         (primary / "commands", "workspace"),
     ]
+
+
+def _routine_command_roots(person_id: str) -> list[tuple[Path, str]]:
+    """Roots scanned for routine candidates.
+
+    Unlike :func:`_command_roots`, this includes the package templates so that
+    built-in routine workflows are discovered through the same single pass as
+    workspace-defined ones. Workspace entries keep priority over the template.
+    """
+    return [
+        *_command_roots(person_id),
+        (get_template_path() / "commands", "template"),
+    ]
+
+
+def _is_routine_command(metadata: dict[str, Any]) -> bool:
+    return metadata.get("routine") is True
+
+
+def _default_routine_command(options: list[CommandOption]) -> str:
+    """Pick the routine command to seed / pre-select for a new member.
+
+    A single eligible candidate is the default on its own; with several, the
+    edition's declared default wins (``workflows/ticket_driven_workflow`` for the
+    simple edition), so the literal name lives only in the edition.
+    """
+    eligible = [option.command for option in options if option.routine_eligible]
+    if len(eligible) == 1:
+        return eligible[0]
+    for command in get_edition().get_default_routines():
+        if command in eligible:
+            return command
+    return eligible[0] if eligible else ""
 
 
 def _command_name(root: Path, path: Path, language_code: str) -> str:
@@ -835,7 +933,7 @@ def _command_option(
     github_enabled: bool,
     context: Context,
 ) -> CommandOption:
-    metadata = _command_metadata(path)
+    metadata = _command_metadata(path, context.team.project.get_language_code())
     requirements = _command_requirements(path, metadata, github_enabled, context)
     description = str(metadata.get("description", ""))
     return CommandOption(
@@ -851,7 +949,13 @@ def _command_option(
     )
 
 
-def _command_metadata(path: Path) -> dict[str, Any]:
+def _command_metadata(path: Path, language_code: str = "") -> dict[str, Any]:
+    metadata = _command_file_metadata(path)
+    metadata.update(_command_sidecar_metadata(path, language_code))
+    return metadata
+
+
+def _command_file_metadata(path: Path) -> dict[str, Any]:
     try:
         if path.suffix == ".md":
             return cast(dict[str, Any], load_markdown_with_frontmatter(path))
@@ -862,10 +966,83 @@ def _command_metadata(path: Path) -> dict[str, Any]:
             module = ast.parse(path.read_text(encoding="utf-8"))
             main = _find_main_function(module)
             description = ast.get_docstring(main) if main is not None else ""
-            return {"description": _first_line(description or "")}
+            return {
+                "description": _first_line(description or ""),
+                "routine": _module_bool_flag(module, "ROUTINE"),
+            }
     except Exception:
         return {}
     return {}
+
+
+def _command_sidecar_metadata(path: Path, language_code: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for sidecar in _command_metadata_sidecar_paths(path, language_code):
+        if not sidecar.exists():
+            continue
+        try:
+            loaded = load_yaml_file(sidecar)
+            if isinstance(loaded, dict):
+                metadata.update(loaded)
+        except Exception:
+            continue
+    for key in ("name", "description", "recommended_input"):
+        metadata[key] = _localized_metadata_value(metadata.get(key), language_code)
+    return {key: value for key, value in metadata.items() if value is not None}
+
+
+def _command_metadata_sidecar_paths(path: Path, language_code: str) -> list[Path]:
+    base = _command_metadata_sidecar_base(path, language_code)
+    paths = [base.with_suffix(".metadata.yml"), base.with_suffix(".metadata.yaml")]
+    if language_code:
+        paths.extend(
+            [
+                base.with_suffix(".metadata.en.yml"),
+                base.with_suffix(".metadata.en.yaml"),
+                base.with_suffix(f".metadata.{language_code}.yml"),
+                base.with_suffix(f".metadata.{language_code}.yaml"),
+            ]
+        )
+    return paths
+
+
+def _command_metadata_sidecar_base(path: Path, language_code: str) -> Path:
+    base = path.with_suffix("")
+    if language_code:
+        suffixes = {language_code, "en"}
+        if "." in base.name:
+            name, suffix = base.name.rsplit(".", 1)
+            if suffix in suffixes:
+                return base.with_name(name)
+    return base
+
+
+def _is_command_metadata_sidecar(path: Path) -> bool:
+    stem = path.with_suffix("").name
+    return ".metadata" in stem
+
+
+def _localized_metadata_value(value: Any, language_code: str) -> Any:
+    if not isinstance(value, dict):
+        return value
+    if language_code and language_code in value:
+        return value[language_code]
+    if "en" in value:
+        return value["en"]
+    return next(iter(value.values()), None)
+
+
+def _module_bool_flag(module: ast.Module, name: str) -> bool:
+    """Return True if the module declares a top-level ``name = True`` assignment."""
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            return isinstance(node.value, ast.Constant) and node.value.value is True
+    return False
 
 
 def _command_label(command: str) -> str:
@@ -1144,7 +1321,7 @@ def _referenced_command_requirement_kinds(
         resolved = resolve_command_reference(base_dir, command_name, context)
     except Exception:
         return set()
-    metadata = _command_metadata(resolved)
+    metadata = _command_metadata(resolved, context.team.project.get_language_code())
     return _command_requirement_kinds(resolved, metadata, context, seen)
 
 

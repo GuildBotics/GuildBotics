@@ -56,6 +56,7 @@ vi.mock("./api/client", async (importOriginal) => {
       routines: [{ command: "workflows/ticket_driven_workflow", requires_github: false }],
     })),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
+    getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
     getPromptTrace: vi.fn(),
     getMemoryEvents: vi.fn(),
     updatePromptTrace: vi.fn(),

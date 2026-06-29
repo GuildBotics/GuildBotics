@@ -32,7 +32,9 @@ class TaskScheduler:
         Initialize the TaskScheduler with a list of jobs.
         Args:
             context (Context): The context for the task scheduler.
-            default_routine_commands (list[str]): List of default routine commands to run.
+            default_routine_commands (list[str]): Legacy constructor input retained for
+                callers that still pass service-level routine commands. Worker execution
+                uses each member's ``routine_commands``.
             consecutive_error_limit (int): Maximum number of consecutive errors allowed
                 before stopping the worker loop.
             routine_interval_minutes (int): Minimum interval between routine command
@@ -133,11 +135,7 @@ class TaskScheduler:
 
         context = self.context.clone_for(person)
 
-        routine_commands = (
-            person.routine_commands
-            if person.routine_commands
-            else self.default_routine_commands
-        )
+        routine_commands = person.routine_commands
         routine_command_index = 0
         next_routine_time: datetime.datetime | None = None
         consecutive_errors = 0

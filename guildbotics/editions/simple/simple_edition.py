@@ -6,6 +6,12 @@ from guildbotics.editions.simple.simple_integration_factory import (
 from guildbotics.editions.simple.simple_loader_factory import SimpleLoaderFactory
 from guildbotics.runtime import Context
 
+# The single source of the routine command name in this edition. Routine
+# candidates are discovered from each command's own ``routine`` declaration; this
+# constant only names the edition's preferred default to seed / fall back to when
+# several candidates exist.
+DEFAULT_ROUTINE_COMMAND = "workflows/ticket_driven_workflow"
+
 
 class SimpleEdition(Edition):
     """Default YAML-based runtime edition."""
@@ -19,4 +25,4 @@ class SimpleEdition(Edition):
         )
 
     def get_default_routines(self) -> list[str]:
-        return ["workflows/ticket_driven_workflow"]
+        return [DEFAULT_ROUTINE_COMMAND]

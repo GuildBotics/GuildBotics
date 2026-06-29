@@ -161,14 +161,10 @@ def start(
     start_events = only_target in (None, "events")
     start_member_worker = scheduler_sources_enabled or start_events
 
-    routine_commands = list(default_routine_commands)
-    if scheduler_sources_enabled and not routine_commands:
-        routine_commands = edition.get_default_routines()
-
     scheduler = (
         TaskScheduler(
             edition.get_context(),
-            routine_commands if scheduler_sources_enabled else [],
+            list(default_routine_commands) if scheduler_sources_enabled else [],
             consecutive_error_limit=max_consecutive_errors,
             scheduled_source_enabled=scheduler_sources_enabled,
             routine_source_enabled=scheduler_sources_enabled,

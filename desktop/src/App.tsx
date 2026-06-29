@@ -50,7 +50,6 @@ import {
   type DiagnosticCheck,
   type MemoryEvent,
   type PromptTraceEntry,
-  type RoutineOption,
   type RuntimeEvent,
   type RuntimeLog,
   type SchedulerStartRequest,
@@ -63,7 +62,6 @@ import {
   getProjectConfig,
   getPromptTrace,
   getRuntimeDebug,
-  getSchedulerRoutines,
   getSchedulerStatus,
   getTeam,
   getTraceDetail,
@@ -82,7 +80,6 @@ import { type AppLanguage, normalizeLanguage, setAppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
 import { buildTraceGroups, type PromptTraceGroup } from "./trace";
 
-const TICKET_ROUTINE = "workflows/ticket_driven_workflow";
 const PROMPT_TRACE_LIMIT = 500;
 const EXECUTION_LIMIT = 200;
 const MEMORY_EVENT_LIMIT = 500;
@@ -160,7 +157,6 @@ function ServicePage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [initialPreferences] = useState(loadServicePreferences);
-  const [selectedRoutine, setSelectedRoutine] = useState(initialPreferences.selectedRoutine);
   const [scheduledSourceEnabled, setScheduledSourceEnabled] = useState(
     initialPreferences.scheduledSourceEnabled,
   );
@@ -181,7 +177,6 @@ function ServicePage() {
       scheduledSourceEnabled,
       routineSourceEnabled,
       eventQueueSourceEnabled,
-      selectedRoutine,
       routineIntervalMinutes,
       maxConsecutiveErrors,
     }),
@@ -189,7 +184,6 @@ function ServicePage() {
       scheduledSourceEnabled,
       routineSourceEnabled,
       eventQueueSourceEnabled,
-      selectedRoutine,
       routineIntervalMinutes,
       maxConsecutiveErrors,
     ],
@@ -207,48 +201,12 @@ function ServicePage() {
   useEffect(() => () => saveServicePreferences(servicePreferencesRef.current), []);
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
-  const routines = useQuery({
-    queryKey: ["scheduler-routines"],
-    queryFn: getSchedulerRoutines,
-    retry: false,
-  });
   const scheduler = useQuery({
     queryKey: ["scheduler"],
     queryFn: getSchedulerStatus,
     refetchInterval: 5000,
   });
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
-  const projectConfig = useQuery({
-    queryKey: ["project-config"],
-    queryFn: getProjectConfig,
-    enabled: hasProjectConfig,
-    retry: false,
-  });
-  const githubEnabled = projectConfig.data?.github_enabled ?? false;
-
-  const routineOptions = useMemo(() => routines.data?.routines ?? [], [routines.data?.routines]);
-  const selectedRoutineOption = useMemo(
-    () =>
-      routineOptions.find((routine) => routine.command === selectedRoutine) ??
-      routineOptions.find((routine) => !routine.requires_github) ??
-      routineOptions[0] ??
-      null,
-    [routineOptions, selectedRoutine],
-  );
-  const effectiveSelectedRoutine = selectedRoutineOption?.command ?? "";
-  const routineSelectValue = selectedRoutineOption ? effectiveSelectedRoutine : null;
-  const routineSelectOptions = useMemo(
-    () =>
-      routineOptions.map((routine: RoutineOption) => ({
-        value: routine.command,
-        label: routine.requires_github
-          ? `${routineLabel(t, routine.command)} (${t("overview.requiresGithub")})`
-          : routineLabel(t, routine.command),
-      })),
-    [routineOptions, t],
-  );
-  const routineRequiresGithub = selectedRoutineOption?.requires_github ?? false;
-  const canStartRoutine = !routineRequiresGithub || githubEnabled;
 
   const startMutation = useMutation({
     mutationFn: () => {
@@ -261,9 +219,6 @@ function ServicePage() {
         max_consecutive_errors: maxConsecutiveErrors,
         routine_interval_minutes: routineIntervalMinutes,
       };
-      if (routineSourceEnabled && effectiveSelectedRoutine) {
-        body.routine_commands = [effectiveSelectedRoutine];
-      }
       return startScheduler(body);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scheduler"] }),
@@ -291,9 +246,7 @@ function ServicePage() {
   const showStopAction = Boolean(runtimeRunning || runtimeStopping);
   const noStartTarget =
     !scheduledSourceEnabled && !routineSourceEnabled && !eventQueueSourceEnabled;
-  const startNeedsRoutine = routineSourceEnabled;
-  const startBlockedByGithub = startNeedsRoutine && !canStartRoutine;
-  const startDisabled = !hasProjectConfig || runtimeActive || startBlockedByGithub || noStartTarget;
+  const startDisabled = !hasProjectConfig || runtimeActive || noStartTarget;
   const stopDisabled = !runtimeActive;
 
   return (
@@ -371,13 +324,6 @@ function ServicePage() {
                 ],
               ]}
             >
-              <Select
-                label={t("overview.routine")}
-                disabled={!routineSourceEnabled || runtimeActive}
-                value={routineSelectValue}
-                onChange={(value) => setSelectedRoutine(value ?? "")}
-                data={routineSelectOptions}
-              />
               <NumberInput
                 label={t("overview.routineIntervalMinutes")}
                 min={1}
@@ -423,6 +369,11 @@ function ServicePage() {
                     scheduler.data?.scheduler.event_queue_source_enabled ?? eventQueueSourceEnabled,
                   ),
                 ],
+                [
+                  t("overview.eventsCard.supportedEvents"),
+                  t("overview.eventsCard.supportedEventsValue"),
+                ],
+                [t("overview.eventsCard.workflow"), t("overview.eventsCard.workflowValue")],
                 [
                   t("overview.eventsCard.listeners"),
                   String(scheduler.data?.events.listener_count ?? 0),
@@ -530,16 +481,6 @@ function ServicePage() {
           </div>
           <PromptTraceOutputSettings />
           <RuntimeDebugSettings />
-          {startBlockedByGithub ? (
-            <Alert color="yellow" title={t("overview.startGuardTitle")}>
-              <Group justify="space-between" align="center">
-                <Text size="sm">{t("overview.startGuardBody")}</Text>
-                <Button component={NavLink} to="/setup" variant="light">
-                  {t("overview.openSetup")}
-                </Button>
-              </Group>
-            </Alert>
-          ) : null}
           {startMutation.error ? (
             <Alert color="red" title={t("overview.startError")}>
               {startMutation.error.message}
@@ -2621,16 +2562,6 @@ function diagnosticIcon(status: DiagnosticCheck["status"]) {
   return <XCircle size={18} />;
 }
 
-function routineLabel(t: TFunction, command: string | undefined) {
-  if (!command) {
-    return t("overview.none");
-  }
-  if (command === TICKET_ROUTINE) {
-    return t("overview.routines.ticketDriven");
-  }
-  return command;
-}
-
 function sourceState(
   unit: RuntimeUnitStatus | undefined,
   sourceEnabled: boolean | null | undefined,
@@ -3353,7 +3284,6 @@ export type ServicePreferences = {
   scheduledSourceEnabled: boolean;
   routineSourceEnabled: boolean;
   eventQueueSourceEnabled: boolean;
-  selectedRoutine: string;
   routineIntervalMinutes: number;
   maxConsecutiveErrors: number;
 };
@@ -3362,7 +3292,6 @@ export const DEFAULT_SERVICE_PREFERENCES: ServicePreferences = {
   scheduledSourceEnabled: true,
   routineSourceEnabled: true,
   eventQueueSourceEnabled: true,
-  selectedRoutine: "",
   routineIntervalMinutes: 10,
   maxConsecutiveErrors: 3,
 };
@@ -3406,10 +3335,6 @@ export function loadServicePreferences(): ServicePreferences {
           : typeof legacyEventsEnabled === "boolean"
             ? legacyEventsEnabled
             : DEFAULT_SERVICE_PREFERENCES.eventQueueSourceEnabled,
-      selectedRoutine:
-        typeof parsed.selectedRoutine === "string"
-          ? parsed.selectedRoutine
-          : DEFAULT_SERVICE_PREFERENCES.selectedRoutine,
       // Clamp to the same bounds the NumberInput controls enforce so a tampered
       // or outdated value cannot push the inputs out of range.
       routineIntervalMinutes: clampStoredInteger(

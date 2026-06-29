@@ -66,15 +66,6 @@ class MemberDeleteRequest(BaseModel):
     env_file_path: Path
 
 
-class RoutineOption(BaseModel):
-    command: str
-    requires_github: bool
-
-
-class RoutineOptionsResponse(BaseModel):
-    routines: list[RoutineOption]
-
-
 class CommandArgumentOption(BaseModel):
     name: str
     kind: Literal["positional", "keyword"]
@@ -99,10 +90,19 @@ class CommandOption(BaseModel):
     supports_raw_args: bool = True
     recommended_input: str = ""
     requirements: list[CommandRequirement] = Field(default_factory=list)
+    # Routine candidates that still require caller-supplied input cannot run on a
+    # schedule; they stay listed but are flagged ineligible so the UI can explain.
+    routine_eligible: bool = True
 
 
 class CommandOptionsResponse(BaseModel):
     options: list[CommandOption]
+
+
+class RoutineCommandOptionsResponse(BaseModel):
+    options: list[CommandOption]
+    # Command to seed / pre-select for a new member. Empty when no candidate.
+    default_command: str = ""
 
 
 class RoleOption(BaseModel):
