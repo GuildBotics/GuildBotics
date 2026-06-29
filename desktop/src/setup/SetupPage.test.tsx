@@ -1804,10 +1804,9 @@ describe("MembersSection", () => {
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
     await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
     await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
-    await user.type(
-      screen.getByLabelText(t("setup.members.accessToken")),
-      "ghp_0123456789abcdef0123456789abcdef0123",
-    );
+    fireEvent.change(screen.getByLabelText(t("setup.members.accessToken")), {
+      target: { value: "ghp_0123456789abcdef0123456789abcdef0123" },
+    });
     await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
@@ -2101,8 +2100,9 @@ describe("MembersSection", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("setup.members.addButton") })).toBeDisabled();
 
-    await user.clear(tokenField);
-    await user.type(tokenField, "ghp_0123456789abcdef0123456789abcdef0123");
+    fireEvent.change(tokenField, {
+      target: { value: "ghp_0123456789abcdef0123456789abcdef0123" },
+    });
     await waitFor(() =>
       expect(screen.getByRole("button", { name: t("setup.members.addButton") })).toBeEnabled(),
     );
