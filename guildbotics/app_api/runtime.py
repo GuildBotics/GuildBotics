@@ -236,6 +236,7 @@ class AppRuntime:
                 source=source,
                 github_enabled=github_enabled,
                 context=context,
+                metadata=metadata,
             )
             options[command] = option.model_copy(
                 update={
@@ -932,8 +933,10 @@ def _command_option(
     source: str,
     github_enabled: bool,
     context: Context,
+    metadata: dict[str, Any] | None = None,
 ) -> CommandOption:
-    metadata = _command_metadata(path, context.team.project.get_language_code())
+    if metadata is None:
+        metadata = _command_metadata(path, context.team.project.get_language_code())
     requirements = _command_requirements(path, metadata, github_enabled, context)
     description = str(metadata.get("description", ""))
     return CommandOption(
@@ -1003,7 +1006,7 @@ def _command_metadata_sidecar_paths(path: Path, language_code: str) -> list[Path
                 base.with_suffix(f".metadata.{language_code}.yaml"),
             ]
         )
-    return paths
+    return list(dict.fromkeys(paths))
 
 
 def _command_metadata_sidecar_base(path: Path, language_code: str) -> Path:

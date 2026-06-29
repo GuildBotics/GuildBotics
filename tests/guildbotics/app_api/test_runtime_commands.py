@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from guildbotics.app_api import runtime as runtime_module
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.models import (
@@ -487,6 +488,66 @@ def test_routine_command_options_read_python_sidecar_metadata(
     assert option.label == "私の巡回"
     assert option.description == "私の巡回処理を実行します。"
     assert option.routine_eligible is True
+
+
+def test_routine_command_options_reuse_loaded_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    command_path = _write(
+        config_dir / "commands/my_routine.md",
+        "\n".join(
+            ["---", "name: My Routine", "routine: true", "brain: none", "---", "Body."]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+    original = runtime_module._command_metadata
+    loads: list[Path] = []
+
+    def counting_metadata(path: Path, language_code: str = "") -> dict[str, Any]:
+        if path == command_path:
+            loads.append(path)
+        return original(path, language_code)
+
+    monkeypatch.setattr(runtime_module, "_command_metadata", counting_metadata)
+
+    assert any(
+        item.command == "my_routine"
+        for item in runtime.get_routine_command_options().options
+    )
+    assert loads == [command_path]
+
+
+def test_routine_command_options_do_not_reload_duplicate_en_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/my_routine.py",
+        "\n".join(["async def main(context):", "    return None"]),
+    )
+    sidecar_path = _write(
+        config_dir / "commands/my_routine.metadata.en.yml",
+        "\n".join(["name: My Routine", "routine: true"]),
+    )
+    context = _make_context([_make_person()], language_code="en")
+    runtime = _runtime_with_context(monkeypatch, context)
+    original = runtime_module.load_yaml_file
+    loads: list[Path] = []
+
+    def counting_load_yaml_file(path: Path) -> Any:
+        if path == sidecar_path:
+            loads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(runtime_module, "load_yaml_file", counting_load_yaml_file)
+
+    assert any(
+        item.command == "my_routine"
+        for item in runtime.get_routine_command_options().options
+    )
+    assert loads == [sidecar_path]
 
 
 def test_routine_command_options_keep_legacy_python_routine_flag(
