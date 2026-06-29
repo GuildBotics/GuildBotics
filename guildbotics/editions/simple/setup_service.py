@@ -11,6 +11,7 @@ import requests  # type: ignore
 from dotenv import dotenv_values
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 BASE_DIR = Path(__file__).parent
@@ -813,7 +814,10 @@ class SimplePersonSetupService:
             config.config_dir / f"team/members/{config.person_id}/person.yml"
         )
         person_config_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(person_config_file, self.build_person_config(config))
+        save_yaml_file(
+            person_config_file,
+            self.build_person_config(config, include_initial_defaults=True),
+        )
         files.append(CreatedFile(path=person_config_file, action="create"))
 
         if config.append_env_file and env_vars:
@@ -903,7 +907,9 @@ class SimplePersonSetupService:
             files.append(CreatedFile(path=env_file_path, action="update"))
         return PersonSetupResult(files=files, masked_environment_variables=[])
 
-    def build_person_config(self, config: PersonSetupInput) -> dict:
+    def build_person_config(
+        self, config: PersonSetupInput, *, include_initial_defaults: bool = False
+    ) -> dict:
         role_overrides: dict[str, dict[str, str]] = {
             role.rstrip(":"): {} for role in config.roles
         }
@@ -946,19 +952,44 @@ class SimplePersonSetupService:
                 for channel in config.slack_channels
                 if channel
             ]
-        routine_commands = [
-            command.strip() for command in config.routine_commands if command.strip()
-        ]
+        routine_commands = (
+            []
+            if config.person_type == "human"
+            else [
+                command.strip()
+                for command in config.routine_commands
+                if command.strip()
+            ]
+        )
+        if (
+            include_initial_defaults
+            and not routine_commands
+            and self._should_seed_default_routine(config)
+        ):
+            routine_commands = [DEFAULT_ROUTINE_COMMAND]
         if routine_commands:
             person_config["routine_commands"] = routine_commands
-        task_schedules = [
-            schedule.model_dump()
-            for schedule in config.task_schedules
-            if schedule.command.strip() and schedule.schedules
-        ]
+        task_schedules = (
+            []
+            if config.person_type == "human"
+            else [
+                schedule.model_dump()
+                for schedule in config.task_schedules
+                if schedule.command.strip() and schedule.schedules
+            ]
+        )
         if task_schedules:
             person_config["task_schedules"] = task_schedules
         return person_config
+
+    @staticmethod
+    def _should_seed_default_routine(config: PersonSetupInput) -> bool:
+        if config.person_type == "human":
+            return False
+        github_account_type = (config.github_account_type or config.person_type).strip()
+        if github_account_type in {"", "none", "human"}:
+            return bool(config.github_username.strip())
+        return github_account_type in {"machine_user", "github_apps", "proxy_agent"}
 
     def _build_slack_message_channel(
         self, channel: str, *, person_id: str, participation: str = "strict"

@@ -14,6 +14,7 @@ import {
   ensureAgentField,
   getAgentFieldState,
   getCommandOptions,
+  getRoutineCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
   getMemberConfig,
@@ -131,6 +132,10 @@ vi.mock("../api/client", async (importOriginal) => {
       },
     ]),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
+    getRoutineCommandOptions: vi.fn(async () => ({
+      options: [],
+      default_command: "workflows/ticket_driven_workflow",
+    })),
     getConfigStatus: vi.fn(async () => ({
       cwd: "/workspace",
       env_file: "/workspace/.env",
@@ -1786,6 +1791,60 @@ describe("MembersSection", () => {
     expect(request.github_installation_id).toBeUndefined();
   });
 
+  it("preselects the ticket workflow for a new GitHub-backed agent", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await selectGitHubAccountType(user, "Machine Account (Machine User)");
+    await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
+    await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
+    fireEvent.change(screen.getByLabelText(t("setup.members.accessToken")), {
+      target: { value: "ghp_0123456789abcdef0123456789abcdef0123" },
+    });
+    await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+
+    await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+    expect(lastMemberAddRequest().routine_commands).toEqual(["workflows/ticket_driven_workflow"]);
+  });
+
+  it("preselects patrol commands for a new agent when the project uses GitHub", async () => {
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({
+        github_enabled: true,
+        github_project_url: "https://github.com/orgs/acme/projects/9",
+      }),
+    );
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      members: [],
+    });
+    vi.mocked(getRoutineCommandOptions).mockResolvedValue({
+      options: [
+        commandOption({
+          command: "workflows/ticket_driven_workflow",
+          label: "Routine Ticket Workflow",
+          routine_eligible: true,
+        }),
+      ],
+      default_command: "workflows/ticket_driven_workflow",
+    });
+    renderSetupPage("/setup?section=members&tab=patrol");
+
+    expect(
+      (await screen.findAllByText("Routine Ticket Workflow (workflows/ticket_driven_workflow)"))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("switch", { name: new RegExp(t("setup.members.patrol.overrideRoutine")) }),
+    ).toBeChecked();
+  });
+
   it("edits a persisted member and submits an update payload", async () => {
     const user = userEvent.setup();
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail({ person_name: "Alice" }));
@@ -2041,8 +2100,9 @@ describe("MembersSection", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("setup.members.addButton") })).toBeDisabled();
 
-    await user.clear(tokenField);
-    await user.type(tokenField, "ghp_0123456789abcdef0123456789abcdef0123");
+    fireEvent.change(tokenField, {
+      target: { value: "ghp_0123456789abcdef0123456789abcdef0123" },
+    });
     await waitFor(() =>
       expect(screen.getByRole("button", { name: t("setup.members.addButton") })).toBeEnabled(),
     );
@@ -2184,6 +2244,26 @@ const PATROL_COMMAND_OPTIONS: CommandOption[] = [
   }),
 ];
 
+// The routine selector reads its own catalog (commands that self-declare
+// `routine: true`, discovered across workspace + template). A distinctive label
+// proves the routine MultiSelect uses this catalog rather than the plain
+// /commands/options list, and an ineligible entry proves declared-but-unrunnable
+// routines stay visible instead of being dropped.
+const PATROL_ROUTINE_OPTIONS: CommandOption[] = [
+  commandOption({
+    command: "workflows/ticket_driven_workflow",
+    label: "Routine Ticket Workflow",
+    source: "template",
+    routine_eligible: true,
+  }),
+  commandOption({
+    command: "workflows/needs_input",
+    label: "Needs Input",
+    source: "template",
+    routine_eligible: false,
+  }),
+];
+
 async function openPatrolTab(user: ReturnType<typeof userEvent.setup>) {
   renderSetupPage("/setup?section=members&tab=patrol");
   await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
@@ -2196,28 +2276,125 @@ describe("PatrolSettingsEditor", () => {
     // valid and save reflects only the patrol/schedule changes under test.
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
     vi.mocked(getCommandOptions).mockResolvedValue({ options: PATROL_COMMAND_OPTIONS });
+    vi.mocked(getRoutineCommandOptions).mockResolvedValue({
+      options: PATROL_ROUTINE_OPTIONS,
+      default_command: "workflows/ticket_driven_workflow",
+    });
   });
 
-  it("explains the shared default when the routine override is off", async () => {
+  it("lists routine candidates from the dedicated routine catalog", async () => {
+    const user = userEvent.setup();
+    await openPatrolTab(user);
+
+    // Enabling the override seeds the edition default routine; the selected
+    // value renders with the routine catalog's label rather than the plain
+    // /commands/options entry, proving the routine selector reads its own
+    // catalog.
+    await user.click(await screen.findByText(t("setup.members.patrol.overrideRoutine")));
+    expect(
+      (await screen.findAllByText("Routine Ticket Workflow (workflows/ticket_driven_workflow)"))
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not seed the default routine while editing an existing GitHub member with no patrol commands", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        github_account_type: "machine_user",
+        github_username: "bot",
+        git_email: "bot@example.com",
+        has_github_access_token: true,
+        routine_commands: [],
+      }),
+    );
+    await openPatrolTab(user);
+
+    expect(
+      await screen.findByText(t("setup.members.patrol.noRoutineCommands")),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Routine Ticket Workflow (workflows/ticket_driven_workflow)"),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+    const [, body] = vi.mocked(updateMemberConfig).mock.calls[0];
+    expect(body.routine_commands).toEqual([]);
+  });
+
+  it("keeps an ineligible routine candidate visible with a reason", async () => {
+    const user = userEvent.setup();
+    await openPatrolTab(user);
+
+    // Enable the override, then open the routine selector dropdown. The declared
+    // but input-requiring candidate is shown with its ineligibility reason
+    // rather than hidden.
+    await user.click(await screen.findByText(t("setup.members.patrol.overrideRoutine")));
+    const routineInput = screen
+      .getAllByLabelText(t("setup.members.patrol.routineCommands"))
+      .find((element) => element instanceof HTMLInputElement && element.type !== "hidden");
+    await user.click(routineInput as HTMLElement);
+
+    expect(
+      await screen.findByText(t("setup.members.patrol.routineIneligible")),
+    ).toBeInTheDocument();
+  });
+
+  it("blocks saving when an existing selected routine is no longer eligible", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({ routine_commands: ["workflows/needs_input"] }),
+    );
+    await openPatrolTab(user);
+
+    expect(
+      (await screen.findAllByText(t("setup.members.patrol.routineIneligible"))).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
+  });
+
+  it("shows a routine catalog loading error and disables patrol command editing", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getRoutineCommandOptions).mockRejectedValue(new Error("routine catalog failed"));
+    await openPatrolTab(user);
+
+    expect(await screen.findByText(t("setup.members.patrol.routineLoadError"))).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: new RegExp(t("setup.members.patrol.overrideRoutine")) }),
+    ).toBeDisabled();
+  });
+
+  it("explains that patrol is skipped when no routine commands are configured", async () => {
     const user = userEvent.setup();
     await openPatrolTab(user);
 
     expect(
-      await screen.findByText(t("setup.members.patrol.usesServiceDefault")),
+      await screen.findByText(t("setup.members.patrol.noRoutineCommands")),
     ).toBeInTheDocument();
     expect(
       screen.queryByLabelText(t("setup.members.patrol.routineCommands")),
     ).not.toBeInTheDocument();
   });
 
-  it("requires a routine when the override is enabled with none selected", async () => {
+  it("requires a routine once the seeded default is removed", async () => {
     const user = userEvent.setup();
     await openPatrolTab(user);
 
-    // Clicking the Switch's visible label toggles the member-specific override.
+    // Clicking the Switch's visible label toggles the member-specific override,
+    // which seeds the default routine so the form starts valid.
     await user.click(await screen.findByText(t("setup.members.patrol.overrideRoutine")));
+    expect(screen.queryByText(t("setup.members.patrol.routineRequired"))).not.toBeInTheDocument();
+
+    // Removing the only selected command surfaces the required-field error and
+    // blocks saving even though the rest of the member is valid.
+    const routineInput = screen
+      .getAllByLabelText(t("setup.members.patrol.routineCommands"))
+      .find((element) => element instanceof HTMLInputElement && element.type !== "hidden");
+    await user.click(routineInput as HTMLElement);
+    await user.keyboard("{Backspace}");
     expect(await screen.findByText(t("setup.members.patrol.routineRequired"))).toBeInTheDocument();
-    // The error blocks saving even though the rest of the member is valid.
     expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
   });
 

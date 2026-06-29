@@ -114,7 +114,7 @@ graph TD
 - ticket は `context.task` と `ticket_manager.get_task_to_work_on()` に依存する。
 - chat は `Context.shared_state["incoming_event"]` に依存する。
 - cron / scheduled command は payload を持たず、単に command string を実行する。
-- routine は default routine として ticket workflow を起動するが、実際の対象選定は workflow 内で行う。
+- routine は各 member の `routine_commands` で明示された command を起動する。`ticket_driven_workflow` の実際の対象選定は workflow 内で行う。
 
 ## 採用する中間アーキテクチャ
 
@@ -397,21 +397,21 @@ payload 例:
 
 現行の trace scope は次の通り。
 
-| 現行経路 | scope | 主な属性 |
-|---|---|---|
-| scheduled command | `scheduled` | `person_id`, `command`, `service_run_id` |
-| routine command | `routine` | `person_id`, `command`, `service_run_id` |
-| pending chat event | `event_listener` | `event.provider`, `slack.channel`, `slack.thread_ts`, `slack.ts`, `event_id`, `service_run_id` |
-| ticket workflow 内部 | workflow 内 `set_attributes()` | `github.repo`, `github.kind`, `github.url`, `github.number` |
+| 現行経路             | scope                          | 主な属性                                                                                       |
+| -------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| scheduled command    | `scheduled`                    | `person_id`, `command`, `service_run_id`                                                       |
+| routine command      | `routine`                      | `person_id`, `command`, `service_run_id`                                                       |
+| pending chat event   | `event_listener`               | `event.provider`, `slack.channel`, `slack.thread_ts`, `slack.ts`, `event_id`, `service_run_id` |
+| ticket workflow 内部 | workflow 内 `set_attributes()` | `github.repo`, `github.kind`, `github.url`, `github.number`                                    |
 
 dispatcher 導入後の対応は次の通り。
 
-| `WorkflowInvocation.source` | `trigger_type` | trace scope | 属性の作成者 |
-|---|---|---|---|
-| `scheduled` | `generic` / `scheduled` | `scheduled` | `TaskScheduler` または `WorkflowDispatcher` |
-| `routine` | `ticket` / `generic` | `routine` | `TaskScheduler` または `WorkflowDispatcher` |
-| `event_queue` | `chat` | `event_listener` | `WorkflowDispatcher` |
-| `manual` | 任意 | `manual` または既存 caller の scope | caller |
+| `WorkflowInvocation.source` | `trigger_type`          | trace scope                         | 属性の作成者                                |
+| --------------------------- | ----------------------- | ----------------------------------- | ------------------------------------------- |
+| `scheduled`                 | `generic` / `scheduled` | `scheduled`                         | `TaskScheduler` または `WorkflowDispatcher` |
+| `routine`                   | `ticket` / `generic`    | `routine`                           | `TaskScheduler` または `WorkflowDispatcher` |
+| `event_queue`               | `chat`                  | `event_listener`                    | `WorkflowDispatcher`                        |
+| `manual`                    | 任意                    | `manual` または既存 caller の scope | caller                                      |
 
 `WorkflowDispatcher` は、少なくとも chat invocation について現行 `PendingChatDispatcher` と同じ属性を payload から導出する。
 
@@ -512,8 +512,8 @@ payload は現行 `IncomingChatEvent.to_shared_state()` をそのまま使える
 
 注意:
 
-- 最初から全 routine command を selector 化しない。default ticket routine だけを対象にしてよい。
-- person ごとの `routine_commands` で明示的に別 command が設定されている場合は、従来通り command string を実行する。
+- 最初から全 routine command を selector 化しない。`workflows/ticket_driven_workflow` だけを対象にしてよい。
+- person ごとの `routine_commands` で別 command が設定されている場合は、従来通り command string を実行する。
 - `TaskScheduler` の command execution semantics を変えすぎない。
 
 テスト:

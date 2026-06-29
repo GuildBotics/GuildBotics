@@ -20,7 +20,6 @@ from guildbotics.app_api import lifecycle
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import SchedulerStartRequest
 
-DEFAULT_ROUTINES = ["workflows/ticket_driven_workflow"]
 EXPECTED_WORKER_COUNT = 2
 EXPECTED_MEMBER_COUNT = 2
 EXPECTED_MAX_ERRORS = 5
@@ -167,7 +166,6 @@ def _make_service(
     service = lifecycle.RuntimeLifecycleService(
         event_bus=bus,
         context_factory=context_factory,
-        default_routines_factory=lambda: list(DEFAULT_ROUTINES),
         stop_timeout_seconds=stop_timeout_seconds,
     )
     return service, bus
@@ -382,7 +380,9 @@ def test_scheduler_metadata_reflects_request_and_summary(context_factory: Any) -
         _stop_quietly(service)
 
 
-def test_scheduler_uses_default_routines_when_unspecified(context_factory: Any) -> None:
+def test_scheduler_does_not_inject_default_routines_when_unspecified(
+    context_factory: Any,
+) -> None:
     service, _bus = _make_service(context_factory)
     try:
         service.start(
@@ -390,8 +390,8 @@ def test_scheduler_uses_default_routines_when_unspecified(context_factory: Any) 
                 sources={"scheduled": True, "routine": True, "event_queue": False}
             )
         )
-        assert FakeScheduler.instances[0].routine_commands == DEFAULT_ROUTINES
-        assert service.get_status().scheduler.routine_commands == DEFAULT_ROUTINES
+        assert FakeScheduler.instances[0].routine_commands == []
+        assert service.get_status().scheduler.routine_commands == []
     finally:
         _stop_quietly(service)
 
@@ -547,7 +547,6 @@ def test_scheduler_start_context_factory_exception_marks_failed() -> None:
     service = lifecycle.RuntimeLifecycleService(
         event_bus=bus,
         context_factory=boom,
-        default_routines_factory=lambda: list(DEFAULT_ROUTINES),
     )
 
     with pytest.raises(RuntimeError, match="no context"):
@@ -576,7 +575,6 @@ def test_events_start_context_factory_exception_marks_member_worker_failed() -> 
     service = lifecycle.RuntimeLifecycleService(
         event_bus=bus,
         context_factory=boom,
-        default_routines_factory=lambda: list(DEFAULT_ROUTINES),
     )
 
     with pytest.raises(RuntimeError, match="no events context"):

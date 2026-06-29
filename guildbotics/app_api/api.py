@@ -55,8 +55,7 @@ from guildbotics.app_api.models import (
     PromptTraceUpdateRequest,
     RoleOption,
     RoleOptionsResponse,
-    RoutineOption,
-    RoutineOptionsResponse,
+    RoutineCommandOptionsResponse,
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
@@ -214,6 +213,17 @@ def create_app(
     ) -> CommandOptionsResponse:
         return app_runtime.get_command_options(person)
 
+    @app.get(
+        "/commands/routine-options",
+        response_model=RoutineCommandOptionsResponse,
+        responses=error_responses,
+    )
+    def routine_command_options(
+        person: str | None = None,
+        _: None = Depends(require_token),
+    ) -> RoutineCommandOptionsResponse:
+        return app_runtime.get_routine_command_options(person)
+
     @app.post(
         "/commands/run",
         response_model=CommandRunResponse,
@@ -250,21 +260,6 @@ def create_app(
                     )
                 )
         return RoleOptionsResponse(roles=roles)
-
-    @app.get(
-        "/scheduler/routines",
-        response_model=RoutineOptionsResponse,
-        responses=error_responses,
-    )
-    def scheduler_routines(_: None = Depends(require_token)) -> RoutineOptionsResponse:
-        routines = [
-            RoutineOption(
-                command=command,
-                requires_github=app_runtime.requires_github_for_routine(command),
-            )
-            for command in app_runtime.get_default_routines()
-        ]
-        return RoutineOptionsResponse(routines=routines)
 
     @app.get(
         "/scheduler/status",

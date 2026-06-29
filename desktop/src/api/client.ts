@@ -309,6 +309,9 @@ export type CommandOption = {
   supports_raw_args: boolean;
   recommended_input: string;
   requirements: CommandRequirement[];
+  // False when a routine candidate still needs caller-supplied input and so
+  // cannot run on a schedule. Absent on the general /commands/options listing.
+  routine_eligible?: boolean;
 };
 
 export type CommandOptionsResponse = {
@@ -488,13 +491,10 @@ export type RuntimeLog = Correlation & {
 
 export type StreamStatus = "connecting" | "connected" | "disconnected" | "error";
 
-export type RoutineOption = {
-  command: string;
-  requires_github: boolean;
-};
-
-export type RoutineOptionsResponse = {
-  routines: RoutineOption[];
+export type RoutineCommandOptionsResponse = {
+  options: CommandOption[];
+  // Command to seed / pre-select for a new member. Empty when no candidate.
+  default_command?: string;
 };
 
 export type RoleOption = {
@@ -601,10 +601,6 @@ export async function getTeam(): Promise<TeamSummary> {
 
 export async function getSchedulerStatus(): Promise<RuntimeStatus> {
   return request("/scheduler/status");
-}
-
-export async function getSchedulerRoutines(): Promise<RoutineOptionsResponse> {
-  return request("/scheduler/routines");
 }
 
 export async function getRoleOptions(language: "en" | "ja"): Promise<RoleOptionsResponse> {
@@ -769,6 +765,13 @@ export async function runCommand(body: {
 export async function getCommandOptions(person?: string): Promise<CommandOptionsResponse> {
   const query = person ? `?person=${encodeURIComponent(person)}` : "";
   return request(`/commands/options${query}`);
+}
+
+export async function getRoutineCommandOptions(
+  person?: string,
+): Promise<RoutineCommandOptionsResponse> {
+  const query = person ? `?person=${encodeURIComponent(person)}` : "";
+  return request(`/commands/routine-options${query}`);
 }
 
 export async function initConfig(body: ProjectSetupRequest): Promise<ConfigWriteResponse> {

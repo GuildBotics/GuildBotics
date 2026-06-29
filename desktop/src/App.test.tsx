@@ -119,6 +119,7 @@ vi.mock("./api/client", async (importOriginal) => {
       has_anthropic_api_key: false,
     })),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
+    getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
     getPromptTrace: vi.fn(async () => ({
       enabled: false,
       env_file: "",
@@ -915,7 +916,6 @@ describe("service preferences persistence", () => {
       scheduledSourceEnabled: false,
       routineSourceEnabled: true,
       eventQueueSourceEnabled: true,
-      selectedRoutine: "workflows/ticket_driven_workflow",
       routineIntervalMinutes: 25,
       maxConsecutiveErrors: 7,
     });
@@ -923,7 +923,6 @@ describe("service preferences persistence", () => {
       scheduledSourceEnabled: false,
       routineSourceEnabled: true,
       eventQueueSourceEnabled: true,
-      selectedRoutine: "workflows/ticket_driven_workflow",
       routineIntervalMinutes: 25,
       maxConsecutiveErrors: 7,
     });

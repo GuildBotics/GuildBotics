@@ -7,6 +7,7 @@ import {
   getAgentFieldState,
   getApiBase,
   getCommandOptions,
+  getRoutineCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
   getMemoryEvents,
@@ -267,6 +268,20 @@ describe("GET query parameter encoding", () => {
     await getCommandOptions();
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/options");
+  });
+
+  it("encodes person for getRoutineCommandOptions", async () => {
+    const { calls } = captureFetch(jsonResponse({ options: [] }));
+    await getRoutineCommandOptions("a&b");
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/routine-options?person=a%26b");
+  });
+
+  it("omits the query when getRoutineCommandOptions has no person", async () => {
+    const { calls } = captureFetch(jsonResponse({ options: [] }));
+    await getRoutineCommandOptions();
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/routine-options");
   });
 
   it("encodes the path segment for getMemberConfig", async () => {

@@ -87,6 +87,7 @@ import {
   getAgentFieldState,
   getCliAgentDetections,
   getCommandOptions,
+  getRoutineCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
   getLlmProviders,
@@ -542,6 +543,7 @@ export function SetupPage() {
               members={persistedTeam?.members ?? []}
               config={config.data}
               workspaceDir={form.values.workspaceDir}
+              projectGithubEnabled={form.values.githubDecision === "enabled"}
               cliDetections={cliDetections.data?.agents ?? []}
               llmProviderAvailability={llmProviderAvailability}
               providers={llmProviders.data ?? []}
@@ -2167,6 +2169,7 @@ function MembersSection({
   members,
   config,
   workspaceDir,
+  projectGithubEnabled,
   cliDetections,
   llmProviderAvailability,
   providers,
@@ -2183,6 +2186,7 @@ function MembersSection({
   }>;
   config: ConfigStatus | undefined;
   workspaceDir: string;
+  projectGithubEnabled: boolean;
   cliDetections: CliAgentDetection[];
   llmProviderAvailability: LlmProviderAvailability;
   providers: LlmProviderInfo[];
@@ -2246,6 +2250,7 @@ function MembersSection({
   const [draftMembers, setDraftMembers] = useState<MemberConfig[]>([]);
   const memberIntelligenceSaveRef = useRef<(() => Promise<void>) | null>(null);
   const emptyAddDefaultsAppliedRef = useRef(false);
+  const routineDefaultDismissedRef = useRef(false);
   const hasPersistedProject = Boolean(config?.project_file_exists);
   const [avatarTimestamp, setAvatarTimestamp] = useState(Date.now());
   const [importingAvatar, setImportingAvatar] = useState(false);
@@ -2352,6 +2357,12 @@ function MembersSection({
     enabled: hasPersistedProject,
     retry: false,
   });
+  const routineCommandOptions = useQuery({
+    queryKey: ["routine-command-options", editingPersonId ?? "team"],
+    queryFn: () => getRoutineCommandOptions(editingPersonId ?? undefined),
+    enabled: hasPersistedProject,
+    retry: false,
+  });
   const roleOptions = useMemo(
     () =>
       (rolesQuery.data?.roles ?? []).map((option: RoleOption) => ({
@@ -2378,6 +2389,15 @@ function MembersSection({
     () => new Map(commandCatalog.map((option) => [option.command, option])),
     [commandCatalog],
   );
+  const routineCommandCatalog = useMemo(
+    () => routineCommandOptions.data?.options ?? [],
+    [routineCommandOptions.data?.options],
+  );
+  const routineCommandOptionByValue = useMemo(
+    () => new Map(routineCommandCatalog.map((option) => [option.command, option])),
+    [routineCommandCatalog],
+  );
+  const routineDefaultCommand = routineCommandOptions.data?.default_command ?? "";
   const speakingStyleTemplates = useMemo(() => getSpeakingStyleTemplates(t), [t]);
   const characterPresetExamples = useMemo(
     () => getCharacterPresetExamples(appLanguage),
@@ -2467,6 +2487,7 @@ function MembersSection({
     setSlackChannelParticipation({});
     setRoutineOverrideEnabled(false);
     setRoutineCommands([]);
+    routineDefaultDismissedRef.current = false;
     setScheduledCommands([]);
     setPersonType("agent");
     setGithubAccountType("none");
@@ -2526,6 +2547,10 @@ function MembersSection({
     setSlackAppToken("");
     setRoutineOverrideEnabled(member.routine_commands.length > 0);
     setRoutineCommands(member.routine_commands);
+    routineDefaultDismissedRef.current =
+      nextPersonType === "human" ||
+      member.routine_commands.length > 0 ||
+      toGitHubAccountType(member.github_account_type || member.person_type) === "none";
     setScheduledCommands(
       flattenTaskSchedules(member.task_schedules).map((entry) =>
         scheduledCommandToDraft(entry, commandCatalog),
@@ -2637,6 +2662,7 @@ function MembersSection({
   const slackChannels = useMemo(() => parseSlackChannels(slackChannelsText), [slackChannelsText]);
   const slackChannelsConfigured = slackChannels.length > 0;
   const usesGitHubMember = githubAccountType !== "none";
+  const shouldSeedDefaultRoutine = projectGithubEnabled || usesGitHubMember;
   const configDir = resolveConfigDir(workspaceDir);
   const envFilePath = joinPath(workspaceDir, ".env");
   const requiresGitHubAuth =
@@ -2682,13 +2708,46 @@ function MembersSection({
     },
     t,
   );
-  const patrolSettingsValid =
-    (!routineOverrideEnabled || routineCommands.length > 0) &&
+  const routineSettingsValid =
+    personType === "human" ||
+    !routineOverrideEnabled ||
+    (routineCommands.length > 0 &&
+      routineCommands.every(
+        (command) => routineCommandOptionByValue.get(command)?.routine_eligible !== false,
+      ));
+  const scheduledSettingsValid =
+    personType === "human" ||
     scheduledCommands.every(
       (draft) =>
         buildScheduledCommandExpression(draft, commandOptionByValue).trim().length > 0 &&
         isValidCron(draftToCron(draft)),
     );
+  const patrolSettingsValid = routineSettingsValid && scheduledSettingsValid;
+  const seedDefaultRoutineCommands = useCallback(() => {
+    setRoutineOverrideEnabled(true);
+    if (!routineDefaultCommand) {
+      return;
+    }
+    setRoutineCommands((current) => (current.length > 0 ? current : [routineDefaultCommand]));
+  }, [routineDefaultCommand]);
+  useEffect(() => {
+    if (
+      formMode === "add" &&
+      personType !== "human" &&
+      shouldSeedDefaultRoutine &&
+      !routineDefaultDismissedRef.current &&
+      (!routineOverrideEnabled || routineCommands.length === 0)
+    ) {
+      seedDefaultRoutineCommands();
+    }
+  }, [
+    formMode,
+    personType,
+    shouldSeedDefaultRoutine,
+    routineOverrideEnabled,
+    routineCommands.length,
+    seedDefaultRoutineCommands,
+  ]);
   const canResolveIdentity =
     usesGitHubMember &&
     getGitHubResolveInput(githubAccountType, identity, githubUsername).trim().length > 0 &&
@@ -2872,8 +2931,9 @@ function MembersSection({
               }),
             )
           : {},
-      routine_commands: routineOverrideEnabled ? routineCommands : [],
-      task_schedules: buildTaskSchedules(scheduledCommands, commandOptionByValue),
+      routine_commands: personType === "human" || !routineOverrideEnabled ? [] : routineCommands,
+      task_schedules:
+        personType === "human" ? [] : buildTaskSchedules(scheduledCommands, commandOptionByValue),
     };
     if (githubAccountType === "github_apps") {
       request.github_installation_id = githubInstallationId
@@ -3478,11 +3538,21 @@ function MembersSection({
                 <PatrolSettingsEditor
                   commandCatalog={commandCatalog}
                   commandOptionByValue={commandOptionByValue}
+                  routineCommandCatalog={routineCommandCatalog}
                   commandOptionsLoading={commandOptions.isLoading}
+                  routineCommandOptionsLoading={routineCommandOptions.isLoading}
+                  routineCommandOptionsError={Boolean(routineCommandOptions.error)}
                   routineOverrideEnabled={routineOverrideEnabled}
                   routineCommands={routineCommands}
                   scheduledCommands={scheduledCommands}
-                  onRoutineOverrideChange={setRoutineOverrideEnabled}
+                  onRoutineOverrideChange={(enabled) => {
+                    routineDefaultDismissedRef.current = !enabled;
+                    if (enabled && personType !== "human") {
+                      seedDefaultRoutineCommands();
+                    } else {
+                      setRoutineOverrideEnabled(enabled);
+                    }
+                  }}
                   onRoutineCommandsChange={setRoutineCommands}
                   onScheduledCommandsChange={setScheduledCommands}
                 />
@@ -3500,7 +3570,18 @@ function MembersSection({
                     value={githubAccountType}
                     disabled={personType === "human"}
                     onChange={(value) => {
-                      setGithubAccountType(toGitHubAccountType(value ?? "none"));
+                      const nextAccountType = toGitHubAccountType(value ?? "none");
+                      setGithubAccountType(nextAccountType);
+                      if (
+                        formMode === "add" &&
+                        personType !== "human" &&
+                        nextAccountType !== "none" &&
+                        !routineDefaultDismissedRef.current &&
+                        routineCommands.length === 0
+                      ) {
+                        routineDefaultDismissedRef.current = false;
+                        seedDefaultRoutineCommands();
+                      }
                       setIdentityResolveError("");
                     }}
                   />
@@ -3850,7 +3931,10 @@ function MembersSection({
 function PatrolSettingsEditor({
   commandCatalog,
   commandOptionByValue,
+  routineCommandCatalog,
   commandOptionsLoading,
+  routineCommandOptionsLoading,
+  routineCommandOptionsError,
   routineOverrideEnabled,
   routineCommands,
   scheduledCommands,
@@ -3860,7 +3944,10 @@ function PatrolSettingsEditor({
 }: {
   commandCatalog: CommandOption[];
   commandOptionByValue: Map<string, CommandOption>;
+  routineCommandCatalog: CommandOption[];
   commandOptionsLoading: boolean;
+  routineCommandOptionsLoading: boolean;
+  routineCommandOptionsError: boolean;
   routineOverrideEnabled: boolean;
   routineCommands: string[];
   scheduledCommands: ScheduledCommandDraft[];
@@ -3869,10 +3956,31 @@ function PatrolSettingsEditor({
   onScheduledCommandsChange: (commands: ScheduledCommandDraft[]) => void;
 }) {
   const { t } = useTranslation();
-  const commandOptions = commandCatalog.map((option) => ({
+  const routineOptionByValue = new Map(
+    routineCommandCatalog.map((option) => [option.command, option]),
+  );
+  const routineCommandOptions = [
+    ...routineCommandCatalog.map((option) => ({
+      value: option.command,
+      label: `${option.label} (${option.command})`,
+      disabled: option.routine_eligible === false,
+    })),
+    ...routineCommands
+      .filter((command) => command.trim() && !routineOptionByValue.has(command))
+      .map((command) => ({ value: command, label: command })),
+  ];
+  const scheduledCommandOptions = commandCatalog.map((option) => ({
     value: option.command,
     label: `${option.label} (${option.command})`,
   }));
+  const routineSelectionError =
+    routineCommands.length === 0
+      ? t("setup.members.patrol.routineRequired")
+      : routineCommands.some(
+            (command) => routineOptionByValue.get(command)?.routine_eligible === false,
+          )
+        ? t("setup.members.patrol.routineIneligible")
+        : undefined;
   const updateScheduled = (
     id: string,
     recipe: (current: ScheduledCommandDraft) => ScheduledCommandDraft,
@@ -3891,28 +3999,46 @@ function PatrolSettingsEditor({
         checked={routineOverrideEnabled}
         label={t("setup.members.patrol.overrideRoutine")}
         description={t("setup.members.patrol.overrideRoutineHint")}
+        disabled={routineCommandOptionsLoading || routineCommandOptionsError}
         onChange={(event) => onRoutineOverrideChange(event.currentTarget.checked)}
       />
+      {routineCommandOptionsLoading ? (
+        <Text size="sm" c="dimmed">
+          {t("setup.members.patrol.loadingCommands")}
+        </Text>
+      ) : null}
+      {routineCommandOptionsError ? (
+        <Alert color="red" title={t("setup.members.patrol.routineLoadError")} />
+      ) : null}
       {routineOverrideEnabled ? (
         <MultiSelect
           label={t("setup.members.patrol.routineCommands")}
-          data={commandOptions}
+          data={routineCommandOptions}
           value={routineCommands}
           onChange={onRoutineCommandsChange}
+          disabled={routineCommandOptionsLoading || routineCommandOptionsError}
           searchable
           clearable
-          error={
-            routineCommands.length === 0 ? t("setup.members.patrol.routineRequired") : undefined
-          }
+          error={routineSelectionError}
           nothingFoundMessage={t("commands.noCommandOptions")}
           renderOption={({ option }) => {
-            const commandOption = commandOptionByValue.get(option.value);
-            return <CommandOptionRow label={option.label} option={commandOption} />;
+            const commandOption = routineOptionByValue.get(option.value);
+            return (
+              <CommandOptionRow
+                label={option.label}
+                option={commandOption}
+                note={
+                  commandOption?.routine_eligible === false
+                    ? t("setup.members.patrol.routineIneligible")
+                    : undefined
+                }
+              />
+            );
           }}
         />
       ) : (
         <Text size="sm" c="dimmed">
-          {t("setup.members.patrol.usesServiceDefault")}
+          {t("setup.members.patrol.noRoutineCommands")}
         </Text>
       )}
 
@@ -3994,7 +4120,7 @@ function PatrolSettingsEditor({
                       searchable
                       nothingFoundMessage={t("commands.noCommandOptions")}
                       value={draft.command}
-                      data={commandOptions}
+                      data={scheduledCommandOptions}
                       onChange={(value) =>
                         updateScheduled(draft.id, (current) => ({
                           ...current,
@@ -4156,13 +4282,26 @@ function PatrolSettingsEditor({
   );
 }
 
-function CommandOptionRow({ label, option }: { label: string; option: CommandOption | undefined }) {
+function CommandOptionRow({
+  label,
+  option,
+  note,
+}: {
+  label: string;
+  option: CommandOption | undefined;
+  note?: string;
+}) {
   return (
     <Stack gap={2}>
       <Text size="sm">{label}</Text>
       {option?.description ? (
         <Text size="xs" c="dimmed">
           {option.description}
+        </Text>
+      ) : null}
+      {note ? (
+        <Text size="xs" c="red">
+          {note}
         </Text>
       ) : null}
     </Stack>

@@ -210,9 +210,7 @@ def test_project_update_input_provider_api_keys_default_empty() -> None:
 
 def test_project_update_input_keeps_provider_api_keys() -> None:
     request = ProjectUpdateInput(
-        **_project_update_kwargs(
-            provider_api_keys={"anthropic": "", "openai": "token"}
-        )
+        **_project_update_kwargs(provider_api_keys={"anthropic": "", "openai": "token"})
     )
     assert request.provider_api_keys == {"anthropic": "", "openai": "token"}
 

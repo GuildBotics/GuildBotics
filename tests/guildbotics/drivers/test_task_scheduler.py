@@ -40,10 +40,10 @@ class _Context:
 
 
 class _Person:
-    def __init__(self) -> None:
+    def __init__(self, routine_commands: list[str] | None = None) -> None:
         self.person_id = "alice"
         self.is_active = True
-        self.routine_commands: list[str] = []
+        self.routine_commands: list[str] = routine_commands or []
 
     def get_scheduled_commands(self) -> list[object]:
         return []
@@ -59,7 +59,7 @@ def test_task_scheduler_runs_routine_at_configured_minute_interval(monkeypatch) 
                 return cls.current
             return cls.current.replace(tzinfo=tz)
 
-    person = _Person()
+    person = _Person(["routine"])
     scheduler = TaskScheduler(
         _Context(person),
         ["routine"],
@@ -104,7 +104,7 @@ def test_task_scheduler_measures_routine_interval_after_routine_finishes(
                 return cls.current
             return cls.current.replace(tzinfo=tz)
 
-    person = _Person()
+    person = _Person(["routine"])
     scheduler = TaskScheduler(
         _Context(person),
         ["routine"],

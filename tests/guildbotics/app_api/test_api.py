@@ -17,6 +17,7 @@ from guildbotics.app_api.models import (
     CliAgentDetectionsResponse,
     CommandOption,
     CommandOptionsResponse,
+    CommandRequirement,
     CommandRunRequest,
     ConfigStatus,
     DiagnosticCheck,
@@ -24,6 +25,7 @@ from guildbotics.app_api.models import (
     ProjectStatusOptionsResponse,
     PromptTraceStatus,
     PromptTraceUpdateRequest,
+    RoutineCommandOptionsResponse,
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
@@ -172,6 +174,24 @@ class RuntimeStub:
             ]
         )
 
+    def get_routine_command_options(
+        self, person: str | None = None
+    ) -> RoutineCommandOptionsResponse:
+        options = list(self.get_command_options(person).options)
+        options.append(
+            CommandOption(
+                command="workflows/ticket_driven_workflow",
+                label="Ticket Driven Workflow",
+                category="workflow",
+                source="template",
+                path=self.config_status.cwd
+                / "templates/commands/workflows/ticket_driven_workflow.py",
+            )
+        )
+        return RoutineCommandOptionsResponse(
+            options=options, default_command="workflows/ticket_driven_workflow"
+        )
+
     def get_scheduler_status(self) -> RuntimeStatus:
         return _runtime_status()
 
@@ -243,9 +263,6 @@ class RuntimeStub:
             env_file=self.config_status.env_file,
             env_file_exists=True,
         )
-
-    def get_default_routines(self) -> list[str]:
-        return ["workflows/ticket_driven_workflow"]
 
     def requires_github_for_routine(self, command: str) -> bool:
         return command == "workflows/ticket_driven_workflow"
@@ -657,6 +674,23 @@ def test_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
     assert response.json()["options"][0]["label"] == "Hello"
 
 
+def test_routine_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/commands/routine-options",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+        )
+
+    assert response.status_code == HTTP_OK
+    payload = response.json()
+    commands = [option["command"] for option in payload["options"]]
+    assert "hello" in commands
+    assert "workflows/ticket_driven_workflow" in commands
+    assert payload["default_command"] == "workflows/ticket_driven_workflow"
+
+
 def test_event_stream_replays_trace_id(tmp_path: Path) -> None:
     event_bus = EventBus()
     app = create_app(
@@ -981,25 +1015,6 @@ def test_config_members_resolve_endpoint(tmp_path: Path, monkeypatch) -> None:
         "github_user_id": 123,
         "git_email": "123+alice@users.noreply.github.com",
     }
-
-
-def test_scheduler_routines_endpoint(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
-
-    with TestClient(app) as client:
-        response = client.get(
-            "/scheduler/routines",
-            headers={"X-GuildBotics-Session-Token": "secret"},
-        )
-
-    assert response.status_code == HTTP_OK
-    payload = response.json()
-    assert payload["routines"] == [
-        {
-            "command": "workflows/ticket_driven_workflow",
-            "requires_github": True,
-        }
-    ]
 
 
 def test_roles_endpoint_returns_template_roles(tmp_path: Path) -> None:
@@ -1522,7 +1537,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
         )
     )
     assert first.scheduler.state == "running"
-    assert first.scheduler.routine_commands == ["routine"]
+    assert first.scheduler.routine_commands == []
     assert first.scheduler.max_consecutive_errors == DEFAULT_MAX_CONSECUTIVE_ERRORS
     assert first.scheduler.routine_interval_minutes == DEFAULT_ROUTINE_INTERVAL_MINUTES
     assert (
@@ -1842,12 +1857,35 @@ def test_app_runtime_rejects_github_required_routine_without_integration() -> No
     assert exc_info.value.code == "github_integration_required_for_routine"
 
 
-def test_app_runtime_preserves_github_requirement_for_default_ticket_routine() -> None:
+def test_app_runtime_derives_github_requirement_from_routine_option() -> None:
+    # The GitHub dependency is read from the routine command's own detected
+    # requirements, not a hardcoded command name.
     runtime = AppRuntime(EventBus())
+    ticket = CommandOption(
+        command="workflows/ticket_driven_workflow",
+        label="Ticket Driven Workflow",
+        category="workflow",
+        source="template",
+        path=Path("templates/commands/workflows/ticket_driven_workflow.py"),
+        requirements=[CommandRequirement(kind="github", satisfied=False)],
+    )
+    plain = CommandOption(
+        command="workflows/local_only",
+        label="Local Only",
+        category="workflow",
+        source="workspace",
+        path=Path("commands/workflows/local_only.py"),
+    )
+    runtime.get_routine_command_options = (  # type: ignore[method-assign]
+        lambda person=None: RoutineCommandOptionsResponse(
+            options=[plain, ticket], default_command=ticket.command
+        )
+    )
 
     assert (
         runtime.requires_github_for_routine("workflows/ticket_driven_workflow") is True
     )
+    assert runtime.requires_github_for_routine("workflows/local_only") is False
 
 
 @pytest.mark.asyncio
@@ -1896,9 +1934,9 @@ PROTECTED_ENDPOINTS = [
     ("POST", "/workspace"),
     ("GET", "/team"),
     ("GET", "/commands/options"),
+    ("GET", "/commands/routine-options"),
     ("POST", "/commands/run"),
     ("GET", "/config/roles"),
-    ("GET", "/scheduler/routines"),
     ("GET", "/scheduler/status"),
     ("POST", "/scheduler/start"),
     ("POST", "/scheduler/stop"),

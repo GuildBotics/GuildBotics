@@ -8,17 +8,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import {
   getConfigStatus,
-  getProjectConfig,
   getRuntimeDebug,
-  getSchedulerRoutines,
   getSchedulerStatus,
   getTeam,
   startScheduler,
   stopScheduler,
   updateRuntimeDebug,
   type ConfigStatus,
-  type ProjectConfig,
-  type RoutineOption,
   type RuntimeStatus,
   type RuntimeUnitStatus,
 } from "./api/client";
@@ -42,10 +38,9 @@ vi.mock("./api/client", async (importOriginal) => {
     ...actual,
     getConfigStatus: vi.fn(),
     getTeam: vi.fn(),
-    getSchedulerRoutines: vi.fn(),
     getSchedulerStatus: vi.fn(),
-    getProjectConfig: vi.fn(),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
+    getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
     getPromptTrace: vi.fn(async () => promptTrace()),
     getRuntimeDebug: vi.fn(async () => runtimeDebug()),
     startScheduler: vi.fn(),
@@ -58,9 +53,7 @@ vi.mock("./api/client", async (importOriginal) => {
 
 const getConfigStatusMock = vi.mocked(getConfigStatus);
 const getTeamMock = vi.mocked(getTeam);
-const getSchedulerRoutinesMock = vi.mocked(getSchedulerRoutines);
 const getSchedulerStatusMock = vi.mocked(getSchedulerStatus);
-const getProjectConfigMock = vi.mocked(getProjectConfig);
 const startSchedulerMock = vi.mocked(startScheduler);
 const stopSchedulerMock = vi.mocked(stopScheduler);
 const getRuntimeDebugMock = vi.mocked(getRuntimeDebug);
@@ -75,9 +68,7 @@ beforeEach(() => {
     project: { name: "Demo", language_code: "en", language_name: "English" },
     members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["developer"] }],
   });
-  getSchedulerRoutinesMock.mockReset().mockResolvedValue({ routines: [routine()] });
   getSchedulerStatusMock.mockReset().mockResolvedValue(runtimeStatus());
-  getProjectConfigMock.mockReset().mockResolvedValue(projectConfig());
   startSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   stopSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   getRuntimeDebugMock.mockReset().mockResolvedValue(runtimeDebug());
@@ -99,7 +90,7 @@ describe("Service Runtime screen", () => {
     });
   });
 
-  it("includes the selected routine in routine_commands when scheduler is enabled", async () => {
+  it("omits routine_commands because patrol commands are configured per member", async () => {
     const user = userEvent.setup();
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
@@ -107,9 +98,7 @@ describe("Service Runtime screen", () => {
     await user.click(screen.getByRole("button", { name: t("overview.start") }));
 
     await waitFor(() => expect(startSchedulerMock).toHaveBeenCalledTimes(1));
-    expect(startSchedulerMock.mock.calls[0][0]).toMatchObject({
-      routine_commands: ["workflows/ticket_driven_workflow"],
-    });
+    expect(startSchedulerMock.mock.calls[0][0]).not.toHaveProperty("routine_commands");
   });
 
   it("toggles runtime debug from the service screen", async () => {
@@ -208,21 +197,6 @@ describe("Service Runtime screen", () => {
     await waitFor(() => expect(eventsSwitch()).not.toBeChecked());
     await waitFor(() => expect(scheduledSourceSwitch()).not.toBeChecked());
     expect(routineSourceSwitch()).toBeChecked();
-  });
-
-  it("blocks start when the selected routine requires GitHub but GitHub is disabled", async () => {
-    getSchedulerRoutinesMock.mockResolvedValue({
-      routines: [routine({ command: "workflows/github_flow", requires_github: true })],
-    });
-    getProjectConfigMock.mockResolvedValue(projectConfig({ github_enabled: false }));
-    renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: t("overview.start") })).toBeDisabled(),
-    );
-    expect(screen.getByText(t("overview.startGuardTitle"))).toBeInTheDocument();
-    expect(startSchedulerMock).not.toHaveBeenCalled();
   });
 
   it("renders the running state and offers a stop action", async () => {
@@ -456,30 +430,6 @@ function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
     project_file: "/workspace/.guildbotics/config/project.yml",
     project_file_exists: true,
     storage_dir: "/workspace/.guildbotics",
-    ...overrides,
-  };
-}
-
-function projectConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
-  return {
-    config_dir: "/workspace/.guildbotics/config",
-    env_file_path: "/workspace/.env",
-    language: "en",
-    description: "Demo project",
-    llm_api_type: "openai",
-    cli_agent: "codex",
-    github_enabled: false,
-    github_project_url: "",
-    lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-    provider_api_keys: { openai: true, gemini: false, anthropic: false },
-    ...overrides,
-  };
-}
-
-function routine(overrides: Partial<RoutineOption> = {}): RoutineOption {
-  return {
-    command: "workflows/ticket_driven_workflow",
-    requires_github: false,
     ...overrides,
   };
 }

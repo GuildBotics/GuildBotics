@@ -311,6 +311,7 @@ function serviceServer(): MockServer {
     .json("GET", "/scheduler/status", runtimeStatus())
     .json("GET", "/config/project", projectConfig())
     .json("GET", "/commands/options", { options: [] })
+    .json("GET", "/commands/routine-options", { options: [] })
     .json("GET", "/prompt-trace", promptTrace())
     .json("GET", "/runtime/debug", runtimeDebug())
     .json("PUT", "/runtime/debug", runtimeDebug({ enabled: true }))
@@ -371,7 +372,7 @@ afterEach(() => {
 });
 
 describe("Service Runtime integration (real client + mock server)", () => {
-  it("sends the real POST /scheduler/start with token, JSON body, sources and routine_commands", async () => {
+  it("sends the real POST /scheduler/start with token, JSON body and sources", async () => {
     const server = serviceServer();
     const user = userEvent.setup();
     renderApp(server, "/service");
@@ -386,10 +387,10 @@ describe("Service Runtime integration (real client + mock server)", () => {
     expect(call.headers["Content-Type"]).toBe("application/json");
     expect(call.body).toMatchObject({
       sources: { scheduled: true, routine: true, event_queue: true },
-      routine_commands: ["workflows/ticket_driven_workflow"],
       routine_interval_minutes: expect.any(Number),
       max_consecutive_errors: expect.any(Number),
     });
+    expect(call.body).not.toHaveProperty("routine_commands");
   });
 
   it("encodes sources and the edited interval / max errors into the start body", async () => {
@@ -418,8 +419,8 @@ describe("Service Runtime integration (real client + mock server)", () => {
       sources: { scheduled: true, routine: true, event_queue: false },
       routine_interval_minutes: 30,
       max_consecutive_errors: 7,
-      routine_commands: ["workflows/ticket_driven_workflow"],
     });
+    expect(server.lastBody("POST", "/scheduler/start")).not.toHaveProperty("routine_commands");
   });
 
   it("omits routine_commands and sends only the event queue source for the event-only target", async () => {
@@ -498,6 +499,7 @@ describe("Setup integration (real client + mock server)", () => {
       }))
       .json("GET", "/config/project", projectConfig())
       .json("GET", "/commands/options", { options: [] })
+      .json("GET", "/commands/routine-options", { options: [] })
       .json("GET", "/intelligences/cli-agents/detection", {
         agents: [{ name: "codex", executable: "codex", detected: true, path: "/usr/bin/codex" }],
       })

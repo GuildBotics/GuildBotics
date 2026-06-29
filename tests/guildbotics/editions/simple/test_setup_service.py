@@ -454,6 +454,92 @@ def test_member_config_round_trips_patrol_settings(tmp_path: Path) -> None:
     assert "task_schedules" not in updated
 
 
+def test_write_person_seeds_default_patrol_for_github_agent(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file = tmp_path / ".env"
+    service = SimplePersonSetupService()
+
+    service.write_person(
+        PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            append_env_file=False,
+            person_type="machine_user",
+            person_id="alice",
+            person_name="Alice",
+            is_active=True,
+            github_account_type="machine_user",
+            github_username="alice",
+            git_email="1+alice@users.noreply.github.com",
+            roles=["architect"],
+            speaking_style="style-a",
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/members/alice/person.yml")
+
+    assert stored["routine_commands"] == ["workflows/ticket_driven_workflow"]
+
+
+def test_write_person_does_not_seed_default_patrol_without_github(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file = tmp_path / ".env"
+    service = SimplePersonSetupService()
+
+    service.write_person(
+        PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            append_env_file=False,
+            person_type="agent",
+            person_id="alice",
+            person_name="Alice",
+            is_active=True,
+            github_account_type="none",
+            github_username="",
+            git_email="",
+            roles=["architect"],
+            speaking_style="style-a",
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/members/alice/person.yml")
+
+    assert "routine_commands" not in stored
+
+
+def test_write_person_omits_patrol_and_schedule_for_human(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file = tmp_path / ".env"
+    service = SimplePersonSetupService()
+
+    service.write_person(
+        PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            append_env_file=False,
+            person_type="human",
+            person_id="alice",
+            person_name="Alice",
+            is_active=False,
+            github_account_type="human",
+            github_username="",
+            git_email="",
+            roles=["architect"],
+            speaking_style="style-a",
+            routine_commands=["workflows/ticket_driven_workflow"],
+            task_schedules=[{"command": "reports/morning", "schedules": ["0 9 * * *"]}],
+        )
+    )
+
+    stored = load_yaml_file(config_dir / "team/members/alice/person.yml")
+
+    assert "routine_commands" not in stored
+    assert "task_schedules" not in stored
+
+
 def test_read_person_config_skips_invalid_task_schedules(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     env_file = tmp_path / ".env"

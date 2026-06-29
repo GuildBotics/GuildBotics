@@ -26,13 +26,11 @@ class RuntimeLifecycleService:
         *,
         event_bus: EventBus,
         context_factory: Callable[[], Context],
-        default_routines_factory: Callable[[], list[str]],
         stop_timeout_seconds: float = 10.0,
     ) -> None:
         self._scheduler = SchedulerLifecycle(
             event_bus=event_bus,
             context_factory=context_factory,
-            default_routines_factory=default_routines_factory,
             stop_timeout_seconds=stop_timeout_seconds,
         )
         self._events = EventListenerLifecycle(
@@ -58,13 +56,10 @@ class RuntimeLifecycleService:
             or routine_source_enabled
             or event_queue_source_enabled
         ):
-            routine_commands = (
-                (request.routine_commands or self._scheduler.default_routines())
-                if routine_source_enabled
-                else []
-            )
             self._scheduler.start(
-                routine_commands=routine_commands,
+                routine_commands=request.routine_commands
+                if routine_source_enabled
+                else [],
                 max_consecutive_errors=request.max_consecutive_errors,
                 routine_interval_minutes=request.routine_interval_minutes,
                 scheduled_source_enabled=scheduled_source_enabled,
@@ -173,7 +168,6 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         *,
         event_bus: EventBus,
         context_factory: Callable[[], Context],
-        default_routines_factory: Callable[[], list[str]],
         stop_timeout_seconds: float,
     ) -> None:
         super().__init__(
@@ -182,12 +176,8 @@ class SchedulerLifecycle(_RuntimeLifecycle):
             stop_timeout_seconds=stop_timeout_seconds,
         )
         self._context_factory = context_factory
-        self._default_routines_factory = default_routines_factory
         self._scheduler: TaskScheduler | None = None
         self._thread: threading.Thread | None = None
-
-    def default_routines(self) -> list[str]:
-        return self._default_routines_factory()
 
     def start(
         self,

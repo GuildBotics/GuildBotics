@@ -1,0 +1,7 @@
+name:
+  en: Ticket-driven workflow
+  ja: チケット駆動ワークフロー
+description:
+  en: Poll the ticket manager for one actionable GitHub issue or PR and delegate it to the CLI agent.
+  ja: 対応可能な GitHub issue または PR を1件取得し、CLIエージェントへ委譲します。
+routine: true

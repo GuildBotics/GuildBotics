@@ -568,3 +568,33 @@ async def main(context: Context):
 ```
 
 - Because `invoke` is asynchronous, call it with `await`. Therefore, define `main` as `async def`.
+
+## 8. Declaring a routine (patrol) command
+
+A command can declare itself as a candidate for a member's routine (patrol) execution. Routine candidates are the commands offered in the member's patrol settings, and the scheduler runs the selected ones periodically.
+
+Declare it in the command's own metadata, so adding a routine never requires editing an edition-side list:
+
+- Markdown / YAML commands: add `routine: true` to the YAML front matter.
+- Python commands: add a sidecar metadata file named `<command>.metadata.yml`. The legacy module-level `ROUTINE = True` flag is still accepted as a fallback.
+
+```markdown
+---
+description: Periodically reconcile open tickets.
+routine: true
+---
+...
+```
+
+```yaml
+# commands/workflows/reconcile_tickets.metadata.yml
+name:
+  en: Reconcile tickets
+  ja: チケット確認
+description:
+  en: Periodically reconcile open tickets.
+  ja: 未対応チケットを定期的に確認します。
+routine: true
+```
+
+Because the scheduler runs a routine with no caller-supplied input, a routine candidate must be runnable without arguments. A command that declares `routine: true` but still has required arguments (or a required `${...}` placeholder) stays listed in the patrol settings but is shown as ineligible with the reason, instead of silently disappearing.
