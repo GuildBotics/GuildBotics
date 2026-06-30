@@ -22,3 +22,13 @@ class PersonNotFoundError(CommandError):
         super().__init__(f"Person '{identifier}' not found.")
         self.identifier = identifier
         self.available = list(available)
+
+
+class PersonExecutionNotAllowedError(CommandError):
+    """Raised when a member cannot be used as an AI execution subject."""
+
+    def __init__(self, person_id: str):
+        super().__init__(
+            f"Human member '{person_id}' cannot be used as an AI execution subject."
+        )
+        self.person_id = person_id

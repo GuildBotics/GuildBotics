@@ -7,6 +7,7 @@ from typing import Any
 from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import (
     CommandError,
+    PersonExecutionNotAllowedError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
@@ -18,6 +19,7 @@ from guildbotics.runtime.member_context import resolve_person
 
 __all__ = [
     "CommandRunner",
+    "PersonExecutionNotAllowedError",
     "PersonNotFoundError",
     "PersonSelectionRequiredError",
     "_resolve_person",
@@ -127,6 +129,8 @@ async def run_command(
         person_identifier,
         default_to_single_active=True,
     )
+    if person.person_type == "human":
+        raise PersonExecutionNotAllowedError(person.person_id)
     context = base_context.clone_for(person)
     runner = CommandRunner(context, command_name, command_args, cwd)
     return await runner.run()

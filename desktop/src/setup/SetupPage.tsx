@@ -2255,13 +2255,14 @@ function MembersSection({
   const [avatarTimestamp, setAvatarTimestamp] = useState(Date.now());
   const [importingAvatar, setImportingAvatar] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const isHumanMember = personType === "human";
 
   // Effective CLI agent for the member (member override falls back to the team
   // default automatically), shown as a badge on the avatar header row.
   const cliAgentBadgeQuery = useQuery({
     queryKey: ["intelligence-config", editingPersonId ?? "team"],
     queryFn: () => getIntelligenceConfig(editingPersonId ?? undefined),
-    enabled: hasPersistedProject,
+    enabled: hasPersistedProject && !isHumanMember,
   });
   const cliAgentLabel = useMemo(
     () => cliAgentLabelFromConfig(cliAgentBadgeQuery.data, cliDetections),
@@ -2354,13 +2355,13 @@ function MembersSection({
   const commandOptions = useQuery({
     queryKey: ["command-options", editingPersonId ?? "team"],
     queryFn: () => getCommandOptions(editingPersonId ?? undefined),
-    enabled: hasPersistedProject,
+    enabled: hasPersistedProject && !isHumanMember,
     retry: false,
   });
   const routineCommandOptions = useQuery({
     queryKey: ["routine-command-options", editingPersonId ?? "team"],
     queryFn: () => getRoutineCommandOptions(editingPersonId ?? undefined),
-    enabled: hasPersistedProject,
+    enabled: hasPersistedProject && !isHumanMember,
     retry: false,
   });
   const roleOptions = useMemo(
@@ -2458,6 +2459,15 @@ function MembersSection({
       emptyAddDefaultsAppliedRef.current = true;
     }
   }, [applyPresetFields, displayedMembers.length, mode]);
+
+  useEffect(() => {
+    if (
+      isHumanMember &&
+      (activeTab === "intelligence" || activeTab === "patrol" || activeTab === "diagnostics")
+    ) {
+      setActiveTab("basic");
+    }
+  }, [activeTab, isHumanMember]);
 
   const clearForm = ({ withDefaults = false }: { withDefaults?: boolean } = {}) => {
     setIdentity("");
@@ -2658,7 +2668,7 @@ function MembersSection({
     },
   });
 
-  const effectiveIsActive = personType === "human" ? false : isActive;
+  const effectiveIsActive = isHumanMember ? false : isActive;
   const slackChannels = useMemo(() => parseSlackChannels(slackChannelsText), [slackChannelsText]);
   const slackChannelsConfigured = slackChannels.length > 0;
   const usesGitHubMember = githubAccountType !== "none";
@@ -2709,20 +2719,29 @@ function MembersSection({
     t,
   );
   const routineSettingsValid =
-    personType === "human" ||
+    isHumanMember ||
     !routineOverrideEnabled ||
     (routineCommands.length > 0 &&
       routineCommands.every(
         (command) => routineCommandOptionByValue.get(command)?.routine_eligible !== false,
       ));
   const scheduledSettingsValid =
-    personType === "human" ||
+    isHumanMember ||
     scheduledCommands.every(
       (draft) =>
         buildScheduledCommandExpression(draft, commandOptionByValue).trim().length > 0 &&
         isValidCron(draftToCron(draft)),
     );
   const patrolSettingsValid = routineSettingsValid && scheduledSettingsValid;
+  const memberProfileValid =
+    isHumanMember ||
+    (speakingStyle.trim().length > 0 &&
+      characterArchetype.trim().length > 0 &&
+      characterTraits.length > 0 &&
+      characterInterests.length > 0 &&
+      characterJoinWhenText.trim().length > 0 &&
+      characterAvoidWhenText.trim().length > 0 &&
+      characterContributionText.trim().length > 0);
   const seedDefaultRoutineCommands = useCallback(() => {
     setRoutineOverrideEnabled(true);
     if (!routineDefaultCommand) {
@@ -2733,7 +2752,7 @@ function MembersSection({
   useEffect(() => {
     if (
       formMode === "add" &&
-      personType !== "human" &&
+      !isHumanMember &&
       shouldSeedDefaultRoutine &&
       !routineDefaultDismissedRef.current &&
       (!routineOverrideEnabled || routineCommands.length === 0)
@@ -2742,7 +2761,7 @@ function MembersSection({
     }
   }, [
     formMode,
-    personType,
+    isHumanMember,
     shouldSeedDefaultRoutine,
     routineOverrideEnabled,
     routineCommands.length,
@@ -2760,13 +2779,7 @@ function MembersSection({
     personId.trim().length > 0 &&
     personName.trim().length > 0 &&
     roles.length > 0 &&
-    speakingStyle.trim().length > 0 &&
-    characterArchetype.trim().length > 0 &&
-    characterTraits.length > 0 &&
-    characterInterests.length > 0 &&
-    characterJoinWhenText.trim().length > 0 &&
-    characterAvoidWhenText.trim().length > 0 &&
-    characterContributionText.trim().length > 0 &&
+    memberProfileValid &&
     githubIdentityReady &&
     authReady &&
     patrolSettingsValid &&
@@ -2774,18 +2787,21 @@ function MembersSection({
   const activePresetSample = characterPresetExamples[speakingStylePreset || "energetic"];
   const hasMemberError = (keys: Array<keyof MemberFieldErrors>) =>
     keys.some((key) => Boolean(memberErrors[key]));
-  const basicTabHasError = hasMemberError([
-    "personId",
-    "personName",
-    "roles",
-    "speakingStyle",
-    "characterArchetype",
-    "characterTraits",
-    "characterInterests",
-    "characterJoinWhenText",
-    "characterAvoidWhenText",
-    "characterContributionText",
-  ]);
+  const basicErrorKeys: Array<keyof MemberFieldErrors> = isHumanMember
+    ? ["personId", "personName", "roles"]
+    : [
+        "personId",
+        "personName",
+        "roles",
+        "speakingStyle",
+        "characterArchetype",
+        "characterTraits",
+        "characterInterests",
+        "characterJoinWhenText",
+        "characterAvoidWhenText",
+        "characterContributionText",
+      ];
+  const basicTabHasError = hasMemberError(basicErrorKeys);
   const githubTabHasError = hasMemberError([
     "identity",
     "githubUsername",
@@ -2907,17 +2923,19 @@ function MembersSection({
       github_username: githubUsername.trim(),
       git_email: gitEmail.trim(),
       roles,
-      speaking_style: speakingStyle.trim(),
-      relationships: relationships.trim(),
-      character: buildCharacterPayload({
-        archetype: characterArchetype,
-        traits: characterTraits,
-        interests: characterInterests,
-        joinWhen: splitLines(characterJoinWhenText),
-        avoidWhen: splitLines(characterAvoidWhenText),
-        contributionStyle: splitLines(characterContributionText),
-        extras: characterExtras,
-      }),
+      speaking_style: isHumanMember ? "" : speakingStyle.trim(),
+      relationships: isHumanMember ? "" : relationships.trim(),
+      character: isHumanMember
+        ? {}
+        : buildCharacterPayload({
+            archetype: characterArchetype,
+            traits: characterTraits,
+            interests: characterInterests,
+            joinWhen: splitLines(characterJoinWhenText),
+            avoidWhen: splitLines(characterAvoidWhenText),
+            contributionStyle: splitLines(characterContributionText),
+            extras: characterExtras,
+          }),
       slack_user_id: personType === "human" ? slackUserId.trim() : "",
       slack_bot_token: personType === "agent" ? slackBotToken.trim() : "",
       slack_app_token: personType === "agent" ? slackAppToken.trim() : "",
@@ -2931,9 +2949,10 @@ function MembersSection({
               }),
             )
           : {},
-      routine_commands: personType === "human" || !routineOverrideEnabled ? [] : routineCommands,
-      task_schedules:
-        personType === "human" ? [] : buildTaskSchedules(scheduledCommands, commandOptionByValue),
+      routine_commands: isHumanMember || !routineOverrideEnabled ? [] : routineCommands,
+      task_schedules: isHumanMember
+        ? []
+        : buildTaskSchedules(scheduledCommands, commandOptionByValue),
     };
     if (githubAccountType === "github_apps") {
       request.github_installation_id = githubInstallationId
@@ -2976,7 +2995,9 @@ function MembersSection({
             original_person_id: editingPersonId,
           },
         });
-        await memberIntelligenceSaveRef.current?.();
+        if (!isHumanMember) {
+          await memberIntelligenceSaveRef.current?.();
+        }
         return;
       }
       await addMemberMutation.mutateAsync(request);
@@ -3138,8 +3159,12 @@ function MembersSection({
                 >
                   {t("setup.members.tabs.basic")}
                 </Tabs.Tab>
-                <Tabs.Tab value="intelligence">{t("setup.members.tabs.intelligence")}</Tabs.Tab>
-                <Tabs.Tab value="patrol">{t("setup.members.tabs.patrol")}</Tabs.Tab>
+                {!isHumanMember ? (
+                  <Tabs.Tab value="intelligence">{t("setup.members.tabs.intelligence")}</Tabs.Tab>
+                ) : null}
+                {!isHumanMember ? (
+                  <Tabs.Tab value="patrol">{t("setup.members.tabs.patrol")}</Tabs.Tab>
+                ) : null}
                 <Tabs.Tab
                   value="github"
                   rightSection={
@@ -3160,7 +3185,9 @@ function MembersSection({
                 >
                   {t("setup.members.tabs.slack")}
                 </Tabs.Tab>
-                <Tabs.Tab value="diagnostics">{t("setup.members.tabs.diagnostics")}</Tabs.Tab>
+                {!isHumanMember ? (
+                  <Tabs.Tab value="diagnostics">{t("setup.members.tabs.diagnostics")}</Tabs.Tab>
+                ) : null}
               </Tabs.List>
 
               <Tabs.Panel value="basic" pt="md">
@@ -3341,166 +3368,172 @@ function MembersSection({
                       );
                     }}
                   />
-                  <SegmentedControl
-                    fullWidth
-                    data={SPEAKING_STYLE_OPTIONS.map((value) => ({
-                      value,
-                      label: t(`setup.members.speakingStyleOptions.${value}`),
-                    }))}
-                    value={speakingStylePreset}
-                    onChange={(value) => {
-                      const preset = (value as SpeakingStylePreset) ?? "energetic";
-                      setSpeakingStylePreset(preset);
-                      applyPresetFields(preset);
-                    }}
-                  />
-                  <Group justify="flex-end" mt={-4}>
-                    <Button
-                      size="xs"
-                      variant="default"
-                      leftSection={<Eraser size={14} />}
-                      onClick={clearPresetFields}
-                    >
-                      {t("setup.members.clearDefaults")}
-                    </Button>
-                  </Group>
-                  <TagsInput
-                    label={
-                      <DefaultableLabel
-                        text={t("setup.members.characterTraits")}
-                        tooltip={t("setup.members.applyDefaultTooltip")}
-                        onApply={() => setCharacterTraits(activePresetSample.traits)}
-                        required
+                  {!isHumanMember ? (
+                    <>
+                      <SegmentedControl
+                        fullWidth
+                        data={SPEAKING_STYLE_OPTIONS.map((value) => ({
+                          value,
+                          label: t(`setup.members.speakingStyleOptions.${value}`),
+                        }))}
+                        value={speakingStylePreset}
+                        onChange={(value) => {
+                          const preset = (value as SpeakingStylePreset) ?? "energetic";
+                          setSpeakingStylePreset(preset);
+                          applyPresetFields(preset);
+                        }}
                       />
-                    }
-                    aria-required
-                    value={characterTraits}
-                    onChange={setCharacterTraits}
-                    placeholder={activePresetSample.traits.join(", ")}
-                    error={memberErrors.characterTraits}
-                  />
-                  <TagsInput
-                    label={
-                      <DefaultableLabel
-                        text={t("setup.members.characterInterests")}
-                        tooltip={t("setup.members.applyDefaultTooltip")}
-                        onApply={() => setCharacterInterests(activePresetSample.interests)}
-                        required
-                      />
-                    }
-                    aria-required
-                    value={characterInterests}
-                    onChange={setCharacterInterests}
-                    placeholder={activePresetSample.interests.join(", ")}
-                    error={memberErrors.characterInterests}
-                  />
-                  <Textarea
-                    label={
-                      <DefaultableLabel
-                        text={t("setup.members.speakingStyle")}
-                        tooltip={t("setup.members.applyDefaultTooltip")}
-                        onApply={() =>
-                          setSpeakingStyle(
-                            speakingStyleTemplates[speakingStylePreset || "energetic"],
-                          )
+                      <Group justify="flex-end" mt={-4}>
+                        <Button
+                          size="xs"
+                          variant="default"
+                          leftSection={<Eraser size={14} />}
+                          onClick={clearPresetFields}
+                        >
+                          {t("setup.members.clearDefaults")}
+                        </Button>
+                      </Group>
+                      <TagsInput
+                        label={
+                          <DefaultableLabel
+                            text={t("setup.members.characterTraits")}
+                            tooltip={t("setup.members.applyDefaultTooltip")}
+                            onApply={() => setCharacterTraits(activePresetSample.traits)}
+                            required
+                          />
                         }
-                        required
+                        aria-required
+                        value={characterTraits}
+                        onChange={setCharacterTraits}
+                        placeholder={activePresetSample.traits.join(", ")}
+                        error={memberErrors.characterTraits}
                       />
-                    }
-                    aria-required
-                    autosize
-                    minRows={3}
-                    value={speakingStyle}
-                    onChange={(event) => setSpeakingStyle(event.currentTarget.value)}
-                    placeholder={speakingStyleTemplates[speakingStylePreset || "energetic"]}
-                    error={memberErrors.speakingStyle}
-                  />
-                  <TextInput
-                    label={
-                      <DefaultableLabel
-                        text={t("setup.members.characterArchetype")}
-                        tooltip={t("setup.members.applyDefaultTooltip")}
-                        onApply={() => setCharacterArchetype(activePresetSample.archetype)}
-                        required
-                      />
-                    }
-                    aria-required
-                    value={characterArchetype}
-                    onChange={(event) => setCharacterArchetype(event.currentTarget.value)}
-                    description={t("setup.members.characterArchetypeHint")}
-                    placeholder={activePresetSample.archetype}
-                    error={memberErrors.characterArchetype}
-                  />
-                  <Textarea
-                    label={
-                      <DefaultableLabel
-                        text={t("setup.members.characterJoinWhen")}
-                        tooltip={t("setup.members.applyDefaultTooltip")}
-                        onApply={() =>
-                          setCharacterJoinWhenText(activePresetSample.joinWhen.join("\n"))
+                      <TagsInput
+                        label={
+                          <DefaultableLabel
+                            text={t("setup.members.characterInterests")}
+                            tooltip={t("setup.members.applyDefaultTooltip")}
+                            onApply={() => setCharacterInterests(activePresetSample.interests)}
+                            required
+                          />
                         }
-                        required
+                        aria-required
+                        value={characterInterests}
+                        onChange={setCharacterInterests}
+                        placeholder={activePresetSample.interests.join(", ")}
+                        error={memberErrors.characterInterests}
                       />
-                    }
-                    aria-required
-                    autosize
-                    minRows={3}
-                    value={characterJoinWhenText}
-                    onChange={(event) => setCharacterJoinWhenText(event.currentTarget.value)}
-                    description={t("setup.members.characterListHint")}
-                    placeholder={activePresetSample.joinWhen.join("\n")}
-                    error={memberErrors.characterJoinWhenText}
-                  />
-                  <Textarea
-                    label={
-                      <DefaultableLabel
-                        text={t("setup.members.characterAvoidWhen")}
-                        tooltip={t("setup.members.applyDefaultTooltip")}
-                        onApply={() =>
-                          setCharacterAvoidWhenText(activePresetSample.avoidWhen.join("\n"))
+                      <Textarea
+                        label={
+                          <DefaultableLabel
+                            text={t("setup.members.speakingStyle")}
+                            tooltip={t("setup.members.applyDefaultTooltip")}
+                            onApply={() =>
+                              setSpeakingStyle(
+                                speakingStyleTemplates[speakingStylePreset || "energetic"],
+                              )
+                            }
+                            required
+                          />
                         }
-                        required
+                        aria-required
+                        autosize
+                        minRows={3}
+                        value={speakingStyle}
+                        onChange={(event) => setSpeakingStyle(event.currentTarget.value)}
+                        placeholder={speakingStyleTemplates[speakingStylePreset || "energetic"]}
+                        error={memberErrors.speakingStyle}
                       />
-                    }
-                    aria-required
-                    autosize
-                    minRows={3}
-                    value={characterAvoidWhenText}
-                    onChange={(event) => setCharacterAvoidWhenText(event.currentTarget.value)}
-                    description={t("setup.members.characterListHint")}
-                    placeholder={activePresetSample.avoidWhen.join("\n")}
-                    error={memberErrors.characterAvoidWhenText}
-                  />
-                  <Textarea
-                    label={
-                      <DefaultableLabel
-                        text={t("setup.members.characterContributionStyle")}
-                        tooltip={t("setup.members.applyDefaultTooltip")}
-                        onApply={() =>
-                          setCharacterContributionText(
-                            activePresetSample.contributionStyle.join("\n"),
-                          )
+                      <TextInput
+                        label={
+                          <DefaultableLabel
+                            text={t("setup.members.characterArchetype")}
+                            tooltip={t("setup.members.applyDefaultTooltip")}
+                            onApply={() => setCharacterArchetype(activePresetSample.archetype)}
+                            required
+                          />
                         }
-                        required
+                        aria-required
+                        value={characterArchetype}
+                        onChange={(event) => setCharacterArchetype(event.currentTarget.value)}
+                        description={t("setup.members.characterArchetypeHint")}
+                        placeholder={activePresetSample.archetype}
+                        error={memberErrors.characterArchetype}
                       />
-                    }
-                    aria-required
-                    autosize
-                    minRows={3}
-                    value={characterContributionText}
-                    onChange={(event) => setCharacterContributionText(event.currentTarget.value)}
-                    description={t("setup.members.characterListHint")}
-                    placeholder={activePresetSample.contributionStyle.join("\n")}
-                    error={memberErrors.characterContributionText}
-                  />
-                  <Textarea
-                    label={t("setup.members.relationships")}
-                    autosize
-                    minRows={2}
-                    value={relationships}
-                    onChange={(event) => setRelationships(event.currentTarget.value)}
-                    placeholder={activePresetSample.relationships}
-                  />
+                      <Textarea
+                        label={
+                          <DefaultableLabel
+                            text={t("setup.members.characterJoinWhen")}
+                            tooltip={t("setup.members.applyDefaultTooltip")}
+                            onApply={() =>
+                              setCharacterJoinWhenText(activePresetSample.joinWhen.join("\n"))
+                            }
+                            required
+                          />
+                        }
+                        aria-required
+                        autosize
+                        minRows={3}
+                        value={characterJoinWhenText}
+                        onChange={(event) => setCharacterJoinWhenText(event.currentTarget.value)}
+                        description={t("setup.members.characterListHint")}
+                        placeholder={activePresetSample.joinWhen.join("\n")}
+                        error={memberErrors.characterJoinWhenText}
+                      />
+                      <Textarea
+                        label={
+                          <DefaultableLabel
+                            text={t("setup.members.characterAvoidWhen")}
+                            tooltip={t("setup.members.applyDefaultTooltip")}
+                            onApply={() =>
+                              setCharacterAvoidWhenText(activePresetSample.avoidWhen.join("\n"))
+                            }
+                            required
+                          />
+                        }
+                        aria-required
+                        autosize
+                        minRows={3}
+                        value={characterAvoidWhenText}
+                        onChange={(event) => setCharacterAvoidWhenText(event.currentTarget.value)}
+                        description={t("setup.members.characterListHint")}
+                        placeholder={activePresetSample.avoidWhen.join("\n")}
+                        error={memberErrors.characterAvoidWhenText}
+                      />
+                      <Textarea
+                        label={
+                          <DefaultableLabel
+                            text={t("setup.members.characterContributionStyle")}
+                            tooltip={t("setup.members.applyDefaultTooltip")}
+                            onApply={() =>
+                              setCharacterContributionText(
+                                activePresetSample.contributionStyle.join("\n"),
+                              )
+                            }
+                            required
+                          />
+                        }
+                        aria-required
+                        autosize
+                        minRows={3}
+                        value={characterContributionText}
+                        onChange={(event) =>
+                          setCharacterContributionText(event.currentTarget.value)
+                        }
+                        description={t("setup.members.characterListHint")}
+                        placeholder={activePresetSample.contributionStyle.join("\n")}
+                        error={memberErrors.characterContributionText}
+                      />
+                      <Textarea
+                        label={t("setup.members.relationships")}
+                        autosize
+                        minRows={2}
+                        value={relationships}
+                        onChange={(event) => setRelationships(event.currentTarget.value)}
+                        placeholder={activePresetSample.relationships}
+                      />
+                    </>
+                  ) : null}
                   <Switch
                     label={t("setup.members.activeSwitch")}
                     description={
@@ -3513,50 +3546,54 @@ function MembersSection({
                 </Stack>
               </Tabs.Panel>
 
-              <Tabs.Panel value="intelligence" pt="md">
-                {formMode === "edit" && editingPersonId ? (
-                  <IntelligenceEditor
-                    personId={editingPersonId}
-                    savePersonId={personId.trim()}
-                    enabled={Boolean(configDir)}
-                    detections={cliDetections}
-                    llmProviderAvailability={llmProviderAvailability}
-                    providers={providers}
-                    saveMode="external"
-                    onRegisterSave={(save) => {
-                      memberIntelligenceSaveRef.current = save;
-                    }}
-                  />
-                ) : (
-                  <Text size="sm" c="dimmed">
-                    {t("setup.members.saveBeforeIntelligence")}
-                  </Text>
-                )}
-              </Tabs.Panel>
+              {!isHumanMember ? (
+                <Tabs.Panel value="intelligence" pt="md">
+                  {formMode === "edit" && editingPersonId ? (
+                    <IntelligenceEditor
+                      personId={editingPersonId}
+                      savePersonId={personId.trim()}
+                      enabled={Boolean(configDir)}
+                      detections={cliDetections}
+                      llmProviderAvailability={llmProviderAvailability}
+                      providers={providers}
+                      saveMode="external"
+                      onRegisterSave={(save) => {
+                        memberIntelligenceSaveRef.current = save;
+                      }}
+                    />
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      {t("setup.members.saveBeforeIntelligence")}
+                    </Text>
+                  )}
+                </Tabs.Panel>
+              ) : null}
 
-              <Tabs.Panel value="patrol" pt="md">
-                <PatrolSettingsEditor
-                  commandCatalog={commandCatalog}
-                  commandOptionByValue={commandOptionByValue}
-                  routineCommandCatalog={routineCommandCatalog}
-                  commandOptionsLoading={commandOptions.isLoading}
-                  routineCommandOptionsLoading={routineCommandOptions.isLoading}
-                  routineCommandOptionsError={Boolean(routineCommandOptions.error)}
-                  routineOverrideEnabled={routineOverrideEnabled}
-                  routineCommands={routineCommands}
-                  scheduledCommands={scheduledCommands}
-                  onRoutineOverrideChange={(enabled) => {
-                    routineDefaultDismissedRef.current = !enabled;
-                    if (enabled && personType !== "human") {
-                      seedDefaultRoutineCommands();
-                    } else {
-                      setRoutineOverrideEnabled(enabled);
-                    }
-                  }}
-                  onRoutineCommandsChange={setRoutineCommands}
-                  onScheduledCommandsChange={setScheduledCommands}
-                />
-              </Tabs.Panel>
+              {!isHumanMember ? (
+                <Tabs.Panel value="patrol" pt="md">
+                  <PatrolSettingsEditor
+                    commandCatalog={commandCatalog}
+                    commandOptionByValue={commandOptionByValue}
+                    routineCommandCatalog={routineCommandCatalog}
+                    commandOptionsLoading={commandOptions.isLoading}
+                    routineCommandOptionsLoading={routineCommandOptions.isLoading}
+                    routineCommandOptionsError={Boolean(routineCommandOptions.error)}
+                    routineOverrideEnabled={routineOverrideEnabled}
+                    routineCommands={routineCommands}
+                    scheduledCommands={scheduledCommands}
+                    onRoutineOverrideChange={(enabled) => {
+                      routineDefaultDismissedRef.current = !enabled;
+                      if (enabled) {
+                        seedDefaultRoutineCommands();
+                      } else {
+                        setRoutineOverrideEnabled(enabled);
+                      }
+                    }}
+                    onRoutineCommandsChange={setRoutineCommands}
+                    onScheduledCommandsChange={setScheduledCommands}
+                  />
+                </Tabs.Panel>
+              ) : null}
 
               <Tabs.Panel value="github" pt="md">
                 <Stack>
@@ -3857,20 +3894,22 @@ function MembersSection({
                   )}
                 </Stack>
               </Tabs.Panel>
-              <Tabs.Panel value="diagnostics" pt="md">
-                <MemberDiagnosticsPanel
-                  personId={editingPersonId}
-                  formMode={formMode}
-                  loading={memberDiagnosticsMutation.isPending}
-                  error={memberDiagnosticsMutation.error}
-                  checks={memberDiagnosticsMutation.data?.checks ?? []}
-                  onRun={() => {
-                    if (editingPersonId) {
-                      memberDiagnosticsMutation.mutate(editingPersonId);
-                    }
-                  }}
-                />
-              </Tabs.Panel>
+              {!isHumanMember ? (
+                <Tabs.Panel value="diagnostics" pt="md">
+                  <MemberDiagnosticsPanel
+                    personId={editingPersonId}
+                    formMode={formMode}
+                    loading={memberDiagnosticsMutation.isPending}
+                    error={memberDiagnosticsMutation.error}
+                    checks={memberDiagnosticsMutation.data?.checks ?? []}
+                    onRun={() => {
+                      if (editingPersonId) {
+                        memberDiagnosticsMutation.mutate(editingPersonId);
+                      }
+                    }}
+                  />
+                </Tabs.Panel>
+              ) : null}
             </Tabs>
             <Divider />
             <Group justify="space-between" className="form-footer">
@@ -5297,26 +5336,28 @@ export function getMemberFieldErrors(
   if (values.roles.length === 0) {
     errors.roles = t("setup.validation.memberRolesRequired");
   }
-  if (!values.speakingStyle.trim()) {
-    errors.speakingStyle = t("setup.validation.memberSpeakingStyleRequired");
-  }
-  if (!values.characterArchetype.trim()) {
-    errors.characterArchetype = t("setup.validation.memberCharacterArchetypeRequired");
-  }
-  if (values.characterTraits.length === 0) {
-    errors.characterTraits = t("setup.validation.memberCharacterTraitsRequired");
-  }
-  if (values.characterInterests.length === 0) {
-    errors.characterInterests = t("setup.validation.memberCharacterInterestsRequired");
-  }
-  if (!values.characterJoinWhenText.trim()) {
-    errors.characterJoinWhenText = t("setup.validation.memberCharacterJoinWhenRequired");
-  }
-  if (!values.characterAvoidWhenText.trim()) {
-    errors.characterAvoidWhenText = t("setup.validation.memberCharacterAvoidWhenRequired");
-  }
-  if (!values.characterContributionText.trim()) {
-    errors.characterContributionText = t("setup.validation.memberCharacterContributionRequired");
+  if (values.personType !== "human") {
+    if (!values.speakingStyle.trim()) {
+      errors.speakingStyle = t("setup.validation.memberSpeakingStyleRequired");
+    }
+    if (!values.characterArchetype.trim()) {
+      errors.characterArchetype = t("setup.validation.memberCharacterArchetypeRequired");
+    }
+    if (values.characterTraits.length === 0) {
+      errors.characterTraits = t("setup.validation.memberCharacterTraitsRequired");
+    }
+    if (values.characterInterests.length === 0) {
+      errors.characterInterests = t("setup.validation.memberCharacterInterestsRequired");
+    }
+    if (!values.characterJoinWhenText.trim()) {
+      errors.characterJoinWhenText = t("setup.validation.memberCharacterJoinWhenRequired");
+    }
+    if (!values.characterAvoidWhenText.trim()) {
+      errors.characterAvoidWhenText = t("setup.validation.memberCharacterAvoidWhenRequired");
+    }
+    if (!values.characterContributionText.trim()) {
+      errors.characterContributionText = t("setup.validation.memberCharacterContributionRequired");
+    }
   }
 
   const usesGitHubMember = values.githubAccountType !== "none";

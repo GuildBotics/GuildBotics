@@ -35,7 +35,7 @@ def test_member_context_outputs_no_secret(monkeypatch):
     person = Person(
         person_id="aiko",
         name="Aiko",
-        person_type="human",
+        person_type="agent",
         profile={"bio": "developer"},
         account_info={"github_username": "aiko-gh"},
     )
@@ -59,6 +59,26 @@ def test_member_context_outputs_no_secret(monkeypatch):
     assert '"person_id": "aiko"' in result.output
     assert '"credential_status": "unchecked"' in result.output
     assert "super-secret-sentinel-value" not in result.output
+
+
+def test_member_context_rejects_human_member(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member, ["context", "--person", "aiko", "--format", "json"]
+    )
+
+    assert result.exit_code != 0
+    assert "cannot be used as an AI execution subject" in result.output
 
 
 def test_member_help_prints_capability_reference():
@@ -128,7 +148,7 @@ def test_member_memory_record_and_recall_cli(monkeypatch):
 
 
 def test_member_context_markdown_renders_capabilities_section(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
     def fake_resolve_member_context(identifier):
         return FakeContext(person), person
@@ -160,7 +180,7 @@ def test_member_context_markdown_renders_capabilities_section(monkeypatch):
 
 
 def test_member_context_markdown_highlights_communication_style(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -209,7 +229,7 @@ def test_member_context_uses_active_workspace(monkeypatch, tmp_path):
     (workspace / ".env").write_text("WORKSPACE_MARKER=loaded\n", encoding="utf-8")
     write_active_workspace(workspace)
 
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -244,7 +264,7 @@ def test_member_context_workspace_option_overrides_active_workspace(
     explicit_workspace.mkdir()
     write_active_workspace(active_workspace)
 
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -285,7 +305,7 @@ def test_member_workspace_without_env_does_not_load_cwd_env(monkeypatch, tmp_pat
     monkeypatch.chdir(caller)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -338,7 +358,7 @@ def test_member_active_workspace_without_env_does_not_load_cwd_env(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     write_active_workspace(workspace)
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -372,7 +392,7 @@ def test_member_context_check_credentials_fail_closed(monkeypatch):
     person = Person(
         person_id="aiko",
         name="Aiko",
-        person_type="human",
+        person_type="agent",
         account_info={"github_username": "aiko-gh"},
     )
 

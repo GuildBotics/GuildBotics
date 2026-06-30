@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -37,6 +38,7 @@ DiagnosticSection = Literal[
     "config", "members", "llm", "cli_agent", "github", "slack", "git"
 ]
 DiagnosticStatus = Literal["ok", "warning", "error"]
+SLACK_USER_ID_PATTERN = re.compile(r"^[UW][A-Z0-9]{8,}$")
 
 
 class ScenarioDiagnosticsService:
@@ -104,6 +106,10 @@ class ScenarioDiagnosticsService:
             )
             return self._response(checks, [])
 
+        if person_id is not None and members[0].person_type == "human":
+            checks.extend(await self._check_human_member(context, members[0]))
+            return self._response(checks, [members[0].person_id])
+
         inactive_members = [
             member.person_id for member in members if not member.is_active
         ]
@@ -133,6 +139,145 @@ class ScenarioDiagnosticsService:
         checks.extend(await self._check_slack(context, members))
         return self._response(checks, [member.person_id for member in members])
 
+    async def _check_human_member(
+        self, context: Context, member: Person
+    ) -> list[DiagnosticCheck]:
+        checks = [
+            self._check(
+                "members",
+                "human_member_reference",
+                "ok",
+                "Human member config was loaded as a reference member, not an AI runtime subject.",
+                person_id=member.person_id,
+            )
+        ]
+        if member.roles:
+            checks.append(
+                self._check(
+                    "members",
+                    "human_member_roles",
+                    "ok",
+                    "Human member roles are configured.",
+                    person_id=member.person_id,
+                    context={"roles": sorted(member.roles)},
+                )
+            )
+        else:
+            checks.append(
+                self._check(
+                    "members",
+                    "human_member_roles",
+                    "error",
+                    "Human member roles are not configured.",
+                    person_id=member.person_id,
+                )
+            )
+
+        slack_user_id = str(member.account_info.get("slack_user_id", "")).strip()
+        if not slack_user_id:
+            checks.append(
+                self._check(
+                    "slack",
+                    "human_slack_user_id",
+                    "warning",
+                    "Slack User ID is not configured for this human member.",
+                    person_id=member.person_id,
+                )
+            )
+        elif SLACK_USER_ID_PATTERN.fullmatch(slack_user_id):
+            checks.append(
+                self._check(
+                    "slack",
+                    "human_slack_user_id",
+                    "ok",
+                    "Slack User ID is configured.",
+                    person_id=member.person_id,
+                    target=slack_user_id,
+                )
+            )
+        else:
+            checks.append(
+                self._check(
+                    "slack",
+                    "human_slack_user_id",
+                    "error",
+                    "Slack User ID format is invalid.",
+                    person_id=member.person_id,
+                    target=slack_user_id,
+                )
+            )
+
+        username = get_github_username(member)
+        if not username:
+            checks.append(
+                self._check(
+                    "github",
+                    "human_github_user",
+                    "error",
+                    "GitHub username is not configured for this human member.",
+                    person_id=member.person_id,
+                )
+            )
+            return checks
+
+        project = context.team.project
+        if not (
+            project.is_available_service(Service.TICKET_MANAGER)
+            or project.is_available_service(Service.CODE_HOSTING_SERVICE)
+        ):
+            checks.append(
+                self._check(
+                    "github",
+                    "human_github_user",
+                    "ok",
+                    "GitHub username is configured; GitHub integration is not configured, so live resolution was skipped.",
+                    person_id=member.person_id,
+                    target=username,
+                )
+            )
+            return checks
+
+        c = context.clone_for(member)
+        try:
+            ticket_manager = cast(GitHubTicketManager, c.get_ticket_manager())
+            if await ticket_manager.is_assignable_user(username):
+                checks.append(
+                    self._check(
+                        "github",
+                        "human_github_user",
+                        "ok",
+                        "GitHub username resolved to an assignable user account.",
+                        person_id=member.person_id,
+                        target=username,
+                    )
+                )
+            else:
+                checks.append(
+                    self._check(
+                        "github",
+                        "human_github_user",
+                        "error",
+                        "GitHub username could not be resolved as an assignable user account.",
+                        person_id=member.person_id,
+                        target=username,
+                    )
+                )
+        except Exception as exc:
+            checks.append(
+                self._check(
+                    "github",
+                    "human_github_user",
+                    "error",
+                    self._safe_error("GitHub user account check failed", exc),
+                    person_id=member.person_id,
+                    target=username,
+                    context={"error_type": type(exc).__name__},
+                )
+            )
+        finally:
+            await c.aclose()
+        return checks
+
     def _target_members(self, context: Context, person_id: str | None) -> list[Person]:
         if person_id:
             return [
@@ -140,7 +285,11 @@ class ScenarioDiagnosticsService:
                 for member in context.team.members
                 if member.person_id == person_id
             ]
-        return [member for member in context.team.members if member.is_active]
+        return [
+            member
+            for member in context.team.members
+            if member.is_active and member.person_type != "human"
+        ]
 
     async def _check_llm(
         self, context: Context, member: Person

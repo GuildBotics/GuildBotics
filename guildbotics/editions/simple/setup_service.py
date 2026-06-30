@@ -910,31 +910,34 @@ class SimplePersonSetupService:
     def build_person_config(
         self, config: PersonSetupInput, *, include_initial_defaults: bool = False
     ) -> dict:
+        is_human = config.person_type == "human"
         role_overrides: dict[str, dict[str, str]] = {
             role.rstrip(":"): {} for role in config.roles
         }
         profile: dict[str, Any] = {
             "roles": role_overrides,
         }
-        if config.character:
+        if config.character and not is_human:
             profile["character"] = config.character
         person_config = {
             "person_id": config.person_id,
             "name": config.person_name,
-            "is_active": False if config.person_type == "human" else config.is_active,
+            "is_active": False if is_human else config.is_active,
             "person_type": config.person_type,
             "account_info": {
-                "github_account_type": config.github_account_type,
+                "github_account_type": "human"
+                if is_human
+                else config.github_account_type,
                 "github_username": config.github_username,
                 "git_user": config.person_name,
                 "git_email": config.git_email,
                 "slack_user_id": config.slack_user_id,
             },
             "profile": profile,
-            "speaking_style": config.speaking_style,
-            "relationships": config.relationships,
+            "speaking_style": "" if is_human else config.speaking_style,
+            "relationships": "" if is_human else config.relationships,
         }
-        if config.slack_channels:
+        if config.slack_channels and not is_human:
             slack_channel_participation = {
                 _normalize_slack_channel_ref(channel): _chat_participation(
                     participation
@@ -954,7 +957,7 @@ class SimplePersonSetupService:
             ]
         routine_commands = (
             []
-            if config.person_type == "human"
+            if is_human
             else [
                 command.strip()
                 for command in config.routine_commands
@@ -971,7 +974,7 @@ class SimplePersonSetupService:
             person_config["routine_commands"] = routine_commands
         task_schedules = (
             []
-            if config.person_type == "human"
+            if is_human
             else [
                 schedule.model_dump()
                 for schedule in config.task_schedules
@@ -1015,6 +1018,9 @@ class SimplePersonSetupService:
         }
 
     def build_environment_variables(self, config: PersonSetupInput) -> list[str]:
+        if config.person_type == "human":
+            return []
+
         sanitized_id = config.person_id.replace("-", "_").upper()
         env_vars: list[str] = []
 

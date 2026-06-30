@@ -26,7 +26,10 @@ from guildbotics.capabilities.task_runs import (
     current_run_id,
     current_task_run_id,
 )
-from guildbotics.commands.errors import PersonNotFoundError
+from guildbotics.commands.errors import (
+    PersonExecutionNotAllowedError,
+    PersonNotFoundError,
+)
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.utils.env_loader import load_guildbotics_env
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
@@ -361,6 +364,10 @@ async def _context_cmd(
     person: str, check_credentials: bool, output_format: str
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
+    if member_person.person_type == "human":
+        raise click.ClickException(
+            str(PersonExecutionNotAllowedError(member_person.person_id))
+        )
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
         result = await service.context(check_credentials=check_credentials)

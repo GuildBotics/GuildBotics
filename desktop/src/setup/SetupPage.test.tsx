@@ -1196,6 +1196,29 @@ describe("getMemberFieldErrors", () => {
     expect(errors).toEqual({});
   });
 
+  it("does not require agent profile fields for human members", () => {
+    const errors = getMemberFieldErrors(
+      baseMemberValues({
+        personType: "human",
+        speakingStyle: "",
+        characterArchetype: "",
+        characterTraits: [],
+        characterInterests: [],
+        characterJoinWhenText: "",
+        characterAvoidWhenText: "",
+        characterContributionText: "",
+      }),
+      t,
+    );
+    expect(errors.speakingStyle).toBeUndefined();
+    expect(errors.characterArchetype).toBeUndefined();
+    expect(errors.characterTraits).toBeUndefined();
+    expect(errors.characterInterests).toBeUndefined();
+    expect(errors.characterJoinWhenText).toBeUndefined();
+    expect(errors.characterAvoidWhenText).toBeUndefined();
+    expect(errors.characterContributionText).toBeUndefined();
+  });
+
   it("flags missing core member fields", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
@@ -2060,11 +2083,35 @@ describe("MembersSection", () => {
     await screen.findByLabelText("Member ID");
     await selectBasicMemberType(user, "Human");
 
+    expect(
+      screen.queryByRole("tab", { name: t("setup.members.tabs.intelligence") }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("tab", { name: t("setup.members.tabs.patrol") }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("tab", { name: t("setup.members.tabs.diagnostics") }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: t("setup.members.diagnostics.run") }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.speakingStyle"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.characterTraits"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.characterInterests"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.characterArchetype"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.characterJoinWhen"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.characterAvoidWhen"))).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(t("setup.members.characterContributionStyle")),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.relationships"))).not.toBeInTheDocument();
+
     const activeSwitch = screen.getByRole("switch", {
       name: new RegExp(t("setup.members.activeSwitch")),
     });
     expect(activeSwitch).toBeDisabled();
     await waitFor(() => expect(activeSwitch).not.toBeChecked());
+    expect(screen.getByText(t("setup.members.activeHumanHint"))).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
     const accountType = await screen.findByRole("textbox", {
@@ -2072,11 +2119,54 @@ describe("MembersSection", () => {
     });
     expect(accountType).toBeDisabled();
     expect(accountType).toHaveValue("Human");
+    expect(await screen.findByText(t("setup.members.githubAuthNotRequired"))).toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.installationId"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.appId"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.privateKeyPath"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.accessToken"))).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
     expect(await screen.findByLabelText(t("setup.members.slackUserId"))).toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.slackChannelAdd"))).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(t("setup.members.slackParticipationPolicy")),
+    ).not.toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.slackBotToken"))).not.toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.slackAppToken"))).not.toBeInTheDocument();
+  });
+
+  it("saves human members with agent execution settings cleared", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await fillRequiredMemberBasics(user, { personId: "bob", personName: "Bob" });
+    await selectBasicMemberType(user, "Human");
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bob");
+    await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bob@example.com");
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    await user.type(await screen.findByLabelText(t("setup.members.slackUserId")), "U012345678");
+    await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+
+    await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+    expect(lastMemberAddRequest()).toMatchObject({
+      person_type: "human",
+      github_account_type: "human",
+      is_active: false,
+      speaking_style: "",
+      relationships: "",
+      character: {},
+      routine_commands: [],
+      task_schedules: [],
+      slack_channels: [],
+      slack_channel_participation: {},
+      slack_bot_token: "",
+      slack_app_token: "",
+    });
   });
 
   it("blocks saving a machine_user member until a valid access token is provided", async () => {

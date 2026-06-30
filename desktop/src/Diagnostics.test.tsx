@@ -91,8 +91,27 @@ beforeEach(() => {
     .mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
       members: [
-        { person_id: "alice", name: "Alice", is_active: true, roles: ["developer"] },
-        { person_id: "bob", name: "Bob", is_active: false, roles: ["reviewer"] },
+        {
+          person_id: "alice",
+          name: "Alice",
+          person_type: "agent",
+          is_active: true,
+          roles: ["developer"],
+        },
+        {
+          person_id: "bob",
+          name: "Bob",
+          person_type: "agent",
+          is_active: false,
+          roles: ["reviewer"],
+        },
+        {
+          person_id: "hana",
+          name: "Hana",
+          person_type: "human",
+          is_active: false,
+          roles: ["product"],
+        },
       ],
     });
   vi.mocked(getProjectConfig).mockReset().mockResolvedValue(projectConfig());
@@ -324,6 +343,11 @@ describe("Diagnostics memory tab", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("Refresh before retry.").length).toBeGreaterThan(0);
     expect(screen.getByText("Retry after refreshing the token.")).toBeInTheDocument();
+
+    await user.click(screen.getAllByLabelText(t("diagnostics.memory.person"))[0]);
+    expect(await screen.findByText("Alice (alice)")).toBeInTheDocument();
+    expect(screen.getByText("Bob (bob)")).toBeInTheDocument();
+    expect(screen.queryByText("Hana (hana)")).not.toBeInTheDocument();
 
     await user.click(screen.getAllByLabelText(t("diagnostics.memory.action"))[0]);
     await user.click(await screen.findByText(t("diagnostics.memory.actions.touch")));
