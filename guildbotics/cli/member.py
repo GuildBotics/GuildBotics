@@ -366,7 +366,7 @@ async def _context_cmd(
     context, member_person = _resolve(person)
     if member_person.person_type == "human":
         raise click.ClickException(
-            PersonExecutionNotAllowedError(member_person.person_id).args[0]
+            str(PersonExecutionNotAllowedError(member_person.person_id))
         )
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:

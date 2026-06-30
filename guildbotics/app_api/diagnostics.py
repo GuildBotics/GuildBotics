@@ -212,7 +212,7 @@ class ScenarioDiagnosticsService:
             checks.append(
                 self._check(
                     "github",
-                    "human_github_username",
+                    "human_github_user",
                     "error",
                     "GitHub username is not configured for this human member.",
                     person_id=member.person_id,
@@ -228,7 +228,7 @@ class ScenarioDiagnosticsService:
             checks.append(
                 self._check(
                     "github",
-                    "human_github_username",
+                    "human_github_user",
                     "ok",
                     "GitHub username is configured; GitHub integration is not configured, so live resolution was skipped.",
                     person_id=member.person_id,

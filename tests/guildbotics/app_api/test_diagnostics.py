@@ -288,6 +288,53 @@ async def test_person_id_human_member_uses_static_checks_only() -> None:
 
 
 @pytest.mark.asyncio
+async def test_person_id_human_member_without_github_username_uses_stable_code() -> None:
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "aiko",
+                    is_active=False,
+                    person_type="human",
+                    account_info={"slack_user_id": "U012345678"},
+                )
+            ]
+        )
+    )
+
+    response = await _run(context, person_id="aiko")
+
+    checks = _by_code(response)
+    assert checks["human_github_user"].status == "error"
+    assert "human_github_username" not in checks
+
+
+@pytest.mark.asyncio
+async def test_person_id_human_member_without_github_service_uses_stable_code() -> None:
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "aiko",
+                    is_active=False,
+                    person_type="human",
+                    account_info={
+                        "slack_user_id": "U012345678",
+                        "github_username": "aiko",
+                    },
+                )
+            ]
+        )
+    )
+
+    response = await _run(context, person_id="aiko")
+
+    checks = _by_code(response)
+    assert checks["human_github_user"].status == "ok"
+    assert "human_github_username" not in checks
+
+
+@pytest.mark.asyncio
 async def test_active_human_member_is_not_default_diagnostics_target() -> None:
     context = _StubContext(
         team=_team(
