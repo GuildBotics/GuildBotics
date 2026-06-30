@@ -1,11 +1,14 @@
 import textwrap
 from pathlib import Path
 
+import click
 import pytest
 
+import guildbotics.cli as cli_module
 from guildbotics.cli import _parse_command_spec
 from guildbotics.drivers.command_runner import (
     CommandRunner,
+    PersonExecutionNotAllowedError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
     _resolve_person,
@@ -25,6 +28,7 @@ def test_command_runner_public_exports():
     import guildbotics.drivers.command_runner as command_runner
 
     assert "PersonNotFoundError" in command_runner.__all__
+    assert "PersonExecutionNotAllowedError" in command_runner.__all__
     assert "PersonSelectionRequiredError" in command_runner.__all__
     assert "_resolve_person" in command_runner.__all__
 
@@ -103,6 +107,15 @@ def _get_context(message: str = "") -> Context:
     ).clone_for(person)
 
 
+def _context_for_person(person: Person, message: str = "") -> Context:
+    return Context.get_default(
+        DummyLoaderFactory(_make_team(person)),
+        DummyIntegrationFactory(),
+        DummyBrainFactory(),
+        message,
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
@@ -120,6 +133,59 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
 
     result = await run_command(_get_context("stdin text"), "solo", ["world"])
     assert result == "Greetings world\nstdin text"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("command_spec", "person_option"),
+    [("solo", "aiko"), ("solo@aiko", None)],
+)
+async def test_cli_run_rejects_human_member_without_traceback(
+    monkeypatch, command_spec: str, person_option: str | None
+):
+    human = Person(
+        person_id="aiko",
+        name="Aiko",
+        is_active=False,
+        person_type="human",
+    )
+    context = _context_for_person(human)
+
+    class FakeEdition:
+        def get_context(self, message: str = "") -> Context:
+            assert message == ""
+            return context
+
+    monkeypatch.setattr(cli_module, "get_edition", lambda: FakeEdition())
+
+    with pytest.raises(click.ClickException) as exc_info:
+        await cli_module._run_custom_command(command_spec, (), person_option, "")
+
+    assert "cannot be used as an AI execution subject" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_run_custom_command_rejects_human_member(tmp_path, monkeypatch):
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    _write(
+        tmp_path / "commands/solo.md",
+        """
+        ---
+        brain: none
+        ---
+        Greetings
+        """,
+    )
+    human = Person(
+        person_id="aiko",
+        name="Aiko",
+        is_active=False,
+        person_type="human",
+    )
+    context = _context_for_person(human)
+
+    with pytest.raises(PersonExecutionNotAllowedError):
+        await run_command(context, "solo", [], person_identifier="aiko")
 
 
 @pytest.mark.asyncio

@@ -681,7 +681,11 @@ type MemoryEventFilters = {
   query: string;
 };
 
-function MemoryEventsPanel({ members }: { members: Array<{ person_id: string; name: string }> }) {
+function MemoryEventsPanel({
+  members,
+}: {
+  members: Array<{ person_id: string; name: string; person_type?: string }>;
+}) {
   const { t } = useTranslation();
   const [selectedId, setSelectedId] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -702,6 +706,7 @@ function MemoryEventsPanel({ members }: { members: Array<{ person_id: string; na
     refetchInterval: 5000,
   });
   const events = sortMemoryEventsDescending(memoryEvents.data?.events ?? []);
+  const selectableMembers = members.filter((member) => member.person_type !== "human");
   const selectedEvent =
     events.find((event) => memoryEventKey(event) === selectedId) ?? events[0] ?? null;
   const selectedKey = selectedEvent ? memoryEventKey(selectedEvent) : "";
@@ -743,7 +748,7 @@ function MemoryEventsPanel({ members }: { members: Array<{ person_id: string; na
           aria-label={t("diagnostics.memory.person")}
           data={[
             { value: MEMORY_FILTER_ALL, label: t("diagnostics.memory.allPeople") },
-            ...members.map((member) => ({
+            ...selectableMembers.map((member) => ({
               value: member.person_id,
               label: `${member.name} (${member.person_id})`,
             })),

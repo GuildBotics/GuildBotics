@@ -18,6 +18,7 @@ from guildbotics.cli.workspace import workspace
 from guildbotics.drivers import (
     CommandError,
     EventListenerRunner,
+    PersonExecutionNotAllowedError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
     TaskScheduler,
@@ -275,6 +276,8 @@ async def _run_custom_command(
         raise click.ClickException(
             f"Person '{exc.identifier}' not found. Available: {available}"
         ) from exc
+    except PersonExecutionNotAllowedError as exc:
+        raise click.ClickException(str(exc)) from exc
     except CommandError as exc:
         traceback.print_exc()
         raise click.ClickException(str(exc)) from exc

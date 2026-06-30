@@ -194,6 +194,56 @@ def test_write_person_accepts_slack_channel_names_and_ids(tmp_path: Path) -> Non
     assert channels[1]["channel_info"]["channel_id"] == "C0123456789"
 
 
+def test_write_human_person_clears_agent_execution_settings(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    env_file_path = tmp_path / ".env"
+    env_file_path.write_text("")
+
+    result = SimplePersonSetupService().write_person(
+        PersonSetupInput(
+            config_dir=config_dir,
+            env_file_path=env_file_path,
+            append_env_file=True,
+            person_type="human",
+            github_account_type="machine_user",
+            person_id="alice",
+            person_name="Alice",
+            is_active=True,
+            github_username="alice",
+            git_email="alice@example.com",
+            roles=["product"],
+            speaking_style="Legacy style",
+            relationships="Legacy relationship",
+            character={"archetype": "legacy"},
+            github_access_token="secret-token",
+            slack_user_id="U012345678",
+            slack_bot_token="xoxb-secret",
+            slack_app_token="xapp-secret",
+            slack_channels=["general"],
+            routine_commands=["workflows/ticket_driven_workflow"],
+            task_schedules=[
+                setup_service.PersonTaskScheduleInput(
+                    command="workflows/ticket_driven_workflow",
+                    schedules=["0 * * * *"],
+                )
+            ],
+        )
+    )
+
+    person = load_yaml_file(config_dir / "team/members/alice/person.yml")
+    assert person["is_active"] is False
+    assert person["account_info"]["github_account_type"] == "human"
+    assert person["account_info"]["slack_user_id"] == "U012345678"
+    assert person.get("speaking_style", "") == ""
+    assert person.get("relationships", "") == ""
+    assert person["profile"] == {"roles": {"product": {}}}
+    assert "message_channels" not in person
+    assert "routine_commands" not in person
+    assert "task_schedules" not in person
+    assert env_file_path.read_text() == ""
+    assert result.masked_environment_variables == []
+
+
 def test_person_service_parses_github_apps_url() -> None:
     app_name = SimplePersonSetupService().parse_github_apps_url(
         "https://github.com/organizations/GuildBotics/settings/apps/guildbotics-agent"

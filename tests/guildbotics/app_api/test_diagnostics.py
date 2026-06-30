@@ -12,6 +12,7 @@ from guildbotics.entities.team import (
     MessageChannel,
     Person,
     Project,
+    Role,
     Team,
 )
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
@@ -236,6 +237,77 @@ async def test_person_id_inactive_member_warns(
     assert warning.person_id == "alice"
     assert warning.context["inactive_members"] == ["alice"]
     assert "active_members" in codes
+
+
+@pytest.mark.asyncio
+async def test_person_id_human_member_uses_static_checks_only() -> None:
+    ticket_manager = _StubTicketManager()
+    ticket_manager.assignable = True
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "aiko",
+                    is_active=False,
+                    person_type="human",
+                    roles={
+                        "product": Role(
+                            id="product",
+                            summary="Product",
+                            description="Product decisions",
+                        )
+                    },
+                    account_info={
+                        "slack_user_id": "U012345678",
+                        "github_username": "aiko",
+                    },
+                )
+            ],
+            services={
+                "ticket_manager": {
+                    "name": "GitHub",
+                    "owner": "acme",
+                    "project_id": "1",
+                }
+            },
+        ),
+        ticket_manager=ticket_manager,
+    )
+
+    response = await _run(context, person_id="aiko")
+
+    checks = _by_code(response)
+    assert checks["human_member_reference"].status == "ok"
+    assert checks["human_member_roles"].status == "ok"
+    assert checks["human_slack_user_id"].status == "ok"
+    assert checks["human_github_user"].status == "ok"
+    assert "llm_live_call" not in checks
+    assert "cli_agent_executable" not in checks
+    assert "slack_bot_auth" not in checks
+    assert response.active_members == ["aiko"]
+
+
+@pytest.mark.asyncio
+async def test_active_human_member_is_not_default_diagnostics_target() -> None:
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "aiko",
+                    is_active=True,
+                    person_type="human",
+                    account_info={"github_username": "aiko"},
+                )
+            ]
+        )
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["active_members"].status == "error"
+    assert "llm_live_call" not in checks
+    assert response.active_members == []
 
 
 @pytest.mark.asyncio
