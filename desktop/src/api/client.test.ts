@@ -6,6 +6,7 @@ import {
   ensureAgentField,
   getAgentFieldState,
   getApiBase,
+  getActivityHistory,
   getCommandOptions,
   getRoutineCommandOptions,
   getConfigStatus,
@@ -240,6 +241,21 @@ describe("GET query parameter encoding", () => {
     expect(url.searchParams.get("since")).toBe("2026-06-21T00:00:00Z");
     expect(url.searchParams.get("until")).toBe("2026-06-22T00:00:00Z");
     expect(url.searchParams.get("limit")).toBe("50");
+  });
+
+  it("encodes the range for getActivityHistory", async () => {
+    const { calls } = captureFetch(jsonResponse({ sessions: [], events: [], members: [] }));
+    await getActivityHistory({
+      start: "2026-07-01T00:00:00+09:00",
+      end: "2026-07-02T00:00:00+09:00",
+      limit: 75,
+    });
+
+    const url = new URL(calls[0].url);
+    expect(url.pathname).toBe("/activity/history");
+    expect(url.searchParams.get("start")).toBe("2026-07-01T00:00:00+09:00");
+    expect(url.searchParams.get("end")).toBe("2026-07-02T00:00:00+09:00");
+    expect(url.searchParams.get("limit")).toBe("75");
   });
 
   it("omits the query when runScenarioDiagnostics has no person id", async () => {

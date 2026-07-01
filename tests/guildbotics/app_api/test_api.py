@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from yaml import safe_load
 
 from guildbotics.app_api.api import create_app
+from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
@@ -43,6 +44,7 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
+from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability import trace_scope
 
 HTTP_OK = 200
@@ -1923,6 +1925,44 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
         "command.finished",
     ]
     assert all(event["trace_id"] == response.trace_id for event in events)
+
+
+@pytest.mark.asyncio
+async def test_manual_command_activity_history_uses_resolved_default_person(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    event_bus = EventBus(store=store)
+    runtime = AppRuntime(event_bus, diagnostics_store=store)
+    team = Team(
+        project=Project(name="demo"),
+        members=[
+            Person(person_id="alice", name="Alice", person_type="agent", is_active=True)
+        ],
+    )
+
+    async def fake_run_command(*_: Any, **__: Any) -> str:
+        return "done"
+
+    monkeypatch.setattr(
+        runtime,
+        "_get_context",
+        lambda message="": type("ContextStub", (), {"team": team})(),
+    )
+    monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
+
+    await runtime.run_command(CommandRunRequest(command="functions/talk_as"))
+
+    history = runtime.get_activity_history(
+        start="2000-01-01T00:00:00Z",
+        end="2999-01-01T00:00:00Z",
+    )
+
+    assert [member.person_id for member in history.members] == ["alice"]
+    assert len(history.sessions) == 1
+    assert history.sessions[0].person_id == "alice"
+    assert history.sessions[0].mode == "interactive"
+    assert history.sessions[0].title == "functions/talk_as"
 
 
 # --- auth coverage -------------------------------------------------------

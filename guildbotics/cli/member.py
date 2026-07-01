@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
 
 import click
 
+from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
 from guildbotics.capabilities.member_github import (
@@ -30,8 +32,16 @@ from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
 )
+from guildbotics.observability import correlation_fields, trace_scope
+from guildbotics.observability.interactive_sessions import (
+    InteractiveTraceSession,
+    InteractiveTraceStore,
+    interactive_host,
+    interactive_thread_key,
+)
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.utils.env_loader import load_guildbotics_env
+from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
 FormatChoice = click.Choice(["json", "markdown"])
@@ -40,6 +50,7 @@ SLACK_TS_FRACTION_DIGITS = 6
 
 
 @click.group()
+@click.pass_context
 @click.option(
     "--workspace",
     "workspace_dir",
@@ -47,7 +58,7 @@ SLACK_TS_FRACTION_DIGITS = 6
     default=None,
     help="Workspace root to use instead of the persisted active workspace.",
 )
-def member(workspace_dir: Path | None) -> None:
+def member(ctx: click.Context, workspace_dir: Path | None) -> None:
     """Operate as a configured GuildBotics member."""
     try:
         applied_workspace = apply_workspace_for_cli(workspace_dir)
@@ -61,6 +72,11 @@ def member(workspace_dir: Path | None) -> None:
         )
     else:
         load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=True)
+    ctx.obj = {
+        "workspace": str(
+            (applied_workspace.workspace if applied_workspace else Path.cwd()).resolve()
+        )
+    }
 
 
 @member.command(name="context")
@@ -994,6 +1010,7 @@ async def _git_push(
         )
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_push", payload)
+        _record_member_push_event(member_person, payload)
         return payload
     finally:
         await service.aclose()
@@ -1059,6 +1076,7 @@ async def _git_publish(
             result = await service.publish(repo_path=repo_path, message=message)
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_publish", payload)
+        _record_member_push_event(member_person, payload)
         return payload
     finally:
         await service.aclose()
@@ -1264,6 +1282,7 @@ async def _pr_create(
             repo, head, base, title, body, issue_url, draft
         )
         TaskRunStore().append_evidence(current_task_run_id(), "pr_create", result)
+        _record_member_pr_create_event(member_person, repo, title, result)
         return result
     finally:
         await service.aclose()
@@ -1406,13 +1425,21 @@ def task_complete(
     output_format: str,
 ) -> None:
     summary = _read_file(summary_file, "summary-file")
+    _run(
+        _task_complete(person, run_id, ticket_url, status, summary),
+        output_format=output_format,
+    )
+
+
+async def _task_complete(
+    person: str, run_id: str, ticket_url: str, status: str, summary: str
+) -> dict[str, Any]:
     _resolve(person)
     store = TaskRunStore()
     try:
-        payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
+        return store.complete(run_id, status, summary, ticket_url, person).to_dict()
     except TaskRunError as exc:
         raise click.ClickException(_safe_error(exc)) from exc
-    _emit(payload, output_format)
 
 
 @task.command(name="status")
@@ -1424,12 +1451,15 @@ def task_complete(
 )
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def task_status(run_id: str, person: str, output_format: str) -> None:
+    _run(_task_status(run_id, person), output_format=output_format)
+
+
+async def _task_status(run_id: str, person: str) -> dict[str, Any]:
     del person
     try:
-        payload = TaskRunStore().status(run_id).to_dict()
+        return TaskRunStore().status(run_id).to_dict()
     except TaskRunError as exc:
         raise click.ClickException(_safe_error(exc)) from exc
-    _emit(payload, output_format)
 
 
 def _resolve(person: str):
@@ -1611,12 +1641,183 @@ def _slack_permalink_ts(raw_message_id: str) -> str:
 
 
 def _run(coro, *, output_format: str) -> Any:
+    interactive_session = _interactive_session_for_current_command()
+    command = _current_command_path()
     try:
-        result = asyncio.run(coro)
+        if interactive_session is None:
+            result = asyncio.run(coro)
+        else:
+            result = _run_interactive(coro, interactive_session, command)
     except (MemberCapabilityError, MemberMemoryError, TaskRunError, KeyError) as exc:
         raise click.ClickException(_safe_error(exc)) from exc
     _emit(result, output_format)
     return result
+
+
+def _run_interactive(
+    coro, session: InteractiveTraceSession, command: str
+) -> dict[str, Any]:
+    store = InteractiveTraceStore()
+    try:
+        with trace_scope(
+            "interactive",
+            person_id=session.person_id,
+            command=command,
+            attributes=session.attributes,
+            trace_id=session.trace_id,
+        ):
+            _record_member_command_event("member.command.started", command)
+            try:
+                result = asyncio.run(coro)
+            except Exception as exc:
+                _record_member_command_event(
+                    "member.command.failed",
+                    command,
+                    {"error_type": type(exc).__name__},
+                )
+                raise
+            _record_member_command_event("member.command.finished", command)
+            return cast(dict[str, Any], result)
+    finally:
+        store.touch(session)
+
+
+def _interactive_session_for_current_command() -> InteractiveTraceSession | None:
+    person = _current_person()
+    if not person:
+        return None
+    try:
+        _context, member_person = _resolve(person)
+    except click.ClickException:
+        return None
+    if member_person.person_type == "human":
+        return None
+    workspace = _current_workspace()
+    return InteractiveTraceStore().start_or_touch(
+        person_id=member_person.person_id,
+        workspace=workspace,
+        host=interactive_host(),
+        thread_key=interactive_thread_key(),
+    )
+
+
+def _current_person() -> str:
+    ctx = click.get_current_context(silent=True)
+    while ctx is not None:
+        value = ctx.params.get("person") if ctx.params else None
+        if isinstance(value, str) and value:
+            return value
+        ctx = ctx.parent
+    return ""
+
+
+def _current_workspace() -> str:
+    return str(get_workspace_data_root(Path.cwd()))
+
+
+def _current_command_path() -> str:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return "member"
+    return ctx.command_path
+
+
+def _record_member_command_event(
+    event_type: str, command: str, payload: dict[str, Any] | None = None
+) -> None:
+    correlation = correlation_fields()
+    attributes = dict(correlation.get("attributes") or {})
+    DiagnosticsStore().record(
+        {
+            "kind": "event",
+            "type": event_type,
+            "trace_id": correlation.get("trace_id"),
+            "span_id": correlation.get("span_id"),
+            "parent_id": correlation.get("parent_id"),
+            "call_id": correlation.get("call_id"),
+            "span": correlation.get("span", ""),
+            "source": correlation.get("source"),
+            "person_id": correlation.get("person_id", ""),
+            "command": command,
+            "workflow": correlation.get("workflow", ""),
+            "attributes": attributes,
+            "payload": {"command": command, **(payload or {})},
+            "timestamp": datetime.now().astimezone().isoformat(),
+        }
+    )
+
+
+def _record_member_push_event(member_person: Any, payload: dict[str, Any]) -> None:
+    if not payload.get("pushed"):
+        return
+    branch = str(payload.get("branch") or "")
+    _record_member_domain_event(
+        member_person,
+        "github.push",
+        {
+            "action": "push",
+            "ref": f"refs/heads/{branch}" if branch else "",
+        },
+        {"github.action": "push"},
+    )
+
+
+def _record_member_pr_create_event(
+    member_person: Any, repo: str, title: str, payload: dict[str, Any]
+) -> None:
+    if not payload.get("created"):
+        return
+    number = payload.get("pr_number")
+    url = str(payload.get("pr_url") or "")
+    _record_member_domain_event(
+        member_person,
+        "github.pull_request",
+        {
+            "action": "opened",
+            "pull_request": {
+                "number": number,
+                "title": title.strip(),
+                "html_url": url,
+                "merged": False,
+            },
+        },
+        {
+            "github.action": "opened",
+            "github.kind": "pull_request",
+            "github.number": number,
+            "github.repo": repo,
+            "github.url": url,
+        },
+    )
+
+
+def _record_member_domain_event(
+    member_person: Any,
+    event_type: str,
+    payload: dict[str, Any],
+    attributes: dict[str, Any],
+) -> None:
+    correlation = correlation_fields()
+    merged_attributes = dict(correlation.get("attributes") or {})
+    merged_attributes.update({key: value for key, value in attributes.items() if value})
+    DiagnosticsStore().record(
+        {
+            "kind": "event",
+            "type": event_type,
+            "trace_id": correlation.get("trace_id"),
+            "span_id": correlation.get("span_id"),
+            "parent_id": correlation.get("parent_id"),
+            "call_id": correlation.get("call_id"),
+            "span": correlation.get("span", ""),
+            "source": correlation.get("source") or "github",
+            "person_id": getattr(member_person, "person_id", ""),
+            "command": str(correlation.get("command") or ""),
+            "workflow": correlation.get("workflow", ""),
+            "attributes": merged_attributes,
+            "payload": payload,
+            "timestamp": datetime.now().astimezone().isoformat(),
+        }
+    )
 
 
 def _emit(payload: dict[str, Any], output_format: str) -> None:

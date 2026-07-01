@@ -29,6 +29,7 @@ import {
   Copy,
   ExternalLink,
   FolderOpen,
+  History,
   Play,
   RotateCcw,
   Search,
@@ -76,6 +77,7 @@ import {
   updateRuntimeDebug,
   memberAvatarUrl,
 } from "./api/client";
+import { ActivityHistoryPage } from "./activity/ActivityHistory";
 import { type AppLanguage, normalizeLanguage, setAppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
 import { buildTraceGroups, type PromptTraceGroup } from "./trace";
@@ -88,6 +90,8 @@ const MEMORY_FILTER_ALL = "__all__";
 export function App() {
   const { t, i18n } = useTranslation();
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
+  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  const configured = Boolean(config.data?.project_file_exists);
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -95,6 +99,11 @@ export function App() {
           <h1>GuildBotics</h1>
         </div>
         <nav className="nav">
+          {configured ? (
+            <NavLink className="nav-item" to="/activity">
+              <History size={18} /> {t("app.nav.activity")}
+            </NavLink>
+          ) : null}
           <NavLink className="nav-item" to="/service">
             <Activity size={18} /> {t("app.nav.service")}
           </NavLink>
@@ -130,6 +139,10 @@ export function App() {
 
       <section className="workspace">
         <Routes>
+          <Route
+            element={<ConfiguredRoute configured={configured} loading={config.isLoading} />}
+            path="/activity"
+          />
           <Route element={<ServicePage />} path="/service" />
           <Route element={<Navigate replace to="/service" />} path="/overview" />
           <Route element={<CommandsPage />} path="/commands" />
@@ -142,6 +155,13 @@ export function App() {
   );
 }
 
+function ConfiguredRoute({ configured, loading }: { configured: boolean; loading: boolean }) {
+  if (loading) {
+    return null;
+  }
+  return configured ? <ActivityHistoryPage /> : <Navigate replace to="/setup" />;
+}
+
 function IndexRedirect() {
   // The landing route picks the first screen based on whether setup is done:
   // a configured workspace opens the service screen, otherwise the setup screen.
@@ -150,7 +170,7 @@ function IndexRedirect() {
     return null;
   }
   const configured = Boolean(config.data?.project_file_exists);
-  return <Navigate replace to={configured ? "/service" : "/setup"} />;
+  return <Navigate replace to={configured ? "/activity" : "/setup"} />;
 }
 
 function ServicePage() {

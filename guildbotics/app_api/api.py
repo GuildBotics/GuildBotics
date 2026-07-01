@@ -32,6 +32,7 @@ from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.intelligences import IntelligenceConfigService
 from guildbotics.app_api.llm_providers import discover_llm_providers
 from guildbotics.app_api.models import (
+    ActivityHistoryResponse,
     AgentFieldStateResponse,
     ApiError,
     CliAgentDetectionsResponse,
@@ -417,6 +418,19 @@ def create_app(
             until=until,
             limit=limit,
         )
+
+    @app.get(
+        "/activity/history",
+        response_model=ActivityHistoryResponse,
+        responses=error_responses,
+    )
+    def activity_history(
+        start: str | None = None,
+        end: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+        _: None = Depends(require_token),
+    ) -> ActivityHistoryResponse:
+        return app_runtime.get_activity_history(start=start, end=end, limit=limit)
 
     @app.get(
         "/intelligences/cli-agents/detection",

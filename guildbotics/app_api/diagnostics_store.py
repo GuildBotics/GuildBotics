@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import threading
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -108,6 +109,28 @@ class DiagnosticsStore:
         with self._lock:
             self._refresh_path_locked()
             records = [item for item in self._records if not item.get("trace_id")]
+        records.sort(key=lambda item: item.get("timestamp", ""))
+        return records[-max(1, limit) :]
+
+    def records_between(
+        self,
+        *,
+        includes: Callable[[str], bool],
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Return records whose timestamp satisfies ``includes``.
+
+        The caller owns timestamp parsing so this store remains a generic JSONL
+        persistence layer. Returned records are oldest-first and capped to the
+        most recent ``limit`` matching rows.
+        """
+        with self._lock:
+            self._refresh_path_locked()
+            records = [
+                item
+                for item in self._records
+                if includes(str(item.get("timestamp", "")))
+            ]
         records.sort(key=lambda item: item.get("timestamp", ""))
         return records[-max(1, limit) :]
 
