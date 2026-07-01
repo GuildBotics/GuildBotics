@@ -13,8 +13,8 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.member_memory import MemberMemoryService
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability import trace_scope
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
@@ -200,6 +200,25 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         bus.publish_event(
             "member.command.finished", {"command": "member memory recall"}
         )
+        bus.publish_event(
+            "github.pull_request",
+            {
+                "action": "opened",
+                "pull_request": {
+                    "number": 8,
+                    "title": "Add member activity",
+                    "html_url": "https://github.com/owner/repo/pull/8",
+                    "merged": False,
+                },
+            },
+        )
+        bus.publish_event(
+            "github.push",
+            {
+                "action": "push",
+                "ref": "refs/heads/feature",
+            },
+        )
     with trace_scope(
         "manual", trace_id="human-trace", person_id="bob", command="human"
     ):
@@ -256,7 +275,9 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     sessions = {session["trace_id"]: session for session in body["sessions"]}
     assert set(sessions) == {"agent-trace", "skill-trace"}
     assert sessions["agent-trace"]["mode"] == "interactive"
+    assert sessions["agent-trace"]["title"] == "Issue #42"
     assert sessions["skill-trace"]["mode"] == "interactive"
+    assert sessions["skill-trace"]["title"] == "member memory recall"
     assert sessions["agent-trace"]["links"] == [
         {
             "kind": "issue",
@@ -266,9 +287,18 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     ]
     assert {event["type"] for event in body["events"]} == {
         "issue_resolve",
+        "pr_create",
         "pr_merge",
         "push",
     }
+    assert any(
+        event["title"] == "PR #8 Created" and event["person_id"] == "alice"
+        for event in body["events"]
+    )
+    assert any(
+        event["title"] == "Push" and event["person_id"] == "alice"
+        for event in body["events"]
+    )
     assert any(event["title"] == "PR #7 Merged" for event in body["events"])
     assert any(event["title"] == "Push: 2 commits" for event in body["events"])
     assert any(event["title"] == "Issue #133 Resolved" for event in body["events"])
@@ -358,7 +388,8 @@ def test_activity_history_merges_memory_and_prompt_trace_records(
         }
     ]
     assert sessions["prompt-trace"].mode == "interactive"
-    assert sessions["prompt-trace"].title == "functions/talk_as"
+    assert sessions["memory-trace"].title == "Desktop API 仕様書"
+    assert sessions["prompt-trace"].title == "調査して"
 
 
 def test_memory_events_endpoint_filters_and_returns_body_preview(

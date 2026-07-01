@@ -90,19 +90,20 @@ def _summarize_trace(
     status = _trace_status(records)
     started_at = min(timestamps)
     ended_at = max(timestamps)
+    links = _links_from_records(records, attributes)
     return ActivityHistorySession(
         trace_id=trace_id,
         person_id=str(first.get("person_id") or ""),
         source=source,
         command=command,
         workflow=workflow,
-        title=_session_title(trace_id, records, command, workflow),
+        title=_session_title(trace_id, records, command, workflow, links),
         mode="interactive" if source in {"interactive", "manual"} else "workflow",
         status=status,
         started_at=started_at.isoformat(),
         ended_at=ended_at.isoformat(),
         duration_seconds=max(0.0, (ended_at - started_at).total_seconds()),
-        links=_links_from_records(records, attributes),
+        links=links,
     )
 
 
@@ -332,15 +333,21 @@ def _merged_attributes(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _session_title(
-    trace_id: str, records: list[dict[str, Any]], command: str, workflow: str
+    trace_id: str,
+    records: list[dict[str, Any]],
+    command: str,
+    workflow: str,
+    links: list[ActivityHistoryLink],
 ) -> str:
-    if command or workflow:
-        return command or workflow
     attributes = _merged_attributes(records)
     for value in (
         attributes.get("memory.title"),
-        attributes.get("memory.doc_id"),
         _first_payload_text(records, "title"),
+        _first_work_link_label(links),
+        _first_payload_field(records, "prompt"),
+        workflow,
+        command,
+        attributes.get("memory.doc_id"),
         _first_payload_field(records, "brain"),
         _first_payload_field(records, "cli_agent"),
         _first_record_text(records, "type", "event", "message"),
@@ -348,6 +355,14 @@ def _session_title(
         if value:
             return str(value)
     return trace_id
+
+
+def _first_work_link_label(links: list[ActivityHistoryLink]) -> str:
+    for kind in ("pull_request", "issue", "doc"):
+        for link in links:
+            if link.kind == kind and link.label:
+                return link.label
+    return ""
 
 
 def _links_from_records(

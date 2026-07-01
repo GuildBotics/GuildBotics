@@ -818,6 +818,21 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
     assert calls["cwd"].is_absolute()
     assert calls["closed"] is True
     assert '"status": "pushed"' in result.output
+    events = DiagnosticsStore().records_between(includes=lambda _timestamp: True)
+    assert [
+        {
+            "type": event["type"],
+            "person_id": event["person_id"],
+            "payload": event["payload"],
+        }
+        for event in events
+    ] == [
+        {
+            "type": "github.push",
+            "person_id": "aiko",
+            "payload": {"action": "push", "ref": "refs/heads/main"},
+        }
+    ]
 
 
 def test_member_git_publish_current_mode_rejects_workflow_task_run(
@@ -931,6 +946,37 @@ def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
         "closed": True,
     }
     assert '"base": "ticket-driven-workflow"' in result.output
+    events = DiagnosticsStore().records_between(includes=lambda _timestamp: True)
+    assert [
+        {
+            "type": event["type"],
+            "person_id": event["person_id"],
+            "payload": event["payload"],
+            "attributes": event["attributes"],
+        }
+        for event in events
+    ] == [
+        {
+            "type": "github.pull_request",
+            "person_id": "aiko",
+            "payload": {
+                "action": "opened",
+                "pull_request": {
+                    "number": 1,
+                    "title": "PR title",
+                    "html_url": "https://github.com/owner/repo/pull/1",
+                    "merged": False,
+                },
+            },
+            "attributes": {
+                "github.action": "opened",
+                "github.kind": "pull_request",
+                "github.number": 1,
+                "github.repo": "owner/repo",
+                "github.url": "https://github.com/owner/repo/pull/1",
+            },
+        }
+    ]
 
 
 def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):

@@ -1010,6 +1010,7 @@ async def _git_push(
         )
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_push", payload)
+        _record_member_push_event(member_person, payload)
         return payload
     finally:
         await service.aclose()
@@ -1075,6 +1076,7 @@ async def _git_publish(
             result = await service.publish(repo_path=repo_path, message=message)
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_publish", payload)
+        _record_member_push_event(member_person, payload)
         return payload
     finally:
         await service.aclose()
@@ -1280,6 +1282,7 @@ async def _pr_create(
             repo, head, base, title, body, issue_url, draft
         )
         TaskRunStore().append_evidence(current_task_run_id(), "pr_create", result)
+        _record_member_pr_create_event(member_person, repo, title, result)
         return result
     finally:
         await service.aclose()
@@ -1739,6 +1742,79 @@ def _record_member_command_event(
             "workflow": correlation.get("workflow", ""),
             "attributes": attributes,
             "payload": {"command": command, **(payload or {})},
+            "timestamp": datetime.now().astimezone().isoformat(),
+        }
+    )
+
+
+def _record_member_push_event(member_person: Any, payload: dict[str, Any]) -> None:
+    if not payload.get("pushed"):
+        return
+    branch = str(payload.get("branch") or "")
+    _record_member_domain_event(
+        member_person,
+        "github.push",
+        {
+            "action": "push",
+            "ref": f"refs/heads/{branch}" if branch else "",
+        },
+        {"github.action": "push"},
+    )
+
+
+def _record_member_pr_create_event(
+    member_person: Any, repo: str, title: str, payload: dict[str, Any]
+) -> None:
+    if not payload.get("created"):
+        return
+    number = payload.get("pr_number")
+    url = str(payload.get("pr_url") or "")
+    _record_member_domain_event(
+        member_person,
+        "github.pull_request",
+        {
+            "action": "opened",
+            "pull_request": {
+                "number": number,
+                "title": title.strip(),
+                "html_url": url,
+                "merged": False,
+            },
+        },
+        {
+            "github.action": "opened",
+            "github.kind": "pull_request",
+            "github.number": number,
+            "github.repo": repo,
+            "github.url": url,
+        },
+    )
+
+
+def _record_member_domain_event(
+    member_person: Any,
+    event_type: str,
+    payload: dict[str, Any],
+    attributes: dict[str, Any],
+) -> None:
+    correlation = correlation_fields()
+    merged_attributes = dict(correlation.get("attributes") or {})
+    merged_attributes.update({key: value for key, value in attributes.items() if value})
+    DiagnosticsStore().record(
+        {
+            "kind": "event",
+            "type": event_type,
+            "trace_id": correlation.get("trace_id"),
+            "span_id": correlation.get("span_id"),
+            "parent_id": correlation.get("parent_id"),
+            "call_id": correlation.get("call_id"),
+            "span": correlation.get("span", ""),
+            "source": correlation.get("source") or "github",
+            "person_id": getattr(member_person, "person_id", ""),
+            "command": str(correlation.get("command") or ""),
+            "workflow": correlation.get("workflow", ""),
+            "attributes": merged_attributes,
+            "payload": payload,
             "timestamp": datetime.now().astimezone().isoformat(),
         }
     )
