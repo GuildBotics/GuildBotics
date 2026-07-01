@@ -259,6 +259,54 @@ export type TraceDetailResponse = {
   records: TraceRecord[];
 };
 
+export type ActivityHistoryMember = {
+  person_id: string;
+  name: string;
+  person_type: string;
+  roles: string[];
+};
+
+export type ActivityHistoryLink = {
+  kind: "doc" | "issue" | "pull_request" | "commit" | "external";
+  label: string;
+  url: string;
+};
+
+export type ActivityHistorySession = {
+  trace_id: string;
+  person_id: string;
+  source: string;
+  command: string;
+  workflow: string;
+  title: string;
+  mode: "interactive" | "workflow";
+  status: string;
+  started_at: string;
+  ended_at: string;
+  duration_seconds: number;
+  links: ActivityHistoryLink[];
+};
+
+export type ActivityHistoryEvent = {
+  id: string;
+  timestamp: string;
+  person_id: string;
+  type: "pr_create" | "pr_merge" | "pr_closed" | "push" | "issue_resolve" | "external";
+  title: string;
+  detail: string;
+  url: string;
+  links: ActivityHistoryLink[];
+};
+
+export type ActivityHistoryResponse = {
+  start: string;
+  end: string;
+  members: ActivityHistoryMember[];
+  sessions: ActivityHistorySession[];
+  events: ActivityHistoryEvent[];
+  unsupported_event_sources: string[];
+};
+
 export type MemoryEvent = {
   timestamp: string;
   action: string;
@@ -689,6 +737,18 @@ export async function getTraceDetail(traceId: string): Promise<TraceDetailRespon
 
 export async function getGlobalRecords(limit = 200): Promise<TraceDetailResponse> {
   return request(`/diagnostics/global?limit=${encodeURIComponent(String(limit))}`);
+}
+
+export async function getActivityHistory(params: {
+  start: string;
+  end: string;
+  limit?: number;
+}): Promise<ActivityHistoryResponse> {
+  const search = new URLSearchParams({ start: params.start, end: params.end });
+  if (params.limit) {
+    search.set("limit", String(params.limit));
+  }
+  return request(`/activity/history?${search.toString()}`);
 }
 
 export async function getMemoryEvents(params?: {

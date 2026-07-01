@@ -42,6 +42,7 @@ import {
   upsertCommandRecord,
   type CommandRunRecord,
 } from "./App";
+import { getConfigStatus } from "./api/client";
 import type {
   CommandOption,
   PromptTraceEntry,
@@ -120,6 +121,14 @@ vi.mock("./api/client", async (importOriginal) => {
     })),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
+    getActivityHistory: vi.fn(async () => ({
+      start: "2026-07-01T00:00:00Z",
+      end: "2026-07-02T00:00:00Z",
+      members: [],
+      sessions: [],
+      events: [],
+      unsupported_event_sources: [],
+    })),
     getPromptTrace: vi.fn(async () => ({
       enabled: false,
       env_file: "",
@@ -165,6 +174,23 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Service Runtime" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Service/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
+  });
+
+  it("hides activity navigation before initial setup", async () => {
+    vi.mocked(getConfigStatus).mockResolvedValueOnce({
+      cwd: "/workspace",
+      env_file: "/workspace/.env",
+      env_file_exists: false,
+      config_dir: "/workspace/.guildbotics/config",
+      project_file: "/workspace/.guildbotics/config/project.yml",
+      project_file_exists: false,
+      storage_dir: "/workspace/.guildbotics",
+    });
+    window.location.hash = "#/service";
+    renderApp();
+
+    await screen.findByRole("heading", { name: "Service Runtime" });
+    expect(screen.queryByRole("link", { name: /Activity/ })).not.toBeInTheDocument();
   });
 });
 

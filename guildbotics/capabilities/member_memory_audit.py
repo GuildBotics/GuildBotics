@@ -10,6 +10,7 @@ from typing import Any
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.observability import correlation_fields
 from guildbotics.utils.fileio import get_workspace_data_path
+from guildbotics.utils.timestamps import parse_iso_datetime
 
 MEMORY_AUDIT_FILE = "memory_events.jsonl"
 DEFAULT_MEMORY_AUDIT_LIMIT = 5000
@@ -249,17 +250,8 @@ def _timestamp_sort_key(item: dict[str, Any]) -> datetime:
 
 
 def parse_memory_audit_timestamp(value: str | None) -> datetime | None:
-    raw = (value or "").strip()
-    if not raw:
-        return None
-    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    parsed = parse_iso_datetime(value)
+    return parsed.astimezone(UTC) if parsed is not None else None
 
 
 def _now() -> str:

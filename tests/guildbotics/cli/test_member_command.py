@@ -5,6 +5,8 @@ import os
 import pytest
 from click.testing import CliRunner
 
+from guildbotics.app_api.diagnostics_store import DiagnosticsStore
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
@@ -145,6 +147,75 @@ def test_member_memory_record_and_recall_cli(monkeypatch):
 
     assert recall.exit_code == 0
     assert json.loads(recall.output)["results"][0]["doc_id"] == doc_id
+
+
+def test_member_cli_reuses_trace_for_interactive_session(monkeypatch):
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    runner = CliRunner()
+
+    record = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "record",
+            "--person",
+            "aiko",
+            "--scope",
+            "personal",
+            "--title",
+            "Trace note",
+            "--summary",
+            "Trace summary",
+            "--keyword",
+            "trace",
+            "--body-stdin",
+        ],
+        input="Trace body.\n",
+    )
+    assert record.exit_code == 0
+
+    recall = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "recall",
+            "--person",
+            "aiko",
+            "--query",
+            "trace",
+            "--meta-only",
+        ],
+    )
+    assert recall.exit_code == 0
+
+    traces = DiagnosticsStore().list_traces(source="interactive")
+    assert len(traces) == 1
+    trace_id = traces[0]["trace_id"]
+    records = DiagnosticsStore().get_records(trace_id)
+    assert [item["type"] for item in records] == [
+        "member.command.started",
+        "member.command.finished",
+        "member.command.started",
+        "member.command.finished",
+    ]
+    assert {item["command"] for item in records} == {
+        "member memory recall",
+        "member memory record",
+    }
+    memory_events = MemoryAuditStore().list_events(trace_id=trace_id)
+    assert {event["type"] for event in memory_events} == {
+        "memory.recall",
+        "memory.record",
+    }
 
 
 def test_member_context_markdown_renders_capabilities_section(monkeypatch):

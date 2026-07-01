@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,8 +13,9 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.member_memory import MemberMemoryService
-from guildbotics.entities.team import Person
+from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability import trace_scope
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
@@ -150,6 +153,212 @@ def test_global_endpoint_returns_unscoped_events_and_logs(tmp_path: Path) -> Non
     assert "global line" in messages
     assert "scheduler.running" in types
     assert "scoped line" not in messages
+
+
+def test_activity_history_returns_sessions_and_recorded_github_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    bus = EventBus(store=store)
+    runtime = AppRuntime(bus, diagnostics_store=store)
+    team = Team(
+        project=Project(name="demo"),
+        members=[
+            Person(
+                person_id="alice", name="Alice", person_type="agent", is_active=False
+            ),
+            Person(person_id="bob", name="Bob", person_type="human", is_active=True),
+        ],
+    )
+    monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
+    app = create_app(
+        session_token="secret",
+        runtime=runtime,
+        event_bus=bus,
+        diagnostics_store=store,
+    )
+    with trace_scope(
+        "manual",
+        trace_id="agent-trace",
+        person_id="alice",
+        command="demo",
+        attributes={
+            "github.kind": "issue",
+            "github.number": "42",
+            "github.url": "https://github.com/owner/repo/issues/42",
+        },
+    ):
+        bus.publish_event("command.started", {"command": "demo"})
+        bus.publish_event("command.finished", {"command": "demo"})
+    with trace_scope(
+        "interactive",
+        trace_id="skill-trace",
+        person_id="alice",
+        command="member memory recall",
+    ):
+        bus.publish_event("member.command.started", {"command": "member memory recall"})
+        bus.publish_event(
+            "member.command.finished", {"command": "member memory recall"}
+        )
+    with trace_scope(
+        "manual", trace_id="human-trace", person_id="bob", command="human"
+    ):
+        bus.publish_event("command.started", {"command": "human"})
+    bus.publish_event(
+        "github.pull_request",
+        {
+            "action": "closed",
+            "pull_request": {
+                "number": 7,
+                "title": "Add activity",
+                "html_url": "https://github.com/owner/repo/pull/7",
+                "merged": True,
+            },
+        },
+        source="github",
+    )
+    bus.publish_event(
+        "github.push",
+        {
+            "ref": "refs/heads/main",
+            "compare": "https://github.com/owner/repo/compare/a...b",
+            "commits": [{"id": "abc"}, {"id": "def"}],
+        },
+        source="github",
+    )
+    bus.publish_event(
+        "github.issue",
+        {
+            "action": "closed",
+            "issue": {
+                "number": 133,
+                "title": "Reconnect websocket",
+                "html_url": "https://github.com/owner/repo/issues/133",
+            },
+        },
+        source="github",
+    )
+    client = TestClient(app)
+
+    with client:
+        response = client.get(
+            "/activity/history",
+            params={
+                "start": "2000-01-01T00:00:00Z",
+                "end": "2999-01-01T00:00:00Z",
+            },
+            headers=HEADERS,
+        )
+
+    assert response.status_code == HTTP_OK
+    body = response.json()
+    assert [member["person_id"] for member in body["members"]] == ["alice"]
+    sessions = {session["trace_id"]: session for session in body["sessions"]}
+    assert set(sessions) == {"agent-trace", "skill-trace"}
+    assert sessions["agent-trace"]["mode"] == "interactive"
+    assert sessions["skill-trace"]["mode"] == "interactive"
+    assert sessions["agent-trace"]["links"] == [
+        {
+            "kind": "issue",
+            "label": "Issue #42",
+            "url": "https://github.com/owner/repo/issues/42",
+        }
+    ]
+    assert {event["type"] for event in body["events"]} == {
+        "issue_resolve",
+        "pr_merge",
+        "push",
+    }
+    assert any(event["title"] == "PR #7 Merged" for event in body["events"])
+    assert any(event["title"] == "Push: 2 commits" for event in body["events"])
+    assert any(event["title"] == "Issue #133 Resolved" for event in body["events"])
+    assert body["unsupported_event_sources"] == []
+
+
+def test_activity_history_merges_memory_and_prompt_trace_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
+    prompt_trace = tmp_path / "prompt_trace.jsonl"
+    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(prompt_trace))
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    bus = EventBus(store=store)
+    runtime = AppRuntime(bus, diagnostics_store=store)
+    team = Team(
+        project=Project(name="demo"),
+        members=[
+            Person(person_id="alice", name="Alice", person_type="agent", is_active=True)
+        ],
+    )
+    monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
+
+    MemoryAuditStore().record(
+        {
+            "kind": "memory",
+            "type": "memory.write",
+            "timestamp": "2026-07-01T10:00:00+00:00",
+            "trace_id": "memory-trace",
+            "source": "manual",
+            "person_id": "alice",
+            "command": "functions/talk_as",
+            "message": "memory write: Desktop API 仕様書",
+            "attributes": {
+                "memory.action": "write",
+                "memory.doc_id": "desktop-api",
+                "memory.path": "documents/desktop-api",
+                "memory.scope": "project",
+            },
+            "payload": {"title": "Desktop API 仕様書", "summary": "API notes"},
+        }
+    )
+    prompt_trace.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "cli_agent.request",
+                        "timestamp": "2026-07-01T11:00:00+00:00",
+                        "trace_id": "prompt-trace",
+                        "source": "manual",
+                        "person_id": "alice",
+                        "command": "functions/talk_as",
+                        "brain": "Codex",
+                        "prompt": "調査して",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "cli_agent.response",
+                        "timestamp": "2026-07-01T11:05:00+00:00",
+                        "trace_id": "prompt-trace",
+                        "source": "manual",
+                        "person_id": "alice",
+                        "command": "functions/talk_as",
+                        "brain": "Codex",
+                        "stdout": "done",
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    history = runtime.get_activity_history(
+        start="2026-07-01T00:00:00Z",
+        end="2026-07-02T00:00:00Z",
+    )
+
+    sessions = {session.trace_id: session for session in history.sessions}
+    assert set(sessions) == {"memory-trace", "prompt-trace"}
+    assert [link.model_dump() for link in sessions["memory-trace"].links] == [
+        {
+            "kind": "doc",
+            "label": "Desktop API 仕様書",
+            "url": "",
+        }
+    ]
+    assert sessions["prompt-trace"].mode == "interactive"
+    assert sessions["prompt-trace"].title == "functions/talk_as"
 
 
 def test_memory_events_endpoint_filters_and_returns_body_preview(

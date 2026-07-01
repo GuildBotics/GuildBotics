@@ -10,6 +10,7 @@ const resources = {
     translation: {
       app: {
         nav: {
+          activity: "Activity",
           service: "Service",
           commands: "Run Command",
           diagnostics: "Diagnostics",
@@ -24,6 +25,28 @@ const resources = {
           title: "Starting GuildBotics",
           failed: "GuildBotics could not start",
           retry: "Retry",
+        },
+      },
+      activity: {
+        title: "Activity",
+        subtitle: "Member sessions and recorded project events.",
+        search: "Search activity",
+        searchPlaceholder: "command / member / #42 / GitHub URL...",
+        previous: "Previous period",
+        next: "Next period",
+        date: "Date",
+        day: "1 day",
+        week: "1 week",
+        memberColumn: "Member / event",
+        events: "Events",
+        loading: "Loading activity...",
+        empty: "No activity recorded for this period.",
+        loadError: "Failed to load activity",
+        recordedOnly: "GitHub events are shown when they are present in recorded diagnostics.",
+        noLinks: "No related links",
+        modes: {
+          interactive: "Interactive",
+          workflow: "Workflow",
         },
       },
       service: {
@@ -1082,6 +1105,7 @@ const resources = {
     translation: {
       app: {
         nav: {
+          activity: "アクティビティ",
           service: "サービス実行",
           commands: "コマンド実行",
           diagnostics: "診断",
@@ -1096,6 +1120,28 @@ const resources = {
           title: "GuildBotics を起動しています",
           failed: "GuildBotics を起動できませんでした",
           retry: "再試行",
+        },
+      },
+      activity: {
+        title: "アクティビティ",
+        subtitle: "メンバーごとの作業セッションと記録済みイベントを確認できます。",
+        search: "アクティビティ検索",
+        searchPlaceholder: "コマンド / メンバー / #42 / GitHub URL...",
+        previous: "前の期間",
+        next: "次の期間",
+        date: "日付",
+        day: "1日",
+        week: "1週間",
+        memberColumn: "メンバー / イベント",
+        events: "イベント",
+        loading: "アクティビティを読み込んでいます...",
+        empty: "この期間のアクティビティはまだありません。",
+        loadError: "アクティビティの読み込みに失敗しました",
+        recordedOnly: "GitHub イベントは記録済みの診断データに含まれる場合に表示されます。",
+        noLinks: "関連リンクはありません",
+        modes: {
+          interactive: "対話",
+          workflow: "ワークフロー",
         },
       },
       setup: {

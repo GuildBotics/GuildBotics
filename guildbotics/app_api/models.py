@@ -199,6 +199,56 @@ class MemoryEventsResponse(BaseModel):
     events: list[MemoryEvent] = Field(default_factory=list)
 
 
+class ActivityHistoryMember(BaseModel):
+    person_id: str
+    name: str
+    person_type: str = ""
+    roles: list[str] = Field(default_factory=list)
+
+
+class ActivityHistoryLink(BaseModel):
+    kind: Literal["doc", "issue", "pull_request", "commit", "external"]
+    label: str
+    url: str = ""
+
+
+class ActivityHistorySession(BaseModel):
+    trace_id: str
+    person_id: str
+    source: str = ""
+    command: str = ""
+    workflow: str = ""
+    title: str = ""
+    mode: Literal["interactive", "workflow"] = "workflow"
+    status: str = "info"
+    started_at: str = ""
+    ended_at: str = ""
+    duration_seconds: float = 0
+    links: list[ActivityHistoryLink] = Field(default_factory=list)
+
+
+class ActivityHistoryEvent(BaseModel):
+    id: str
+    timestamp: str
+    person_id: str = ""
+    type: Literal[
+        "pr_create", "pr_merge", "pr_closed", "push", "issue_resolve", "external"
+    ]
+    title: str
+    detail: str = ""
+    url: str = ""
+    links: list[ActivityHistoryLink] = Field(default_factory=list)
+
+
+class ActivityHistoryResponse(BaseModel):
+    start: str
+    end: str
+    members: list[ActivityHistoryMember] = Field(default_factory=list)
+    sessions: list[ActivityHistorySession] = Field(default_factory=list)
+    events: list[ActivityHistoryEvent] = Field(default_factory=list)
+    unsupported_event_sources: list[str] = Field(default_factory=list)
+
+
 class RuntimeSourceSelection(BaseModel):
     scheduled: bool = True
     routine: bool = True
