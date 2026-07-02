@@ -42,11 +42,18 @@ const resources = {
         loading: "Loading activity...",
         empty: "No activity recorded for this period.",
         loadError: "Failed to load activity",
-        recordedOnly: "GitHub events are shown when they are present in recorded diagnostics.",
         noLinks: "No related links",
         modes: {
           interactive: "Interactive",
           workflow: "Workflow",
+        },
+        eventTypes: {
+          pr_create: "PR created",
+          pr_merge: "PR merged",
+          pr_closed: "PR closed",
+          push: "Push",
+          issue_resolve: "Issue resolved",
+          external: "Event",
         },
       },
       service: {
@@ -1137,11 +1144,18 @@ const resources = {
         loading: "アクティビティを読み込んでいます...",
         empty: "この期間のアクティビティはまだありません。",
         loadError: "アクティビティの読み込みに失敗しました",
-        recordedOnly: "GitHub イベントは記録済みの診断データに含まれる場合に表示されます。",
         noLinks: "関連リンクはありません",
         modes: {
           interactive: "対話",
           workflow: "ワークフロー",
+        },
+        eventTypes: {
+          pr_create: "PR 作成",
+          pr_merge: "PR マージ",
+          pr_closed: "PR クローズ",
+          push: "Push",
+          issue_resolve: "Issue 解決",
+          external: "イベント",
         },
       },
       setup: {

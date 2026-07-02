@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from guildbotics.app_api.llm_providers import discover_llm_providers, provider_env_keys
+from guildbotics.intelligences.llm_providers import (
+    discover_llm_providers,
+    provider_env_keys,
+)
 
 DEFAULT_ORDER = 1000
 

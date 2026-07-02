@@ -15,12 +15,7 @@ from typing import Any, cast
 from dotenv import dotenv_values
 
 from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
-from guildbotics.app_api.cli_agents import (
-    discover_cli_agents,
-    resolve_cli_agent_path,
-)
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
@@ -77,7 +72,12 @@ from guildbotics.editions import get_edition
 from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities import Project, Service, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.intelligences.cli_agents import (
+    discover_cli_agents,
+    resolve_cli_agent_path,
+)
 from guildbotics.observability import new_id, trace_scope
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime import Context
 from guildbotics.runtime.member_context import resolve_person
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE, HOME_ENV_PROTECTED_KEYS
@@ -619,12 +619,8 @@ class AppRuntime:
                 limit=limit,
             )
         )
-        records.extend(
-            item
-            for item in self._prompt_trace_activity_records(limit)
-            if includes(str(item.get("timestamp", "")))
-        )
-        records.sort(key=lambda item: str(item.get("timestamp", "")))
+        records.extend(self._prompt_trace_activity_records(includes, limit))
+        records.sort(key=_activity_record_sort_key)
         return records[-max(1, limit) :]
 
     def list_memory_events(
@@ -662,12 +658,15 @@ class AppRuntime:
             records.append(_prompt_trace_record(item))
         return records
 
-    def _prompt_trace_activity_records(self, limit: int) -> list[dict[str, Any]]:
-        records = [
-            _prompt_trace_record(item).model_dump()
-            for item in self._read_all_prompt_trace_events()
-        ]
-        records.sort(key=lambda item: str(item.get("timestamp", "")))
+    def _prompt_trace_activity_records(
+        self, includes: Callable[[str], bool], limit: int
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for item in self._read_all_prompt_trace_events():
+            record = _prompt_trace_record(item).model_dump()
+            if includes(str(record.get("timestamp", ""))):
+                records.append(record)
+        records.sort(key=_activity_record_sort_key)
         return records[-max(1, limit) :]
 
     def _memory_trace_records(self, trace_id: str) -> list[TraceRecord]:
@@ -1479,7 +1478,7 @@ def _requirement_satisfied(kind: str, github_enabled: bool) -> bool:
     if kind == "slack":
         return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"))
     if kind == "llm":
-        from guildbotics.app_api.llm_providers import provider_env_keys
+        from guildbotics.intelligences.llm_providers import provider_env_keys
 
         return any(
             os.getenv(env_var)
@@ -1567,6 +1566,15 @@ def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
 def _trace_record_sort_key(record: TraceRecord) -> datetime:
     return parse_memory_audit_timestamp(record.timestamp) or datetime.min.replace(
         tzinfo=UTC
+    )
+
+
+def _activity_record_sort_key(item: dict[str, Any]) -> datetime:
+    parsed = parse_timestamp(str(item.get("timestamp") or ""))
+    return (
+        parsed.astimezone(UTC)
+        if parsed is not None
+        else datetime.min.replace(tzinfo=UTC)
     )
 
 

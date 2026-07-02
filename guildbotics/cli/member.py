@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
 
 import click
 
-from guildbotics.app_api.diagnostics_events import record_correlated_event
 from guildbotics.capabilities.member_activity_events import (
     record_member_pr_create_event,
     record_member_push_event,
@@ -25,6 +25,8 @@ from guildbotics.capabilities.member_memory import (
 )
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.capabilities.task_runs import (
+    RUN_ENV,
+    TASK_RUN_ENV,
     RunStore,
     TaskRunError,
     TaskRunStore,
@@ -36,6 +38,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
 )
 from guildbotics.observability import trace_scope
+from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
     InteractiveTraceSession,
     InteractiveTraceStore,
@@ -1686,12 +1689,14 @@ def _run_interactive(
 
 
 def _interactive_session_for_current_command() -> InteractiveTraceSession | None:
+    if _running_under_workflow():
+        return None
     person = _current_person()
     if not person:
         return None
     try:
         _context, member_person = _resolve(person)
-    except click.ClickException:
+    except (click.ClickException, FileNotFoundError):
         return None
     if member_person.person_type == "human":
         return None
@@ -1702,6 +1707,10 @@ def _interactive_session_for_current_command() -> InteractiveTraceSession | None
         host=interactive_host(),
         thread_key=interactive_thread_key(),
     )
+
+
+def _running_under_workflow() -> bool:
+    return bool(os.getenv(TASK_RUN_ENV) or os.getenv(RUN_ENV))
 
 
 def _current_person() -> str:

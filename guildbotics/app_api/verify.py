@@ -6,17 +6,17 @@ from typing import Any, cast
 
 from dotenv import dotenv_values
 
-from guildbotics.app_api.cli_agents import (
-    resolve_cli_agent_path,
-    resolve_default_cli_executable,
-)
-from guildbotics.app_api.llm_providers import provider_env_keys
 from guildbotics.app_api.models import ConfigStatus, VerifyCheck, VerifyResponse
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.github_utils import (
     GitHubAppAuth,
     get_github_account_type,
 )
+from guildbotics.intelligences.cli_agents import (
+    resolve_cli_agent_path,
+    resolve_default_cli_executable,
+)
+from guildbotics.intelligences.llm_providers import provider_env_keys
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
 

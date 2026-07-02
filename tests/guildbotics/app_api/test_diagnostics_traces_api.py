@@ -10,13 +10,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability import trace_scope
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
 HEADERS = {"X-GuildBotics-Session-Token": "secret"}
@@ -292,7 +292,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     assert [member["person_id"] for member in body["members"]] == ["alice"]
     sessions = {session["trace_id"]: session for session in body["sessions"]}
     assert set(sessions) == {"agent-trace", "skill-trace"}
-    assert sessions["agent-trace"]["mode"] == "interactive"
+    assert sessions["agent-trace"]["mode"] == "workflow"
     assert sessions["agent-trace"]["title"] == "Issue #42"
     assert sessions["skill-trace"]["mode"] == "interactive"
     assert sessions["skill-trace"]["title"] == "member memory recall"
@@ -348,6 +348,98 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     ]
     assert any(event["title"] == "Issue #133 Resolved" for event in body["events"])
     assert body["unsupported_event_sources"] == []
+
+
+def test_activity_history_sorts_mixed_timestamp_offsets_by_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    bus = EventBus(store=store)
+    runtime = AppRuntime(bus, diagnostics_store=store)
+    team = Team(
+        project=Project(name="demo"),
+        members=[
+            Person(person_id="alice", name="Alice", person_type="agent", is_active=True)
+        ],
+    )
+    monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
+    store.record(
+        {
+            "kind": "event",
+            "type": "command.finished",
+            "timestamp": "2026-07-01T00:30:00Z",
+            "trace_id": "mixed-trace",
+            "source": "manual",
+            "person_id": "alice",
+            "command": "demo",
+        }
+    )
+    store.record(
+        {
+            "kind": "event",
+            "type": "command.started",
+            "timestamp": "2026-07-01T09:00:00+09:00",
+            "trace_id": "mixed-trace",
+            "source": "manual",
+            "person_id": "alice",
+            "command": "demo",
+        }
+    )
+
+    history = runtime.get_activity_history(
+        start="2026-07-01T00:00:00Z",
+        end="2026-07-01T01:00:00Z",
+    )
+
+    assert len(history.sessions) == 1
+    assert history.sessions[0].status == "success"
+    assert history.sessions[0].started_at == "2026-07-01T09:00:00+09:00"
+    assert history.sessions[0].ended_at == "2026-07-01T00:30:00+00:00"
+
+
+def test_activity_history_filters_prompt_trace_before_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    bus = EventBus(store=store)
+    runtime = AppRuntime(bus, diagnostics_store=store)
+    team = Team(
+        project=Project(name="demo"),
+        members=[
+            Person(person_id="alice", name="Alice", person_type="agent", is_active=True)
+        ],
+    )
+    monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
+    events = [
+        {
+            "event": "prompt.completed",
+            "timestamp": "2026-06-01T10:00:00Z",
+            "trace_id": "old-prompt",
+            "source": "prompt_trace",
+            "person_id": "alice",
+            "command": "old command",
+        }
+    ]
+    events.extend(
+        {
+            "event": "prompt.completed",
+            "timestamp": f"2026-07-01T{index % 24:02d}:00:00Z",
+            "trace_id": f"recent-{index}",
+            "source": "prompt_trace",
+            "person_id": "alice",
+            "command": "recent command",
+        }
+        for index in range(1001)
+    )
+    monkeypatch.setattr(runtime, "_read_all_prompt_trace_events", lambda: events)
+
+    history = runtime.get_activity_history(
+        start="2026-06-01T00:00:00Z",
+        end="2026-06-02T00:00:00Z",
+        limit=1000,
+    )
+
+    assert [session.trace_id for session in history.sessions] == ["old-prompt"]
 
 
 def test_activity_history_merges_memory_and_prompt_trace_records(
@@ -441,7 +533,7 @@ def test_activity_history_merges_memory_and_prompt_trace_records(
             "url": "https://github.com/owner/repo/pull/240",
         }
     ]
-    assert sessions["prompt-trace"].mode == "interactive"
+    assert sessions["prompt-trace"].mode == "workflow"
     assert sessions["memory-trace"].title == "Desktop API 仕様書"
     assert sessions["prompt-trace"].title == "調査して"
 

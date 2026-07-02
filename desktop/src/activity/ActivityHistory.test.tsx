@@ -8,6 +8,7 @@ import {
   ActivityHistoryPage,
   activityLinkHref,
   activityRange,
+  buildActivityBlocks,
   matchActivityHistory,
 } from "./ActivityHistory";
 import { getActivityHistory } from "../api/client";
@@ -177,6 +178,72 @@ describe("activityLinkHref", () => {
   });
 });
 
+describe("buildActivityBlocks", () => {
+  it("rounds display ranges to enclosing hourly slots", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "short",
+        started_at: "2026-07-01T12:31:00Z",
+        ended_at: "2026-07-01T12:34:00Z",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].display_started_at).toBe("2026-07-01T12:00:00.000Z");
+    expect(blocks[0].display_ended_at).toBe("2026-07-01T13:00:00.000Z");
+    expect(blocks[0].started_at).toBe("2026-07-01T12:31:00Z");
+    expect(blocks[0].ended_at).toBe("2026-07-01T12:34:00Z");
+  });
+
+  it("merges sessions whose rounded display ranges overlap", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "first",
+        title: "First task",
+        started_at: "2026-07-01T12:31:00Z",
+        ended_at: "2026-07-01T12:34:00Z",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "second",
+        title: "Second task",
+        started_at: "2026-07-01T12:55:00Z",
+        ended_at: "2026-07-01T13:08:00Z",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].display_started_at).toBe("2026-07-01T12:00:00.000Z");
+    expect(blocks[0].display_ended_at).toBe("2026-07-01T14:00:00.000Z");
+    expect(blocks[0].title).toBe("First task +1");
+    expect(blocks[0].sessions.map((session) => session.trace_id)).toEqual(["first", "second"]);
+  });
+
+  it("keeps sessions separate when rounded display ranges only touch", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "first",
+        title: "First task",
+        started_at: "2026-07-01T12:31:00Z",
+        ended_at: "2026-07-01T12:34:00Z",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "second",
+        title: "Second task",
+        started_at: "2026-07-01T13:01:00Z",
+        ended_at: "2026-07-01T13:08:00Z",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(2);
+    expect(blocks.map((block) => block.title)).toEqual(["First task", "Second task"]);
+  });
+});
+
 describe("matchActivityHistory", () => {
   it("matches linked GitHub issue text", () => {
     const matches = matchActivityHistory(ACTIVITY_FIXTURE, "#42");
@@ -189,6 +256,14 @@ describe("matchActivityHistory", () => {
     const matches = matchActivityHistory(ACTIVITY_FIXTURE, "Desktop API");
 
     expect(matches.sessionIds.has("trace-1")).toBe(true);
+  });
+
+  it("matches member names", () => {
+    const matches = matchActivityHistory(ACTIVITY_FIXTURE, "Alice");
+
+    expect(matches.sessionIds.has("trace-1")).toBe(true);
+    expect(matches.eventIds.has("event-2")).toBe(true);
+    expect(matches.eventIds.has("event-1")).toBe(false);
   });
 });
 

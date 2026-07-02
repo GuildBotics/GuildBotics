@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from guildbotics.app_api.diagnostics_events import record_correlated_event
+from guildbotics.entities.team import Person
+from guildbotics.observability.diagnostics_events import record_correlated_event
 
 
-def record_member_push_event(member_person: Any, payload: dict[str, Any]) -> None:
+def record_member_push_event(member_person: Person, payload: dict[str, Any]) -> None:
     if not payload.get("pushed"):
         return
     branch = str(payload.get("branch") or "")
@@ -22,7 +23,7 @@ def record_member_push_event(member_person: Any, payload: dict[str, Any]) -> Non
 
 
 def record_member_pr_create_event(
-    member_person: Any, repo: str, title: str, payload: dict[str, Any]
+    member_person: Person, repo: str, title: str, payload: dict[str, Any]
 ) -> None:
     if not payload.get("created"):
         return
@@ -51,7 +52,7 @@ def record_member_pr_create_event(
 
 
 def _record_member_domain_event(
-    member_person: Any,
+    member_person: Person,
     event_type: str,
     payload: dict[str, Any],
     attributes: dict[str, Any],
@@ -61,5 +62,5 @@ def _record_member_domain_event(
         payload=payload,
         attributes=attributes,
         default_source="github",
-        person_id=str(getattr(member_person, "person_id", "")),
+        person_id=member_person.person_id,
     )

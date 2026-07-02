@@ -733,7 +733,7 @@ pre {
 }
 
 .activity-timeline-head-day {
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  position: relative;
 }
 
 .activity-timeline-head-week {
@@ -746,6 +746,17 @@ pre {
   display: flex;
   justify-content: center;
   min-width: 0;
+}
+
+.activity-timeline-head-day span {
+  border-right: 0;
+}
+
+.activity-time-tick {
+  height: 100%;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
 }
 
 .activity-timeline-head span:last-child {
@@ -818,9 +829,9 @@ pre {
   font-size: 11px;
   font-weight: 700;
   height: 28px;
-  min-width: 28px;
+  min-width: 0;
   overflow: hidden;
-  padding: 0 9px;
+  padding: 0 4px;
   position: absolute;
   z-index: 4;
 }
@@ -832,6 +843,13 @@ pre {
   padding: 0 8px;
   position: static;
   width: 100%;
+}
+
+.activity-block-session-list {
+  display: grid;
+  gap: 6px;
+  max-height: 150px;
+  overflow: auto;
 }
 
 .activity-session span {

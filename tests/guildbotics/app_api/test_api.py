@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from yaml import safe_load
 
 from guildbotics.app_api.api import create_app
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
@@ -46,6 +45,7 @@ from guildbotics.editions.simple.setup_service import (
 )
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability import trace_scope
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
@@ -1961,7 +1961,7 @@ async def test_manual_command_activity_history_uses_resolved_default_person(
     assert [member.person_id for member in history.members] == ["alice"]
     assert len(history.sessions) == 1
     assert history.sessions[0].person_id == "alice"
-    assert history.sessions[0].mode == "interactive"
+    assert history.sessions[0].mode == "workflow"
     assert history.sessions[0].title == "functions/talk_as"
 
 

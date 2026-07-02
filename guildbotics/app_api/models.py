@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
+from guildbotics.intelligences.llm_providers import LlmProviderInfo
 
 
 class VerifyCheck(BaseModel):
@@ -369,19 +370,6 @@ class ScenarioDiagnosticsResponse(BaseModel):
     errors: list[DiagnosticCheck]
 
 
-class CliAgentInfo(BaseModel):
-    """A selectable CLI agent, discovered from ``cli_agents/<name>-cli.yml``.
-
-    Single source of truth for the CLI agent catalog: ``name`` is the file stem
-    (without ``-cli``), and the rest comes from that file.
-    """
-
-    name: str
-    label: str = ""
-    order: int = 1000
-    executable: str = ""
-
-
 class CliAgentDetection(BaseModel):
     name: str
     label: str = ""
@@ -415,21 +403,6 @@ class BrainAssignment(BaseModel):
     brain_class: str
     engine: Literal["llm", "cli"]
     target: str
-
-
-class LlmProviderInfo(BaseModel):
-    """A selectable LLM provider, discovered from ``models/<provider>/default.yml``.
-
-    This is the single source of truth for the provider catalog: ``provider`` is
-    the directory name, and the remaining fields come from that ``default.yml``.
-    """
-
-    provider: str
-    label: str = ""
-    order: int = 1000
-    api_key_env: str = ""
-    model_class: str = ""
-    model_id: str = ""
 
 
 class LlmProvidersResponse(BaseModel):

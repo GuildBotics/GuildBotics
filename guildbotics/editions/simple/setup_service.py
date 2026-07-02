@@ -360,7 +360,7 @@ class SimpleProjectSetupService:
         github_enabled = bool(owner and project_id and github_project_url)
         lane_map = LaneMapInput.from_config(ticket_manager.get("lane_map"))
 
-        from guildbotics.app_api.llm_providers import provider_env_keys
+        from guildbotics.intelligences.llm_providers import provider_env_keys
 
         env_values = (
             dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
@@ -547,7 +547,7 @@ class SimpleProjectSetupService:
         save_yaml_file(cli_mapping_file, cli_mapping)
         files.append(CreatedFile(path=cli_mapping_file, action="update"))
 
-        from guildbotics.app_api.llm_providers import provider_env_keys
+        from guildbotics.intelligences.llm_providers import provider_env_keys
 
         env_keys = provider_env_keys(config.config_dir)
         env_updates = {
@@ -601,7 +601,7 @@ class SimpleProjectSetupService:
         return project
 
     def render_env_file(self, config: ProjectSetupInput) -> str:
-        from guildbotics.app_api.llm_providers import discover_llm_providers
+        from guildbotics.intelligences.llm_providers import discover_llm_providers
 
         key_lines = [
             f"{provider.api_key_env}={config.provider_api_keys.get(provider.provider, '')}"

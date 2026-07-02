@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from guildbotics.app_api import cli_agents
-from guildbotics.app_api.cli_agents import (
+from guildbotics.intelligences import cli_agents
+from guildbotics.intelligences.cli_agents import (
     discover_cli_agents,
     get_cli_agent_search_path,
     resolve_cli_agent_path,

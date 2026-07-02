@@ -18,13 +18,13 @@ import pytest
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
-    CliAgentInfo,
     ProjectStatusOptionsRequest,
     PromptTraceUpdateRequest,
     RuntimeDebugUpdateRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities import Person, Project, Team
+from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.workspace_state import (
@@ -493,7 +493,7 @@ def test_get_context_does_not_reapply_workspace_data_root(
 def test_diagnostics_store_switches_with_workspace_data_root(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from guildbotics.app_api.diagnostics_store import DiagnosticsStore
+    from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
     store = DiagnosticsStore()
     runtime = AppRuntime(EventBus(store=store))

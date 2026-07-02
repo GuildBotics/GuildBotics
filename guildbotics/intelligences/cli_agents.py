@@ -5,7 +5,8 @@ import shutil
 from pathlib import Path
 from typing import Any, cast
 
-from guildbotics.app_api.models import CliAgentInfo
+from pydantic import BaseModel
+
 from guildbotics.utils.fileio import (
     get_config_path,
     get_intelligence_roots,
@@ -14,6 +15,20 @@ from guildbotics.utils.fileio import (
 )
 
 _DEFAULT_ORDER = 1000
+
+
+class CliAgentInfo(BaseModel):
+    """A selectable CLI agent, discovered from ``cli_agents/<name>-cli.yml``.
+
+    Single source of truth for the CLI agent catalog: ``name`` is the file stem
+    (without ``-cli``), and the rest comes from that file.
+    """
+
+    name: str
+    label: str = ""
+    order: int = 1000
+    executable: str = ""
+
 
 GUI_APP_PATHS = (
     "/opt/homebrew/bin",

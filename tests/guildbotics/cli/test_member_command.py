@@ -5,10 +5,10 @@ import os
 import pytest
 from click.testing import CliRunner
 
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.workspace_state import (
@@ -1146,6 +1146,67 @@ def test_member_task_status_cli(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert '"completed": true' in result.output
     assert '"evidence_types": ["issue_comment"]' in result.output
+
+
+def test_member_task_status_ignores_missing_context_for_interactive_trace(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+
+    def missing_context(_identifier):
+        raise FileNotFoundError("team/project.yml")
+
+    monkeypatch.setattr(member_module, "resolve_member_context", missing_context)
+    store = TaskRunStore()
+    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.complete(
+        "run-1",
+        "done",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        ["task", "status", "--person", "aiko", "--run-id", "run-1"],
+    )
+
+    assert result.exit_code == 0
+    assert '"completed": true' in result.output
+
+
+def test_member_task_status_skips_interactive_trace_under_workflow(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
+
+    def unexpected_context(_identifier):
+        raise AssertionError("workflow command should not resolve interactive context")
+
+    monkeypatch.setattr(member_module, "resolve_member_context", unexpected_context)
+    store = TaskRunStore()
+    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.complete(
+        "run-1",
+        "done",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        ["task", "status", "--person", "aiko", "--run-id", "run-1"],
+    )
+
+    assert result.exit_code == 0
+    assert DiagnosticsStore().list_traces(source="interactive") == []
 
 
 def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):

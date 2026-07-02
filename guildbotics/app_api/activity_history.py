@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from guildbotics.app_api.activity_events import (
@@ -42,7 +42,7 @@ def build_activity_history(
         if str(getattr(member, "person_type", "")) != "human"
     ]
     display_member_ids = {member.person_id for member in display_members}
-    ordered_records = sorted(records, key=lambda item: str(item.get("timestamp", "")))
+    ordered_records = sorted(records, key=_record_sort_key)
     sessions = _build_sessions(ordered_records, display_member_ids)
     events = _build_events(ordered_records, display_member_ids)
     return ActivityHistoryResponse(
@@ -72,7 +72,7 @@ def _build_sessions(
         if summary is None:
             continue
         sessions.append(summary)
-    sessions.sort(key=lambda session: session.started_at)
+    sessions.sort(key=lambda session: _timestamp_sort_key(session.started_at))
     return sessions
 
 
@@ -102,7 +102,7 @@ def _summarize_trace(
         command=command,
         workflow=workflow,
         title=_session_title(trace_id, records, command, workflow, links),
-        mode="interactive" if source in {"interactive", "manual"} else "workflow",
+        mode="interactive" if source == "interactive" else "workflow",
         status=status,
         started_at=started_at.isoformat(),
         ended_at=ended_at.isoformat(),
@@ -122,7 +122,7 @@ def _build_events(
             continue
         seen.add(event.id)
         events.append(event)
-    events.sort(key=lambda event: event.timestamp)
+    events.sort(key=lambda event: _timestamp_sort_key(event.timestamp))
     return events
 
 
@@ -276,3 +276,16 @@ def _first_record_text(records: list[dict[str, Any]], *keys: str) -> str:
 
 def parse_timestamp(value: str) -> datetime | None:
     return parse_iso_datetime(value)
+
+
+def _record_sort_key(item: dict[str, Any]) -> datetime:
+    return _timestamp_sort_key(str(item.get("timestamp") or ""))
+
+
+def _timestamp_sort_key(value: str) -> datetime:
+    parsed = parse_timestamp(value)
+    return (
+        parsed.astimezone(UTC)
+        if parsed is not None
+        else datetime.min.replace(tzinfo=UTC)
+    )

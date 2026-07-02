@@ -40,13 +40,27 @@ import {
 
 export type ActivityView = "day" | "week";
 
-const HOURS = ["00:00", "03:00", "06:00", "09:00", "12:00", "15:00", "18:00", "21:00"];
+const HOURS = ["03:00", "06:00", "09:00", "12:00", "15:00", "18:00", "21:00"];
 const ACTIVITY_LIMIT = 1000;
+const ACTIVITY_BLOCK_MINUTES = 60;
 
 export type ActivityHistoryMatchState = {
   active: boolean;
   sessionIds: Set<string>;
   eventIds: Set<string>;
+};
+
+type ActivityBlock = {
+  id: string;
+  person_id: string;
+  mode: ActivityHistorySession["mode"];
+  title: string;
+  started_at: string;
+  ended_at: string;
+  display_started_at: string;
+  display_ended_at: string;
+  sessions: ActivityHistorySession[];
+  links: ActivityHistoryLink[];
 };
 
 export function ActivityHistoryPage() {
@@ -194,7 +208,15 @@ function ActivityChart({
           }
         >
           {view === "day"
-            ? HOURS.map((hour) => <span key={hour}>{hour}</span>)
+            ? HOURS.map((hour) => (
+                <span
+                  className="activity-time-tick"
+                  key={hour}
+                  style={{ left: `${(Number(hour.slice(0, 2)) * 100) / 24}%` }}
+                >
+                  {hour}
+                </span>
+              ))
             : Array.from({ length: 7 }).map((_, index) => (
                 <span key={index}>{formatWeekday(addDays(range.start, index), locale)}</span>
               ))}
@@ -258,6 +280,7 @@ function ActivityTimelineRow({
   member?: ActivityHistoryMember;
   team?: boolean;
 }) {
+  const blocks = buildActivityBlocks(sessions);
   const weekSessionCount = view === "week" ? maxWeekSessionCount(sessions, range) : 0;
   const rowMinHeight = team ? 38 : view === "week" ? Math.max(86, weekSessionCount * 30 + 44) : 86;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
@@ -283,13 +306,13 @@ function ActivityTimelineRow({
         {view === "week" ? (
           <WeekSessionColumns sessions={sessions} range={range} matches={matches} />
         ) : (
-          sessions.map((session) => (
-            <SessionBar
-              key={session.trace_id}
-              session={session}
+          blocks.map((block) => (
+            <ActivityBlockBar
+              key={block.id}
+              block={block}
               range={range}
               view={view}
-              matched={matches.sessionIds.has(session.trace_id)}
+              matched={block.sessions.some((session) => matches.sessionIds.has(session.trace_id))}
               searchActive={matches.active}
             />
           ))
@@ -344,7 +367,7 @@ function WeekSessionColumns({
   matches: ActivityHistoryMatchState;
 }) {
   const today = startOfLocalDay(new Date()).getTime();
-  const columns = weekSessionSegments(sessions, range);
+  const columns = weekActivityBlockSegments(sessions, range);
   return (
     <div className="activity-week-columns">
       {Array.from({ length: 7 }).map((_, index) => {
@@ -356,13 +379,13 @@ function WeekSessionColumns({
             }
             key={index}
           >
-            {columns[index].map((session) => (
-              <SessionBar
-                key={`${session.trace_id}:${index}`}
-                session={session}
+            {columns[index].map((block) => (
+              <ActivityBlockBar
+                key={`${block.id}:${index}`}
+                block={block}
                 range={{ start: addDays(range.start, index), end: addDays(range.start, index + 1) }}
                 view="week"
-                matched={matches.sessionIds.has(session.trace_id)}
+                matched={block.sessions.some((session) => matches.sessionIds.has(session.trace_id))}
                 searchActive={matches.active}
               />
             ))}
@@ -373,32 +396,32 @@ function WeekSessionColumns({
   );
 }
 
-function SessionBar({
-  session,
+function ActivityBlockBar({
+  block,
   range,
   view,
   matched,
   searchActive,
 }: {
-  session: ActivityHistorySession;
+  block: ActivityBlock;
   range: { start: Date; end: Date };
   view: ActivityView;
   matched: boolean;
   searchActive: boolean;
 }) {
-  const start = new Date(session.started_at);
-  const end = new Date(session.ended_at);
+  const start = new Date(block.display_started_at);
+  const end = new Date(block.display_ended_at);
   const left = positionInRange(start, range);
   const right = positionInRange(end, range);
-  const width = Math.max(2.5, right - left);
+  const width = Math.max(0, right - left);
   const stateClass = searchStateClass(searchActive, matched);
   return (
     <HoverCard openDelay={150} closeDelay={80} withinPortal>
       <HoverCard.Target>
         <div
-          aria-label={session.title}
+          aria-label={block.title}
           className={`${stateClass} ${
-            session.mode === "interactive"
+            block.mode === "interactive"
               ? "activity-session activity-session-interactive"
               : "activity-session activity-session-workflow"
           } ${view === "week" ? "activity-session-week" : ""}`}
@@ -408,11 +431,11 @@ function SessionBar({
             ...(view === "day" ? { left: `${left}%`, top: "10px", width: `${width}%` } : {}),
           }}
         >
-          <span>{session.title}</span>
+          <span>{block.title}</span>
         </div>
       </HoverCard.Target>
       <HoverCard.Dropdown className="activity-hover-card">
-        <ActivitySessionDetail session={session} />
+        <ActivityBlockDetail block={block} />
       </HoverCard.Dropdown>
     </HoverCard>
   );
@@ -451,33 +474,48 @@ function EventPin({
   );
 }
 
-function ActivitySessionDetail({ session }: { session: ActivityHistorySession }) {
+function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
   const { t } = useTranslation();
   return (
     <Stack gap="xs">
       <Group gap="xs" justify="space-between">
         <Text fw={700} size="sm" lineClamp={2}>
-          {session.title}
+          {block.title}
         </Text>
-        <Badge color={session.mode === "interactive" ? "teal" : "blue"} variant="light">
-          {t(`activity.modes.${session.mode}`)}
+        <Badge color={block.mode === "interactive" ? "teal" : "blue"} variant="light">
+          {t(`activity.modes.${block.mode}`)}
         </Badge>
       </Group>
       <Text c="dimmed" size="xs">
-        <Clock3 size={12} /> {formatTimeRange(session.started_at, session.ended_at)} ·{" "}
-        {formatDuration(session.duration_seconds)}
+        <Clock3 size={12} /> {formatTimeRange(block.started_at, block.ended_at)} ·{" "}
+        {formatDuration(blockDurationSeconds(block))}
       </Text>
-      <LinkList links={session.links} />
+      {block.sessions.length > 1 ? (
+        <div className="activity-block-session-list">
+          {block.sessions.map((session) => (
+            <div key={session.trace_id}>
+              <Text fw={600} lineClamp={1} size="xs">
+                {session.title}
+              </Text>
+              <Text c="dimmed" size="xs">
+                {formatTimeRange(session.started_at, session.ended_at)}
+              </Text>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <LinkList links={block.links} />
     </Stack>
   );
 }
 
 function ActivityEventDetail({ event }: { event: ActivityHistoryEvent }) {
+  const { t } = useTranslation();
   return (
     <Stack gap="xs">
       <Group gap="xs">
         <Badge color={eventColor(event.type)} variant="light">
-          {eventLabel(event.type)}
+          {t(`activity.eventTypes.${event.type}`)}
         </Badge>
         <Text c="dimmed" size="xs">
           {formatTime(event.timestamp)}
@@ -553,6 +591,7 @@ export function matchActivityHistory(
   const query = rawQuery.trim().toLowerCase();
   const allSessions = new Set(data.sessions.map((session) => session.trace_id));
   const allEvents = new Set(data.events.map((event) => event.id));
+  const members = new Map(data.members.map((member) => [member.person_id, member]));
   if (!query) {
     return { active: false, sessionIds: allSessions, eventIds: allEvents };
   }
@@ -560,22 +599,148 @@ export function matchActivityHistory(
     active: true,
     sessionIds: new Set(
       data.sessions
-        .filter((session) =>
-          searchableText(
-            [session.title, session.command, session.workflow],
+        .filter((session) => {
+          const member = members.get(session.person_id);
+          return searchableText(
+            [
+              session.title,
+              session.command,
+              session.workflow,
+              session.person_id,
+              member?.name ?? "",
+              ...(member?.roles ?? []),
+            ],
             session.links,
-          ).includes(query),
-        )
+          ).includes(query);
+        })
         .map((session) => session.trace_id),
     ),
     eventIds: new Set(
       data.events
-        .filter((event) =>
-          searchableText([event.title, event.detail, event.url], event.links).includes(query),
-        )
+        .filter((event) => {
+          const member = members.get(event.person_id);
+          return searchableText(
+            [
+              event.title,
+              event.detail,
+              event.url,
+              event.person_id,
+              member?.name ?? "",
+              ...(member?.roles ?? []),
+            ],
+            event.links,
+          ).includes(query);
+        })
         .map((event) => event.id),
     ),
   };
+}
+
+export function buildActivityBlocks(sessions: ActivityHistorySession[]): ActivityBlock[] {
+  const rounded = sessions
+    .map((session) => ({
+      session,
+      displayStart: floorToInterval(new Date(session.started_at), ACTIVITY_BLOCK_MINUTES),
+      displayEnd: ceilToInterval(new Date(session.ended_at), ACTIVITY_BLOCK_MINUTES),
+    }))
+    .map(({ session, displayStart, displayEnd }) => ({
+      session,
+      displayStart,
+      displayEnd:
+        displayEnd.getTime() > displayStart.getTime()
+          ? displayEnd
+          : addMinutes(displayStart, ACTIVITY_BLOCK_MINUTES),
+    }))
+    .sort(
+      (left, right) =>
+        left.displayStart.getTime() - right.displayStart.getTime() ||
+        left.displayEnd.getTime() - right.displayEnd.getTime(),
+    );
+
+  const blocks: ActivityBlock[] = [];
+  for (const item of rounded) {
+    const last = blocks[blocks.length - 1];
+    if (last && item.displayStart.getTime() < new Date(last.display_ended_at).getTime()) {
+      mergeSessionIntoBlock(last, item.session, item.displayEnd);
+      continue;
+    }
+    blocks.push(activityBlockFromSession(item.session, item.displayStart, item.displayEnd));
+  }
+  return blocks;
+}
+
+function activityBlockFromSession(
+  session: ActivityHistorySession,
+  displayStart: Date,
+  displayEnd: Date,
+): ActivityBlock {
+  return {
+    id: session.trace_id,
+    person_id: session.person_id,
+    mode: session.mode,
+    title: session.title,
+    started_at: session.started_at,
+    ended_at: session.ended_at,
+    display_started_at: displayStart.toISOString(),
+    display_ended_at: displayEnd.toISOString(),
+    sessions: [session],
+    links: session.links,
+  };
+}
+
+function mergeSessionIntoBlock(
+  block: ActivityBlock,
+  session: ActivityHistorySession,
+  displayEnd: Date,
+) {
+  block.id = `${block.id}:${session.trace_id}`;
+  block.sessions.push(session);
+  block.mode = block.sessions.some((item) => item.mode === "interactive")
+    ? "interactive"
+    : "workflow";
+  block.title = blockTitle(block.sessions);
+  block.started_at = minIso(block.started_at, session.started_at);
+  block.ended_at = maxIso(block.ended_at, session.ended_at);
+  block.display_ended_at = maxIso(block.display_ended_at, displayEnd.toISOString());
+  block.links = dedupeLinks(block.sessions.flatMap((item) => item.links));
+}
+
+function blockTitle(sessions: ActivityHistorySession[]): string {
+  const [first] = sessions;
+  return sessions.length === 1 ? first.title : `${first.title} +${sessions.length - 1}`;
+}
+
+function blockDurationSeconds(block: ActivityBlock): number {
+  return Math.max(
+    0,
+    (new Date(block.ended_at).getTime() - new Date(block.started_at).getTime()) / 1000,
+  );
+}
+
+function dedupeLinks(links: ActivityHistoryLink[]): ActivityHistoryLink[] {
+  const seen = new Set<string>();
+  const deduped: ActivityHistoryLink[] = [];
+  for (const link of links) {
+    const key = activityLinkKey(link);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(link);
+  }
+  return deduped;
+}
+
+function floorToInterval(date: Date, minutes: number): Date {
+  const next = new Date(date);
+  next.setSeconds(0, 0);
+  next.setMinutes(Math.floor(next.getMinutes() / minutes) * minutes);
+  return next;
+}
+
+function ceilToInterval(date: Date, minutes: number): Date {
+  const floored = floorToInterval(date, minutes);
+  return floored.getTime() === date.getTime() ? floored : addMinutes(floored, minutes);
 }
 
 function searchableText(parts: string[], links: ActivityHistoryLink[]): string {
@@ -617,6 +782,12 @@ function startOfWeek(date: Date): Date {
 function addDays(date: Date, days: number): Date {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
+  return next;
+}
+
+function addMinutes(date: Date, minutes: number): Date {
+  const next = new Date(date);
+  next.setMinutes(next.getMinutes() + minutes);
   return next;
 }
 
@@ -698,10 +869,6 @@ function eventColor(type: ActivityHistoryEvent["type"]): string {
   }[type];
 }
 
-function eventLabel(type: ActivityHistoryEvent["type"]): string {
-  return type.replace("_", " ");
-}
-
 function searchStateClass(active: boolean, matched: boolean): string {
   if (!active) {
     return "";
@@ -731,9 +898,24 @@ function weekSessionSegments(
   return columns;
 }
 
+function weekActivityBlockSegments(
+  sessions: ActivityHistorySession[],
+  range: { start: Date; end: Date },
+): ActivityBlock[][] {
+  return weekSessionSegments(sessions, range).map((column) => buildActivityBlocks(column));
+}
+
 function maxWeekSessionCount(
   sessions: ActivityHistorySession[],
   range: { start: Date; end: Date },
 ): number {
-  return Math.max(0, ...weekSessionSegments(sessions, range).map((column) => column.length));
+  return Math.max(0, ...weekActivityBlockSegments(sessions, range).map((column) => column.length));
+}
+
+function minIso(left: string, right: string): string {
+  return left <= right ? left : right;
+}
+
+function maxIso(left: string, right: string): string {
+  return left >= right ? left : right;
 }

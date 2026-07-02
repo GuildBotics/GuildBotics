@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.observability import correlation_fields
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 
 def record_correlated_event(

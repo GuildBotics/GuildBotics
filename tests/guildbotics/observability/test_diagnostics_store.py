@@ -1,10 +1,12 @@
-"""Unit tests for ``guildbotics.app_api.diagnostics_store``."""
+"""Unit tests for ``guildbotics.observability.diagnostics_store``."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
+
+TWO_RECORDS = 2
 
 
 def _event(trace_id: str, event_type: str, **fields: object) -> dict[str, object]:
@@ -56,7 +58,7 @@ def test_list_traces_aggregates_records(tmp_path: Path) -> None:
     assert summary["command"] == "demo"
     assert summary["person_id"] == "alice"
     assert summary["status"] == "success"
-    assert summary["event_count"] == 2
+    assert summary["event_count"] == TWO_RECORDS
     assert summary["log_count"] == 1
     assert summary["started_at"] == "2026-06-12T00:00:01+09:00"
     assert summary["updated_at"] == "2026-06-12T00:00:03+09:00"
@@ -71,7 +73,7 @@ def test_failed_event_sets_failed_status_and_error_count(tmp_path: Path) -> None
 
     summary = store.list_traces()[0]
     assert summary["status"] == "failed"
-    assert summary["error_count"] == 2  # failed event + ERROR log
+    assert summary["error_count"] == TWO_RECORDS  # failed event + ERROR log
 
 
 def test_list_traces_filters_by_source_person_and_query(tmp_path: Path) -> None:
@@ -159,7 +161,7 @@ def test_rotation_does_not_duplicate_the_record_on_disk(tmp_path: Path) -> None:
     # must appear exactly once — a fresh store must not double-count it.
     reloaded = DiagnosticsStore(path)
     summary = reloaded.list_traces()[0]
-    assert summary["event_count"] == 2
+    assert summary["event_count"] == TWO_RECORDS
     assert path.read_text(encoding="utf-8").count('"command.finished"') == 1
 
 

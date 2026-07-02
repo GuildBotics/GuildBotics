@@ -74,7 +74,7 @@ class InteractiveTraceStore:
         )
         with _STATE_LOCK:
             state = self._read_state()
-            sessions = _sessions(state)
+            sessions = _active_sessions(_sessions(state), timestamp)
             current = _session_from_raw(sessions.get(key))
             if current is None or _expired(current, timestamp):
                 current = InteractiveTraceSession(
@@ -109,7 +109,7 @@ class InteractiveTraceStore:
         updated = _replace_seen(session, timestamp, self._idle_timeout)
         with _STATE_LOCK:
             state = self._read_state()
-            sessions = _sessions(state)
+            sessions = _active_sessions(_sessions(state), timestamp)
             sessions[key] = asdict(updated)
             self._write_state({"sessions": sessions})
         return updated
@@ -169,6 +169,15 @@ def interactive_thread_key() -> str:
 def _sessions(state: dict[str, Any]) -> dict[str, Any]:
     sessions = state.get("sessions")
     return sessions if isinstance(sessions, dict) else {}
+
+
+def _active_sessions(sessions: dict[str, Any], now: datetime) -> dict[str, Any]:
+    active: dict[str, Any] = {}
+    for key, value in sessions.items():
+        session = _session_from_raw(value)
+        if session is not None and not _expired(session, now):
+            active[key] = value
+    return active
 
 
 def _session_key(*, person_id: str, workspace: str, host: str, thread_key: str) -> str:

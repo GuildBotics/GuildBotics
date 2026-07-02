@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from guildbotics.observability.interactive_sessions import InteractiveTraceStore
@@ -52,3 +53,27 @@ def test_interactive_trace_store_separates_threads(tmp_path):
     )
 
     assert second.trace_id != first.trace_id
+
+
+def test_interactive_trace_store_prunes_expired_sessions(tmp_path):
+    path = tmp_path / "interactive_trace_state.json"
+    store = InteractiveTraceStore(path, idle_timeout=timedelta(minutes=30))
+    first = store.start_or_touch(
+        person_id="aiko",
+        workspace="/repo",
+        host="codex",
+        thread_key="thread-1",
+        now=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
+    )
+
+    store.start_or_touch(
+        person_id="aiko",
+        workspace="/repo",
+        host="codex",
+        thread_key="thread-2",
+        now=datetime(2026, 7, 1, 11, 0, tzinfo=UTC),
+    )
+
+    sessions = json.loads(path.read_text(encoding="utf-8"))["sessions"]
+    assert len(sessions) == 1
+    assert first.trace_id not in str(sessions)

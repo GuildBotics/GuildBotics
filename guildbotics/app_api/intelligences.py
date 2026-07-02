@@ -4,7 +4,6 @@ import shutil
 from pathlib import Path
 from typing import Any, cast
 
-from guildbotics.app_api.cli_agents import discover_cli_agents, resolve_cli_agent_path
 from guildbotics.app_api.models import (
     BrainAssignment,
     CliAgentDefinition,
@@ -15,6 +14,10 @@ from guildbotics.app_api.models import (
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.editions.simple.setup_service import CreatedFile
 from guildbotics.intelligences.brains import agno_agent, cli_agent
+from guildbotics.intelligences.cli_agents import (
+    discover_cli_agents,
+    resolve_cli_agent_path,
+)
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"

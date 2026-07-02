@@ -26,11 +26,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.intelligences import IntelligenceConfigService
-from guildbotics.app_api.llm_providers import discover_llm_providers
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentFieldStateResponse,
@@ -82,6 +80,8 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
+from guildbotics.intelligences.llm_providers import discover_llm_providers
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.fileio import get_template_path, load_yaml_file
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
