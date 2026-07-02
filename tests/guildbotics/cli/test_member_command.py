@@ -777,6 +777,13 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
                 "branch": "main",
                 "pushed": True,
                 "status": "pushed",
+                "commits": [
+                    {
+                        "id": "abc1234",
+                        "message": "Improve activity",
+                        "url": "https://github.com/owner/repo/commit/abc1234",
+                    }
+                ],
             }
 
     class FakeService:
@@ -830,7 +837,17 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
         {
             "type": "github.push",
             "person_id": "aiko",
-            "payload": {"action": "push", "ref": "refs/heads/main"},
+            "payload": {
+                "action": "push",
+                "ref": "refs/heads/main",
+                "commits": [
+                    {
+                        "id": "abc1234",
+                        "message": "Improve activity",
+                        "url": "https://github.com/owner/repo/commit/abc1234",
+                    }
+                ],
+            },
         }
     ]
 

@@ -75,6 +75,9 @@ async def test_publish_commits_pushes_and_preserves_worktree(monkeypatch, tmp_pa
     assert result.has_changes is True
     assert result.commit_sha is not None
     assert result.pushed is True
+    assert result.commits == [
+        {"id": result.commit_sha, "message": "publish changes", "url": ""}
+    ]
     assert readme.read_text(encoding="utf-8") == "initial\nchanged\n"
     assert untracked.read_text(encoding="utf-8") == "new\n"
     assert repo.is_dirty(untracked_files=True) is False
@@ -145,6 +148,7 @@ async def test_push_pushes_existing_commit(monkeypatch, tmp_path):
 
     assert result.pushed is True
     assert result.status == "pushed"
+    assert result.commits == [{"id": commit_sha, "message": "local commit", "url": ""}]
     remote_repo = git.Repo(tmp_path / "remote.git")
     assert remote_repo.commit("main").hexsha == commit_sha
 
@@ -251,6 +255,9 @@ async def test_publish_current_workspace_allows_current_repo_outside_member_work
     assert result.has_changes is True
     assert result.commit_sha is not None
     assert result.pushed is True
+    assert result.commits == [
+        {"id": result.commit_sha, "message": "publish current workspace", "url": ""}
+    ]
     assert repo.active_branch.name == before_branch
 
 

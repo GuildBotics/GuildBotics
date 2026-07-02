@@ -217,6 +217,13 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
             {
                 "action": "push",
                 "ref": "refs/heads/feature",
+                "commits": [
+                    {
+                        "id": "abc1234",
+                        "message": "Improve activity history event context\n\nbody",
+                        "url": "https://github.com/owner/repo/commit/abc1234",
+                    }
+                ],
             },
         )
     with trace_scope(
@@ -241,7 +248,18 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         {
             "ref": "refs/heads/main",
             "compare": "https://github.com/owner/repo/compare/a...b",
-            "commits": [{"id": "abc"}, {"id": "def"}],
+            "commits": [
+                {
+                    "id": "abc",
+                    "message": "Add activity page",
+                    "url": "https://github.com/owner/repo/commit/abc",
+                },
+                {
+                    "id": "def",
+                    "message": "Wire activity API",
+                    "url": "https://github.com/owner/repo/commit/def",
+                },
+            ],
         },
         source="github",
     )
@@ -296,11 +314,38 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         for event in body["events"]
     )
     assert any(
-        event["title"] == "Push" and event["person_id"] == "alice"
+        event["title"] == "Improve activity history event context"
+        and event["person_id"] == "alice"
         for event in body["events"]
     )
+    member_push = next(
+        event
+        for event in body["events"]
+        if event["title"] == "Improve activity history event context"
+    )
+    assert member_push["links"] == [
+        {
+            "kind": "commit",
+            "label": "Improve activity history event context",
+            "url": "https://github.com/owner/repo/commit/abc1234",
+        }
+    ]
     assert any(event["title"] == "PR #7 Merged" for event in body["events"])
-    assert any(event["title"] == "Push: 2 commits" for event in body["events"])
+    shared_push = next(
+        event for event in body["events"] if event["title"] == "Push: 2 commits"
+    )
+    assert shared_push["links"] == [
+        {
+            "kind": "commit",
+            "label": "Add activity page",
+            "url": "https://github.com/owner/repo/commit/abc",
+        },
+        {
+            "kind": "commit",
+            "label": "Wire activity API",
+            "url": "https://github.com/owner/repo/commit/def",
+        },
+    ]
     assert any(event["title"] == "Issue #133 Resolved" for event in body["events"])
     assert body["unsupported_event_sources"] == []
 
@@ -338,7 +383,16 @@ def test_activity_history_merges_memory_and_prompt_trace_records(
                 "memory.path": "documents/desktop-api",
                 "memory.scope": "project",
             },
-            "payload": {"title": "Desktop API 仕様書", "summary": "API notes"},
+            "payload": {
+                "title": "Desktop API 仕様書",
+                "summary": "API notes",
+                "source": [
+                    {
+                        "type": "pr",
+                        "url": "https://github.com/owner/repo/pull/240",
+                    }
+                ],
+            },
         }
     )
     prompt_trace.write_text(
@@ -382,9 +436,9 @@ def test_activity_history_merges_memory_and_prompt_trace_records(
     assert set(sessions) == {"memory-trace", "prompt-trace"}
     assert [link.model_dump() for link in sessions["memory-trace"].links] == [
         {
-            "kind": "doc",
+            "kind": "pull_request",
             "label": "Desktop API 仕様書",
-            "url": "",
+            "url": "https://github.com/owner/repo/pull/240",
         }
     ]
     assert sessions["prompt-trace"].mode == "interactive"

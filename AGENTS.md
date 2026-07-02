@@ -9,6 +9,7 @@
 - 挙動変更を行った場合は、関連ドキュメントも必要に応じて更新する
 - コードの修正に際しては「最小限の変更量」ではなく、「変更後のコード量が最小になること」を最優先事項とし、場当たり的対応ではなくあるべき姿の美しいコードとなることを心がける
 - 意味判定・分類・採用可否のような自然言語理解が必要な処理を、キーワード列挙や場当たり的な文字列マッチで実装しない。既存の LLM 判定基盤（例: `guildbotics/intelligences/functions.py` と `guildbotics/templates/commands/functions/*`）を優先し、必要なら汎用的な判定関数を追加する。
+- 責務境界を越えた実装をしない。GuildBotics における具体的な責務境界は「重要な実装ポイント」の「責務境界」を参照する。
 
 このリポジトリの `.gitignore` では、少なくとも以下を無視対象にしています（抜粋）:
 
@@ -33,7 +34,79 @@
 
 ## 重要な実装ポイント
 
-## 1. CLI コマンド
+## 1. 責務境界
+
+GuildBotics では、実装場所を「その処理を知ってよい層」で決める。近い場所に場当たり的に置かず、以下の境界に従う。
+
+### CLI (`guildbotics/cli/*`)
+
+責務:
+
+- Click の引数・オプション定義、入力ファイル/stdin 読み取り、出力形式の選択
+- workspace / member 解決、capability 呼び出し、CLI 用エラー変換
+- interactive session の開始・touch、member command の開始/終了/failure という CLI 実行イベントの記録
+
+禁止:
+
+- GitHub / Slack / Git など provider 固有 payload の組み立て
+- PR / Issue / commit など domain event の構造決定
+- provider URL の生成・分類
+- activity history 表示用の title / label / link kind 正規化
+
+例: `guildbotics member git push` は push capability の結果を受けて記録関数を呼ぶだけにし、`github.push` payload の構造は `guildbotics/capabilities/*` 側へ置く。
+
+### Capability (`guildbotics/capabilities/*`)
+
+責務:
+
+- GitHub / Git / Slack / memory など外部サービスや domain 操作の実行
+- provider API / URL / payload / credential など provider 固有知識の保持
+- capability の結果 payload と、必要な domain event payload の組み立て
+- provider 固有 URL 生成。例: GitHub commit URL は Git/GitHub capability 側で扱う
+
+禁止:
+
+- desktop / activity history の画面都合に合わせた表示文言の決定
+- FastAPI response model や React component の都合を直接知ること
+
+### Diagnostics / App API (`guildbotics/app_api/*`)
+
+責務:
+
+- diagnostics store / event bus / runtime API の集約
+- trace, log, event, memory audit, prompt trace など複数 source の統合
+- API response model への変換
+- provider payload を activity history 用の provider-neutral な event/link/title/detail に変換する normalizer / translator
+
+禁止:
+
+- CLI と同じ domain event payload を別途組み立てること
+- GitHub URL の `/pull/` や `/issues/` のような path 文字列だけで PR/Issue を分類すること
+- provider API 呼び出しや credential 処理を持つこと
+
+例: activity history では raw diagnostics record を直接 UI 向けに解釈せず、`activity_events.py` / `activity_links.py` のような専用 normalizer に寄せる。
+
+### Desktop frontend (`desktop/src/*`)
+
+責務:
+
+- API response の表示、ユーザー操作、画面状態管理
+- 表示密度、hover/click、responsive layout など UI 固有の振る舞い
+
+禁止:
+
+- provider raw payload を独自に再分類すること
+- GitHub URL path から PR/Issue/commit 種別を推測すること
+- backend と同じ title / label / link kind 正規化を再実装すること
+
+### 共通判断ルール
+
+- 同じ判断が CLI と API、または API と frontend に重複しそうな場合は、より domain に近い backend module へ寄せる
+- provider 固有知識は capability か provider normalizer に閉じ込める
+- activity history / diagnostics 表示に必要な変換は、raw payload を保存する層ではなく表示用 normalizer に置く
+- 新しい event/link 種別を追加するときは、記録 payload、normalizer、API model、frontend 表示の責務を分けて実装する
+
+## 2. CLI コマンド
 
 `guildbotics/cli/__init__.py` に主要コマンドがあります。
 
@@ -53,7 +126,7 @@
 - `start` は PID ファイルを `~/.guildbotics/data/run/scheduler.pid` に保存
 - `stop` / `kill` は上記 PID を使ってプロセス停止
 
-## 2. コマンド実行基盤（最重要）
+## 3. コマンド実行基盤（最重要）
 
 中心実装:
 
@@ -83,7 +156,7 @@
 - `to_html`
 - `to_pdf`
 
-## 3. 設定ファイル解決（実装依存）
+## 4. 設定ファイル解決（実装依存）
 
 設定ファイル解決は `guildbotics/utils/fileio.py` が担当します。
 
@@ -95,7 +168,7 @@
 - ローカライズ対応ファイルは `.<lang>` → `.en` → 素のファイル名の順で探索
 - メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
 
-## 4. スケジューラ
+## 5. スケジューラ
 
 中心実装:
 
@@ -113,7 +186,7 @@
 
 - `workflows/ticket_driven_workflow` (`SimpleEdition.get_default_routines()`)
 
-## 5. Edition 切替
+## 6. Edition 切替
 
 `guildbotics/editions/__init__.py#get_edition()` で `GUILDBOTICS_EDITION` を見て Edition を切り替えます。`Edition` は `get_context()` と `get_default_routines()` のみを提供する実行時の抽象です。
 

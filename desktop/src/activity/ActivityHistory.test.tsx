@@ -4,7 +4,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ActivityHistoryPage, activityRange, matchActivityHistory } from "./ActivityHistory";
+import {
+  ActivityHistoryPage,
+  activityLinkHref,
+  activityRange,
+  matchActivityHistory,
+} from "./ActivityHistory";
 import { getActivityHistory } from "../api/client";
 import type { ActivityHistoryResponse } from "../api/client";
 import "../i18n";
@@ -73,6 +78,16 @@ const ACTIVITY_FIXTURE: ActivityHistoryResponse = {
         },
       ],
     },
+    {
+      id: "event-2",
+      timestamp: "2026-07-01T02:10:00Z",
+      person_id: "alice",
+      type: "push",
+      title: "Improve activity history event context",
+      detail: "refs/heads/feature",
+      url: "",
+      links: [],
+    },
   ],
   unsupported_event_sources: [],
 };
@@ -93,6 +108,9 @@ describe("ActivityHistoryPage", () => {
     expect(await screen.findByText("Alice")).toBeInTheDocument();
     expect(await screen.findByText("workflows/ticket_driven_workflow")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "PR #7 Merged" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Improve activity history event context" }),
+    ).toBeInTheDocument();
   });
 
   it("dims nonmatching activity and highlights matching activity by query", async () => {
@@ -120,6 +138,21 @@ describe("ActivityHistoryPage", () => {
       "activity-session-week",
     );
   });
+
+  it("hides member event pins in week view", async () => {
+    const user = userEvent.setup();
+    renderActivity();
+
+    expect(
+      await screen.findByRole("button", { name: "Improve activity history event context" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByText("1 week"));
+
+    expect(screen.queryByRole("button", { name: "Improve activity history event context" })).toBe(
+      null,
+    );
+    expect(screen.getByRole("button", { name: "PR #7 Merged" })).toBeInTheDocument();
+  });
 });
 
 describe("activityRange", () => {
@@ -128,6 +161,19 @@ describe("activityRange", () => {
 
     expect(range.start.getDay()).toBe(1);
     expect(range.end.getTime() - range.start.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+});
+
+describe("activityLinkHref", () => {
+  it("uses normalized backend link urls consistently", () => {
+    expect(
+      activityLinkHref({
+        kind: "pull_request",
+        label: "PR #240 Activity history",
+        url: "https://github.com/owner/repo/pull/240",
+      }),
+    ).toBe("https://github.com/owner/repo/pull/240");
+    expect(activityLinkHref({ kind: "doc", label: "Memory note", url: "" })).toBe(null);
   });
 });
 

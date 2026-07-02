@@ -332,6 +332,16 @@ class MemberGitHubCapabilityService:
     async def get_clone_url(self, owner: str, repo: str) -> str:
         return f"{self.web_base_url()}/{owner}/{repo}.git"
 
+    def commit_url_from_remote(self, remote_url: str, sha: str) -> str:
+        web_url = _remote_web_url(remote_url)
+        if not web_url:
+            return ""
+        configured_host = urlparse(self.web_base_url()).hostname
+        remote_host = urlparse(web_url).hostname
+        if configured_host != remote_host:
+            return ""
+        return f"{web_url}/commit/{sha}"
+
     async def get_pr_head_branch(self, url: str) -> str:
         return (await self.get_pr_head(url)).branch
 
@@ -763,3 +773,23 @@ def _append_closes(body: str, issue_url: str) -> str:
     ):
         return body
     return f"{body.rstrip()}\n\n{closes}" if body.strip() else closes
+
+
+def _remote_web_url(remote_url: str) -> str:
+    value = remote_url.strip()
+    if not value:
+        return ""
+    if "://" not in value and ":" in value:
+        host, path = value.split(":", 1)
+        host = host.rsplit("@", 1)[-1]
+        return _strip_git_suffix(f"https://{host}/{path}") if host and path else ""
+    parsed = urlparse(value)
+    if parsed.scheme in {"http", "https"} and parsed.netloc and parsed.path:
+        return _strip_git_suffix(f"{parsed.scheme}://{parsed.netloc}{parsed.path}")
+    if parsed.scheme == "ssh" and parsed.hostname and parsed.path:
+        return _strip_git_suffix(f"https://{parsed.hostname}{parsed.path}")
+    return ""
+
+
+def _strip_git_suffix(url: str) -> str:
+    return url.removesuffix(".git").rstrip("/")

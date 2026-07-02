@@ -261,6 +261,7 @@ function ActivityTimelineRow({
   const weekSessionCount = view === "week" ? maxWeekSessionCount(sessions, range) : 0;
   const rowMinHeight = team ? 38 : view === "week" ? Math.max(86, weekSessionCount * 30 + 44) : 86;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
+  const visibleEvents = view === "week" && !team ? [] : events;
   return (
     <div className={team ? "activity-row activity-row-events" : "activity-row"}>
       <div className="activity-member-cell">
@@ -293,7 +294,7 @@ function ActivityTimelineRow({
             />
           ))
         )}
-        {events.map((event) => (
+        {visibleEvents.map((event) => (
           <EventPin
             key={event.id}
             event={event}
@@ -514,26 +515,30 @@ function LinkList({ links }: { links: ActivityHistoryLink[] }) {
   }
   return (
     <div className="activity-link-list">
-      {links.map((link) =>
-        link.url ? (
-          <a
-            href={link.url}
-            key={`${link.kind}:${link.label}:${link.url}`}
-            target="_blank"
-            rel="noreferrer"
-          >
+      {links.map((link) => {
+        const href = activityLinkHref(link);
+        return href ? (
+          <a href={href} key={activityLinkKey(link)} target="_blank" rel="noreferrer">
             <ExternalLink size={12} />
             <span>{link.label}</span>
           </a>
         ) : (
-          <span className="activity-link-item" key={`${link.kind}:${link.label}:${link.url}`}>
+          <span className="activity-link-item" key={activityLinkKey(link)}>
             <ExternalLink size={12} />
             <span>{link.label}</span>
           </span>
-        ),
-      )}
+        );
+      })}
     </div>
   );
+}
+
+export function activityLinkHref(link: ActivityHistoryLink): string | null {
+  return link.url || null;
+}
+
+export function activityLinkKey(link: ActivityHistoryLink): string {
+  return `${link.kind}:${link.label}:${link.url}`;
 }
 
 export function activityRange(baseDate: Date, view: ActivityView): { start: Date; end: Date } {

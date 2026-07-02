@@ -28,6 +28,7 @@ class PublishResult:
     pushed: bool
     has_changes: bool
     status: str
+    commits: list[dict[str, str]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,6 +38,7 @@ class PublishResult:
             "pushed": self.pushed,
             "has_changes": self.has_changes,
             "status": self.status,
+            "commits": self.commits,
         }
 
 
@@ -64,6 +66,7 @@ class PushResult:
     branch: str
     pushed: bool
     status: str
+    commits: list[dict[str, str]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +74,7 @@ class PushResult:
             "branch": self.branch,
             "pushed": self.pushed,
             "status": self.status,
+            "commits": self.commits,
         }
 
 
@@ -183,12 +187,13 @@ class MemberGitWorkspaceService:
         repo = git.Repo(repo_path)
         branch = repo.active_branch.name
         token = await get_person_github_token(self.person, self.github.base_url)
-        pushed = self._push_if_needed(repo, branch, token)
+        pushed, commits = self._push_if_needed(repo, branch, token)
         return PushResult(
             repo_path=str(repo_path),
             branch=branch,
             pushed=pushed,
             status="pushed" if pushed else "up_to_date",
+            commits=commits,
         )
 
     async def _publish(
@@ -212,6 +217,7 @@ class MemberGitWorkspaceService:
             status=(
                 "published" if (commit.commit_sha or push.pushed) else "up_to_date"
             ),
+            commits=push.commits,
         )
 
     def _validate_repo_path(
@@ -278,7 +284,9 @@ class MemberGitWorkspaceService:
             return bool(repo.index.entries)
         return bool(repo.index.diff(repo.head.commit))
 
-    def _push_if_needed(self, repo: git.Repo, branch: str, token: str) -> bool:
+    def _push_if_needed(
+        self, repo: git.Repo, branch: str, token: str
+    ) -> tuple[bool, list[dict[str, str]]]:
         origin = repo.remotes.origin
         with _git_auth_environment(repo, token):
             origin.fetch()
@@ -286,12 +294,28 @@ class MemberGitWorkspaceService:
             commits_ahead = list(repo.iter_commits(f"origin/{branch}..{branch}"))
             need_push = bool(commits_ahead)
         except GitCommandError:
+            commits_ahead = [repo.head.commit] if repo.head.is_valid() else []
             need_push = True
         if not need_push:
-            return False
+            return False, []
+        commits = [
+            _commit_summary(
+                commit, self.github.commit_url_from_remote(origin.url, commit.hexsha)
+            )
+            for commit in commits_ahead
+        ]
         with _git_auth_environment(repo, token):
             origin.push(branch)
-        return True
+        return True, commits
+
+
+def _commit_summary(commit: git.Commit, url: str) -> dict[str, str]:
+    message = str(commit.message or "").strip()
+    return {
+        "id": commit.hexsha,
+        "message": message.splitlines()[0] if message else commit.hexsha[:7],
+        "url": url,
+    }
 
 
 @contextmanager
