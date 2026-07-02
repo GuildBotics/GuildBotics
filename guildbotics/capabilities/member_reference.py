@@ -1,11 +1,17 @@
 """Single source of truth for the GuildBotics member capability reference.
 
 This describes *what a configured member can do and how*: the ``guildbotics
-member ...`` command surface plus the cross-cutting safety rules. It is
-deliberately free of task-contract content (a run's primary objective, its
-required completion command, status semantics). Those belong to each entrypoint
-(``SKILL.md`` and the workflow prompts), never to this shared reference, so that
-workflow-invoked and interactive behavior are never blurred.
+member ...`` command surface, the standard work procedure, and the
+cross-cutting rules (including the memory and communication-style contracts).
+Everything here is mode-independent: it applies whether the member is invoked
+by a workflow or interactively through the skill.
+
+What it deliberately excludes is a run's completion contract — the primary
+objective, the required completion command, and status semantics. Those belong
+to each entrypoint (``SKILL.md`` and the workflow prompts), never to this
+shared reference, so that workflow-invoked and interactive behavior are never
+blurred. The reverse also holds: guidance that would otherwise be duplicated
+across entrypoints belongs here, not in the prompts.
 
 Consumers render from this one source:
 - ``member context`` embeds it (the mandatory first call in every entrypoint).
@@ -34,8 +40,10 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "stage and branch with plain git yourself",
         [
             (
-                "guildbotics member git prepare --person <person> --issue-url <url> [--pr-url <url>]",
-                "Clone/checkout an isolated member workspace for the ticket or PR head.",
+                "guildbotics member git prepare --person <person> "
+                "(--issue-url <url> | --pr-url <url> | --repo <owner/repo> --branch <name>)",
+                "Clone/checkout an isolated member workspace for a ticket, a PR head, "
+                "or an ad-hoc branch.",
             ),
             (
                 "guildbotics member git commit --person <person> --repo-path <path> "
@@ -203,6 +211,23 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ),
 ]
 
+_STANDARD_WORK_PROCEDURE: list[str] = [
+    "Inspect first: read the current issue / PR / thread with the member inspect "
+    "commands before acting. Fields owned by GitHub or Slack (state, assignees, "
+    "labels, PR links, bodies, comments, review threads) are canonical in that "
+    "inspect output.",
+    "Edit, then run the relevant tests, linters, and checks before publishing any "
+    "code change.",
+    "Stage with plain git (`git add`), then commit and push through `member git "
+    "commit`, `member git push`, or `member git publish`.",
+    "When issue work changed code, open or reuse a PR with `member github pr "
+    "create`. When addressing PR review threads, reply with `member github pr "
+    "reply` using the `reply_target_id` from `pr inspect --include-comments`.",
+    "Leave observable evidence even when no change is needed: a comment, a reply, "
+    "or a reaction.",
+    "Before finishing, maintain memory according to the rules below.",
+]
+
 _CROSS_CUTTING_RULES: list[str] = [
     "Publishing writes go through these `guildbotics member ...` commands: commits, pushes, PRs, "
     "issue/PR comments, and Slack posts/reactions. Never use gh, raw GitHub/Slack tokens or APIs, "
@@ -210,8 +235,12 @@ _CROSS_CUTTING_RULES: list[str] = [
     "Local-only git is the opposite: run `git add` and `git switch -c` yourself as plain git. "
     "`member git commit` / `publish` commit only what you staged and apply the member name/email "
     "to that one commit without changing the repository git config.",
-    "Apply the member voice from `communication_style` to conversational and document outputs; "
-    "keep IDs, paths, command arguments, and machine-readable output factual.",
+    "Apply `communication_style` by output kind: `interactive_replies` for interactive "
+    "progress updates and final replies to the user; `github_comments` for issue comments, "
+    "PR conversation comments, and review thread replies; `neutral_documents` for issue/PR "
+    "titles and bodies, commit messages, and task summaries; `machine_outputs` for command "
+    "output, command arguments, IDs, paths, workflow completion JSON, and workflow "
+    "`AgentResponse.message`.",
     "`memory.pinned` from `member context` contains standing rules. `memory.digest` is only a hint "
     "that a relevant note may exist.",
     "Before work, recall prior memory by source whenever a ticket URL, PR URL, Slack thread URL, "
@@ -222,10 +251,18 @@ _CROSS_CUTTING_RULES: list[str] = [
     "state of GitHub, Slack, or code. Reality-check every memory you read against the current "
     "owning system, and when sources differ prefer the owning system for canonical fields such "
     "as GitHub state, assignees, labels, PR links, Slack thread contents, and code behavior.",
+    "When the requester asks what the member remembers, recorded, learned, or previously "
+    "discussed, use memory as the primary basis for the answer, then verify freshness against "
+    "the owning system when current state matters.",
     "Before finishing, touch memories that actually helped, update memories that reality proves "
     "wrong, and record only durable reusable lessons. Policy memory (`kind: policy`) requires "
     "human approval through `--policy-approved`; autonomous workflow runs must propose policy "
     "changes in their normal output instead of updating policy directly.",
+    "After creating, reusing, or updating a PR, record durable PR work context with "
+    "`member memory record --pr <pr_url>`, adding `--ticket <url>` and/or `--thread <url>` "
+    "when known: include the branch, commit, verification result, what was completed, and "
+    "remaining follow-up. Record reusable technical lessons as separate memory documents "
+    "only when they are valuable beyond that one PR.",
     "Never display, infer, store, or copy secrets or token values.",
 ]
 
@@ -238,6 +275,9 @@ def capability_reference_text() -> str:
         for usage, purpose in commands:
             lines.append(f"- `{usage}` — {purpose}")
         lines.append("")
+    lines.append("### Standard work procedure")
+    lines.extend(f"- {step}" for step in _STANDARD_WORK_PROCEDURE)
+    lines.append("")
     lines.append("### Rules")
     lines.extend(f"- {rule}" for rule in _CROSS_CUTTING_RULES)
     return "\n".join(lines).strip()

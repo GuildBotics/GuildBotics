@@ -1,0 +1,10 @@
+ja:
+  workflow_contract: |-
+    この実行は非対話の workflow 実行です(guildbotics_execution_mode=workflow)。この prompt が primary contract であり、skill から手順を置き換えたり推測したりしないでください。
+    - 最初に `guildbotics member context --person %{person_id}` を実行し、出力の capabilities セクション(同内容は `guildbotics member help` でも参照可)を、コマンド構文・安全ルール・communication style・GitHub/git/Slack 書き込み・memory handling・標準作業手順の source of truth としてください。
+    - isolated member workspace で作業してください。`--workspace-mode current` は決して使わないでください。
+    - この実行は非対話です。ユーザーの応答を待ってはいけません。情報が不足している場合は、GitHub(issue/PR コメントまたは review reply)か Slack thread に質問を投稿し、status `asking` で complete してください。
+    - credential・アクセス権・必要文脈の不足で処理できない場合は、safe summary を書いて status `blocked` で complete してください。
+    - この run に必須の完了コマンドが成功する前に、成功応答を返してはいけません。失敗した場合は不足している evidence を補うか、agent run を失敗させてください。
+    - secret を表示・推測・保存・コピーしないでください。
+    - 応答は AgentResponse の単一 JSON オブジェクトだけにしてください。`message` は workflow 用の中立 summary とし、member 口調の会話文や投稿本文をそのまま入れないでください。

@@ -714,6 +714,64 @@ def test_member_git_commit_reads_message_from_stdin(monkeypatch, tmp_path):
     assert calls["message"] == "日本語のコミットメッセージ\n"
 
 
+def test_member_git_prepare_rejects_missing_anchor():
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member, ["git", "prepare", "--person", "aiko"]
+    )
+
+    assert result.exit_code != 0
+    assert "Provide --issue-url, --pr-url, or --repo with --branch." in result.output
+
+
+def test_member_git_prepare_rejects_repo_combined_with_url():
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "git",
+            "prepare",
+            "--person",
+            "aiko",
+            "--repo",
+            "acme/widget",
+            "--branch",
+            "chat/fix-typo",
+            "--issue-url",
+            "https://github.com/acme/widget/issues/1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--repo cannot be combined with --issue-url or --pr-url." in result.output
+
+
+def test_member_git_prepare_rejects_repo_without_branch():
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        ["git", "prepare", "--person", "aiko", "--repo", "acme/widget"],
+    )
+
+    assert result.exit_code != 0
+    assert "--repo requires --branch." in result.output
+
+
+def test_member_git_prepare_rejects_branch_without_repo():
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        ["git", "prepare", "--person", "aiko", "--branch", "chat/fix-typo"],
+    )
+
+    assert result.exit_code != 0
+    assert "--branch requires --repo." in result.output
+
+
 def test_member_git_commit_rejects_missing_message_source(tmp_path):
     runner = CliRunner()
 

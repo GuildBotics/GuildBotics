@@ -198,6 +198,10 @@ async def _handle_event(
         await invoke(
             "functions/handle_chat_event",
             person_id=person_id,
+            workflow_contract=t(
+                "commands.workflows.common.workflow_contract",
+                person_id=person_id,
+            ),
             workflow_run_id=run_id,
             service_name=service_name,
             channel_id=channel_id,

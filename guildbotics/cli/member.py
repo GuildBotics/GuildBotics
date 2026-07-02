@@ -888,23 +888,60 @@ def git() -> None:
 
 @git.command(name="prepare")
 @click.option("--person", required=True)
-@click.option("--issue-url", required=True)
+@click.option("--issue-url", default="")
 @click.option("--pr-url", default="")
+@click.option("--repo", default="", help="Target repository as <owner>/<repo>.")
+@click.option(
+    "--branch", default="", help="Branch to create or check out (with --repo)."
+)
 @click.option("--format", "output_format", type=FormatChoice, default="json")
-def git_prepare(person: str, issue_url: str, pr_url: str, output_format: str) -> None:
+def git_prepare(
+    person: str,
+    issue_url: str,
+    pr_url: str,
+    repo: str,
+    branch: str,
+    output_format: str,
+) -> None:
+    _validate_prepare_anchor(issue_url, pr_url, repo, branch)
     _run(
-        _git_prepare(person, issue_url, pr_url or None),
+        _git_prepare(
+            person, issue_url or None, pr_url or None, repo or None, branch or None
+        ),
         output_format=output_format,
     )
 
 
+def _validate_prepare_anchor(
+    issue_url: str, pr_url: str, repo: str, branch: str
+) -> None:
+    if branch and not repo:
+        raise click.UsageError("--branch requires --repo.")
+    if not (issue_url or pr_url or repo):
+        raise click.UsageError(
+            "Provide --issue-url, --pr-url, or --repo with --branch."
+        )
+    if repo and (issue_url or pr_url):
+        raise click.UsageError(
+            "--repo cannot be combined with --issue-url or --pr-url."
+        )
+    if repo and not branch:
+        raise click.UsageError("--repo requires --branch.")
+
+
 async def _git_prepare(
-    person: str, issue_url: str, pr_url: str | None
+    person: str,
+    issue_url: str | None,
+    pr_url: str | None,
+    repo: str | None,
+    branch: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitWorkspaceService(member_person, context.team, context.logger)
     try:
-        return await service.prepare(issue_url=issue_url, pr_url=pr_url)
+        return await service.prepare(
+            issue_url=issue_url, pr_url=pr_url, repo=repo, branch=branch
+        )
     finally:
         await service.aclose()
 
