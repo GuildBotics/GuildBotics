@@ -423,21 +423,20 @@ function ActivityBlockBar({
   return (
     <HoverCard openDelay={150} closeDelay={80} withinPortal>
       <HoverCard.Target>
-        <div
+        <button
+          type="button"
           aria-label={block.title}
           className={`${stateClass} ${
             block.mode === "interactive"
               ? "activity-session activity-session-interactive"
               : "activity-session activity-session-workflow"
           } ${view === "week" ? "activity-session-week" : ""}`}
-          role="button"
-          tabIndex={0}
           style={{
             ...(view === "day" ? { left: `${left}%`, top: "10px", width: `${width}%` } : {}),
           }}
         >
           <span>{visibleTitle}</span>
-        </div>
+        </button>
       </HoverCard.Target>
       <HoverCard.Dropdown className="activity-hover-card">
         <ActivityBlockDetail block={block} />
@@ -462,15 +461,14 @@ function EventPin({
   return (
     <HoverCard openDelay={120} closeDelay={80} withinPortal>
       <HoverCard.Target>
-        <div
+        <button
+          type="button"
           aria-label={event.title}
           className={`activity-event-pin activity-event-${event.type} ${searchStateClass(searchActive, matched)}`}
-          role="button"
-          tabIndex={0}
           style={{ left: `${positionInRange(new Date(event.timestamp), range)}%`, top }}
         >
           {eventIcon(event.type)}
-        </div>
+        </button>
       </HoverCard.Target>
       <HoverCard.Dropdown className="activity-hover-card">
         <ActivityEventDetail event={event} />

@@ -47,7 +47,6 @@ from guildbotics.observability.interactive_sessions import (
 )
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.utils.env_loader import load_guildbotics_env
-from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
 FormatChoice = click.Choice(["json", "markdown"])
@@ -1724,7 +1723,13 @@ def _current_person() -> str:
 
 
 def _current_workspace() -> str:
-    return str(get_workspace_data_root(Path.cwd()))
+    ctx = click.get_current_context(silent=True)
+    while ctx is not None:
+        workspace = ctx.obj.get("workspace") if isinstance(ctx.obj, dict) else None
+        if isinstance(workspace, str) and workspace:
+            return workspace
+        ctx = ctx.parent
+    return str(Path.cwd().resolve())
 
 
 def _current_command_path() -> str:

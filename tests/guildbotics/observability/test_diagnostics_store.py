@@ -78,6 +78,16 @@ def test_list_traces_orders_mixed_offset_timestamps_by_instant(tmp_path: Path) -
     assert traces[1]["updated_at"] == "2026-07-01T00:30:00Z"
 
 
+def test_list_traces_treats_naive_timestamp_as_utc(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started", timestamp="2026-07-01T00:00:00"))
+    store.record(_event("t2", "command.started", timestamp="2026-07-01T08:30:00+09:00"))
+
+    traces = store.list_traces()
+
+    assert [trace["trace_id"] for trace in traces] == ["t1", "t2"]
+
+
 def test_failed_event_sets_failed_status_and_error_count(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     store.record(_event("t1", "command.started"))

@@ -1209,6 +1209,77 @@ def test_member_task_status_skips_interactive_trace_under_workflow(
     assert DiagnosticsStore().list_traces(source="interactive") == []
 
 
+def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    calls: dict[str, str] = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeInteractiveTraceStore:
+        def start_or_touch(self, *, person_id, workspace, host, thread_key):
+            calls.update(
+                {
+                    "person_id": person_id,
+                    "workspace": workspace,
+                    "host": host,
+                    "thread_key": thread_key,
+                }
+            )
+            return member_module.InteractiveTraceSession(
+                trace_id="trace-1",
+                person_id=person_id,
+                workspace=workspace,
+                host=host,
+                thread_key=thread_key,
+                started_at="2026-01-01T00:00:00+00:00",
+                last_seen_at="2026-01-01T00:00:00+00:00",
+                expires_at="2026-01-01T00:30:00+00:00",
+            )
+
+        def touch(self, session):
+            return session
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(
+        member_module, "InteractiveTraceStore", FakeInteractiveTraceStore
+    )
+    store = TaskRunStore()
+    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.complete(
+        "run-1",
+        "done",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "--workspace",
+            str(workspace),
+            "task",
+            "status",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["workspace"] == str(workspace.resolve())
+
+
 def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     # The run id is injected by the workflow via env, not a CLI flag; the write

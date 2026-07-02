@@ -13,11 +13,11 @@ import json
 import threading
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from guildbotics.utils.fileio import get_workspace_data_path
+from guildbotics.utils.timestamps import parse_iso_datetime
 
 
 def default_store_path() -> Path:
@@ -294,9 +294,8 @@ def _record_timestamp_sort_key(item: dict[str, Any]) -> tuple[float, str]:
 
 
 def _timestamp_sort_key(timestamp: str) -> tuple[float, str]:
-    try:
-        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    except ValueError:
+    parsed = parse_iso_datetime(timestamp)
+    if parsed is None:
         return (0.0, timestamp)
     return (parsed.timestamp(), timestamp)
 
