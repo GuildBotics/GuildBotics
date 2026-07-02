@@ -231,6 +231,37 @@ def test_rotation_does_not_duplicate_the_record_on_disk(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8").count('"command.finished"') == 1
 
 
+def test_reads_pick_up_records_appended_by_another_process(tmp_path: Path) -> None:
+    # A long-lived reader (e.g. the app_api backend) and a separate writer
+    # (e.g. a ``guildbotics member`` CLI subprocess) share one JSONL file. The
+    # reader must reflect rows the writer appended after the reader loaded,
+    # instead of serving its stale in-memory snapshot.
+    path = tmp_path / "diag.jsonl"
+    reader = DiagnosticsStore(path)
+    writer = DiagnosticsStore(path)
+
+    writer.record(_event("t1", "github.push", timestamp="2026-07-02T22:40:00+09:00"))
+
+    records = reader.records_between(includes=lambda _timestamp: True, limit=10)
+    assert [record["trace_id"] for record in records] == ["t1"]
+    assert reader.list_traces()[0]["trace_id"] == "t1"
+
+
+def test_reads_reflect_external_rotation(tmp_path: Path) -> None:
+    # When another process rotates the file (rewrite shrinks it), the reader
+    # must reload rather than keep its larger stale snapshot.
+    path = tmp_path / "diag.jsonl"
+    reader = DiagnosticsStore(path)
+    reader.record(_event("t1", "command.started"))
+    assert reader.list_traces()[0]["trace_id"] == "t1"
+
+    writer = DiagnosticsStore(path, max_file_bytes=1)
+    writer.record(_event("t2", "command.started"))
+
+    trace_ids = {summary["trace_id"] for summary in reader.list_traces()}
+    assert "t2" in trace_ids
+
+
 def test_record_with_non_serializable_attribute_does_not_raise(tmp_path: Path) -> None:
     path = tmp_path / "diag.jsonl"
     store = DiagnosticsStore(path)
