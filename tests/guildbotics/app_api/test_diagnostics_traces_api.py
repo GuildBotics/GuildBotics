@@ -40,6 +40,10 @@ def _app(tmp_path: Path) -> tuple[TestClient, EventBus]:
     return TestClient(app), bus
 
 
+def _without_timestamp(item: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in item.items() if key != "timestamp"}
+
+
 def test_traces_endpoint_lists_published_traces(tmp_path: Path) -> None:
     client, bus = _app(tmp_path)
     with trace_scope("manual", trace_id="t1", command="demo", person_id="alice"):
@@ -230,6 +234,18 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         "manual", trace_id="human-trace", person_id="bob", command="human"
     ):
         bus.publish_event("command.started", {"command": "human"})
+    with trace_scope(
+        "routine",
+        trace_id="empty-routine",
+        person_id="alice",
+        command="workflows/ticket_driven_workflow",
+    ):
+        bus.publish_event(
+            "command.started", {"command": "workflows/ticket_driven_workflow"}
+        )
+        bus.publish_event(
+            "command.finished", {"command": "workflows/ticket_driven_workflow"}
+        )
     bus.publish_event(
         "github.pull_request",
         {
@@ -296,7 +312,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     assert sessions["agent-trace"]["title"] == "Issue #42"
     assert sessions["skill-trace"]["mode"] == "interactive"
     assert sessions["skill-trace"]["title"] == "member memory recall"
-    assert sessions["agent-trace"]["links"] == [
+    assert [_without_timestamp(link) for link in sessions["agent-trace"]["links"]] == [
         {
             "kind": "issue",
             "label": "Issue #42",
@@ -323,7 +339,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         for event in body["events"]
         if event["title"] == "Improve activity history event context"
     )
-    assert member_push["links"] == [
+    assert [_without_timestamp(link) for link in member_push["links"]] == [
         {
             "kind": "commit",
             "label": "Improve activity history event context",
@@ -334,7 +350,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     shared_push = next(
         event for event in body["events"] if event["title"] == "Push: 2 commits"
     )
-    assert shared_push["links"] == [
+    assert [_without_timestamp(link) for link in shared_push["links"]] == [
         {
             "kind": "commit",
             "label": "Add activity page",
@@ -531,7 +547,18 @@ def test_activity_history_merges_memory_and_prompt_trace_records(
             "kind": "pull_request",
             "label": "Desktop API 仕様書",
             "url": "https://github.com/owner/repo/pull/240",
-        }
+            "timestamp": "2026-07-01T10:00:00+00:00",
+        },
+        {
+            "kind": "doc",
+            "label": "Desktop API 仕様書",
+            "url": (
+                "/diagnostics?tab=memory&doc_id=desktop-api&trace_id=memory-trace"
+                "&timestamp=2026-07-01T10%3A00%3A00%2B00%3A00"
+                "&action=write&person_id=alice"
+            ),
+            "timestamp": "2026-07-01T10:00:00+00:00",
+        },
     ]
     assert sessions["prompt-trace"].mode == "workflow"
     assert sessions["memory-trace"].title == "Desktop API 仕様書"
@@ -600,6 +627,18 @@ def test_memory_events_endpoint_filters_and_returns_body_preview(
     assert search_event["result_count"] == 1
     assert isinstance(search_event["duration_ms"], float)
     assert search_event["body_preview"] == ""
+
+    with client:
+        trace_response = client.get(
+            "/diagnostics/memory-events",
+            params={"trace_id": "memory-trace"},
+            headers=HEADERS,
+        )
+
+    assert trace_response.status_code == HTTP_OK
+    assert {event["trace_id"] for event in trace_response.json()["events"]} == {
+        "memory-trace"
+    }
 
 
 def test_trace_detail_merges_memory_events(

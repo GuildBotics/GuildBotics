@@ -211,6 +211,7 @@ class ActivityHistoryLink(BaseModel):
     kind: Literal["doc", "issue", "pull_request", "commit", "external"]
     label: str
     url: str = ""
+    timestamp: str = ""
 
 
 class ActivityHistorySession(BaseModel):

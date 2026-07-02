@@ -13,6 +13,7 @@ import json
 import threading
 from collections import deque
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +79,9 @@ class DiagnosticsStore:
             if _summary_matches(summary, source, person_id, query, attr_key, attr_value)
         ]
         # _summary_matches reads "_text" before _finalize_summary drops it.
-        result.sort(key=lambda summary: summary["started_at"], reverse=True)
+        result.sort(
+            key=lambda summary: _timestamp_sort_key(summary["started_at"]), reverse=True
+        )
         return result[: max(1, limit)]
 
     def get_records(self, trace_id: str) -> list[dict[str, Any]]:
@@ -87,7 +90,7 @@ class DiagnosticsStore:
             records = [
                 item for item in self._records if item.get("trace_id") == trace_id
             ]
-        records.sort(key=lambda item: item.get("timestamp", ""))
+        records.sort(key=_record_timestamp_sort_key)
         return records
 
     def get_summary(self, trace_id: str) -> dict[str, Any] | None:
@@ -109,7 +112,7 @@ class DiagnosticsStore:
         with self._lock:
             self._refresh_path_locked()
             records = [item for item in self._records if not item.get("trace_id")]
-        records.sort(key=lambda item: item.get("timestamp", ""))
+        records.sort(key=_record_timestamp_sort_key)
         return records[-max(1, limit) :]
 
     def records_between(
@@ -131,7 +134,7 @@ class DiagnosticsStore:
                 for item in self._records
                 if includes(str(item.get("timestamp", "")))
             ]
-        records.sort(key=lambda item: item.get("timestamp", ""))
+        records.sort(key=_record_timestamp_sort_key)
         return records[-max(1, limit) :]
 
     # -- persistence ---------------------------------------------------------
@@ -214,16 +217,27 @@ def _new_summary(trace_id: str) -> dict[str, Any]:
         "attributes": {},
         "_spans": set(),
         "_text": [],
+        "_started_at_key": None,
+        "_updated_at_key": None,
     }
 
 
 def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
     timestamp = str(item.get("timestamp", ""))
     if timestamp:
-        if not summary["started_at"] or timestamp < summary["started_at"]:
+        timestamp_key = _timestamp_sort_key(timestamp)
+        if (
+            summary["_started_at_key"] is None
+            or timestamp_key < summary["_started_at_key"]
+        ):
             summary["started_at"] = timestamp
-        if timestamp > summary["updated_at"]:
+            summary["_started_at_key"] = timestamp_key
+        if (
+            summary["_updated_at_key"] is None
+            or timestamp_key > summary["_updated_at_key"]
+        ):
             summary["updated_at"] = timestamp
+            summary["_updated_at_key"] = timestamp_key
     for key in ("source", "person_id", "command", "workflow"):
         if not summary[key] and item.get(key):
             summary[key] = str(item.get(key))
@@ -268,9 +282,23 @@ def _finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary = dict(summary)
     summary["span_count"] = len(summary.pop("_spans"))
     summary.pop("_text", None)
+    summary.pop("_started_at_key", None)
+    summary.pop("_updated_at_key", None)
     if not summary["started_at"]:
         summary["started_at"] = summary["updated_at"]
     return summary
+
+
+def _record_timestamp_sort_key(item: dict[str, Any]) -> tuple[float, str]:
+    return _timestamp_sort_key(str(item.get("timestamp", "")))
+
+
+def _timestamp_sort_key(timestamp: str) -> tuple[float, str]:
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return (0.0, timestamp)
+    return (parsed.timestamp(), timestamp)
 
 
 def _summary_matches(

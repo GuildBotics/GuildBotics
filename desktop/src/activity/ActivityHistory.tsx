@@ -14,13 +14,17 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  CircleDot,
   Clock3,
   ExternalLink,
+  FileText,
   GitBranch,
+  GitCommitHorizontal,
   GitMerge,
   GitPullRequest,
   Search,
@@ -415,6 +419,7 @@ function ActivityBlockBar({
   const right = positionInRange(end, range);
   const width = Math.max(0, right - left);
   const stateClass = searchStateClass(searchActive, matched);
+  const visibleTitle = activityBlockVisibleTitle(block.title);
   return (
     <HoverCard openDelay={150} closeDelay={80} withinPortal>
       <HoverCard.Target>
@@ -431,7 +436,7 @@ function ActivityBlockBar({
             ...(view === "day" ? { left: `${left}%`, top: "10px", width: `${width}%` } : {}),
           }}
         >
-          <span>{block.title}</span>
+          <span>{visibleTitle}</span>
         </div>
       </HoverCard.Target>
       <HoverCard.Dropdown className="activity-hover-card">
@@ -476,20 +481,31 @@ function EventPin({
 
 function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
   const { t } = useTranslation();
+  const executionUrl = activityBlockExecutionUrl(block);
   return (
     <Stack gap="xs">
       <Group gap="xs" justify="space-between">
-        <Text fw={700} size="sm" lineClamp={2}>
-          {block.title}
-        </Text>
+        {executionUrl ? (
+          <Link className="activity-block-title-link" to={executionUrl}>
+            <Text fw={700} size="sm" lineClamp={2}>
+              {block.title}
+            </Text>
+          </Link>
+        ) : (
+          <Text fw={700} size="sm" lineClamp={2}>
+            {block.title}
+          </Text>
+        )}
+      </Group>
+      <Group gap="xs" wrap="nowrap">
         <Badge color={block.mode === "interactive" ? "teal" : "blue"} variant="light">
           {t(`activity.modes.${block.mode}`)}
         </Badge>
+        <Text c="dimmed" size="xs">
+          <Clock3 size={12} /> {formatTimeRange(block.started_at, block.ended_at)} ·{" "}
+          {formatDuration(blockDurationSeconds(block))}
+        </Text>
       </Group>
-      <Text c="dimmed" size="xs">
-        <Clock3 size={12} /> {formatTimeRange(block.started_at, block.ended_at)} ·{" "}
-        {formatDuration(blockDurationSeconds(block))}
-      </Text>
       {block.sessions.length > 1 ? (
         <div className="activity-block-session-list">
           {block.sessions.map((session) => (
@@ -544,7 +560,8 @@ function ActivityEventDetail({ event }: { event: ActivityHistoryEvent }) {
 
 function LinkList({ links }: { links: ActivityHistoryLink[] }) {
   const { t } = useTranslation();
-  if (links.length === 0) {
+  const orderedLinks = orderedActivityLinks(links);
+  if (orderedLinks.length === 0) {
     return (
       <Text c="dimmed" fs="italic" size="xs">
         {t("activity.noLinks")}
@@ -553,16 +570,29 @@ function LinkList({ links }: { links: ActivityHistoryLink[] }) {
   }
   return (
     <div className="activity-link-list">
-      {links.map((link) => {
+      {orderedLinks.map((link) => {
         const href = activityLinkHref(link);
-        return href ? (
-          <a href={href} key={activityLinkKey(link)} target="_blank" rel="noreferrer">
-            <ExternalLink size={12} />
+        const icon = activityLinkIcon(link.kind);
+        const className = `activity-link-kind-${link.kind}`;
+        return href && isInternalActivityLink(href) ? (
+          <Link className={className} to={href} key={activityLinkKey(link)}>
+            {icon}
+            <span>{link.label}</span>
+          </Link>
+        ) : href ? (
+          <a
+            className={className}
+            href={href}
+            key={activityLinkKey(link)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {icon}
             <span>{link.label}</span>
           </a>
         ) : (
-          <span className="activity-link-item" key={activityLinkKey(link)}>
-            <ExternalLink size={12} />
+          <span className={`activity-link-item ${className}`} key={activityLinkKey(link)}>
+            {icon}
             <span>{link.label}</span>
           </span>
         );
@@ -575,8 +605,60 @@ export function activityLinkHref(link: ActivityHistoryLink): string | null {
   return link.url || null;
 }
 
+function isInternalActivityLink(href: string): boolean {
+  return href.startsWith("/");
+}
+
+function activityLinkIcon(kind: ActivityHistoryLink["kind"]): ReactNode {
+  if (kind === "doc") {
+    return <FileText size={12} />;
+  }
+  if (kind === "commit") {
+    return <GitCommitHorizontal size={12} />;
+  }
+  if (kind === "pull_request") {
+    return <GitPullRequest size={12} />;
+  }
+  if (kind === "issue") {
+    return <CircleDot size={12} />;
+  }
+  return <ExternalLink size={12} />;
+}
+
 export function activityLinkKey(link: ActivityHistoryLink): string {
   return `${link.kind}:${link.label}:${link.url}`;
+}
+
+export function orderedActivityLinks(links: ActivityHistoryLink[]): ActivityHistoryLink[] {
+  return [...links].sort(
+    (left, right) => activityLinkTimestamp(left) - activityLinkTimestamp(right),
+  );
+}
+
+function activityLinkTimestamp(link: ActivityHistoryLink): number {
+  if (!link.timestamp) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const value = Date.parse(link.timestamp);
+  return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value;
+}
+
+export function activityBlockExecutionUrl(block: ActivityBlock): string {
+  const traceIds = uniqueTraceIds(block.sessions);
+  if (traceIds.length === 0) {
+    return "";
+  }
+  const search = new URLSearchParams({ tab: "executions" });
+  search.set("trace_ids", traceIds.join(","));
+  return `/diagnostics?${search.toString()}`;
+}
+
+function uniqueTraceIds(sessions: ActivityHistorySession[]): string[] {
+  return Array.from(
+    new Set(
+      sessions.map((session) => session.trace_id.trim()).filter((traceId) => traceId.length > 0),
+    ),
+  );
 }
 
 export function activityRange(baseDate: Date, view: ActivityView): { start: Date; end: Date } {
@@ -708,6 +790,15 @@ function mergeSessionIntoBlock(
 function blockTitle(sessions: ActivityHistorySession[]): string {
   const [first] = sessions;
   return sessions.length === 1 ? first.title : `${first.title} +${sessions.length - 1}`;
+}
+
+function activityBlockVisibleTitle(title: string): string {
+  const trimmed = title.trim();
+  const withoutPullRequestPrefix = trimmed.replace(
+    /^(?:PR|Pull Request)\s*#\d+\s*[:\-–—]?\s*/i,
+    "",
+  );
+  return withoutPullRequestPrefix || trimmed;
 }
 
 function blockDurationSeconds(block: ActivityBlock): number {
@@ -893,7 +984,9 @@ function weekSessionSegments(
     }
   }
   for (const column of columns) {
-    column.sort((left, right) => left.started_at.localeCompare(right.started_at));
+    column.sort(
+      (left, right) => timestampMillis(left.started_at) - timestampMillis(right.started_at),
+    );
   }
   return columns;
 }
@@ -913,9 +1006,14 @@ function maxWeekSessionCount(
 }
 
 function minIso(left: string, right: string): string {
-  return left <= right ? left : right;
+  return timestampMillis(left) <= timestampMillis(right) ? left : right;
 }
 
 function maxIso(left: string, right: string): string {
-  return left >= right ? left : right;
+  return timestampMillis(left) >= timestampMillis(right) ? left : right;
+}
+
+function timestampMillis(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from guildbotics.app_api.activity_events import (
     ActivityEventType,
@@ -22,6 +22,9 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.entities.team import Person
 from guildbotics.utils.timestamps import parse_iso_datetime
+
+type ActivitySessionMode = Literal["interactive", "workflow"]
+AUTOMATED_WORKFLOW_SOURCES = {"routine", "scheduled", "event_listener"}
 
 
 def build_activity_history(
@@ -95,6 +98,13 @@ def _summarize_trace(
     started_at = min(timestamps)
     ended_at = max(timestamps)
     links = links_from_records(records, attributes)
+    mode: ActivitySessionMode = "interactive" if source == "interactive" else "workflow"
+    if (
+        mode == "workflow"
+        and source in AUTOMATED_WORKFLOW_SOURCES
+        and not _has_workflow_activity_evidence(records, attributes, links)
+    ):
+        return None
     return ActivityHistorySession(
         trace_id=trace_id,
         person_id=str(first.get("person_id") or ""),
@@ -102,12 +112,78 @@ def _summarize_trace(
         command=command,
         workflow=workflow,
         title=_session_title(trace_id, records, command, workflow, links),
-        mode="interactive" if source == "interactive" else "workflow",
+        mode=mode,
         status=status,
         started_at=started_at.isoformat(),
         ended_at=ended_at.isoformat(),
         duration_seconds=max(0.0, (ended_at - started_at).total_seconds()),
         links=links,
+    )
+
+
+def _has_workflow_activity_evidence(
+    records: list[dict[str, Any]],
+    attributes: dict[str, Any],
+    links: list[ActivityHistoryLink],
+) -> bool:
+    if links:
+        return True
+    if _has_work_target_attributes(attributes):
+        return True
+    return any(_record_indicates_work(item) for item in records)
+
+
+def _has_work_target_attributes(attributes: dict[str, Any]) -> bool:
+    return any(
+        _attribute_has_value(attributes, key)
+        for key in (
+            "github.number",
+            "github.url",
+            "github.kind",
+            "memory.doc_id",
+            "memory.path",
+            "memory.title",
+            "memory.action",
+        )
+    )
+
+
+def _attribute_has_value(attributes: dict[str, Any], key: str) -> bool:
+    value = attributes.get(key)
+    return value is not None and str(value).strip() != ""
+
+
+def _record_indicates_work(item: dict[str, Any]) -> bool:
+    kind = str(item.get("kind") or "")
+    if kind in {"memory", "prompt_trace"}:
+        return True
+    payload = item.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    return bool(
+        _first_payload_value(payload, "title", "prompt", "response", "stdout")
+        or _source_payload_has_url(payload)
+    )
+
+
+def _first_payload_value(payload: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if value:
+            return str(value)
+    fields = payload.get("fields")
+    if isinstance(fields, dict):
+        for key in keys:
+            value = fields.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _source_payload_has_url(payload: dict[str, Any]) -> bool:
+    source = payload.get("source")
+    return isinstance(source, list) and any(
+        isinstance(item, dict) and item.get("url") for item in source
     )
 
 
@@ -151,7 +227,7 @@ def _activity_event(
         return None
     link_attrs = dict(attributes)
     link_attrs.update(github_attrs_from_payload(payload))
-    links = links_from_record(payload, link_attrs)
+    links = links_from_record(payload, link_attrs, item)
     url = event_url(payload, attributes, links[0].url if links else "")
     label = event_label(payload, attributes, classification)
     return ActivityHistoryEvent(

@@ -224,6 +224,7 @@ describe("GET query parameter encoding", () => {
       personId: "alice/dev",
       docId: "doc 1",
       action: "touch",
+      traceId: "trace 1",
       source: "https://example.test/issues/1",
       query: "retry note",
       since: "2026-06-21T00:00:00Z",
@@ -236,6 +237,7 @@ describe("GET query parameter encoding", () => {
     expect(url.searchParams.get("person_id")).toBe("alice/dev");
     expect(url.searchParams.get("doc_id")).toBe("doc 1");
     expect(url.searchParams.get("action")).toBe("touch");
+    expect(url.searchParams.get("trace_id")).toBe("trace 1");
     expect(url.searchParams.get("source")).toBe("https://example.test/issues/1");
     expect(url.searchParams.get("q")).toBe("retry note");
     expect(url.searchParams.get("since")).toBe("2026-06-21T00:00:00Z");

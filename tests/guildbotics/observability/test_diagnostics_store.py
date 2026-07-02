@@ -65,6 +65,19 @@ def test_list_traces_aggregates_records(tmp_path: Path) -> None:
     assert summary["attributes"] == {"service_run_id": "svc-1"}
 
 
+def test_list_traces_orders_mixed_offset_timestamps_by_instant(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started", timestamp="2026-07-01T09:00:00+09:00"))
+    store.record(_event("t1", "command.finished", timestamp="2026-07-01T00:30:00Z"))
+    store.record(_event("t2", "command.started", timestamp="2026-07-01T00:15:00Z"))
+
+    traces = store.list_traces()
+
+    assert [trace["trace_id"] for trace in traces] == ["t2", "t1"]
+    assert traces[1]["started_at"] == "2026-07-01T09:00:00+09:00"
+    assert traces[1]["updated_at"] == "2026-07-01T00:30:00Z"
+
+
 def test_failed_event_sets_failed_status_and_error_count(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     store.record(_event("t1", "command.started"))
@@ -128,6 +141,24 @@ def test_global_records_returns_unscoped_events_and_logs(tmp_path: Path) -> None
     ]
 
 
+def test_global_records_orders_mixed_offset_timestamps_by_instant(
+    tmp_path: Path,
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("", "scheduler.running", timestamp="2026-07-01T09:00:00+09:00"))
+    store.record(_log(None, "INFO", "later", "2026-07-01T00:30:00Z"))
+
+    records = store.global_records()
+
+    assert [record.get("type") or record.get("message") for record in records] == [
+        "scheduler.running",
+        "later",
+    ]
+    assert [record.get("message") for record in store.global_records(limit=1)] == [
+        "later"
+    ]
+
+
 def test_get_records_returns_sorted_records_for_trace(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     store.record(_log("t1", "INFO", "second", "2026-06-12T00:00:02+09:00"))
@@ -137,6 +168,31 @@ def test_get_records_returns_sorted_records_for_trace(tmp_path: Path) -> None:
         "2026-06-12T00:00:01+09:00",
         "2026-06-12T00:00:02+09:00",
     ]
+
+
+def test_get_records_orders_mixed_offset_timestamps_by_instant(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.finished", timestamp="2026-07-01T00:30:00Z"))
+    store.record(_event("t1", "command.started", timestamp="2026-07-01T09:00:00+09:00"))
+
+    records = store.get_records("t1")
+
+    assert [record["timestamp"] for record in records] == [
+        "2026-07-01T09:00:00+09:00",
+        "2026-07-01T00:30:00Z",
+    ]
+
+
+def test_records_between_orders_and_limits_mixed_offset_timestamps_by_instant(
+    tmp_path: Path,
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started", timestamp="2026-07-01T09:00:00+09:00"))
+    store.record(_event("t2", "command.started", timestamp="2026-07-01T00:30:00Z"))
+
+    records = store.records_between(includes=lambda _timestamp: True, limit=1)
+
+    assert [record["trace_id"] for record in records] == ["t2"]
 
 
 def test_records_persist_across_restart(tmp_path: Path) -> None:

@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ActivityHistoryPage,
+  activityBlockExecutionUrl,
   activityLinkHref,
   activityRange,
   buildActivityBlocks,
   matchActivityHistory,
+  orderedActivityLinks,
 } from "./ActivityHistory";
 import { getActivityHistory } from "../api/client";
 import type { ActivityHistoryResponse } from "../api/client";
@@ -174,7 +176,41 @@ describe("activityLinkHref", () => {
         url: "https://github.com/owner/repo/pull/240",
       }),
     ).toBe("https://github.com/owner/repo/pull/240");
+    expect(
+      activityLinkHref({
+        kind: "doc",
+        label: "Memory note",
+        url: "/diagnostics?tab=memory&doc_id=doc-1",
+      }),
+    ).toBe("/diagnostics?tab=memory&doc_id=doc-1");
     expect(activityLinkHref({ kind: "doc", label: "Memory note", url: "" })).toBe(null);
+  });
+});
+
+describe("orderedActivityLinks", () => {
+  it("orders links by ascending timestamp so newer items appear lower", () => {
+    const links = orderedActivityLinks([
+      {
+        kind: "doc",
+        label: "Newer memory",
+        url: "/diagnostics?tab=memory&doc_id=new",
+        timestamp: "2026-07-01T10:05:00Z",
+      },
+      {
+        kind: "commit",
+        label: "Older commit",
+        url: "https://github.com/owner/repo/commit/abc",
+        timestamp: "2026-07-01T10:00:00Z",
+      },
+      {
+        kind: "pull_request",
+        label: "Middle PR",
+        url: "https://github.com/owner/repo/pull/1",
+        timestamp: "2026-07-01T10:03:00Z",
+      },
+    ]);
+
+    expect(links.map((link) => link.label)).toEqual(["Older commit", "Middle PR", "Newer memory"]);
   });
 });
 
@@ -241,6 +277,52 @@ describe("buildActivityBlocks", () => {
 
     expect(blocks).toHaveLength(2);
     expect(blocks.map((block) => block.title)).toEqual(["First task", "Second task"]);
+  });
+
+  it("merges mixed-offset timestamps by instant instead of raw string order", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "first",
+        title: "First task",
+        started_at: "2026-07-01T09:00:00+09:00",
+        ended_at: "2026-07-01T09:15:00+09:00",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "second",
+        title: "Second task",
+        started_at: "2026-07-01T00:30:00Z",
+        ended_at: "2026-07-01T00:45:00Z",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].started_at).toBe("2026-07-01T09:00:00+09:00");
+    expect(blocks[0].ended_at).toBe("2026-07-01T00:45:00Z");
+  });
+});
+
+describe("activityBlockExecutionUrl", () => {
+  it("builds a composite diagnostics URL from merged block trace ids", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "first",
+        started_at: "2026-07-01T12:31:00Z",
+        ended_at: "2026-07-01T12:34:00Z",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "second",
+        started_at: "2026-07-01T12:55:00Z",
+        ended_at: "2026-07-01T13:08:00Z",
+      },
+    ]);
+
+    expect(activityBlockExecutionUrl(blocks[0])).toBe(
+      "/diagnostics?tab=executions&trace_ids=first%2Csecond",
+    );
   });
 });
 

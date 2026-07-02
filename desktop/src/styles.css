@@ -961,6 +961,17 @@ pre {
   vertical-align: text-bottom;
 }
 
+.activity-block-title-link {
+  color: inherit;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.activity-block-title-link:hover {
+  color: #0f766e;
+  text-decoration: underline;
+}
+
 .activity-link-list {
   display: grid;
   gap: 6px;
@@ -985,6 +996,31 @@ pre {
 .activity-link-list a:hover {
   background: #eef3fb;
   color: #1b4fa0;
+}
+
+.activity-link-list svg,
+.activity-link-item svg {
+  flex: 0 0 auto;
+}
+
+.activity-link-kind-doc svg {
+  color: #1d4ed8;
+}
+
+.activity-link-kind-commit svg {
+  color: #d97706;
+}
+
+.activity-link-kind-pull_request svg {
+  color: #6d28d9;
+}
+
+.activity-link-kind-issue svg {
+  color: #0d6b47;
+}
+
+.activity-link-kind-external svg {
+  color: #64736d;
 }
 
 .activity-link-list a span,

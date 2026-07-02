@@ -270,6 +270,7 @@ export type ActivityHistoryLink = {
   kind: "doc" | "issue" | "pull_request" | "commit" | "external";
   label: string;
   url: string;
+  timestamp?: string;
 };
 
 export type ActivityHistorySession = {
@@ -755,6 +756,7 @@ export async function getMemoryEvents(params?: {
   personId?: string;
   docId?: string;
   action?: string;
+  traceId?: string;
   source?: string;
   query?: string;
   since?: string;
@@ -770,6 +772,9 @@ export async function getMemoryEvents(params?: {
   }
   if (params?.action) {
     search.set("action", params.action);
+  }
+  if (params?.traceId) {
+    search.set("trace_id", params.traceId);
   }
   if (params?.source) {
     search.set("source", params.source);
