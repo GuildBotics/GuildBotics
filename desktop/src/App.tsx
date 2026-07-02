@@ -29,6 +29,7 @@ import {
   Copy,
   ExternalLink,
   FolderOpen,
+  History,
   Play,
   RotateCcw,
   Search,
@@ -39,7 +40,7 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -54,7 +55,9 @@ import {
   type RuntimeLog,
   type SchedulerStartRequest,
   type RuntimeUnitStatus,
+  type TraceDetailResponse,
   type TraceRecord,
+  type TraceSummary,
   getConfigStatus,
   getCommandOptions,
   getGlobalRecords,
@@ -76,6 +79,7 @@ import {
   updateRuntimeDebug,
   memberAvatarUrl,
 } from "./api/client";
+import { ActivityHistoryPage } from "./activity/ActivityHistory";
 import { type AppLanguage, normalizeLanguage, setAppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
 import { buildTraceGroups, type PromptTraceGroup } from "./trace";
@@ -84,10 +88,27 @@ const PROMPT_TRACE_LIMIT = 500;
 const EXECUTION_LIMIT = 200;
 const MEMORY_EVENT_LIMIT = 500;
 const MEMORY_FILTER_ALL = "__all__";
+type DiagnosticsTab = "readiness" | "executions" | "memory" | "promptTrace";
+const DIAGNOSTICS_TABS = new Set<DiagnosticsTab>([
+  "readiness",
+  "executions",
+  "memory",
+  "promptTrace",
+]);
+
+type MemoryEventFocus = {
+  docId: string;
+  traceId: string;
+  timestamp: string;
+  action: string;
+  personId: string;
+};
 
 export function App() {
   const { t, i18n } = useTranslation();
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
+  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  const configured = Boolean(config.data?.project_file_exists);
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -95,6 +116,11 @@ export function App() {
           <h1>GuildBotics</h1>
         </div>
         <nav className="nav">
+          {configured ? (
+            <NavLink className="nav-item" to="/activity">
+              <History size={18} /> {t("app.nav.activity")}
+            </NavLink>
+          ) : null}
           <NavLink className="nav-item" to="/service">
             <Activity size={18} /> {t("app.nav.service")}
           </NavLink>
@@ -130,6 +156,10 @@ export function App() {
 
       <section className="workspace">
         <Routes>
+          <Route
+            element={<ConfiguredRoute configured={configured} loading={config.isLoading} />}
+            path="/activity"
+          />
           <Route element={<ServicePage />} path="/service" />
           <Route element={<Navigate replace to="/service" />} path="/overview" />
           <Route element={<CommandsPage />} path="/commands" />
@@ -142,6 +172,13 @@ export function App() {
   );
 }
 
+function ConfiguredRoute({ configured, loading }: { configured: boolean; loading: boolean }) {
+  if (loading) {
+    return null;
+  }
+  return configured ? <ActivityHistoryPage /> : <Navigate replace to="/setup" />;
+}
+
 function IndexRedirect() {
   // The landing route picks the first screen based on whether setup is done:
   // a configured workspace opens the service screen, otherwise the setup screen.
@@ -150,7 +187,7 @@ function IndexRedirect() {
     return null;
   }
   const configured = Boolean(config.data?.project_file_exists);
-  return <Navigate replace to={configured ? "/service" : "/setup"} />;
+  return <Navigate replace to={configured ? "/activity" : "/setup"} />;
 }
 
 function ServicePage() {
@@ -499,6 +536,9 @@ function ServicePage() {
 
 function DiagnosticsPage() {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = diagnosticsTabFromSearch(searchParams.get("tab"));
+  const memoryFocus = memoryFocusFromSearch(searchParams);
   const [readTracePath, setReadTracePath] = useState("");
   const [readTracePathEdited, setReadTracePathEdited] = useState(false);
   const [loadedTracePath, setLoadedTracePath] = useState("");
@@ -525,6 +565,16 @@ function DiagnosticsPage() {
   const diagnosticsMutation = useMutation({
     mutationFn: () => runScenarioDiagnostics(),
   });
+  const changeDiagnosticsTab = (value: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    const tab = diagnosticsTabFromSearch(value);
+    if (tab === "readiness") {
+      next.delete("tab");
+    } else {
+      next.set("tab", tab);
+    }
+    setSearchParams(next);
+  };
   const applyReadTracePath = (tracePath: string = effectiveReadTracePath) => {
     const normalizedPath = tracePath.trim();
     if (!readTracePathEdited && normalizedPath === loadedTracePath) {
@@ -561,7 +611,7 @@ function DiagnosticsPage() {
           <Title order={2}>{t("diagnostics.title")}</Title>
         </div>
       </Group>
-      <Tabs className="diagnostics-tabs" defaultValue="readiness">
+      <Tabs className="diagnostics-tabs" value={activeTab} onChange={changeDiagnosticsTab}>
         <Tabs.List>
           <Tabs.Tab value="readiness">{t("diagnostics.tabs.readiness")}</Tabs.Tab>
           <Tabs.Tab value="executions">{t("diagnostics.tabs.executions")}</Tabs.Tab>
@@ -653,11 +703,31 @@ function DiagnosticsPage() {
           <TraceExplorer />
         </Tabs.Panel>
         <Tabs.Panel className="diagnostics-fill-panel" value="memory" pt="md">
-          <MemoryEventsPanel members={team.data?.members ?? []} />
+          <MemoryEventsPanel
+            key={memoryFocusKey(memoryFocus)}
+            members={team.data?.members ?? []}
+            focus={memoryFocus}
+          />
         </Tabs.Panel>
       </Tabs>
     </Stack>
   );
+}
+
+function diagnosticsTabFromSearch(value: string | null): DiagnosticsTab {
+  return value && DIAGNOSTICS_TABS.has(value as DiagnosticsTab)
+    ? (value as DiagnosticsTab)
+    : "readiness";
+}
+
+function memoryFocusFromSearch(searchParams: URLSearchParams): MemoryEventFocus {
+  return {
+    docId: searchParams.get("doc_id") ?? "",
+    traceId: searchParams.get("trace_id") ?? "",
+    timestamp: searchParams.get("timestamp") ?? "",
+    action: searchParams.get("action") ?? "",
+    personId: searchParams.get("person_id") ?? "",
+  };
 }
 
 const TRACE_SOURCES = ["all", "manual", "routine", "scheduled", "event_listener"] as const;
@@ -675,24 +745,127 @@ export type RecordScopeFilter = {
 // to any trace.
 const GLOBAL_TRACE_ID = "__global__";
 
+function traceIdsFromSearch(searchParams: URLSearchParams): string[] {
+  const rawValues = searchParams.getAll("trace_ids");
+  const commaValue = searchParams.get("trace_ids");
+  const values = rawValues.length > 0 ? rawValues : commaValue ? [commaValue] : [];
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) => value.split(","))
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+}
+
+function compositeTraceRecords(details: TraceDetailResponse[]): TraceRecord[] {
+  return details
+    .flatMap((detail) => detail.records)
+    .sort((left, right) => timestampMillis(left.timestamp) - timestampMillis(right.timestamp));
+}
+
+function compositeTraceSummary(
+  details: TraceDetailResponse[],
+  traceIds: string[],
+  t: TFunction,
+): TraceSummary | null {
+  if (traceIds.length === 0) {
+    return null;
+  }
+  const summaries = details.map((detail) => detail.summary).filter(Boolean) as TraceSummary[];
+  const records = compositeTraceRecords(details);
+  const startedAt =
+    minTimestamp([
+      ...summaries.map((summary) => summary.started_at),
+      ...records.map((record) => record.timestamp),
+    ]) ?? "";
+  const updatedAt =
+    maxTimestamp([
+      ...summaries.map((summary) => summary.updated_at),
+      ...records.map((record) => record.timestamp),
+    ]) ?? startedAt;
+  return {
+    trace_id: traceIds.join(","),
+    source: "",
+    person_id: "",
+    command: t("diagnostics.executions.compositeTitle"),
+    workflow: "",
+    started_at: startedAt,
+    updated_at: updatedAt,
+    status: compositeTraceStatus(summaries),
+    event_count: summaries.reduce((total, summary) => total + summary.event_count, 0),
+    log_count: summaries.reduce((total, summary) => total + summary.log_count, 0),
+    error_count: summaries.reduce((total, summary) => total + summary.error_count, 0),
+    span_count: summaries.reduce((total, summary) => total + summary.span_count, 0),
+    attributes: {},
+  };
+}
+
+function compositeTraceStatus(summaries: TraceSummary[]): TraceSummary["status"] {
+  if (summaries.some((summary) => summary.status === "failed")) {
+    return "failed";
+  }
+  if (summaries.some((summary) => summary.status === "running")) {
+    return "running";
+  }
+  if (summaries.length > 0 && summaries.every((summary) => summary.status === "success")) {
+    return "success";
+  }
+  return "info";
+}
+
+function minTimestamp(values: string[]): string | null {
+  return extremeTimestamp(values, Math.min);
+}
+
+function maxTimestamp(values: string[]): string | null {
+  return extremeTimestamp(values, Math.max);
+}
+
+function extremeTimestamp(
+  values: string[],
+  select: (...values: number[]) => number,
+): string | null {
+  const parsed = values
+    .map((value) => ({ value, millis: timestampMillis(value) }))
+    .filter((item) => Number.isFinite(item.millis));
+  if (parsed.length === 0) {
+    return null;
+  }
+  const target = select(...parsed.map((item) => item.millis));
+  return parsed.find((item) => item.millis === target)?.value ?? null;
+}
+
+function timestampMillis(value: string): number {
+  const millis = Date.parse(value);
+  return Number.isNaN(millis) ? Number.POSITIVE_INFINITY : millis;
+}
+
 type MemoryEventFilters = {
   personId: string;
   action: string;
   query: string;
+  docId: string;
+  traceId: string;
 };
 
 function MemoryEventsPanel({
   members,
+  focus,
 }: {
   members: Array<{ person_id: string; name: string; person_type?: string }>;
+  focus: MemoryEventFocus;
 }) {
   const { t } = useTranslation();
   const [selectedId, setSelectedId] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [filters, setFilters] = useState<MemoryEventFilters>({
-    personId: MEMORY_FILTER_ALL,
-    action: MEMORY_FILTER_ALL,
+    personId: focus.personId || MEMORY_FILTER_ALL,
+    action: focus.action || MEMORY_FILTER_ALL,
     query: "",
+    docId: focus.docId,
+    traceId: focus.traceId,
   });
   const memoryEvents = useQuery({
     queryKey: ["diagnostics-memory-events", filters],
@@ -700,6 +873,8 @@ function MemoryEventsPanel({
       getMemoryEvents({
         personId: filters.personId === MEMORY_FILTER_ALL ? undefined : filters.personId,
         action: filters.action === MEMORY_FILTER_ALL ? undefined : filters.action,
+        docId: filters.docId || undefined,
+        traceId: filters.traceId || undefined,
         query: filters.query.trim() || undefined,
         limit: MEMORY_EVENT_LIMIT,
       }),
@@ -708,7 +883,10 @@ function MemoryEventsPanel({
   const events = sortMemoryEventsDescending(memoryEvents.data?.events ?? []);
   const selectableMembers = members.filter((member) => member.person_type !== "human");
   const selectedEvent =
-    events.find((event) => memoryEventKey(event) === selectedId) ?? events[0] ?? null;
+    events.find((event) => memoryEventKey(event) === selectedId) ??
+    events.find((event) => memoryEventMatchesFocus(event, focus)) ??
+    events[0] ??
+    null;
   const selectedKey = selectedEvent ? memoryEventKey(selectedEvent) : "";
   const updateFilters = (next: MemoryEventFilters) => {
     setFilters(next);
@@ -957,6 +1135,10 @@ function MemoryEventDetail({ event }: { event: MemoryEvent }) {
 
 function TraceExplorer() {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusedTraceId = searchParams.get("trace_id") ?? "";
+  const compositeTraceIds = useMemo(() => traceIdsFromSearch(searchParams), [searchParams]);
+  const isComposite = compositeTraceIds.length > 0;
   const [source, setSource] = useState("all");
   const [searchInput, setSearchInput] = useState("");
   const [query, setQuery] = useState("");
@@ -964,12 +1146,14 @@ function TraceExplorer() {
   // lifecycle events and global logs such as Slack listener auth failures) are
   // visible the moment the executions tab opens, without the user having to know
   // to click the Global entry.
-  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(GLOBAL_TRACE_ID);
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(
+    focusedTraceId || (isComposite ? null : GLOBAL_TRACE_ID),
+  );
   const [recordFilter, setRecordFilter] = useState("all");
   const [recordScopeFilter, setRecordScopeFilter] = useState<RecordScopeFilter | null>(null);
   const [drawerRecord, setDrawerRecord] = useState<TraceRecord | null>(null);
   const [attrFilter, setAttrFilter] = useState<AttrFilter | null>(null);
-  const isGlobal = selectedTraceId === GLOBAL_TRACE_ID;
+  const isGlobal = !isComposite && selectedTraceId === GLOBAL_TRACE_ID;
 
   const traces = useQuery({
     queryKey: ["diagnostics-traces", source, query, attrFilter?.key, attrFilter?.value],
@@ -986,21 +1170,35 @@ function TraceExplorer() {
   const detail = useQuery({
     queryKey: ["diagnostics-trace", selectedTraceId],
     queryFn: () => (isGlobal ? getGlobalRecords() : getTraceDetail(selectedTraceId as string)),
-    enabled: Boolean(selectedTraceId),
+    enabled: Boolean(selectedTraceId) && !isComposite,
     refetchInterval: selectedTraceId ? 5000 : false,
   });
+  const compositeDetail = useQuery({
+    queryKey: ["diagnostics-trace-composite", compositeTraceIds],
+    queryFn: async () => Promise.all(compositeTraceIds.map((traceId) => getTraceDetail(traceId))),
+    enabled: isComposite,
+    refetchInterval: isComposite ? 5000 : false,
+  });
   const traceItems = useMemo(() => traces.data?.traces ?? [], [traces.data]);
-  const selectedSummary = useMemo(
-    () =>
-      traceItems.find((trace) => trace.trace_id === selectedTraceId) ??
-      detail.data?.summary ??
-      null,
-    [traceItems, selectedTraceId, detail.data],
+  const compositeSummary = useMemo(
+    () => compositeTraceSummary(compositeDetail.data ?? [], compositeTraceIds, t),
+    [compositeDetail.data, compositeTraceIds, t],
   );
+  const selectedSummary = useMemo(() => {
+    if (isComposite) {
+      return compositeSummary;
+    }
+    return (
+      traceItems.find((trace) => trace.trace_id === selectedTraceId) ?? detail.data?.summary ?? null
+    );
+  }, [isComposite, compositeSummary, traceItems, selectedTraceId, detail.data]);
   // The API returns records oldest-first; show them newest-first so a live
   // (polling) trace surfaces new records at the top without scrolling, matching
   // the descending order used by the rest of the diagnostics UI.
-  const records = (detail.data?.records ?? [])
+  const timelineRecords = isComposite
+    ? compositeTraceRecords(compositeDetail.data ?? [])
+    : (detail.data?.records ?? []);
+  const records = timelineRecords
     .filter((record) => matchesRecordFilter(record, recordFilter))
     .filter((record) => matchesRecordScopeFilter(record, recordScopeFilter))
     .reverse();
@@ -1008,6 +1206,15 @@ function TraceExplorer() {
   // Selecting a different execution resets its per-trace UI state (record
   // filter) at the event source rather than in an effect.
   const selectTrace = (traceId: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", "executions");
+    next.delete("trace_ids");
+    if (traceId === GLOBAL_TRACE_ID) {
+      next.delete("trace_id");
+    } else {
+      next.set("trace_id", traceId);
+    }
+    setSearchParams(next);
     setSelectedTraceId(traceId);
     setRecordFilter("all");
     setRecordScopeFilter(null);
@@ -1122,6 +1329,33 @@ function TraceExplorer() {
       </div>
       <div className="exec-grid">
         <div className="exec-list">
+          {isComposite ? (
+            <button
+              type="button"
+              className="exec-row exec-row-active exec-row-composite"
+              onClick={() => {
+                setRecordFilter("all");
+                setRecordScopeFilter(null);
+              }}
+            >
+              <div className="exec-row-top">
+                <Badge size="sm" color="teal" variant="light">
+                  {t("diagnostics.executions.compositeBadge")}
+                </Badge>
+                <span className="exec-row-time">{compositeTraceIds.length}</span>
+              </div>
+              <Text className="exec-row-command" fw={600} size="sm">
+                {t("diagnostics.executions.compositeTitle")}
+              </Text>
+              <div className="exec-row-meta">
+                <span>
+                  {t("diagnostics.executions.compositeSubtitle", {
+                    count: compositeTraceIds.length,
+                  })}
+                </span>
+              </div>
+            </button>
+          ) : null}
           {showGlobalEntry ? (
             <button
               type="button"
@@ -1229,7 +1463,7 @@ function TraceExplorer() {
                 onSelect={setDrawerRecord}
               />
             </>
-          ) : selectedTraceId && selectedSummary ? (
+          ) : selectedSummary ? (
             <>
               <div
                 className="exec-summary"
@@ -1256,9 +1490,15 @@ function TraceExplorer() {
                           defaultValue: selectedSummary.status,
                         })}
                       </Badge>
-                      <Badge variant="outline">
-                        {traceSourceLabel(t, selectedSummary.source || "unknown")}
-                      </Badge>
+                      {isComposite ? (
+                        <Badge color="teal" variant="outline">
+                          {t("diagnostics.executions.compositeBadge")}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">
+                          {traceSourceLabel(t, selectedSummary.source || "unknown")}
+                        </Badge>
+                      )}
                       {(() => {
                         const chip = ticketChipInfo(selectedSummary.attributes);
                         if (!chip) {
@@ -1314,30 +1554,36 @@ function TraceExplorer() {
                   <div className="exec-summary-meta">
                     <span className="exec-summary-id">
                       {t("diagnostics.executions.meta.trace")}:{" "}
-                      <Tooltip label={selectedSummary.trace_id} withArrow>
-                        <code>{shortTraceId(selectedSummary.trace_id)}</code>
-                      </Tooltip>
-                      <CopyButton value={selectedSummary.trace_id} timeout={1500}>
-                        {({ copied, copy }) => (
-                          <Tooltip
-                            label={
-                              copied
-                                ? t("diagnostics.executions.copied")
-                                : t("diagnostics.executions.copy")
-                            }
-                            withArrow
-                          >
-                            <ActionIcon
-                              variant="subtle"
-                              size="sm"
-                              color={copied ? "teal" : "gray"}
-                              onClick={copy}
-                            >
-                              {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                            </ActionIcon>
+                      {isComposite ? (
+                        <span>{compositeTraceIds.length}</span>
+                      ) : (
+                        <>
+                          <Tooltip label={selectedSummary.trace_id} withArrow>
+                            <code>{shortTraceId(selectedSummary.trace_id)}</code>
                           </Tooltip>
-                        )}
-                      </CopyButton>
+                          <CopyButton value={selectedSummary.trace_id} timeout={1500}>
+                            {({ copied, copy }) => (
+                              <Tooltip
+                                label={
+                                  copied
+                                    ? t("diagnostics.executions.copied")
+                                    : t("diagnostics.executions.copy")
+                                }
+                                withArrow
+                              >
+                                <ActionIcon
+                                  variant="subtle"
+                                  size="sm"
+                                  color={copied ? "teal" : "gray"}
+                                  onClick={copy}
+                                >
+                                  {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </CopyButton>
+                        </>
+                      )}
                     </span>
                     {selectedSummary.person_id ? (
                       <span>
@@ -1740,6 +1986,32 @@ function memoryActionColor(action: string): string {
 
 function memoryEventKey(event: MemoryEvent): string {
   return `${event.timestamp}-${event.action}-${event.person_id}-${event.doc_id}`;
+}
+
+function memoryFocusKey(focus: MemoryEventFocus): string {
+  return [focus.docId, focus.traceId, focus.timestamp, focus.action, focus.personId].join("\0");
+}
+
+function memoryEventMatchesFocus(event: MemoryEvent, focus: MemoryEventFocus): boolean {
+  if (!focus.docId && !focus.traceId && !focus.timestamp && !focus.action && !focus.personId) {
+    return false;
+  }
+  if (focus.docId && event.doc_id !== focus.docId) {
+    return false;
+  }
+  if (focus.traceId && event.trace_id !== focus.traceId) {
+    return false;
+  }
+  if (focus.timestamp && event.timestamp !== focus.timestamp) {
+    return false;
+  }
+  if (focus.action && event.action !== focus.action) {
+    return false;
+  }
+  if (focus.personId && event.person_id !== focus.personId) {
+    return false;
+  }
+  return true;
 }
 
 function sortMemoryEventsDescending(events: MemoryEvent[]): MemoryEvent[] {

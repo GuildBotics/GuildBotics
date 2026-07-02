@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from guildbotics.app_api.models import LlmProviderInfo
+from pydantic import BaseModel
+
 from guildbotics.utils.fileio import (
     get_intelligence_roots,
     load_yaml_dict,
@@ -11,6 +12,21 @@ from guildbotics.utils.fileio import (
 
 PROVIDER_DEFAULT_FILENAME = "default.yml"
 _DEFAULT_ORDER = 1000
+
+
+class LlmProviderInfo(BaseModel):
+    """A selectable LLM provider, discovered from ``models/<provider>/default.yml``.
+
+    This is the single source of truth for the provider catalog: ``provider`` is
+    the directory name, and the remaining fields come from that ``default.yml``.
+    """
+
+    provider: str
+    label: str = ""
+    order: int = 1000
+    api_key_env: str = ""
+    model_class: str = ""
+    model_id: str = ""
 
 
 def _read_provider_default(roots: list[Path], provider: str) -> dict[str, Any]:

@@ -5,8 +5,10 @@ import os
 import pytest
 from click.testing import CliRunner
 
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.workspace_state import (
@@ -145,6 +147,75 @@ def test_member_memory_record_and_recall_cli(monkeypatch):
 
     assert recall.exit_code == 0
     assert json.loads(recall.output)["results"][0]["doc_id"] == doc_id
+
+
+def test_member_cli_reuses_trace_for_interactive_session(monkeypatch):
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    runner = CliRunner()
+
+    record = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "record",
+            "--person",
+            "aiko",
+            "--scope",
+            "personal",
+            "--title",
+            "Trace note",
+            "--summary",
+            "Trace summary",
+            "--keyword",
+            "trace",
+            "--body-stdin",
+        ],
+        input="Trace body.\n",
+    )
+    assert record.exit_code == 0
+
+    recall = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "recall",
+            "--person",
+            "aiko",
+            "--query",
+            "trace",
+            "--meta-only",
+        ],
+    )
+    assert recall.exit_code == 0
+
+    traces = DiagnosticsStore().list_traces(source="interactive")
+    assert len(traces) == 1
+    trace_id = traces[0]["trace_id"]
+    records = DiagnosticsStore().get_records(trace_id)
+    assert [item["type"] for item in records] == [
+        "member.command.started",
+        "member.command.finished",
+        "member.command.started",
+        "member.command.finished",
+    ]
+    assert {item["command"] for item in records} == {
+        "member memory recall",
+        "member memory record",
+    }
+    memory_events = MemoryAuditStore().list_events(trace_id=trace_id)
+    assert {event["type"] for event in memory_events} == {
+        "memory.recall",
+        "memory.record",
+    }
 
 
 def test_member_context_markdown_renders_capabilities_section(monkeypatch):
@@ -706,6 +777,13 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
                 "branch": "main",
                 "pushed": True,
                 "status": "pushed",
+                "commits": [
+                    {
+                        "id": "abc1234",
+                        "message": "Improve activity",
+                        "url": "https://github.com/owner/repo/commit/abc1234",
+                    }
+                ],
             }
 
     class FakeService:
@@ -747,6 +825,31 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
     assert calls["cwd"].is_absolute()
     assert calls["closed"] is True
     assert '"status": "pushed"' in result.output
+    events = DiagnosticsStore().records_between(includes=lambda _timestamp: True)
+    assert [
+        {
+            "type": event["type"],
+            "person_id": event["person_id"],
+            "payload": event["payload"],
+        }
+        for event in events
+    ] == [
+        {
+            "type": "github.push",
+            "person_id": "aiko",
+            "payload": {
+                "action": "push",
+                "ref": "refs/heads/main",
+                "commits": [
+                    {
+                        "id": "abc1234",
+                        "message": "Improve activity",
+                        "url": "https://github.com/owner/repo/commit/abc1234",
+                    }
+                ],
+            },
+        }
+    ]
 
 
 def test_member_git_publish_current_mode_rejects_workflow_task_run(
@@ -860,6 +963,37 @@ def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
         "closed": True,
     }
     assert '"base": "ticket-driven-workflow"' in result.output
+    events = DiagnosticsStore().records_between(includes=lambda _timestamp: True)
+    assert [
+        {
+            "type": event["type"],
+            "person_id": event["person_id"],
+            "payload": event["payload"],
+            "attributes": event["attributes"],
+        }
+        for event in events
+    ] == [
+        {
+            "type": "github.pull_request",
+            "person_id": "aiko",
+            "payload": {
+                "action": "opened",
+                "pull_request": {
+                    "number": 1,
+                    "title": "PR title",
+                    "html_url": "https://github.com/owner/repo/pull/1",
+                    "merged": False,
+                },
+            },
+            "attributes": {
+                "github.action": "opened",
+                "github.kind": "pull_request",
+                "github.number": 1,
+                "github.repo": "owner/repo",
+                "github.url": "https://github.com/owner/repo/pull/1",
+            },
+        }
+    ]
 
 
 def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
@@ -1012,6 +1146,138 @@ def test_member_task_status_cli(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert '"completed": true' in result.output
     assert '"evidence_types": ["issue_comment"]' in result.output
+
+
+def test_member_task_status_ignores_missing_context_for_interactive_trace(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+
+    def missing_context(_identifier):
+        raise FileNotFoundError("team/project.yml")
+
+    monkeypatch.setattr(member_module, "resolve_member_context", missing_context)
+    store = TaskRunStore()
+    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.complete(
+        "run-1",
+        "done",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        ["task", "status", "--person", "aiko", "--run-id", "run-1"],
+    )
+
+    assert result.exit_code == 0
+    assert '"completed": true' in result.output
+
+
+def test_member_task_status_skips_interactive_trace_under_workflow(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
+
+    def unexpected_context(_identifier):
+        raise AssertionError("workflow command should not resolve interactive context")
+
+    monkeypatch.setattr(member_module, "resolve_member_context", unexpected_context)
+    store = TaskRunStore()
+    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.complete(
+        "run-1",
+        "done",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        ["task", "status", "--person", "aiko", "--run-id", "run-1"],
+    )
+
+    assert result.exit_code == 0
+    assert DiagnosticsStore().list_traces(source="interactive") == []
+
+
+def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    calls: dict[str, str] = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeInteractiveTraceStore:
+        def start_or_touch(self, *, person_id, workspace, host, thread_key):
+            calls.update(
+                {
+                    "person_id": person_id,
+                    "workspace": workspace,
+                    "host": host,
+                    "thread_key": thread_key,
+                }
+            )
+            return member_module.InteractiveTraceSession(
+                trace_id="trace-1",
+                person_id=person_id,
+                workspace=workspace,
+                host=host,
+                thread_key=thread_key,
+                started_at="2026-01-01T00:00:00+00:00",
+                last_seen_at="2026-01-01T00:00:00+00:00",
+                expires_at="2026-01-01T00:30:00+00:00",
+            )
+
+        def touch(self, session):
+            return session
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(
+        member_module, "InteractiveTraceStore", FakeInteractiveTraceStore
+    )
+    store = TaskRunStore()
+    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.complete(
+        "run-1",
+        "done",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "--workspace",
+            str(workspace),
+            "task",
+            "status",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["workspace"] == str(workspace.resolve())
 
 
 def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):

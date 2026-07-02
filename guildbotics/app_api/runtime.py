@@ -8,23 +8,20 @@ import re
 import shlex
 import threading
 from collections.abc import Awaitable, Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
 from dotenv import dotenv_values
 
-from guildbotics.app_api.cli_agents import (
-    discover_cli_agents,
-    resolve_cli_agent_path,
-)
+from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
+    ActivityHistoryResponse,
     AgentFieldOption,
     AgentFieldStateResponse,
     CliAgentDetection,
@@ -75,8 +72,14 @@ from guildbotics.editions import get_edition
 from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities import Project, Service, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.intelligences.cli_agents import (
+    discover_cli_agents,
+    resolve_cli_agent_path,
+)
 from guildbotics.observability import new_id, trace_scope
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime import Context
+from guildbotics.runtime.member_context import resolve_person
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE, HOME_ENV_PROTECTED_KEYS
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
@@ -301,24 +304,26 @@ class AppRuntime:
         trace_id = new_id()
         self._reserve_command(trace_id)
         try:
+            context = self._get_context(request.message)
             with trace_scope(
                 "manual",
                 command=request.command,
-                person_id=request.person or "",
+                person_id=_manual_trace_person_id(context, request.person),
                 trace_id=trace_id,
             ):
-                output = await self._run_command_traced(request)
+                output = await self._run_command_traced(request, context)
         finally:
             self._release_command(trace_id)
         return CommandRunResponse(trace_id=trace_id, output=output)
 
-    async def _run_command_traced(self, request: CommandRunRequest) -> str:
+    async def _run_command_traced(
+        self, request: CommandRunRequest, context: Context
+    ) -> str:
         self._event_bus.publish_event(
             "command.started",
             {"command": request.command, "person": request.person},
         )
         try:
-            context = self._get_context(request.message)
             output = await run_command(
                 context,
                 command_name=request.command,
@@ -567,12 +572,64 @@ class AppRuntime:
             )
         return TraceDetailResponse(trace_id="", summary=None, records=records)
 
+    def get_activity_history(
+        self,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 1000,
+    ) -> ActivityHistoryResponse:
+        end_time = parse_timestamp(end or "") or datetime.now(UTC)
+        start_time = parse_timestamp(start or "") or (end_time - timedelta(days=7))
+        if start_time > end_time:
+            raise AppApiError(
+                "invalid_activity_history_range",
+                "Activity history start must be before end.",
+                context={"start": start or "", "end": end or ""},
+                status_code=400,
+            )
+        context = self._get_context()
+        records = self._activity_records_between(start_time, end_time, limit=limit)
+        return build_activity_history(
+            start=start_time,
+            end=end_time,
+            members=context.team.members,
+            records=records,
+        )
+
+    def _activity_records_between(
+        self, start: datetime, end: datetime, *, limit: int
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+
+        def includes(value: str) -> bool:
+            return _timestamp_in_range(value, start, end)
+
+        if self._diagnostics_store is not None:
+            records.extend(
+                self._diagnostics_store.records_between(
+                    includes=includes,
+                    limit=limit,
+                )
+            )
+        records.extend(
+            MemoryAuditStore().list_events(
+                since=start.isoformat(),
+                until=end.isoformat(),
+                limit=limit,
+            )
+        )
+        records.extend(self._prompt_trace_activity_records(includes, limit))
+        records.sort(key=_activity_record_sort_key)
+        return records[-max(1, limit) :]
+
     def list_memory_events(
         self,
         *,
         person_id: str | None = None,
         doc_id: str | None = None,
         action: str | None = None,
+        trace_id: str | None = None,
         source: str | None = None,
         query: str | None = None,
         since: str | None = None,
@@ -583,6 +640,7 @@ class AppRuntime:
             "person_id": person_id,
             "doc_id": doc_id,
             "action": action,
+            "trace_id": trace_id,
             "source": source,
             "query": query,
             "since": since,
@@ -601,6 +659,17 @@ class AppRuntime:
                 continue
             records.append(_prompt_trace_record(item))
         return records
+
+    def _prompt_trace_activity_records(
+        self, includes: Callable[[str], bool], limit: int
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for item in self._read_all_prompt_trace_events():
+            record = _prompt_trace_record(item).model_dump()
+            if includes(str(record.get("timestamp", ""))):
+                records.append(record)
+        records.sort(key=_activity_record_sort_key)
+        return records[-max(1, limit) :]
 
     def _memory_trace_records(self, trace_id: str) -> list[TraceRecord]:
         return [
@@ -898,6 +967,22 @@ def _default_routine_command(options: list[CommandOption]) -> str:
         if command in eligible:
             return command
     return eligible[0] if eligible else ""
+
+
+def _timestamp_in_range(value: str, start: datetime, end: datetime) -> bool:
+    parsed = parse_timestamp(value)
+    return parsed is not None and start <= parsed < end
+
+
+def _manual_trace_person_id(context: Context, person_identifier: str | None) -> str:
+    try:
+        return resolve_person(
+            context.team.members,
+            person_identifier,
+            default_to_single_active=True,
+        ).person_id
+    except (AttributeError, PersonNotFoundError, PersonSelectionRequiredError):
+        return person_identifier or ""
 
 
 def _command_name(root: Path, path: Path, language_code: str) -> str:
@@ -1395,7 +1480,7 @@ def _requirement_satisfied(kind: str, github_enabled: bool) -> bool:
     if kind == "slack":
         return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"))
     if kind == "llm":
-        from guildbotics.app_api.llm_providers import provider_env_keys
+        from guildbotics.intelligences.llm_providers import provider_env_keys
 
         return any(
             os.getenv(env_var)
@@ -1483,6 +1568,15 @@ def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
 def _trace_record_sort_key(record: TraceRecord) -> datetime:
     return parse_memory_audit_timestamp(record.timestamp) or datetime.min.replace(
         tzinfo=UTC
+    )
+
+
+def _activity_record_sort_key(item: dict[str, Any]) -> datetime:
+    parsed = parse_timestamp(str(item.get("timestamp") or ""))
+    return (
+        parsed.astimezone(UTC)
+        if parsed is not None
+        else datetime.min.replace(tzinfo=UTC)
     )
 
 

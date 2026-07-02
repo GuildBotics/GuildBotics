@@ -6,11 +6,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from guildbotics.app_api.cli_agents import (
-    resolve_cli_agent_path,
-    resolve_default_cli_executable,
-)
-from guildbotics.app_api.llm_providers import provider_env_keys
 from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsResponse
 from guildbotics.app_api.verify import (
     resolve_default_model_provider,
@@ -31,7 +26,12 @@ from guildbotics.integrations.github.github_utils import (
     is_proxy_agent,
 )
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
+from guildbotics.intelligences.cli_agents import (
+    resolve_cli_agent_path,
+    resolve_default_cli_executable,
+)
 from guildbotics.intelligences.functions import talk_as
+from guildbotics.intelligences.llm_providers import provider_env_keys
 from guildbotics.runtime import Context
 
 DiagnosticSection = Literal[

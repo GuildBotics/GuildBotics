@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
+from guildbotics.intelligences.llm_providers import LlmProviderInfo
 
 
 class VerifyCheck(BaseModel):
@@ -199,6 +200,57 @@ class MemoryEventsResponse(BaseModel):
     events: list[MemoryEvent] = Field(default_factory=list)
 
 
+class ActivityHistoryMember(BaseModel):
+    person_id: str
+    name: str
+    person_type: str = ""
+    roles: list[str] = Field(default_factory=list)
+
+
+class ActivityHistoryLink(BaseModel):
+    kind: Literal["doc", "issue", "pull_request", "commit", "external"]
+    label: str
+    url: str = ""
+    timestamp: str = ""
+
+
+class ActivityHistorySession(BaseModel):
+    trace_id: str
+    person_id: str
+    source: str = ""
+    command: str = ""
+    workflow: str = ""
+    title: str = ""
+    mode: Literal["interactive", "workflow"] = "workflow"
+    status: str = "info"
+    started_at: str = ""
+    ended_at: str = ""
+    duration_seconds: float = 0
+    links: list[ActivityHistoryLink] = Field(default_factory=list)
+
+
+class ActivityHistoryEvent(BaseModel):
+    id: str
+    timestamp: str
+    person_id: str = ""
+    type: Literal[
+        "pr_create", "pr_merge", "pr_closed", "push", "issue_resolve", "external"
+    ]
+    title: str
+    detail: str = ""
+    url: str = ""
+    links: list[ActivityHistoryLink] = Field(default_factory=list)
+
+
+class ActivityHistoryResponse(BaseModel):
+    start: str
+    end: str
+    members: list[ActivityHistoryMember] = Field(default_factory=list)
+    sessions: list[ActivityHistorySession] = Field(default_factory=list)
+    events: list[ActivityHistoryEvent] = Field(default_factory=list)
+    unsupported_event_sources: list[str] = Field(default_factory=list)
+
+
 class RuntimeSourceSelection(BaseModel):
     scheduled: bool = True
     routine: bool = True
@@ -319,19 +371,6 @@ class ScenarioDiagnosticsResponse(BaseModel):
     errors: list[DiagnosticCheck]
 
 
-class CliAgentInfo(BaseModel):
-    """A selectable CLI agent, discovered from ``cli_agents/<name>-cli.yml``.
-
-    Single source of truth for the CLI agent catalog: ``name`` is the file stem
-    (without ``-cli``), and the rest comes from that file.
-    """
-
-    name: str
-    label: str = ""
-    order: int = 1000
-    executable: str = ""
-
-
 class CliAgentDetection(BaseModel):
     name: str
     label: str = ""
@@ -365,21 +404,6 @@ class BrainAssignment(BaseModel):
     brain_class: str
     engine: Literal["llm", "cli"]
     target: str
-
-
-class LlmProviderInfo(BaseModel):
-    """A selectable LLM provider, discovered from ``models/<provider>/default.yml``.
-
-    This is the single source of truth for the provider catalog: ``provider`` is
-    the directory name, and the remaining fields come from that ``default.yml``.
-    """
-
-    provider: str
-    label: str = ""
-    order: int = 1000
-    api_key_env: str = ""
-    model_class: str = ""
-    model_id: str = ""
 
 
 class LlmProvidersResponse(BaseModel):

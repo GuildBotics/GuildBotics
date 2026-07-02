@@ -343,10 +343,10 @@ describe("App routing and layout", () => {
     expect(await screen.findByText("Setup Mock")).toBeInTheDocument();
   });
 
-  it("redirects to /service when the project config exists", async () => {
+  it("redirects to /activity when the project config exists", async () => {
     renderApp("/");
 
-    expect(await screen.findByRole("heading", { name: t("service.title") })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: t("activity.title") })).toBeInTheDocument();
   });
 
   it("redirects /overview to /service", async () => {

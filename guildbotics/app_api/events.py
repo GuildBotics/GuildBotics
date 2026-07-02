@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from guildbotics.observability import correlation_fields
 
 if TYPE_CHECKING:
-    from guildbotics.app_api.diagnostics_store import DiagnosticsStore
+    from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 
 @dataclass(frozen=True)

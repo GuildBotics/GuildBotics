@@ -26,12 +26,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from guildbotics.app_api.diagnostics_store import DiagnosticsStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.intelligences import IntelligenceConfigService
-from guildbotics.app_api.llm_providers import discover_llm_providers
 from guildbotics.app_api.models import (
+    ActivityHistoryResponse,
     AgentFieldStateResponse,
     ApiError,
     CliAgentDetectionsResponse,
@@ -81,6 +80,8 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
+from guildbotics.intelligences.llm_providers import discover_llm_providers
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.fileio import get_template_path, load_yaml_file
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
@@ -400,6 +401,7 @@ def create_app(
         person_id: str | None = None,
         doc_id: str | None = None,
         action: str | None = None,
+        trace_id: str | None = None,
         source: str | None = None,
         q: str | None = None,
         since: str | None = None,
@@ -411,12 +413,26 @@ def create_app(
             person_id=person_id,
             doc_id=doc_id,
             action=action,
+            trace_id=trace_id,
             source=source,
             query=q,
             since=since,
             until=until,
             limit=limit,
         )
+
+    @app.get(
+        "/activity/history",
+        response_model=ActivityHistoryResponse,
+        responses=error_responses,
+    )
+    def activity_history(
+        start: str | None = None,
+        end: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+        _: None = Depends(require_token),
+    ) -> ActivityHistoryResponse:
+        return app_runtime.get_activity_history(start=start, end=end, limit=limit)
 
     @app.get(
         "/intelligences/cli-agents/detection",

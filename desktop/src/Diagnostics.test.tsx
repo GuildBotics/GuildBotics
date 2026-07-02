@@ -409,6 +409,49 @@ describe("Diagnostics memory tab", () => {
     expect(rows[0]).toHaveTextContent("UTC newer");
     expect(rows[1]).toHaveTextContent("Offset older");
   });
+
+  it("opens a focused memory event from diagnostics query parameters", async () => {
+    vi.mocked(getMemoryEvents).mockResolvedValue({
+      event_count: 2,
+      events: [
+        memoryEvent({
+          timestamp: "2026-01-02T00:00:00Z",
+          title: "Other memory",
+          doc_id: "other-doc",
+          trace_id: "other-trace",
+        }),
+        memoryEvent({
+          timestamp: "2026-01-01T00:00:00Z",
+          action: "touch",
+          person_id: "bob",
+          title: "Focused memory",
+          doc_id: "doc-2",
+          trace_id: "trace-2",
+          body_preview: "Focused body",
+        }),
+      ],
+    });
+
+    renderApp(
+      "/diagnostics?tab=memory&doc_id=doc-2&trace_id=trace-2&timestamp=2026-01-01T00%3A00%3A00Z&action=touch&person_id=bob",
+    );
+
+    expect(await screen.findByRole("tab", { name: t("diagnostics.tabs.memory") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await waitFor(() => {
+      const calls = vi.mocked(getMemoryEvents).mock.calls;
+      expect(calls[calls.length - 1]?.[0]).toMatchObject({
+        personId: "bob",
+        action: "touch",
+        docId: "doc-2",
+        traceId: "trace-2",
+      });
+    });
+    expect(await screen.findByRole("heading", { name: "Focused memory" })).toBeInTheDocument();
+    expect(screen.getByText("Focused body")).toBeInTheDocument();
+  });
 });
 
 describe("Diagnostics executions tab", () => {
@@ -473,6 +516,47 @@ describe("Diagnostics executions tab", () => {
     const live = screen.getByText("working on it");
     const started = screen.getByText("command.started");
     expect(live.compareDocumentPosition(started) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("opens a combined execution timeline from trace_ids query parameters", async () => {
+    vi.mocked(getTraceDetail).mockImplementation(async (traceId: string) => ({
+      trace_id: traceId,
+      summary: {
+        trace_id: traceId,
+        source: "manual",
+        person_id: "alice",
+        command: traceId === "trace-a" ? "first task" : "second task",
+        workflow: "",
+        started_at: traceId === "trace-a" ? "2026-06-12T00:00:01Z" : "2026-06-12T00:00:03Z",
+        updated_at: traceId === "trace-a" ? "2026-06-12T00:00:02Z" : "2026-06-12T00:00:04Z",
+        status: "success",
+        event_count: 1,
+        log_count: 0,
+        error_count: 0,
+        span_count: 0,
+        attributes: {},
+      },
+      records: [
+        makeTraceRecord({
+          trace_id: traceId,
+          kind: "event",
+          type: traceId === "trace-a" ? "first.record" : "second.record",
+          timestamp: traceId === "trace-a" ? "2026-06-12T00:00:01Z" : "2026-06-12T00:00:03Z",
+        }),
+      ],
+    }));
+
+    renderApp("/diagnostics?tab=executions&trace_ids=trace-a%2Ctrace-b");
+
+    expect(
+      (await screen.findAllByText(t("diagnostics.executions.compositeTitle"))).length,
+    ).toBeGreaterThan(0);
+    expect((await screen.findAllByText("second.record")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("first.record").length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(vi.mocked(getTraceDetail)).toHaveBeenCalledWith("trace-a");
+      expect(vi.mocked(getTraceDetail)).toHaveBeenCalledWith("trace-b");
+    });
   });
 
   it("filters the timeline to logs only", async () => {

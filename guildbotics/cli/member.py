@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
 
 import click
 
+from guildbotics.capabilities.member_activity_events import (
+    record_member_pr_create_event,
+    record_member_push_event,
+)
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
 from guildbotics.capabilities.member_github import (
@@ -20,6 +25,8 @@ from guildbotics.capabilities.member_memory import (
 )
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.capabilities.task_runs import (
+    RUN_ENV,
+    TASK_RUN_ENV,
     RunStore,
     TaskRunError,
     TaskRunStore,
@@ -29,6 +36,14 @@ from guildbotics.capabilities.task_runs import (
 from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
+)
+from guildbotics.observability import trace_scope
+from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.observability.interactive_sessions import (
+    InteractiveTraceSession,
+    InteractiveTraceStore,
+    interactive_host,
+    interactive_thread_key,
 )
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.utils.env_loader import load_guildbotics_env
@@ -40,6 +55,7 @@ SLACK_TS_FRACTION_DIGITS = 6
 
 
 @click.group()
+@click.pass_context
 @click.option(
     "--workspace",
     "workspace_dir",
@@ -47,7 +63,7 @@ SLACK_TS_FRACTION_DIGITS = 6
     default=None,
     help="Workspace root to use instead of the persisted active workspace.",
 )
-def member(workspace_dir: Path | None) -> None:
+def member(ctx: click.Context, workspace_dir: Path | None) -> None:
     """Operate as a configured GuildBotics member."""
     try:
         applied_workspace = apply_workspace_for_cli(workspace_dir)
@@ -61,6 +77,11 @@ def member(workspace_dir: Path | None) -> None:
         )
     else:
         load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=True)
+    ctx.obj = {
+        "workspace": str(
+            (applied_workspace.workspace if applied_workspace else Path.cwd()).resolve()
+        )
+    }
 
 
 @member.command(name="context")
@@ -994,6 +1015,7 @@ async def _git_push(
         )
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_push", payload)
+        record_member_push_event(member_person, payload)
         return payload
     finally:
         await service.aclose()
@@ -1059,6 +1081,7 @@ async def _git_publish(
             result = await service.publish(repo_path=repo_path, message=message)
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_publish", payload)
+        record_member_push_event(member_person, payload)
         return payload
     finally:
         await service.aclose()
@@ -1264,6 +1287,7 @@ async def _pr_create(
             repo, head, base, title, body, issue_url, draft
         )
         TaskRunStore().append_evidence(current_task_run_id(), "pr_create", result)
+        record_member_pr_create_event(member_person, repo, title, result)
         return result
     finally:
         await service.aclose()
@@ -1406,13 +1430,21 @@ def task_complete(
     output_format: str,
 ) -> None:
     summary = _read_file(summary_file, "summary-file")
+    _run(
+        _task_complete(person, run_id, ticket_url, status, summary),
+        output_format=output_format,
+    )
+
+
+async def _task_complete(
+    person: str, run_id: str, ticket_url: str, status: str, summary: str
+) -> dict[str, Any]:
     _resolve(person)
     store = TaskRunStore()
     try:
-        payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
+        return store.complete(run_id, status, summary, ticket_url, person).to_dict()
     except TaskRunError as exc:
         raise click.ClickException(_safe_error(exc)) from exc
-    _emit(payload, output_format)
 
 
 @task.command(name="status")
@@ -1424,12 +1456,15 @@ def task_complete(
 )
 @click.option("--format", "output_format", type=FormatChoice, default="json")
 def task_status(run_id: str, person: str, output_format: str) -> None:
+    _run(_task_status(run_id, person), output_format=output_format)
+
+
+async def _task_status(run_id: str, person: str) -> dict[str, Any]:
     del person
     try:
-        payload = TaskRunStore().status(run_id).to_dict()
+        return TaskRunStore().status(run_id).to_dict()
     except TaskRunError as exc:
         raise click.ClickException(_safe_error(exc)) from exc
-    _emit(payload, output_format)
 
 
 def _resolve(person: str):
@@ -1611,12 +1646,107 @@ def _slack_permalink_ts(raw_message_id: str) -> str:
 
 
 def _run(coro, *, output_format: str) -> Any:
+    interactive_session = _interactive_session_for_current_command()
+    command = _current_command_path()
     try:
-        result = asyncio.run(coro)
+        if interactive_session is None:
+            result = asyncio.run(coro)
+        else:
+            result = _run_interactive(coro, interactive_session, command)
     except (MemberCapabilityError, MemberMemoryError, TaskRunError, KeyError) as exc:
         raise click.ClickException(_safe_error(exc)) from exc
     _emit(result, output_format)
     return result
+
+
+def _run_interactive(
+    coro, session: InteractiveTraceSession, command: str
+) -> dict[str, Any]:
+    store = InteractiveTraceStore()
+    try:
+        with trace_scope(
+            "interactive",
+            person_id=session.person_id,
+            command=command,
+            attributes=session.attributes,
+            trace_id=session.trace_id,
+        ):
+            _record_member_command_event("member.command.started", command)
+            try:
+                result = asyncio.run(coro)
+            except Exception as exc:
+                _record_member_command_event(
+                    "member.command.failed",
+                    command,
+                    {"error_type": type(exc).__name__},
+                )
+                raise
+            _record_member_command_event("member.command.finished", command)
+            return cast(dict[str, Any], result)
+    finally:
+        store.touch(session)
+
+
+def _interactive_session_for_current_command() -> InteractiveTraceSession | None:
+    if _running_under_workflow():
+        return None
+    person = _current_person()
+    if not person:
+        return None
+    try:
+        _context, member_person = _resolve(person)
+    except (click.ClickException, FileNotFoundError):
+        return None
+    if member_person.person_type == "human":
+        return None
+    workspace = _current_workspace()
+    return InteractiveTraceStore().start_or_touch(
+        person_id=member_person.person_id,
+        workspace=workspace,
+        host=interactive_host(),
+        thread_key=interactive_thread_key(),
+    )
+
+
+def _running_under_workflow() -> bool:
+    return bool(os.getenv(TASK_RUN_ENV) or os.getenv(RUN_ENV))
+
+
+def _current_person() -> str:
+    ctx = click.get_current_context(silent=True)
+    while ctx is not None:
+        value = ctx.params.get("person") if ctx.params else None
+        if isinstance(value, str) and value:
+            return value
+        ctx = ctx.parent
+    return ""
+
+
+def _current_workspace() -> str:
+    ctx = click.get_current_context(silent=True)
+    while ctx is not None:
+        workspace = ctx.obj.get("workspace") if isinstance(ctx.obj, dict) else None
+        if isinstance(workspace, str) and workspace:
+            return workspace
+        ctx = ctx.parent
+    return str(Path.cwd().resolve())
+
+
+def _current_command_path() -> str:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return "member"
+    return ctx.command_path
+
+
+def _record_member_command_event(
+    event_type: str, command: str, payload: dict[str, Any] | None = None
+) -> None:
+    record_correlated_event(
+        event_type=event_type,
+        command=command,
+        payload={"command": command, **(payload or {})},
+    )
 
 
 def _emit(payload: dict[str, Any], output_format: str) -> None:

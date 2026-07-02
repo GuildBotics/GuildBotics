@@ -9,6 +9,7 @@
 - 挙動変更を行った場合は、関連ドキュメントも必要に応じて更新する
 - コードの修正に際しては「最小限の変更量」ではなく、「変更後のコード量が最小になること」を最優先事項とし、場当たり的対応ではなくあるべき姿の美しいコードとなることを心がける
 - 意味判定・分類・採用可否のような自然言語理解が必要な処理を、キーワード列挙や場当たり的な文字列マッチで実装しない。既存の LLM 判定基盤（例: `guildbotics/intelligences/functions.py` と `guildbotics/templates/commands/functions/*`）を優先し、必要なら汎用的な判定関数を追加する。
+- 責務境界を越えた実装をしない。GuildBotics における具体的な責務境界は「重要な実装ポイント」の「責務境界」を参照する。
 
 このリポジトリの `.gitignore` では、少なくとも以下を無視対象にしています（抜粋）:
 
@@ -30,10 +31,119 @@
 
 - インストール後 CLI: `guildbotics` (`pyproject.toml` の `project.scripts`)
 - モジュール側: `guildbotics/cli/__init__.py`
+- Desktop 向け Local API: `python -m guildbotics.app_api`（FastAPI。全リクエストに `X-GuildBotics-Session-Token` ヘッダが必要、`/health` で疎通確認）
+
+### パッケージ全体マップ
+
+- `guildbotics/cli/*` … Click コマンド。`member.py` に member capability の入口
+- `guildbotics/app_api/*` … Desktop 向け Local API（FastAPI + EventBus + normalizer）
+- `guildbotics/drivers/*` … スケジューラ、command runner、workflow dispatcher
+- `guildbotics/capabilities/*` … member の git / github / chat / memory 操作と domain event 記録
+- `guildbotics/commands/*` … コマンド種別（md/py/sh/yml + inline）の実行基盤
+- `guildbotics/editions/*` … Edition 抽象と Simple edition（setup_service は GUI からも再利用）
+- `guildbotics/integrations/*` … GitHub / Slack など外部サービス client（capability から使う）
+- `guildbotics/intelligences/*` … brains（`agno_agent` / `cli_agent`）、LLM 判定関数（`functions.py`）、LLM provider / CLI agent カタログ（`llm_providers.py` / `cli_agents.py`）
+- `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、interactive session
+- `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
+- `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤
+
+依存方向のハードルール（`tests/guildbotics/test_layer_boundaries.py` で担保）:
+
+- `guildbotics/app_api/*` は最上位層であり、他の guildbotics package から import してはならない。app_api と core の両方が必要とする知識（provider / CLI agent カタログなど）は core 側（例: `guildbotics/intelligences/*`）に置き、app_api は API model への変換だけを持つ
+- `guildbotics/observability/*` は `utils` 以外に依存しない記録基盤であり、app_api や capability の都合を知らない
+
+リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 
 ## 重要な実装ポイント
 
-## 1. CLI コマンド
+### 1. 責務境界
+
+GuildBotics では、実装場所を「その処理を知ってよい層」で決める。近い場所に場当たり的に置かず、以下の境界に従う。
+
+#### CLI (`guildbotics/cli/*`)
+
+責務:
+
+- Click の引数・オプション定義、入力ファイル/stdin 読み取り、出力形式の選択
+- workspace / member 解決、capability 呼び出し、CLI 用エラー変換
+- interactive session の開始・touch、member command の開始/終了/failure という CLI 実行イベントの記録
+
+禁止:
+
+- GitHub / Slack / Git など provider 固有 payload の組み立て
+- PR / Issue / commit など domain event の構造決定
+- provider URL の生成・分類
+- activity history 表示用の title / label / link kind 正規化
+
+例: `guildbotics member git push` は push capability の結果を受けて記録関数を呼ぶだけにし、`github.push` payload の構造は `guildbotics/capabilities/*` 側へ置く。
+
+#### Capability (`guildbotics/capabilities/*`)
+
+責務:
+
+- GitHub / Git / Slack / memory など外部サービスや domain 操作の実行
+- provider API / URL / payload / credential など provider 固有知識の保持
+- capability の結果 payload と、必要な domain event payload の組み立て
+- provider 固有 URL 生成。例: GitHub commit URL は Git/GitHub capability 側で扱う
+
+禁止:
+
+- desktop / activity history の画面都合に合わせた表示文言の決定
+- FastAPI response model や React component の都合を直接知ること
+
+#### Observability (`guildbotics/observability/*`)
+
+責務:
+
+- diagnostics record の統一スキーマでの記録・永続化（`diagnostics_store.py`、`run/diagnostics.jsonl`）
+- trace / span の相関（`correlation_fields`）と correlated event の記録（`diagnostics_events.py`）
+- interactive session の管理（`interactive_sessions.py`）
+
+禁止:
+
+- `guildbotics.utils` 以外の guildbotics package への依存
+- 表示用の title / label / link kind の決定（それは app_api の normalizer の仕事）
+- provider 固有 payload の解釈
+
+#### App API (`guildbotics/app_api/*`)
+
+責務:
+
+- Desktop 向け runtime API（FastAPI）と event bus の集約
+- observability store の読み出しと、trace, log, event, memory audit, prompt trace など複数 source の統合
+- API response model への変換
+- provider payload を activity history 用の provider-neutral な event/link/title/detail に変換する normalizer / translator
+
+禁止:
+
+- 他の guildbotics package から import される API を持つこと（依存方向は「パッケージ全体マップ」参照）
+- CLI と同じ domain event payload を別途組み立てること
+- GitHub URL の `/pull/` や `/issues/` のような path 文字列だけで PR/Issue を分類すること
+- provider API 呼び出しや credential 処理を持つこと
+
+例: activity history では raw diagnostics record を直接 UI 向けに解釈せず、`activity_events.py` / `activity_links.py` のような専用 normalizer に寄せる。
+
+#### Desktop frontend (`desktop/src/*`)
+
+責務:
+
+- API response の表示、ユーザー操作、画面状態管理
+- 表示密度、hover/click、responsive layout など UI 固有の振る舞い
+
+禁止:
+
+- provider raw payload を独自に再分類すること
+- GitHub URL path から PR/Issue/commit 種別を推測すること
+- backend と同じ title / label / link kind 正規化を再実装すること
+
+#### 共通判断ルール
+
+- 同じ判断が CLI と API、または API と frontend に重複しそうな場合は、より domain に近い backend module へ寄せる
+- provider 固有知識は capability か provider normalizer に閉じ込める
+- activity history / diagnostics 表示に必要な変換は、raw payload を保存する層ではなく表示用 normalizer に置く
+- 新しい event/link 種別を追加するときは、記録 payload（capability → observability）、normalizer / API model（app_api）、frontend 表示（desktop）の責務を分けて実装する
+
+### 2. CLI コマンド
 
 `guildbotics/cli/__init__.py` に主要コマンドがあります。
 
@@ -49,11 +159,11 @@
 
 - `run` は `--person` または `<command>@<person_id>` でメンバー指定可能
 - `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
-- `member` group は `--workspace <dir>` を受け取り、CLI agent / skill 経由の member capability の入口になる
+- `member` group は `--workspace <dir>` を受け取り、CLI agent / skill 経由の member capability の入口になる。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（prepare/commit/push/publish）、`github`（issue/pr/reaction）、`context`、`help`
 - `start` は PID ファイルを `~/.guildbotics/data/run/scheduler.pid` に保存
 - `stop` / `kill` は上記 PID を使ってプロセス停止
 
-## 2. コマンド実行基盤（最重要）
+### 3. コマンド実行基盤（最重要）
 
 中心実装:
 
@@ -70,7 +180,7 @@
 
 `Context.pipe` はコマンド間の標準入力/標準出力的な受け渡し文字列として使われます。
 
-### サポートされるコマンド種別（`guildbotics/commands/registry.py`）
+#### サポートされるコマンド種別（`guildbotics/commands/registry.py`）
 
 - `.md` (`MarkdownCommand`)
 - `.py` (`PythonCommand`)
@@ -83,7 +193,7 @@
 - `to_html`
 - `to_pdf`
 
-## 3. 設定ファイル解決（実装依存）
+### 4. 設定ファイル解決（実装依存）
 
 設定ファイル解決は `guildbotics/utils/fileio.py` が担当します。
 
@@ -95,7 +205,7 @@
 - ローカライズ対応ファイルは `.<lang>` → `.en` → 素のファイル名の順で探索
 - メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
 
-## 4. スケジューラ
+### 5. スケジューラ
 
 中心実装:
 
@@ -113,7 +223,7 @@
 
 - `workflows/ticket_driven_workflow` (`SimpleEdition.get_default_routines()`)
 
-## 5. Edition 切替
+### 6. Edition 切替
 
 `guildbotics/editions/__init__.py#get_edition()` で `GUILDBOTICS_EDITION` を見て Edition を切り替えます。`Edition` は `get_context()` と `get_default_routines()` のみを提供する実行時の抽象です。
 
@@ -183,7 +293,7 @@ desktop packaging / Tauri 変更時の確認:
 - 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で Ruff 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、packaging smoke など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
 - Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics` を実行）
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
-- 最低限の確認コマンドは `uv run --no-sync ruff format --check guildbotics`、`uv run --no-sync ruff check guildbotics`、`uv run --no-sync mypy guildbotics`、`uv run --no-sync pylint guildbotics`、`uv run --no-sync python -m pytest ...`
+- 最低限の確認コマンドは上記「開発時の基本コマンド（CI 準拠）」と同じ（`pytest` は関連範囲に絞ってよい）
 - 型エラーや lint エラーを回避するためだけの `# type: ignore` や noqa は、理由が明確でない限り追加しない
 
 desktop TypeScript 開発時の品質確認:
@@ -207,7 +317,7 @@ desktop TypeScript 開発時の品質確認:
 
 - Unit test を最も厚くする。純粋関数、入力変換、validator、payload 生成、状態遷移、エラー変換、ファイル解決順はまず unit test で網羅する
 - Component / service integration test は、UI 操作、API endpoint、config 書き込み、runtime lifecycle など境界をまたぐ主要 workflow に限定して追加する
-- ブラウザ E2E（Playwright, `desktop/e2e/`）は lean-but-real。実ブラウザ engine + 実 Local API backend でしか検証できない critical user journey（setup→実ファイル書き込み、scheduler start/stop、command 実行+`/events` ストリーム、diagnostics、backend down→retry）に絞り、振る舞いパターンの総当たりはしない（分岐網羅は unit / component に委譲）。push CI からは隔離し専用ジョブで回す
+- ブラウザ E2E（Playwright, `desktop/e2e/`）は lean-but-real。実ブラウザ engine + 実 Local API backend でしか検証できない critical user journey（setup→実ファイル書き込み、scheduler start/stop、command 実行+`/events` ストリーム、diagnostics、backend down→retry）に絞り、振る舞いパターンの総当たりはしない（分岐網羅は unit / component に委譲）。push CI には含めず、ローカルの `npm run e2e` で実行する（現状、専用 CI ジョブは無い）
 - Tauri ネイティブ / packaging smoke は最小限に保ち、実 OS + Tauri runtime が要るもの（sidecar 起動 / `backend_info` / file picker など）は workflow_dispatch / release workflow に隔離する
 - LLM、GitHub、Slack、外部 CLI などへの実通信は通常 CI のテストに入れない。既存抽象化、stub、mock、fixture を使い、送信 payload、判定結果、エラー処理を検証する
 - snapshot のみで品質を担保しない。ユーザーが観測する文言・状態、生成 request、保存 file/env、publish event、return value を具体的に assert する
@@ -247,6 +357,7 @@ desktop TypeScript 開発時の品質確認:
 3. `guildbotics/commands/*`
 4. `guildbotics/runtime/context.py`
 5. `guildbotics/utils/fileio.py`
-6. `tests/guildbotics/...`
+6. desktop / diagnostics まわりは `guildbotics/app_api/runtime.py`、`guildbotics/observability/*`、`desktop/src/*`
+7. `tests/guildbotics/...`
 
-ドキュメントは補助として利用し、矛盾があればソースに合わせて修正すること。
+ドキュメントは補助として利用し、矛盾があればソースに合わせて修正すること。`docs/ARCHITECTURE.md` はアーキテクチャ概観、`docs/spec/*.ja.md` は過去の設計計画書で、いずれも実装より古い場合がある。

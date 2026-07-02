@@ -286,7 +286,7 @@ class CliAgentBrain(Brain):
         Raises:
             RuntimeError: If the subprocess exits with a non-zero status.
         """
-        from guildbotics.app_api.cli_agents import get_cli_agent_search_path
+        from guildbotics.intelligences.cli_agents import get_cli_agent_search_path
 
         env = os.environ.copy()
         env.update(self.executable_info.env)

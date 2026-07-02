@@ -95,6 +95,57 @@ def test_parse_github_issue_and_pull_request_urls():
     assert pull.kind == "pull"
 
 
+def test_commit_url_from_remote_supports_configured_github_hosts():
+    service = _service()
+
+    assert (
+        service.commit_url_from_remote("https://github.com/owner/repo.git", "abc123")
+        == "https://github.com/owner/repo/commit/abc123"
+    )
+    assert (
+        service.commit_url_from_remote("git@github.com:owner/repo.git", "abc123")
+        == "https://github.com/owner/repo/commit/abc123"
+    )
+    assert (
+        service.commit_url_from_remote("ssh://git@github.com/owner/repo.git", "abc123")
+        == "https://github.com/owner/repo/commit/abc123"
+    )
+    assert (
+        service.commit_url_from_remote("https://gitlab.com/owner/repo.git", "abc123")
+        == ""
+    )
+    assert service.commit_url_from_remote("/tmp/remote.git", "abc123") == ""
+
+
+def test_commit_url_from_remote_supports_github_enterprise_host():
+    person = Person(person_id="aiko", name="Aiko")
+    team = Team(
+        project=Project(
+            name="demo",
+            services={
+                "code_hosting_service": {
+                    "name": "github",
+                    "owner": "owner",
+                    "api_base_url": "https://ghe.example.test/api/v3",
+                },
+            },
+        ),
+        members=[person],
+    )
+    service = MemberGitHubCapabilityService(person, team)
+
+    assert (
+        service.commit_url_from_remote("git@ghe.example.test:owner/repo.git", "abc123")
+        == "https://ghe.example.test/owner/repo/commit/abc123"
+    )
+    assert (
+        service.commit_url_from_remote(
+            "https://ghe.example.test/owner/repo.git", "abc123"
+        )
+        == "https://ghe.example.test/owner/repo/commit/abc123"
+    )
+
+
 @pytest.mark.asyncio
 async def test_context_returns_llm_ready_communication_style():
     person = Person(
