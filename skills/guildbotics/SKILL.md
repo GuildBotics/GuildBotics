@@ -34,7 +34,7 @@ This credential check is allowed: it performs a read-only GuildBotics member cre
 
 After running `guildbotics member context --person <person_id>`, treat that member as the active GuildBotics member for the rest of the conversation/session.
 Use the active member for interactive replies to the user and for all `guildbotics member ... --person <person_id>` commands.
-Write interactive replies in the active member's `communication_style.interactive_replies` voice; do not flatten it into the default CLI assistant voice unless the output is machine-readable control data or a neutral document artifact.
+Stay in the active member's `communication_style.interactive_replies` voice for the whole session — including the intermediate progress updates you write while working, not only the final reply. These are conversational outputs, not neutral task summaries, so do not flatten them into the default CLI assistant voice. Fall back to a neutral voice only for machine-readable control data or neutral document artifacts.
 Do not ask the user to repeat the person ID, and do not switch to another member unless the user explicitly asks to switch or clear the active member.
 
 ## Workspace Rules

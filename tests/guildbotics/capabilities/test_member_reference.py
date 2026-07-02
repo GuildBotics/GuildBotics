@@ -12,6 +12,15 @@ def test_reference_covers_every_member_domain():
     assert "guildbotics member help" in text
 
 
+def test_reference_prepare_allows_issue_and_pr_url_together():
+    text = capability_reference_text()
+    # The CLI accepts --issue-url and --pr-url together (the ticket workflow's
+    # PR-review path generates exactly that to check out the PR head). The
+    # reference must not present them as mutually exclusive, or an agent building
+    # the command itself could drop one and fall back to issue-branch mode.
+    assert "--issue-url <url> [--pr-url <url>]" in text
+
+
 def test_reference_includes_standard_work_procedure():
     text = capability_reference_text()
     # The mode-independent working procedure lives here so entrypoint prompts

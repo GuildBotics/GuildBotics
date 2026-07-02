@@ -41,9 +41,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             (
                 "guildbotics member git prepare --person <person> "
-                "(--issue-url <url> | --pr-url <url> | --repo <owner/repo> --branch <name>)",
-                "Clone/checkout an isolated member workspace for a ticket, a PR head, "
-                "or an ad-hoc branch.",
+                "(--issue-url <url> [--pr-url <url>] | --pr-url <url> "
+                "| --repo <owner/repo> --branch <name>)",
+                "Clone/checkout an isolated member workspace: a ticket branch "
+                "(--issue-url), a PR head (--pr-url, alone or together with "
+                "--issue-url, which checks out the PR head), or an ad-hoc branch "
+                "(--repo --branch). --repo cannot be combined with the URL options.",
             ),
             (
                 "guildbotics member git commit --person <person> --repo-path <path> "

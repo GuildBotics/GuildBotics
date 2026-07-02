@@ -95,6 +95,11 @@ def test_guildbotics_skill_keeps_only_interactive_envelope():
         "active GuildBotics member for the rest of the conversation/session" in body
     )
     assert "communication_style.interactive_replies" in body
+    # The active member voice must persist across the whole interactive session,
+    # including intermediate progress updates (not only the final reply) — this
+    # is interactive-only and must stay in the skill envelope.
+    assert "progress updates" in body
+    assert "not neutral task summaries" in body
     assert "shared pair-programming workspace" in body
     assert "--workspace-mode current" in body
     assert "Do not run `member git prepare`" in body
