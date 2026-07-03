@@ -215,6 +215,7 @@ async def test_context_includes_capability_reference():
     # instead of a flat command-name list, and not the old fields.
     assert "guildbotics member chat reply" in result["capabilities"]
     assert "guildbotics member github pr create" in result["capabilities"]
+    assert "guildbotics member github pr review-comment" in result["capabilities"]
     assert "available_member_commands" not in result
     assert "safety_note" not in result
 
@@ -247,6 +248,50 @@ async def test_pr_reply_uses_pull_replies_endpoint_and_proxy_signature():
         (
             "/repos/owner/repo/pulls/7/comments/101/replies",
             {"body": "Fixed.\n\n⚙aiko"},
+            None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pr_review_comment_posts_diff_coordinates_and_proxy_signature():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": "owner/repo"}}
+    }
+    service._client = fake
+
+    result = await service.pr_review_comment(
+        "https://github.com/owner/repo/pull/7",
+        "Please simplify this branch.",
+        "guildbotics/example.py",
+        12,
+        "RIGHT",
+        10,
+        "RIGHT",
+    )
+
+    assert result == {
+        "review_comment_id": REPLY_COMMENT_ID,
+        "html_url": "https://github.com/owner/repo/pull/1#discussion_r123",
+        "created_at": "2026-01-01T00:00:00Z",
+        "path": "guildbotics/example.py",
+        "line": 12,
+        "side": "RIGHT",
+    }
+    assert fake.posts == [
+        (
+            "/repos/owner/repo/pulls/7/comments",
+            {
+                "body": "Please simplify this branch.\n\n⚙aiko",
+                "commit_id": "abc123",
+                "path": "guildbotics/example.py",
+                "line": 12,
+                "side": "RIGHT",
+                "start_line": 10,
+                "start_side": "RIGHT",
+            },
             None,
         )
     ]
@@ -321,6 +366,86 @@ async def test_pr_inspect_includes_review_thread_resolution_fields():
     assert result["review_threads"][0]["resolved"] is True
     assert result["review_threads"][0]["replyable"] is True
     assert result["review_threads"][0]["reply_target_id"] == ROOT_REVIEW_COMMENT_ID
+
+
+@pytest.mark.asyncio
+async def test_pr_inspect_include_diff_returns_commentable_lines():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "title": "PR",
+        "body": "Body",
+        "state": "open",
+        "merged_at": None,
+        "draft": False,
+        "html_url": "https://github.com/owner/repo/pull/7",
+        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
+        "base": {"ref": "main"},
+    }
+    fake.get_payloads["/repos/owner/repo/pulls/7/files"] = [
+        {
+            "filename": "guildbotics/example.py",
+            "status": "modified",
+            "additions": 2,
+            "deletions": 1,
+            "changes": 3,
+            "patch": "@@ -1,2 +1,3 @@\n unchanged\n-old\n+new\n+extra",
+        }
+    ]
+    service._client = fake
+
+    result = await service.pr_inspect(
+        "https://github.com/owner/repo/pull/7",
+        include_comments=False,
+        include_diff=True,
+    )
+
+    assert result["files"] == [
+        {
+            "path": "guildbotics/example.py",
+            "status": "modified",
+            "additions": 2,
+            "deletions": 1,
+            "changes": 3,
+            "patch": "@@ -1,2 +1,3 @@\n unchanged\n-old\n+new\n+extra",
+            "commentable_lines": [
+                {
+                    "path": "guildbotics/example.py",
+                    "line": 1,
+                    "side": "RIGHT",
+                    "left_line": 1,
+                    "right_line": 1,
+                    "content": "unchanged",
+                },
+                {
+                    "path": "guildbotics/example.py",
+                    "line": 2,
+                    "side": "LEFT",
+                    "left_line": 2,
+                    "content": "old",
+                },
+                {
+                    "path": "guildbotics/example.py",
+                    "line": 2,
+                    "side": "RIGHT",
+                    "right_line": 2,
+                    "content": "new",
+                },
+                {
+                    "path": "guildbotics/example.py",
+                    "line": 3,
+                    "side": "RIGHT",
+                    "right_line": 3,
+                    "content": "extra",
+                },
+            ],
+        }
+    ]
+    assert fake.gets[-1] == (
+        "/repos/owner/repo/pulls/7/files",
+        {"per_page": 100, "page": 1},
+        None,
+    )
 
 
 @pytest.mark.asyncio

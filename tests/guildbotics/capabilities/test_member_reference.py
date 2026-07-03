@@ -6,7 +6,9 @@ def test_reference_covers_every_member_domain():
     # All capability domains are listed so any member can act across them
     # regardless of which workflow invoked it.
     assert "guildbotics member git commit" in text
+    assert "--include-diff" in text
     assert "guildbotics member github pr create" in text
+    assert "guildbotics member github pr review-comment" in text
     assert "guildbotics member chat reply" in text
     assert "guildbotics member task complete" in text
     assert "guildbotics member help" in text
@@ -29,6 +31,9 @@ def test_reference_includes_standard_work_procedure():
     assert "Inspect first" in text
     assert "before publishing any code change" in text
     assert "Stage with plain git" in text
+    assert "files[].commentable_lines" in text
+    assert "path`, `line`, `side`" in text
+    assert "start_line" in text
     assert "reply_target_id" in text
     assert "Leave observable evidence" in text
 

@@ -280,10 +280,11 @@ guildbotics member github pr inspect \
   --person <person_id> \
   --url <github_pr_url> \
   [--include-comments] \
+  [--include-diff] \
   [--format markdown|json]
 ```
 
-- PR title/body/state/merged/head/base/review threads/conversation comments を取得。`--include-comments` 時は各 review thread について `root_comment_id` / `latest_comment_id` / `resolved` / `outdated` / `replyable` / `reply_target_id` を含める。読み取り専用。
+- PR title/body/state/merged/head/base/review threads/conversation comments/diff context を取得。`--include-comments` 時は各 review thread について `root_comment_id` / `latest_comment_id` / `resolved` / `outdated` / `replyable` / `reply_target_id` を含める。`--include-diff` 時は各 file の `patch` と、`pr review-comment` に渡せる `files[].commentable_lines`（`path` / `line` / `side`）を含める。読み取り専用。
 - `reply_target_id` は agent がそのまま `pr reply --reply-target-id` に渡すための値。agent に root/latest/resolved/outdated の raw 構造を解釈させない。
 
 ```bash
@@ -315,6 +316,22 @@ guildbotics member github pr comment \
 ```
 
 - PR conversation comment を投稿。proxy agent signature を自動付与。返却 JSON は issue comment と同形。
+
+```bash
+guildbotics member github pr review-comment \
+  --person <person_id> \
+  --url <github_pr_url> \
+  --path <file> \
+  --line <line> \
+  [--side LEFT|RIGHT] \
+  [--start-line <line> --start-side LEFT|RIGHT] \
+  --body-file <path> \
+  [--format json|markdown]
+```
+
+- PR diff 上に新規 inline review comment を作成する。対象行は事前に `pr inspect --include-diff` で確認し、`path` / `line` / `side` と、範囲コメントの場合は `start-line` / `start-side` で明示する。
+- capability 側で PR head commit を取得し、GitHub REST の pull request review comments endpoint へ provider 固有 payload を組み立てる。proxy agent signature を自動付与。
+- 返却 JSON: `review_comment_id` / `html_url` / `created_at` / `path` / `line` / `side`。
 
 ```bash
 guildbotics member github pr reply \
@@ -450,7 +467,7 @@ def resolve_member_context(person_identifier: str) -> tuple[Context, Person]
 - まず `guildbotics member context --person <person>` を実行する。
 - GitHub/git/chat 操作は通常 CLI/`gh`/user account を直接使わない。
 - GitHub/git 書き込みは `guildbotics member github ...` / `guildbotics member git ...` のみ。
-- issue/PR 作業の標準手順: `member context` → `issue/pr inspect` → `git prepare` → 調査/編集/テスト → 必要なら `git publish` → 必要なら `pr create` → `issue/pr comment` / `pr reply` / `reaction add`。
+- issue/PR 作業の標準手順: `member context` → `issue/pr inspect`（新規 inline 指摘では `pr inspect --include-diff`）→ `git prepare` → 調査/編集/テスト → 必要なら `git publish` → 必要なら `pr create` → `issue/pr comment` / `pr comment` / `pr review-comment` / `pr reply` / `reaction add`。
 - workflow から呼ばれた場合は、最後に必ず `guildbotics member task complete --run-id <workflow_run_id> ...` を実行し、完了状態と evidence を記録する。
 - 不明点は GitHub コメントで質問。対応不要なら reaction/comment で痕跡を残す。
 - secrets を表示・推測・保存しない。
@@ -621,7 +638,7 @@ ticket workflow 実装時点での将来対応:
 
 ### Step 3: GitHub write capability
 
-- `issue comment` / `issue create`（実 issue + ProjectV2 add item）/ `pr comment` / `pr reply`（正しい replies endpoint）/ `pr create`（既存 PR 再利用・`Closes #N`）/ `reaction add` / proxy signature append。
+- `issue comment` / `issue create`（実 issue + ProjectV2 add item）/ `pr comment` / `pr review-comment`（新規 inline review comment）/ `pr reply`（正しい replies endpoint）/ `pr create`（既存 PR 再利用・`Closes #N`）/ `reaction add` / proxy signature append。
 - write command は `GUILDBOTICS_TASK_RUN_ID` があれば task-run evidence を記録する。
 - tests: payload, endpoint, signature, no secret leakage。
 
@@ -840,7 +857,7 @@ GuildBotics 設定確認:
 
 質問シナリオ: 情報不足 issue → agent が推測実装せず `issue comment` で質問 → 最終応答が「質問投稿済み・回答待ち」。
 
-PR review 対応シナリオ: review comment 付き PR → `pr inspect --include-comments` → 妥当なら編集/publish/`pr reply` → 不要でも `pr reply` または reaction で痕跡。
+PR review 対応シナリオ: review comment 付き PR → `pr inspect --include-comments`（新規 inline 指摘では `--include-diff` も付ける）→ 妥当なら編集/publish/既存 thread には `pr reply`、新規 inline 指摘には `pr review-comment` → 不要でも `pr reply` または reaction で痕跡。
 
 クライアント拒否設定の検証: agent が `gh` / `git push` を試みた場合、クライアントが承認要求 or 拒否し、利用者が拒否できることを確認する。
 

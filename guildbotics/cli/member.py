@@ -1245,23 +1245,28 @@ def pr() -> None:
 @click.option("--person", required=True)
 @click.option("--url", "pr_url", required=True)
 @click.option("--include-comments", is_flag=True)
+@click.option("--include-diff", is_flag=True)
 @click.option("--format", "output_format", type=FormatChoice, default="markdown")
 def pr_inspect(
-    person: str, pr_url: str, include_comments: bool, output_format: str
+    person: str,
+    pr_url: str,
+    include_comments: bool,
+    include_diff: bool,
+    output_format: str,
 ) -> None:
     _run(
-        _pr_inspect(person, pr_url, include_comments),
+        _pr_inspect(person, pr_url, include_comments, include_diff),
         output_format=output_format,
     )
 
 
 async def _pr_inspect(
-    person: str, pr_url: str, include_comments: bool
+    person: str, pr_url: str, include_comments: bool, include_diff: bool
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        return await service.pr_inspect(pr_url, include_comments)
+        return await service.pr_inspect(pr_url, include_comments, include_diff)
     finally:
         await service.aclose()
 
@@ -1349,6 +1354,64 @@ async def _pr_comment(person: str, pr_url: str, body: str) -> dict[str, Any]:
     try:
         result = await service.pr_comment(pr_url, body)
         TaskRunStore().append_evidence(current_task_run_id(), "pr_comment", result)
+        return result
+    finally:
+        await service.aclose()
+
+
+@pr.command(name="review-comment")
+@click.option("--person", required=True)
+@click.option("--url", "pr_url", required=True)
+@click.option("--path", "file_path", required=True)
+@click.option("--line", required=True, type=click.IntRange(min=1))
+@click.option("--side", type=click.Choice(["LEFT", "RIGHT"]), default="RIGHT")
+@click.option("--start-line", type=click.IntRange(min=1), default=None)
+@click.option("--start-side", type=click.Choice(["LEFT", "RIGHT"]), default=None)
+@click.option("--body-file", required=True, type=click.Path(path_type=Path))
+@click.option("--format", "output_format", type=FormatChoice, default="json")
+def pr_review_comment(
+    person: str,
+    pr_url: str,
+    file_path: str,
+    line: int,
+    side: str,
+    start_line: int | None,
+    start_side: str | None,
+    body_file: Path,
+    output_format: str,
+) -> None:
+    if (start_line is None) != (start_side is None):
+        raise click.ClickException(
+            "--start-line and --start-side must be provided together."
+        )
+    body = _read_file(body_file, "body-file")
+    _run(
+        _pr_review_comment(
+            person, pr_url, body, file_path, line, side, start_line, start_side
+        ),
+        output_format=output_format,
+    )
+
+
+async def _pr_review_comment(
+    person: str,
+    pr_url: str,
+    body: str,
+    file_path: str,
+    line: int,
+    side: str,
+    start_line: int | None,
+    start_side: str | None,
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberGitHubCapabilityService(member_person, context.team)
+    try:
+        result = await service.pr_review_comment(
+            pr_url, body, file_path, line, side, start_line, start_side
+        )
+        TaskRunStore().append_evidence(
+            current_task_run_id(), "pr_review_comment", result
+        )
         return result
     finally:
         await service.aclose()

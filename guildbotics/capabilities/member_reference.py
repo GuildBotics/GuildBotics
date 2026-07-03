@@ -84,8 +84,9 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Open a follow-up issue.",
             ),
             (
-                "guildbotics member github pr inspect --person <person> --url <pr_url> [--include-comments]",
-                "Read a PR and its review threads.",
+                "guildbotics member github pr inspect --person <person> --url <pr_url> "
+                "[--include-comments] [--include-diff]",
+                "Read a PR, optionally including review threads and diff comment coordinates.",
             ),
             (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
@@ -96,6 +97,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member github pr comment --person <person> --url <pr_url> --body-file <file>",
                 "Comment on a PR conversation.",
+            ),
+            (
+                "guildbotics member github pr review-comment --person <person> --url <pr_url> "
+                "--path <file> --line <n> [--side LEFT|RIGHT] [--start-line <n> --start-side LEFT|RIGHT] "
+                "--body-file <file>",
+                "Create a new inline review comment on a PR diff line.",
             ),
             (
                 "guildbotics member github pr reply --person <person> --url <pr_url> "
@@ -224,8 +231,12 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "Stage with plain git (`git add`), then commit and push through `member git "
     "commit`, `member git push`, or `member git publish`.",
     "When issue work changed code, open or reuse a PR with `member github pr "
-    "create`. When addressing PR review threads, reply with `member github pr "
-    "reply` using the `reply_target_id` from `pr inspect --include-comments`.",
+    "create`. When creating new PR inline feedback, first inspect the PR with "
+    "`member github pr inspect --include-diff`, then use `member github pr "
+    "review-comment` with explicit diff coordinates from `files[].commentable_lines` "
+    "(`path`, `line`, `side`, and optional `start_line` / `start_side`). When "
+    "addressing existing PR review threads, reply with `member github pr reply` "
+    "using the `reply_target_id` from `pr inspect --include-comments`.",
     "Leave observable evidence even when no change is needed: a comment, a reply, "
     "or a reaction.",
     "Before finishing, maintain memory according to the rules below.",
@@ -240,7 +251,8 @@ _CROSS_CUTTING_RULES: list[str] = [
     "to that one commit without changing the repository git config.",
     "Apply `communication_style` by output kind: `interactive_replies` for interactive "
     "progress updates and final replies to the user; `github_comments` for issue comments, "
-    "PR conversation comments, and review thread replies; `neutral_documents` for issue/PR "
+    "PR conversation comments, inline review comments, and review thread replies; "
+    "`neutral_documents` for issue/PR "
     "titles and bodies, commit messages, and task summaries; `machine_outputs` for command "
     "output, command arguments, IDs, paths, workflow completion JSON, and workflow "
     "`AgentResponse.message`.",
