@@ -7,7 +7,9 @@ complete-or-fail, and the AgentResponse shape. Trigger-specific completion
 command forms stay in each prompt.
 """
 
-from guildbotics.utils.i18n_tool import get_language, set_language, t
+import i18n  # type: ignore
+
+from guildbotics.utils.i18n_tool import set_language, t
 
 CONTRACT_KEY = "commands.workflows.common.workflow_contract"
 
@@ -23,12 +25,14 @@ REQUIRED_TOKENS = (
 
 
 def _contract(language: str) -> str:
-    previous = get_language()
+    previous_locale = i18n.get("locale")
+    previous_fallback = i18n.get("fallback")
     set_language(language)
     try:
         return t(CONTRACT_KEY, person_id="aiko")
     finally:
-        set_language(previous or "en")
+        i18n.set("locale", previous_locale)
+        i18n.set("fallback", previous_fallback)
 
 
 def test_contract_resolves_with_required_tokens_in_both_languages():
