@@ -13,6 +13,10 @@ from typing import Any
 import httpx
 
 from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.integrations.slack.message_events import (
+    is_bot_message,
+    is_conversational_message,
+)
 from guildbotics.runtime.event_listener import EventListener, IncomingChatEvent
 
 _MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
@@ -243,8 +247,7 @@ class SlackSocketEventListener(EventListener):
         if not ts:
             return None
         thread_ts = _str_or_none(event.get("thread_ts")) or ts
-        subtype = str(event.get("subtype", ""))
-        if subtype in {"message_changed", "message_deleted"}:
+        if not is_conversational_message(event):
             return None
         text = str(event.get("text", "") or "")
         author_id = _str_or_none(event.get("user"))
@@ -256,7 +259,7 @@ class SlackSocketEventListener(EventListener):
             author_id=author_id,
             text=text,
             mentions=_extract_mentions(text),
-            is_bot_message=bool(event.get("bot_id")) or subtype == "bot_message",
+            is_bot_message=is_bot_message(event),
             is_thread_reply=(thread_ts != ts),
         )
         return IncomingChatEvent(

@@ -34,7 +34,7 @@ async def test_get_bot_identity_uses_auth_test():
 
 @pytest.mark.asyncio
 async def test_list_channel_events_normalizes_messages():
-    expected_event_count = 2
+    expected_event_count = 3
     seen_body = ""
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -68,6 +68,25 @@ async def test_list_channel_events_normalizes_messages():
                     "subtype": "message_deleted",
                     "ts": "101.15",
                 },
+                {
+                    "type": "message",
+                    "subtype": "bot_add",
+                    "text": "Aiko integration was added to this channel",
+                    "ts": "101.2",
+                },
+                {
+                    "type": "message",
+                    "subtype": "channel_join",
+                    "text": "Alice joined the channel",
+                    "ts": "101.3",
+                },
+                {
+                    "type": "message",
+                    "subtype": "file_share",
+                    "user": "UUSER1",
+                    "text": "please check this file",
+                    "ts": "102.1",
+                },
             ],
             "response_metadata": {"next_cursor": "abc"},
         }
@@ -84,6 +103,8 @@ async def test_list_channel_events_normalizes_messages():
     assert page.events[0].mentions == ["UBOT123"]
     assert page.events[0].is_thread_reply is False
     assert page.events[1].is_bot_message is True
+    assert page.events[2].event_id == "C1:102.1"
+    assert page.events[2].text == "please check this file"
     assert "oldest=90.0" in seen_body
     assert "latest=110.0" in seen_body
     await client.aclose()
