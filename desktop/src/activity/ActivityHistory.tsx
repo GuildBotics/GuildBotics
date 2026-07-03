@@ -43,6 +43,9 @@ import {
 } from "../api/client";
 
 export type ActivityView = "day" | "week";
+export type ActivitySessionMode = ActivityHistorySession["mode"];
+export type ActivityBlockMode = ActivitySessionMode | "mixed";
+const SESSION_MODE_ORDER: ActivitySessionMode[] = ["workflow", "interactive"];
 
 const HOURS = ["03:00", "06:00", "09:00", "12:00", "15:00", "18:00", "21:00"];
 const ACTIVITY_LIMIT = 1000;
@@ -57,7 +60,7 @@ export type ActivityHistoryMatchState = {
 type ActivityBlock = {
   id: string;
   person_id: string;
-  mode: ActivityHistorySession["mode"];
+  mode: ActivityBlockMode;
   title: string;
   started_at: string;
   ended_at: string;
@@ -426,11 +429,9 @@ function ActivityBlockBar({
         <button
           type="button"
           aria-label={block.title}
-          className={`${stateClass} ${
-            block.mode === "interactive"
-              ? "activity-session activity-session-interactive"
-              : "activity-session activity-session-workflow"
-          } ${view === "week" ? "activity-session-week" : ""}`}
+          className={`${stateClass} activity-session activity-session-${block.mode} ${
+            view === "week" ? "activity-session-week" : ""
+          }`}
           style={{
             ...(view === "day" ? { left: `${left}%`, top: "10px", width: `${width}%` } : {}),
           }}
@@ -495,22 +496,35 @@ function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
           </Text>
         )}
       </Group>
-      <Group gap="xs" wrap="nowrap">
-        <Badge color={block.mode === "interactive" ? "teal" : "blue"} variant="light">
-          {t(`activity.modes.${block.mode}`)}
-        </Badge>
-        <Text c="dimmed" size="xs">
-          <Clock3 size={12} /> {formatTimeRange(block.started_at, block.ended_at)} ·{" "}
-          {formatDuration(blockDurationSeconds(block))}
-        </Text>
-      </Group>
+      <Stack gap={6}>
+        {blockModes(block.sessions).map((mode) => {
+          const span = sessionsTimeSpan(block.sessions.filter((session) => session.mode === mode));
+          return (
+            <Group key={mode} gap="xs" wrap="nowrap">
+              <Badge color={sessionModeColor(mode)} variant="light" style={{ flexShrink: 0 }}>
+                {t(`activity.modes.${mode}`)}
+              </Badge>
+              <Text c="dimmed" size="xs">
+                <Clock3 size={12} /> {formatTimeRange(span.start, span.end)} ·{" "}
+                {formatDuration(spanSeconds(span))}
+              </Text>
+            </Group>
+          );
+        })}
+      </Stack>
       {block.sessions.length > 1 ? (
         <div className="activity-block-session-list">
           {block.sessions.map((session) => (
             <div key={session.trace_id}>
-              <Text fw={600} lineClamp={1} size="xs">
-                {session.title}
-              </Text>
+              <Group gap={6} wrap="nowrap">
+                <span
+                  className={`activity-session-mode-dot activity-session-mode-dot-${session.mode}`}
+                  aria-hidden
+                />
+                <Text fw={600} lineClamp={1} size="xs">
+                  {session.title}
+                </Text>
+              </Group>
               <Text c="dimmed" size="xs">
                 {formatTimeRange(session.started_at, session.ended_at)}
               </Text>
@@ -775,9 +789,7 @@ function mergeSessionIntoBlock(
 ) {
   block.id = `${block.id}:${session.trace_id}`;
   block.sessions.push(session);
-  block.mode = block.sessions.some((item) => item.mode === "interactive")
-    ? "interactive"
-    : "workflow";
+  block.mode = blockMode(block.sessions);
   block.title = blockTitle(block.sessions);
   block.started_at = minIso(block.started_at, session.started_at);
   block.ended_at = maxIso(block.ended_at, session.ended_at);
@@ -790,6 +802,20 @@ function blockTitle(sessions: ActivityHistorySession[]): string {
   return sessions.length === 1 ? first.title : `${first.title} +${sessions.length - 1}`;
 }
 
+export function blockModes(sessions: ActivityHistorySession[]): ActivitySessionMode[] {
+  const present = new Set(sessions.map((session) => session.mode));
+  return SESSION_MODE_ORDER.filter((mode) => present.has(mode));
+}
+
+function blockMode(sessions: ActivityHistorySession[]): ActivityBlockMode {
+  const modes = blockModes(sessions);
+  return modes.length > 1 ? "mixed" : (modes[0] ?? "workflow");
+}
+
+function sessionModeColor(mode: ActivitySessionMode): string {
+  return mode === "interactive" ? "teal" : "blue";
+}
+
 function activityBlockVisibleTitle(title: string): string {
   const trimmed = title.trim();
   const withoutPullRequestPrefix = trimmed.replace(
@@ -799,11 +825,20 @@ function activityBlockVisibleTitle(title: string): string {
   return withoutPullRequestPrefix || trimmed;
 }
 
-function blockDurationSeconds(block: ActivityBlock): number {
-  return Math.max(
-    0,
-    (new Date(block.ended_at).getTime() - new Date(block.started_at).getTime()) / 1000,
-  );
+export function sessionsTimeSpan(sessions: ActivityHistorySession[]): {
+  start: string;
+  end: string;
+} {
+  return {
+    start: sessions
+      .map((session) => session.started_at)
+      .reduce((left, right) => minIso(left, right)),
+    end: sessions.map((session) => session.ended_at).reduce((left, right) => maxIso(left, right)),
+  };
+}
+
+function spanSeconds(span: { start: string; end: string }): number {
+  return Math.max(0, (new Date(span.end).getTime() - new Date(span.start).getTime()) / 1000);
 }
 
 function dedupeLinks(links: ActivityHistoryLink[]): ActivityHistoryLink[] {

@@ -112,6 +112,38 @@ def test_chat_run_done_accepts_noop_evidence(tmp_path):
     assert status.evidence_types == ["chat_noop"]
 
 
+def test_summaries_by_subject_keys_on_subject_and_person(tmp_path):
+    store = RunStore(tmp_path)
+    for run_id, person, summary in [
+        ("run-a", "aiko", "aiko の回答"),
+        ("run-y", "yuki", "yuki の回答"),
+    ]:
+        store.append_evidence(run_id, "chat_reply", {"text": "answered"})
+        store.complete_run(
+            run_id,
+            "done",
+            summary,
+            subject_type="chat",
+            subject_id="slack:C1:100.1:E1",
+            person_id=person,
+        )
+
+    # Same subject, two members: each keeps its own summary (no cross-member).
+    assert store.summaries_by_subject() == {
+        ("slack:C1:100.1:E1", "aiko"): "aiko の回答",
+        ("slack:C1:100.1:E1", "yuki"): "yuki の回答",
+    }
+
+
+def test_summaries_by_subject_ignores_incomplete_runs(tmp_path):
+    store = RunStore(tmp_path)
+
+    assert store.summaries_by_subject() == {}
+
+    store.append_evidence("run-2", "chat_reply", {"text": "in progress"})
+    assert store.summaries_by_subject() == {}
+
+
 def test_chat_run_asking_requires_post_evidence(tmp_path):
     store = RunStore(tmp_path)
     store.append_evidence("run-1", "chat_reaction", {"reaction": "ack"})

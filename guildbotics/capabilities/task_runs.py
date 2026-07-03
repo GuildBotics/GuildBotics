@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,15 @@ from guildbotics.utils.fileio import get_workspace_data_path
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
+
+
+@dataclass(frozen=True)
+class _RunCompletion:
+    run_id: str
+    subject_id: str
+    person_id: str
+    summary: str
+    completed_at: str
 
 
 class RunError(RuntimeError):
@@ -154,6 +164,59 @@ class RunStore:
             for record in self._read_records(run_id)
             if record.get("kind") == "evidence"
         ]
+
+    def summaries_by_subject(self) -> dict[tuple[str, str], str]:
+        """Map each ``(subject_id, person_id)`` to its latest completion summary.
+
+        Runs are stored per opaque ``run_id`` but correlate to a domain
+        subject (a chat thread event id or a ticket url) via ``subject_id``.
+        The person is part of the key because several members can run against
+        the same subject (e.g. the same Slack event), so subject alone would
+        cross members. Activity history titles a session from the summary the
+        matching member wrote. Read-only and tolerant: unreadable or incomplete
+        run files are skipped.
+        """
+        latest: dict[tuple[str, str], tuple[str, str]] = {}
+        for completion in self._completions():
+            if not completion.subject_id or not completion.summary:
+                continue
+            key = (completion.subject_id, completion.person_id)
+            existing = latest.get(key)
+            if existing is None or completion.completed_at >= existing[0]:
+                latest[key] = (completion.completed_at, completion.summary)
+        return {key: summary for key, (_, summary) in latest.items()}
+
+    def subjects_by_run(self) -> dict[str, str]:
+        """Map each ``run_id`` to the domain ``subject_id`` it completed.
+
+        Lets activity history attach run-scoped records that carry only a
+        ``run_id`` (e.g. memory writes made by a workflow subprocess, which
+        have no trace id) back to the session that owns the same subject.
+        """
+        return {
+            completion.run_id: completion.subject_id
+            for completion in self._completions()
+            if completion.subject_id
+        }
+
+    def _completions(self) -> Iterator[_RunCompletion]:
+        if not self.root.is_dir():
+            return
+        for path in sorted(self.root.glob("*.jsonl")):
+            try:
+                records = self._read_records_if_exists(path.stem)
+            except TaskRunError:
+                continue
+            for record in records:
+                if record.get("kind") != "complete":
+                    continue
+                yield _RunCompletion(
+                    run_id=path.stem,
+                    subject_id=str(record.get("subject_id") or ""),
+                    person_id=str(record.get("person_id") or ""),
+                    summary=str(record.get("summary") or "").strip(),
+                    completed_at=str(record.get("completed_at") or ""),
+                )
 
     def status(self, run_id: str) -> RunStatus:
         records = self._read_records(run_id)
