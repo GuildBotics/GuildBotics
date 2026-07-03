@@ -399,7 +399,12 @@ class MemberGitHubCapabilityService:
         )
         _raise_for_status(resp)
         payload = resp.json()
-        return payload if isinstance(payload, dict) else {}
+        if not isinstance(payload, dict):
+            raise MemberCapabilityError(
+                "Unexpected GitHub pull request response for "
+                f"{resource.full_repo}#{resource.number}."
+            )
+        return payload
 
     def _validate_review_comment_location(
         self,
@@ -425,6 +430,14 @@ class MemberGitHubCapabilityService:
             )
         if start_line is not None and start_line < 1:
             raise MemberCapabilityError("Review comment start_line must be positive.")
+        if start_side is not None and start_side != side:
+            raise MemberCapabilityError(
+                "Review comment range start_side must match side."
+            )
+        if start_line is not None and start_line > line:
+            raise MemberCapabilityError(
+                "Review comment range start_line must be less than or equal to line."
+            )
 
     def parse_repo(self, repo: str) -> tuple[str, str]:
         parts = [part for part in repo.strip().split("/") if part]
@@ -765,7 +778,6 @@ class MemberGitHubCapabilityService:
             "additions": file.get("additions", 0),
             "deletions": file.get("deletions", 0),
             "changes": file.get("changes", 0),
-            "patch": patch,
             "commentable_lines": _commentable_lines_from_patch(path, patch),
         }
 

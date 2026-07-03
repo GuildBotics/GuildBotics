@@ -1,6 +1,9 @@
 import pytest
 
-from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
+from guildbotics.capabilities.member_github import (
+    MemberCapabilityError,
+    MemberGitHubCapabilityService,
+)
 from guildbotics.entities.team import Person, Project, Role, Team
 
 HTTP_BAD_REQUEST = 400
@@ -298,6 +301,56 @@ async def test_pr_review_comment_posts_diff_coordinates_and_proxy_signature():
 
 
 @pytest.mark.asyncio
+async def test_pr_review_comment_rejects_invalid_multiline_range():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": "owner/repo"}}
+    }
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="start_side must match side"):
+        await service.pr_review_comment(
+            "https://github.com/owner/repo/pull/7",
+            "Please simplify this branch.",
+            "guildbotics/example.py",
+            12,
+            "RIGHT",
+            10,
+            "LEFT",
+        )
+
+    with pytest.raises(
+        MemberCapabilityError, match="start_line must be less than or equal to line"
+    ):
+        await service.pr_review_comment(
+            "https://github.com/owner/repo/pull/7",
+            "Please simplify this branch.",
+            "guildbotics/example.py",
+            12,
+            "RIGHT",
+            13,
+            "RIGHT",
+        )
+
+
+@pytest.mark.asyncio
+async def test_pr_inspect_rejects_unexpected_pull_request_payload():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = []
+    service._client = fake
+
+    with pytest.raises(
+        MemberCapabilityError,
+        match="Unexpected GitHub pull request response for owner/repo#7",
+    ):
+        await service.pr_inspect(
+            "https://github.com/owner/repo/pull/7", include_comments=False
+        )
+
+
+@pytest.mark.asyncio
 async def test_pr_reply_allows_outdated_thread():
     service = _service()
     fake = FakeClient()
@@ -407,7 +460,6 @@ async def test_pr_inspect_include_diff_returns_commentable_lines():
             "additions": 2,
             "deletions": 1,
             "changes": 3,
-            "patch": "@@ -1,2 +1,3 @@\n unchanged\n-old\n+new\n+extra",
             "commentable_lines": [
                 {
                     "path": "guildbotics/example.py",

@@ -33,7 +33,8 @@ def test_reference_includes_standard_work_procedure():
     assert "Stage with plain git" in text
     assert "files[].commentable_lines" in text
     assert "path`, `line`, `side`" in text
-    assert "start_line" in text
+    assert "--start-line" in text
+    assert "--start-side" in text
     assert "reply_target_id" in text
     assert "Leave observable evidence" in text
 

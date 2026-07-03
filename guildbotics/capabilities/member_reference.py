@@ -234,7 +234,7 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "create`. When creating new PR inline feedback, first inspect the PR with "
     "`member github pr inspect --include-diff`, then use `member github pr "
     "review-comment` with explicit diff coordinates from `files[].commentable_lines` "
-    "(`path`, `line`, `side`, and optional `start_line` / `start_side`). When "
+    "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`). When "
     "addressing existing PR review threads, reply with `member github pr reply` "
     "using the `reply_target_id` from `pr inspect --include-comments`.",
     "Leave observable evidence even when no change is needed: a comment, a reply, "
