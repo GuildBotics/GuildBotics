@@ -12,7 +12,11 @@ from guildbotics.app_api.activity_events import (
     event_url,
     github_attrs_from_payload,
 )
-from guildbotics.app_api.activity_links import links_from_record, links_from_records
+from guildbotics.app_api.activity_links import (
+    MEMORY_READ_ONLY_ACTIONS,
+    links_from_record,
+    links_from_records,
+)
 from guildbotics.app_api.models import (
     ActivityHistoryEvent,
     ActivityHistoryLink,
@@ -374,6 +378,8 @@ def _run_scoped_owner_trace(
 ) -> str:
     attributes = item.get("attributes")
     if item.get("trace_id") or not isinstance(attributes, dict):
+        return ""
+    if str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS:
         return ""
     run_id = str(attributes.get("run_id") or attributes.get("task_run_id") or "")
     if not run_id:

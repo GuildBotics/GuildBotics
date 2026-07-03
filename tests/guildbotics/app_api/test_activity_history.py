@@ -251,6 +251,33 @@ def test_build_activity_history_does_not_mutate_input_records() -> None:
     assert all(_OWNER_TRACE_KEY not in record for record in records)
 
 
+def test_read_only_memory_record_is_not_adopted_into_session() -> None:
+    # A `get`/`recall`/`touch` does not change a document, so it must not add a
+    # link nor become the session title (its payload title is just what was read).
+    read_record = {
+        "trace_id": None,
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "memory",
+        "type": "memory.get",
+        "attributes": {
+            "run_id": "task-run-1",
+            "memory.action": "get",
+            "memory.doc_id": "read-doc",
+            "memory.path": "documents/personal/alice/read-doc",
+        },
+        "payload": {"title": "読んだだけのメモ"},
+    }
+    set_language("ja")
+    session = _session(
+        _chat_records() + [read_record],
+        run_summary=lambda _subject_id, _person_id: "",
+        run_subject=lambda run_id: CHAT_SUBJECT_ID if run_id == "task-run-1" else "",
+    )
+    assert all(link.kind != "doc" for link in session.links)
+    assert session.title == t("app_api.activity_history.chat_trigger", provider="Slack")
+
+
 def test_memory_write_does_not_cross_to_another_members_session() -> None:
     # Alice owns the chat session for the shared Slack subject; Kenji ran his
     # own workflow against the same subject and recalled memory. Kenji's memory

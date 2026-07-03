@@ -8,6 +8,10 @@ from guildbotics.app_api.activity_events import commit_entries, commit_message
 from guildbotics.app_api.models import ActivityHistoryLink
 
 type ActivityLinkKind = Literal["doc", "issue", "pull_request", "commit", "external"]
+# Read-only / signal memory actions do not change a document, so they are noise
+# in activity history (they still appear in the dedicated Memory audit view).
+# Only content-changing actions (record, update, archive, promote) get a link.
+MEMORY_READ_ONLY_ACTIONS = frozenset({"recall", "get", "touch"})
 
 
 def links_from_records(
@@ -83,6 +87,8 @@ def doc_link_from_memory(
     attributes: dict[str, Any],
     record: dict[str, Any] | None = None,
 ) -> ActivityHistoryLink | None:
+    if str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS:
+        return None
     path = str(attributes.get("memory.path") or "")
     doc_id = str(attributes.get("memory.doc_id") or "")
     title = str(payload.get("title") or "")
