@@ -287,6 +287,76 @@ describe("buildActivityBlocks", () => {
     expect(blocks[0].sessions.map((session) => session.trace_id)).toEqual(["first", "second"]);
   });
 
+  it("labels a merged block by the meaningful title, not a command fallback", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "setup",
+        command: "guildbotics member context",
+        title: "guildbotics member context",
+        started_at: "2026-07-01T12:31:00Z",
+        ended_at: "2026-07-01T12:34:00Z",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "work",
+        command: "guildbotics member context",
+        title: "PR #246 Slack event filter",
+        started_at: "2026-07-01T12:55:00Z",
+        ended_at: "2026-07-01T13:08:00Z",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].title).toBe("PR #246 Slack event filter +1");
+  });
+
+  it("dedupes the same PR url across merged sessions with different labels", () => {
+    const url = "https://github.com/o/r/pull/246";
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "first",
+        started_at: "2026-07-01T12:31:00Z",
+        ended_at: "2026-07-01T12:34:00Z",
+        links: [{ kind: "pull_request", label: "PR #246", url }],
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "second",
+        started_at: "2026-07-01T12:55:00Z",
+        ended_at: "2026-07-01T13:08:00Z",
+        links: [{ kind: "pull_request", label: "PR #246 note のタイトル", url }],
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].links).toEqual([{ kind: "pull_request", label: "PR #246", url }]);
+  });
+
+  it("prefers the canonical PR label even when it merges in after a memory-source label", () => {
+    const url = "https://github.com/o/r/pull/246";
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "first",
+        started_at: "2026-07-01T12:31:00Z",
+        ended_at: "2026-07-01T12:34:00Z",
+        links: [{ kind: "pull_request", label: "PR #246 note のタイトル", url }],
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "second",
+        started_at: "2026-07-01T12:55:00Z",
+        ended_at: "2026-07-01T13:08:00Z",
+        links: [{ kind: "pull_request", label: "PR #246", url }],
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].links).toEqual([{ kind: "pull_request", label: "PR #246", url }]);
+  });
+
   it("keeps sessions separate when rounded display ranges only touch", () => {
     const blocks = buildActivityBlocks([
       {
