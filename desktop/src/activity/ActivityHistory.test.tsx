@@ -9,6 +9,7 @@ import {
   activityBlockExecutionUrl,
   activityLinkHref,
   activityRange,
+  blockModes,
   buildActivityBlocks,
   matchActivityHistory,
   orderedActivityLinks,
@@ -140,6 +141,35 @@ describe("ActivityHistoryPage", () => {
     expect(screen.getByRole("button", { name: "workflows/ticket_driven_workflow" })).toHaveClass(
       "activity-session-week",
     );
+  });
+
+  it("marks a merged mixed-mode block with the mixed style", async () => {
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      events: [],
+      sessions: [
+        {
+          ...ACTIVITY_FIXTURE.sessions[0],
+          trace_id: "wf",
+          title: "First task",
+          mode: "workflow",
+          started_at: "2026-07-01T12:05:00Z",
+          ended_at: "2026-07-01T12:20:00Z",
+        },
+        {
+          ...ACTIVITY_FIXTURE.sessions[0],
+          trace_id: "chat",
+          title: "Second task",
+          mode: "interactive",
+          started_at: "2026-07-01T12:30:00Z",
+          ended_at: "2026-07-01T12:45:00Z",
+        },
+      ],
+    });
+    renderActivity();
+
+    const bar = await screen.findByRole("button", { name: "First task +1" });
+    expect(bar).toHaveClass("activity-session-mixed");
   });
 
   it("hides member event pins in week view", async () => {
@@ -300,6 +330,52 @@ describe("buildActivityBlocks", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].started_at).toBe("2026-07-01T09:00:00+09:00");
     expect(blocks[0].ended_at).toBe("2026-07-01T00:45:00Z");
+  });
+
+  it("marks a merged block as mixed when session modes differ", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "wf",
+        mode: "workflow",
+        started_at: "2026-07-01T12:05:00Z",
+        ended_at: "2026-07-01T12:20:00Z",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "chat",
+        mode: "interactive",
+        started_at: "2026-07-01T12:30:00Z",
+        ended_at: "2026-07-01T12:45:00Z",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].mode).toBe("mixed");
+    expect(blockModes(blocks[0].sessions)).toEqual(["workflow", "interactive"]);
+  });
+
+  it("keeps a single mode when merged sessions share it", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "wf-1",
+        mode: "workflow",
+        started_at: "2026-07-01T12:05:00Z",
+        ended_at: "2026-07-01T12:20:00Z",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "wf-2",
+        mode: "workflow",
+        started_at: "2026-07-01T12:30:00Z",
+        ended_at: "2026-07-01T12:45:00Z",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].mode).toBe("workflow");
+    expect(blockModes(blocks[0].sessions)).toEqual(["workflow"]);
   });
 });
 

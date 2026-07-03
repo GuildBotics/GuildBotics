@@ -60,6 +60,7 @@ from guildbotics.capabilities.member_memory_audit import (
     MemoryAuditStore,
     parse_memory_audit_timestamp,
 )
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.registry import get_command_extensions
 from guildbotics.drivers import (
@@ -590,11 +591,18 @@ class AppRuntime:
             )
         context = self._get_context()
         records = self._activity_records_between(start_time, end_time, limit=limit)
+        run_store = RunStore()
+        run_summaries = run_store.summaries_by_subject()
+        run_subjects = run_store.subjects_by_run()
         return build_activity_history(
             start=start_time,
             end=end_time,
             members=context.team.members,
             records=records,
+            run_summary=lambda subject_id, person_id: run_summaries.get(
+                (subject_id, person_id), ""
+            ),
+            run_subject=lambda run_id: run_subjects.get(run_id, ""),
         )
 
     def _activity_records_between(

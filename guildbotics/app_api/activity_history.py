@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
@@ -12,7 +12,11 @@ from guildbotics.app_api.activity_events import (
     event_url,
     github_attrs_from_payload,
 )
-from guildbotics.app_api.activity_links import links_from_record, links_from_records
+from guildbotics.app_api.activity_links import (
+    MEMORY_READ_ONLY_ACTIONS,
+    links_from_record,
+    links_from_records,
+)
 from guildbotics.app_api.models import (
     ActivityHistoryEvent,
     ActivityHistoryLink,
@@ -21,10 +25,15 @@ from guildbotics.app_api.models import (
     ActivityHistorySession,
 )
 from guildbotics.entities.team import Person
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 type ActivitySessionMode = Literal["interactive", "workflow"]
 AUTOMATED_WORKFLOW_SOURCES = {"routine", "scheduled", "event_listener"}
+# Internal grouping key: the trace that owns a run-scoped record. Kept separate
+# from the record's own ``trace_id`` so adopted records still generate links
+# (e.g. memory diagnostics urls) against their original identity.
+_OWNER_TRACE_KEY = "_owner_trace_id"
 
 
 def build_activity_history(
@@ -33,6 +42,8 @@ def build_activity_history(
     end: datetime,
     members: Iterable[Person],
     records: Iterable[dict[str, Any]],
+    run_summary: Callable[[str, str], str] | None = None,
+    run_subject: Callable[[str], str] | None = None,
 ) -> ActivityHistoryResponse:
     display_members = [
         ActivityHistoryMember(
@@ -45,8 +56,15 @@ def build_activity_history(
         if str(getattr(member, "person_type", "")) != "human"
     ]
     display_member_ids = {member.person_id for member in display_members}
-    ordered_records = sorted(records, key=_record_sort_key)
-    sessions = _build_sessions(ordered_records, display_member_ids)
+    record_list = _attach_run_scoped_records(
+        list(records), run_subject or (lambda _run_id: "")
+    )
+    ordered_records = sorted(record_list, key=_record_sort_key)
+    sessions = _build_sessions(
+        ordered_records,
+        display_member_ids,
+        run_summary or (lambda _subject_id, _person_id: ""),
+    )
     events = _build_events(ordered_records, display_member_ids)
     return ActivityHistoryResponse(
         start=start.isoformat(),
@@ -59,11 +77,13 @@ def build_activity_history(
 
 
 def _build_sessions(
-    records: list[dict[str, Any]], display_member_ids: set[str]
+    records: list[dict[str, Any]],
+    display_member_ids: set[str],
+    run_summary: Callable[[str, str], str],
 ) -> list[ActivityHistorySession]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in records:
-        trace_id = str(item.get("trace_id") or "")
+        trace_id = str(item.get(_OWNER_TRACE_KEY) or item.get("trace_id") or "")
         person_id = str(item.get("person_id") or "")
         if not trace_id or person_id not in display_member_ids:
             continue
@@ -71,7 +91,7 @@ def _build_sessions(
 
     sessions: list[ActivityHistorySession] = []
     for trace_id, trace_records in grouped.items():
-        summary = _summarize_trace(trace_id, trace_records)
+        summary = _summarize_trace(trace_id, trace_records, run_summary)
         if summary is None:
             continue
         sessions.append(summary)
@@ -80,7 +100,9 @@ def _build_sessions(
 
 
 def _summarize_trace(
-    trace_id: str, records: list[dict[str, Any]]
+    trace_id: str,
+    records: list[dict[str, Any]],
+    run_summary: Callable[[str, str], str],
 ) -> ActivityHistorySession | None:
     timestamps = [
         parsed
@@ -105,13 +127,17 @@ def _summarize_trace(
         and not _has_workflow_activity_evidence(records, attributes, links)
     ):
         return None
+    person_id = str(first.get("person_id") or "")
+    completion_summary = _first_line(run_summary(_subject_id(attributes), person_id))
     return ActivityHistorySession(
         trace_id=trace_id,
-        person_id=str(first.get("person_id") or ""),
+        person_id=person_id,
         source=source,
         command=command,
         workflow=workflow,
-        title=_session_title(trace_id, records, command, workflow, links),
+        title=_session_title(
+            trace_id, records, command, workflow, links, attributes, completion_summary
+        ),
         mode=mode,
         status=status,
         started_at=started_at.isoformat(),
@@ -290,12 +316,15 @@ def _session_title(
     command: str,
     workflow: str,
     links: list[ActivityHistoryLink],
+    attributes: dict[str, Any],
+    completion_summary: str,
 ) -> str:
-    attributes = _merged_attributes(records)
     for value in (
+        completion_summary,
         attributes.get("memory.title"),
         _first_payload_text(records, "title"),
         _first_work_link_label(links),
+        _trigger_label(attributes),
         _first_payload_field(records, "prompt"),
         workflow,
         command,
@@ -307,6 +336,94 @@ def _session_title(
         if value:
             return str(value)
     return trace_id
+
+
+def _attach_run_scoped_records(
+    records: list[dict[str, Any]], run_subject: Callable[[str], str]
+) -> list[dict[str, Any]]:
+    """Adopt orphan run-scoped records into the trace that owns their subject.
+
+    A workflow subprocess (chat reply, memory write) records without the parent
+    trace id but tags each record with a run id (``run_id`` for chat workflows,
+    ``task_run_id`` for ticket workflows). Mapping that run to its ``subject_id``
+    and back to the trace that reconstructs the same subject lets those records
+    (and their memory/doc links) show up on the originating session instead of
+    vanishing.
+
+    Returns a new list; adopted records are shallow-copied with the owner key so
+    the caller's record dicts are never mutated (safe to reuse the input array).
+    """
+    trace_by_key: dict[tuple[str, str], str] = {}
+    for item in records:
+        trace_id = str(item.get("trace_id") or "")
+        attributes = item.get("attributes")
+        if not trace_id or not isinstance(attributes, dict):
+            continue
+        subject = _subject_id(attributes)
+        if subject:
+            person_id = str(item.get("person_id") or "")
+            trace_by_key.setdefault((subject, person_id), trace_id)
+
+    adopted: list[dict[str, Any]] = []
+    for item in records:
+        owner_trace = _run_scoped_owner_trace(item, run_subject, trace_by_key)
+        adopted.append({**item, _OWNER_TRACE_KEY: owner_trace} if owner_trace else item)
+    return adopted
+
+
+def _run_scoped_owner_trace(
+    item: dict[str, Any],
+    run_subject: Callable[[str], str],
+    trace_by_key: dict[tuple[str, str], str],
+) -> str:
+    attributes = item.get("attributes")
+    if item.get("trace_id") or not isinstance(attributes, dict):
+        return ""
+    if str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS:
+        return ""
+    run_id = str(attributes.get("run_id") or attributes.get("task_run_id") or "")
+    if not run_id:
+        return ""
+    person_id = str(item.get("person_id") or "")
+    return trace_by_key.get((run_subject(run_id), person_id), "")
+
+
+def _subject_id(attributes: dict[str, Any]) -> str:
+    """Reconstruct the run subject id from trace attributes.
+
+    Mirrors the ``subject_id`` a workflow records on completion so activity
+    history can join a trace to its completion summary. Chat traces key on the
+    provider/channel/thread/event tuple; ticket traces key on the GitHub url.
+    """
+    provider = str(attributes.get("event.provider") or "").strip()
+    if provider:
+        channel = str(attributes.get("slack.channel") or "")
+        thread_ts = str(attributes.get("slack.thread_ts") or "")
+        event_id = str(attributes.get("event_id") or "")
+        return f"{provider}:{channel}:{thread_ts}:{event_id}"
+    return str(attributes.get("github.url") or "")
+
+
+def _trigger_label(attributes: dict[str, Any]) -> str:
+    """Build a provider-neutral label for an event-triggered session.
+
+    ``event.provider`` is only present on chat-triggered workflows, so its
+    presence is what selects this label. It gives an in-progress chat session
+    a meaningful title before its completion summary exists, instead of
+    falling through to the raw agent prompt.
+    """
+    provider = str(attributes.get("event.provider") or "").strip()
+    if not provider:
+        return ""
+    return t("app_api.activity_history.chat_trigger", provider=provider.title())
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
 
 
 def _first_work_link_label(links: list[ActivityHistoryLink]) -> str:

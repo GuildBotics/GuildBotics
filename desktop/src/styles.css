@@ -591,12 +591,12 @@ pre {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  justify-content: space-between;
   margin-bottom: 14px;
 }
 
 .activity-search {
   flex: 1 1 260px;
+  margin-inline-end: auto;
   max-width: 380px;
 }
 
@@ -870,6 +870,27 @@ pre {
   background: #eef3fb;
   border: 1px solid #c2d6f6;
   color: #1b4fa0;
+}
+
+.activity-session-mixed {
+  background: #e9f2f2;
+  border: 1px solid #bfdce7;
+  color: #1e4d72;
+}
+
+.activity-session-mode-dot {
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 8px;
+  width: 8px;
+}
+
+.activity-session-mode-dot-workflow {
+  background: #378add;
+}
+
+.activity-session-mode-dot-interactive {
+  background: #1d9e75;
 }
 
 .activity-session:hover {
