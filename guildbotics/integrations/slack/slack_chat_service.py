@@ -14,6 +14,10 @@ from guildbotics.integrations.chat_service import (
     ChatService,
     SemanticReaction,
 )
+from guildbotics.integrations.slack.message_events import (
+    is_bot_message,
+    is_conversational_message,
+)
 
 _MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 _EPHEMERAL_PARTICIPANT_LABEL_RE = re.compile(r"^(?:user|agent)_\d+$", re.IGNORECASE)
@@ -254,15 +258,13 @@ class SlackChatService(ChatService):
         return self._client
 
     def _to_event(self, channel_id: str, raw: dict[str, Any]) -> ChatEvent | None:
-        subtype = str(raw.get("subtype", ""))
-        if subtype in {"message_changed", "message_deleted"}:
+        if not is_conversational_message(raw):
             return None
         author_id = _str_or_none(raw.get("user"))
         text = str(raw.get("text", "") or "")
         thread_ts = _str_or_none(raw.get("thread_ts")) or str(raw.get("ts", "") or "")
         message_ts = str(raw.get("ts", "") or "")
         event_id = f"{channel_id}:{message_ts}"
-        is_bot_message = bool(raw.get("bot_id")) or subtype == "bot_message"
         return ChatEvent(
             event_id=event_id,
             channel_id=channel_id,
@@ -271,7 +273,7 @@ class SlackChatService(ChatService):
             author_id=author_id,
             text=text,
             mentions=_extract_mentions(text),
-            is_bot_message=is_bot_message,
+            is_bot_message=is_bot_message(raw),
             is_thread_reply=thread_ts != message_ts,
         )
 

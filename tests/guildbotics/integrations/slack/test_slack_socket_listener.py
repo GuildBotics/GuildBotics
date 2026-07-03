@@ -10,6 +10,8 @@ from guildbotics.integrations.slack.slack_socket_listener import (
     SlackSocketEventListener,
 )
 
+EXPECTED_RECONNECT_ATTEMPTS = 2
+
 
 class _FakeSocket:
     def __init__(self, frames: list[str], *, fail_on_empty: bool = False) -> None:
@@ -119,15 +121,15 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
     drained = []
     while time.time() < deadline:
         drained.extend(listener.drain_events())
-        if drained and ws_connect_calls["count"] >= 2:
+        if drained and ws_connect_calls["count"] >= EXPECTED_RECONNECT_ATTEMPTS:
             break
         time.sleep(0.01)
 
     listener.stop()
     client.close()
 
-    assert ws_connect_calls["count"] >= 2
-    assert open_calls["count"] >= 2
+    assert ws_connect_calls["count"] >= EXPECTED_RECONNECT_ATTEMPTS
+    assert open_calls["count"] >= EXPECTED_RECONNECT_ATTEMPTS
     assert ws1.closed is True
     assert ws2.closed is True
     assert [item.event.event_id for item in drained] == ["C1:100.1"]
@@ -181,7 +183,7 @@ def test_invalid_auth_surfaces_warning_and_stops_retrying(monkeypatch):
     assert open_calls["count"] == 1
 
 
-def test_to_incoming_event_ignores_message_changed_and_deleted():
+def test_to_incoming_event_ignores_non_conversational_subtypes():
     listener = SlackSocketEventListener(
         logger=_dummy_logger(),
         app_token="xapp-test",
@@ -214,6 +216,75 @@ def test_to_incoming_event_ignores_message_changed_and_deleted():
             }
         },
     }
+    bot_add = {
+        "type": "events_api",
+        "payload": {
+            "event": {
+                "type": "message",
+                "subtype": "bot_add",
+                "channel": "C1",
+                "ts": "100.3",
+                "text": "Aiko integration was added to this channel",
+            }
+        },
+    }
+    channel_join = {
+        "type": "events_api",
+        "payload": {
+            "event": {
+                "type": "message",
+                "subtype": "channel_join",
+                "channel": "C1",
+                "ts": "100.4",
+                "text": "Alice joined the channel",
+            }
+        },
+    }
 
     assert listener._to_incoming_event(changed) is None
     assert listener._to_incoming_event(deleted) is None
+    assert listener._to_incoming_event(bot_add) is None
+    assert listener._to_incoming_event(channel_join) is None
+
+
+def test_to_incoming_event_keeps_conversational_subtypes():
+    listener = SlackSocketEventListener(
+        logger=_dummy_logger(),
+        app_token="xapp-test",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(lambda _req: httpx.Response(500))
+        ),
+        ws_connect=lambda _url: _FakeSocket([]),
+    )
+
+    bot_message = {
+        "type": "events_api",
+        "payload": {
+            "event": {
+                "type": "message",
+                "subtype": "bot_message",
+                "bot_id": "B1",
+                "channel": "C1",
+                "ts": "100.1",
+                "text": "bot says",
+            }
+        },
+    }
+    file_share = {
+        "type": "events_api",
+        "payload": {
+            "event": {
+                "type": "message",
+                "subtype": "file_share",
+                "channel": "C1",
+                "user": "U1",
+                "ts": "100.2",
+                "text": "please check this file",
+            }
+        },
+    }
+
+    assert listener._to_incoming_event(bot_message).event.is_bot_message is True
+    assert (
+        listener._to_incoming_event(file_share).event.text == "please check this file"
+    )
