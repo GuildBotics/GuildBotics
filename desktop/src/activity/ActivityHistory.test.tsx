@@ -10,11 +10,13 @@ import {
   activityLinkHref,
   activityRange,
   blockModes,
+  blockHoverCardPosition,
   buildActivityBlocks,
   matchActivityHistory,
   orderedActivityLinks,
+  weekRowMinHeight,
 } from "./ActivityHistory";
-import { getActivityHistory } from "../api/client";
+import { getActivityHistory, getCliAgentDetections, getIntelligenceConfig } from "../api/client";
 import type { ActivityHistoryResponse } from "../api/client";
 import "../i18n";
 
@@ -23,6 +25,8 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     getActivityHistory: vi.fn(),
+    getCliAgentDetections: vi.fn(),
+    getIntelligenceConfig: vi.fn(),
     memberAvatarUrl: (personId: string) => `http://avatar.test/${personId}`,
   };
 });
@@ -98,6 +102,27 @@ const ACTIVITY_FIXTURE: ActivityHistoryResponse = {
 
 beforeEach(() => {
   vi.mocked(getActivityHistory).mockResolvedValue(ACTIVITY_FIXTURE);
+  vi.mocked(getIntelligenceConfig).mockResolvedValue({
+    config_dir: "",
+    person_id: "alice",
+    inherited: false,
+    model_mapping: {},
+    models: [],
+    cli_agent_mapping: { default: "claude-code.yml" },
+    cli_agents: [],
+    brain_mapping: [],
+  });
+  vi.mocked(getCliAgentDetections).mockResolvedValue({
+    agents: [
+      {
+        name: "claude-code",
+        label: "Claude Code",
+        executable: "claude",
+        detected: true,
+        path: "",
+      },
+    ],
+  });
 });
 
 afterEach(() => {
@@ -115,6 +140,23 @@ describe("ActivityHistoryPage", () => {
     expect(
       await screen.findByRole("button", { name: "Improve activity history event context" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows each member's CLI agent under the name and Human for human members", async () => {
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      members: [
+        { person_id: "alice", name: "Alice", person_type: "agent", roles: ["developer"] },
+        { person_id: "bob", name: "Bob", person_type: "human", roles: ["designer"] },
+      ],
+    });
+    renderActivity();
+
+    expect(await screen.findByText("Claude Code")).toBeInTheDocument();
+    expect(await screen.findByText("Human")).toBeInTheDocument();
+    // The member role is no longer rendered.
+    expect(screen.queryByText("developer")).toBe(null);
+    expect(screen.queryByText("designer")).toBe(null);
   });
 
   it("dims nonmatching activity and highlights matching activity by query", async () => {
@@ -170,6 +212,18 @@ describe("ActivityHistoryPage", () => {
 
     const bar = await screen.findByRole("button", { name: "First task +1" });
     expect(bar).toHaveClass("activity-session-mixed");
+  });
+
+  it("drops the current-time line in week view but keeps it in day view", async () => {
+    const user = userEvent.setup();
+    const { container } = renderActivity();
+
+    await screen.findByRole("button", { name: "workflows/ticket_driven_workflow" });
+    expect(container.querySelectorAll(".activity-now-line").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByText("1 week"));
+
+    expect(container.querySelector(".activity-now-line")).toBe(null);
   });
 
   it("hides member event pins in week view", async () => {
@@ -446,6 +500,30 @@ describe("buildActivityBlocks", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].mode).toBe("workflow");
     expect(blockModes(blocks[0].sessions)).toEqual(["workflow"]);
+  });
+});
+
+describe("blockHoverCardPosition", () => {
+  it("opens week-view cards to the already-scanned left side", () => {
+    expect(blockHoverCardPosition("week")).toBe("left-start");
+  });
+
+  it("keeps day-view cards below the bar", () => {
+    expect(blockHoverCardPosition("day")).toBe("bottom");
+  });
+});
+
+describe("weekRowMinHeight", () => {
+  it("keeps the base minimum height for empty or sparse rows", () => {
+    expect(weekRowMinHeight(0)).toBe(86);
+    expect(weekRowMinHeight(1)).toBe(86);
+    expect(weekRowMinHeight(2)).toBe(86);
+  });
+
+  it("fits the stacked bars exactly once they exceed the base height", () => {
+    // Mirrors .activity-week-day geometry: 24px bars, 4px gaps, 6px padding.
+    expect(weekRowMinHeight(3)).toBe(3 * 24 + 2 * 4 + 2 * 6); // 92
+    expect(weekRowMinHeight(4)).toBe(4 * 24 + 3 * 4 + 2 * 6); // 120
   });
 });
 

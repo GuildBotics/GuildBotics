@@ -10,6 +10,7 @@ import {
   Text,
   TextInput,
   Title,
+  type FloatingPosition,
 } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
@@ -41,6 +42,7 @@ import {
   getActivityHistory,
   memberAvatarUrl,
 } from "../api/client";
+import { useMemberCliAgentLabel } from "../cliAgent";
 
 export type ActivityView = "day" | "week";
 export type ActivitySessionMode = ActivityHistorySession["mode"];
@@ -50,6 +52,15 @@ const SESSION_MODE_ORDER: ActivitySessionMode[] = ["workflow", "interactive"];
 const HOURS = ["03:00", "06:00", "09:00", "12:00", "15:00", "18:00", "21:00"];
 const ACTIVITY_LIMIT = 1000;
 const ACTIVITY_BLOCK_MINUTES = 60;
+
+// Week-view row height mirrors the stacked-bar geometry of `.activity-week-day`
+// in styles.css: each bar is WEEK_BLOCK_HEIGHT_PX tall, bars are separated by
+// WEEK_BLOCK_GAP_PX, and the column adds WEEK_COLUMN_PADDING_PX top and bottom.
+// Keep these in sync with that CSS so the row has no trailing empty space.
+const WEEK_BLOCK_HEIGHT_PX = 24;
+const WEEK_BLOCK_GAP_PX = 4;
+const WEEK_COLUMN_PADDING_PX = 6;
+const WEEK_ROW_MIN_HEIGHT_PX = 86;
 
 export type ActivityHistoryMatchState = {
   active: boolean;
@@ -231,7 +242,6 @@ function ActivityChart({
       </div>
       <ActivityTimelineRow
         label={t("activity.events")}
-        role=""
         avatar={<Users size={15} />}
         sessions={[]}
         events={sharedEvents}
@@ -245,7 +255,6 @@ function ActivityChart({
         <ActivityTimelineRow
           key={member.person_id}
           label={member.name || member.person_id}
-          role={member.roles.join(", ") || member.person_id}
           avatar={member.person_id.substring(0, 2).toUpperCase()}
           sessions={sessionsByMember.get(member.person_id) ?? []}
           events={eventsByMember.get(member.person_id) ?? []}
@@ -264,7 +273,6 @@ function ActivityChart({
 
 function ActivityTimelineRow({
   label,
-  role,
   avatar,
   sessions,
   events,
@@ -276,7 +284,6 @@ function ActivityTimelineRow({
   team = false,
 }: {
   label: string;
-  role: string;
   avatar: string | ReactNode;
   sessions: ActivityHistorySession[];
   events: ActivityHistoryEvent[];
@@ -289,7 +296,7 @@ function ActivityTimelineRow({
 }) {
   const blocks = buildActivityBlocks(sessions);
   const weekSessionCount = view === "week" ? maxWeekSessionCount(sessions, range) : 0;
-  const rowMinHeight = team ? 38 : view === "week" ? Math.max(86, weekSessionCount * 30 + 44) : 86;
+  const rowMinHeight = team ? 38 : view === "week" ? weekRowMinHeight(weekSessionCount) : 86;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
   const visibleEvents = view === "week" && !team ? [] : events;
   return (
@@ -305,7 +312,7 @@ function ActivityTimelineRow({
         </Avatar>
         <div className="activity-member-info">
           <span className="activity-member-name">{label}</span>
-          {role ? <span className="activity-member-role">{role}</span> : null}
+          {member ? <MemberCliAgentRole member={member} /> : null}
         </div>
       </div>
       <div className="activity-timeline-cell" style={{ minHeight: rowMinHeight }}>
@@ -334,12 +341,25 @@ function ActivityTimelineRow({
             top={eventTop}
           />
         ))}
-        {now ? (
+        {view === "day" && now ? (
           <div className="activity-now-line" style={{ left: `${positionInRange(now, range)}%` }} />
         ) : null}
       </div>
     </div>
   );
+}
+
+// Sub-label under the member name: the CLI agent the member runs (matching the
+// setup members list), or "Human" for human members whose config has no agent.
+function MemberCliAgentRole({ member }: { member: ActivityHistoryMember }) {
+  const { t } = useTranslation();
+  const isHuman = member.person_type === "human";
+  const cliAgentLabel = useMemberCliAgentLabel(member.person_id, !isHuman);
+  const label = isHuman ? t("activity.memberHuman") : cliAgentLabel;
+  if (!label) {
+    return null;
+  }
+  return <span className="activity-member-role">{label}</span>;
 }
 
 function TimelineGrid({ view, range }: { view: ActivityView; range: { start: Date; end: Date } }) {
@@ -424,7 +444,7 @@ function ActivityBlockBar({
   const stateClass = searchStateClass(searchActive, matched);
   const visibleTitle = activityBlockVisibleTitle(block.title);
   return (
-    <HoverCard openDelay={150} closeDelay={80} withinPortal>
+    <HoverCard openDelay={150} closeDelay={80} withinPortal position={blockHoverCardPosition(view)}>
       <HoverCard.Target>
         <button
           type="button"
@@ -1069,6 +1089,26 @@ function maxWeekSessionCount(
   range: { start: Date; end: Date },
 ): number {
   return Math.max(0, ...weekActivityBlockSegments(sessions, range).map((column) => column.length));
+}
+
+// Week-view columns are read top-to-bottom then left-to-right, so open the
+// hover card on the already-scanned left side: it never covers the bars still
+// below in the same column nor the next day column to the right. The leftmost
+// (Monday) column has no room and floating-ui flips it right, which is
+// accepted. Day view keeps the default below-the-bar placement.
+export function blockHoverCardPosition(view: ActivityView): FloatingPosition {
+  return view === "week" ? "left-start" : "bottom";
+}
+
+export function weekRowMinHeight(sessionCount: number): number {
+  if (sessionCount <= 0) {
+    return WEEK_ROW_MIN_HEIGHT_PX;
+  }
+  const stackHeight =
+    sessionCount * WEEK_BLOCK_HEIGHT_PX +
+    (sessionCount - 1) * WEEK_BLOCK_GAP_PX +
+    WEEK_COLUMN_PADDING_PX * 2;
+  return Math.max(WEEK_ROW_MIN_HEIGHT_PX, stackHeight);
 }
 
 function minIso(left: string, right: string): string {

@@ -116,6 +116,7 @@ import {
   getCliAgentSkillStatuses,
   restartBackend,
 } from "../api/backend";
+import { cliAgentLabelFromConfig, useMemberCliAgentLabel } from "../cliAgent";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -183,33 +184,8 @@ type IntelligenceDraftState = {
 const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "members", "github"] as const;
 const CORE_SETUP_SECTIONS_CONFIGURED = ["project", "intelligence", "members", "github"] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
-// Resolve the human-friendly CLI agent label from an effective intelligence
-// config (member override already falls back to the team default server-side).
-// Labels come from the backend CLI agent catalog (the detection endpoint).
-function cliAgentLabelFromConfig(
-  config: IntelligenceConfig | undefined,
-  detections: CliAgentDetection[],
-): string | null {
-  const mapping = config?.cli_agent_mapping ?? {};
-  const file = mapping["default"] ?? Object.values(mapping)[0];
-  if (!file) {
-    return null;
-  }
-  const value = file.replace(/\.yml$/, "").replace(/-cli$/, "");
-  return detections.find((agent) => agent.name === value)?.label ?? value;
-}
-
 function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
-  const query = useQuery({
-    queryKey: ["intelligence-config", personId],
-    queryFn: () => getIntelligenceConfig(personId),
-    enabled,
-  });
-  const detections = useQuery({
-    queryKey: ["cli-agent-detections"],
-    queryFn: getCliAgentDetections,
-  });
-  const label = cliAgentLabelFromConfig(query.data, detections.data?.agents ?? []);
+  const label = useMemberCliAgentLabel(personId, enabled);
   if (!label) {
     return null;
   }
