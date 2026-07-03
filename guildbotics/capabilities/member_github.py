@@ -21,6 +21,11 @@ from guildbotics.utils.person_profile import build_member_communication_style
 
 REPO_WITH_OWNER_PART_COUNT = 2
 GITHUB_RESOURCE_MIN_PART_COUNT = 4
+GITHUB_PAGE_SIZE = 100
+PATCH_HUNK_RE = re.compile(
+    r"^@@ -(?P<left>\d+)(?:,(?P<left_count>\d+))? "
+    r"\+(?P<right>\d+)(?:,(?P<right_count>\d+))? @@"
+)
 
 
 class MemberCapabilityError(RuntimeError):
@@ -179,14 +184,11 @@ class MemberGitHubCapabilityService:
             "project_item_id": project_item_id,
         }
 
-    async def pr_inspect(self, url: str, include_comments: bool) -> dict[str, Any]:
+    async def pr_inspect(
+        self, url: str, include_comments: bool, include_diff: bool = False
+    ) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
-        client = await self._get_client()
-        resp = await client.get(
-            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}"
-        )
-        _raise_for_status(resp)
-        pr = resp.json()
+        pr = await self._pull_request(resource)
         head = self._pull_request_head(resource, pr)
         result: dict[str, Any] = {
             "repo": resource.full_repo,
@@ -206,6 +208,8 @@ class MemberGitHubCapabilityService:
         if include_comments:
             result["conversation_comments"] = await self._issue_comments(resource)
             result["review_threads"] = await self._review_threads(resource)
+        if include_diff:
+            result["files"] = await self._pull_request_files(resource)
         return result
 
     async def pr_create(
@@ -267,6 +271,45 @@ class MemberGitHubCapabilityService:
             body,
         )
         return _comment_result(comment)
+
+    async def pr_review_comment(
+        self,
+        url: str,
+        body: str,
+        path: str,
+        line: int,
+        side: str,
+        start_line: int | None,
+        start_side: str | None,
+    ) -> dict[str, Any]:
+        resource = self.parse_url(url, expected_kind="pull")
+        self._validate_review_comment_location(path, line, side, start_line, start_side)
+        pr = await self._pull_request(resource)
+        payload: dict[str, Any] = {
+            "body": self._append_signature(body),
+            "commit_id": self._pull_request_head_sha(resource, pr),
+            "path": path,
+            "line": line,
+            "side": side,
+        }
+        if start_line is not None and start_side is not None:
+            payload["start_line"] = start_line
+            payload["start_side"] = start_side
+        client = await self._get_client()
+        resp = await client.post(
+            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/comments",
+            json=payload,
+        )
+        _raise_for_status(resp)
+        comment = resp.json()
+        return {
+            "review_comment_id": comment.get("id"),
+            "html_url": comment.get("html_url"),
+            "created_at": comment.get("created_at"),
+            "path": path,
+            "line": line,
+            "side": side,
+        }
 
     async def pr_reply(
         self, url: str, reply_target_id: int, body: str
@@ -347,12 +390,54 @@ class MemberGitHubCapabilityService:
 
     async def get_pr_head(self, url: str) -> GitHubPullRequestHead:
         resource = self.parse_url(url, expected_kind="pull")
+        return self._pull_request_head(resource, await self._pull_request(resource))
+
+    async def _pull_request(self, resource: GitHubResource) -> dict[str, Any]:
         client = await self._get_client()
         resp = await client.get(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}"
         )
         _raise_for_status(resp)
-        return self._pull_request_head(resource, resp.json())
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            raise MemberCapabilityError(
+                "Unexpected GitHub pull request response for "
+                f"{resource.full_repo}#{resource.number}."
+            )
+        return payload
+
+    def _validate_review_comment_location(
+        self,
+        path: str,
+        line: int,
+        side: str,
+        start_line: int | None,
+        start_side: str | None,
+    ) -> None:
+        if not path.strip():
+            raise MemberCapabilityError("Review comment path is required.")
+        if line < 1:
+            raise MemberCapabilityError("Review comment line must be positive.")
+        if side not in {"LEFT", "RIGHT"}:
+            raise MemberCapabilityError("Review comment side must be LEFT or RIGHT.")
+        if start_side is not None and start_side not in {"LEFT", "RIGHT"}:
+            raise MemberCapabilityError(
+                "Review comment start_side must be LEFT or RIGHT."
+            )
+        if (start_line is None) != (start_side is None):
+            raise MemberCapabilityError(
+                "Review comment range requires both start_line and start_side."
+            )
+        if start_line is not None and start_line < 1:
+            raise MemberCapabilityError("Review comment start_line must be positive.")
+        if start_side is not None and start_side != side:
+            raise MemberCapabilityError(
+                "Review comment range start_side must match side."
+            )
+        if start_line is not None and start_line > line:
+            raise MemberCapabilityError(
+                "Review comment range start_line must be less than or equal to line."
+            )
 
     def parse_repo(self, repo: str) -> tuple[str, str]:
         parts = [part for part in repo.strip().split("/") if part]
@@ -459,6 +544,27 @@ class MemberGitHubCapabilityService:
         )
         _raise_for_status(resp)
         return [self._comment_summary(comment) for comment in _as_list(resp.json())]
+
+    async def _pull_request_files(
+        self, resource: GitHubResource
+    ) -> list[dict[str, Any]]:
+        client = await self._get_client()
+        endpoint = (
+            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/files"
+        )
+        files: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            resp = await client.get(
+                endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
+            )
+            _raise_for_status(resp)
+            page_items = _as_list(resp.json())
+            files.extend(self._pull_request_file_summary(item) for item in page_items)
+            if len(page_items) < GITHUB_PAGE_SIZE:
+                break
+            page += 1
+        return files
 
     async def _review_threads(self, resource: GitHubResource) -> list[dict[str, Any]]:
         query = """
@@ -663,6 +769,18 @@ class MemberGitHubCapabilityService:
             "html_url": comment.get("html_url"),
         }
 
+    def _pull_request_file_summary(self, file: dict[str, Any]) -> dict[str, Any]:
+        path = str(file.get("filename") or "")
+        patch = str(file.get("patch") or "")
+        return {
+            "path": path,
+            "status": file.get("status", ""),
+            "additions": file.get("additions", 0),
+            "deletions": file.get("deletions", 0),
+            "changes": file.get("changes", 0),
+            "commentable_lines": _commentable_lines_from_patch(path, patch),
+        }
+
     def _graphql_review_comment_summary(
         self, comment: dict[str, Any]
     ) -> dict[str, Any]:
@@ -707,6 +825,18 @@ class MemberGitHubCapabilityService:
                 )
         return GitHubPullRequestHead(owner=owner, repo=repo_name, branch=branch)
 
+    def _pull_request_head_sha(
+        self, resource: GitHubResource, pr: dict[str, Any]
+    ) -> str:
+        raw_head = pr.get("head")
+        head = raw_head if isinstance(raw_head, dict) else {}
+        sha = str(head.get("sha") or "")
+        if not sha:
+            raise MemberCapabilityError(
+                f"Pull request head commit not found for {resource.full_repo}#{resource.number}."
+            )
+        return sha
+
 
 def _as_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
@@ -732,6 +862,58 @@ def _comment_result(comment: dict[str, Any]) -> dict[str, Any]:
         "author": user.get("login", ""),
         "created_at": comment.get("created_at"),
     }
+
+
+def _commentable_lines_from_patch(path: str, patch: str) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    left_line: int | None = None
+    right_line: int | None = None
+    for raw_line in patch.splitlines():
+        hunk = PATCH_HUNK_RE.match(raw_line)
+        if hunk:
+            left_line = int(hunk.group("left"))
+            right_line = int(hunk.group("right"))
+            continue
+        if left_line is None or right_line is None or raw_line.startswith("\\"):
+            continue
+        marker = raw_line[:1]
+        content = raw_line[1:] if marker in {" ", "+", "-"} else raw_line
+        if marker == " ":
+            lines.append(
+                {
+                    "path": path,
+                    "line": right_line,
+                    "side": "RIGHT",
+                    "left_line": left_line,
+                    "right_line": right_line,
+                    "content": content,
+                }
+            )
+            left_line += 1
+            right_line += 1
+        elif marker == "+":
+            lines.append(
+                {
+                    "path": path,
+                    "line": right_line,
+                    "side": "RIGHT",
+                    "right_line": right_line,
+                    "content": content,
+                }
+            )
+            right_line += 1
+        elif marker == "-":
+            lines.append(
+                {
+                    "path": path,
+                    "line": left_line,
+                    "side": "LEFT",
+                    "left_line": left_line,
+                    "content": content,
+                }
+            )
+            left_line += 1
+    return lines
 
 
 def _project_item_summary(item: dict[str, Any]) -> dict[str, Any]:

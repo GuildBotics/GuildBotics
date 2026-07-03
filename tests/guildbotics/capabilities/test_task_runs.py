@@ -85,6 +85,31 @@ def test_task_run_done_with_code_publish_requires_pr_create(tmp_path):
     assert status.evidence_types == ["git_publish", "pr_create"]
 
 
+def test_task_run_accepts_pr_review_comment_evidence(tmp_path):
+    store = TaskRunStore(tmp_path)
+    payload = {"html_url": "https://github.com/owner/repo/pull/7#discussion_r123"}
+    store.append_evidence("run-done", "pr_review_comment", payload)
+    store.append_evidence("run-asking", "pr_review_comment", payload)
+
+    done = store.complete(
+        "run-done",
+        "done",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+    asking = store.complete(
+        "run-asking",
+        "asking",
+        "summary",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+
+    assert done.evidence_types == ["pr_review_comment"]
+    assert asking.evidence_types == ["pr_review_comment"]
+
+
 def test_task_run_redacts_secret_like_payload_keys(tmp_path):
     store = TaskRunStore(tmp_path)
     store.append_evidence("run-1", "issue_comment", {"access_token": "secret"})

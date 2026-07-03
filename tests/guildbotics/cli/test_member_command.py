@@ -938,6 +938,76 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
     assert "only for interactive use" in result.output
 
 
+def test_member_github_pr_inspect_passes_include_diff(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_inspect(self, pr_url, include_comments, include_diff):
+            calls.update(
+                {
+                    "pr_url": pr_url,
+                    "include_comments": include_comments,
+                    "include_diff": include_diff,
+                }
+            )
+            return {
+                "repo": "owner/repo",
+                "number": 7,
+                "files": [
+                    {
+                        "path": "guildbotics/example.py",
+                        "commentable_lines": [{"line": 12, "side": "RIGHT"}],
+                    }
+                ],
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "inspect",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/7",
+            "--include-comments",
+            "--include-diff",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "pr_url": "https://github.com/owner/repo/pull/7",
+        "include_comments": True,
+        "include_diff": True,
+        "closed": True,
+    }
+    payload = json.loads(result.output)
+    assert payload["files"][0]["commentable_lines"] == [
+        {"line": 12, "side": "RIGHT"}
+    ]
+
+
 def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
     person = Person(person_id="aiko", name="Aiko", person_type="human")
     title_file = tmp_path / "title.txt"
@@ -1181,6 +1251,125 @@ def test_member_github_pr_create_rejects_missing_content_source():
     assert "Either --content-stdin or both --title-file and --body-file" in (
         result.output
     )
+
+
+def test_member_github_pr_review_comment_reads_body_file_and_records_evidence(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    body_file = tmp_path / "comment.md"
+    body_file.write_text("Please simplify this branch.\n", encoding="utf-8")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_review_comment(
+            self, pr_url, body, file_path, line, side, start_line, start_side
+        ):
+            calls.update(
+                {
+                    "pr_url": pr_url,
+                    "body": body,
+                    "file_path": file_path,
+                    "line": line,
+                    "side": side,
+                    "start_line": start_line,
+                    "start_side": start_side,
+                }
+            )
+            return {
+                "review_comment_id": 123,
+                "html_url": "https://github.com/owner/repo/pull/7#discussion_r123",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "review-comment",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/7",
+            "--path",
+            "guildbotics/example.py",
+            "--line",
+            "12",
+            "--side",
+            "RIGHT",
+            "--start-line",
+            "10",
+            "--start-side",
+            "RIGHT",
+            "--body-file",
+            str(body_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "pr_url": "https://github.com/owner/repo/pull/7",
+        "body": "Please simplify this branch.\n",
+        "file_path": "guildbotics/example.py",
+        "line": 12,
+        "side": "RIGHT",
+        "start_line": 10,
+        "start_side": "RIGHT",
+        "closed": True,
+    }
+    payload = json.loads(result.output)
+    assert payload["review_comment_id"] == 123
+    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == (
+        "pr_review_comment"
+    )
+
+
+def test_member_github_pr_review_comment_rejects_partial_range(tmp_path):
+    body_file = tmp_path / "comment.md"
+    body_file.write_text("Please simplify this branch.\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "review-comment",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/7",
+            "--path",
+            "guildbotics/example.py",
+            "--line",
+            "12",
+            "--start-line",
+            "10",
+            "--body-file",
+            str(body_file),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--start-line and --start-side must be provided together" in result.output
 
 
 def test_member_task_status_cli(monkeypatch, tmp_path):

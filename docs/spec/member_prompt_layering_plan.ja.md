@@ -107,7 +107,9 @@ A ──────────────────────────
   - 編集後、公開前に関連する検証(テスト・lint)を実行
   - plain git で stage → `member git commit/publish`
   - issue 対応でコード変更があれば `member github pr create`(作成 or 再利用)、
-    review 対応は `reply_target_id` で `pr reply`
+    新規 PR inline 指摘は `pr inspect --include-diff` の `files[].commentable_lines`
+    で座標を確認して `pr review-comment`、既存 review thread への応答は
+    `reply_target_id` で `pr reply`
   - 変更不要でも comment / reply / reaction で観測可能な痕跡を残す
   - 終了前に memory 手入れ(下記契約)
 - [x] `_CROSS_CUTTING_RULES` に **PR 作業記録契約** を追加:
@@ -197,7 +199,9 @@ A ──────────────────────────
 
 - [x] instructions に**残す**もの:
   - ticket: source key = `{ticket_url}`、issue/pr inspect 必須、`{prepare_command}` 実行
-    (PR review では `--pr-url` 込み)、PR 作成/再利用、`pr reply` の `reply_target_id`、
+    (PR review では `--pr-url` 込み)、PR 作成/再利用、新規 inline 指摘用の
+    `pr inspect --include-diff` / `pr review-comment`、既存 thread 返信用の
+    `pr reply` / `reply_target_id`、
     follow-up issue、`task complete --person {person_id} --run-id {workflow_run_id}
     --ticket-url {ticket_url} ...` の具体形、応答 JSON 例
   - chat: inspect thread 必須+失敗時 blocked、source key = thread permalink /
