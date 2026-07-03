@@ -38,6 +38,10 @@ def links_from_record(
     attributes: dict[str, Any],
     record: dict[str, Any] | None = None,
 ) -> list[ActivityHistoryLink]:
+    if str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS:
+        # A read/signal memory op merely references documents (and their source
+        # PRs/issues); those are not this session's work, so it yields no links.
+        return []
     timestamp = record_timestamp(record)
     links = links_from_attributes(attributes, timestamp=timestamp)
     source_links = source_links_from_payload(payload, timestamp=timestamp)
@@ -207,9 +211,13 @@ def dedupe_links(
     links: Iterable[ActivityHistoryLink],
 ) -> list[ActivityHistoryLink]:
     deduped: list[ActivityHistoryLink] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str]] = set()
     for link in links:
-        key = (link.kind, link.label, link.url)
+        # Same target (kind + url) is one link even if labels differ, e.g. a PR
+        # from github attributes ("PR #246") and the same PR referenced by a
+        # memory source (labelled with the note title). Keep the first (github)
+        # label. Fall back to the label only when there is no url to key on.
+        key = (link.kind, link.url) if link.url else (link.kind, f"label:{link.label}")
         if key in seen:
             continue
         seen.add(key)

@@ -278,6 +278,42 @@ def test_read_only_memory_record_is_not_adopted_into_session() -> None:
     assert session.title == t("app_api.activity_history.chat_trigger", provider="Slack")
 
 
+def test_read_only_memory_title_is_skipped_for_session_title() -> None:
+    # An interactive session that recalled memory then wrote a note must title
+    # from the note it wrote, not the generic "Memory recall" of the read event.
+    base = {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member chat reply",
+        "workflow": "",
+        "kind": "prompt_trace",
+        "attributes": {},
+        "payload": {"fields": {"prompt": "作業して"}},
+    }
+    recall = {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "memory",
+        "type": "memory.recall",
+        "attributes": {"memory.action": "recall"},
+        "payload": {"title": "Memory recall"},
+    }
+    wrote = {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:02:00+00:00",
+        "kind": "memory",
+        "type": "memory.update",
+        "attributes": {"memory.action": "update", "memory.doc_id": "d1"},
+        "payload": {"title": "PR #247: レビュー対応"},
+    }
+    base_with_ts = {**base, "timestamp": "2026-07-01T10:00:00+00:00"}
+    title = _title([base_with_ts, recall, wrote], lambda _subject_id, _person_id: "")
+    assert title == "PR #247: レビュー対応"
+
+
 def test_memory_write_does_not_cross_to_another_members_session() -> None:
     # Alice owns the chat session for the shared Slack subject; Kenji ran his
     # own workflow against the same subject and recalled memory. Kenji's memory

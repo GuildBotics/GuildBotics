@@ -641,6 +641,13 @@ export function activityLinkKey(link: ActivityHistoryLink): string {
   return `${link.kind}:${link.label}:${link.url}`;
 }
 
+// Same target (kind + url) is one link even if the labels differ (e.g. a PR from
+// github attributes vs the same PR referenced by a memory note). Mirrors the
+// backend dedupe so merging sessions into a block does not resurrect duplicates.
+export function activityLinkDedupeKey(link: ActivityHistoryLink): string {
+  return link.url ? `${link.kind}:${link.url}` : `${link.kind}:label:${link.label}`;
+}
+
 export function orderedActivityLinks(links: ActivityHistoryLink[]): ActivityHistoryLink[] {
   return [...links].sort(
     (left, right) => activityLinkTimestamp(left) - activityLinkTimestamp(right),
@@ -798,8 +805,18 @@ function mergeSessionIntoBlock(
 }
 
 function blockTitle(sessions: ActivityHistorySession[]): string {
-  const [first] = sessions;
-  return sessions.length === 1 ? first.title : `${first.title} +${sessions.length - 1}`;
+  if (sessions.length === 1) {
+    return sessions[0].title;
+  }
+  // Prefer a session whose title carries real signal over one that only fell
+  // back to its raw command/workflow (e.g. the SKILL's setup step
+  // "guildbotics member context"), so a merged block is labelled by its work.
+  const primary = sessions.find(hasMeaningfulTitle) ?? sessions[0];
+  return `${primary.title} +${sessions.length - 1}`;
+}
+
+function hasMeaningfulTitle(session: ActivityHistorySession): boolean {
+  return session.title !== session.command && session.title !== session.workflow;
 }
 
 export function blockModes(sessions: ActivityHistorySession[]): ActivitySessionMode[] {
@@ -845,7 +862,7 @@ function dedupeLinks(links: ActivityHistoryLink[]): ActivityHistoryLink[] {
   const seen = new Set<string>();
   const deduped: ActivityHistoryLink[] = [];
   for (const link of links) {
-    const key = activityLinkKey(link);
+    const key = activityLinkDedupeKey(link);
     if (seen.has(key)) {
       continue;
     }

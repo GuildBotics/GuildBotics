@@ -379,7 +379,7 @@ def _run_scoped_owner_trace(
     attributes = item.get("attributes")
     if item.get("trace_id") or not isinstance(attributes, dict):
         return ""
-    if str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS:
+    if _is_read_only_memory(item):
         return ""
     run_id = str(attributes.get("run_id") or attributes.get("task_run_id") or "")
     if not run_id:
@@ -434,10 +434,23 @@ def _first_work_link_label(links: list[ActivityHistoryLink]) -> str:
     return ""
 
 
+def _is_read_only_memory(item: dict[str, Any]) -> bool:
+    """True for memory reads/signals (recall/get/touch) that change nothing.
+
+    Their payload title is generic ("Memory recall") or just the doc that was
+    read, so they must not become a session title or an activity link.
+    """
+    attributes = item.get("attributes")
+    return (
+        isinstance(attributes, dict)
+        and str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS
+    )
+
+
 def _first_payload_text(records: list[dict[str, Any]], key: str) -> str:
     for item in records:
         payload = item.get("payload")
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or _is_read_only_memory(item):
             continue
         value = payload.get(key)
         if value:
