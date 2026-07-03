@@ -859,17 +859,33 @@ function spanSeconds(span: { start: string; end: string }): number {
 }
 
 function dedupeLinks(links: ActivityHistoryLink[]): ActivityHistoryLink[] {
-  const seen = new Set<string>();
-  const deduped: ActivityHistoryLink[] = [];
+  const order: string[] = [];
+  const byKey = new Map<string, ActivityHistoryLink>();
   for (const link of links) {
     const key = activityLinkDedupeKey(link);
-    if (seen.has(key)) {
+    const existing = byKey.get(key);
+    if (!existing) {
+      order.push(key);
+      byKey.set(key, link);
       continue;
     }
-    seen.add(key);
-    deduped.push(link);
+    // A canonical GitHub label (e.g. "PR #246") always wins over a
+    // memory-source label (e.g. "PR #246 <note title>") for the same target,
+    // regardless of which session's link appears first when merging.
+    if (!isCanonicalGitHubLabel(existing) && isCanonicalGitHubLabel(link)) {
+      byKey.set(key, link);
+    }
   }
-  return deduped;
+  return order.map((key) => byKey.get(key)!);
+}
+
+const CANONICAL_GITHUB_LABEL = /^(?:PR|Issue) #\d+$/;
+
+function isCanonicalGitHubLabel(link: ActivityHistoryLink): boolean {
+  if (link.kind !== "pull_request" && link.kind !== "issue") {
+    return true;
+  }
+  return CANONICAL_GITHUB_LABEL.test(link.label);
 }
 
 function floorToInterval(date: Date, minutes: number): Date {
