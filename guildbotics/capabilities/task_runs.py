@@ -85,6 +85,7 @@ class RunStore:
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or get_workspace_data_path("task-runs")
+        self._completions_cache: list[_RunCompletion] | None = None
 
     def append(self, run_id: str, record: dict[str, Any]) -> None:
         path = self._path(run_id)
@@ -199,7 +200,19 @@ class RunStore:
             if completion.subject_id
         }
 
-    def _completions(self) -> Iterator[_RunCompletion]:
+    def _completions(self) -> list[_RunCompletion]:
+        """Return all completion records, read from disk once per instance.
+
+        ``summaries_by_subject()`` and ``subjects_by_run()`` are always called
+        together (see ``AppRuntime.get_activity_history``); caching here lets
+        both share a single filesystem scan instead of re-parsing every
+        ``*.jsonl`` file twice.
+        """
+        if self._completions_cache is None:
+            self._completions_cache = list(self._read_completions())
+        return self._completions_cache
+
+    def _read_completions(self) -> Iterator[_RunCompletion]:
         if not self.root.is_dir():
             return
         for path in sorted(self.root.glob("*.jsonl")):
