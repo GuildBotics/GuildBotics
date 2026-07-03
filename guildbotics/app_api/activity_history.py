@@ -52,8 +52,9 @@ def build_activity_history(
         if str(getattr(member, "person_type", "")) != "human"
     ]
     display_member_ids = {member.person_id for member in display_members}
-    record_list = list(records)
-    _attach_run_scoped_records(record_list, run_subject or (lambda _run_id: ""))
+    record_list = _attach_run_scoped_records(
+        list(records), run_subject or (lambda _run_id: "")
+    )
     ordered_records = sorted(record_list, key=_record_sort_key)
     sessions = _build_sessions(
         ordered_records,
@@ -335,14 +336,18 @@ def _session_title(
 
 def _attach_run_scoped_records(
     records: list[dict[str, Any]], run_subject: Callable[[str], str]
-) -> None:
+) -> list[dict[str, Any]]:
     """Adopt orphan run-scoped records into the trace that owns their subject.
 
-    A workflow subprocess (chat reply, memory write) records without the
-    parent trace id but tags each record with ``attributes.run_id``. Mapping
-    that run to its ``subject_id`` and back to the trace that reconstructs the
-    same subject lets those records (and their memory/doc links) show up on the
-    originating session instead of vanishing.
+    A workflow subprocess (chat reply, memory write) records without the parent
+    trace id but tags each record with a run id (``run_id`` for chat workflows,
+    ``task_run_id`` for ticket workflows). Mapping that run to its ``subject_id``
+    and back to the trace that reconstructs the same subject lets those records
+    (and their memory/doc links) show up on the originating session instead of
+    vanishing.
+
+    Returns a new list; adopted records are shallow-copied with the owner key so
+    the caller's record dicts are never mutated (safe to reuse the input array).
     """
     trace_by_key: dict[tuple[str, str], str] = {}
     for item in records:
@@ -355,17 +360,26 @@ def _attach_run_scoped_records(
             person_id = str(item.get("person_id") or "")
             trace_by_key.setdefault((subject, person_id), trace_id)
 
+    adopted: list[dict[str, Any]] = []
     for item in records:
-        attributes = item.get("attributes")
-        if item.get("trace_id") or not isinstance(attributes, dict):
-            continue
-        run_id = str(attributes.get("run_id") or "")
-        if not run_id:
-            continue
-        person_id = str(item.get("person_id") or "")
-        owner_trace = trace_by_key.get((run_subject(run_id), person_id))
-        if owner_trace:
-            item[_OWNER_TRACE_KEY] = owner_trace
+        owner_trace = _run_scoped_owner_trace(item, run_subject, trace_by_key)
+        adopted.append({**item, _OWNER_TRACE_KEY: owner_trace} if owner_trace else item)
+    return adopted
+
+
+def _run_scoped_owner_trace(
+    item: dict[str, Any],
+    run_subject: Callable[[str], str],
+    trace_by_key: dict[tuple[str, str], str],
+) -> str:
+    attributes = item.get("attributes")
+    if item.get("trace_id") or not isinstance(attributes, dict):
+        return ""
+    run_id = str(attributes.get("run_id") or attributes.get("task_run_id") or "")
+    if not run_id:
+        return ""
+    person_id = str(item.get("person_id") or "")
+    return trace_by_key.get((run_subject(run_id), person_id), "")
 
 
 def _subject_id(attributes: dict[str, Any]) -> str:

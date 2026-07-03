@@ -11,7 +11,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Callable
 
-from guildbotics.app_api.activity_history import build_activity_history
+from guildbotics.app_api.activity_history import (
+    _OWNER_TRACE_KEY,
+    build_activity_history,
+)
 from guildbotics.entities.team import Person
 from guildbotics.utils.i18n_tool import set_language, t
 
@@ -21,6 +24,26 @@ LONG_PROMPT = (
     "あなたは Slack thread の文脈を理解し、割り当てられた GuildBotics member として..."
 )
 CHAT_SUBJECT_ID = "slack:C1:100.1:E1"
+TICKET_SUBJECT_ID = "https://github.com/o/r/issues/42"
+
+
+def _ticket_records() -> list[dict[str, Any]]:
+    return [
+        {
+            "trace_id": "t-ticket",
+            "person_id": "alice",
+            "timestamp": "2026-07-01T11:00:00+00:00",
+            "source": "scheduled",
+            "command": "workflows/ticket_driven_workflow",
+            "workflow": "",
+            "attributes": {
+                "github.url": TICKET_SUBJECT_ID,
+                "github.number": "42",
+                "github.kind": "issue",
+            },
+            "payload": {},
+        }
+    ]
 
 
 def _members() -> list[Person]:
@@ -174,6 +197,58 @@ def test_workflow_memory_write_links_back_to_owning_session() -> None:
     # the owning chat trace, or the diagnostics memory tab filters to nothing.
     assert "doc_id=doc-xyz" in doc_links[0].url
     assert "t-chat" not in doc_links[0].url
+
+
+def test_ticket_workflow_memory_write_uses_task_run_id() -> None:
+    # Ticket workflows tag memory records with ``task_run_id`` (not ``run_id``);
+    # the record must still be adopted into the owning ticket session.
+    memory_record = {
+        "trace_id": None,
+        "person_id": "alice",
+        "timestamp": "2026-07-01T11:01:00+00:00",
+        "kind": "memory",
+        "type": "memory.update",
+        "attributes": {
+            "task_run_id": "ticket-run",
+            "memory.action": "update",
+            "memory.doc_id": "ticket-doc",
+            "memory.path": "documents/personal/alice/ticket-doc",
+        },
+        "payload": {"title": "Issue #42 の作業記録"},
+    }
+    session = _session(
+        _ticket_records() + [memory_record],
+        run_summary=lambda _subject_id, _person_id: "",
+        run_subject=lambda run_id: TICKET_SUBJECT_ID if run_id == "ticket-run" else "",
+    )
+    assert any(
+        link.kind == "doc" and link.label == "Issue #42 の作業記録"
+        for link in session.links
+    )
+
+
+def test_build_activity_history_does_not_mutate_input_records() -> None:
+    memory_record = {
+        "trace_id": None,
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "memory",
+        "type": "memory.update",
+        "attributes": {"run_id": "task-run-1", "memory.doc_id": "doc-xyz"},
+        "payload": {"title": "PR #244 の作業記録"},
+    }
+    records = _chat_records() + [memory_record]
+    build_activity_history(
+        start=START,
+        end=END,
+        members=_members(),
+        records=records,
+        run_summary=lambda _subject_id, _person_id: "",
+        run_subject=lambda run_id: CHAT_SUBJECT_ID if run_id == "task-run-1" else "",
+    )
+    # The adopted record was copied, so the caller's dicts stay clean and reusing
+    # the same array under different conditions cannot leak a stale owner trace.
+    assert all(_OWNER_TRACE_KEY not in record for record in records)
 
 
 def test_memory_write_does_not_cross_to_another_members_session() -> None:
