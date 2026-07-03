@@ -92,21 +92,42 @@ class MemberGitWorkspaceService:
         await self.github.aclose()
 
     async def prepare(
-        self, issue_url: str, pr_url: str | None = None
+        self,
+        issue_url: str | None = None,
+        pr_url: str | None = None,
+        repo: str | None = None,
+        branch: str | None = None,
     ) -> dict[str, Any]:
-        resource = self.github.parse_url(pr_url or issue_url)
-        if resource.kind == "pull":
-            mode = "pull_request_review"
-            pr_url = pr_url or issue_url
-            head = await self.github.get_pr_head(pr_url)
-            branch = head.branch
-            checkout_owner = head.owner
-            checkout_repo = head.repo
+        # Three anchors decide the checkout: a PR head, an issue-derived
+        # ticket/<n> branch, or an ad-hoc repo+branch (e.g. chat-originated work
+        # with no issue). Issue anchoring is a ticket-workflow contract, not a
+        # capability requirement.
+        anchor_url = pr_url or issue_url
+        if anchor_url:
+            resource = self.github.parse_url(anchor_url)
+            full_repo = resource.full_repo
+            if resource.kind == "pull":
+                mode = "pull_request_review"
+                pr_url = pr_url or anchor_url
+                head = await self.github.get_pr_head(pr_url)
+                branch = head.branch
+                checkout_owner = head.owner
+                checkout_repo = head.repo
+            else:
+                mode = "issue"
+                branch = f"ticket/{resource.number}"
+                checkout_owner = resource.owner
+                checkout_repo = resource.repo
         else:
-            mode = "issue"
-            branch = f"ticket/{resource.number}"
-            checkout_owner = resource.owner
-            checkout_repo = resource.repo
+            if not repo or not branch:
+                raise MemberCapabilityError(
+                    "prepare requires --issue-url, --pr-url, or --repo with --branch."
+                )
+            mode = "branch"
+            checkout_owner, separator, checkout_repo = repo.partition("/")
+            if not separator or not checkout_owner or not checkout_repo:
+                raise MemberCapabilityError("--repo must be in <owner>/<repo> format.")
+            full_repo = repo
         default_branch = await self.github.default_branch(checkout_owner, checkout_repo)
         clone_url = await self.github.get_clone_url(checkout_owner, checkout_repo)
         token = await get_person_github_token(self.person, self.github.base_url)
@@ -126,12 +147,12 @@ class MemberGitWorkspaceService:
         finally:
             tool.close()
         return {
-            "repo": resource.full_repo,
+            "repo": full_repo,
             "checkout_repo": f"{checkout_owner}/{checkout_repo}",
             "repo_path": str(repo_path),
             "branch": branch,
             "default_branch": default_branch,
-            "issue_url": issue_url,
+            "issue_url": issue_url or "",
             "pr_url": pr_url or "",
             "mode": mode,
         }

@@ -154,6 +154,10 @@ async def _main(context: Context, ticket_manager: TicketManager) -> AgentRespons
         response = await context.invoke(
             "functions/handle_github_ticket",
             person_id=context.person.person_id,
+            workflow_contract=t(
+                "commands.workflows.common.workflow_contract",
+                person_id=context.person.person_id,
+            ),
             ticket_url=ticket_url,
             pull_request_url=context.task.pull_request_url or "",
             work_type=_work_type(context.task),

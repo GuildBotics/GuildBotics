@@ -227,6 +227,88 @@ async def test_prepare_pull_request_review_clones_fork_head_repo(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_prepare_branch_mode_checks_out_ad_hoc_branch(monkeypatch, tmp_path):
+    # Chat-originated work has no issue: prepare must work from just a
+    # repository and a branch name.
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    service.workspace_root = tmp_path / "workspace" / "aiko"
+    calls = {}
+
+    class FakeGitHub:
+        base_url = "https://api.github.com"
+
+        def parse_url(self, url):
+            raise AssertionError("parse_url must not be called in branch mode")
+
+        async def default_branch(self, owner, repo):
+            calls["default_branch_repo"] = (owner, repo)
+            return "main"
+
+        async def get_clone_url(self, owner, repo):
+            calls["clone_repo"] = (owner, repo)
+            return f"https://github.com/{owner}/{repo}.git"
+
+    class FakeGitTool:
+        def __init__(
+            self,
+            workspace,
+            repo_url,
+            logger,
+            user_name,
+            user_email,
+            default_branch,
+            auth_token=None,
+        ):
+            calls["repo_url"] = repo_url
+            self.repo_path = workspace / "repo"
+
+        def checkout_branch(self, branch):
+            calls["checkout_branch"] = branch
+
+        def close(self):
+            calls["closed"] = True
+
+    async def fake_token(person, base_url):
+        return "token"
+
+    service.github = FakeGitHub()
+    monkeypatch.setattr(member_git, "GitTool", FakeGitTool)
+    monkeypatch.setattr(member_git, "get_person_github_token", fake_token)
+
+    result = await service.prepare(repo="acme/widget", branch="chat/fix-typo")
+
+    assert calls["default_branch_repo"] == ("acme", "widget")
+    assert calls["clone_repo"] == ("acme", "widget")
+    assert calls["checkout_branch"] == "chat/fix-typo"
+    assert result["repo"] == "acme/widget"
+    assert result["checkout_repo"] == "acme/widget"
+    assert result["branch"] == "chat/fix-typo"
+    assert result["mode"] == "branch"
+    assert result["issue_url"] == ""
+    assert result["pr_url"] == ""
+
+
+@pytest.mark.asyncio
+async def test_prepare_requires_an_anchor():
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+
+    with pytest.raises(MemberCapabilityError, match="requires --issue-url"):
+        await service.prepare()
+    with pytest.raises(MemberCapabilityError, match="requires --issue-url"):
+        await service.prepare(repo="acme/widget")
+    with pytest.raises(MemberCapabilityError, match="requires --issue-url"):
+        await service.prepare(branch="chat/fix-typo")
+
+
+@pytest.mark.asyncio
+async def test_prepare_rejects_malformed_repo():
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+
+    with pytest.raises(MemberCapabilityError, match="<owner>/<repo>"):
+        await service.prepare(repo="acme", branch="chat/fix-typo")
+
+
+@pytest.mark.asyncio
 async def test_publish_rejects_repo_outside_member_workspace(tmp_path):
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     service.workspace_root = tmp_path / "workspace" / "aiko"

@@ -39,8 +39,10 @@ class DiagnosticsStore:
         self._memory_limit = memory_limit
         self._max_file_bytes = max_file_bytes
         self._records: deque[dict[str, Any]] = deque(maxlen=memory_limit)
+        self._file_signature: tuple[int, int] | None = None
         self._lock = threading.Lock()
         self._load_from_path(self._path)
+        self._file_signature = self._file_signature_now()
 
     @property
     def path(self) -> Path:
@@ -52,6 +54,11 @@ class DiagnosticsStore:
             self._refresh_path_locked()
             self._records.append(item)
             self._append_to_file(item)
+            # Our own append changed the file. Capture the new signature so this
+            # process does not reload the whole file on its next read, while
+            # appends from *other* processes still change the signature and are
+            # picked up (see ``_reload_if_changed_locked``).
+            self._file_signature = self._file_signature_now()
 
     def list_traces(
         self,
@@ -144,14 +151,33 @@ class DiagnosticsStore:
             self._refresh_path_locked()
 
     def _refresh_path_locked(self) -> None:
-        if self._path_override is not None:
-            return
-        path = default_store_path()
-        if path == self._path:
-            return
-        self._path = path
+        if self._path_override is None:
+            path = default_store_path()
+            if path != self._path:
+                self._path = path
+                self._reload_from_path_locked()
+                return
+        # Same file, but another process (e.g. a ``guildbotics member`` CLI
+        # subprocess) may have appended records to it since we last read. A
+        # long-lived reader such as the app_api backend would otherwise serve a
+        # stale in-memory snapshot and miss those rows.
+        self._reload_if_changed_locked()
+
+    def _reload_if_changed_locked(self) -> None:
+        if self._file_signature_now() != self._file_signature:
+            self._reload_from_path_locked()
+
+    def _reload_from_path_locked(self) -> None:
         self._records.clear()
-        self._load_from_path(path)
+        self._load_from_path(self._path)
+        self._file_signature = self._file_signature_now()
+
+    def _file_signature_now(self) -> tuple[int, int] | None:
+        try:
+            stat = self._path.stat()
+        except OSError:
+            return None
+        return (stat.st_size, stat.st_mtime_ns)
 
     def _load_from_path(self, path: Path) -> None:
         if not path.exists():

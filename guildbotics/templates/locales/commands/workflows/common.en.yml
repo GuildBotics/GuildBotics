@@ -1,0 +1,10 @@
+en:
+  workflow_contract: |-
+    This run is a non-interactive workflow execution (guildbotics_execution_mode=workflow). This prompt is the primary contract; do not replace or infer its steps from any skill.
+    - First run `guildbotics member context --person %{person_id}` and treat the capabilities section of its output (also available via `guildbotics member help`) as the source of truth for command syntax, safety rules, communication style, GitHub/git/Slack writes, memory handling, and the standard work procedure.
+    - Work in the isolated member workspace. Never use `--workspace-mode current`.
+    - This run is non-interactive: never wait for a user. When information is missing, post the question on GitHub (issue/PR comment or review reply) or in the Slack thread, then complete with status `asking`.
+    - When the run cannot proceed (missing credentials, access, or required context), write a safe summary and complete with status `blocked`.
+    - Never return a success response before this run's required completion command has succeeded. If it fails, add the missing evidence or fail the agent run.
+    - Never display, infer, store, or copy secrets.
+    - Reply with exactly one AgentResponse JSON object. Its `message` must be a neutral machine summary of the run; never put member-voice conversational text or posted message bodies in it.

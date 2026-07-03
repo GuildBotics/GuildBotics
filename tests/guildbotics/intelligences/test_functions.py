@@ -33,83 +33,85 @@ def test_messages_to_json_basic():
     assert data[0]["content"] == "hi" and data[1]["author_type"] == "Assistant"
 
 
-def test_handle_github_ticket_prompt_uses_member_capability_contract():
+def test_handle_github_ticket_prompt_keeps_only_trigger_specific_contract():
     prompt = load_markdown_with_frontmatter(
         Path("guildbotics/templates/commands/functions/handle_github_ticket.en.md")
     )
 
+    body = prompt["body"]
     assert prompt["response_class"] == "guildbotics.intelligences.common.AgentResponse"
-    assert "guildbotics member" in prompt["body"]
-    assert "member task complete" in prompt["body"]
-    assert "GitHubTicketAgentResult" not in prompt["body"]
-    assert "capabilities section is the source of truth" in prompt["body"]
-    assert "Use `{ticket_url}` as this run's memory source key" in prompt["body"]
+    # The shared workflow envelope arrives via injection, never restated inline.
+    assert "{workflow_contract}" in body
+    assert "member task complete" in body
+    assert "Use `{ticket_url}` as this run's memory source key" in body
     # The workflow no longer injects issue content; the agent inspects it.
-    assert "{issue_title}" not in prompt["body"]
-    assert "{issue_description}" not in prompt["body"]
+    assert "{issue_title}" not in body
+    assert "{issue_description}" not in body
     # PR-review safety: the agent runs the workflow-provided prepare command,
     # which carries --pr-url for PR review.
-    assert "{prepare_command}" in prompt["body"]
-    assert "--pr-url" in prompt["body"]
-    assert "communication style" in prompt["body"]
-    assert "neutral workflow execution summary" in prompt["body"]
-    assert "If a PR was created, reused, or updated" in prompt["body"]
-    assert "Record separate reusable technical lessons" in prompt["body"]
-    assert "guildbotics_execution_mode=workflow" in prompt["body"]
-    assert "isolated member workspace" in prompt["body"]
-    assert "--workspace-mode current" in prompt["body"]
+    assert "{prepare_command}" in body
+    assert "--pr-url" in body
+    assert "reply_target_id" in body
+    # Envelope and shared-procedure content lives in the injected contract and
+    # the member capability reference only.
+    assert "--workspace-mode" not in body
+    assert "guildbotics member context" not in body
+    assert "secret" not in body.lower()
 
 
-def test_handle_chat_event_prompt_records_secondary_pr_work_context():
+def test_handle_chat_event_prompt_keeps_only_trigger_specific_contract():
     prompt = load_markdown_with_frontmatter(
         Path("guildbotics/templates/commands/functions/handle_chat_event.en.md")
     )
 
+    body = prompt["body"]
     assert prompt["response_class"] == "guildbotics.intelligences.common.AgentResponse"
-    assert "member chat complete" in prompt["body"]
-    assert (
-        "If a secondary GitHub action created, reused, or updated a PR"
-        in (prompt["body"])
-    )
-    assert "--pr <pr_url>" in prompt["body"]
-    assert "--thread <slack_thread_url>" in prompt["body"]
-    assert "Record separate reusable technical lessons" in prompt["body"]
+    assert "{workflow_contract}" in body
+    assert "member chat complete" in body
+    assert "chat inspect thread" in body
+    assert "reply / reaction-only / no-op / asking / blocked" in body
+    # Chat-originated code work needs no pre-existing issue: prepare runs from a
+    # repo and branch, and issue/PR anchors are only for explicit references.
+    assert "--repo <owner/repo> --branch <branch>" in body
+    assert "no issue has to be created first" in body
+    # Envelope and shared-procedure content lives in the injected contract and
+    # the member capability reference only.
+    assert "--workspace-mode" not in body
+    assert "guildbotics member context" not in body
+    assert "secret" not in body.lower()
 
 
-def test_guildbotics_skill_uses_member_persona_without_decorating_control_data():
+def test_guildbotics_skill_keeps_only_interactive_envelope():
     skill = load_markdown_with_frontmatter(Path("skills/guildbotics/SKILL.md"))
 
+    body = skill["body"]
     assert skill["name"] == "guildbotics"
-    assert "member context" in skill["body"]
-    assert "persona" in skill["body"]
-    assert "communication style" in skill["body"]
-    assert "`capabilities` section returned by `member context`" in skill["body"]
-    assert "source-vs-current-state handling" in skill["body"]
-    assert "conversational outputs" in skill["body"]
-    assert "issue titles/bodies, PR titles/bodies, commit messages" in skill["body"]
-    assert "workflow `AgentResponse.message`" in skill["body"]
-    assert "Active Member Session Rules" in skill["body"]
+    # Interactive envelope: member context first, active member session, shared
+    # workspace with --workspace-mode current, interactive DOD, marker guardrail.
+    assert "member context" in body
+    assert "persona" in body
+    assert "Active Member Session Rules" in body
     assert (
-        "active GuildBotics member for the rest of the conversation/session"
-        in skill["body"]
+        "active GuildBotics member for the rest of the conversation/session" in body
     )
-    assert "Workspace Rules" in skill["body"]
-    assert "guildbotics_execution_mode=workflow" in skill["body"]
-    assert "shared pair-programming workspace" in skill["body"]
-    assert "--workspace-mode current" in skill["body"]
-    assert "Do not run `member git prepare`" in skill["body"]
-    assert (
-        "If you create or update a PR outside the GitHub Issue Flow or PR Review Flow"
-        in skill["body"]
-    )
-    assert "--pr <pr_url>" in skill["body"]
-    assert "--thread <thread_url>" in skill["body"]
-    assert (
-        "After commit, push, PR creation, and final GitHub comment/reaction are done"
-        in skill["body"]
-    )
-    assert "When a PR was created or updated, record durable context" in skill["body"]
-    assert "When a PR was updated, record durable context" in skill["body"]
+    assert "communication_style.interactive_replies" in body
+    # The active member voice must persist across the whole interactive session,
+    # including intermediate progress updates (not only the final reply) — this
+    # is interactive-only and must stay in the skill envelope.
+    assert "progress updates" in body
+    assert "not neutral task summaries" in body
+    assert "shared pair-programming workspace" in body
+    assert "--workspace-mode current" in body
+    assert "Do not run `member git prepare`" in body
+    assert "Definition of Done" in body
+    assert "standard work procedure" in body
+    assert "guildbotics_execution_mode=workflow" in body
+    # Shared procedure, memory contracts, and command details live in the member
+    # capability reference; the skill no longer restates per-domain flows.
+    assert "GitHub Issue Flow" not in body
+    assert "PR Review Flow" not in body
+    assert "Slack Chat Flow" not in body
+    assert "--pr <pr_url>" not in body
 
 
 @pytest.mark.asyncio
