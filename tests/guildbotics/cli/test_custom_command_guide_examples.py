@@ -157,13 +157,13 @@ async def test_context_variables_in_jinja2(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cli_agent_brain_cli_passes_cwd_and_params(tmp_path, monkeypatch):
+async def test_agent_brain_passes_cwd_and_params(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
         tmp_path / "commands/summarize.md",
         """
         ---
-        brain: cli
+        brain: agent
         ---
         ${file}の最初のセクションを読み、その内容を${language}を用いて要約してください
         """,

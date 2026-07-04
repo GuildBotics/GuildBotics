@@ -11,7 +11,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
     - [2.1. Named arguments](#21-named-arguments)
     - [2.2. Jinja2 examples](#22-jinja2-examples)
     - [2.3. Using the `context` variable](#23-using-the-context-variable)
-  - [3. Using the CLI agent](#3-using-the-cli-agent)
+  - [3. Using the AI CLI tool](#3-using-the-ai-cli-tool)
   - [4. Using built-in commands](#4-using-built-in-commands)
   - [5. Using subcommands](#5-using-subcommands)
     - [5.1. Naming subcommands and referencing outputs](#51-naming-subcommands-and-referencing-outputs)
@@ -137,15 +137,15 @@ Team members:
 
 - With `brain: none`, the LLM is not called; only subcommand outputs are used as the final result.
 
-## 3. Using the CLI agent
+## 3. Using the AI CLI tool
 
-Specify `brain: cli` in YAML front matter to invoke a CLI agent such as OpenAI Codex or Google Antigravity CLI. With a CLI agent, you can instruct the AI to read files, run system commands, and perform more advanced operations.
+Specify `brain: agent` in YAML front matter to invoke an AI CLI tool such as OpenAI Codex or Google Antigravity. With an AI CLI tool, you can instruct the assigned GuildBotics member to read files, run system commands, and perform more advanced operations.
 
 For example, create a file `summarize.md` with the following content:
 
 ```markdown
 ---
-brain: cli
+brain: agent
 ---
 Read the first section of ${file} and summarize it in one line using ${language}.
 ```
@@ -157,7 +157,7 @@ $ guildbotics run summarize file=README.md language=English cwd=.
 GuildBotics is an alpha tool for collaborating with AI agents and a task board; users should test in isolated environments due to potential breaking changes and risks.
 ```
 
-For CLI agents, set the working directory for system commands via the `cwd` parameter.
+For AI CLI tools, set the working directory for system commands via the `cwd` parameter.
 
 
 ## 4. Using built-in commands

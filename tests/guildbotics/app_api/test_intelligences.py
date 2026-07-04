@@ -63,7 +63,7 @@ def _write_team_config(config_dir: Path) -> None:
                 "class": AGNO_BRAIN_CLASS,
                 "args": {"model": "default"},
             },
-            "file_editor": {
+            "agent": {
                 "class": CLI_BRAIN_CLASS,
                 "args": {"cli_agent": "default"},
             },
@@ -240,7 +240,7 @@ def test_read_config_brain_mapping_engine_classification(tmp_path: Path) -> None
         base / "brain_mapping.yml",
         {
             "llm_brain": {"class": AGNO_BRAIN_CLASS, "args": {"model": "openai"}},
-            "cli_brain": {"class": CLI_BRAIN_CLASS, "args": {"cli_agent": "codex"}},
+            "agent": {"class": CLI_BRAIN_CLASS, "args": {"cli_agent": "codex"}},
             "skipped": "not-a-dict",
         },
     )
@@ -248,11 +248,11 @@ def test_read_config_brain_mapping_engine_classification(tmp_path: Path) -> None
     response = IntelligenceConfigService().read_config(config_dir=tmp_path)
 
     by_name = {b.name: b for b in response.brain_mapping}
-    assert set(by_name) == {"llm_brain", "cli_brain"}
+    assert set(by_name) == {"llm_brain", "agent"}
     assert by_name["llm_brain"].engine == "llm"
     assert by_name["llm_brain"].target == "openai"
-    assert by_name["cli_brain"].engine == "cli"
-    assert by_name["cli_brain"].target == "codex"
+    assert by_name["agent"].engine == "cli"
+    assert by_name["agent"].target == "codex"
 
 
 # --------------------------------------------------------------------------- #
@@ -290,7 +290,7 @@ def _team_update_request(config_dir: Path) -> IntelligenceConfigUpdateRequest:
                 target="default",
             ),
             BrainAssignment(
-                name="file_editor",
+                name="agent",
                 brain_class=CLI_BRAIN_CLASS,
                 engine="cli",
                 target="codex",
@@ -332,7 +332,7 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
         "class": AGNO_BRAIN_CLASS,
         "args": {"model": "default"},
     }
-    assert brain_data["file_editor"] == {
+    assert brain_data["agent"] == {
         "class": CLI_BRAIN_CLASS,
         "args": {"cli_agent": "codex"},
     }

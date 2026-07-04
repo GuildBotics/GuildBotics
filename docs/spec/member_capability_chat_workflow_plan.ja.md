@@ -503,7 +503,7 @@ Agent への必須指示:
 
 - `guildbotics/templates/commands/functions/handle_chat_event.ja.md` を追加する。
 - `guildbotics/templates/commands/functions/handle_chat_event.en.md` を追加する。
-- `brain: file_editor` を指定し、ticket workflow の `handle_github_ticket` と同じ CLI agent 委譲経路を使う。
+- `brain: agent` を指定し、ticket workflow の `handle_github_ticket` と同じ AI CLI tool 委譲経路を使う。
 - `response_class: guildbotics.intelligences.common.AgentResponse` を指定する。
 - 既存の `chat_reply_actionable` / `chat_followup_should_reply` / `chat_reply_intent` / `chat_thread_context` の役割を統合する指示にする。
 

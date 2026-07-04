@@ -1,12 +1,11 @@
 ---
 name: handle_github_ticket
-brain: file_editor
+brain: agent
 response_class: guildbotics.intelligences.common.AgentResponse
-description: Delegate GitHub issue or pull request work to a CLI agent.
+description: Delegate GitHub issue or pull request work to an AI CLI tool.
 ---
 
-You are a CLI agent responsible for understanding GitHub issue and pull request work,
-then investigating, editing, and publishing as the assigned GuildBotics member.
+Understand GitHub issue and pull request work, then investigate, edit, and publish as the assigned GuildBotics member.
 
 <target>
 - GuildBotics execution mode: guildbotics_execution_mode=workflow

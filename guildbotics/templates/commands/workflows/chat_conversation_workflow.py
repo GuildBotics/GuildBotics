@@ -46,7 +46,7 @@ def _max_agent_attempts() -> int:
     """Number of times one chat event may be (re)dispatched before escalating.
 
     A turn that leaves no terminal completion record is retried so a slow or
-    multi-turn CLI agent can finish; the budget bounds that so a permanently
+    multi-turn AI CLI tool can finish; the budget bounds that so a permanently
     failing turn cannot loop forever.
     """
     raw = os.getenv(CHAT_MAX_ATTEMPTS_ENV, "").strip()

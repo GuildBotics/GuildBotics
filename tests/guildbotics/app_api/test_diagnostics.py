@@ -495,7 +495,7 @@ async def test_cli_agent_mapping_missing(monkeypatch: pytest.MonkeyPatch) -> Non
 
     check = _by_code(response)["cli_agent_mapping"]
     assert check.status == "error"
-    assert check.message == "Default CLI agent executable could not be inferred."
+    assert check.message == "Default AI CLI tool executable could not be inferred."
 
 
 @pytest.mark.asyncio

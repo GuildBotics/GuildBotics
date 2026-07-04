@@ -520,7 +520,7 @@ def test_app_runtime_command_options_propagate_nested_requirements(
     commands_dir = tmp_path / ".guildbotics/config/commands"
     commands_dir.mkdir(parents=True)
     (commands_dir / "cli-task.md").write_text(
-        "\n".join(["---", "brain: cli", "---", "Summarize ${file}."])
+        "\n".join(["---", "brain: agent", "---", "Summarize ${file}."])
     )
     (commands_dir / "nested.yml").write_text(
         "\n".join(
@@ -568,7 +568,28 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
     commands_dir = config_dir / "commands"
     commands_dir.mkdir(parents=True)
     (commands_dir / "edit.md").write_text(
-        "\n".join(["---", "brain: file_editor", "---", "Edit ${file}."])
+        "\n".join(["---", "brain: workspace_actor", "---", "Edit ${file}."])
+    )
+    (commands_dir / "inline-edit.yml").write_text(
+        "\n".join(
+            [
+                "commands:",
+                "  - prompt: Edit ${file}.",
+                "    brain: workspace_actor",
+            ]
+        )
+    )
+    (commands_dir / "legacy-cli.md").write_text(
+        "\n".join(["---", "brain: cli", "---", "Edit ${file}."])
+    )
+    (commands_dir / "inline-legacy-cli.yml").write_text(
+        "\n".join(
+            [
+                "commands:",
+                "  - prompt: Edit ${file}.",
+                "    brain: cli",
+            ]
+        )
     )
     brain_mapping = config_dir / "intelligences/brain_mapping.yml"
     brain_mapping.parent.mkdir(parents=True)
@@ -577,7 +598,7 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
             [
                 "default:",
                 "  class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain",
-                "file_editor:",
+                "workspace_actor:",
                 "  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain",
             ]
         )
@@ -597,9 +618,12 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
 
-    option = runtime.get_command_options().options[0]
+    options = {option.command: option for option in runtime.get_command_options().options}
 
-    assert {requirement.kind for requirement in option.requirements} == {"cli_agent"}
+    assert {req.kind for req in options["edit"].requirements} == {"cli_agent"}
+    assert {req.kind for req in options["inline-edit"].requirements} == {"cli_agent"}
+    assert {req.kind for req in options["legacy-cli"].requirements} == {"llm"}
+    assert {req.kind for req in options["inline-legacy-cli"].requirements} == {"llm"}
 
 
 def test_app_runtime_command_options_extract_markdown_arguments(

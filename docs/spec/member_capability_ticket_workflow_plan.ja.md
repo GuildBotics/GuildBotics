@@ -655,7 +655,7 @@ ticket workflow 実装時点での将来対応:
 - desktop app に同梱する `guildbotics-cli` と first-launch install（`~/.guildbotics/bin/guildbotics` / managed shim / skills）を追加。
 - active workspace（desktop app / `guildbotics workspace use` / `member --workspace`）の導入前提を docs に追加。env 手渡しは fallback として説明する。
 - skill 導入 smoke check（`~/.guildbotics/bin/guildbotics workspace status` と `member context --check-credentials`）を docs に追加。
-- `handle_github_ticket.ja.md/en.md` を `AgentResponse` + member CLI usage に変更。`brain: file_editor` は維持。prompt examples を実コマンド名に一致させる。
+- `handle_github_ticket.ja.md/en.md` を `AgentResponse` + member CLI usage に変更。`brain: agent` は維持。prompt examples を実コマンド名に一致させる。
 
 ### Step 6: ticket workflow replacement
 

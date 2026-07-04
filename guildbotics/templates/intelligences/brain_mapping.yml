@@ -2,7 +2,7 @@ default:
   class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain
   args:
     model: default
-file_editor:
+agent:
   class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain
   args:
     cli_agent: default

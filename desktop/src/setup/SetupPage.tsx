@@ -1445,7 +1445,7 @@ function IntelligenceEditor({
 
   const modelSlots = Object.keys(draft.model_mapping);
   const cliSlots = Object.keys(draft.cli_agent_mapping);
-  // Offer every known CLI agent as a choice, not just the ones still mapped to a
+  // Offer every known AI CLI tool as a choice, not just the ones still mapped to a
   // slot. Deriving the options from `draft.cli_agents` (which the backend builds
   // only from currently-mapped paths) would otherwise leave a single option once
   // the other slots are deleted.
@@ -1679,7 +1679,7 @@ function IntelligenceEditor({
 
   const handleDeleteBrain = (index: number) => {
     const target = draft.brain_mapping[index];
-    if (!target || target.name === "default" || target.name === "file_editor") return;
+    if (!target || target.name === "default" || target.name === "agent") return;
     updateDraft((current) => {
       return {
         ...current,
@@ -1721,8 +1721,7 @@ function IntelligenceEditor({
 
   const handleRenameBrain = (index: number, newName: string) => {
     const target = draft.brain_mapping[index];
-    if (!target || target.name === "default" || target.name === "file_editor" || !newName.trim())
-      return;
+    if (!target || target.name === "default" || target.name === "agent" || !newName.trim()) return;
     updateDraft((current) => {
       const exists = current.brain_mapping.some((b, i) => i !== index && b.name === newName);
       if (exists) return current;
@@ -1892,7 +1891,7 @@ function IntelligenceEditor({
                     <TextInput
                       label={t("setup.intelligence.feature")}
                       value={assignment.name}
-                      readOnly={assignment.name === "default" || assignment.name === "file_editor"}
+                      readOnly={assignment.name === "default" || assignment.name === "agent"}
                       onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
                       flex={2}
                     />
@@ -1915,7 +1914,7 @@ function IntelligenceEditor({
                       onChange={(value) => handleUpdateBrain(index, { target: value ?? "default" })}
                       flex={1.5}
                     />
-                    {assignment.name !== "default" && assignment.name !== "file_editor" ? (
+                    {assignment.name !== "default" && assignment.name !== "agent" ? (
                       <ActionIcon
                         color="red"
                         variant="subtle"
@@ -2233,7 +2232,7 @@ function MembersSection({
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const isHumanMember = personType === "human";
 
-  // Effective CLI agent for the member (member override falls back to the team
+  // Effective AI CLI tool for the member (member override falls back to the team
   // default automatically), shown as a badge on the avatar header row.
   const cliAgentBadgeQuery = useQuery({
     queryKey: ["intelligence-config", editingPersonId ?? "team"],
