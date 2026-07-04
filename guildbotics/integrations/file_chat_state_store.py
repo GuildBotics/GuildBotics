@@ -414,12 +414,21 @@ class FileConversationStateStore(ConversationStateStore):
         self, service: str, person_id: str, channel_id: str
     ) -> None:
         with self._lock:
-            # Drop received-but-unprocessed events for this channel.
+            # Drop received-but-unprocessed events for this channel. The pending
+            # queue is drained without a cutoff check, so a stale file here would
+            # be reprocessed. If unlink fails, overwrite with an empty backlog so
+            # the queue is still cleared; if that also fails, surface the error
+            # rather than reporting a reset that silently left a backlog.
             pending_file = self._pending_events_file(service, person_id, channel_id)
             if pending_file.exists():
-                with suppress(Exception):
+                try:
                     pending_file.unlink()
-            # Drop tracked threads so old threads are not re-backfilled.
+                except OSError:
+                    self._write_json(pending_file, {"events": []})
+            # Drop tracked threads as cleanup. Correctness does not depend on this
+            # deletion: backfill of a surviving thread is bounded by the receive
+            # cutoff filter in EventListenerRunner, so pre-cutoff replies are never
+            # re-queued even if a file cannot be removed here.
             thread_dir = self._thread_file(service, person_id, channel_id, "_").parent
             if thread_dir.is_dir():
                 for path in thread_dir.glob("*.json"):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
@@ -412,3 +414,37 @@ def test_clear_channel_receive_backlog_drops_pending_and_threads(tmp_path):
     # The per-channel cursor (watermark, processed ids) is left intact; the
     # receive cutoff is the mechanism that bounds future backfill.
     assert store.load_channel_cursor("slack", "alice", "C1").oldest_ts == "100.0"
+
+
+def test_clear_channel_receive_backlog_empties_pending_when_unlink_fails(
+    tmp_path, monkeypatch
+):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event(
+        "slack",
+        "alice",
+        "C1",
+        ChatEvent(
+            event_id="C1:1",
+            channel_id="C1",
+            message_ts="1",
+            thread_ts="1",
+            author_id="U1",
+            text="old",
+        ),
+    )
+
+    original_unlink = Path.unlink
+
+    def failing_unlink(self: Path, *args, **kwargs):
+        if self.name == "C1.json" and "pending_events" in self.parts:
+            raise OSError("simulated filesystem error")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    store.clear_channel_receive_backlog("slack", "alice", "C1")
+
+    # Even when the pending file cannot be deleted, the backlog is emptied via an
+    # overwrite fallback, so nothing stale is drained on the next start.
+    assert store.load_pending_events("slack", "alice", "C1") == []
