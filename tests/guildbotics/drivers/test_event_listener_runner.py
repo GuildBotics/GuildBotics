@@ -21,7 +21,10 @@ from guildbotics.integrations.chat_service import (
     ChatIdentity,
     ChatPostResult,
 )
-from guildbotics.integrations.chat_state_store import ThreadMessageState
+from guildbotics.integrations.chat_state_store import (
+    ChannelCursorState,
+    ThreadMessageState,
+)
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.runtime.context import Context
@@ -710,6 +713,65 @@ async def test_run_once_backfills_channel_and_known_thread_events(
     # worker runs them later); they are not dispatched here.
     pending = state_store.load_pending_events("slack", "alice", "C1")
     assert sorted(pe.event.event_id for pe in pending) == ["C1:101.1", "C1:102.1"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_receive_cutoff_floors_oldest_and_filters_events(tmp_path):
+    alice = Person(person_id="alice", name="Alice", is_active=True)
+    ctx = _BackfillContext(_BackfillChatService())
+    ctx.team = types.SimpleNamespace(members=[alice])
+    store = FileConversationStateStore(base_dir=tmp_path)
+    # An existing watermark whose overlap window (205 - 60 = 145) reaches before
+    # the reset cutoff; the cutoff must clamp the query and drop pre-cutoff events.
+    store.save_channel_cursor("slack", "alice", "C1", ChannelCursorState(oldest_ts="205.0"))
+    store.save_receive_cutoff("slack", "alice", "200.0")
+    runner = EventListenerRunner(ctx, state_store=store)  # type: ignore[arg-type]
+
+    seen: dict[str, str | None] = {}
+
+    class _CutoffChatService:
+        async def list_channel_events(
+            self,
+            channel_id: str,
+            *,
+            cursor: str | None = None,
+            oldest_ts: str | None = None,
+            latest_ts: str | None = None,
+            limit: int = 100,
+        ) -> ChatEventPage:
+            seen["oldest_ts"] = oldest_ts
+            return ChatEventPage(
+                events=[
+                    ChatEvent(
+                        event_id="C1:150.0",
+                        channel_id="C1",
+                        message_ts="150.0",
+                        thread_ts="150.0",
+                        author_id="U",
+                        text="before cutoff",
+                    ),
+                    ChatEvent(
+                        event_id="C1:250.0",
+                        channel_id="C1",
+                        message_ts="250.0",
+                        thread_ts="250.0",
+                        author_id="U",
+                        text="after cutoff",
+                    ),
+                ],
+                oldest_ts="250.0",
+            )
+
+    count = await runner._backfill_channel_events(
+        alice, "slack", "C1", _CutoffChatService(), ChatBackfillPolicy()
+    )
+
+    # The query is floored at the cutoff instead of watermark-minus-overlap.
+    assert seen["oldest_ts"] == "200.0"
+    # Only the post-cutoff event is queued; the pre-cutoff one is filtered out.
+    assert count == 1
+    pending = store.load_pending_events("slack", "alice", "C1")
+    assert [pe.event.event_id for pe in pending] == ["C1:250.0"]
 
 
 @pytest.mark.asyncio

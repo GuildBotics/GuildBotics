@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import threading
+import time
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,6 +25,7 @@ from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentFieldOption,
     AgentFieldStateResponse,
+    ChatReceiveResetResponse,
     CliAgentDetection,
     CliAgentDetectionsResponse,
     CommandArgumentOption,
@@ -72,6 +74,8 @@ from guildbotics.drivers import (
 from guildbotics.editions import get_edition
 from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities import Project, Service, Team
+from guildbotics.integrations.chat_profile import get_chat_subscriptions
+from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.intelligences.cli_agents import (
     discover_cli_agents,
@@ -408,6 +412,64 @@ class AppRuntime:
 
     def get_scheduler_status(self) -> RuntimeStatus:
         return self._lifecycle.get_status()
+
+    def reset_chat_receive_state(self) -> ChatReceiveResetResponse:
+        """Ignore every chat message up to now across all active Slack members.
+
+        Records a per-member receive cutoff at the current time (a hard floor
+        that backfill never fetches before, covering channels known only by name
+        with no stored state yet) and drops received-but-unprocessed events, so
+        the next start only handles messages that arrive afterwards. Rejected
+        while the runtime is running so it never races the live listener.
+        """
+        status = self.get_scheduler_status()
+        if status.scheduler.running or status.events.running:
+            raise AppApiError(
+                "runtime_running",
+                "Stop the service before resetting chat receive state.",
+                status_code=409,
+            )
+        context = self._get_context()
+        self._load_workspace_env(apply_data_root=True)
+        store = FileConversationStateStore()
+        cutoff_ts = f"{time.time():.6f}"
+        members_reset = 0
+        channels_reset = 0
+        for member in context.team.members:
+            if not getattr(member, "is_active", False):
+                continue
+            if not self._has_slack_subscription(member):
+                continue
+            store.save_receive_cutoff("slack", member.person_id, cutoff_ts)
+            for channel_id in store.list_known_channels("slack", member.person_id):
+                store.clear_channel_receive_backlog(
+                    "slack", member.person_id, channel_id
+                )
+                channels_reset += 1
+            members_reset += 1
+        self._event_bus.publish_event(
+            "chat.receive_state_reset",
+            {"members": members_reset, "channels": channels_reset},
+        )
+        return ChatReceiveResetResponse(
+            members_reset=members_reset, channels_reset=channels_reset
+        )
+
+    def _has_slack_subscription(self, member: Any) -> bool:
+        """True when a member subscribes to any enabled Slack channel, whether it
+        is identified by id or only by name."""
+        for sub in get_chat_subscriptions(member):
+            if not isinstance(sub, dict):
+                continue
+            if str(sub.get("service", "slack")).strip().lower() != "slack":
+                continue
+            if not bool(sub.get("enabled", True)):
+                continue
+            channel_id = str(sub.get("channel_id", "") or "").strip()
+            channel_name = str(sub.get("channel_name", "") or "").strip()
+            if channel_id or channel_name:
+                return True
+        return False
 
     def get_prompt_trace_status(
         self, limit: int = 20, read_path: str | None = None

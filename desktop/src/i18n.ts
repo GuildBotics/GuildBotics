@@ -955,6 +955,19 @@ const resources = {
           authFailedTitle: "Slack authentication failed",
           authFailedBody:
             "Slack rejected the app-level token (Socket Mode) for: {{persons}}. These members cannot receive events until their SLACK_APP_TOKEN is fixed and the service is restarted.",
+          chatReset: {
+            title: "Reset receive state",
+            description:
+              "Ignores every chat message up to now (including received but unprocessed ones). The next start handles only messages that arrive afterwards.",
+            action: "Discard unprocessed messages",
+            stoppedOnlyHint: "Available only while the service is stopped.",
+            confirmTitle: "Ignore past chat messages",
+            confirmBody:
+              "This discards received but unprocessed messages for all active Slack members and moves the cutoff to now. It cannot be undone.",
+            confirm: "Discard messages",
+            cancel: "Cancel",
+            successBody: "Reset receive state for {{members}} member(s), {{channels}} channel(s).",
+          },
         },
         promptTrace: {
           title: "Prompt trace",
@@ -2072,6 +2085,20 @@ const resources = {
           authFailedTitle: "Slack 認証に失敗しました",
           authFailedBody:
             "Slack が Socket Mode の App Token を拒否しました: {{persons}}。これらのメンバーは SLACK_APP_TOKEN を修正してサービスを再起動するまでイベントを受信できません。",
+          chatReset: {
+            title: "受信状態のリセット",
+            description:
+              "現在までのチャットメッセージ（受信済み・未処理を含む）をすべて無視します。次回開始以降に届くメッセージだけを処理します。",
+            action: "未処理の受信メッセージを破棄",
+            stoppedOnlyHint: "サービス停止中のみ実行できます。",
+            confirmTitle: "過去のチャットメッセージを無視する",
+            confirmBody:
+              "アクティブな全 Slack メンバーの受信済み・未処理メッセージを破棄し、カットオフを現在時刻に移動します。この操作は取り消せません。",
+            confirm: "メッセージを破棄",
+            cancel: "キャンセル",
+            successBody:
+              "{{members}} 名のメンバー、{{channels}} 個のチャンネルの受信状態をリセットしました。",
+          },
         },
         promptTrace: {
           title: "プロンプトトレース",

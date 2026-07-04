@@ -382,8 +382,66 @@ class FileConversationStateStore(ConversationStateStore):
                     out.append((service_dir.name, pending_file.stem))
             return out
 
+    def list_known_channels(self, service: str, person_id: str) -> list[str]:
+        with self._lock:
+            root = self._root(service, person_id)
+            found: set[str] = set()
+            for sub_dir in ("channels", "pending_events"):
+                directory = root / sub_dir
+                if directory.is_dir():
+                    for path in directory.glob("*.json"):
+                        found.add(path.stem)
+            threads_dir = root / "threads"
+            if threads_dir.is_dir():
+                for path in threads_dir.iterdir():
+                    if path.is_dir():
+                        found.add(path.name)
+            return sorted(found)
+
+    def load_receive_cutoff(self, service: str, person_id: str) -> str | None:
+        with self._lock:
+            data = self._read_json(self._receive_cutoff_file(service, person_id))
+            return _to_str_or_none(data.get("cutoff_ts"))
+
+    def save_receive_cutoff(self, service: str, person_id: str, cutoff_ts: str) -> None:
+        with self._lock:
+            self._write_json(
+                self._receive_cutoff_file(service, person_id),
+                {"cutoff_ts": cutoff_ts},
+            )
+
+    def clear_channel_receive_backlog(
+        self, service: str, person_id: str, channel_id: str
+    ) -> None:
+        with self._lock:
+            # Drop received-but-unprocessed events for this channel. The pending
+            # queue is drained without a cutoff check, so a stale file here would
+            # be reprocessed. If unlink fails, overwrite with an empty backlog so
+            # the queue is still cleared; if that also fails, surface the error
+            # rather than reporting a reset that silently left a backlog.
+            pending_file = self._pending_events_file(service, person_id, channel_id)
+            if pending_file.exists():
+                try:
+                    pending_file.unlink()
+                except OSError:
+                    self._write_json(pending_file, {"events": []})
+            # Drop tracked threads as cleanup. Correctness does not depend on this
+            # deletion: backfill of a surviving thread is bounded by the receive
+            # cutoff filter in EventListenerRunner, so pre-cutoff replies are never
+            # re-queued even if a file cannot be removed here.
+            thread_dir = self._thread_file(service, person_id, channel_id, "_").parent
+            if thread_dir.is_dir():
+                for path in thread_dir.glob("*.json"):
+                    with suppress(Exception):
+                        path.unlink()
+                with suppress(Exception):
+                    thread_dir.rmdir()
+
     def _root(self, service: str, person_id: str) -> Path:
         return self._base_dir / _safe_segment(service) / _safe_segment(person_id)
+
+    def _receive_cutoff_file(self, service: str, person_id: str) -> Path:
+        return self._root(service, person_id) / "receive_cutoff.json"
 
     def _channel_file(self, service: str, person_id: str, channel_id: str) -> Path:
         return (

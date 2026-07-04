@@ -11,6 +11,7 @@ import {
   getRuntimeDebug,
   getSchedulerStatus,
   getTeam,
+  resetChatReceiveState,
   startScheduler,
   stopScheduler,
   updateRuntimeDebug,
@@ -45,6 +46,7 @@ vi.mock("./api/client", async (importOriginal) => {
     getRuntimeDebug: vi.fn(async () => runtimeDebug()),
     startScheduler: vi.fn(),
     stopScheduler: vi.fn(),
+    resetChatReceiveState: vi.fn(),
     updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => runtimeDebug(body)),
     subscribeEvents: vi.fn(() => () => {}),
     subscribeLogs: vi.fn(() => () => {}),
@@ -56,6 +58,7 @@ const getTeamMock = vi.mocked(getTeam);
 const getSchedulerStatusMock = vi.mocked(getSchedulerStatus);
 const startSchedulerMock = vi.mocked(startScheduler);
 const stopSchedulerMock = vi.mocked(stopScheduler);
+const resetChatReceiveStateMock = vi.mocked(resetChatReceiveState);
 const getRuntimeDebugMock = vi.mocked(getRuntimeDebug);
 const updateRuntimeDebugMock = vi.mocked(updateRuntimeDebug);
 
@@ -71,6 +74,7 @@ beforeEach(() => {
   getSchedulerStatusMock.mockReset().mockResolvedValue(runtimeStatus());
   startSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   stopSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
+  resetChatReceiveStateMock.mockReset().mockResolvedValue({ members_reset: 1, channels_reset: 3 });
   getRuntimeDebugMock.mockReset().mockResolvedValue(runtimeDebug());
   updateRuntimeDebugMock.mockReset().mockImplementation(async (body) => runtimeDebug(body));
 });
@@ -332,6 +336,49 @@ describe("Service Runtime screen", () => {
 
     expect(await screen.findByText(t("overview.stopError"))).toBeInTheDocument();
     expect(screen.getByText("stop blew up")).toBeInTheDocument();
+  });
+
+  it("resets chat receive state after confirming while stopped", async () => {
+    const user = userEvent.setup();
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    const resetButton = await screen.findByRole("button", {
+      name: t("overview.eventsCard.chatReset.action"),
+    });
+    expect(resetButton).toBeEnabled();
+    await user.click(resetButton);
+
+    await user.click(
+      await screen.findByRole("button", { name: t("overview.eventsCard.chatReset.confirm") }),
+    );
+
+    await waitFor(() => expect(resetChatReceiveStateMock).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText(
+        t("overview.eventsCard.chatReset.successBody", { members: 1, channels: 3 }),
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("disables the chat receive reset while the runtime is running", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
+        events: runtimeUnit("events", { state: "running", running: true }),
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    const resetButton = await screen.findByRole("button", {
+      name: t("overview.eventsCard.chatReset.action"),
+    });
+    expect(resetButton).toBeDisabled();
+    expect(
+      screen.getByText(t("overview.eventsCard.chatReset.stoppedOnlyHint")),
+    ).toBeInTheDocument();
+    expect(resetChatReceiveStateMock).not.toHaveBeenCalled();
   });
 });
 

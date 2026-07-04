@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
@@ -319,3 +321,130 @@ def test_list_pending_channels(tmp_path):
 
     assert store.list_pending_channels("alice") == [("slack", "C1"), ("slack", "C2")]
     assert store.list_pending_channels("bob") == [("slack", "C9")]
+
+
+def test_list_known_channels_unions_cursor_pending_and_threads(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.save_channel_cursor(
+        "slack", "alice", "C1", ChannelCursorState(oldest_ts="100.0")
+    )
+    store.upsert_pending_event(
+        "slack",
+        "alice",
+        "C2",
+        ChatEvent(
+            event_id="C2:1",
+            channel_id="C2",
+            message_ts="1",
+            thread_ts="1",
+            author_id="U1",
+            text="hi",
+        ),
+    )
+    store.append_thread_message(
+        "slack",
+        "alice",
+        "C3",
+        "50.0",
+        ThreadMessageState(
+            channel_id="C3",
+            thread_ts="50.0",
+            message_ts="50.0",
+            author_id="U1",
+            text="thread",
+        ),
+    )
+
+    assert store.list_known_channels("slack", "alice") == ["C1", "C2", "C3"]
+    assert store.list_known_channels("slack", "bob") == []
+
+
+def test_receive_cutoff_roundtrip(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+
+    assert store.load_receive_cutoff("slack", "alice") is None
+
+    store.save_receive_cutoff("slack", "alice", "999.5")
+    assert store.load_receive_cutoff("slack", "alice") == "999.5"
+    # Cutoff is scoped per person and does not leak across members.
+    assert store.load_receive_cutoff("slack", "bob") is None
+
+
+def test_clear_channel_receive_backlog_drops_pending_and_threads(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.save_channel_cursor(
+        "slack",
+        "alice",
+        "C1",
+        ChannelCursorState(oldest_ts="100.0", processed_event_ids=["C1:1"]),
+    )
+    store.upsert_pending_event(
+        "slack",
+        "alice",
+        "C1",
+        ChatEvent(
+            event_id="C1:1",
+            channel_id="C1",
+            message_ts="1",
+            thread_ts="1",
+            author_id="U1",
+            text="old",
+        ),
+    )
+    store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "50.0",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="50.0",
+            message_ts="50.0",
+            author_id="U1",
+            text="thread",
+        ),
+    )
+
+    store.clear_channel_receive_backlog("slack", "alice", "C1")
+
+    # Received-but-unprocessed events and tracked threads are discarded.
+    assert store.load_pending_events("slack", "alice", "C1") == []
+    assert store.list_pending_channels("alice") == []
+    assert store.list_thread_states("slack", "alice", "C1") == []
+    # The per-channel cursor (watermark, processed ids) is left intact; the
+    # receive cutoff is the mechanism that bounds future backfill.
+    assert store.load_channel_cursor("slack", "alice", "C1").oldest_ts == "100.0"
+
+
+def test_clear_channel_receive_backlog_empties_pending_when_unlink_fails(
+    tmp_path, monkeypatch
+):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event(
+        "slack",
+        "alice",
+        "C1",
+        ChatEvent(
+            event_id="C1:1",
+            channel_id="C1",
+            message_ts="1",
+            thread_ts="1",
+            author_id="U1",
+            text="old",
+        ),
+    )
+
+    original_unlink = Path.unlink
+
+    def failing_unlink(self: Path, *args, **kwargs):
+        if self.name == "C1.json" and "pending_events" in self.parts:
+            raise OSError("simulated filesystem error")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    store.clear_channel_receive_backlog("slack", "alice", "C1")
+
+    # Even when the pending file cannot be deleted, the backlog is emptied via an
+    # overwrite fallback, so nothing stale is drained on the next start.
+    assert store.load_pending_events("slack", "alice", "C1") == []
