@@ -1314,11 +1314,13 @@ def _direct_command_requirement_kinds(
 def _markdown_brain_requirement_kind(
     metadata: dict[str, Any], context: Context
 ) -> str | None:
-    brain = str(metadata.get("brain", "default")).strip()
+    return _brain_requirement_kind(metadata.get("brain", "default"), context)
+
+
+def _brain_requirement_kind(brain_value: object, context: Context) -> str | None:
+    brain = str(brain_value).strip()
     if brain.lower() in {"none", "-", "null", "disabled"}:
         return None
-    if brain.lower() == "agent":
-        return "cli_agent"
 
     try:
         mapping = load_yaml_file(
@@ -1364,7 +1366,7 @@ def _command_entry_requirement_kinds(
         return set()
 
     if any(key in entry for key in {"prompt", "print"}):
-        return _inline_markdown_requirement_kinds(entry)
+        return _inline_markdown_requirement_kinds(entry, context)
     if "python" in entry:
         return _inline_python_requirement_kinds(entry)
     if any(key in entry for key in {"script", "to_html", "to_pdf"}):
@@ -1382,15 +1384,13 @@ def _command_entry_requirement_kinds(
     return set()
 
 
-def _inline_markdown_requirement_kinds(entry: dict) -> set[str]:
+def _inline_markdown_requirement_kinds(entry: dict, context: Context) -> set[str]:
     if "print" in entry:
         return set()
-    brain = str(entry.get("brain", "")).lower()
-    if brain == "agent":
-        return {"cli_agent"}
-    if brain in {"none", "-", "null", "disabled"}:
+    kind = _brain_requirement_kind(entry.get("brain", "default"), context)
+    if kind is None:
         return set()
-    return {"llm"}
+    return {kind}
 
 
 def _inline_python_requirement_kinds(entry: dict) -> set[str]:
