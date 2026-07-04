@@ -92,6 +92,13 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
                             "user": "U1",
                             "text": "hello",
                             "ts": "100.1",
+                            "metadata": {
+                                "event_type": "guildbotics.workflow_status",
+                                "event_payload": {
+                                    "routing": "suppress",
+                                    "reason": "failed",
+                                },
+                            },
                         }
                     },
                 }
@@ -133,6 +140,7 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
     assert ws1.closed is True
     assert ws2.closed is True
     assert [item.event.event_id for item in drained] == ["C1:100.1"]
+    assert drained[0].event.metadata["event_type"] == "guildbotics.workflow_status"
     assert any("env-1" in msg for msg in ws1.sent)
 
 

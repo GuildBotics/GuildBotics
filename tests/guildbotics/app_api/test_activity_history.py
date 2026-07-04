@@ -124,6 +124,70 @@ def test_in_progress_chat_session_uses_neutral_trigger_label() -> None:
     assert LONG_PROMPT not in title
 
 
+def test_rate_limited_workflow_event_sets_session_rate_limit() -> None:
+    session = _session(
+        [
+            {
+                "trace_id": "t-rate",
+                "person_id": "alice",
+                "timestamp": "2026-07-01T10:00:00+00:00",
+                "source": "event_listener",
+                "command": "workflows/chat_conversation_workflow",
+                "workflow": "workflows/chat_conversation_workflow",
+                "kind": "event",
+                "type": "workflow.rate_limited",
+                "attributes": {
+                    "rate_limit.retry_after_at": "2026-07-04T11:44:00+09:00",
+                    "rate_limit.retry_after_text": "11:44 AM",
+                },
+                "payload": {
+                    "retry_after_at": "fallback",
+                    "retry_after_text": "fallback",
+                },
+            }
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+
+    assert session.status == "rate_limited"
+    assert session.rate_limit is not None
+    assert session.rate_limit.retry_after_at == "2026-07-04T11:44:00+09:00"
+    assert session.rate_limit.retry_after_text == "11:44 AM"
+
+
+def test_latest_rate_limit_record_wins() -> None:
+    session = _session(
+        [
+            {
+                "trace_id": "t-rate",
+                "person_id": "alice",
+                "timestamp": "2026-07-01T10:00:00+00:00",
+                "source": "event_listener",
+                "command": "workflows/chat_conversation_workflow",
+                "kind": "event",
+                "type": "workflow.rate_limited",
+                "attributes": {"rate_limit.retry_after_text": "old"},
+                "payload": {},
+            },
+            {
+                "trace_id": "t-rate",
+                "person_id": "alice",
+                "timestamp": "2026-07-01T10:05:00+00:00",
+                "source": "event_listener",
+                "command": "workflows/chat_conversation_workflow",
+                "kind": "event",
+                "type": "workflow.rate_limited",
+                "attributes": {},
+                "payload": {"retry_after_text": "new"},
+            },
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+
+    assert session.rate_limit is not None
+    assert session.rate_limit.retry_after_text == "new"
+
+
 def test_completed_ticket_session_titled_by_summary_keeps_issue_link() -> None:
     records = [
         {

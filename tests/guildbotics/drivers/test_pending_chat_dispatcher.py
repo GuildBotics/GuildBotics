@@ -12,6 +12,7 @@ from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
 )
+from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
 
 
 class _FakeContext:
@@ -82,6 +83,43 @@ async def test_dispatcher_runs_workflow_and_clears_pending(monkeypatch, tmp_path
     assert incoming is not None
     assert incoming.event.event_id == "E1"
     assert incoming.chat_participation == "social"
+    retry_context = ctx_used.shared_state[WORKFLOW_INVOCATION_KEY].payload[
+        "retry_context"
+    ]
+    assert retry_context["attempt_count"] == 1
+    assert retry_context["max_attempts"] == 5
+    assert retry_context["is_final_attempt"] is False
+    assert retry_context["run_id"]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_uses_env_for_initial_retry_budget(monkeypatch, tmp_path):
+    monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "10")
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    ran = []
+
+    class _FakeRunner:
+        def __init__(self, context, command, args):
+            ran.append(context)
+
+        async def run(self):
+            return "ok"
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
+    )
+
+    context = _FakeContext()
+    person = Person(person_id="alice", name="A", is_active=True)
+    dispatcher = PendingChatDispatcher(context, state_store=store)  # type: ignore[arg-type]
+
+    await dispatcher.process_person(person)
+
+    retry_context = (
+        ran[0].shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"]
+    )
+    assert retry_context["max_attempts"] == 10
 
 
 @pytest.mark.asyncio
@@ -140,3 +178,43 @@ async def test_dispatcher_leaves_event_queued_on_error(monkeypatch, tmp_path):
     assert [
         pe.event.event_id for pe in store.load_pending_events("slack", "alice", "C1")
     ] == ["E1"]
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    assert pending.attempt_count == 1
+    assert pending.next_attempt_at is not None
+    first_run_id = pending.run_id
+
+    processed = await dispatcher.process_person(person)
+
+    assert processed == 0
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    assert pending.attempt_count == 1
+    assert pending.run_id == first_run_id
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_skips_future_retry(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    pending.next_attempt_at = "2999-01-01T00:00:00+00:00"
+    store.save_pending_event("slack", "alice", "C1", pending)
+
+    class _FakeRunner:
+        def __init__(self, *a):
+            raise AssertionError("future retry should not run")
+
+        async def run(self):
+            return "ok"
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
+    )
+
+    context = _FakeContext()
+    person = Person(person_id="alice", name="A", is_active=True)
+    dispatcher = PendingChatDispatcher(context, state_store=store)  # type: ignore[arg-type]
+
+    processed = await dispatcher.process_person(person)
+
+    assert processed == 0
+    assert store.load_pending_events("slack", "alice", "C1")[0].next_attempt_at

@@ -1,13 +1,16 @@
 import asyncio
+import json
 import os
+import re
 import shutil
 import tempfile
 from contextlib import suppress
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from logging import Logger
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
@@ -21,6 +24,36 @@ from guildbotics.utils.log_utils import get_log_output_dir
 from guildbotics.utils.prompt_trace import write_prompt_trace
 from guildbotics.utils.text_utils import replace_placeholders
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
+
+CLI_AGENT_ERROR_MARKER = "GUILDBOTICS_CLI_AGENT_ERROR_JSON:"
+_HOURS_PER_HALF_DAY = 12
+_MAX_24_HOUR = 23
+_MAX_MINUTE = 59
+_MONTHS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
 
 
 class ExecutableInfo:
@@ -48,6 +81,176 @@ class CliAgentExecutionResult:
     stdout: str
     stderr: str
     returncode: int
+    error_category: str = ""
+    error_details: dict[str, str] = field(default_factory=dict)
+
+
+class CliAgentExecutionError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        cli_agent: str,
+        result: CliAgentExecutionResult,
+        message: str | None = None,
+    ) -> None:
+        self.cli_agent = cli_agent
+        self.result = result
+        self.category = result.error_category
+        self.details = dict(result.error_details)
+        detail = result.stderr or result.stdout or "no output"
+        super().__init__(
+            message
+            or f"CLI agent '{cli_agent}' exited with code {result.returncode}: {detail}"
+        )
+
+
+def normalize_cli_agent_retry_after(
+    retry_after_text: str = "",
+    retry_after_timezone: str = "",
+) -> str:
+    text = retry_after_text.strip()
+    timezone_text = retry_after_timezone.strip()
+    if not text:
+        return ""
+    timezone = _zoneinfo_or_local(timezone_text)
+    relative = _parse_relative_retry_delta(text)
+    if relative is not None:
+        return (datetime.now().astimezone() + relative).isoformat(timespec="seconds")
+    parsed_datetime = _parse_retry_datetime(text, timezone)
+    if parsed_datetime is not None:
+        return parsed_datetime.isoformat(timespec="seconds")
+    parsed_time = _parse_retry_time(text)
+    if parsed_time is None:
+        return ""
+    hour, minute = parsed_time
+    now = datetime.now(timezone)
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate.isoformat(timespec="seconds")
+
+
+def _zoneinfo_or_local(timezone_text: str) -> Any:
+    if timezone_text:
+        with suppress(ZoneInfoNotFoundError):
+            return ZoneInfo(timezone_text)
+    return datetime.now().astimezone().tzinfo
+
+
+def _parse_relative_retry_delta(text: str) -> timedelta | None:
+    normalized = text.strip()
+    if not re.search(r"\b(?:please wait|resets in)\b", normalized, re.IGNORECASE):
+        return None
+    matches = list(
+        re.finditer(
+            r"(?P<value>\d+)\s*"
+            r"(?P<unit>second|seconds|minute|minutes|hour|hours|s|m|h)\b",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+    if not matches:
+        return None
+    seconds = 0
+    for match in matches:
+        value = int(match.group("value"))
+        unit = match.group("unit").lower()
+        if unit.startswith("s"):
+            seconds += value
+        elif unit.startswith("m"):
+            seconds += value * 60
+        else:
+            seconds += value * 60 * 60
+    return timedelta(seconds=seconds)
+
+
+def _parse_retry_datetime(text: str, timezone: Any) -> datetime | None:
+    match = re.search(
+        r"(?:try again at|reset on)\s+"
+        r"(?P<month>[A-Za-z]+)\s+"
+        r"(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+"
+        r"(?P<year>\d{4})\s+(?:at\s+)?"
+        r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*"
+        r"(?P<ampm>am|pm)",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    month = _MONTHS.get(match.group("month").lower())
+    if month is None:
+        return None
+    parsed_time = _parse_retry_time(
+        f"{match.group('hour')}:{match.group('minute')} {match.group('ampm')}"
+    )
+    if parsed_time is None:
+        return None
+    hour, minute = parsed_time
+    try:
+        return datetime(
+            int(match.group("year")),
+            month,
+            int(match.group("day")),
+            hour,
+            minute,
+            tzinfo=timezone,
+        )
+    except ValueError:
+        return None
+
+
+def _parse_retry_time(text: str) -> tuple[int, int] | None:
+    match = re.search(
+        r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>am|pm)?",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    ampm = (match.group("ampm") or "").lower()
+    if ampm:
+        if hour == _HOURS_PER_HALF_DAY:
+            hour = 0
+        if ampm == "pm":
+            hour += _HOURS_PER_HALF_DAY
+    if not 0 <= hour <= _MAX_24_HOUR or not 0 <= minute <= _MAX_MINUTE:
+        return None
+    return hour, minute
+
+
+def _parse_cli_agent_error_marker(
+    stderr: str, logger: Logger | None = None
+) -> tuple[str, dict[str, str]]:
+    for line in stderr.splitlines():
+        if CLI_AGENT_ERROR_MARKER not in line:
+            continue
+        _, raw = line.split(CLI_AGENT_ERROR_MARKER, 1)
+        try:
+            parsed = json.loads(raw.strip())
+        except json.JSONDecodeError as exc:
+            if logger is not None:
+                with suppress(Exception):
+                    logger.warning("failed to parse CLI agent error marker: %s", exc)
+            return "", {}
+        if not isinstance(parsed, dict):
+            return "", {}
+        category = str(parsed.get("category", "") or "")
+        details = {
+            str(key): str(value)
+            for key, value in parsed.items()
+            if str(key) != "category" and value is not None
+        }
+        if category == "rate_limited" and not details.get("retry_after_at"):
+            retry_after_at = normalize_cli_agent_retry_after(
+                details.get("retry_after_text", ""),
+                details.get("retry_after_timezone", ""),
+            )
+            if retry_after_at:
+                details["retry_after_at"] = retry_after_at
+        return category, details
+    return "", {}
 
 
 def _extra_env(kwargs: dict[str, Any]) -> dict[str, str]:
@@ -257,6 +460,11 @@ class CliAgentBrain(Brain):
         return result
 
     def _raise_if_execution_failed(self, result: CliAgentExecutionResult) -> None:
+        if result.error_category == "rate_limited":
+            raise CliAgentExecutionError(
+                cli_agent=self.cli_agent,
+                result=result,
+            )
         if result.returncode != 0:
             detail = result.stderr or result.stdout or "no output"
             raise RuntimeError(
@@ -342,11 +550,16 @@ class CliAgentBrain(Brain):
 
             if process.returncode != 0:
                 self.logger.error(f"CLI Agent exited with code {process.returncode}")
+            error_category, error_details = _parse_cli_agent_error_marker(
+                stderr_output, self.logger
+            )
 
             return CliAgentExecutionResult(
                 stdout=response.strip(),
                 stderr=stderr_output.strip(),
                 returncode=process.returncode or 0,
+                error_category=error_category,
+                error_details=error_details,
             )
         finally:
             # If the await was cancelled (e.g. the service is stopping) before the

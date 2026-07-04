@@ -18,6 +18,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadConversationState,
     ThreadHandoffState,
     ThreadMessageState,
+    ThreadSystemNoticeState,
 )
 from guildbotics.utils.fileio import get_workspace_data_path
 
@@ -102,6 +103,9 @@ class FileConversationStateStore(ConversationStateStore):
         handoffs = data.get("handoffs") or []
         if not isinstance(handoffs, list):
             handoffs = []
+        system_notices = data.get("system_notices") or []
+        if not isinstance(system_notices, list):
+            system_notices = []
         return ThreadConversationState(
             channel_id=str(data.get("channel_id", channel_id)),
             thread_ts=str(data.get("thread_ts", thread_ts)),
@@ -119,6 +123,23 @@ class FileConversationStateStore(ConversationStateStore):
                 )
                 for item in handoffs
                 if isinstance(item, dict) and str(item.get("person_id", "") or "")
+            ],
+            system_notices=[
+                ThreadSystemNoticeState(
+                    kind=str(item.get("kind", "") or ""),
+                    reason=str(item.get("reason", "failed") or "failed"),
+                    person_id=str(item.get("person_id", "") or ""),
+                    source_event_id=str(item.get("source_event_id", "") or ""),
+                    message_ts=str(item.get("message_ts", "") or ""),
+                    run_id=str(item.get("run_id", "") or ""),
+                    retry_after_at=str(item.get("retry_after_at", "") or ""),
+                    retry_after_text=str(item.get("retry_after_text", "") or ""),
+                    recorded_at=str(item.get("recorded_at", "") or ""),
+                )
+                for item in system_notices
+                if isinstance(item, dict)
+                and str(item.get("kind", "") or "")
+                and str(item.get("source_event_id", "") or "")
             ],
             backfill_disabled_reason=str(
                 data.get("backfill_disabled_reason", "") or ""
@@ -290,10 +311,17 @@ class FileConversationStateStore(ConversationStateStore):
                             ),
                             is_bot_message=bool(item.get("is_bot_message", False)),
                             is_thread_reply=bool(item.get("is_thread_reply", False)),
+                            metadata=_to_str_object_dict(item.get("metadata")),
                         ),
                         chat_participation=str(
                             item.get("chat_participation", "strict") or "strict"
                         ),
+                        attempt_count=_to_non_negative_int(item.get("attempt_count")),
+                        max_attempts=max(
+                            1, _to_non_negative_int(item.get("max_attempts")) or 5
+                        ),
+                        next_attempt_at=_to_str_or_none(item.get("next_attempt_at")),
+                        run_id=str(item.get("run_id", "") or ""),
                     )
                 )
             return out
@@ -312,25 +340,60 @@ class FileConversationStateStore(ConversationStateStore):
             raw_items = data.get("events") or []
             if not isinstance(raw_items, list):
                 raw_items = []
-            item = {
-                "event_id": event.event_id,
-                "channel_id": event.channel_id,
-                "message_ts": event.message_ts,
-                "thread_ts": event.thread_ts,
-                "author_id": event.author_id,
-                "text": event.text,
-                "mentions": [str(x) for x in event.mentions if str(x)],
-                "is_edit_or_delete": bool(event.is_edit_or_delete),
-                "is_bot_message": bool(event.is_bot_message),
-                "is_thread_reply": bool(event.is_thread_reply),
-                "chat_participation": chat_participation,
-            }
             merged: list[dict] = []
             replaced = False
             for raw in raw_items:
                 if not isinstance(raw, dict):
                     continue
                 if _to_str_or_none(raw.get("event_id")) == event.event_id:
+                    pending = PendingChatEvent(
+                        event=event,
+                        chat_participation=chat_participation,
+                        attempt_count=_to_non_negative_int(raw.get("attempt_count")),
+                        max_attempts=max(
+                            1, _to_non_negative_int(raw.get("max_attempts")) or 5
+                        ),
+                        next_attempt_at=_to_str_or_none(raw.get("next_attempt_at")),
+                        run_id=str(raw.get("run_id", "") or ""),
+                    )
+                    item = _pending_event_to_item(pending)
+                    merged.append(item)
+                    replaced = True
+                else:
+                    merged.append(raw)
+            if not replaced:
+                merged.append(
+                    _pending_event_to_item(
+                        PendingChatEvent(
+                            event=event,
+                            chat_participation=chat_participation,
+                        )
+                    )
+                )
+            merged.sort(key=lambda x: str(x.get("message_ts", "")))
+            data["events"] = merged[-self._max_processed_events :]
+            self._write_json(path, data)
+
+    def save_pending_event(
+        self,
+        service: str,
+        person_id: str,
+        channel_id: str,
+        pending: PendingChatEvent,
+    ) -> None:
+        with self._lock:
+            path = self._pending_events_file(service, person_id, channel_id)
+            data = self._read_json(path)
+            raw_items = data.get("events") or []
+            if not isinstance(raw_items, list):
+                raw_items = []
+            item = _pending_event_to_item(pending)
+            merged: list[dict] = []
+            replaced = False
+            for raw in raw_items:
+                if not isinstance(raw, dict):
+                    continue
+                if _to_str_or_none(raw.get("event_id")) == pending.event.event_id:
                     merged.append(item)
                     replaced = True
                 else:
@@ -539,6 +602,34 @@ def _to_non_negative_int(value: object) -> int:
     except (TypeError, ValueError):
         return 0
     return max(0, parsed)
+
+
+def _to_str_object_dict(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items() if str(key)}
+
+
+def _pending_event_to_item(pending: PendingChatEvent) -> dict[str, object]:
+    event = pending.event
+    return {
+        "event_id": event.event_id,
+        "channel_id": event.channel_id,
+        "message_ts": event.message_ts,
+        "thread_ts": event.thread_ts,
+        "author_id": event.author_id,
+        "text": event.text,
+        "mentions": [str(x) for x in event.mentions if str(x)],
+        "is_edit_or_delete": bool(event.is_edit_or_delete),
+        "is_bot_message": bool(event.is_bot_message),
+        "is_thread_reply": bool(event.is_thread_reply),
+        "metadata": _to_str_object_dict(event.metadata),
+        "chat_participation": pending.chat_participation,
+        "attempt_count": max(0, int(pending.attempt_count)),
+        "max_attempts": max(1, int(pending.max_attempts)),
+        "next_attempt_at": pending.next_attempt_at,
+        "run_id": pending.run_id,
+    }
 
 
 def _dedupe_keep_order(items: list[str]) -> list[str]:

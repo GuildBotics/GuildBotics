@@ -291,6 +291,10 @@ export type ActivityHistorySession = {
   ended_at: string;
   duration_seconds: number;
   links: ActivityHistoryLink[];
+  rate_limit?: {
+    retry_after_at: string;
+    retry_after_text: string;
+  } | null;
 };
 
 export type ActivityHistoryEvent = {

@@ -75,6 +75,12 @@ def _parse_generic_event_from_shared_state(
             if isinstance(mentions_raw, list)
             else []
         )
+        metadata_raw = raw_event.get("metadata")
+        metadata = (
+            {str(key): item for key, item in metadata_raw.items() if str(key)}
+            if isinstance(metadata_raw, dict)
+            else {}
+        )
         return ChatEvent(
             event_id=event_id,
             channel_id=channel_id,
@@ -86,6 +92,7 @@ def _parse_generic_event_from_shared_state(
             is_edit_or_delete=bool(raw_event.get("is_edit_or_delete", False)),
             is_bot_message=bool(raw_event.get("is_bot_message", False)),
             is_thread_reply=bool(raw_event.get("is_thread_reply", False)),
+            metadata=metadata,
         )
     except Exception:
         return None

@@ -9,6 +9,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadConversationState,
     ThreadHandoffState,
     ThreadMessageState,
+    ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 
@@ -110,7 +111,38 @@ def test_load_missing_state_returns_defaults(tmp_path):
     assert thread.thread_topic == ""
     assert thread.latest_focus == ""
     assert thread.handoffs == []
+    assert thread.system_notices == []
     assert store.load_thread_messages("slack", "alice", "C1", "100.1") == []
+
+
+def test_thread_system_notices_roundtrip(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    state = ThreadConversationState(
+        channel_id="C1",
+        thread_ts="123.456",
+        system_notices=[
+            ThreadSystemNoticeState(
+                kind="workflow_error",
+                reason="rate_limited",
+                person_id="alice",
+                source_event_id="C1:100.1",
+                message_ts="300.1",
+                run_id="run-1",
+                retry_after_at="2026-07-04T11:44:00+09:00",
+                retry_after_text="11:44 AM",
+                recorded_at="2026-07-04T02:44:00+00:00",
+            )
+        ],
+    )
+
+    store.save_thread_state("slack", "alice", "C1", "123.456", state)
+    loaded = store.load_thread_state("slack", "alice", "C1", "123.456")
+
+    assert len(loaded.system_notices) == 1
+    notice = loaded.system_notices[0]
+    assert notice.kind == "workflow_error"
+    assert notice.reason == "rate_limited"
+    assert notice.retry_after_at == "2026-07-04T11:44:00+09:00"
 
 
 def test_state_is_isolated_per_person_and_channel(tmp_path):
@@ -289,6 +321,38 @@ def test_pending_events_roundtrip_dedupe_and_remove(tmp_path):
     store.remove_pending_event("slack", "alice", "C1", "C1:100.1")
     loaded2 = store.load_pending_events("slack", "alice", "C1")
     assert [pe.event.event_id for pe in loaded2] == ["C1:100.2"]
+
+
+def test_pending_event_metadata_and_retry_state_roundtrip(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    event = ChatEvent(
+        event_id="C1:100.1",
+        channel_id="C1",
+        message_ts="100.1",
+        thread_ts="100.1",
+        author_id="U1",
+        text="hello",
+        metadata={
+            "event_type": "guildbotics.workflow_status",
+            "event_payload": {"routing": "suppress"},
+        },
+    )
+    store.upsert_pending_event("slack", "alice", "C1", event, "social")
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    pending.attempt_count = 2
+    pending.max_attempts = 5
+    pending.next_attempt_at = "2026-07-04T02:30:00+00:00"
+    pending.run_id = "run-1"
+    store.save_pending_event("slack", "alice", "C1", pending)
+
+    loaded = store.load_pending_events("slack", "alice", "C1")[0]
+
+    assert loaded.event.metadata["event_type"] == "guildbotics.workflow_status"
+    assert loaded.chat_participation == "social"
+    assert loaded.attempt_count == 2
+    assert loaded.max_attempts == 5
+    assert loaded.next_attempt_at == "2026-07-04T02:30:00+00:00"
+    assert loaded.run_id == "run-1"
 
 
 def test_list_pending_channels(tmp_path):

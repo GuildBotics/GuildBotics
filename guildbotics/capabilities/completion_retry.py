@@ -27,6 +27,8 @@ async def run_with_completion_retry[T](
     invoke: Callable[[str, int], Awaitable[object]],
     check_completion: Callable[[str], T],
     max_attempts: int,
+    run_id: str | None = None,
+    retry_invoke_exceptions: bool = True,
 ) -> tuple[T, str]:
     """Run an agent turn and verify it recorded a terminal completion, retrying
     until the attempt budget is exhausted.
@@ -60,13 +62,51 @@ async def run_with_completion_retry[T](
     Raises:
         CompletionRetryExhausted: when no attempt completed within the budget.
     """
-    run_id = uuid4().hex
+    run_id = run_id or uuid4().hex
     last_error: Exception = RuntimeError("no attempts were made")
     attempts = max(1, max_attempts)
     for attempt in range(1, attempts + 1):
         try:
             await invoke(run_id, attempt)
+        except Exception as exc:
+            if found := find_cli_agent_execution_error(exc, category="rate_limited"):
+                raise found from exc
+            if not retry_invoke_exceptions:
+                raise
+            last_error = exc
+            continue
+        try:
             return check_completion(run_id), run_id
         except Exception as exc:
+            if found := find_cli_agent_execution_error(exc, category="rate_limited"):
+                raise found from exc
             last_error = exc
     raise CompletionRetryExhausted(attempts, last_error)
+
+
+def find_cli_agent_execution_error(
+    exc: BaseException, *, category: str = ""
+) -> BaseException | None:
+    """Find a CliAgentExecutionError through common wrapper exception chains."""
+    from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
+
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        obj_id = id(current)
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        if isinstance(current, CliAgentExecutionError) and (
+            not category or current.category == category
+        ):
+            return current
+        last_error = getattr(current, "last_error", None)
+        if isinstance(last_error, BaseException):
+            stack.append(last_error)
+        if current.__cause__ is not None:
+            stack.append(current.__cause__)
+        if current.__context__ is not None:
+            stack.append(current.__context__)
+    return None

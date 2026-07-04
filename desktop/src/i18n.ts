@@ -48,6 +48,10 @@ const resources = {
           interactive: "Interactive",
           workflow: "Workflow",
         },
+        rateLimit: {
+          label: "Rate limited",
+          reset: "Reset: {{reset}}",
+        },
         eventTypes: {
           pr_create: "PR created",
           pr_merge: "PR merged",
@@ -1167,6 +1171,10 @@ const resources = {
         modes: {
           interactive: "対話",
           workflow: "ワークフロー",
+        },
+        rateLimit: {
+          label: "Rate limit 中",
+          reset: "Reset: {{reset}}",
         },
         eventTypes: {
           pr_create: "PR 作成",

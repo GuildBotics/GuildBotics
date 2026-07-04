@@ -5,7 +5,52 @@ env:
 script: |
   res=$(mktemp)
   log=$(mktemp)
-  cat "$PROMPT_FILE" | claude -p --dangerously-skip-permissions > "$res" 2> "$log"
+
+  cleanup() {
+    rm -f "$res" "$log"
+  }
+  trap cleanup EXIT HUP INT TERM
+
+  status=0
+
+  claude \
+    -p \
+    --dangerously-skip-permissions \
+    < "$PROMPT_FILE" \
+    > "$res" \
+    2> "$log" || status=$?
+
+  # Claude Code reports subscription session exhaustion in the form:
+  #   You've hit your session limit · resets 11:10am (Asia/Tokyo)
+  # Normalize the provider-specific output into the GuildBotics common marker.
+  if grep -Eqi \
+    "^You've hit your session limit([[:space:]]|·)" \
+    "$res" "$log"
+  then
+    retry_after_text=$(
+      grep -Ehoi \
+        'resets[[:space:]]+[0-9]{1,2}:[0-9]{2}(am|pm)[[:space:]]+\([^)]*\)' \
+        "$res" "$log" 2>/dev/null |
+        head -n1
+    )
+    retry_after_timezone=$(
+      printf '%s\n' "$retry_after_text" |
+        sed -n 's/.*(\([^)]*\)).*/\1/p' |
+        head -n1
+    )
+
+    cat "$log" >&2
+    cat "$res"
+
+    printf '%s\n' \
+      "GUILDBOTICS_CLI_AGENT_ERROR_JSON: {\"category\":\"rate_limited\",\"retry_after_text\":\"$retry_after_text\",\"retry_after_timezone\":\"$retry_after_timezone\"}" \
+      >&2
+
+    exit 75
+  fi
+
   cat "$log" >&2
   cat "$res"
-  rm -f "$res" "$log"
+
+  # Preserve Claude Code's exit code so CliAgentBrain detects a failed run.
+  exit "$status"

@@ -21,6 +21,7 @@ from guildbotics.app_api.models import (
     ActivityHistoryEvent,
     ActivityHistoryLink,
     ActivityHistoryMember,
+    ActivityHistoryRateLimit,
     ActivityHistoryResponse,
     ActivityHistorySession,
 )
@@ -120,10 +121,14 @@ def _summarize_trace(
     started_at = min(timestamps)
     ended_at = max(timestamps)
     links = links_from_records(records, attributes)
+    rate_limit = _rate_limit_from_records(records)
+    if rate_limit is not None:
+        status = "rate_limited"
     mode: ActivitySessionMode = "interactive" if source == "interactive" else "workflow"
     if (
         mode == "workflow"
         and source in AUTOMATED_WORKFLOW_SOURCES
+        and rate_limit is None
         and not _has_workflow_activity_evidence(records, attributes, links)
     ):
         return None
@@ -144,6 +149,7 @@ def _summarize_trace(
         ended_at=ended_at.isoformat(),
         duration_seconds=max(0.0, (ended_at - started_at).total_seconds()),
         links=links,
+        rate_limit=rate_limit,
     )
 
 
@@ -282,6 +288,8 @@ def _trace_status(records: list[dict[str, Any]]) -> str:
         kind = item.get("kind")
         event_type = str(item.get("type") or "")
         level = str(item.get("level") or "").upper()
+        if kind == "event" and event_type == "workflow.rate_limited":
+            return "rate_limited"
         if kind == "event" and event_type.endswith(".failed"):
             return "failed"
         if kind == "log" and level in {"ERROR", "CRITICAL"}:
@@ -291,6 +299,35 @@ def _trace_status(records: list[dict[str, Any]]) -> str:
         if kind == "event" and event_type.endswith(".finished"):
             status = "success"
     return status
+
+
+def _rate_limit_from_records(
+    records: list[dict[str, Any]],
+) -> ActivityHistoryRateLimit | None:
+    latest: dict[str, Any] | None = None
+    for item in records:
+        if str(item.get("type") or "") != "workflow.rate_limited":
+            continue
+        if latest is None or _record_sort_key(latest) <= _record_sort_key(item):
+            latest = item
+    if latest is None:
+        return None
+    attributes = latest.get("attributes")
+    payload = latest.get("payload")
+    attr_data = attributes if isinstance(attributes, dict) else {}
+    payload_data = payload if isinstance(payload, dict) else {}
+    return ActivityHistoryRateLimit(
+        retry_after_at=str(
+            attr_data.get("rate_limit.retry_after_at")
+            or payload_data.get("retry_after_at")
+            or ""
+        ),
+        retry_after_text=str(
+            attr_data.get("rate_limit.retry_after_text")
+            or payload_data.get("retry_after_text")
+            or ""
+        ),
+    )
 
 
 def _first_text(records: list[dict[str, Any]], key: str) -> str:

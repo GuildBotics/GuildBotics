@@ -214,6 +214,11 @@ class ActivityHistoryLink(BaseModel):
     timestamp: str = ""
 
 
+class ActivityHistoryRateLimit(BaseModel):
+    retry_after_at: str = ""
+    retry_after_text: str = ""
+
+
 class ActivityHistorySession(BaseModel):
     trace_id: str
     person_id: str
@@ -227,6 +232,7 @@ class ActivityHistorySession(BaseModel):
     ended_at: str = ""
     duration_seconds: float = 0
     links: list[ActivityHistoryLink] = Field(default_factory=list)
+    rate_limit: ActivityHistoryRateLimit | None = None
 
 
 class ActivityHistoryEvent(BaseModel):
