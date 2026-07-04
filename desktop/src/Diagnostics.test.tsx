@@ -617,7 +617,7 @@ describe("Diagnostics executions tab", () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     const longMessage =
-      "This is a long CLI agent log message that must be readable in the detail drawer even when the timeline row truncates it.";
+      "This is a long AI CLI tool log message that must be readable in the detail drawer even when the timeline row truncates it.";
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
       configurable: true,

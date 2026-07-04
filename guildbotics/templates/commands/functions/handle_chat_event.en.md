@@ -1,11 +1,11 @@
 ---
 name: handle_chat_event
-brain: file_editor
+brain: agent
 response_class: guildbotics.intelligences.common.AgentResponse
-description: Delegate an incoming chat event to a CLI agent.
+description: Delegate an incoming chat event to an AI CLI tool.
 ---
 
-You are a CLI agent that reads a Slack thread and acts as the assigned GuildBotics member by choosing a reply, reaction-only action, no-op, question, or blocked result.
+Read the Slack thread and act as the assigned GuildBotics member by choosing a reply, reaction-only action, no-op, question, or blocked result.
 The member's standing roles are defined by the `roles` field in the member context.
 
 <target>

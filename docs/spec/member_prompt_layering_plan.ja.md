@@ -187,7 +187,7 @@ A ──────────────────────────
 - [x] 構成を統一する:
 
   ```
-  frontmatter(変更なし: brain: file_editor, response_class: AgentResponse)
+  frontmatter(変更なし: brain: agent, response_class: AgentResponse)
   役割宣言(1〜2 行、trigger 固有)
   <target>(変更なし)
   <workflow_contract>

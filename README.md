@@ -29,7 +29,7 @@ GuildBotics enables you to:
   - [3.1. Supported Platforms](#31-supported-platforms)
   - [3.2. Required Software](#32-required-software)
   - [3.3. LLM API](#33-llm-api)
-  - [3.4. CLI Agent](#34-cli-agent)
+  - [3.4. AI CLI Tool](#34-ai-cli-tool)
 - [4. Installation](#4-installation)
 - [5. Basic Usage](#5-basic-usage)
   - [5.1. Initial Setup](#51-initial-setup)
@@ -83,7 +83,7 @@ GuildBotics enables you to:
   - Python scripts (with context injection)
   - Shell scripts
   - YAML workflows (command composition)
-- **Brain Abstraction**: Swap LLM providers or delegate to CLI agents (Antigravity CLI, Codex CLI, Claude Code, GitHub Copilot CLI)
+- **Brain Abstraction**: Swap LLM providers or delegate to AI CLI tools (Antigravity, Codex, Claude Code, GitHub Copilot, etc., which are AI tools launched from a local CLI)
 - **Extensible Integrations**: Pluggable adapters for external services
 
 ## Built-in Capabilities
@@ -94,8 +94,8 @@ GuildBotics enables you to:
 # 2. Quick Start
 
 GuildBotics is configured through the **GuildBotics Desktop app (GUI)**, and run through the
-**`guildbotics` CLI**. The desktop app bundles the CLI and installs a managed copy for CLI
-agents on first launch. Setup writes plain config files (`.env` and `.guildbotics/config/...`),
+**`guildbotics` CLI**. The desktop app bundles the CLI and installs a managed copy for AI
+CLI tools on first launch. Setup writes plain config files (`.env` and `.guildbotics/config/...`),
 so once configured you can run the CLI on any machine, including headless servers, by copying
 those files over.
 
@@ -134,8 +134,8 @@ Please obtain one of the following API keys:
 - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
 - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
 
-## 3.4. CLI Agent
-Please install one of the following CLI agents and authenticate:
+## 3.4. AI CLI Tool
+Please install one of the following AI CLI tools and authenticate:
 
 - [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
 - [OpenAI Codex CLI](https://github.com/openai/codex/)
@@ -152,9 +152,9 @@ Setup is performed with the **GuildBotics Desktop app**; command execution uses 
 [desktop/README.md](desktop/README.md) for build and install instructions
 (currently macOS Apple Silicon). On first launch, the app installs:
 
-- `~/.guildbotics/bin/guildbotics`: managed GuildBotics CLI used by CLI agents and skills
+- `~/.guildbotics/bin/guildbotics`: managed GuildBotics CLI used by AI CLI tools and skills
 - `~/.local/bin/guildbotics`: a small shim, only when the path is missing or already managed
-- GuildBotics skill files for detected Codex, Claude Code, Antigravity CLI, and GitHub Copilot CLI
+- GuildBotics skill files for detected Codex, Claude Code, Antigravity, and GitHub Copilot
   user skill directories. User-created or user-edited skills are not overwritten.
 
 **Standalone CLI (headless / non-desktop environments):** Use `uv tool install guildbotics`
@@ -178,7 +178,7 @@ GuildBotics writes configuration files such as the following into the workspace:
 
 - `.env`: Environment variable settings
 - `.guildbotics/config/team/project.yml`: Project definition
-- `.guildbotics/config/intelligences/`: Brain and CLI agent settings
+- `.guildbotics/config/intelligences/`: Brain and AI CLI tool settings
 
 These are all plain text configuration files.
 Because GuildBotics stores all settings in these files, you can copy the workspace folder to a
@@ -204,7 +204,7 @@ GuildBotics writes two kinds of local data:
 
 After completing the project settings, configure the following initial settings:
 
-- **LLM / CLI agent:** Default LLM, CLI agent, and LLM API keys
+- **LLM / AI CLI tool:** Default LLM, AI CLI tool, and LLM API keys
 - **Members:** Team member creation and settings
 - **GitHub:** GitHub integration settings (only when using GitHub)
 
@@ -527,14 +527,14 @@ task_schedules:
 
 ## 5.6. Slack Chat Workflow
 
-In the Slack chat workflow, channels configured in `message_channels` of `person.yml` are monitored, and incoming events are delegated to the configured CLI agent. The CLI agent decides whether to reply, add a reaction, record a no-op, ask a question, or report a blocked state. Slack posts, replies, and reactions are written only through the public member capability commands under `guildbotics member chat ...`.
+In the Slack chat workflow, channels configured in `message_channels` of `person.yml` are monitored, and incoming events are delegated to the configured AI CLI tool. The AI CLI tool decides whether to reply, add a reaction, record a no-op, ask a question, or report a blocked state. Slack posts, replies, and reactions are written only through the public member capability commands under `guildbotics member chat ...`.
 
 Scheduled command output posting remains separate: use `task_schedules` + `workflows/chat_post_command` for scheduled posts.
 
 Incoming chat events are received by the event listener runner started with `guildbotics start`, then handled serially by each member worker's event queue source. If you start only scheduled/routine work with `--only scheduler`, incoming chat events are not received. If you start only events with `--only events`, scheduled and routine commands are disabled, but member workers still drain queued chat events.
 
-For CLI-agent chat handling, GuildBotics runs `functions/handle_chat_event` from the per-agent work directory. By default, that directory is `<workspace>/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through evidence recorded by `guildbotics member chat complete`; natural-language agent stdout alone is not treated as proof that Slack was updated.
-You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the CLI agent.
+For AI CLI tool chat handling, GuildBotics runs `functions/handle_chat_event` from the per-member work directory. By default, that directory is `<workspace>/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through evidence recorded by `guildbotics member chat complete`; natural-language tool stdout alone is not treated as proof that Slack was updated.
+You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the AI CLI tool.
 
 ### 5.6.1. Prerequisites (Slack Side)
 
@@ -653,22 +653,22 @@ This section describes how to use the default `ticket_driven_workflow` which int
 
 ### 6.1.1. Git Environment
 - Ticket-driven work is performed through the `guildbotics member ...` CLI. The workflow
-  selects a GitHub Project item, starts the CLI agent in that member's work directory, and
-  verifies that the agent recorded task completion. By default, the work directory is
-  `<workspace>/.guildbotics/data/workspaces/<person_id>`. The agent itself performs
+  selects a GitHub Project item, starts the AI CLI tool in that member's work directory, and
+  verifies that the tool recorded task completion. By default, the work directory is
+  `<workspace>/.guildbotics/data/workspaces/<person_id>`. The tool itself performs
   clone/push/PR/comment/reply operations through
   `guildbotics member`.
 - Configure each AI member's GitHub credentials in GuildBotics. GitHub/git writes use the
   assigned member's configured machine-user token or GitHub App installation, not the local
   `gh auth` user. Credential-required member commands load these values from
   the selected workspace `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the current directory.
-- For interactive CLI agent sessions, launch the GuildBotics Desktop app at least
+- For interactive AI CLI tool sessions, launch the GuildBotics Desktop app at least
   once after selecting the workspace. The app installs the GuildBotics skill and managed CLI
   under `~/.guildbotics/bin/guildbotics`. Configure the client to reject or require approval
   for `gh`, direct GitHub token/API writes, and `git push`. This is a guardrail against
   falling back to your own local GitHub account; it is not a complete technical sandbox
   against token exfiltration.
-- When using Codex CLI as the CLI agent, verify its authentication and network reachability:
+- When using Codex as the AI CLI tool, verify its authentication and network reachability:
   ```bash
   codex doctor
   ```
@@ -724,7 +724,7 @@ If you use your own account as the AI agent, issue a **Classic** PAT. Select the
 
 After completing [Basic Usage](#5-basic-usage) steps, verify the configuration from the
 **Diagnostics / Verify** view in the Desktop app. This checks that each active member's GitHub,
-LLM, and CLI agent settings are usable.
+LLM, and AI CLI tool settings are usable.
 
 **Custom fields** are created automatically the first time GuildBotics operates on a GitHub
 Project, so no explicit setup step is required. GuildBotics manages the `Agent` field to select
@@ -844,10 +844,10 @@ workspace-specific run data. If it is set in the process environment at startup 
 - `task_schedules[].command`: Scheduled posting can be configured with `workflows/chat_post_command ...`
 - `message_channels`: Monitored channel settings (`chat.enabled`, `chat.event_source=socket_mode`, `channel_id`/`name`)
 
-**Brain/CLI Agent Configuration**:
-- `intelligences/cli_agent_mapping.yml`: Default CLI agent selection
-- `intelligences/cli_agents/*.yml`: CLI agent scripts
-- `team/members/<person_id>/intelligences/`: Per-agent overrides
+**Brain/AI CLI Tool Configuration**:
+- `intelligences/cli_agent_mapping.yml`: Default AI CLI tool selection
+- `intelligences/cli_agents/*.yml`: AI CLI tool scripts
+- `team/members/<person_id>/intelligences/`: Per-member overrides
 
 
 # 8. Troubleshooting

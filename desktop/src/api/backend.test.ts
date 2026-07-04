@@ -187,7 +187,7 @@ describe("restartBackend", () => {
   });
 });
 
-describe("CLI agent skill commands", () => {
+describe("AI CLI tool skill commands", () => {
   it("returns an empty status list outside Tauri", async () => {
     setTauriRuntime(false);
 

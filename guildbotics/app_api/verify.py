@@ -179,7 +179,7 @@ class VerifyService:
                 VerifyCheck(
                     code="cli_agent_mapping",
                     status="warning",
-                    message="Default CLI agent executable could not be inferred.",
+                    message="Default AI CLI tool executable could not be inferred.",
                 )
             ]
 
@@ -189,8 +189,8 @@ class VerifyService:
             self._check(
                 "cli_agent_executable",
                 bool(path),
-                f"CLI agent executable '{executable}' was found.",
-                f"CLI agent executable '{executable}' was not found on PATH.",
+                f"AI CLI tool executable '{executable}' was found.",
+                f"AI CLI tool executable '{executable}' was not found on PATH.",
                 target=executable,
                 context={"path": path or ""},
             )

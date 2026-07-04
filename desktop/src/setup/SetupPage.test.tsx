@@ -367,7 +367,7 @@ describe("SetupPage", () => {
     expect(screen.getByText(t("setup.project.agentLanguage"))).toBeInTheDocument();
   });
 
-  it("shows the LLM provider and CLI agent selection with API-key availability", async () => {
+  it("shows the LLM provider and AI CLI tool selection with API-key availability", async () => {
     const user = userEvent.setup();
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
@@ -376,7 +376,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
 
     expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
     // The provider buttons expose the provider label as their accessible name;
@@ -399,7 +399,7 @@ describe("SetupPage", () => {
     expect(screen.getByRole("button", { name: /Claude Code/ })).toBeDisabled();
   });
 
-  it("shows CLI agent skill status and allows an explicit overwrite", async () => {
+  it("shows AI CLI tool skill status and allows an explicit overwrite", async () => {
     const user = userEvent.setup();
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
@@ -419,7 +419,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
     const magicWand = await screen.findByRole("button", {
       name: t("setup.intelligence.skillStatusButtonLabel", { agent: "OpenAI Codex CLI" }),
     });
@@ -673,7 +673,7 @@ describe("SetupPage", () => {
     // The GitHub decision now lives in the Project section.
     await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
-    await user.click(screen.getByRole("button", { name: "LLM / CLI agent" }));
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
     await user.click(
       await screen.findByRole("button", {
         name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
@@ -1763,7 +1763,7 @@ describe("MembersSection", () => {
     expect(screen.getByRole("button", { name: "Import from Slack" })).toBeDisabled();
   });
 
-  it("sorts members by name and shows the CLI agent badge only for agents", async () => {
+  it("sorts members by name and shows the AI CLI tool badge only for agents", async () => {
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
       members: [
@@ -1778,9 +1778,9 @@ describe("MembersSection", () => {
     const labels = (await screen.findAllByText(/\([a-z]+\)$/)).map((el) => el.textContent);
     expect(labels).toEqual(["Alice (alice)", "Bob (bob)", "Charlie (charlie)"]);
 
-    // Both agents show the effective CLI agent badge; the human member does not.
+    // Both agents show the effective AI CLI tool badge; the human member does not.
     expect(screen.getAllByText("OpenAI Codex CLI")).toHaveLength(2);
-    // The human member is labelled "Human" instead of a CLI agent badge.
+    // The human member is labelled "Human" instead of an AI CLI tool badge.
     expect(screen.getByText("Human")).toBeInTheDocument();
   });
 
@@ -2774,7 +2774,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
-  it("renders the CLI agent detection badge from detections", async () => {
+  it("renders the AI CLI tool detection badge from detections", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
@@ -2798,7 +2798,7 @@ describe("IntelligenceEditor (team default)", () => {
 
 describe("IntelligenceEditor (member override)", () => {
   beforeEach(() => {
-    // Two providers and two CLI agents are available so the override buttons are
+    // Two providers and two AI CLI tools are available so the override buttons are
     // enabled and selecting a non-default option is possible.
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({
@@ -2851,7 +2851,7 @@ describe("IntelligenceEditor (member override)", () => {
     expect("brain_mapping" in body).toBe(false);
   });
 
-  it("edits the member default CLI agent override", async () => {
+  it("edits the member default AI CLI tool override", async () => {
     const user = userEvent.setup();
     await openMemberIntelligenceTab(user);
 

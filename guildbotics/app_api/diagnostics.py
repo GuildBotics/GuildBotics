@@ -359,7 +359,7 @@ class ScenarioDiagnosticsService:
                     "cli_agent",
                     "cli_agent_mapping",
                     "error",
-                    "Default CLI agent executable could not be inferred.",
+                    "Default AI CLI tool executable could not be inferred.",
                 )
             ]
 
@@ -370,7 +370,7 @@ class ScenarioDiagnosticsService:
                     "cli_agent",
                     "cli_agent_executable",
                     "error",
-                    f"CLI agent executable '{executable}' was not found on PATH.",
+                    f"AI CLI tool executable '{executable}' was not found on PATH.",
                     target=executable,
                 )
             ]
@@ -379,7 +379,7 @@ class ScenarioDiagnosticsService:
                 "cli_agent",
                 "cli_agent_executable",
                 "ok",
-                f"CLI agent executable '{executable}' was found.",
+                f"AI CLI tool executable '{executable}' was found.",
                 target=executable,
                 context={"path": path},
             )
@@ -396,9 +396,9 @@ class ScenarioDiagnosticsService:
         c = context.clone_for(member)
         try:
             config = {
-                "brain": "cli",
+                "brain": "agent",
                 "body": (
-                    "You are validating that the configured CLI agent can run. "
+                    "You are validating that the configured AI CLI tool can run. "
                     "Reply with exactly OK and perform no file changes."
                 ),
                 "template_engine": "default",
@@ -430,7 +430,7 @@ class ScenarioDiagnosticsService:
                     "cli_agent_brain",
                     "error",
                     self._format_cli_agent_error(
-                        "CLI agent command failed",
+                        "AI CLI tool command failed",
                         result.stderr,
                         result.stdout,
                         result.returncode,
@@ -447,7 +447,7 @@ class ScenarioDiagnosticsService:
 
             if not result.stdout.strip():
                 c.logger.warning(
-                    "CLI agent diagnostics produced empty stdout for "
+                    "AI CLI tool diagnostics produced empty stdout for "
                     "person=%s executable=%s stderr=%s",
                     member.person_id,
                     executable,
@@ -458,7 +458,7 @@ class ScenarioDiagnosticsService:
                     "cli_agent_brain",
                     "error",
                     self._format_cli_agent_error(
-                        "CLI agent command completed but returned no response",
+                        "AI CLI tool command completed but returned no response",
                         result.stderr,
                         result.stdout,
                         result.returncode,
@@ -475,12 +475,12 @@ class ScenarioDiagnosticsService:
                 "cli_agent",
                 "cli_agent_brain",
                 "ok",
-                "CLI agent accepted a minimal read-only request.",
+                "AI CLI tool accepted a minimal read-only request.",
                 person_id=member.person_id,
             )
         except Exception as exc:
             c.logger.warning(
-                "CLI agent diagnostics failed for person=%s executable=%s: %s",
+                "AI CLI tool diagnostics failed for person=%s executable=%s: %s",
                 member.person_id,
                 executable,
                 exc,
@@ -489,7 +489,7 @@ class ScenarioDiagnosticsService:
                 "cli_agent",
                 "cli_agent_brain",
                 "error",
-                self._safe_error("CLI agent brain check failed", exc),
+                self._safe_error("AI CLI tool brain check failed", exc),
                 person_id=member.person_id,
                 target=executable,
                 context={"error_type": type(exc).__name__, "executable": executable},

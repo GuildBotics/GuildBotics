@@ -1898,8 +1898,8 @@ export function matchesRecordFilter(record: TraceRecord, filter: string): boolea
       record.type.endsWith(".failed")
     );
   }
-  // LLM / CLI Agent group both the prompt-trace request/response records and the
-  // logs emitted during that agent's span (tagged via record.span).
+  // LLM / AI CLI tool group both the prompt-trace request/response records and
+  // the logs emitted during that tool's span (tagged via record.span).
   if (filter === "llm") {
     return (
       (record.kind === "prompt_trace" && record.type.startsWith("llm")) ||

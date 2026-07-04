@@ -349,8 +349,8 @@ function ActivityTimelineRow({
   );
 }
 
-// Sub-label under the member name: the CLI agent the member runs (matching the
-// setup members list), or "Human" for human members whose config has no agent.
+// Sub-label under the member name: the AI CLI tool the member runs (matching the
+// setup members list), or "Human" for human members whose config has no tool.
 function MemberCliAgentRole({ member }: { member: ActivityHistoryMember }) {
   const { t } = useTranslation();
   const isHuman = member.person_type === "human";

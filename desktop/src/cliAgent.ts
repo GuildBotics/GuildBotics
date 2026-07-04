@@ -7,9 +7,9 @@ import {
   getIntelligenceConfig,
 } from "./api/client";
 
-// Resolve the human-friendly CLI agent label from an effective intelligence
+// Resolve the human-friendly AI CLI tool label from an effective intelligence
 // config (member override already falls back to the team default server-side).
-// Labels come from the backend CLI agent catalog (the detection endpoint).
+// Labels come from the backend AI CLI tool catalog (the detection endpoint).
 export function cliAgentLabelFromConfig(
   config: IntelligenceConfig | undefined,
   detections: CliAgentDetection[],
@@ -24,8 +24,8 @@ export function cliAgentLabelFromConfig(
 }
 
 // Shared by the setup members list and the activity history member column so
-// both resolve a member's CLI agent label the same way. Callers pass
-// `enabled: false` for human members, whose config carries no CLI agent.
+// both resolve a member's AI CLI tool label the same way. Callers pass
+// `enabled: false` for human members, whose config carries no AI CLI tool.
 export function useMemberCliAgentLabel(personId: string, enabled: boolean): string | null {
   const config = useQuery({
     queryKey: ["intelligence-config", personId],

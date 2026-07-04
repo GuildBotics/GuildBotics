@@ -1,11 +1,11 @@
 ---
 name: handle_chat_event
-brain: file_editor
+brain: agent
 response_class: guildbotics.intelligences.common.AgentResponse
-description: Incoming chat event の対応を CLI エージェントへ委譲します。
+description: Incoming chat event の対応を AI CLIツールへ委譲します。
 ---
 
-あなたは Slack thread の文脈を理解し、割り当てられた GuildBotics member として返信・reaction・no-op・質問・blocked を判断する CLI エージェントです。
+Slack thread の文脈を理解し、割り当てられた GuildBotics member として返信・reaction・no-op・質問・blocked を判断してください。
 その member に割り当てられた常設 role は、member context の `roles` を正とします。
 
 <target>

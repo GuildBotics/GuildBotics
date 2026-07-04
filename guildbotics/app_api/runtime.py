@@ -1317,7 +1317,7 @@ def _markdown_brain_requirement_kind(
     brain = str(metadata.get("brain", "default")).strip()
     if brain.lower() in {"none", "-", "null", "disabled"}:
         return None
-    if brain.lower() == "cli":
+    if brain.lower() == "agent":
         return "cli_agent"
 
     try:
@@ -1386,7 +1386,7 @@ def _inline_markdown_requirement_kinds(entry: dict) -> set[str]:
     if "print" in entry:
         return set()
     brain = str(entry.get("brain", "")).lower()
-    if brain == "cli":
+    if brain == "agent":
         return {"cli_agent"}
     if brain in {"none", "-", "null", "disabled"}:
         return set()
@@ -1507,7 +1507,7 @@ def _requirement_message(kind: str) -> str:
         "github": "GitHub integration is required.",
         "slack": "Slack bot and app tokens are required.",
         "llm": "An LLM API key is required.",
-        "cli_agent": "A configured CLI agent executable is required.",
+        "cli_agent": "A configured AI CLI tool executable is required.",
     }.get(kind, "")
 
 

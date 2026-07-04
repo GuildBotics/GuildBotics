@@ -32,7 +32,7 @@ def _max_agent_attempts() -> int:
     """Number of agent turns per ticket dispatch before giving up.
 
     A turn that leaves no terminal completion record is retried (resuming the
-    previous conversation) so a slow, multi-turn CLI agent can finish; the budget
+    previous conversation) so a slow, multi-turn AI CLI tool can finish; the budget
     bounds that so a permanently failing turn cannot loop.
     """
     raw = os.getenv(TICKET_MAX_ATTEMPTS_ENV, "").strip()
@@ -216,7 +216,7 @@ def _prepare_command(context: Context, ticket_url: str) -> str:
 async def main(context: Context) -> AgentResponse | None:
     """
     Poll the ticket manager for one actionable GitHub issue or PR and delegate the
-    actual GitHub/git/PR work to the configured CLI agent.
+    actual GitHub/git/PR work to the configured AI CLI tool.
     """
     ticket_manager = context.get_ticket_manager()
 

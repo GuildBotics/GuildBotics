@@ -520,7 +520,7 @@ def test_app_runtime_command_options_propagate_nested_requirements(
     commands_dir = tmp_path / ".guildbotics/config/commands"
     commands_dir.mkdir(parents=True)
     (commands_dir / "cli-task.md").write_text(
-        "\n".join(["---", "brain: cli", "---", "Summarize ${file}."])
+        "\n".join(["---", "brain: agent", "---", "Summarize ${file}."])
     )
     (commands_dir / "nested.yml").write_text(
         "\n".join(
@@ -568,7 +568,7 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
     commands_dir = config_dir / "commands"
     commands_dir.mkdir(parents=True)
     (commands_dir / "edit.md").write_text(
-        "\n".join(["---", "brain: file_editor", "---", "Edit ${file}."])
+        "\n".join(["---", "brain: agent", "---", "Edit ${file}."])
     )
     brain_mapping = config_dir / "intelligences/brain_mapping.yml"
     brain_mapping.parent.mkdir(parents=True)
@@ -577,7 +577,7 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
             [
                 "default:",
                 "  class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain",
-                "file_editor:",
+                "agent:",
                 "  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain",
             ]
         )

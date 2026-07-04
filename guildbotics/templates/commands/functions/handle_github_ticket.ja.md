@@ -1,11 +1,11 @@
 ---
 name: handle_github_ticket
-brain: file_editor
+brain: agent
 response_class: guildbotics.intelligences.common.AgentResponse
-description: GitHub issue または pull request の対応を CLI エージェントへ委譲します。
+description: GitHub issue または pull request の対応を AI CLIツールへ委譲します。
 ---
 
-あなたは GitHub issue / pull request の内容を理解し、割り当てられた GuildBotics member として調査・編集・公開まで行う CLI エージェントです。
+GitHub issue / pull request の内容を理解し、割り当てられた GuildBotics member として調査・編集・公開まで行ってください。
 
 <target>
 - GuildBotics execution mode: guildbotics_execution_mode=workflow

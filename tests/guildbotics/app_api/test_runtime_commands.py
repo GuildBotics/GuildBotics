@@ -313,7 +313,7 @@ def test_command_options_detect_llm_and_cli_requirements(
     )
     _write(
         config_dir / "commands/cli_task.md",
-        "\n".join(["---", "name: CLI Task", "brain: cli", "---", "Edit ${file}."]),
+        "\n".join(["---", "name: Agent Task", "brain: agent", "---", "Edit ${file}."]),
     )
     context = _make_context([_make_person()])
     runtime = _runtime_with_context(monkeypatch, context)
@@ -590,7 +590,7 @@ def test_routine_command_options_localize_builtin_sidecar_metadata(
     assert ticket.label == "チケット駆動ワークフロー"
     assert (
         ticket.description
-        == "対応可能な GitHub issue または PR を1件取得し、CLIエージェントへ委譲します。"
+        == "対応可能な GitHub issue または PR を1件取得し、AI CLIツールへ委譲します。"
     )
 
 

@@ -142,7 +142,7 @@ describe("ActivityHistoryPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows each member's CLI agent under the name and Human for human members", async () => {
+  it("shows each member's AI CLI tool under the name and Human for human members", async () => {
     vi.mocked(getActivityHistory).mockResolvedValue({
       ...ACTIVITY_FIXTURE,
       members: [

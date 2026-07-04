@@ -85,7 +85,7 @@ export async function forceUpdateCliAgentSkill(
   agent: CliAgentSkillState["agent"],
 ): Promise<CliAgentSkillState> {
   if (!isTauriRuntime()) {
-    throw new Error("GuildBotics Desktop is required to update CLI agent skills.");
+    throw new Error("GuildBotics Desktop is required to update AI CLI tool skills.");
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<CliAgentSkillState>("force_update_cli_agent_skill", { agent });
