@@ -12,6 +12,10 @@ script: |
   }
   trap cleanup EXIT HUP INT TERM
 
+  emit_rate_limit_marker() {
+    python3 -c 'import json, sys; payload = {"category": "rate_limited", "retry_after_text": sys.argv[1]}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))' "$1"
+  }
+
   # Resume this dispatch's own conversation on retries. The workflow points
   # GUILDBOTICS_CLI_AGENT_CONVERSATION_FILE at a per-run file: if it already holds
   # an id (a previous attempt of the same dispatch) we resume that exact
@@ -66,9 +70,7 @@ script: |
     cat "$log" >&2
     cat "$res"
 
-    printf '%s\n' \
-      "GUILDBOTICS_CLI_AGENT_ERROR_JSON: {\"category\":\"rate_limited\",\"retry_after_text\":\"$retry_after_text\"}" \
-      >&2
+    emit_rate_limit_marker "$retry_after_text" >&2
 
     exit 75
   fi

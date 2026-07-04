@@ -634,6 +634,12 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("missing")
     _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 3,
+        "max_attempts": 3,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
 
     # A single dispatch retries the agent in-process up to the budget, then
     # escalates and stops (no exception bubbles out).
@@ -682,6 +688,12 @@ async def test_agent_run_failure_escalates_and_stops(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")  # the agent run raises every attempt
     _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 2,
+        "max_attempts": 2,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
 
     # A failing agent run must be bounded and escalated, NOT raise out of the
     # workflow (which would leave the event queued for infinite retry).
@@ -713,6 +725,25 @@ async def test_non_final_agent_run_failure_bubbles_for_pending_backoff(tmp_path)
         "is_final_attempt": False,
         "run_id": "run-1",
     }
+
+    with pytest.raises(RuntimeError, match="agent exited non-zero"):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
+
+    assert service.posts == []
+    assert (
+        state_store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_retry_context_agent_failure_bubbles_for_pending_backoff(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("crash")
+    _set_incoming_event(ctx)
 
     with pytest.raises(RuntimeError, match="agent exited non-zero"):
         await chat_conversation_workflow.main(
@@ -771,6 +802,12 @@ async def test_duplicate_system_notice_is_not_posted_again(tmp_path):
     state_store.save_thread_state("slack", "alice", "C1", "100.1", state)
     ctx = FakeInvokeContext("crash")
     _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 5,
+        "max_attempts": 5,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
 
     await chat_conversation_workflow.main(
         ctx, chat_service=service, state_store=state_store
@@ -789,6 +826,12 @@ async def test_final_notice_post_failure_marks_processed_without_notice_state(tm
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")
     _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 5,
+        "max_attempts": 5,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
 
     await chat_conversation_workflow.main(
         ctx, chat_service=service, state_store=state_store

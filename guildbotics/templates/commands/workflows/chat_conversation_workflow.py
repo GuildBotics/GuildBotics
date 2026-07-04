@@ -455,9 +455,9 @@ def _read_retry_context_from_context(context: Any) -> RetryContext:
             run_id=str(raw.get("run_id", "") or ""),
         )
     return RetryContext(
-        attempt_count=max_attempts,
+        attempt_count=1,
         max_attempts=max_attempts,
-        is_final_attempt=True,
+        is_final_attempt=False,
     )
 
 

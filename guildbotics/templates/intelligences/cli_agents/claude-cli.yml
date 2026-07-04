@@ -11,6 +11,10 @@ script: |
   }
   trap cleanup EXIT HUP INT TERM
 
+  emit_rate_limit_marker() {
+    python3 -c 'import json, sys; payload = {"category": "rate_limited", "retry_after_text": sys.argv[1], "retry_after_timezone": sys.argv[2]}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))' "$1" "$2"
+  }
+
   status=0
 
   claude \
@@ -42,9 +46,7 @@ script: |
     cat "$log" >&2
     cat "$res"
 
-    printf '%s\n' \
-      "GUILDBOTICS_CLI_AGENT_ERROR_JSON: {\"category\":\"rate_limited\",\"retry_after_text\":\"$retry_after_text\",\"retry_after_timezone\":\"$retry_after_timezone\"}" \
-      >&2
+    emit_rate_limit_marker "$retry_after_text" "$retry_after_timezone" >&2
 
     exit 75
   fi
