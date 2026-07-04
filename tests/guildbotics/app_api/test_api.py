@@ -14,6 +14,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
+    ChatReceiveResetResponse,
     CliAgentDetectionsResponse,
     CommandOption,
     CommandOptionsResponse,
@@ -44,6 +45,9 @@ from guildbotics.editions.simple.setup_service import (
     SimpleProjectSetupService,
 )
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.integrations.chat_state_store import ChannelCursorState
+from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
@@ -59,6 +63,37 @@ DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 GITHUB_APPS_USER_ID = 42
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
+
+
+def _chat_person(
+    person_id: str, channel_id: str, *, active: bool, channel_name: str = ""
+) -> Any:
+    return type(
+        "ChatPersonStub",
+        (),
+        {
+            "person_id": person_id,
+            "is_active": active,
+            "message_channels": [],
+            "profile": {
+                "chat": {
+                    "subscriptions": [
+                        {
+                            "service": "slack",
+                            "channel_id": channel_id,
+                            "channel_name": channel_name,
+                            "enabled": True,
+                        }
+                    ]
+                }
+            },
+        },
+    )()
+
+
+def _chat_context(members: list[Any]) -> Any:
+    team = type("TeamStub", (), {"members": members})()
+    return type("ContextStub", (), {"team": team})()
 
 
 def _client(runtime: "RuntimeStub") -> TestClient:
@@ -99,6 +134,9 @@ class RuntimeStub:
 
     def stop_scheduler(self) -> RuntimeStatus:
         return _runtime_status()
+
+    def reset_chat_receive_state(self) -> ChatReceiveResetResponse:
+        return ChatReceiveResetResponse(members_reset=2, channels_reset=5)
 
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
@@ -2004,6 +2042,7 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/scheduler/status"),
     ("POST", "/scheduler/start"),
     ("POST", "/scheduler/stop"),
+    ("POST", "/chat/receive-state/reset"),
     ("GET", "/prompt-trace"),
     ("PUT", "/prompt-trace"),
     ("GET", "/runtime/debug"),
@@ -2507,6 +2546,97 @@ def test_scheduler_stop_endpoint(tmp_path: Path) -> None:
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "stopped"
     assert response.json()["events"]["state"] == "stopped"
+
+
+def test_chat_receive_state_reset_endpoint_uses_runtime(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post("/chat/receive-state/reset", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {"members_reset": 2, "channels_reset": 5}
+
+
+def test_chat_receive_state_reset_ignores_past_for_active_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GUILDBOTICS_DATA_DIR", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    runtime = AppRuntime(EventBus())
+    active = _chat_person("alice", "C1", active=True)
+    inactive = _chat_person("carol", "C9", active=False)
+    context = _chat_context([active, inactive])
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    seed = FileConversationStateStore()
+    seed.save_channel_cursor("slack", "alice", "C1", ChannelCursorState(oldest_ts="1.0"))
+    seed.upsert_pending_event(
+        "slack",
+        "alice",
+        "C1",
+        ChatEvent(
+            event_id="C1:1",
+            channel_id="C1",
+            message_ts="1.0",
+            thread_ts="1.0",
+            author_id="U1",
+            text="old",
+        ),
+    )
+
+    result = runtime.reset_chat_receive_state()
+
+    assert result.members_reset == 1
+    assert result.channels_reset == 1
+    reloaded = FileConversationStateStore()
+    # Received-but-unprocessed backlog is discarded.
+    assert reloaded.load_pending_events("slack", "alice", "C1") == []
+    # A hard receive cutoff at "now" is recorded for the active member.
+    cutoff = reloaded.load_receive_cutoff("slack", "alice")
+    assert cutoff is not None
+    assert float(cutoff) > 1.0
+    # Inactive members are never touched.
+    assert reloaded.load_receive_cutoff("slack", "carol") is None
+
+
+def test_chat_receive_state_reset_covers_name_only_subscription(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GUILDBOTICS_DATA_DIR", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    runtime = AppRuntime(EventBus())
+    # Subscription known only by channel name, with no stored per-channel state.
+    member = _chat_person("dave", "", active=True, channel_name="general")
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _chat_context([member])
+    )
+
+    result = runtime.reset_chat_receive_state()
+
+    assert result.members_reset == 1
+    assert result.channels_reset == 0
+    # The cutoff still applies even without a resolved channel id, so the next
+    # start's startup backfill is floored at the reset time.
+    assert FileConversationStateStore().load_receive_cutoff("slack", "dave") is not None
+
+
+def test_chat_receive_state_reset_rejected_while_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(
+        runtime,
+        "get_scheduler_status",
+        lambda: _runtime_status(events_state="running"),
+    )
+
+    with pytest.raises(AppApiError) as exc_info:
+        runtime.reset_chat_receive_state()
+
+    assert exc_info.value.status_code == HTTP_CONFLICT
 
 
 # --- prompt trace --------------------------------------------------------

@@ -299,6 +299,11 @@ class RuntimeStatus(BaseModel):
     events: RuntimeUnitStatus
 
 
+class ChatReceiveResetResponse(BaseModel):
+    members_reset: int
+    channels_reset: int
+
+
 class PromptTraceUpdateRequest(BaseModel):
     enabled: bool
     trace_path: str = ""

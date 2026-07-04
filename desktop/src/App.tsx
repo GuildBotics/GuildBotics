@@ -11,6 +11,7 @@ import {
   Divider,
   Drawer,
   Group,
+  Modal,
   NumberInput,
   Select,
   SegmentedControl,
@@ -53,6 +54,7 @@ import {
   type PromptTraceEntry,
   type RuntimeEvent,
   type RuntimeLog,
+  type ChatReceiveResetResponse,
   type SchedulerStartRequest,
   type RuntimeUnitStatus,
   type TraceDetailResponse,
@@ -69,6 +71,7 @@ import {
   getTeam,
   getTraceDetail,
   getTraces,
+  resetChatReceiveState,
   runCommand,
   runScenarioDiagnostics,
   startScheduler,
@@ -435,7 +438,9 @@ function ServicePage() {
                   }),
                 ],
               ]}
-            />
+            >
+              <ChatReceiveResetControl disabled={runtimeActive} />
+            </ServiceRuntimeSection>
             <ServiceRuntimeSection
               title={t("overview.scheduledSourceCard.title")}
               description={t("overview.scheduledSourceCard.description")}
@@ -2213,6 +2218,87 @@ export function recordBadgeLabel(t: TFunction, record: TraceRecord): string {
     return record.level || "LOG";
   }
   return eventTypeLabel(t, record.type);
+}
+
+function ChatReceiveResetControl({ disabled }: { disabled: boolean }) {
+  const { t } = useTranslation();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [result, setResult] = useState<ChatReceiveResetResponse | null>(null);
+  const resetMutation = useMutation({
+    mutationFn: resetChatReceiveState,
+    onSuccess: (data) => {
+      setResult(data);
+      setConfirmOpen(false);
+    },
+  });
+
+  return (
+    <Alert
+      color="orange"
+      icon={<RotateCcw size={16} />}
+      title={t("overview.eventsCard.chatReset.title")}
+    >
+      <Stack gap="xs">
+        <Text size="sm">{t("overview.eventsCard.chatReset.description")}</Text>
+        <Group gap="sm" align="center">
+          <Button
+            size="xs"
+            color="red"
+            variant="light"
+            disabled={disabled}
+            loading={resetMutation.isPending}
+            onClick={() => {
+              setResult(null);
+              resetMutation.reset();
+              setConfirmOpen(true);
+            }}
+          >
+            {t("overview.eventsCard.chatReset.action")}
+          </Button>
+          {disabled ? (
+            <Text size="xs" c="dimmed">
+              {t("overview.eventsCard.chatReset.stoppedOnlyHint")}
+            </Text>
+          ) : null}
+        </Group>
+        {result ? (
+          <Text size="sm" c="green">
+            {t("overview.eventsCard.chatReset.successBody", {
+              members: result.members_reset,
+              channels: result.channels_reset,
+            })}
+          </Text>
+        ) : null}
+        {resetMutation.error ? (
+          <Text size="sm" c="red">
+            {resetMutation.error.message}
+          </Text>
+        ) : null}
+      </Stack>
+      <Modal
+        opened={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title={t("overview.eventsCard.chatReset.confirmTitle")}
+        centered
+      >
+        <Stack gap="md">
+          <Text size="sm">{t("overview.eventsCard.chatReset.confirmBody")}</Text>
+          <Group justify="flex-end" gap="sm">
+            <Button variant="default" onClick={() => setConfirmOpen(false)}>
+              {t("overview.eventsCard.chatReset.cancel")}
+            </Button>
+            <Button
+              color="red"
+              loading={resetMutation.isPending}
+              onClick={() => resetMutation.mutate()}
+            >
+              {t("overview.eventsCard.chatReset.confirm")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </Alert>
+  );
 }
 
 function ServiceRuntimeSection({

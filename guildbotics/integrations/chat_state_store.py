@@ -180,3 +180,31 @@ class ConversationStateStore(ABC):
         """List (service, channel_id) pairs that currently hold pending events
         for a person, so a consumer can drain them without resolving
         subscriptions."""
+
+    @abstractmethod
+    def list_known_channels(self, service: str, person_id: str) -> list[str]:
+        """List channel ids that hold any stored receive state (cursor, pending
+        events, or tracked threads) for a person on a service."""
+
+    @abstractmethod
+    def load_receive_cutoff(self, service: str, person_id: str) -> str | None:
+        """Load the receive cutoff ts, or None when no reset has been recorded.
+
+        Backfill treats this as a hard floor: messages at or before it are never
+        re-fetched, regardless of per-channel watermark or overlap. It applies to
+        every subscribed channel, including ones only known by name that have no
+        stored per-channel state yet.
+        """
+
+    @abstractmethod
+    def save_receive_cutoff(self, service: str, person_id: str, cutoff_ts: str) -> None:
+        """Persist the receive cutoff ts for a person on a service."""
+
+    @abstractmethod
+    def clear_channel_receive_backlog(
+        self, service: str, person_id: str, channel_id: str
+    ) -> None:
+        """Drop received-but-unprocessed pending events and tracked threads for a
+        channel, so a reset does not re-process a stale backlog. Does not start
+        or stop any listener; the caller must ensure the runtime is stopped.
+        """

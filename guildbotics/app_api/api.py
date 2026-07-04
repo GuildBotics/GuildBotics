@@ -33,6 +33,7 @@ from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentFieldStateResponse,
     ApiError,
+    ChatReceiveResetResponse,
     CliAgentDetectionsResponse,
     CommandOptionsResponse,
     CommandRunRequest,
@@ -288,6 +289,16 @@ def create_app(
     )
     def scheduler_stop(_: None = Depends(require_token)) -> RuntimeStatus:
         return app_runtime.stop_scheduler()
+
+    @app.post(
+        "/chat/receive-state/reset",
+        response_model=ChatReceiveResetResponse,
+        responses=error_responses,
+    )
+    def chat_receive_state_reset(
+        _: None = Depends(require_token),
+    ) -> ChatReceiveResetResponse:
+        return app_runtime.reset_chat_receive_state()
 
     @app.get(
         "/prompt-trace",

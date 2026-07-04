@@ -590,6 +590,14 @@ class EventListenerRunner:
         oldest_ts = self._backfill_oldest_ts(state.oldest_ts, policy)
         if oldest_ts is None:
             return 0
+        # A recorded receive reset is a hard floor: never fetch or queue events
+        # at or before it, even when the per-channel watermark minus overlap
+        # would reach further back.
+        cutoff_ts = self._state_store.load_receive_cutoff(
+            service_name, person.person_id
+        )
+        if cutoff_ts:
+            oldest_ts = _max_slack_ts(oldest_ts, cutoff_ts) or oldest_ts
         cursor: str | None = None
         highest_ts = state.oldest_ts
         count = 0
@@ -601,6 +609,8 @@ class EventListenerRunner:
                 limit=policy.limit,
             )
             for event in page.events:
+                if cutoff_ts and _compare_slack_ts(event.message_ts, cutoff_ts) <= 0:
+                    continue
                 count += self._upsert_backfilled_event(
                     service_name, person, channel_id, event, policy.participation
                 )
@@ -656,6 +666,9 @@ class EventListenerRunner:
             (message.message_ts for message in thread_messages), default=thread_ts
         )
         oldest_ts = _slack_ts_minus_seconds(latest_message_ts, policy.overlap_seconds)
+        cutoff_ts = self._state_store.load_receive_cutoff(
+            service_name, person.person_id
+        )
         cursor: str | None = None
         count = 0
         while not self._stop_event.is_set():
@@ -667,6 +680,8 @@ class EventListenerRunner:
             )
             for event in page.events:
                 if _compare_slack_ts(event.message_ts, oldest_ts) < 0:
+                    continue
+                if cutoff_ts and _compare_slack_ts(event.message_ts, cutoff_ts) <= 0:
                     continue
                 count += self._upsert_backfilled_event(
                     service_name, person, channel_id, event, policy.participation

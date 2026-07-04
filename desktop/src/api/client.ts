@@ -86,6 +86,11 @@ export type RuntimeStatus = {
   events: RuntimeUnitStatus;
 };
 
+export type ChatReceiveResetResponse = {
+  members_reset: number;
+  channels_reset: number;
+};
+
 export type RuntimeSourceSelection = {
   scheduled: boolean;
   routine: boolean;
@@ -662,6 +667,10 @@ export async function startScheduler(body: SchedulerStartRequest): Promise<Runti
 
 export async function stopScheduler(): Promise<RuntimeStatus> {
   return request("/scheduler/stop", { method: "POST" });
+}
+
+export async function resetChatReceiveState(): Promise<ChatReceiveResetResponse> {
+  return request("/chat/receive-state/reset", { method: "POST" });
 }
 
 export async function getPromptTrace(limit = 20, path?: string): Promise<PromptTraceStatus> {
