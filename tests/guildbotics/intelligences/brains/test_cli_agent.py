@@ -321,6 +321,160 @@ async def test_cli_agent_run_raises_when_script_fails(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cli_agent_run_raises_rate_limit_error_from_marker(monkeypatch, tmp_path):
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+    marker = (
+        'GUILDBOTICS_CLI_AGENT_ERROR_JSON: {"category":"rate_limited",'
+        '"retry_after_at":"2026-07-04T11:44:00+09:00",'
+        '"retry_after_text":"11:44 AM"}'
+    )
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        return StubProcess(stdout=b"", stderr=marker.encode(), returncode=75)
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "warning": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
+            await brain.run("hello", cwd=tmp_path)
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert excinfo.value.category == "rate_limited"
+    assert excinfo.value.details["retry_after_at"] == "2026-07-04T11:44:00+09:00"
+    assert excinfo.value.details["retry_after_text"] == "11:44 AM"
+
+
+def test_normalize_retry_after_handles_composite_relative_duration():
+    retry_after_at = cli_agent.normalize_cli_agent_retry_after("Resets in 2h30m15s")
+
+    assert retry_after_at
+
+
+def test_normalize_retry_after_handles_date_text():
+    retry_after_at = cli_agent.normalize_cli_agent_retry_after(
+        "reset on July 8, 2026 at 11:44 AM",
+        "Asia/Tokyo",
+    )
+
+    assert retry_after_at == "2026-07-08T11:44:00+09:00"
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_marker_normalizes_retry_after_text(monkeypatch, tmp_path):
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+    marker = (
+        'GUILDBOTICS_CLI_AGENT_ERROR_JSON: {"category":"rate_limited",'
+        '"retry_after_text":"reset on July 8, 2026 at 11:44 AM",'
+        '"retry_after_timezone":"Asia/Tokyo"}'
+    )
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        return StubProcess(stdout=b"", stderr=marker.encode(), returncode=75)
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "warning": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
+            await brain.run("hello", cwd=tmp_path)
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert excinfo.value.details["retry_after_at"] == "2026-07-08T11:44:00+09:00"
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_broken_error_marker_remains_regular_failure(
+    monkeypatch, tmp_path
+):
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        return StubProcess(
+            stdout=b"",
+            stderr=b"GUILDBOTICS_CLI_AGENT_ERROR_JSON: {bad",
+            returncode=75,
+        )
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "warning": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        with pytest.raises(RuntimeError, match="exited with code 75"):
+            await brain.run("hello", cwd=tmp_path)
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+
+@pytest.mark.asyncio
 async def test_cli_agent_run_raises_when_response_is_empty(monkeypatch, tmp_path):
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()

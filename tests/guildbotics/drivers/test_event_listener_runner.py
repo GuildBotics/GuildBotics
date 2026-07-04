@@ -91,7 +91,12 @@ class _WorkflowChatService:
         return None
 
     async def post_message(
-        self, channel_id: str, text: str, *, thread_ts: str | None = None
+        self,
+        channel_id: str,
+        text: str,
+        *,
+        thread_ts: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> ChatPostResult:
         self.posts.append((channel_id, text, thread_ts))
         ts = "999.1"
@@ -497,6 +502,72 @@ async def test_run_once_queues_drained_events(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_once_suppresses_workflow_status_metadata(monkeypatch, tmp_path):
+    alice = Person(
+        person_id="alice",
+        name="Alice",
+        is_active=True,
+        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+    )
+    ctx = _FakeContext()
+    ctx.team = types.SimpleNamespace(members=[alice])
+    store = FileConversationStateStore(base_dir=tmp_path)
+    runner = EventListenerRunner(ctx, state_store=store)  # type: ignore[arg-type]
+
+    class _FakeListener:
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def drain_events(self):
+            return [
+                IncomingChatEvent(
+                    service_name="slack",
+                    channel_id="C1",
+                    event=ChatEvent(
+                        event_id="E1",
+                        channel_id="C1",
+                        message_ts="100.1",
+                        thread_ts="100.1",
+                        author_id="U1",
+                        text="workflow notice",
+                        metadata={
+                            "event_type": "guildbotics.workflow_status",
+                            "event_payload": {"routing": "suppress"},
+                        },
+                    ),
+                )
+            ]
+
+    async def _fake_resolve(person, subscriptions):
+        return subscriptions
+
+    monkeypatch.setattr(runner, "_resolve_subscription_channels", _fake_resolve)
+    monkeypatch.setattr(
+        runner,
+        "_make_connection_key",
+        lambda person: (
+            SlackConnectionKey(
+                service="slack",
+                event_source="socket_mode",
+                app_token_hash="h" * 64,
+                base_url="https://slack.example/api",
+            ),
+            "xapp",
+        ),
+    )
+    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
+    monkeypatch.setattr(runner, "_backfill_due_events", _no_backfill)
+
+    await runner._run_once()
+
+    assert store.load_pending_events("slack", "alice", "C1") == []
+    assert store.is_processed_event("slack", "alice", "C1", "E1") is True
+
+
+@pytest.mark.asyncio
 async def test_run_once_queues_event_for_multiple_people(monkeypatch, tmp_path):
     alice = Person(
         person_id="alice",
@@ -723,7 +794,9 @@ async def test_backfill_receive_cutoff_floors_oldest_and_filters_events(tmp_path
     store = FileConversationStateStore(base_dir=tmp_path)
     # An existing watermark whose overlap window (205 - 60 = 145) reaches before
     # the reset cutoff; the cutoff must clamp the query and drop pre-cutoff events.
-    store.save_channel_cursor("slack", "alice", "C1", ChannelCursorState(oldest_ts="205.0"))
+    store.save_channel_cursor(
+        "slack", "alice", "C1", ChannelCursorState(oldest_ts="205.0")
+    )
     store.save_receive_cutoff("slack", "alice", "200.0")
     runner = EventListenerRunner(ctx, state_store=store)  # type: ignore[arg-type]
 

@@ -19,6 +19,7 @@ from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
     ThreadConversationState,
 )
+from guildbotics.integrations.chat_workflow_status import is_suppressed_chat_event
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.integrations.slack.slack_socket_listener import (
@@ -224,6 +225,14 @@ class EventListenerRunner:
                     if incoming.channel_id not in subscriptions:
                         continue
                     if self._is_processed_for_person(person, incoming):
+                        continue
+                    if is_suppressed_chat_event(incoming.event):
+                        self._state_store.mark_processed_event(
+                            incoming.service_name,
+                            person.person_id,
+                            incoming.channel_id,
+                            incoming.event.event_id,
+                        )
                         continue
                     self._state_store.upsert_pending_event(
                         incoming.service_name,
@@ -703,6 +712,11 @@ class EventListenerRunner:
             service_name=service_name, channel_id=channel_id, event=event
         )
         if self._is_processed_for_person(person, incoming):
+            return 0
+        if is_suppressed_chat_event(event):
+            self._state_store.mark_processed_event(
+                service_name, person.person_id, channel_id, event.event_id
+            )
             return 0
         self._state_store.upsert_pending_event(
             service_name, person.person_id, channel_id, event, participation

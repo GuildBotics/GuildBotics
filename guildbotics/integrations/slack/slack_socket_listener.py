@@ -13,6 +13,9 @@ from typing import Any
 import httpx
 
 from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.integrations.chat_workflow_status import (
+    normalize_workflow_status_metadata,
+)
 from guildbotics.integrations.slack.message_events import (
     is_bot_message,
     is_conversational_message,
@@ -261,6 +264,7 @@ class SlackSocketEventListener(EventListener):
             mentions=_extract_mentions(text),
             is_bot_message=is_bot_message(event),
             is_thread_reply=(thread_ts != ts),
+            metadata=normalize_workflow_status_metadata(event.get("metadata")),
         )
         return IncomingChatEvent(
             service_name="slack", channel_id=channel_id, event=chat_event

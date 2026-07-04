@@ -4,7 +4,13 @@ import pytest
 
 from guildbotics.capabilities.completion_retry import (
     CompletionRetryExhausted,
+    find_cli_agent_execution_error,
     run_with_completion_retry,
+)
+from guildbotics.commands.errors import CommandError
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
 )
 
 
@@ -95,3 +101,57 @@ async def test_invoke_failure_counts_as_attempt_and_exhausts():
     assert excinfo.value.attempts == 3
     assert isinstance(excinfo.value.last_error, RuntimeError)
     assert "non-zero" in str(excinfo.value.last_error)
+
+
+@pytest.mark.asyncio
+async def test_retry_invoke_exceptions_false_reraises_immediately():
+    calls = 0
+
+    async def _invoke(run_id, attempt):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("agent exited non-zero")
+
+    with pytest.raises(RuntimeError, match="non-zero"):
+        await run_with_completion_retry(
+            invoke=_invoke,
+            check_completion=lambda _run_id: "never",
+            max_attempts=3,
+            retry_invoke_exceptions=False,
+        )
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_is_reraised_without_retry_attempts():
+    calls = 0
+    rate_limited = CliAgentExecutionError(
+        cli_agent="codex",
+        result=CliAgentExecutionResult(
+            stdout="",
+            stderr="rate limit",
+            returncode=75,
+            error_category="rate_limited",
+            error_details={"retry_after_text": "11:44 AM"},
+        ),
+    )
+
+    async def _invoke(run_id, attempt):
+        nonlocal calls
+        calls += 1
+        raise CommandError("wrapped") from rate_limited
+
+    with pytest.raises(CliAgentExecutionError) as excinfo:
+        await run_with_completion_retry(
+            invoke=_invoke,
+            check_completion=lambda _run_id: "never",
+            max_attempts=3,
+        )
+
+    assert calls == 1
+    assert excinfo.value.category == "rate_limited"
+    assert (
+        find_cli_agent_execution_error(excinfo.value, category="rate_limited")
+        is excinfo.value
+    )

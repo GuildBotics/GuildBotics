@@ -878,6 +878,12 @@ pre {
   color: #8a5a12;
 }
 
+.activity-session-rate-limited {
+  background: #fff1f2;
+  border: 1px solid #f4a9b4;
+  color: #a0142f;
+}
+
 .activity-session-mode-dot {
   border-radius: 50%;
   flex: 0 0 auto;

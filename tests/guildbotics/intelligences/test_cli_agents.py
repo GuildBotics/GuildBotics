@@ -10,10 +10,30 @@ from guildbotics.intelligences.cli_agents import (
 
 CUSTOM_ORDER = 5
 DEFAULT_ORDER = 1000
+TEMPLATE_CLI_AGENT_NAMES = (
+    "antigravity-cli.yml",
+    "claude-cli.yml",
+    "codex-cli.yml",
+    "copilot-cli.yml",
+)
 
 
 def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
     assert get_cli_agent_search_path("") == ""
+
+
+def test_rate_limit_marker_templates_use_json_serialization() -> None:
+    template_dir = (
+        Path(__file__).parents[3]
+        / "guildbotics/templates/intelligences/cli_agents"
+    )
+
+    for name in TEMPLATE_CLI_AGENT_NAMES:
+        script = (template_dir / name).read_text(encoding="utf-8")
+
+        assert "json.dumps(payload" in script
+        assert 'retry_after_text":"$retry_after_text' not in script
+        assert 'retry_after_timezone":"$retry_after_timezone' not in script
 
 
 def test_cli_agent_search_path_falls_back_for_ambient_empty_path(monkeypatch) -> None:

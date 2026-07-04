@@ -79,6 +79,7 @@ type ActivityBlock = {
   display_ended_at: string;
   sessions: ActivityHistorySession[];
   links: ActivityHistoryLink[];
+  rate_limit: ActivityHistorySession["rate_limit"];
 };
 
 export function ActivityHistoryPage() {
@@ -443,13 +444,14 @@ function ActivityBlockBar({
   const width = Math.max(0, right - left);
   const stateClass = searchStateClass(searchActive, matched);
   const visibleTitle = activityBlockVisibleTitle(block.title);
+  const rateLimitClass = block.rate_limit ? "activity-session-rate-limited" : "";
   return (
     <HoverCard openDelay={150} closeDelay={80} withinPortal position={blockHoverCardPosition(view)}>
       <HoverCard.Target>
         <button
           type="button"
           aria-label={block.title}
-          className={`${stateClass} activity-session activity-session-${block.mode} ${
+          className={`${stateClass} activity-session activity-session-${block.mode} ${rateLimitClass} ${
             view === "week" ? "activity-session-week" : ""
           }`}
           style={{
@@ -501,6 +503,7 @@ function EventPin({
 function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
   const { t } = useTranslation();
   const executionUrl = activityBlockExecutionUrl(block);
+  const rateLimitReset = block.rate_limit ? formatRateLimitReset(block.rate_limit) : "";
   return (
     <Stack gap="xs">
       <Group gap="xs" justify="space-between">
@@ -516,6 +519,18 @@ function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
           </Text>
         )}
       </Group>
+      {block.rate_limit ? (
+        <Group gap="xs" wrap="nowrap">
+          <Badge color="red" variant="light" style={{ flexShrink: 0 }}>
+            {t("activity.rateLimit.label")}
+          </Badge>
+          {rateLimitReset ? (
+            <Text c="dimmed" size="xs">
+              {t("activity.rateLimit.reset", { reset: rateLimitReset })}
+            </Text>
+          ) : null}
+        </Group>
+      ) : null}
       <Stack gap={6}>
         {blockModes(block.sessions).map((mode) => {
           const span = sessionsTimeSpan(block.sessions.filter((session) => session.mode === mode));
@@ -727,6 +742,10 @@ export function matchActivityHistory(
               session.title,
               session.command,
               session.workflow,
+              session.status,
+              session.rate_limit ? "rate_limited" : "",
+              session.rate_limit?.retry_after_at ?? "",
+              session.rate_limit?.retry_after_text ?? "",
               session.person_id,
               member?.name ?? "",
               ...(member?.roles ?? []),
@@ -806,6 +825,7 @@ function activityBlockFromSession(
     display_ended_at: displayEnd.toISOString(),
     sessions: [session],
     links: session.links,
+    rate_limit: session.rate_limit ?? null,
   };
 }
 
@@ -822,6 +842,7 @@ function mergeSessionIntoBlock(
   block.ended_at = maxIso(block.ended_at, session.ended_at);
   block.display_ended_at = maxIso(block.display_ended_at, displayEnd.toISOString());
   block.links = dedupeLinks(block.sessions.flatMap((item) => item.links));
+  block.rate_limit = block.sessions.find((item) => item.rate_limit)?.rate_limit ?? null;
 }
 
 function blockTitle(sessions: ActivityHistorySession[]): string {
@@ -851,6 +872,15 @@ function blockMode(sessions: ActivityHistorySession[]): ActivityBlockMode {
 
 function sessionModeColor(mode: ActivitySessionMode): string {
   return mode === "interactive" ? "teal" : "blue";
+}
+
+function formatRateLimitReset(
+  rateLimit: NonNullable<ActivityHistorySession["rate_limit"]>,
+): string {
+  if (rateLimit.retry_after_at) {
+    return formatTime(rateLimit.retry_after_at);
+  }
+  return rateLimit.retry_after_text;
 }
 
 function activityBlockVisibleTitle(title: string): string {

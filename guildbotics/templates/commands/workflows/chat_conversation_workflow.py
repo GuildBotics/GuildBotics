@@ -4,12 +4,14 @@ import json
 import os
 import re
 from contextlib import suppress
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from guildbotics.capabilities.completion_retry import (
     CLI_AGENT_CONVERSATION_FILE_ENV,
-    CompletionRetryExhausted,
+    find_cli_agent_execution_error,
     run_with_completion_retry,
 )
 from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
@@ -23,8 +25,14 @@ from guildbotics.integrations.chat_state_store import (
     ThreadConversationState,
     ThreadHandoffState,
     ThreadMessageState,
+    ThreadSystemNoticeState,
+)
+from guildbotics.integrations.chat_workflow_status import (
+    WORKFLOW_STATUS_KIND,
+    workflow_status_metadata,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
@@ -40,6 +48,15 @@ CHAT_MAX_ATTEMPTS_ENV = "GUILDBOTICS_CHAT_MAX_ATTEMPTS"
 _SLACK_MENTION_RE = re.compile(r"<@([^>|]+)(?:\|[^>]+)?>")
 _MAX_HANDOFF_TEXT_LENGTH = 240
 _DEFAULT_MAX_ATTEMPTS = 5
+_IN_DISPATCH_COMPLETION_ATTEMPTS = 2
+
+
+@dataclass(frozen=True)
+class RetryContext:
+    attempt_count: int
+    max_attempts: int
+    is_final_attempt: bool
+    run_id: str = ""
 
 
 def _max_agent_attempts() -> int:
@@ -57,12 +74,61 @@ def _max_agent_attempts() -> int:
 
 
 async def _escalate_incomplete(
-    chat_service: ChatService, channel_id: str, thread_ts: str
-) -> None:
+    *,
+    chat_service: ChatService,
+    state_store: ConversationStateStore,
+    service_name: str,
+    person_id: str,
+    channel_id: str,
+    thread_ts: str,
+    source_event_id: str,
+    run_id: str,
+    thread_state: ThreadConversationState,
+    reason: str = "failed",
+    retry_after_at: str = "",
+    retry_after_text: str = "",
+) -> bool:
     """Post a thread reply when the agent could not complete within the budget."""
-    message = t("commands.workflows.chat_conversation_workflow.incomplete_escalation")
-    with suppress(Exception):
-        await chat_service.post_message(channel_id, message, thread_ts=thread_ts)
+    if _has_system_notice(thread_state, WORKFLOW_STATUS_KIND, source_event_id):
+        return False
+    message = _workflow_status_notice_text(reason, retry_after_at, retry_after_text)
+    try:
+        result = await chat_service.post_message(
+            channel_id,
+            message,
+            thread_ts=thread_ts,
+            metadata=workflow_status_metadata(
+                reason=reason,
+                person_id=person_id,
+                source_event_id=source_event_id,
+                run_id=run_id,
+                retry_after_at=retry_after_at,
+                retry_after_text=retry_after_text,
+            ),
+        )
+    except Exception:
+        return False
+    thread_state.system_notices.append(
+        ThreadSystemNoticeState(
+            kind=WORKFLOW_STATUS_KIND,
+            reason=reason,
+            person_id=person_id,
+            source_event_id=source_event_id,
+            message_ts=result.message_ts,
+            run_id=run_id,
+            retry_after_at=retry_after_at,
+            retry_after_text=retry_after_text,
+            recorded_at=datetime.now(UTC).isoformat(),
+        )
+    )
+    state_store.save_thread_state(
+        service_name,
+        person_id,
+        channel_id,
+        thread_ts,
+        thread_state,
+    )
+    return True
 
 
 async def main(
@@ -75,17 +141,28 @@ async def main(
     state_store = state_store or FileConversationStateStore()
     incoming = _read_incoming_event_from_context(context)
     if incoming is not None:
-        identity = await chat_service.get_bot_identity()
-        await _handle_event(
-            context=context,
-            chat_service=chat_service,
-            state_store=state_store,
-            service_name=incoming.service_name,
-            channel_id=incoming.channel_id,
-            identity_user_id=identity.user_id,
-            event=incoming.event,
-            chat_participation=incoming.chat_participation,
-        )
+        try:
+            identity = await chat_service.get_bot_identity()
+            await _handle_event(
+                context=context,
+                chat_service=chat_service,
+                state_store=state_store,
+                service_name=incoming.service_name,
+                channel_id=incoming.channel_id,
+                identity_user_id=identity.user_id,
+                event=incoming.event,
+                chat_participation=incoming.chat_participation,
+            )
+        except Exception:
+            if _read_retry_context_from_context(context).is_final_attempt:
+                state_store.mark_processed_event(
+                    incoming.service_name,
+                    context.person.person_id,
+                    incoming.channel_id,
+                    incoming.event.event_id,
+                )
+                return
+            raise
 
 
 async def _handle_event(
@@ -105,6 +182,7 @@ async def _handle_event(
     )
     channel_state = state_store.load_channel_cursor(service_name, person_id, channel_id)
     already_processed = event.event_id in set(channel_state.processed_event_ids)
+    retry_context = _read_retry_context_from_context(context)
     if event.is_edit_or_delete:
         if not already_processed:
             state_store.mark_processed_event(
@@ -176,7 +254,11 @@ async def _handle_event(
     if not callable(invoke):
         raise RuntimeError("Invoker function is not set.")
 
+    current_run_id = retry_context.run_id
+
     async def _invoke_chat_turn(run_id: str, _attempt: int) -> None:
+        nonlocal current_run_id
+        current_run_id = run_id
         # Pin this dispatch's agent conversation to a per-run file so retries
         # resume the same conversation by id (not whatever last ran in this cwd).
         # Ensure the parent exists so the agent can write the file even when the
@@ -241,14 +323,60 @@ async def _handle_event(
             check_completion=lambda rid: _chat_run_status(
                 rid, workspace_data_root / "task-runs", member_workspace
             ),
-            max_attempts=_max_agent_attempts(),
+            max_attempts=_IN_DISPATCH_COMPLETION_ATTEMPTS,
+            run_id=retry_context.run_id or None,
+            retry_invoke_exceptions=False,
         )
-    except CompletionRetryExhausted:
-        await _escalate_incomplete(chat_service, channel_id, event.thread_ts)
-        state_store.mark_processed_event(
-            service_name, person_id, channel_id, event.event_id
-        )
-        return
+    except Exception as exc:
+        rate_limit_error = find_cli_agent_execution_error(exc, category="rate_limited")
+        if rate_limit_error is not None:
+            details = getattr(rate_limit_error, "details", {})
+            retry_after_at = str(details.get("retry_after_at", "") or "")
+            retry_after_text = str(details.get("retry_after_text", "") or "")
+            run_id = current_run_id
+            await _escalate_incomplete(
+                chat_service=chat_service,
+                state_store=state_store,
+                service_name=service_name,
+                person_id=person_id,
+                channel_id=channel_id,
+                thread_ts=event.thread_ts,
+                source_event_id=event.event_id,
+                run_id=run_id,
+                thread_state=thread_state,
+                reason="rate_limited",
+                retry_after_at=retry_after_at,
+                retry_after_text=retry_after_text,
+            )
+            _record_rate_limited(
+                person_id=person_id,
+                source_event_id=event.event_id,
+                run_id=run_id,
+                retry_after_at=retry_after_at,
+                retry_after_text=retry_after_text,
+            )
+            state_store.mark_processed_event(
+                service_name, person_id, channel_id, event.event_id
+            )
+            return
+        if retry_context.is_final_attempt:
+            await _escalate_incomplete(
+                chat_service=chat_service,
+                state_store=state_store,
+                service_name=service_name,
+                person_id=person_id,
+                channel_id=channel_id,
+                thread_ts=event.thread_ts,
+                source_event_id=event.event_id,
+                run_id=retry_context.run_id,
+                thread_state=thread_state,
+                reason="failed",
+            )
+            state_store.mark_processed_event(
+                service_name, person_id, channel_id, event.event_id
+            )
+            return
+        raise
     if hasattr(context, "logger"):
         with suppress(Exception):
             context.logger.info(
@@ -310,6 +438,106 @@ async def _handle_event(
             event.thread_ts,
             thread_state,
         )
+
+
+def _read_retry_context_from_context(context: Any) -> RetryContext:
+    raw = _read_retry_context_payload(context)
+    max_attempts = _max_agent_attempts()
+    if isinstance(raw, dict):
+        attempt_count = _positive_int(raw.get("attempt_count"), 1)
+        max_attempts = max(1, _positive_int(raw.get("max_attempts"), max_attempts))
+        return RetryContext(
+            attempt_count=attempt_count,
+            max_attempts=max_attempts,
+            is_final_attempt=bool(
+                raw.get("is_final_attempt", attempt_count >= max_attempts)
+            ),
+            run_id=str(raw.get("run_id", "") or ""),
+        )
+    return RetryContext(
+        attempt_count=1,
+        max_attempts=max_attempts,
+        is_final_attempt=False,
+    )
+
+
+def _read_retry_context_payload(context: Any) -> object:
+    shared_state = getattr(context, "shared_state", None)
+    if not isinstance(shared_state, dict):
+        return None
+    from guildbotics.runtime.workflow_invocation import (
+        WORKFLOW_INVOCATION_KEY,
+        WorkflowInvocation,
+    )
+
+    invocation = shared_state.get(WORKFLOW_INVOCATION_KEY)
+    if isinstance(invocation, dict):
+        payload = invocation.get("payload")
+        return payload.get("retry_context") if isinstance(payload, dict) else None
+    if isinstance(invocation, WorkflowInvocation):
+        return invocation.payload.get("retry_context")
+    return shared_state.get("retry_context")
+
+
+def _positive_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def _has_system_notice(
+    thread_state: ThreadConversationState, kind: str, source_event_id: str
+) -> bool:
+    return any(
+        notice.kind == kind and notice.source_event_id == source_event_id
+        for notice in thread_state.system_notices
+    )
+
+
+def _workflow_status_notice_text(
+    reason: str, retry_after_at: str = "", retry_after_text: str = ""
+) -> str:
+    if reason == "rate_limited":
+        retry_after = retry_after_text or retry_after_at
+        if retry_after:
+            return t(
+                "commands.workflows.chat_conversation_workflow.rate_limited_escalation_with_reset",
+                retry_after=retry_after,
+            )
+        return t(
+            "commands.workflows.chat_conversation_workflow.rate_limited_escalation"
+        )
+    return t("commands.workflows.chat_conversation_workflow.incomplete_escalation")
+
+
+def _record_rate_limited(
+    *,
+    person_id: str,
+    source_event_id: str,
+    run_id: str,
+    retry_after_at: str,
+    retry_after_text: str,
+) -> None:
+    record_correlated_event(
+        event_type="workflow.rate_limited",
+        default_source="event_listener",
+        person_id=person_id,
+        command="workflows/chat_conversation_workflow",
+        attributes={
+            "error.category": "rate_limited",
+            "rate_limit.retry_after_at": retry_after_at,
+            "rate_limit.retry_after_text": retry_after_text,
+        },
+        payload={
+            "category": "rate_limited",
+            "retry_after_at": retry_after_at,
+            "retry_after_text": retry_after_text,
+            "source_event_id": source_event_id,
+            "run_id": run_id,
+        },
+    )
 
 
 async def _build_agent_prompt_payload(

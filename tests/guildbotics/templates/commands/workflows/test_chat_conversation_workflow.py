@@ -6,13 +6,22 @@ import pytest
 
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person, Role
-from guildbotics.integrations.chat_service import ChatEvent, ChatIdentity
+from guildbotics.integrations.chat_service import (
+    ChatEvent,
+    ChatIdentity,
+    ChatPostResult,
+)
 from guildbotics.integrations.chat_state_store import (
     ThreadConversationState,
     ThreadHandoffState,
     ThreadMessageState,
+    ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+)
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
@@ -36,15 +45,23 @@ class StubLogger:
 class FakeChatService:
     def __init__(self) -> None:
         self.identity = ChatIdentity(user_id="U_ALICE", display_name="AliceBot")
-        self.posts: list[tuple[str, str, str | None]] = []
+        self.posts: list[tuple[str, str, str | None, dict[str, object] | None]] = []
         self.reactions: list[tuple[str, str, str]] = []
+        self.fail_identity = False
+        self.fail_post = False
 
     async def get_bot_identity(self) -> ChatIdentity:
+        if self.fail_identity:
+            raise RuntimeError("invalid_auth")
         return self.identity
 
-    async def post_message(self, channel_id, text, *, thread_ts=None):
-        self.posts.append((channel_id, text, thread_ts))
-        return "300.1"
+    async def post_message(self, channel_id, text, *, thread_ts=None, metadata=None):
+        if self.fail_post:
+            raise RuntimeError("is_archived")
+        self.posts.append((channel_id, text, thread_ts, metadata))
+        return ChatPostResult(
+            channel_id=channel_id, message_ts="300.1", thread_ts=thread_ts or "300.1"
+        )
 
     def normalize_participant_text(self, text, participant_labels):
         for user_id, label in participant_labels.items():
@@ -80,6 +97,20 @@ class FakeInvokeContext(types.SimpleNamespace):
         if name != "functions/handle_chat_event":
             return {}
         self._handle_calls += 1
+        if self.action == "rate_limit":
+            raise CliAgentExecutionError(
+                cli_agent="codex",
+                result=CliAgentExecutionResult(
+                    stdout="",
+                    stderr="rate limit",
+                    returncode=75,
+                    error_category="rate_limited",
+                    error_details={
+                        "retry_after_at": "2026-07-04T11:44:00+09:00",
+                        "retry_after_text": "11:44 AM",
+                    },
+                ),
+            )
         if self.action == "crash":
             # Simulate the CLI agent exiting non-zero (the brain raises).
             raise RuntimeError("agent exited non-zero")
@@ -603,6 +634,12 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("missing")
     _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 3,
+        "max_attempts": 3,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
 
     # A single dispatch retries the agent in-process up to the budget, then
     # escalates and stops (no exception bubbles out).
@@ -615,7 +652,7 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
         for name, kwargs in ctx.invocations
         if name == "functions/handle_chat_event"
     ]
-    assert len(handle_calls) == 3
+    assert len(handle_calls) == 2
     # All attempts share one run id and one conversation file so partial evidence
     # accumulates and retries resume the same agent conversation by id.
     run_ids = {kwargs["workflow_run_id"] for kwargs in handle_calls}
@@ -632,12 +669,16 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
         "slack", "alice", "C1"
     ).processed_event_ids == ["E1"]
     assert len(service.posts) == 1
-    channel_id, text, thread_ts = service.posts[0]
+    channel_id, text, thread_ts, metadata = service.posts[0]
     assert channel_id == "C1"
     assert thread_ts == "100.1"
     assert text == t(
         "commands.workflows.chat_conversation_workflow.incomplete_escalation"
     )
+    assert metadata is not None
+    assert metadata["event_type"] == "guildbotics.workflow_status"
+    assert metadata["event_payload"]["routing"] == "suppress"
+    assert metadata["event_payload"]["reason"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -647,6 +688,12 @@ async def test_agent_run_failure_escalates_and_stops(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")  # the agent run raises every attempt
     _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 2,
+        "max_attempts": 2,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
 
     # A failing agent run must be bounded and escalated, NOT raise out of the
     # workflow (which would leave the event queued for infinite retry).
@@ -659,11 +706,192 @@ async def test_agent_run_failure_escalates_and_stops(tmp_path, monkeypatch):
         for name, kwargs in ctx.invocations
         if name == "functions/handle_chat_event"
     ]
-    assert len(handle_calls) == 2  # bounded by the attempt budget
+    assert len(handle_calls) == 1  # invoke exceptions are left to pending backoff
     assert len(service.posts) == 1  # escalated to the thread
     assert state_store.load_channel_cursor(
         "slack", "alice", "C1"
     ).processed_event_ids == ["E1"]
+
+
+@pytest.mark.asyncio
+async def test_non_final_agent_run_failure_bubbles_for_pending_backoff(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("crash")
+    _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 1,
+        "max_attempts": 5,
+        "is_final_attempt": False,
+        "run_id": "run-1",
+    }
+
+    with pytest.raises(RuntimeError, match="agent exited non-zero"):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
+
+    assert service.posts == []
+    assert (
+        state_store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_retry_context_agent_failure_bubbles_for_pending_backoff(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("crash")
+    _set_incoming_event(ctx)
+
+    with pytest.raises(RuntimeError, match="agent exited non-zero"):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
+
+    assert service.posts == []
+    assert (
+        state_store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_posts_suppressed_notice_and_marks_processed(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("rate_limit")
+    _set_incoming_event(ctx)
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert len(service.posts) == 1
+    _channel_id, text, _thread_ts, metadata = service.posts[0]
+    assert "11:44 AM" in text
+    assert "2026-07-04T11:44:00+09:00" not in text
+    assert metadata is not None
+    payload = metadata["event_payload"]
+    assert payload["reason"] == "rate_limited"
+    assert payload["routing"] == "suppress"
+    assert payload["retry_after_at"] == "2026-07-04T11:44:00+09:00"
+    assert state_store.load_channel_cursor(
+        "slack", "alice", "C1"
+    ).processed_event_ids == ["E1"]
+    thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
+    assert len(thread_state.system_notices) == 1
+    assert thread_state.system_notices[0].reason == "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_system_notice_is_not_posted_again(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    state = ThreadConversationState(channel_id="C1", thread_ts="100.1")
+    state.system_notices.append(
+        ThreadSystemNoticeState(
+            kind="workflow_error",
+            reason="failed",
+            person_id="alice",
+            source_event_id="E1",
+            message_ts="300.1",
+        )
+    )
+    state_store.save_thread_state("slack", "alice", "C1", "100.1", state)
+    ctx = FakeInvokeContext("crash")
+    _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 5,
+        "max_attempts": 5,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert service.posts == []
+    assert state_store.load_channel_cursor(
+        "slack", "alice", "C1"
+    ).processed_event_ids == ["E1"]
+
+
+@pytest.mark.asyncio
+async def test_final_notice_post_failure_marks_processed_without_notice_state(tmp_path):
+    service = FakeChatService()
+    service.fail_post = True
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("crash")
+    _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 5,
+        "max_attempts": 5,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert service.posts == []
+    assert state_store.load_channel_cursor(
+        "slack", "alice", "C1"
+    ).processed_event_ids == ["E1"]
+    thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
+    assert thread_state.system_notices == []
+
+
+@pytest.mark.asyncio
+async def test_final_prerun_identity_failure_marks_processed(tmp_path):
+    service = FakeChatService()
+    service.fail_identity = True
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("reply")
+    _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 5,
+        "max_attempts": 5,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert ctx.invocations == []
+    assert state_store.load_channel_cursor(
+        "slack", "alice", "C1"
+    ).processed_event_ids == ["E1"]
+
+
+@pytest.mark.asyncio
+async def test_non_final_prerun_identity_failure_bubbles(tmp_path):
+    service = FakeChatService()
+    service.fail_identity = True
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("reply")
+    _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 1,
+        "max_attempts": 5,
+        "is_final_attempt": False,
+        "run_id": "run-1",
+    }
+
+    with pytest.raises(RuntimeError, match="invalid_auth"):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
+
+    assert (
+        state_store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+        == []
+    )
 
 
 @pytest.mark.asyncio

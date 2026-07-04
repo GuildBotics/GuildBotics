@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 SemanticReaction = Literal["ack", "agree", "celebrate", "support"]
 SEMANTIC_REACTIONS: tuple[SemanticReaction, ...] = (
@@ -31,6 +31,7 @@ class ChatEvent:
     is_edit_or_delete: bool = False
     is_bot_message: bool = False
     is_thread_reply: bool = False
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def is_from_user(self, user_id: str | None) -> bool:
         if not user_id:
@@ -86,7 +87,12 @@ class ChatService(ABC):
 
     @abstractmethod
     async def post_message(
-        self, channel_id: str, text: str, *, thread_ts: str | None = None
+        self,
+        channel_id: str,
+        text: str,
+        *,
+        thread_ts: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> ChatPostResult:
         """Post a message, optionally as a thread reply."""
 

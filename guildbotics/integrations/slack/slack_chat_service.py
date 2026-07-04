@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from logging import Logger
 from typing import Any, cast
@@ -13,6 +14,9 @@ from guildbotics.integrations.chat_service import (
     ChatPostResult,
     ChatService,
     SemanticReaction,
+)
+from guildbotics.integrations.chat_workflow_status import (
+    normalize_workflow_status_metadata,
 )
 from guildbotics.integrations.slack.message_events import (
     is_bot_message,
@@ -73,7 +77,11 @@ class SlackChatService(ChatService):
         latest_ts: str | None = None,
         limit: int = 100,
     ) -> ChatEventPage:
-        form: dict[str, str] = {"channel": channel_id, "limit": str(limit)}
+        form: dict[str, str] = {
+            "channel": channel_id,
+            "limit": str(limit),
+            "include_all_metadata": "true",
+        }
         if cursor:
             form["cursor"] = cursor
         if oldest_ts:
@@ -110,6 +118,7 @@ class SlackChatService(ChatService):
             "channel": channel_id,
             "ts": thread_ts,
             "limit": str(limit),
+            "include_all_metadata": "true",
         }
         if cursor:
             form["cursor"] = cursor
@@ -170,11 +179,18 @@ class SlackChatService(ChatService):
             cursor = next_cursor
 
     async def post_message(
-        self, channel_id: str, text: str, *, thread_ts: str | None = None
+        self,
+        channel_id: str,
+        text: str,
+        *,
+        thread_ts: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> ChatPostResult:
         form: dict[str, str] = {"channel": channel_id, "text": text}
         if thread_ts:
             form["thread_ts"] = thread_ts
+        if metadata:
+            form["metadata"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         payload = await self._post_form("chat.postMessage", form)
         ts = str(payload.get("ts", ""))
         return ChatPostResult(
@@ -275,6 +291,7 @@ class SlackChatService(ChatService):
             mentions=_extract_mentions(text),
             is_bot_message=is_bot_message(raw),
             is_thread_reply=thread_ts != message_ts,
+            metadata=normalize_workflow_status_metadata(raw.get("metadata")),
         )
 
 

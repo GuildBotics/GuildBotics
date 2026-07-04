@@ -24,6 +24,19 @@ class ThreadHandoffState:
 
 
 @dataclass(slots=True)
+class ThreadSystemNoticeState:
+    kind: str
+    person_id: str
+    source_event_id: str
+    reason: str = "failed"
+    message_ts: str = ""
+    run_id: str = ""
+    retry_after_at: str = ""
+    retry_after_text: str = ""
+    recorded_at: str = ""
+
+
+@dataclass(slots=True)
 class ThreadConversationState:
     channel_id: str
     thread_ts: str
@@ -31,6 +44,7 @@ class ThreadConversationState:
     thread_topic: str = ""
     latest_focus: str = ""
     handoffs: list[ThreadHandoffState] = field(default_factory=list)
+    system_notices: list[ThreadSystemNoticeState] = field(default_factory=list)
     backfill_disabled_reason: str = ""
     backfill_error_count: int = 0
     last_backfill_error: str = ""
@@ -63,6 +77,10 @@ class PendingChatEvent:
 
     event: ChatEvent
     chat_participation: str = "strict"
+    attempt_count: int = 0
+    max_attempts: int = 5
+    next_attempt_at: str | None = None
+    run_id: str = ""
 
 
 class ConversationStateStore(ABC):
@@ -168,6 +186,16 @@ class ConversationStateStore(ABC):
         chat_participation: str = "strict",
     ) -> None:
         """Durably store an unprocessed event (idempotent by event_id)."""
+
+    @abstractmethod
+    def save_pending_event(
+        self,
+        service: str,
+        person_id: str,
+        channel_id: str,
+        pending: PendingChatEvent,
+    ) -> None:
+        """Persist an already loaded pending event, including retry state."""
 
     @abstractmethod
     def remove_pending_event(

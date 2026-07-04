@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -49,6 +50,10 @@ async def test_list_channel_events_normalizes_messages():
                     "user": "UUSER1",
                     "text": "<@UBOT123> hi",
                     "ts": "100.1",
+                    "metadata": {
+                        "event_type": "guildbotics.workflow_status",
+                        "event_payload": {"routing": "suppress", "reason": "failed"},
+                    },
                 },
                 {
                     "type": "message",
@@ -101,12 +106,14 @@ async def test_list_channel_events_normalizes_messages():
     assert len(page.events) == expected_event_count
     assert page.events[0].event_id == "C1:100.1"
     assert page.events[0].mentions == ["UBOT123"]
+    assert page.events[0].metadata["event_type"] == "guildbotics.workflow_status"
     assert page.events[0].is_thread_reply is False
     assert page.events[1].is_bot_message is True
     assert page.events[2].event_id == "C1:102.1"
     assert page.events[2].text == "please check this file"
     assert "oldest=90.0" in seen_body
     assert "latest=110.0" in seen_body
+    assert "include_all_metadata=true" in seen_body
     await client.aclose()
 
 
@@ -135,6 +142,13 @@ async def test_list_thread_events_uses_conversations_replies():
                         "text": "reply",
                         "ts": "100.2",
                         "thread_ts": "100.1",
+                        "metadata": {
+                            "event_type": "guildbotics.workflow_status",
+                            "event_payload": {
+                                "routing": "suppress",
+                                "reason": "failed",
+                            },
+                        },
                     },
                 ],
             },
@@ -147,8 +161,10 @@ async def test_list_thread_events_uses_conversations_replies():
     page = await svc.list_thread_events("C1", thread_ts="100.1", limit=20)
     assert "ts=100.1" in seen_body
     assert "limit=20" in seen_body
+    assert "include_all_metadata=true" in seen_body
     assert [event.text for event in page.events] == ["root", "reply"]
     assert page.events[1].is_thread_reply is True
+    assert page.events[1].metadata["event_type"] == "guildbotics.workflow_status"
     await client.aclose()
 
 
@@ -211,7 +227,15 @@ async def test_post_message_and_add_reaction_send_expected_payloads():
     svc = SlackChatService(
         logging.getLogger("test"), client=client, base_url="https://x.test"
     )
-    res = await svc.post_message("C1", "hello", thread_ts="100.1")
+    res = await svc.post_message(
+        "C1",
+        "hello",
+        thread_ts="100.1",
+        metadata={
+            "event_type": "guildbotics.workflow_status",
+            "event_payload": {"routing": "suppress"},
+        },
+    )
     await svc.add_reaction("C1", "100.1", "ack")
     assert res.message_ts == "200.1"
     assert res.thread_ts == "100.1"
@@ -219,6 +243,9 @@ async def test_post_message_and_add_reaction_send_expected_payloads():
         path.endswith("/chat.postMessage") and "thread_ts=100.1" in body
         for path, body in seen
     )
+    post_body = next(body for path, body in seen if path.endswith("/chat.postMessage"))
+    metadata_json = parse_qs(post_body)["metadata"][0]
+    assert "guildbotics.workflow_status" in metadata_json
     assert any(
         path.endswith("/reactions.add") and "name=white_check_mark" in body
         for path, body in seen

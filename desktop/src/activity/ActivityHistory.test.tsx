@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 
 import {
   ActivityHistoryPage,
@@ -212,6 +213,36 @@ describe("ActivityHistoryPage", () => {
 
     const bar = await screen.findByRole("button", { name: "First task +1" });
     expect(bar).toHaveClass("activity-session-mixed");
+  });
+
+  it("marks rate limited sessions and shows the reset in hover detail", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      events: [],
+      sessions: [
+        {
+          ...ACTIVITY_FIXTURE.sessions[0],
+          trace_id: "rate",
+          title: "Slack thread",
+          mode: "workflow",
+          status: "rate_limited",
+          rate_limit: {
+            retry_after_at: "2026-07-01T03:30:00Z",
+            retry_after_text: "3:30 AM",
+          },
+        },
+      ],
+    });
+    renderActivity();
+
+    const bar = await screen.findByRole("button", { name: "Slack thread" });
+    expect(bar).toHaveClass("activity-session-rate-limited");
+
+    await user.hover(bar);
+
+    expect(await screen.findByText("Rate limited")).toBeInTheDocument();
+    expect(await screen.findByText(/Reset:/)).toBeInTheDocument();
   });
 
   it("drops the current-time line in week view but keeps it in day view", async () => {
@@ -584,7 +615,9 @@ function renderActivity() {
   return render(
     <MantineProvider theme={theme}>
       <QueryClientProvider client={queryClient}>
-        <ActivityHistoryPage />
+        <MemoryRouter>
+          <ActivityHistoryPage />
+        </MemoryRouter>
       </QueryClientProvider>
     </MantineProvider>,
   );

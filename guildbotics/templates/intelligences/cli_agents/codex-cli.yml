@@ -5,7 +5,18 @@ env:
 script: |
   res=$(mktemp)
   log=$(mktemp)
+
+  cleanup() {
+    rm -f "$res" "$log"
+  }
+  trap cleanup EXIT HUP INT TERM
+
+  emit_rate_limit_marker() {
+    python3 -c 'import json, sys; payload = {"category": "rate_limited", "retry_after_text": sys.argv[1]}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))' "$1"
+  }
+
   status=0
+
   # Run non-interactively inside Codex's workspace-write sandbox instead of
   # fully bypassing approvals + sandbox. File writes stay confined to the repo
   # checkout (the subprocess cwd), the workspace data dir, and temp dirs, while
@@ -28,14 +39,39 @@ script: |
   else
     set --
   fi
+
   DEBUG=true codex exec \
     --skip-git-repo-check \
     --sandbox workspace-write \
     "$@" \
     -c sandbox_workspace_write.network_access=true \
     --output-last-message "$res" \
-    < "$PROMPT_FILE" >"$log" 2>&1 || status=$?
+    < "$PROMPT_FILE" \
+    > "$log" \
+    2>&1 || status=$?
+
+  # Codex reports subscription usage exhaustion with this stable prefix.
+  # The reset time is rendered in the CLI process's local timezone.
+  if [ "$status" -ne 0 ] && grep -Fqi \
+    "You've hit your usage limit" \
+    "$log"
+  then
+    retry_after_text=$(
+      grep -Ehoi \
+        'try again at (([A-Za-z]{3} [0-9]{1,2}(st|nd|rd|th), [0-9]{4}) )?[0-9]{1,2}:[0-9]{2} (AM|PM)' \
+        "$log" 2>/dev/null |
+        head -n1
+    )
+
+    cat "$log" >&2
+    cat "$res"
+
+    emit_rate_limit_marker "$retry_after_text" >&2
+
+    exit 75
+  fi
+
   cat "$log" >&2
   cat "$res"
-  rm -f "$res" "$log"
+
   exit "$status"
