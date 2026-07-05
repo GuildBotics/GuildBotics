@@ -763,6 +763,26 @@ pre {
   font-size: 11px;
 }
 
+.activity-member-rate-limit {
+  align-items: center;
+  color: #b4233f;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 800;
+  gap: 4px;
+  letter-spacing: 0;
+  line-height: 1.2;
+  margin-top: 4px;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.activity-member-rate-limit span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .activity-timeline-head {
   align-items: stretch;
   display: grid;
@@ -866,6 +886,7 @@ pre {
   display: flex;
   font-size: 11px;
   font-weight: 700;
+  gap: 4px;
   height: 28px;
   line-height: 1;
   min-width: 0;
@@ -895,6 +916,10 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activity-session-alert-icon {
+  flex: 0 0 auto;
 }
 
 .activity-session-interactive {
