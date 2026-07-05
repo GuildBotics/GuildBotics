@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-# Env var naming a per-dispatch file the CLI agent script uses to pin the agent
+# Env var naming a per-dispatch file the AI CLI tool script uses to pin the agent
 # conversation across retries. Antigravity writes the conversation id it created
 # on the first attempt and resumes it with ``agy --conversation <id>`` on retries
 # (never ``--continue``, which would resume whatever conversation last ran in the
@@ -34,7 +34,7 @@ async def run_with_completion_retry[T](
     until the attempt budget is exhausted.
 
     This is the single retry mechanism shared by the chat and ticket workflows so
-    a slow, multi-turn CLI agent (which may yield mid-task without finalizing) is
+    a slow, multi-turn AI CLI tool (which may yield mid-task without finalizing) is
     driven to completion in one dispatch instead of relying on the outer
     re-dispatch / re-selection layers, which differ between the two workflows.
 
@@ -43,7 +43,7 @@ async def run_with_completion_retry[T](
     same run and the final ``complete`` can land on top of it, instead of being
     stranded under a per-attempt id.
 
-    A failed agent run (``invoke`` raises, e.g. the CLI agent exited non-zero) is
+    A failed agent run (``invoke`` raises, e.g. the AI CLI tool exited non-zero) is
     treated the same as a missing completion record (``check_completion`` raises):
     it consumes an attempt and, once the budget is exhausted, surfaces as
     ``CompletionRetryExhausted`` so the caller escalates instead of letting the

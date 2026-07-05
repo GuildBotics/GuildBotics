@@ -17,7 +17,7 @@ GuildBotics is a multi-agent task scheduling and command execution framework. It
 - **Multi-Agent Support**: Multiple AI agents with different roles and personalities
 - **Task Scheduling**: Cron-based scheduled commands and routine commands per person
 - **Pluggable Commands**: Language-agnostic command execution framework (Markdown/Python/Shell/YAML)
-- **Brain Abstraction**: Supports multiple LLM providers (Google Gemini, OpenAI, Anthropic Claude) and CLI agents
+- **Brain Abstraction**: Supports multiple LLM providers (Google Gemini, OpenAI, Anthropic Claude) and AI CLI tools
 - **Extensible Integrations**: Pluggable integration framework for external services
 - **Internationalization**: Multi-language support via i18n
 - **Desktop Boundary**: Local API daemon for the planned Tauri desktop application
@@ -26,7 +26,7 @@ GuildBotics is a multi-agent task scheduling and command execution framework. It
 
 - **Ticket-Driven Workflow** (default): Processes tasks from GitHub Projects/Issues
 - **Custom Workflows**: Any scheduled automation tasks using the command framework
-- **CLI Agent Integration**: Delegates complex tasks to Google Antigravity CLI, OpenAI Codex CLI, or Claude Code
+- **AI CLI Tool Integration**: Delegates complex tasks to Google Antigravity CLI, OpenAI Codex CLI, or Claude Code
 
 ---
 
@@ -298,7 +298,7 @@ sequenceDiagram
 flowchart TD
     A[GitHub Projects] -->|get_task_to_work_on| B[Issue or PR Review Task]
     B -->|checkout work branch| C[Repository Workspace]
-    C -->|delegate URL and context| D[CLI Agent]
+    C -->|delegate URL and context| D[AI CLI Tool]
     D -->|structured result| E[GuildBotics]
     E -->|member credential| F[GitHub writes]
     F -->|comments / PR / tickets / lane update| A

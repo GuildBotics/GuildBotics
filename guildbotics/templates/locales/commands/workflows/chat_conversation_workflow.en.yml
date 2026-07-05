@@ -2,5 +2,5 @@ en:
   context_location: "Chat Conversation"
   reply_generation_failed: "Sorry, I couldn't generate a reply right now. Please try again. If this keeps happening, contact the administrator."
   incomplete_escalation: "Sorry, I tried a few times but couldn't complete this request automatically. Please review it and re-send the request if needed."
-  rate_limited_escalation: "I cannot continue this workflow right now because the CLI agent is rate-limited. I will not retry this event automatically."
-  rate_limited_escalation_with_reset: "I cannot continue this workflow right now because the CLI agent is rate-limited. Reset: %{retry_after}. I will not retry this event automatically."
+  rate_limited_escalation: "I cannot continue this workflow right now because the AI CLI tool is rate-limited. I will not retry this event automatically."
+  rate_limited_escalation_with_reset: "I cannot continue this workflow right now because the AI CLI tool is rate-limited. Reset: %{retry_after}. I will not retry this event automatically."

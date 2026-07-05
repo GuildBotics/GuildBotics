@@ -1,7 +1,7 @@
 # PyInstaller spec for the GuildBotics member CLI bundled with the desktop app.
 #
 # The desktop bundle installs this binary as `guildbotics` in a user-accessible
-# location on first launch, so external CLI agents can call `guildbotics member`.
+# location on first launch, so external AI CLI tools can call `guildbotics member`.
 
 import os
 

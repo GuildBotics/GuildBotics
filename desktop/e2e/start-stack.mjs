@@ -232,11 +232,11 @@ async function seedWorkspace() {
   console.log(`${tag} seeded configured workspace (workspace=${workspaceDir})`);
 }
 
-// Override the default CLI agent script in the seeded workspace with a mock that
+// Override the default AI CLI tool script in the seeded workspace with a mock that
 // echoes a canned response instead of spawning the real `codex` process. The
 // workspace config dir takes precedence over the packaged template, so the
 // scenario diagnostics' cli_agent check stays fast and deterministic and never
-// depends on a real CLI agent being installed or reachable. The "codex" token is
+// depends on a real AI CLI tool being installed or reachable. The "codex" token is
 // kept so executable detection still resolves to the configured agent.
 function seedMockCliAgent() {
   const cliAgentsDir = join(configDir, "intelligences", "cli_agents");
@@ -246,7 +246,7 @@ function seedMockCliAgent() {
     [
       "env:",
       "script: |",
-      "  # codex mock CLI agent for e2e (no real codex process is spawned).",
+      "  # codex mock AI CLI tool for e2e (no real codex process is spawned).",
       '  cat "$PROMPT_FILE" > /dev/null 2>&1 || true',
       '  echo "OK"',
       "",

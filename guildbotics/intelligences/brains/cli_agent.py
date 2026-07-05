@@ -100,7 +100,7 @@ class CliAgentExecutionError(RuntimeError):
         detail = result.stderr or result.stdout or "no output"
         super().__init__(
             message
-            or f"CLI agent '{cli_agent}' exited with code {result.returncode}: {detail}"
+            or f"AI CLI tool '{cli_agent}' exited with code {result.returncode}: {detail}"
         )
 
 
@@ -232,7 +232,7 @@ def _parse_cli_agent_error_marker(
         except json.JSONDecodeError as exc:
             if logger is not None:
                 with suppress(Exception):
-                    logger.warning("failed to parse CLI agent error marker: %s", exc)
+                    logger.warning("failed to parse AI CLI tool error marker: %s", exc)
             return "", {}
         if not isinstance(parsed, dict):
             return "", {}
@@ -333,7 +333,7 @@ class PromptInfo:
             template_engine (str): The template engine to use for placeholder replacement.
 
         Returns:
-            str: A Markdown-formatted prompt ready to send to the CLI agent.
+            str: A Markdown-formatted prompt ready to send to the AI CLI tool.
         """
         # Create JSON schema for the response model
         description = replace_placeholders(
@@ -345,7 +345,7 @@ class PromptInfo:
 
 class CliAgentBrain(Brain):
     """
-    Intelligence that runs a CLI agent.
+    Intelligence that runs an AI CLI tool.
     """
 
     def __init__(
@@ -379,7 +379,7 @@ class CliAgentBrain(Brain):
 
     async def run(self, message: str, **kwargs):
         """
-        Run the CLI agent with the provided arguments.
+        Run the AI CLI tool with the provided arguments.
 
         Args:
             message (str): The message to pass to the agent.
@@ -393,7 +393,7 @@ class CliAgentBrain(Brain):
         # logs emitted here are attributed to the "cli_agent" span in diagnostics.
         with span_scope("cli_agent"):
             self.logger.debug(
-                f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
+                f"Running AI CLI tool '{self.cli_agent}' with input:\n{input}\n\n"
             )
             self._write_request_trace(input, kwargs)
 
@@ -415,7 +415,7 @@ class CliAgentBrain(Brain):
             self._raise_if_execution_failed(result)
 
             self.logger.debug(
-                f"CLI agent '{self.cli_agent}' produced output:\n{output}\n\n"
+                f"AI CLI tool '{self.cli_agent}' produced output:\n{output}\n\n"
             )
             if self.response_class:
                 output = to_response_class(output, self.response_class)
@@ -439,7 +439,7 @@ class CliAgentBrain(Brain):
         )
         with span_scope("cli_agent"):
             self.logger.debug(
-                f"Running CLI agent '{self.cli_agent}' with input:\n{input}\n\n"
+                f"Running AI CLI tool '{self.cli_agent}' with input:\n{input}\n\n"
             )
             self._write_request_trace(input, kwargs)
 
@@ -468,12 +468,12 @@ class CliAgentBrain(Brain):
         if result.returncode != 0:
             detail = result.stderr or result.stdout or "no output"
             raise RuntimeError(
-                f"CLI agent '{self.cli_agent}' exited with code {result.returncode}: {detail}"
+                f"AI CLI tool '{self.cli_agent}' exited with code {result.returncode}: {detail}"
             )
         if not result.stdout:
             detail = result.stderr or "no output"
             raise RuntimeError(
-                f"CLI agent '{self.cli_agent}' produced no response: {detail}"
+                f"AI CLI tool '{self.cli_agent}' produced no response: {detail}"
             )
 
     async def _execute_script(
@@ -526,12 +526,12 @@ class CliAgentBrain(Brain):
                 stderr=asyncio.subprocess.PIPE,
             )
             self.logger.info(
-                f"Running CLI agent '{self.cli_agent}' with script: {self.executable_info.script}"
+                f"Running AI CLI tool '{self.cli_agent}' with script: {self.executable_info.script}"
             )
             self.logger.debug(f"Environment: {self._mask_env(env)}")
             stdout, stderr = await process.communicate()
             self.logger.info(
-                f"CLI Agent '{self.cli_agent}' finished execution with return code {process.returncode}"
+                f"AI CLI Tool '{self.cli_agent}' finished execution with return code {process.returncode}"
             )
 
             # Log the outputs
@@ -543,13 +543,13 @@ class CliAgentBrain(Brain):
                         f.write(stderr_output)
 
             response = stdout.decode(errors="replace")
-            self.logger.info(f"CLI Agent '{self.cli_agent}' response:\n{response}")
+            self.logger.info(f"AI CLI Tool '{self.cli_agent}' response:\n{response}")
             if response_file:
                 with open(response_file, "w") as f:
                     f.write(response)
 
             if process.returncode != 0:
-                self.logger.error(f"CLI Agent exited with code {process.returncode}")
+                self.logger.error(f"AI CLI Tool exited with code {process.returncode}")
             error_category, error_details = _parse_cli_agent_error_marker(
                 stderr_output, self.logger
             )
@@ -606,7 +606,7 @@ class CliAgentBrain(Brain):
 
     def remove_temp_file(self, file_name: str):
         """
-        Remove temporary files created during the execution of the CLI agent.
+        Remove temporary files created during the execution of the AI CLI tool.
         """
         with suppress(OSError):
             os.remove(file_name)

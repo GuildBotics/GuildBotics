@@ -52,10 +52,10 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("textbox", { name: "GitHub integration" }).click();
   await page.getByRole("option", { name: "Use GitHub", exact: true }).click();
 
-  // LLM / CLI agent section: provide an API key for the default OpenAI provider.
+  // LLM / AI CLI tools section: provide an API key for the default OpenAI provider.
   // The section nav buttons share text with option cards (e.g. "GitHub" vs
   // "GitHub Copilot CLI"), so match the nav buttons exactly.
-  await page.getByRole("button", { name: "LLM / CLI agent", exact: true }).click();
+  await page.getByRole("button", { name: "LLM / AI CLI tools", exact: true }).click();
   await page.getByLabel("OpenAI API key").fill("sk-e2e-test-key");
 
   // Members section (now before GitHub): add one active member so the section is
