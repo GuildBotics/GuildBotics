@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   CircleDot,
   Clock3,
   ExternalLink,
@@ -295,11 +296,14 @@ function ActivityTimelineRow({
   member?: ActivityHistoryMember;
   team?: boolean;
 }) {
+  const { t } = useTranslation();
   const blocks = buildActivityBlocks(sessions);
   const weekSessionCount = view === "week" ? maxWeekSessionCount(sessions, range) : 0;
   const rowMinHeight = team ? 38 : view === "week" ? weekRowMinHeight(weekSessionCount) : 86;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
   const visibleEvents = view === "week" && !team ? [] : events;
+  const activeRateLimit = member ? activeRateLimitForSessions(sessions, now ?? new Date()) : null;
+  const activeRateLimitReset = activeRateLimit ? formatRateLimitReset(activeRateLimit) : "";
   return (
     <div className={team ? "activity-row activity-row-events" : "activity-row"}>
       <div className="activity-member-cell">
@@ -314,6 +318,13 @@ function ActivityTimelineRow({
         <div className="activity-member-info">
           <span className="activity-member-name">{label}</span>
           {member ? <MemberCliAgentRole member={member} /> : null}
+          {activeRateLimit ? (
+            <span className="activity-member-rate-limit">
+              <CircleAlert size={12} aria-hidden="true" />
+              <span>{t("activity.rateLimit.label")}</span>
+              {activeRateLimitReset ? <span>{activeRateLimitReset}</span> : null}
+            </span>
+          ) : null}
         </div>
       </div>
       <div className="activity-timeline-cell" style={{ minHeight: rowMinHeight }}>
@@ -437,6 +448,7 @@ function ActivityBlockBar({
   matched: boolean;
   searchActive: boolean;
 }) {
+  const { t } = useTranslation();
   const start = new Date(block.display_started_at);
   const end = new Date(block.display_ended_at);
   const left = positionInRange(start, range);
@@ -445,12 +457,18 @@ function ActivityBlockBar({
   const stateClass = searchStateClass(searchActive, matched);
   const visibleTitle = activityBlockVisibleTitle(block.title);
   const rateLimitClass = block.rate_limit ? "activity-session-rate-limited" : "";
+  const rateLimitReset = block.rate_limit ? formatRateLimitReset(block.rate_limit) : "";
+  const ariaLabel = block.rate_limit
+    ? `${t("activity.rateLimit.label")}: ${block.title}${
+        rateLimitReset ? ` (${t("activity.rateLimit.reset", { reset: rateLimitReset })})` : ""
+      }`
+    : block.title;
   return (
     <HoverCard openDelay={150} closeDelay={80} withinPortal position={blockHoverCardPosition(view)}>
       <HoverCard.Target>
         <button
           type="button"
-          aria-label={block.title}
+          aria-label={ariaLabel}
           className={`${stateClass} activity-session activity-session-${block.mode} ${rateLimitClass} ${
             view === "week" ? "activity-session-week" : ""
           }`}
@@ -458,6 +476,9 @@ function ActivityBlockBar({
             ...(view === "day" ? { left: `${left}%`, top: "10px", width: `${width}%` } : {}),
           }}
         >
+          {block.rate_limit ? (
+            <CircleAlert className="activity-session-alert-icon" size={13} aria-hidden="true" />
+          ) : null}
           <span>{visibleTitle}</span>
         </button>
       </HoverCard.Target>
@@ -881,6 +902,31 @@ function formatRateLimitReset(
     return formatTime(rateLimit.retry_after_at);
   }
   return rateLimit.retry_after_text;
+}
+
+function activeRateLimitForSessions(
+  sessions: ActivityHistorySession[],
+  now: Date,
+): NonNullable<ActivityHistorySession["rate_limit"]> | null {
+  const nowMs = now.getTime();
+  return sessions.reduce<NonNullable<ActivityHistorySession["rate_limit"]> | null>(
+    (current, session) => {
+      const rateLimit = session.rate_limit;
+      if (!rateLimit?.retry_after_at) {
+        return current;
+      }
+      const retryAfterMs = new Date(rateLimit.retry_after_at).getTime();
+      if (!Number.isFinite(retryAfterMs) || retryAfterMs <= nowMs) {
+        return current;
+      }
+      if (!current) {
+        return rateLimit;
+      }
+      const currentMs = new Date(current.retry_after_at).getTime();
+      return retryAfterMs > currentMs ? rateLimit : current;
+    },
+    null,
+  );
 }
 
 function activityBlockVisibleTitle(title: string): string {

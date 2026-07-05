@@ -215,7 +215,7 @@ describe("ActivityHistoryPage", () => {
     expect(bar).toHaveClass("activity-session-mixed");
   });
 
-  it("marks rate limited sessions and shows the reset in hover detail", async () => {
+  it("marks rate limited sessions and shows active member rate limits", async () => {
     const user = userEvent.setup();
     vi.mocked(getActivityHistory).mockResolvedValue({
       ...ACTIVITY_FIXTURE,
@@ -228,7 +228,7 @@ describe("ActivityHistoryPage", () => {
           mode: "workflow",
           status: "rate_limited",
           rate_limit: {
-            retry_after_at: "2026-07-01T03:30:00Z",
+            retry_after_at: "2999-07-01T03:30:00Z",
             retry_after_text: "3:30 AM",
           },
         },
@@ -236,12 +236,16 @@ describe("ActivityHistoryPage", () => {
     });
     renderActivity();
 
-    const bar = await screen.findByRole("button", { name: "Slack thread" });
+    const bar = await screen.findByRole("button", { name: /Rate limited: Slack thread/ });
     expect(bar).toHaveClass("activity-session-rate-limited");
+    expect(bar.querySelector(".activity-session-alert-icon")).not.toBe(null);
+    expect(
+      (await screen.findByText("Rate limited")).closest(".activity-member-rate-limit"),
+    ).not.toBe(null);
 
     await user.hover(bar);
 
-    expect(await screen.findByText("Rate limited")).toBeInTheDocument();
+    expect((await screen.findAllByText("Rate limited")).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Reset:/)).toBeInTheDocument();
   });
 
