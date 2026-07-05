@@ -5,6 +5,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_state_store import (
@@ -38,11 +39,13 @@ class PendingChatDispatcher:
         workflow_command: str = "workflows/chat_conversation_workflow",
         state_store: ConversationStateStore | None = None,
         service_run_id: str | None = None,
+        execution_coordinator: ExecutionCoordinator | None = None,
     ) -> None:
         self._context = context
         self._workflow_command = workflow_command
         self._state_store = state_store or FileConversationStateStore()
         self._service_run_id = service_run_id
+        self._execution = execution_coordinator or ExecutionCoordinator()
 
     async def process_person(
         self, person: Person, stop_event: threading.Event | None = None
@@ -102,18 +105,28 @@ class PendingChatDispatcher:
         pending: PendingChatEvent,
     ) -> int:
         event_id = pending.event.event_id
-        if not pending.run_id:
-            pending.run_id = uuid4().hex
-        if pending.attempt_count <= 0:
-            pending.max_attempts = _max_pending_attempts()
-        pending.attempt_count = max(0, pending.attempt_count) + 1
-        pending.max_attempts = max(1, pending.max_attempts)
-        pending.next_attempt_at = None
-        self._state_store.save_pending_event(
-            service, person.person_id, channel_id, pending
-        )
         try:
-            await self._run_workflow(person, service, channel_id, pending)
+            with self._execution.track_work(
+                source="event_queue",
+                person_id=person.person_id,
+                command=self._workflow_command,
+            ):
+                # Consume a retry attempt only once the work is accepted, so a
+                # dispatch rejected while the runtime drains does not burn the
+                # event's retry budget without ever running the workflow.
+                if not pending.run_id:
+                    pending.run_id = uuid4().hex
+                if pending.attempt_count <= 0:
+                    pending.max_attempts = _max_pending_attempts()
+                pending.attempt_count = max(0, pending.attempt_count) + 1
+                pending.max_attempts = max(1, pending.max_attempts)
+                pending.next_attempt_at = None
+                self._state_store.save_pending_event(
+                    service, person.person_id, channel_id, pending
+                )
+                await self._run_workflow(person, service, channel_id, pending)
+        except WorkRejectedError:
+            return 0
         except Exception as exc:  # leave queued for retry; do not block the queue
             pending.next_attempt_at = _next_attempt_at(pending.attempt_count)
             self._state_store.save_pending_event(

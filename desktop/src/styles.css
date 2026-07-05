@@ -63,6 +63,43 @@ body {
   text-decoration: none;
 }
 
+.nav-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-status-indicator {
+  background: #22c55e;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.18);
+  display: inline-block;
+  flex: 0 0 auto;
+  height: 9px;
+  margin-left: auto;
+  width: 9px;
+}
+
+.nav-status-indicator.stopping {
+  animation: nav-status-pulse 1s ease-in-out infinite;
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.18);
+}
+
+@keyframes nav-status-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.86);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .nav-item:hover {
   background: #26343c;
 }

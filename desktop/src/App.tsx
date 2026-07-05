@@ -55,6 +55,8 @@ import {
   type RuntimeEvent,
   type RuntimeLog,
   type ChatReceiveResetResponse,
+  type RuntimeActiveWork,
+  type RuntimeStatus,
   type SchedulerStartRequest,
   type RuntimeUnitStatus,
   type TraceDetailResponse,
@@ -98,6 +100,7 @@ const DIAGNOSTICS_TABS = new Set<DiagnosticsTab>([
   "memory",
   "promptTrace",
 ]);
+type NavRuntimeState = "running" | "stopping" | "stopped";
 
 type MemoryEventFocus = {
   docId: string;
@@ -112,8 +115,24 @@ export function App() {
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const configured = Boolean(config.data?.project_file_exists);
+  const runtimeStatus = useQuery({
+    queryKey: ["scheduler"],
+    queryFn: getSchedulerStatus,
+    enabled: configured,
+    refetchInterval: 5000,
+  });
+  const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
+  const commandNavState = commandRuntimeNavState(runtimeStatus.data);
+  const closeGuard = useAppCloseGuard();
   return (
     <main className="shell">
+      <AppCloseBlockedModal
+        error={closeGuard.forceQuitError}
+        forceQuitting={closeGuard.forceQuitting}
+        opened={closeGuard.blocked}
+        onCancel={closeGuard.cancel}
+        onForceQuit={() => void closeGuard.forceStopAndQuit()}
+      />
       <aside className="sidebar">
         <div>
           <h1>GuildBotics</h1>
@@ -125,10 +144,20 @@ export function App() {
             </NavLink>
           ) : null}
           <NavLink className="nav-item" to="/service">
-            <Activity size={18} /> {t("app.nav.service")}
+            <Activity size={18} />
+            <span className="nav-item-label">{t("app.nav.service")}</span>
+            <NavStatusIndicator
+              label={t(`app.navStatus.service.${serviceNavState}`)}
+              state={serviceNavState}
+            />
           </NavLink>
           <NavLink className="nav-item" to="/commands">
-            <Terminal size={18} /> {t("app.nav.commands")}
+            <Terminal size={18} />
+            <span className="nav-item-label">{t("app.nav.commands")}</span>
+            <NavStatusIndicator
+              label={t(`app.navStatus.commands.${commandNavState}`)}
+              state={commandNavState}
+            />
           </NavLink>
           <NavLink className="nav-item" to="/diagnostics">
             <TriangleAlert size={18} /> {t("app.nav.diagnostics")}
@@ -172,6 +201,172 @@ export function App() {
         </Routes>
       </section>
     </main>
+  );
+}
+
+function NavStatusIndicator({ state, label }: { state: NavRuntimeState; label: string }) {
+  if (state === "stopped") {
+    return null;
+  }
+  return (
+    <span
+      aria-label={label}
+      className={`nav-status-indicator ${state}`}
+      role="status"
+      title={label}
+    />
+  );
+}
+
+function serviceRuntimeNavState(status: RuntimeStatus | undefined): NavRuntimeState {
+  if (!status) {
+    return "stopped";
+  }
+  if (runtimeUnitsStopping(status)) {
+    return "stopping";
+  }
+  const nonManualWorkRunning = (status.active_works ?? []).some((work) => work.source !== "manual");
+  if (status.scheduler.running || status.events.running || nonManualWorkRunning) {
+    return "running";
+  }
+  return "stopped";
+}
+
+function commandRuntimeNavState(status: RuntimeStatus | undefined): NavRuntimeState {
+  const manualWorkRunning = (status?.active_works ?? []).some((work) => work.source === "manual");
+  if (!manualWorkRunning) {
+    return "stopped";
+  }
+  return status && runtimeUnitsStopping(status) ? "stopping" : "running";
+}
+
+function runtimeUnitsStopping(status: RuntimeStatus) {
+  return (
+    status.scheduler.state === "stopping" ||
+    status.events.state === "stopping" ||
+    isStopTimeoutPending(status.scheduler) ||
+    isStopTimeoutPending(status.events)
+  );
+}
+
+function runtimeHasActiveWork(status: RuntimeStatus | undefined): boolean {
+  if (!status) {
+    return false;
+  }
+  return (
+    status.scheduler.running || status.events.running || (status.active_works ?? []).length > 0
+  );
+}
+
+/**
+ * Block the Tauri window close while service or command work is running, so a
+ * quit never orphans a running agent (the Rust host SIGKILLs the backend
+ * sidecar on exit, skipping its graceful shutdown). Registering an
+ * onCloseRequested listener defers the close decision to this handler; the
+ * user can force stop the runtime and quit from the modal.
+ */
+function useAppCloseGuard() {
+  const [blocked, setBlocked] = useState(false);
+  const [forceQuitting, setForceQuitting] = useState(false);
+  const [forceQuitError, setForceQuitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const stop = await getCurrentWindow().onCloseRequested(async (event) => {
+          let busy = false;
+          try {
+            busy = runtimeHasActiveWork(await getSchedulerStatus());
+          } catch {
+            // The backend is unreachable, so there is no work to protect.
+          }
+          if (busy) {
+            event.preventDefault();
+            setBlocked(true);
+          }
+        });
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      } catch {
+        // The window API is unavailable (e.g. a harness that only stubs
+        // __TAURI_INTERNALS__ without the full metadata): skip the guard
+        // rather than leaking an unhandled rejection.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const cancel = () => {
+    setBlocked(false);
+    setForceQuitError(null);
+  };
+  const forceStopAndQuit = async () => {
+    setForceQuitting(true);
+    setForceQuitError(null);
+    try {
+      try {
+        await stopScheduler({ force: true });
+      } catch {
+        // Quit regardless; the force stop is best-effort cleanup.
+      }
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().destroy();
+    } catch (error) {
+      // destroy() failed (e.g. a missing window capability), so the window is
+      // staying open: surface the error instead of leaving the button spinning.
+      setForceQuitError(error instanceof Error ? error.message : String(error));
+      setForceQuitting(false);
+    }
+  };
+
+  return { blocked, forceQuitting, forceQuitError, cancel, forceStopAndQuit };
+}
+
+function AppCloseBlockedModal({
+  opened,
+  forceQuitting,
+  error,
+  onCancel,
+  onForceQuit,
+}: {
+  opened: boolean;
+  forceQuitting: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onForceQuit: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Modal centered opened={opened} onClose={onCancel} title={t("app.closeBlocked.title")}>
+      <Stack gap="md">
+        <Text size="sm">{t("app.closeBlocked.body")}</Text>
+        {error ? (
+          <Alert color="red" title={t("app.closeBlocked.error")}>
+            {error}
+          </Alert>
+        ) : null}
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onCancel}>
+            {t("app.closeBlocked.cancel")}
+          </Button>
+          <Button color="red" loading={forceQuitting} onClick={onForceQuit}>
+            {t("app.closeBlocked.force")}
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
   );
 }
 
@@ -264,20 +459,28 @@ function ServicePage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scheduler"] }),
   });
   const stopMutation = useMutation({
-    mutationFn: stopScheduler,
+    mutationFn: () => stopScheduler(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scheduler"] }),
   });
+  const forceStopMutation = useMutation({
+    mutationFn: () => stopScheduler({ force: true }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scheduler"] }),
+  });
+  const activeWorks = scheduler.data?.active_works ?? [];
   const activeMembers = team.data?.members.filter((member) => member.is_active) ?? [];
-  const runtimeRunning = Boolean(
-    scheduler.data?.scheduler.running || scheduler.data?.events.running,
-  );
+  const runtimeRunning = runtimeHasActiveWork(scheduler.data);
   const runtimeStarting = Boolean(
     startMutation.isPending ||
     scheduler.data?.scheduler.state === "starting" ||
     scheduler.data?.events.state === "starting",
   );
+  const runtimeStopPending = Boolean(
+    isStopTimeoutPending(scheduler.data?.scheduler) || isStopTimeoutPending(scheduler.data?.events),
+  );
   const runtimeStopping = Boolean(
     stopMutation.isPending ||
+    forceStopMutation.isPending ||
+    runtimeStopPending ||
     scheduler.data?.scheduler.state === "stopping" ||
     scheduler.data?.events.state === "stopping",
   );
@@ -296,15 +499,29 @@ function ServicePage() {
           <Title order={2}>{t("service.title")}</Title>
         </div>
         {showStopAction ? (
-          <Button
-            leftSection={<Square size={16} />}
-            loading={runtimeStopping}
-            variant="default"
-            disabled={stopDisabled}
-            onClick={() => stopMutation.mutate()}
-          >
-            {t("overview.stop")}
-          </Button>
+          <Group gap="xs">
+            <Button
+              leftSection={<Square size={16} />}
+              loading={stopMutation.isPending}
+              variant="default"
+              disabled={stopDisabled || stopMutation.isPending}
+              onClick={() => stopMutation.mutate()}
+            >
+              {t("overview.stop")}
+            </Button>
+            {runtimeStopping ? (
+              <Button
+                color="red"
+                leftSection={<TriangleAlert size={16} />}
+                loading={forceStopMutation.isPending}
+                variant="light"
+                disabled={stopDisabled || forceStopMutation.isPending}
+                onClick={() => forceStopMutation.mutate()}
+              >
+                {t("overview.forceStop")}
+              </Button>
+            ) : null}
+          </Group>
         ) : (
           <Button
             leftSection={<Play size={16} />}
@@ -335,6 +552,7 @@ function ServicePage() {
               {t("service.noTargetBody")}
             </Alert>
           ) : null}
+          {activeWorks.length > 0 ? <ActiveWorkNotice works={activeWorks} /> : null}
           <div className="service-unit-grid">
             <ServiceRuntimeSection
               title={t("overview.routineSourceCard.title")}
@@ -528,9 +746,9 @@ function ServicePage() {
               {startMutation.error.message}
             </Alert>
           ) : null}
-          {stopMutation.error ? (
+          {stopMutation.error || forceStopMutation.error ? (
             <Alert color="red" title={t("overview.stopError")}>
-              {stopMutation.error.message}
+              {(stopMutation.error ?? forceStopMutation.error)?.message}
             </Alert>
           ) : null}
         </Stack>
@@ -2787,6 +3005,30 @@ function FragmentRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function ActiveWorkNotice({ works }: { works: RuntimeActiveWork[] }) {
+  const { t } = useTranslation();
+  return (
+    <Alert color="blue" title={t("overview.activeWork.title")}>
+      <Stack gap="xs">
+        {works.map((work) => (
+          <Group key={work.id} gap="xs" justify="space-between">
+            <Text size="sm">
+              {t("overview.activeWork.item", {
+                person: work.person_id || t("overview.unknown"),
+                source: activeWorkSourceLabel(t, work.source),
+                command: work.command,
+              })}
+            </Text>
+            <Text c="dimmed" size="xs">
+              {formatDateTime(work.started_at)}
+            </Text>
+          </Group>
+        ))}
+      </Stack>
+    </Alert>
+  );
+}
+
 function RuntimeStateBadge({ state }: { state: RuntimeUnitStatus["state"] }) {
   const { t } = useTranslation();
   const color =
@@ -2808,6 +3050,10 @@ export function isStopTimeoutPending(unit: RuntimeUnitStatus | undefined) {
   return Boolean(
     unit?.running && unit.state === "failed" && unit.error?.includes("did not stop before timeout"),
   );
+}
+
+function activeWorkSourceLabel(t: TFunction, source: RuntimeActiveWork["source"]) {
+  return t(`overview.activeWork.sources.${source}`);
 }
 
 function ScenarioDiagnosticsSummary({

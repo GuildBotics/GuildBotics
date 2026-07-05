@@ -81,9 +81,18 @@ export type RuntimeUnitStatus = {
   events_auth_failed_persons: string[];
 };
 
+export type RuntimeActiveWork = {
+  id: string;
+  source: "manual" | "scheduled" | "routine" | "event_queue";
+  person_id: string;
+  command: string;
+  started_at: string;
+};
+
 export type RuntimeStatus = {
   scheduler: RuntimeUnitStatus;
   events: RuntimeUnitStatus;
+  active_works?: RuntimeActiveWork[];
 };
 
 export type ChatReceiveResetResponse = {
@@ -102,6 +111,10 @@ export type SchedulerStartRequest = {
   routine_commands?: string[];
   max_consecutive_errors?: number;
   routine_interval_minutes?: number;
+};
+
+export type SchedulerStopRequest = {
+  force?: boolean;
 };
 
 export type PromptTraceEntry = {
@@ -669,8 +682,11 @@ export async function startScheduler(body: SchedulerStartRequest): Promise<Runti
   return request("/scheduler/start", { method: "POST", body });
 }
 
-export async function stopScheduler(): Promise<RuntimeStatus> {
-  return request("/scheduler/stop", { method: "POST" });
+export async function stopScheduler(body: SchedulerStopRequest = {}): Promise<RuntimeStatus> {
+  return request("/scheduler/stop", {
+    method: "POST",
+    body: body.force ? body : undefined,
+  });
 }
 
 export async function resetChatReceiveState(): Promise<ChatReceiveResetResponse> {

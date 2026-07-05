@@ -6,6 +6,11 @@ from collections.abc import Coroutine
 from contextlib import suppress
 from typing import Any
 
+from guildbotics.drivers.execution import (
+    ExecutionCoordinator,
+    WorkRejectedError,
+    WorkSource,
+)
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
@@ -27,6 +32,7 @@ class TaskScheduler:
         scheduled_source_enabled: bool = True,
         routine_source_enabled: bool = True,
         event_queue_source_enabled: bool = True,
+        execution_coordinator: ExecutionCoordinator | None = None,
     ):
         """
         Initialize the TaskScheduler with a list of jobs.
@@ -56,14 +62,18 @@ class TaskScheduler:
         self.scheduled_tasks_list = {
             p: p.get_scheduled_commands() for p in context.team.members
         }
+        self._execution = execution_coordinator or ExecutionCoordinator()
         self._stop_event = threading.Event()
+        self._cancel_event = threading.Event()
         self._threads: list[threading.Thread] = []
         # Queued chat events are executed here, in each member's single worker
         # thread, so a member's chat / ticket / scheduled / routine work shares
         # one serial queue and never runs two agents in the same workspace.
         self._chat_poll_interval = DEFAULT_CHAT_POLL_INTERVAL_SECONDS
         self._chat_dispatcher = PendingChatDispatcher(
-            context, service_run_id=service_run_id
+            context,
+            service_run_id=service_run_id,
+            execution_coordinator=self._execution,
         )
 
     def start(self):
@@ -88,6 +98,21 @@ class TaskScheduler:
         for thread in threads:
             thread.join()
 
+    def request_shutdown(self, graceful: bool = True) -> None:
+        """Signal worker threads to stop without waiting for them.
+
+        Safe to call from a signal handler: it only sets events and never
+        blocks, so a second signal can still be delivered to escalate a
+        graceful stop into a forceful (cancelling) one.
+
+        Args:
+            graceful: When True, only stop accepting new work. When False, also
+                cancel any in-flight command/workflow coroutine.
+        """
+        self._stop_event.set()
+        if not graceful:
+            self._cancel_event.set()
+
     def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
         """Signal all worker threads to stop and wait for them.
 
@@ -95,9 +120,9 @@ class TaskScheduler:
             graceful: When True, allow current iteration to complete before exit.
             timeout: Maximum total seconds to wait for worker threads. None waits forever.
         """
-        # Currently, graceful and forceful behave the same at thread level.
-        # The stop event is checked between operations and during sleeps.
-        self._stop_event.set()
+        # The stop event prevents new work from starting. Forceful shutdown also
+        # cancels any in-flight command/workflow coroutine.
+        self.request_shutdown(graceful=graceful)
         deadline = time.monotonic() + timeout if timeout is not None else None
         for t in list(self._threads):
             if t.is_alive():
@@ -221,8 +246,11 @@ class TaskScheduler:
                     command=scheduled_task.command,
                     attributes={"service_run_id": self.service_run_id},
                 ):
-                    ok = self._run(
+                    ok = self._run_work(
                         loop,
+                        person,
+                        "scheduled",
+                        scheduled_task.command,
                         run_command(context, scheduled_task.command, "scheduled"),
                     )
                 consecutive_errors, should_stop = self._update_consecutive_errors(
@@ -259,8 +287,11 @@ class TaskScheduler:
 
         if routine_command and not self._stop_event.is_set():
             if routine_command == "workflows/ticket_driven_workflow":
-                ok = self._run(
+                ok = self._run_work(
                     loop,
+                    person,
+                    "routine",
+                    routine_command,
                     self._run_routine_ticket_workflow(context, person, routine_command),
                 )
             else:
@@ -270,27 +301,28 @@ class TaskScheduler:
                     command=routine_command,
                     attributes={"service_run_id": self.service_run_id},
                 ):
-                    ok = self._run(
-                        loop, run_command(context, routine_command, "routine")
+                    ok = self._run_work(
+                        loop,
+                        person,
+                        "routine",
+                        routine_command,
+                        run_command(context, routine_command, "routine"),
                     )
             next_routine_time = datetime.datetime.now() + datetime.timedelta(
                 minutes=self.routine_interval_minutes
             )
-            if not ok and self._stop_event.is_set():
-                pass
-            else:
-                consecutive_errors, should_stop = self._update_consecutive_errors(
-                    ok,
-                    source="routine",
-                    consecutive_errors=consecutive_errors,
+            consecutive_errors, should_stop = self._update_consecutive_errors(
+                ok,
+                source="routine",
+                consecutive_errors=consecutive_errors,
+            )
+            if should_stop:
+                return (
+                    routine_command_index,
+                    consecutive_errors,
+                    next_routine_time,
+                    True,
                 )
-                if should_stop:
-                    return (
-                        routine_command_index,
-                        consecutive_errors,
-                        next_routine_time,
-                        True,
-                    )
             self._sleep_interruptible(1)
 
         return routine_command_index, consecutive_errors, next_routine_time, False
@@ -332,23 +364,49 @@ class TaskScheduler:
         self._stop_event.wait(timeout=seconds)
 
     def _run(self, loop: asyncio.AbstractEventLoop, coro: Coroutine) -> Any:
-        """Run a coroutine to completion, cancelling it when a stop is requested.
+        """Run a coroutine to completion, cancelling it when forced.
 
-        Cancellation propagates into a running agent subprocess (which the CLI
-        agent brain kills), so a long agent turn cannot block shutdown past the
-        stop timeout.
+        Graceful shutdown lets the current command/workflow finish and only
+        prevents the next one from starting. Forceful shutdown cancels the task,
+        which propagates into a running agent subprocess.
         """
         return loop.run_until_complete(self._run_cancellable(coro))
 
+    def _run_work(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        person: Person,
+        source: WorkSource,
+        command: str,
+        coro: Coroutine,
+    ) -> Any:
+        try:
+            with self._execution.track_work(
+                source=source,
+                person_id=person.person_id,
+                command=command,
+                cancel=self._cancel_event.set,
+            ):
+                return self._run(loop, coro)
+        except WorkRejectedError:
+            # The runtime is draining, meaning a stop of this scheduler is
+            # already in progress; mirror it locally so worker loops exit
+            # instead of treating the rejection as a command error.
+            self._stop_event.set()
+            coro.close()
+            return False
+
     async def _run_cancellable(self, coro: Coroutine) -> Any:
         task: asyncio.Task = asyncio.ensure_future(coro)
-        stop_waiter = asyncio.ensure_future(self._wait_for_stop())
+        cancel_waiter = asyncio.ensure_future(self._wait_for_cancel())
         try:
-            await asyncio.wait({task, stop_waiter}, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(
+                {task, cancel_waiter}, return_when=asyncio.FIRST_COMPLETED
+            )
         finally:
-            stop_waiter.cancel()
+            cancel_waiter.cancel()
             with suppress(asyncio.CancelledError):
-                await stop_waiter
+                await cancel_waiter
         if task.done():
             return task.result()
         task.cancel()
@@ -356,8 +414,8 @@ class TaskScheduler:
             await task
         return False
 
-    async def _wait_for_stop(self) -> None:
-        while not self._stop_event.is_set():
+    async def _wait_for_cancel(self) -> None:
+        while not self._cancel_event.is_set():
             await asyncio.sleep(0.2)
 
     async def _process_pending_chat(self, person: Person) -> bool:
@@ -398,6 +456,10 @@ class TaskScheduler:
             A tuple of (new_consecutive_errors, should_stop).
         """
         if not ok:
+            if self._stop_event.is_set():
+                # Shutdown is in progress: a command that was rejected or
+                # cancelled by the stop is not a workflow error.
+                return consecutive_errors, False
             consecutive_errors += 1
             self.context.logger.warning(
                 f"Command error occurred ({source}). "

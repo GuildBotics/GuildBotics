@@ -132,7 +132,8 @@ class RuntimeStub:
             storage_dir=tmp_path / "home/.guildbotics/data",
         )
 
-    def stop_scheduler(self) -> RuntimeStatus:
+    def stop_scheduler(self, *, force: bool = False) -> RuntimeStatus:
+        self.stop_force = force
         return _runtime_status()
 
     def reset_chat_receive_state(self) -> ChatReceiveResetResponse:
@@ -1565,6 +1566,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             scheduled_source_enabled: bool = True,
             routine_source_enabled: bool = True,
             event_queue_source_enabled: bool = True,
+            execution_coordinator: object | None = None,
         ) -> None:
             self.shutdown_calls = 0
             self.routine_commands = routine_commands
@@ -1621,7 +1623,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
     stopped = runtime.stop_scheduler()
     assert stopped.scheduler.state == "stopped"
     assert BlockingScheduler.instances[0].shutdown_calls == 1
-    assert BlockingScheduler.instances[0].shutdown_timeout == default_stop_timeout
+    assert BlockingScheduler.instances[0].shutdown_timeout is None
 
     stopped_again = runtime.stop_scheduler()
     assert stopped_again.scheduler.state == "stopped"
@@ -1650,6 +1652,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
             scheduled_source_enabled: bool = True,
             routine_source_enabled: bool = True,
             event_queue_source_enabled: bool = True,
+            execution_coordinator: object | None = None,
         ) -> None:
             self.shutdown_timeout: float | None = None
 
@@ -1679,7 +1682,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
     assert first.scheduler.state == "running"
     assert started.wait(THREAD_WAIT_SECONDS)
 
-    stopped = runtime.stop_scheduler()
+    stopped = runtime.stop_scheduler(force=True)
     assert stopped.scheduler.state == "failed"
     assert stopped.scheduler.running is True
     assert stopped.scheduler.error == "Scheduler did not stop before timeout."
@@ -1730,6 +1733,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
             scheduled_source_enabled: bool = True,
             routine_source_enabled: bool = True,
             event_queue_source_enabled: bool = True,
+            execution_coordinator: object | None = None,
         ) -> None:
             self.routine_commands = routine_commands
             self.scheduled_source_enabled = scheduled_source_enabled
@@ -1863,6 +1867,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
             scheduled_source_enabled: bool = True,
             routine_source_enabled: bool = True,
             event_queue_source_enabled: bool = True,
+            execution_coordinator: object | None = None,
         ) -> None:
             return
 
@@ -2539,13 +2544,29 @@ def test_scheduler_start_rejects_github_required_routine(tmp_path: Path) -> None
 
 
 def test_scheduler_stop_endpoint(tmp_path: Path) -> None:
-    client = _client(RuntimeStub(tmp_path))
+    runtime = RuntimeStub(tmp_path)
+    client = _client(runtime)
 
     response = client.post("/scheduler/stop", headers=AUTH_HEADERS)
 
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "stopped"
     assert response.json()["events"]["state"] == "stopped"
+    assert runtime.stop_force is False
+
+
+def test_scheduler_stop_endpoint_accepts_force(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    client = _client(runtime)
+
+    response = client.post(
+        "/scheduler/stop",
+        headers=AUTH_HEADERS,
+        json={"force": True},
+    )
+
+    assert response.status_code == HTTP_OK
+    assert runtime.stop_force is True
 
 
 def test_chat_receive_state_reset_endpoint_uses_runtime(tmp_path: Path) -> None:

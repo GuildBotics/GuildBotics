@@ -8,11 +8,13 @@ from typing import Any, Literal
 
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
+    RuntimeActiveWork,
     RuntimeStatus,
     RuntimeUnitStatus,
     SchedulerStartRequest,
 )
 from guildbotics.drivers import EventListenerRunner, TaskScheduler
+from guildbotics.drivers.execution import ActiveWork, ExecutionCoordinator
 from guildbotics.observability import new_id
 from guildbotics.runtime import Context
 
@@ -27,11 +29,14 @@ class RuntimeLifecycleService:
         event_bus: EventBus,
         context_factory: Callable[[], Context],
         stop_timeout_seconds: float = 10.0,
+        execution_coordinator: ExecutionCoordinator | None = None,
     ) -> None:
+        self._execution = execution_coordinator or ExecutionCoordinator()
         self._scheduler = SchedulerLifecycle(
             event_bus=event_bus,
             context_factory=context_factory,
             stop_timeout_seconds=stop_timeout_seconds,
+            execution_coordinator=self._execution,
         )
         self._events = EventListenerLifecycle(
             event_bus=event_bus,
@@ -43,6 +48,9 @@ class RuntimeLifecycleService:
         return RuntimeStatus(
             scheduler=self._scheduler.get_status(),
             events=self._events.get_status(),
+            active_works=[
+                _active_work_model(work) for work in self._execution.snapshot()
+            ],
         )
 
     def start(self, request: SchedulerStartRequest) -> RuntimeStatus:
@@ -75,9 +83,17 @@ class RuntimeLifecycleService:
                 raise
         return self.get_status()
 
-    def stop(self) -> RuntimeStatus:
+    def stop(self, *, force: bool = False) -> RuntimeStatus:
+        # begin_drain rejects new work from every source (including manual
+        # commands) and, on force, cancels the in-flight work. Scheduler
+        # workers that race into the drain treat the rejection as shutdown
+        # (see TaskScheduler._run_work), not as a command error.
+        self._execution.begin_drain(force=force)
         self._events.stop()
-        self._scheduler.stop()
+        self._scheduler.stop(force=force)
+        self._execution.wait_for_drain(
+            timeout=None if not force else self._scheduler.stop_timeout_seconds
+        )
         return self.get_status()
 
 
@@ -169,6 +185,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         event_bus: EventBus,
         context_factory: Callable[[], Context],
         stop_timeout_seconds: float,
+        execution_coordinator: ExecutionCoordinator,
     ) -> None:
         super().__init__(
             target="scheduler",
@@ -176,8 +193,13 @@ class SchedulerLifecycle(_RuntimeLifecycle):
             stop_timeout_seconds=stop_timeout_seconds,
         )
         self._context_factory = context_factory
+        self._execution = execution_coordinator
         self._scheduler: TaskScheduler | None = None
         self._thread: threading.Thread | None = None
+
+    @property
+    def stop_timeout_seconds(self) -> float:
+        return self._stop_timeout_seconds
 
     def start(
         self,
@@ -206,6 +228,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
                 scheduled_source_enabled=scheduled_source_enabled,
                 routine_source_enabled=routine_source_enabled,
                 event_queue_source_enabled=event_queue_source_enabled,
+                execution_coordinator=self._execution,
             )
         except Exception as exc:
             self._mark_failed(exc)
@@ -235,19 +258,25 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         thread.start()
         return status.model_copy()
 
-    def stop(self) -> RuntimeUnitStatus:
+    def stop(self, *, force: bool = False) -> RuntimeUnitStatus:
         with self._lock:
             self._refresh_locked()
             if not self._is_active_locked():
                 return self._status.model_copy()
             scheduler = self._scheduler
             thread = self._thread
-            self._transition_locked("stopping", running=True)
+            # A concurrent stop (graceful stop escalated by a force stop) may
+            # already be in "stopping"; do not publish the transition twice.
+            if self._status.state != "stopping":
+                self._transition_locked("stopping", running=True)
 
         if scheduler is not None:
-            scheduler.shutdown(graceful=True, timeout=self._stop_timeout_seconds)
+            scheduler.shutdown(
+                graceful=not force,
+                timeout=None if not force else self._stop_timeout_seconds,
+            )
         if thread is not None:
-            thread.join(timeout=self._stop_timeout_seconds)
+            thread.join(timeout=None if not force else self._stop_timeout_seconds)
 
         with self._lock:
             if thread is not None and thread.is_alive():
@@ -260,7 +289,9 @@ class SchedulerLifecycle(_RuntimeLifecycle):
             self._update_metadata_locked({"worker_count": 0})
             self._scheduler = None
             self._thread = None
-            return self._transition_locked("stopped", running=False).model_copy()
+            if self._status.state != "stopped":
+                return self._transition_locked("stopped", running=False).model_copy()
+            return self._status.model_copy()
 
     def _run_scheduler(self, scheduler: TaskScheduler) -> None:
         try:
@@ -377,6 +408,16 @@ class EventListenerLifecycle(_RuntimeLifecycle):
 
 def _timestamp() -> str:
     return datetime.now().astimezone().isoformat()
+
+
+def _active_work_model(work: ActiveWork) -> RuntimeActiveWork:
+    return RuntimeActiveWork(
+        id=work.id,
+        source=work.source,
+        person_id=work.person_id,
+        command=work.command,
+        started_at=work.started_at,
+    )
 
 
 def _runtime_summary(runtime: object | None) -> dict[str, Any]:

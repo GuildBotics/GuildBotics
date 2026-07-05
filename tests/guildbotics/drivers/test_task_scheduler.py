@@ -158,7 +158,38 @@ async def test_process_pending_chat_delegates_to_dispatcher() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_cancellable_cancels_long_task_on_stop() -> None:
+async def test_run_cancellable_allows_long_task_to_finish_on_graceful_stop() -> None:
+    import asyncio
+
+    scheduler = TaskScheduler(_Context(_Person()), [])
+    cancelled = {"value": False}
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def _long():
+        started.set()
+        try:
+            await finish.wait()
+        except asyncio.CancelledError:
+            cancelled["value"] = True
+            raise
+        return True
+
+    task = asyncio.ensure_future(scheduler._run_cancellable(_long()))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    scheduler._stop_event.set()
+    await asyncio.sleep(0)
+    assert task.done() is False
+
+    finish.set()
+    result = await asyncio.wait_for(task, timeout=1.0)
+    assert result is True
+    assert cancelled["value"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_cancellable_cancels_long_task_on_force_stop() -> None:
     import asyncio
 
     scheduler = TaskScheduler(_Context(_Person()), [])
@@ -177,10 +208,40 @@ async def test_run_cancellable_cancels_long_task_on_stop() -> None:
     task = asyncio.ensure_future(scheduler._run_cancellable(_long()))
     await asyncio.wait_for(started.wait(), timeout=1.0)
 
-    scheduler._stop_event.set()
+    scheduler._cancel_event.set()
 
     result = await asyncio.wait_for(task, timeout=1.0)
-    # The long task is cancelled (which kills any running agent) and the runner
-    # returns promptly instead of blocking until the task finishes.
     assert result is False
     assert cancelled["value"] is True
+
+
+def test_update_consecutive_errors_ignores_failures_during_shutdown() -> None:
+    scheduler = TaskScheduler(_Context(_Person()), [])
+    scheduler._stop_event.set()
+
+    count, should_stop = scheduler._update_consecutive_errors(
+        False, source="scheduled", consecutive_errors=2
+    )
+
+    assert (count, should_stop) == (2, False)
+
+
+def test_run_work_rejection_during_drain_mirrors_stop() -> None:
+    import asyncio
+
+    scheduler = TaskScheduler(_Context(_Person()), [])
+    scheduler._execution.begin_drain()
+    loop = asyncio.new_event_loop()
+
+    async def _never_runs() -> bool:
+        raise AssertionError("rejected work must not run")
+
+    try:
+        ok = scheduler._run_work(loop, _Person(), "scheduled", "cmd", _never_runs())
+    finally:
+        loop.close()
+
+    assert ok is False
+    # The drain means a stop is in progress; the worker mirrors it locally so
+    # the rejection is treated as shutdown, not as a command error.
+    assert scheduler._stop_event.is_set()

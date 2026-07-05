@@ -16,6 +16,25 @@ const resources = {
           diagnostics: "Diagnostics",
           setup: "Setup",
         },
+        navStatus: {
+          service: {
+            running: "Service is running",
+            stopping: "Service is stopping",
+            stopped: "Service is stopped",
+          },
+          commands: {
+            running: "Command is running",
+            stopping: "Command is stopping",
+            stopped: "No command is running",
+          },
+        },
+        closeBlocked: {
+          title: "Service or command is running",
+          body: "Service or command work is still running. Force stop it to quit now, or cancel to keep it running.",
+          cancel: "Cancel",
+          force: "Force stop and quit",
+          error: "Failed to close the window",
+        },
         language: {
           label: "Display language",
           english: "English",
@@ -240,6 +259,12 @@ const resources = {
           manual:
             "Fill in the required items in each section, then click Create initial settings to save.",
           auto: "Changes are saved automatically.",
+        },
+        workspaceSwitchBlocked: {
+          title: "Service or command is running",
+          body: "Service or command work is still running. Stop it first, or force stop to switch workspaces now.",
+          ok: "OK",
+          force: "Force stop",
         },
         status: {
           readyTitle: "Required setup complete",
@@ -905,6 +930,16 @@ const resources = {
           failed: "Failed",
         },
         stopDelayHint: "Shutdown is taking a little longer than usual.",
+        activeWork: {
+          title: "Active work",
+          item: "{{person}} is running {{command}} ({{source}})",
+          sources: {
+            manual: "manual command",
+            scheduled: "scheduled command",
+            routine: "patrol workflow",
+            event_queue: "chat workflow",
+          },
+        },
         streamStates: {
           connecting: "Connecting",
           connected: "Connected",
@@ -1071,6 +1106,7 @@ const resources = {
         },
         start: "Run",
         stop: "Stop",
+        forceStop: "Force stop",
       },
       commands: {
         title: "Run Command",
@@ -1140,6 +1176,25 @@ const resources = {
           diagnostics: "診断",
           setup: "設定",
         },
+        navStatus: {
+          service: {
+            running: "サービス実行中",
+            stopping: "サービス停止中",
+            stopped: "サービス停止状態",
+          },
+          commands: {
+            running: "コマンド実行中",
+            stopping: "コマンド停止中",
+            stopped: "コマンド停止状態",
+          },
+        },
+        closeBlocked: {
+          title: "サービスまたはコマンドを実行中です",
+          body: "サービスまたはコマンドを実行中です。今すぐ終了する場合は強制停止してください。実行を続ける場合はキャンセルしてください。",
+          cancel: "キャンセル",
+          force: "強制停止して終了",
+          error: "ウインドウを閉じられませんでした",
+        },
         language: {
           label: "表示言語",
           english: "English",
@@ -1198,6 +1253,12 @@ const resources = {
         saveMode: {
           manual: "各セクションの必須項目を入力し、「初期設定を作成」を押して設定を保存します。",
           auto: "変更は自動で保存されます。",
+        },
+        workspaceSwitchBlocked: {
+          title: "サービスまたはコマンドを実行中です",
+          body: "サービスまたはコマンドを実行中です。まず停止操作を行うか、今すぐ切り替える場合は強制停止してください。",
+          ok: "OK",
+          force: "強制停止",
         },
         status: {
           readyTitle: "必須設定 完了",
@@ -2039,6 +2100,16 @@ const resources = {
           failed: "エラー停止",
         },
         stopDelayHint: "終了処理に少し時間がかかっています。",
+        activeWork: {
+          title: "作業中",
+          item: "{{person}} が {{command}} を実行中（{{source}}）",
+          sources: {
+            manual: "手動コマンド",
+            scheduled: "スケジュールコマンド",
+            routine: "巡回ワークフロー",
+            event_queue: "チャットワークフロー",
+          },
+        },
         streamStates: {
           connecting: "接続中",
           connected: "接続済み",
@@ -2206,6 +2277,7 @@ const resources = {
         },
         start: "実行",
         stop: "停止",
+        forceStop: "強制停止",
       },
       commands: {
         title: "コマンド実行",

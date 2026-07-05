@@ -1038,6 +1038,104 @@ async def test_run_command_rejects_concurrent_run_with_conflict(
     assert exc_info.value.context == {"trace_id": "inflight-id"}
 
 
+@pytest.mark.asyncio
+async def test_run_command_appears_in_runtime_active_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def fake_run_command(*_: Any, **__: Any) -> str:
+        started.set()
+        await finish.wait()
+        return "ok"
+
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
+
+    task = asyncio.create_task(
+        runtime.run_command(CommandRunRequest(command="demo", person="bot"))
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    status = runtime.get_scheduler_status()
+    assert len(status.active_works) == 1
+    active = status.active_works[0]
+    assert active.source == "manual"
+    assert active.person_id == "bot"
+    assert active.command == "demo"
+
+    finish.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_stop_scheduler_waits_for_manual_command_to_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def fake_run_command(*_: Any, **__: Any) -> str:
+        started.set()
+        await finish.wait()
+        return "ok"
+
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
+
+    command_task = asyncio.create_task(
+        runtime.run_command(CommandRunRequest(command="demo", person="bot"))
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    stop_task = asyncio.create_task(asyncio.to_thread(runtime.stop_scheduler))
+    await asyncio.sleep(0.05)
+    assert stop_task.done() is False
+
+    finish.set()
+    stopped = await asyncio.wait_for(stop_task, timeout=1.0)
+    await command_task
+    assert stopped.active_works == []
+
+
+@pytest.mark.asyncio
+async def test_force_stop_scheduler_cancels_manual_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_bus = EventBus()
+    runtime = AppRuntime(event_bus, stop_timeout_seconds=1.0)
+    started = asyncio.Event()
+    cancelled = {"value": False}
+
+    async def fake_run_command(*_: Any, **__: Any) -> str:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled["value"] = True
+            raise
+        return "unreachable"
+
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
+
+    command_task = asyncio.create_task(
+        runtime.run_command(CommandRunRequest(command="demo", person="bot"))
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    stopped = await asyncio.to_thread(runtime.stop_scheduler, force=True)
+
+    with pytest.raises(asyncio.CancelledError):
+        await command_task
+    assert cancelled["value"] is True
+    assert stopped.active_works == []
+    assert event_bus.snapshot_events()[-1]["payload"]["code"] == "cancelled"
+
+
 # ---------------------------------------------------------------------------
 # start_scheduler
 # ---------------------------------------------------------------------------

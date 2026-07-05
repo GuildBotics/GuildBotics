@@ -27,7 +27,7 @@ class RuntimeStub:
             storage_dir=tmp_path / "home/.guildbotics/data",
         )
 
-    def stop_scheduler(self) -> None:
+    def stop_scheduler(self, *, force: bool = False) -> None:
         pass
 
     def get_config_status(self) -> ConfigStatus:

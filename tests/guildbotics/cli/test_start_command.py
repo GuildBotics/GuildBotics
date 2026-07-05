@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -38,12 +39,18 @@ class _FakeScheduler:
         self.event_queue_source_enabled = event_queue_source_enabled
         self.start_called = 0
         self.shutdown_called = 0
+        self.shutdown_calls: list[dict[str, object]] = []
+        self.request_shutdown_calls: list[dict[str, object]] = []
 
     def start(self):
         self.start_called += 1
 
-    def shutdown(self, graceful: bool = True):
+    def request_shutdown(self, graceful: bool = True):
+        self.request_shutdown_calls.append({"graceful": graceful})
+
+    def shutdown(self, graceful: bool = True, timeout: float | None = None):
         self.shutdown_called += 1
+        self.shutdown_calls.append({"graceful": graceful, "timeout": timeout})
 
 
 class _FakeEventListenerRunner:
@@ -118,9 +125,9 @@ def _patch_start_dependencies(monkeypatch, tmp_path: Path):
             call_order.append("scheduler.start")
             return original_start()
 
-        def _shutdown(*, graceful=True):
+        def _shutdown(*, graceful=True, timeout=None):
             call_order.append("scheduler.shutdown")
-            return original_shutdown(graceful=graceful)
+            return original_shutdown(graceful=graceful, timeout=timeout)
 
         inst.start = _start
         inst.shutdown = _shutdown
@@ -293,9 +300,9 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
             call_order.append("scheduler.start")
             return _scheduler_start_and_signal()
 
-        def _shutdown(*, graceful=True):
+        def _shutdown(*, graceful=True, timeout=None):
             call_order.append("scheduler.shutdown")
-            return _FakeScheduler.shutdown(inst, graceful=graceful)
+            return _FakeScheduler.shutdown(inst, graceful=graceful, timeout=timeout)
 
         inst.start = _start
         inst.shutdown = _shutdown
@@ -311,3 +318,36 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
     first_stop = call_order.index("events.stop")
     first_shutdown = call_order.index("scheduler.shutdown")
     assert first_stop < first_shutdown
+
+
+def test_start_second_signal_cancels_in_flight_work(monkeypatch, tmp_path):
+    created, handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    def _task_scheduler_factory(*args, **kwargs):
+        inst = _FakeScheduler(*args, **kwargs)
+        created["scheduler"] = inst
+
+        def _start():
+            inst.start_called += 1
+            # Two signals arrive while the scheduler runs. The handler must stay
+            # non-blocking, so the second one is delivered and escalates to a
+            # cancel instead of being swallowed by a blocking graceful join.
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+        inst.start = _start
+        return inst
+
+    monkeypatch.setattr("guildbotics.cli.TaskScheduler", _task_scheduler_factory)
+
+    result = runner.invoke(cli_main, ["start"])
+
+    assert result.exit_code == 0, result.output
+    # First signal requests a graceful stop; the second escalates to cancel.
+    assert created["scheduler"].request_shutdown_calls == [
+        {"graceful": True},
+        {"graceful": False},
+    ]
+    # The blocking join lives in the main thread's finally, not the handler.
+    assert created["scheduler"].shutdown_calls == [{"graceful": True, "timeout": None}]
