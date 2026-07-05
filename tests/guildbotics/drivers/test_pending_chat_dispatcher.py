@@ -4,6 +4,7 @@ import types
 
 import pytest
 
+from guildbotics.drivers.execution import ExecutionCoordinator
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatEvent
@@ -189,6 +190,30 @@ async def test_dispatcher_leaves_event_queued_on_error(monkeypatch, tmp_path):
     pending = store.load_pending_events("slack", "alice", "C1")[0]
     assert pending.attempt_count == 1
     assert pending.run_id == first_run_id
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_rejection_does_not_consume_retry_attempt(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+
+    coordinator = ExecutionCoordinator()
+    coordinator.begin_drain()
+    context = _FakeContext()
+    person = Person(person_id="alice", name="A", is_active=True)
+    dispatcher = PendingChatDispatcher(
+        context,  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=coordinator,
+    )
+
+    processed = await dispatcher.process_person(person)
+
+    assert processed == 0
+    # A dispatch rejected while the runtime drains never ran the workflow, so
+    # it must not burn the event's retry budget.
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    assert pending.attempt_count == 0
 
 
 @pytest.mark.asyncio

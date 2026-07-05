@@ -292,8 +292,9 @@ To stop the running service:
 guildbotics stop [--timeout <seconds>] [--force]
 ```
 
-- Sends SIGTERM and waits up to `--timeout` seconds (default: 30).
-- If it does not exit within the timeout and `--force` is specified, sends SIGKILL.
+- Sends SIGTERM; the scheduler stops accepting new work, waits for in-flight work to finish, then exits. Waits up to `--timeout` seconds (default: 30).
+- Sending SIGTERM again (for example, running `guildbotics stop` a second time) cancels the in-flight work.
+- With `--force`, after the timeout it sends a second SIGTERM to cancel in-flight work, waits up to `--timeout` seconds again, and sends SIGKILL only if the process is still running.
 
 For an immediate force stop:
 

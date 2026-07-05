@@ -25,6 +25,7 @@ import {
   initConfig,
   resolveMemberIdentity,
   runScenarioDiagnostics,
+  stopScheduler,
   updateIntelligenceConfig,
   updateMemberConfig,
   updateProjectConfig,
@@ -218,6 +219,55 @@ vi.mock("../api/client", async (importOriginal) => {
       warnings: [],
       errors: [],
     })),
+    stopScheduler: vi.fn(async () => ({
+      scheduler: {
+        target: "scheduler",
+        state: "stopped",
+        running: false,
+        started_at: null,
+        stopped_at: null,
+        error: null,
+        routine_commands: [],
+        max_consecutive_errors: null,
+        routine_interval_minutes: null,
+        active_member_count: null,
+        worker_count: null,
+        scheduled_source_enabled: null,
+        routine_source_enabled: null,
+        event_queue_source_enabled: null,
+        subscription_count: null,
+        listener_count: null,
+        cycle_count: null,
+        cycle_failure_count: null,
+        events_drained_count: null,
+        events_auth_failed_count: null,
+        events_auth_failed_persons: [],
+      },
+      events: {
+        target: "events",
+        state: "stopped",
+        running: false,
+        started_at: null,
+        stopped_at: null,
+        error: null,
+        routine_commands: [],
+        max_consecutive_errors: null,
+        routine_interval_minutes: null,
+        active_member_count: null,
+        worker_count: null,
+        scheduled_source_enabled: null,
+        routine_source_enabled: null,
+        event_queue_source_enabled: null,
+        subscription_count: null,
+        listener_count: null,
+        cycle_count: null,
+        cycle_failure_count: null,
+        events_drained_count: null,
+        events_auth_failed_count: null,
+        events_auth_failed_persons: [],
+      },
+      active_works: [],
+    })),
     updateIntelligenceConfig: vi.fn(async () => configWriteResponse()),
     updateMemberConfig: vi.fn(async () => configWriteResponse()),
     updateProjectConfig: vi.fn(async () => configWriteResponse()),
@@ -347,6 +397,34 @@ describe("SetupPage", () => {
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/configured-workspace"));
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace")).toHaveValue("/configured-workspace");
+  });
+
+  it("offers force stop when workspace switching is blocked by active work", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    vi.mocked(restartBackend)
+      .mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "workspace_switch_blocked_by_active_work",
+          message: "Service or command work is still running.",
+          context: {},
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
+    renderSetupPage("/setup");
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    dialogMock.open.mockResolvedValueOnce("/busy-workspace");
+
+    await user.click(screen.getByRole("button", { name: "Choose" }));
+
+    expect(await screen.findByText(t("setup.workspaceSwitchBlocked.body"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("setup.workspaceSwitchBlocked.force") }));
+
+    await waitFor(() => expect(stopScheduler).toHaveBeenCalledWith({ force: true }));
+    await waitFor(() => expect(restartBackend).toHaveBeenCalledTimes(2));
+    expect(restartBackend).toHaveBeenLastCalledWith("/busy-workspace");
   });
 
   it("renders the first-setup required progress and project section fields", async () => {

@@ -101,6 +101,7 @@ import {
   initConfig,
   resolveMemberIdentity,
   runScenarioDiagnostics,
+  stopScheduler,
   updateMemberConfig,
   updateIntelligenceConfig,
   updateProjectConfig,
@@ -316,6 +317,8 @@ export function SetupPage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
+  const [pendingWorkspaceSwitch, setPendingWorkspaceSwitch] = useState("");
+  const [forceWorkspaceSwitching, setForceWorkspaceSwitching] = useState(false);
   const workspaceSwitchId = useRef(0);
   const canAutosave = hasExistingProject && projectConfig.isSuccess;
   const llmProviderAvailability = useMemo(() => {
@@ -423,38 +426,39 @@ export function SetupPage() {
       setSaveState("error");
     }
   };
-  const changeWorkspace = (value: string) => {
-    form.setFieldValue("workspaceDir", value);
-    const workspace = value.trim();
-    if (!workspace) {
+  const applyWorkspaceSwitch = async (workspace: string, switchId: number) => {
+    await restartBackend(workspace);
+    if (workspaceSwitchId.current !== switchId) {
       return;
     }
+    setDraftActiveMemberCount(0);
+    queryClient.setQueryData(["team"], undefined);
+    queryClient.setQueryData(["project-config"], undefined);
+    queryClient.invalidateQueries({ queryKey: ["project-config"] });
+    queryClient.invalidateQueries({ queryKey: ["intelligence-config"] });
+    queryClient.invalidateQueries({ queryKey: ["command-options"] });
+    queryClient.invalidateQueries({ queryKey: ["scheduler"] });
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: ["config"] }),
+      queryClient.refetchQueries({ queryKey: ["team"] }),
+    ]);
+    await queryClient.refetchQueries({ queryKey: ["project-config"] });
+    setSaveState("saved");
+  };
+  const startWorkspaceSwitch = (workspace: string) => {
     const switchId = workspaceSwitchId.current + 1;
     workspaceSwitchId.current = switchId;
     setWorkspaceSwitching(true);
     setSaveState("saving");
-    void restartBackend(workspace)
-      .then(async () => {
-        if (workspaceSwitchId.current !== switchId) {
-          return;
-        }
-        setDraftActiveMemberCount(0);
-        queryClient.setQueryData(["team"], undefined);
-        queryClient.setQueryData(["project-config"], undefined);
-        queryClient.invalidateQueries({ queryKey: ["project-config"] });
-        queryClient.invalidateQueries({ queryKey: ["intelligence-config"] });
-        queryClient.invalidateQueries({ queryKey: ["command-options"] });
-        queryClient.invalidateQueries({ queryKey: ["scheduler"] });
-        await Promise.all([
-          queryClient.refetchQueries({ queryKey: ["config"] }),
-          queryClient.refetchQueries({ queryKey: ["team"] }),
-        ]);
-        await queryClient.refetchQueries({ queryKey: ["project-config"] });
-        setSaveState("saved");
-      })
-      .catch(() => {
+    void applyWorkspaceSwitch(workspace, switchId)
+      .catch((error: unknown) => {
         if (workspaceSwitchId.current === switchId) {
-          setSaveState("error");
+          if (isWorkspaceSwitchBlocked(error)) {
+            setPendingWorkspaceSwitch(workspace);
+            setSaveState("idle");
+          } else {
+            setSaveState("error");
+          }
         }
       })
       .finally(() => {
@@ -462,6 +466,46 @@ export function SetupPage() {
           setWorkspaceSwitching(false);
         }
       });
+  };
+  const changeWorkspace = (value: string) => {
+    form.setFieldValue("workspaceDir", value);
+    const workspace = value.trim();
+    if (workspace) {
+      startWorkspaceSwitch(workspace);
+    }
+  };
+  const dismissPendingWorkspaceSwitch = () => {
+    setPendingWorkspaceSwitch("");
+    const currentWorkspace = config.data?.cwd ?? "";
+    if (currentWorkspace) {
+      form.setFieldValue("workspaceDir", currentWorkspace);
+      localStorage.setItem("guildbotics.workspace", currentWorkspace);
+    }
+  };
+  const forcePendingWorkspaceSwitch = async () => {
+    const workspace = pendingWorkspaceSwitch;
+    if (!workspace) {
+      return;
+    }
+    const switchId = workspaceSwitchId.current + 1;
+    workspaceSwitchId.current = switchId;
+    setForceWorkspaceSwitching(true);
+    setWorkspaceSwitching(true);
+    setSaveState("saving");
+    try {
+      await stopScheduler({ force: true });
+      await applyWorkspaceSwitch(workspace, switchId);
+      setPendingWorkspaceSwitch("");
+    } catch {
+      if (workspaceSwitchId.current === switchId) {
+        setSaveState("error");
+      }
+    } finally {
+      if (workspaceSwitchId.current === switchId) {
+        setWorkspaceSwitching(false);
+      }
+      setForceWorkspaceSwitching(false);
+    }
   };
 
   return (
@@ -540,6 +584,28 @@ export function SetupPage() {
           {saveMutation.error.message}
         </Alert>
       ) : null}
+      <Modal
+        centered
+        opened={Boolean(pendingWorkspaceSwitch)}
+        onClose={dismissPendingWorkspaceSwitch}
+        title={t("setup.workspaceSwitchBlocked.title")}
+      >
+        <Stack gap="md">
+          <Text size="sm">{t("setup.workspaceSwitchBlocked.body")}</Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={dismissPendingWorkspaceSwitch}>
+              {t("setup.workspaceSwitchBlocked.ok")}
+            </Button>
+            <Button
+              color="red"
+              loading={forceWorkspaceSwitching}
+              onClick={() => void forcePendingWorkspaceSwitch()}
+            >
+              {t("setup.workspaceSwitchBlocked.force")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }
@@ -627,6 +693,12 @@ function SetupStatusBanner({
         <Progress value={(status.done / status.total) * 100} w={220} />
       </Group>
     </Card>
+  );
+}
+
+function isWorkspaceSwitchBlocked(error: unknown): boolean {
+  return (
+    error instanceof ApiRequestError && error.code === "workspace_switch_blocked_by_active_work"
   );
 }
 

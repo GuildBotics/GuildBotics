@@ -276,6 +276,18 @@ class SchedulerStartRequest(BaseModel):
     routine_interval_minutes: int = Field(default=10, ge=1)
 
 
+class SchedulerStopRequest(BaseModel):
+    force: bool = False
+
+
+class RuntimeActiveWork(BaseModel):
+    id: str
+    source: Literal["manual", "scheduled", "routine", "event_queue"]
+    person_id: str
+    command: str
+    started_at: str
+
+
 class RuntimeUnitStatus(BaseModel):
     target: Literal["scheduler", "events"]
     state: Literal["starting", "running", "stopping", "stopped", "failed"]
@@ -303,6 +315,7 @@ class RuntimeUnitStatus(BaseModel):
 class RuntimeStatus(BaseModel):
     scheduler: RuntimeUnitStatus
     events: RuntimeUnitStatus
+    active_works: list[RuntimeActiveWork] = Field(default_factory=list)
 
 
 class ChatReceiveResetResponse(BaseModel):

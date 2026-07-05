@@ -20,7 +20,10 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
     ProjectStatusOptionsRequest,
     PromptTraceUpdateRequest,
+    RuntimeActiveWork,
     RuntimeDebugUpdateRequest,
+    RuntimeStatus,
+    RuntimeUnitStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities import Person, Project, Team
@@ -330,7 +333,9 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     runtime = AppRuntime(EventBus())
     stop_calls: list[bool] = []
     monkeypatch.setattr(
-        runtime, "stop_scheduler", lambda: stop_calls.append(True) or None
+        runtime,
+        "stop_scheduler",
+        lambda *, force=False: stop_calls.append(True) or _idle_runtime_status(),
     )
     monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
 
@@ -360,6 +365,74 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert status.env_file_exists is True
 
 
+def _idle_runtime_status() -> RuntimeStatus:
+    return RuntimeStatus(
+        scheduler=RuntimeUnitStatus(target="scheduler", state="stopped", running=False),
+        events=RuntimeUnitStatus(target="events", state="stopped", running=False),
+        active_works=[],
+    )
+
+
+def _busy_runtime_status() -> RuntimeStatus:
+    return RuntimeStatus(
+        scheduler=RuntimeUnitStatus(target="scheduler", state="running", running=True),
+        events=RuntimeUnitStatus(target="events", state="stopped", running=False),
+        active_works=[
+            RuntimeActiveWork(
+                id="work-1",
+                source="manual",
+                person_id="alice",
+                command="demo",
+                started_at="2026-07-05T00:00:00Z",
+            )
+        ],
+    )
+
+
+def test_set_workspace_rejects_running_runtime(isolated_home: Path) -> None:
+    runtime = AppRuntime(EventBus())
+    workspace = isolated_home / "workspace"
+    workspace.mkdir()
+
+    runtime.get_scheduler_status = _busy_runtime_status  # type: ignore[method-assign]
+
+    with pytest.raises(AppApiError) as exc_info:
+        runtime.set_workspace(workspace)
+
+    assert exc_info.value.code == "workspace_switch_blocked_by_active_work"
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.context == {
+        "active_work_count": 1,
+        "scheduler_state": "running",
+        "events_state": "stopped",
+    }
+
+
+def test_set_workspace_aborts_when_force_stop_leaves_work_running(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = AppRuntime(EventBus())
+    workspace = isolated_home / "workspace"
+    workspace.mkdir()
+    _write_project(workspace / ".guildbotics" / "config")
+
+    original_cwd = Path.cwd()
+    # Pre-check sees an idle runtime, but the forced stop fails to drain work
+    # that slipped in (or could not be cancelled) before the timeout.
+    monkeypatch.setattr(runtime, "get_scheduler_status", _idle_runtime_status)
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _busy_runtime_status()
+    )
+
+    with pytest.raises(AppApiError) as exc_info:
+        runtime.set_workspace(workspace)
+
+    assert exc_info.value.code == "workspace_switch_blocked_by_active_work"
+    assert exc_info.value.status_code == 409
+    # The workspace switch must not touch cwd while work is still running.
+    assert Path.cwd() == original_cwd
+
+
 def test_set_workspace_env_does_not_override_home_state_root(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -371,7 +444,9 @@ def test_set_workspace_env_does_not_override_home_state_root(
     monkeypatch.setenv("HOMEDRIVE", original_homedrive)
     monkeypatch.setenv("HOMEPATH", original_homepath)
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
 
     workspace = isolated_home / "workspace"
     workspace.mkdir()
@@ -408,7 +483,9 @@ def test_set_workspace_prefers_env_data_dir_over_inherited(
     inherited_data = isolated_home / "inherited-data"
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(inherited_data))
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
 
     workspace = isolated_home / "workspace"
     workspace.mkdir()
@@ -435,7 +512,9 @@ def test_set_workspace_uses_initial_inherited_data_dir_across_switches(
     inherited_data = isolated_home / "inherited-data"
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(inherited_data))
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
 
     workspace_a = isolated_home / "workspace-a"
     workspace_a.mkdir()
@@ -460,7 +539,9 @@ def test_get_context_does_not_reapply_workspace_data_root(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
     workspace = isolated_home / "workspace"
     workspace.mkdir()
     _write_project(workspace / ".guildbotics" / "config")
@@ -497,7 +578,9 @@ def test_diagnostics_store_switches_with_workspace_data_root(
 
     store = DiagnosticsStore()
     runtime = AppRuntime(EventBus(store=store))
-    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
 
     workspace_a = isolated_home / "workspace-a"
     workspace_a.mkdir()
@@ -521,7 +604,9 @@ def test_set_workspace_clears_stale_dotenv_keys_from_previous_workspace(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
 
@@ -549,7 +634,9 @@ def test_set_workspace_clears_dotenv_keys_when_new_env_missing(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(runtime, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     workspace_a = isolated_home / "workspace-a"

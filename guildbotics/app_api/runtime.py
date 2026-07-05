@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import logging
 import os
@@ -71,6 +72,7 @@ from guildbotics.drivers import (
     PersonSelectionRequiredError,
     run_command,
 )
+from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
 from guildbotics.editions import get_edition
 from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities import Project, Service, Team
@@ -127,6 +129,7 @@ class AppRuntime:
         self._diagnostics_store = diagnostics_store
         self._lock = threading.Lock()
         self._running_command_id: str | None = None
+        self._execution = ExecutionCoordinator()
         self._loaded_dotenv_keys: set[str] = set()
         self._inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
         apply_workspace_data_root(
@@ -138,6 +141,7 @@ class AppRuntime:
             event_bus=event_bus,
             context_factory=self._get_context,
             stop_timeout_seconds=stop_timeout_seconds,
+            execution_coordinator=self._execution,
         )
 
     def get_config_status(self) -> ConfigStatus:
@@ -173,7 +177,17 @@ class AppRuntime:
                 context={"workspace_dir": str(workspace)},
                 status_code=400,
             )
-        self.stop_scheduler()
+        # Reject up front so a running service is not force-stopped just
+        # because a switch was requested.
+        status = self.get_scheduler_status()
+        if _runtime_has_active_work(status):
+            raise _workspace_switch_blocked_error(status)
+        # Force-stop anything that slipped in between the check above and here.
+        # A forced stop can still time out (uncancellable work, drain timeout),
+        # so re-check and abort rather than switching cwd/env under live work.
+        stopped = self.stop_scheduler(force=True)
+        if _runtime_has_active_work(stopped):
+            raise _workspace_switch_blocked_error(stopped)
         os.chdir(workspace)
         write_active_workspace(workspace)
         self._load_workspace_env(apply_data_root=True)
@@ -310,13 +324,37 @@ class AppRuntime:
         self._reserve_command(trace_id)
         try:
             context = self._get_context(request.message)
-            with trace_scope(
-                "manual",
-                command=request.command,
-                person_id=_manual_trace_person_id(context, request.person),
-                trace_id=trace_id,
-            ):
-                output = await self._run_command_traced(request, context)
+            person_id = _manual_trace_person_id(context, request.person)
+            loop = asyncio.get_running_loop()
+            task = asyncio.current_task()
+
+            def _cancel_manual_command() -> None:
+                if task is not None:
+                    loop.call_soon_threadsafe(task.cancel)
+
+            try:
+                with (
+                    self._execution.track_work(
+                        source="manual",
+                        person_id=person_id,
+                        command=request.command,
+                        work_id=trace_id,
+                        cancel=_cancel_manual_command,
+                    ),
+                    trace_scope(
+                        "manual",
+                        command=request.command,
+                        person_id=person_id,
+                        trace_id=trace_id,
+                    ),
+                ):
+                    output = await self._run_command_traced(request, context)
+            except WorkRejectedError as exc:
+                raise AppApiError(
+                    "work_rejected",
+                    str(exc),
+                    status_code=409,
+                ) from exc
         finally:
             self._release_command(trace_id)
         return CommandRunResponse(trace_id=trace_id, output=output)
@@ -336,6 +374,17 @@ class AppRuntime:
                 person_identifier=request.person,
                 cwd=request.cwd,
             )
+        except asyncio.CancelledError:
+            self._event_bus.publish_event(
+                "command.failed",
+                {
+                    "command": request.command,
+                    "person": request.person,
+                    "code": "cancelled",
+                    "message": "Command was cancelled.",
+                },
+            )
+            raise
         except PersonSelectionRequiredError as exc:
             available = list(exc.available)
             self._event_bus.publish_event(
@@ -407,8 +456,8 @@ class AppRuntime:
                     )
         return self._lifecycle.start(request)
 
-    def stop_scheduler(self) -> RuntimeStatus:
-        return self._lifecycle.stop()
+    def stop_scheduler(self, *, force: bool = False) -> RuntimeStatus:
+        return self._lifecycle.stop(force=force)
 
     def get_scheduler_status(self) -> RuntimeStatus:
         return self._lifecycle.get_status()
@@ -1815,6 +1864,29 @@ def _display_text(value: object) -> str:
     if isinstance(value, bool | int | float):
         return str(value)
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _runtime_has_active_work(status: RuntimeStatus) -> bool:
+    return (
+        status.scheduler.running
+        or status.events.running
+        or bool(status.active_works)
+        or status.scheduler.state == "stopping"
+        or status.events.state == "stopping"
+    )
+
+
+def _workspace_switch_blocked_error(status: RuntimeStatus) -> AppApiError:
+    return AppApiError(
+        "workspace_switch_blocked_by_active_work",
+        "Service or command work is still running. Stop it before switching workspaces.",
+        context={
+            "active_work_count": len(status.active_works),
+            "scheduler_state": status.scheduler.state,
+            "events_state": status.events.state,
+        },
+        status_code=409,
+    )
 
 
 def _chat_prompt(payload: object) -> str:

@@ -61,6 +61,7 @@ from guildbotics.app_api.models import (
     RuntimeStatus,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
+    SchedulerStopRequest,
     TeamSummary,
     TraceDetailResponse,
     TracesResponse,
@@ -125,7 +126,7 @@ def create_app(
         try:
             yield
         finally:
-            app_runtime.stop_scheduler()
+            app_runtime.stop_scheduler(force=True)
             logger.removeHandler(log_handler)
 
     app = FastAPI(title="GuildBotics App API", version="0.1.0", lifespan=lifespan)
@@ -287,8 +288,11 @@ def create_app(
         response_model=RuntimeStatus,
         responses=error_responses,
     )
-    def scheduler_stop(_: None = Depends(require_token)) -> RuntimeStatus:
-        return app_runtime.stop_scheduler()
+    def scheduler_stop(
+        request: SchedulerStopRequest | None = None,
+        _: None = Depends(require_token),
+    ) -> RuntimeStatus:
+        return app_runtime.stop_scheduler(force=request.force if request else False)
 
     @app.post(
         "/chat/receive-state/reset",

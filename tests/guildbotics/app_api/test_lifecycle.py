@@ -60,6 +60,7 @@ class FakeScheduler:
         scheduled_source_enabled: bool = True,
         routine_source_enabled: bool = True,
         event_queue_source_enabled: bool = True,
+        execution_coordinator: Any = None,
     ) -> None:
         self.context = context
         self.routine_commands = routine_commands
@@ -81,6 +82,7 @@ class FakeScheduler:
             "event_queue_source_enabled": event_queue_source_enabled,
         }
         self.block_shutdown = False
+        self.block_graceful_shutdown = False
         FakeScheduler.instances.append(self)
 
     def start(self) -> None:
@@ -91,8 +93,13 @@ class FakeScheduler:
 
     def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
         self.shutdown_calls.append({"graceful": graceful, "timeout": timeout})
-        if not self.block_shutdown:
-            self._stop.set()
+        if self.block_shutdown:
+            return
+        if self.block_graceful_shutdown and graceful:
+            # Mimic a worker busy with in-flight work: the graceful shutdown
+            # keeps waiting until a forceful shutdown cancels the work.
+            return
+        self._stop.set()
 
     def get_status_summary(self) -> dict[str, Any]:
         return dict(self.summary)
@@ -469,7 +476,7 @@ def test_stop_stops_events_before_scheduler(context_factory: Any) -> None:
     assert _events_for(bus, "events")[-2:] == ["events.stopping", "events.stopped"]
 
 
-def test_scheduler_shutdown_called_with_stop_timeout(context_factory: Any) -> None:
+def test_graceful_scheduler_shutdown_waits_without_timeout(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory, stop_timeout_seconds=4.5)
     service.start(
         SchedulerStartRequest(
@@ -480,7 +487,51 @@ def test_scheduler_shutdown_called_with_stop_timeout(context_factory: Any) -> No
 
     service.stop()
 
-    assert scheduler.shutdown_calls == [{"graceful": True, "timeout": 4.5}]
+    assert scheduler.shutdown_calls == [{"graceful": True, "timeout": None}]
+
+
+def test_force_scheduler_shutdown_uses_stop_timeout(context_factory: Any) -> None:
+    service, _bus = _make_service(context_factory, stop_timeout_seconds=4.5)
+    service.start(
+        SchedulerStartRequest(
+            sources={"scheduled": True, "routine": True, "event_queue": False}
+        )
+    )
+    scheduler = FakeScheduler.instances[0]
+
+    service.stop(force=True)
+
+    assert scheduler.shutdown_calls == [{"graceful": False, "timeout": 4.5}]
+
+
+def test_force_stop_during_graceful_stop_publishes_single_stop_transition(
+    context_factory: Any,
+) -> None:
+    service, bus = _make_service(context_factory)
+    service.start(
+        SchedulerStartRequest(
+            sources={"scheduled": True, "routine": True, "event_queue": False}
+        )
+    )
+    scheduler = FakeScheduler.instances[0]
+    scheduler.block_graceful_shutdown = True
+
+    graceful = threading.Thread(target=service.stop)
+    graceful.start()
+    try:
+        assert _wait_until(
+            lambda: service.get_status().scheduler.state == "stopping"
+        )
+
+        status = service.stop(force=True)
+    finally:
+        graceful.join(timeout=2.0)
+    assert not graceful.is_alive()
+    assert status.scheduler.state == "stopped"
+
+    events = _events_for(bus, "scheduler")
+    assert events.count("scheduler.stopping") == 1
+    assert events.count("scheduler.stopped") == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -502,7 +553,7 @@ def test_scheduler_stop_timeout_marks_failed_with_running_true(
     scheduler.block_shutdown = True
 
     try:
-        status = service.stop()
+        status = service.stop(force=True)
         assert status.scheduler.state == "failed"
         assert status.scheduler.running is True
         assert status.scheduler.error == "Scheduler did not stop before timeout."
@@ -614,7 +665,7 @@ def test_events_start_failure_stops_new_member_worker(context_factory: Any) -> N
 
     assert len(FakeScheduler.instances) == 1
     assert FakeScheduler.instances[0].shutdown_calls == [
-        {"graceful": True, "timeout": 2.0}
+        {"graceful": True, "timeout": None}
     ]
     status = service.get_status()
     assert status.scheduler.state == "stopped"

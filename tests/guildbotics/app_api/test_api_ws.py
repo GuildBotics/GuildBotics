@@ -25,7 +25,7 @@ POLICY_VIOLATION_CLOSE_CODE = 1008
 class RuntimeStub:
     """Minimal runtime stub: websocket endpoints never touch it."""
 
-    def stop_scheduler(self) -> None:
+    def stop_scheduler(self, *, force: bool = False) -> None:
         return None
 
 

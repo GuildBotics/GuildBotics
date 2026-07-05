@@ -5,8 +5,10 @@ import errno
 import os
 import signal
 import sys
+import threading
 import time
 import traceback
+from contextlib import suppress
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -176,8 +178,21 @@ def start(
     )
     event_runner = EventListenerRunner(edition.get_context()) if start_events else None
 
+    graceful_stop_started = threading.Event()
+
     def _handle_signal(signum, frame):  # type: ignore[no-untyped-def]
-        click.echo(f"Received signal {signum}. Shutting down...")
+        if graceful_stop_started.is_set():
+            # Second signal: escalate like the GUI force stop and cancel the
+            # in-flight work the first (graceful) shutdown is still waiting on.
+            click.echo("Cancelling in-flight work...")
+            if scheduler is not None:
+                scheduler.shutdown(graceful=False, timeout=0)
+            return
+        graceful_stop_started.set()
+        click.echo(
+            f"Received signal {signum}. Waiting for in-flight work to finish "
+            "(send the signal again to cancel it)..."
+        )
         try:
             if event_runner is not None:
                 event_runner.stop()
@@ -307,8 +322,17 @@ def version_cmd() -> None:
 
 
 @main.command()
-@click.option("--timeout", default=30, show_default=True, help="Seconds to wait")
-@click.option("--force", is_flag=True, help="Force kill after timeout")
+@click.option(
+    "--timeout",
+    default=30,
+    show_default=True,
+    help="Seconds to wait at each stop stage",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Cancel in-flight work after timeout, then SIGKILL as a last resort",
+)
 def stop(timeout: int, force: bool) -> None:
     """Gracefully stop the running scheduler process."""
     _load_env_from_cwd()
@@ -339,27 +363,46 @@ def stop(timeout: int, force: bool) -> None:
         _remove_pidfile(pid_path)
         return
 
-    # Wait for graceful shutdown
-    deadline = time.time() + max(0, timeout)
-    while time.time() < deadline:
-        if not _pid_is_running(pid):
-            click.echo("Scheduler stopped.")
-            _remove_pidfile(pid_path)
-            return
-        time.sleep(0.5)
+    # Wait for graceful shutdown (the scheduler finishes in-flight work first).
+    if _wait_for_process_exit(pid, timeout):
+        click.echo("Scheduler stopped.")
+        _remove_pidfile(pid_path)
+        return
 
-    if force and _pid_is_running(pid):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except Exception as e:
-            click.echo(f"Failed to SIGKILL {pid}: {e}")
-        else:
-            click.echo("Force killed scheduler.")
-        # Best effort cleanup
-        if not _pid_is_running(pid):
-            _remove_pidfile(pid_path)
+    if not force:
+        click.echo(
+            "Timeout reached; the scheduler may still be finishing in-flight work. "
+            "Run `guildbotics stop` again to cancel it, or use --force to SIGKILL."
+        )
+        return
+
+    # Escalate: a second SIGTERM cancels in-flight work, SIGKILL is the last resort.
+    with suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGTERM)
+    if _wait_for_process_exit(pid, timeout):
+        click.echo("Scheduler stopped after cancelling in-flight work.")
+        _remove_pidfile(pid_path)
+        return
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception as e:
+        click.echo(f"Failed to SIGKILL {pid}: {e}")
     else:
-        click.echo("Timeout reached and process still running. Use --force to SIGKILL.")
+        click.echo("Force killed scheduler.")
+    # Best effort cleanup
+    if not _pid_is_running(pid):
+        _remove_pidfile(pid_path)
+
+
+def _wait_for_process_exit(pid: int, timeout: float) -> bool:
+    deadline = time.time() + max(0, timeout)
+    while True:
+        if not _pid_is_running(pid):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
 
 
 @main.command()

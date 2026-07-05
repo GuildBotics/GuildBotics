@@ -1,9 +1,11 @@
 import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { App } from "./App";
 import {
@@ -31,6 +33,7 @@ if (!Element.prototype.scrollIntoView) {
 
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
 vi.mock("./setup/SetupPage", () => ({ SetupPage: () => <div>Setup Mock</div> }));
 
 vi.mock("./api/client", async (importOriginal) => {
@@ -80,6 +83,70 @@ beforeEach(() => {
 });
 
 describe("Service Runtime screen", () => {
+  it("keeps sidebar runtime indicators hidden while stopped", async () => {
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    expect(
+      screen.queryByRole("status", { name: t("app.navStatus.service.running") }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("status", { name: t("app.navStatus.commands.running") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows solid sidebar indicators for running service and manual command", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
+        active_works: [
+          {
+            id: "manual-1",
+            source: "manual",
+            person_id: "alice",
+            command: "demo",
+            started_at: "2026-07-05T00:00:00Z",
+          },
+        ],
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    expect(
+      await screen.findByRole("status", { name: t("app.navStatus.service.running") }),
+    ).toHaveClass("running");
+    expect(
+      await screen.findByRole("status", { name: t("app.navStatus.commands.running") }),
+    ).toHaveClass("running");
+  });
+
+  it("shows blinking sidebar indicators while stopping", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", { state: "stopping", running: true }),
+        active_works: [
+          {
+            id: "manual-1",
+            source: "manual",
+            person_id: "alice",
+            command: "demo",
+            started_at: "2026-07-05T00:00:00Z",
+          },
+        ],
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    expect(
+      await screen.findByRole("status", { name: t("app.navStatus.service.stopping") }),
+    ).toHaveClass("stopping");
+    expect(
+      await screen.findByRole("status", { name: t("app.navStatus.commands.stopping") }),
+    ).toHaveClass("stopping");
+  });
+
   it("sends source selection when only scheduled and routine sources are enabled", async () => {
     const user = userEvent.setup();
     renderApp("/service");
@@ -221,6 +288,36 @@ describe("Service Runtime screen", () => {
     expect(screen.getAllByText(t("overview.runtimeStates.running")).length).toBeGreaterThan(0);
   });
 
+  it("shows active manual work as a stop target", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        active_works: [
+          {
+            id: "work-1",
+            source: "manual",
+            person_id: "aiko",
+            command: "demo",
+            started_at: "2026-07-05T00:00:00Z",
+          },
+        ],
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    expect(await screen.findByRole("button", { name: t("overview.stop") })).toBeEnabled();
+    expect(screen.getByText(t("overview.activeWork.title"))).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        t("overview.activeWork.item", {
+          person: "aiko",
+          source: t("overview.activeWork.sources.manual"),
+          command: "demo",
+        }),
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows scheduled/routine sources as stopped when only event queue workers are active", async () => {
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
@@ -307,6 +404,22 @@ describe("Service Runtime screen", () => {
       expect(screen.getAllByText(t("overview.stopDelayHint")).length).toBeGreaterThan(0),
     );
     expect(screen.getAllByText(t("overview.runtimeStates.stopping")).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: t("overview.forceStop") })).toBeInTheDocument();
+  });
+
+  it("sends a force stop request from the stopping state", async () => {
+    const user = userEvent.setup();
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", { state: "stopping", running: true }),
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    await user.click(await screen.findByRole("button", { name: t("overview.forceStop") }));
+
+    await waitFor(() => expect(stopSchedulerMock).toHaveBeenCalledWith({ force: true }));
   });
 
   it("shows an alert when the start mutation fails", async () => {
@@ -424,6 +537,111 @@ describe("App routing and layout", () => {
     await waitFor(() => expect(changeSpy).toHaveBeenCalledWith("ja"));
     changeSpy.mockRestore();
     await i18n.changeLanguage("en");
+  });
+});
+
+describe("App close guard", () => {
+  type CloseHandler = (event: { preventDefault: () => void }) => Promise<void>;
+  let closeHandler: CloseHandler | undefined;
+  const destroyMock = vi.fn();
+
+  beforeEach(() => {
+    closeHandler = undefined;
+    destroyMock.mockReset();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      onCloseRequested: vi.fn(async (handler: CloseHandler) => {
+        closeHandler = handler;
+        return () => {};
+      }),
+      destroy: destroyMock,
+    } as unknown as ReturnType<typeof getCurrentWindow>);
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+
+  async function requestClose() {
+    await waitFor(() => expect(closeHandler).toBeDefined());
+    const preventDefault = vi.fn();
+    await act(async () => {
+      await closeHandler!({ preventDefault });
+    });
+    return preventDefault;
+  }
+
+  it("allows the window to close while nothing is running", async () => {
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    const preventDefault = await requestClose();
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(screen.queryByText(t("app.closeBlocked.body"))).not.toBeInTheDocument();
+  });
+
+  it("blocks the close with a modal while work is active and force stops on request", async () => {
+    const user = userEvent.setup();
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    const preventDefault = await requestClose();
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(await screen.findByText(t("app.closeBlocked.body"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("app.closeBlocked.force") }));
+
+    await waitFor(() => expect(stopSchedulerMock).toHaveBeenCalledWith({ force: true }));
+    await waitFor(() => expect(destroyMock).toHaveBeenCalled());
+  });
+
+  it("shows the destroy error instead of spinning forever when quitting fails", async () => {
+    const user = userEvent.setup();
+    destroyMock.mockRejectedValue(new Error("window.destroy not allowed"));
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    await requestClose();
+    await user.click(await screen.findByRole("button", { name: t("app.closeBlocked.force") }));
+
+    expect(await screen.findByText(t("app.closeBlocked.error"))).toBeInTheDocument();
+    expect(screen.getByText("window.destroy not allowed")).toBeInTheDocument();
+    // The modal stays open and the force button is usable again.
+    expect(screen.getByRole("button", { name: t("app.closeBlocked.force") })).toBeEnabled();
+  });
+
+  it("keeps the window open when the blocked close is cancelled", async () => {
+    const user = userEvent.setup();
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    await requestClose();
+    expect(await screen.findByText(t("app.closeBlocked.body"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("app.closeBlocked.cancel") }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(t("app.closeBlocked.body"))).not.toBeInTheDocument(),
+    );
+    expect(destroyMock).not.toHaveBeenCalled();
+    expect(stopSchedulerMock).not.toHaveBeenCalled();
   });
 });
 

@@ -299,8 +299,9 @@ guildbotics start --only events
 guildbotics stop [--timeout <seconds>] [--force]
 ```
 
-- SIGTERM を送信し、最大 `--timeout` 秒（デフォルト: 30）待機します。
-- タイムアウト内に終了せず、`--force` が指定されている場合、SIGKILL を送信します。
+- SIGTERM を送信します。スケジューラは新しい作業の受付を止め、実行中の作業の完了を待ってから終了します。最大 `--timeout` 秒（デフォルト: 30）待機します。
+- もう一度 SIGTERM を送る（例: `guildbotics stop` を再実行する）と、実行中の作業をキャンセルします。
+- `--force` を指定した場合、タイムアウト後に 2 回目の SIGTERM で実行中の作業をキャンセルし、さらに `--timeout` 秒待っても終了しない場合のみ SIGKILL を送信します。
 
 即座に強制停止する場合:
 
