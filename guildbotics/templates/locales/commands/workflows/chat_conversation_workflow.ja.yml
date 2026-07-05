@@ -2,5 +2,3 @@ ja:
   context_location: "チャット会話"
   reply_generation_failed: "すみません、いま回答の生成に失敗しました。もう一度送ってください。続く場合は管理者に連絡してください。"
   incomplete_escalation: "すみません、何度か試しましたがこの依頼を自動で完了できませんでした。お手数ですが内容をご確認のうえ、必要なら依頼を出し直してください。"
-  rate_limited_escalation: "AI CLIツールが rate limit 中のため、この workflow を今は続行できません。この event は自動再試行しません。"
-  rate_limited_escalation_with_reset: "AI CLIツールが rate limit 中のため、この workflow を今は続行できません。Reset: %{retry_after}。この event は自動再試行しません。"

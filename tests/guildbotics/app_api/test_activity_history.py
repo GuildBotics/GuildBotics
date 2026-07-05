@@ -155,6 +155,34 @@ def test_rate_limited_workflow_event_sets_session_rate_limit() -> None:
     assert session.rate_limit.retry_after_text == "11:44 AM"
 
 
+def test_rate_limited_ticket_workflow_event_sets_session_rate_limit() -> None:
+    session = _session(
+        [
+            {
+                "trace_id": "t-rate",
+                "person_id": "alice",
+                "timestamp": "2026-07-01T10:00:00+00:00",
+                "source": "routine",
+                "command": "workflows/ticket_driven_workflow",
+                "workflow": "workflows/ticket_driven_workflow",
+                "kind": "event",
+                "type": "workflow.rate_limited",
+                "attributes": {
+                    "rate_limit.retry_after_at": "2026-07-05T12:00:00+09:00",
+                    "rate_limit.retry_after_text": "12:00 PM",
+                },
+                "payload": {},
+            }
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+
+    assert session.status == "rate_limited"
+    assert session.rate_limit is not None
+    assert session.rate_limit.retry_after_at == "2026-07-05T12:00:00+09:00"
+    assert session.rate_limit.retry_after_text == "12:00 PM"
+
+
 def test_latest_rate_limit_record_wins() -> None:
     session = _session(
         [

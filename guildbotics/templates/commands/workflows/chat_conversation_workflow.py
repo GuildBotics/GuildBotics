@@ -11,10 +11,15 @@ from typing import Any
 
 from guildbotics.capabilities.completion_retry import (
     CLI_AGENT_CONVERSATION_FILE_ENV,
-    find_cli_agent_execution_error,
     run_with_completion_retry,
 )
 from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
+from guildbotics.capabilities.workflow_rate_limits import (
+    WorkflowRateLimit,
+    record_workflow_rate_limited,
+    workflow_rate_limit_from_exception,
+    workflow_rate_limit_notice_text,
+)
 from guildbotics.entities.message import Message
 from guildbotics.integrations.chat_service import (
     ChatEvent,
@@ -32,7 +37,6 @@ from guildbotics.integrations.chat_workflow_status import (
     workflow_status_metadata,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
@@ -328,11 +332,8 @@ async def _handle_event(
             retry_invoke_exceptions=False,
         )
     except Exception as exc:
-        rate_limit_error = find_cli_agent_execution_error(exc, category="rate_limited")
-        if rate_limit_error is not None:
-            details = getattr(rate_limit_error, "details", {})
-            retry_after_at = str(details.get("retry_after_at", "") or "")
-            retry_after_text = str(details.get("retry_after_text", "") or "")
+        rate_limit = workflow_rate_limit_from_exception(exc)
+        if rate_limit is not None:
             run_id = current_run_id
             await _escalate_incomplete(
                 chat_service=chat_service,
@@ -345,15 +346,16 @@ async def _handle_event(
                 run_id=run_id,
                 thread_state=thread_state,
                 reason="rate_limited",
-                retry_after_at=retry_after_at,
-                retry_after_text=retry_after_text,
+                retry_after_at=rate_limit.retry_after_at,
+                retry_after_text=rate_limit.retry_after_text,
             )
-            _record_rate_limited(
+            record_workflow_rate_limited(
                 person_id=person_id,
-                source_event_id=event.event_id,
+                command="workflows/chat_conversation_workflow",
                 run_id=run_id,
-                retry_after_at=retry_after_at,
-                retry_after_text=retry_after_text,
+                source_event_id=event.event_id,
+                retry_after=rate_limit,
+                default_source="event_listener",
             )
             state_store.mark_processed_event(
                 service_name, person_id, channel_id, event.event_id
@@ -500,44 +502,12 @@ def _workflow_status_notice_text(
     reason: str, retry_after_at: str = "", retry_after_text: str = ""
 ) -> str:
     if reason == "rate_limited":
-        retry_after = retry_after_text or retry_after_at
-        if retry_after:
-            return t(
-                "commands.workflows.chat_conversation_workflow.rate_limited_escalation_with_reset",
-                retry_after=retry_after,
+        return workflow_rate_limit_notice_text(
+            WorkflowRateLimit(
+                retry_after_at=retry_after_at, retry_after_text=retry_after_text
             )
-        return t(
-            "commands.workflows.chat_conversation_workflow.rate_limited_escalation"
         )
     return t("commands.workflows.chat_conversation_workflow.incomplete_escalation")
-
-
-def _record_rate_limited(
-    *,
-    person_id: str,
-    source_event_id: str,
-    run_id: str,
-    retry_after_at: str,
-    retry_after_text: str,
-) -> None:
-    record_correlated_event(
-        event_type="workflow.rate_limited",
-        default_source="event_listener",
-        person_id=person_id,
-        command="workflows/chat_conversation_workflow",
-        attributes={
-            "error.category": "rate_limited",
-            "rate_limit.retry_after_at": retry_after_at,
-            "rate_limit.retry_after_text": retry_after_text,
-        },
-        payload={
-            "category": "rate_limited",
-            "retry_after_at": retry_after_at,
-            "retry_after_text": retry_after_text,
-            "source_event_id": source_event_id,
-            "run_id": run_id,
-        },
-    )
 
 
 async def _build_agent_prompt_payload(
