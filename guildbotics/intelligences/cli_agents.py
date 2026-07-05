@@ -74,7 +74,7 @@ def discover_cli_agents(
 
     An AI CLI tool is any ``*.yml`` (member, team, or template scope); the file in
     the highest-priority scope wins. This is the only place that enumerates the
-    AI CLI tool catalog, so adding an agent is just a matter of dropping in
+    AI CLI tool catalog, so adding a tool is just a matter of dropping in
     ``cli_agents/<name>-cli.yml`` with ``label``/``order``/``executable``.
     """
     files: dict[str, Path] = {}

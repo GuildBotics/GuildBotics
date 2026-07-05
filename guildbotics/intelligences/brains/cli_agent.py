@@ -531,7 +531,7 @@ class CliAgentBrain(Brain):
             self.logger.debug(f"Environment: {self._mask_env(env)}")
             stdout, stderr = await process.communicate()
             self.logger.info(
-                f"AI CLI Tool '{self.cli_agent}' finished execution with return code {process.returncode}"
+                f"AI CLI tool '{self.cli_agent}' finished execution with return code {process.returncode}"
             )
 
             # Log the outputs
@@ -543,13 +543,13 @@ class CliAgentBrain(Brain):
                         f.write(stderr_output)
 
             response = stdout.decode(errors="replace")
-            self.logger.info(f"AI CLI Tool '{self.cli_agent}' response:\n{response}")
+            self.logger.info(f"AI CLI tool '{self.cli_agent}' response:\n{response}")
             if response_file:
                 with open(response_file, "w") as f:
                     f.write(response)
 
             if process.returncode != 0:
-                self.logger.error(f"AI CLI Tool exited with code {process.returncode}")
+                self.logger.error(f"AI CLI tool exited with code {process.returncode}")
             error_category, error_details = _parse_cli_agent_error_marker(
                 stderr_output, self.logger
             )

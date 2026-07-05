@@ -61,7 +61,7 @@ workspace `.env` に `GUILDBOTICS_DATA_DIR` が設定されている場合、wor
 
 `GUILDBOTICS_DATA_DIR` は workspace data root の override であり、machine state root には効かない。
 
-workspace を適用した process では、最終的に使う workspace data root を `os.environ["GUILDBOTICS_DATA_DIR"]` に必ず設定する。これにより、member CLI や AI CLIツールsubprocess の cwd が runtime workspace root と異なる場合でも、同じ workspace data root を参照できる。
+workspace を適用した process では、最終的に使う workspace data root を `os.environ["GUILDBOTICS_DATA_DIR"]` に必ず設定する。これにより、member CLI や AI CLIツール subprocess の cwd が runtime workspace root と異なる場合でも、同じ workspace data root を参照できる。
 
 `os.environ["GUILDBOTICS_DATA_DIR"]` の書き換えは、workspace 適用境界でのみ行う。workspace 適用境界とは、App API の `set_workspace()`、CLI / member CLI の起動時 workspace 解決、`guildbotics run` / `start` の runtime 初期化のように、まだ member 作業や scheduler worker が走っていない地点を指す。scheduler の per-member worker や command / workflow の個別実行中に process-global な `os.environ` を書き換えてはならない。
 
@@ -290,7 +290,7 @@ Desktop 設定画面の挙動:
 
 workflow が AI CLIツールを起動するときは、`cwd` をこの member workspace にする。
 
-AI CLIツールsubprocess には現在の workspace data root を `GUILDBOTICS_DATA_DIR` として必ず渡す。これは利便性ではなく正しさのために必須である。AI CLIツールの cwd は member workspace なので、この値を渡さないと子プロセスが `<member-workspace>/.guildbotics/data` のような入れ子の誤った data root を計算する。
+AI CLIツール subprocess には現在の workspace data root を `GUILDBOTICS_DATA_DIR` として必ず渡す。これは利便性ではなく正しさのために必須である。AI CLIツールの cwd は member workspace なので、この値を渡さないと子プロセスが `<member-workspace>/.guildbotics/data` のような入れ子の誤った data root を計算する。
 
 ### Task Run / Chat Run Evidence
 
@@ -572,7 +572,7 @@ Root 解決は unit test で網羅する。
 - ticket workflow は member workspace を `<workspace-data-root>/workspaces/<person_id>` に作る。
 - chat workflow も同じ member workspace root を使う。
 - `guildbotics member ...` が記録する evidence は `<workspace-data-root>/task-runs/<run_id>.jsonl` に入る。
-- AI CLIツールsubprocess の cwd が `<workspace-data-root>/workspaces/<person_id>` の場合でも、`GUILDBOTICS_DATA_DIR` 伝播により evidence は親 workflow と同じ `<workspace-data-root>/task-runs` に入る。
+- AI CLIツール subprocess の cwd が `<workspace-data-root>/workspaces/<person_id>` の場合でも、`GUILDBOTICS_DATA_DIR` 伝播により evidence は親 workflow と同じ `<workspace-data-root>/task-runs` に入る。
 
 ## ドキュメント更新方針
 

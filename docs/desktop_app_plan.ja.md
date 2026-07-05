@@ -18,7 +18,7 @@ GuildBotics の既存 CLI 体験を維持しながら、macOS 向けのデスク
 - Codex CLI、Antigravity CLI、Claude Code などの外部 AI CLIツールは同梱しない。GUI は検出、状態表示、設定支援、verify のみを提供する。
 - secrets は v1 では既存 CLI 互換の `.env` を正とする。OS Keychain 対応は将来課題とする。
 - Setup UI は Wizard 専用画面を別に作らず、単一の設定画面に初回ガイド層を重ねる。
-- GitHub 連携そのものは任意だが、初期設定では「使う / 使わない」の判断を明示入力にする。Setup の導線は `プロジェクト → LLM・AI CLIツール→ GitHub → メンバー` の順に統一する。
+- GitHub 連携そのものは任意だが、初期設定では「使う / 使わない」の判断を明示入力にする。Setup の導線は `プロジェクト → LLM・AI CLIツール → GitHub → メンバー` の順に統一する。
 - Desktop frontend は Mantine v7、React Router、TanStack Query、lucide-react を標準構成にする。
 - GUI の workspace は backend sidecar の cwd として扱う。API request ごとに workspace path を渡す設計にはしない。
 
@@ -120,7 +120,7 @@ frontend は `message` を表示し、分岐や復旧導線には `code` と `co
 - Setup UI の初回フィードバックを反映し、保存 CTA を「設定ファイルを書き込む」に明確化、language / config location に明示ラベルを追加、Tauri 実行時の作業ディレクトリ選択を OS dialog に変更済み。
 - Setup UI の「次へ」は当該セクションの必須入力が満たされた場合のみ有効化し、未入力のまま進めないように更新済み。
 - `GET /intelligences/cli-agents/detection` を追加し、AI CLIツールの検出済み/未検出を UI で表示し、未検出は選択不可に更新済み。
-- 初期セットアップでは `シークレット` セクションを必須導線から外し、コアは `プロジェクト / LLM・AI CLIツール/ メンバー` の 3 セクションに整理済み。`シークレット` は設定後画面で管理する。
+- 初期セットアップでは `シークレット` セクションを必須導線から外し、コアは `プロジェクト / LLM・AI CLIツール / メンバー` の 3 セクションに整理済み。`シークレット` は設定後画面で管理する。
 - 初期セットアップ時の `.env` 書き込み方式は UI で選択させず自動固定（`.env` 既存時は `append`、未存在時は `overwrite`）に更新済み。
 - FastAPI の `RequestValidationError` を `ApiError` 形式（`code/message/context`）へ統一変換済み。
 - `POST /config/init` と `POST /config/members` を追加し、GUI から setup service を呼べるようにした。
@@ -237,7 +237,7 @@ uv run --no-sync python -m pytest tests/guildbotics/cli/simple tests/guildbotics
 主な作業:
 
 - `verify` を read-only check に限定する。
-- `.env` key presence、config file presence、active member、LLM provider 設定、AI CLIツールexecutable presence、GitHub credential presence を確認する。
+- `.env` key presence、config file presence、active member、LLM provider 設定、AI CLIツール executable presence、GitHub credential presence を確認する。
 - 外部 API を叩く check は timeout 付きの optional deep check として分ける。
 - response は `ok`、`checks[]`、`warnings[]`、`errors[]` に分ける。
 
@@ -329,7 +329,7 @@ uv run --no-sync python -m pytest tests/guildbotics/app_api tests/guildbotics/dr
 - 常設フィールドはユーザーが保存状態を信頼できるよう、validation 成功後に自動保存し、保存済み / 保存中 / 失敗の状態を表示する。
 - secrets は masked input にし、既存 `.env` 値は直接表示しない。
 - Setup の不足 / 完了状態はフォーム validation、AI CLIツール検出、保存処理の成否、保存後の config/team 再読み込みから判定する。
-- advanced intelligence 設定（機能ごとの brain mapping、model definitions、AI CLIツールscript editing）は Session 6 では skeleton / deferred note に留める。
+- advanced intelligence 設定（機能ごとの brain mapping、model definitions、AI CLIツール script editing）は Session 6 では skeleton / deferred note に留める。
 - `docs/mockups/setup/README.md` のコンポーネント構成を実装単位の目安にする。最低限、`SetupSectionNav`、`SetupStatusBanner`、`ProjectSection`、`IntelligenceSection`、`SecretsSection`、`MembersSection`、`GitHubIntegrationSection`、`AutosaveIndicator`、`SecretRow`、`InfoCallout`、`FolderPicker` を分ける。
 - App API write endpoint は `SimpleProjectSetupService` / `SimplePersonSetupService` を呼ぶ薄い層にし、CLI と GUI の生成ロジックを分岐させない。
 - 正となる入力 model / validation は `ProjectSetupInput`、`PersonSetupInput`、および `SimpleSetupTool` の既存条件分岐とする。frontend の zod schema は Pydantic model と対称に保つ。
@@ -406,7 +406,7 @@ npm run build
 - `model_mapping.yml` と `models/*` のモデル定義、モデル ID を表示・編集する。
 - `cli_agent_mapping.yml` と `cli_agents/*` の AI CLIツール定義、検出状態、呼び出し script を表示・編集する。
 - member 単位の `team/members/<person_id>/intelligences/` override を表示・編集する。
-- AI CLIツールscript editing は上級者向けとして明示し、verify の CLI executable detection と連動させる。
+- AI CLIツール script editing は上級者向けとして明示し、verify の CLI executable detection と連動させる。
 - `LLM・AI CLIツール` セクションの「詳細設定（準備中）」表記を解消し、モックアップにある詳細編集 UI（機能割当・モデル定義・CLI 定義）が実際に操作できる状態にする。
 - 保存挙動は mockup 方針に合わせ、常設設定はオートセーブ、member 編集は明示保存の一貫した挙動にする（初回ガイドの `次へ` は保存操作にしない）。
 - `models/*` の `rate_limit` は v1 では編集 UI の対象外とする（現状コードで実効利用されるのは `max_requests_per_minute` のみで、`max_requests_per_day` は未使用のため）。
@@ -415,11 +415,11 @@ Session 8 完了メモ（2026-05-31）:
 
 - `GET/PUT /config/intelligences` を追加し、チーム既定と member override を同じ API model で扱うようにした。
 - member override がない場合はチーム既定を継承し、GUI から `チーム既定を使う` に戻すと member 配下の `intelligences/` override を削除する。
-- 詳細設定 UI は `model_mapping.yml`、モデル ID / model class、`cli_agent_mapping.yml`、`brain_mapping.yml`、AI CLIツールenv/script を編集できる。
+- 詳細設定 UI は `model_mapping.yml`、モデル ID / model class、`cli_agent_mapping.yml`、`brain_mapping.yml`、AI CLIツール env/script を編集できる。
 - チーム既定の詳細設定はオートセーブ、member 個別 override は member 編集フォームの `変更を保存` に統合した。
 - 初期設定前はチーム既定の詳細設定を表示せず、初期設定作成後にだけ表示する。
 - `rate_limit` は v1 の編集対象から外した。
-- Setup サイドバーは `プロジェクト → LLM・AI CLIツール→ GitHub → メンバー` の順にし、必須設定 / 任意連携の見出し分離は廃止した。
+- Setup サイドバーは `プロジェクト → LLM・AI CLIツール → GitHub → メンバー` の順にし、必須設定 / 任意連携の見出し分離は廃止した。
 - member の `person_type` は GitHub 連携時だけ意味を持つため Basic タブから GitHub タブへ移動し、GitHub と連携しない member を追加できるようにした。
 - `POST /verify` は Setup 完了導線から外し、Overview の補助的な軽量診断として扱う。Setup ではフォーム validation、AI CLIツール検出、保存処理の成否、保存後の config/team 再読み込みで初期設定の成否を判断する。
 - 初期設定中に追加した member は `project.yml` 作成前でも UI 上の draft 一覧に保持し、編集・削除できるようにした。
@@ -456,7 +456,7 @@ uv run --no-sync python -m pytest tests/guildbotics/app_api tests/guildbotics/ut
 
 - CLI `guildbotics config verify` が担っている「設定全体が実際に使えるか」の検証を、GUI でどう提供するか再設計する。
 - 軽量診断 `/verify` と、read-only のシナリオ型 live diagnostics を混同しない情報設計にする。
-- v1 では個別接続テスト UI を増やさず、`設定を検証` という 1 つの総合診断から、Config / Members / LLM / AI CLIツール/ GitHub / Slack / Git の項目別結果を返す。
+- v1 では個別接続テスト UI を増やさず、`設定を検証` という 1 つの総合診断から、Config / Members / LLM / AI CLIツール / GitHub / Slack / Git の項目別結果を返す。
 - どの診断も接続先システムのデータを更新しない。GitHub への push / issue 作成 / comment / project item 更新、Slack への message 投稿 / reaction 追加は禁止する。
 
 主な作業:
@@ -501,7 +501,7 @@ Session 8.1 完了メモ（2026-05-31）:
 - `POST /diagnostics/scenario` を追加し、Overview の `設定を検証` から実行できるようにした。
 - `POST /diagnostics/scenario?person_id=<id>` に対応し、メンバー編集画面の `検証` タブから対象メンバーだけを検証できるようにした。
 - 既存 `/verify` は軽量 presence check として残し、通常 UI の主導線は read-only シナリオ診断へ切り替えた。
-- シナリオ診断は Config / Members / LLM / AI CLIツール/ GitHub / Slack / Git の section 別 check を返す。
+- シナリオ診断は Config / Members / LLM / AI CLIツール / GitHub / Slack / Git の section 別 check を返す。
 - Overview は全体診断、メンバー編集画面はメンバー単位診断の入口とする。メンバー追加中は保存済み設定がないため、保存後に検証できる表示にする。
 - GitHub 診断は Project status 取得と repository metadata 取得までに限定し、push / issue 作成 / comment / project item 更新 / custom field 作成は行わない。
 - Slack 診断は bot identity、channel 解決、`conversations.history` の読み取りまでに限定し、message 投稿 / reaction 追加は行わない。
@@ -559,7 +559,7 @@ uv run --no-sync mypy guildbotics
 - 診断画面に Events / Logs viewer を配置し、空状態、接続状態、エラー状態、フィルタ、request id / command との紐付け表示を追加する。
 - Events / Logs は raw payload を常時表示せず、時刻、種別、対象 request id、command、ユーザー向け要約を一覧表示し、詳細は必要時だけ開ける形にする。
 - Slack チャット応答の会話スタイル調査用に、prompt trace を opt-in で出力できるようにする。`GUILDBOTICS_PROMPT_TRACE=1` で有効化し、既定では storage の `run/prompt_trace.jsonl`、`GUILDBOTICS_PROMPT_TRACE_PATH` 指定時はその path に JSONL を出力する。
-- prompt trace には、chat reply 入力（`agent_profile`、`thread_messages`、`reply_intent` など）、LLM request/response、AI CLIツールrequest/response を記録する。prompt や Slack 発言を含むため既定は OFF とする。
+- prompt trace には、chat reply 入力（`agent_profile`、`thread_messages`、`reply_intent` など）、LLM request/response、AI CLIツール request/response を記録する。prompt や Slack 発言を含むため既定は OFF とする。
 - prompt trace の ON/OFF と出力 path は、これから実行する処理の実行前設定として「サービス実行」と「コマンド実行」に配置する。ON/OFF と出力 path は `.env` に保存し、sidecar プロセスの環境変数にも即時反映する。
 - prompt trace の出力 path と表示対象 path は別物として扱う。出力 path はこれから追記する JSONL の保存先であり、表示対象 path は過去に保存済みの JSONL を読み込むための入力である。`診断` の `プロンプトトレース` タブでは表示対象 path を指定でき、出力設定を変えずに任意の記録済み trace file を読み込めるようにする。どちらもファイルパス入力欄そのものを主操作とし、Enter / focus out で適用する。ファイル選択と既定値復帰は、入力欄に紐づく補助アイコンとして配置する。
 - prompt trace の最新 event は raw JSON ではなく、event 種別、person、brain / command / cwd などのメタ情報、prompt/input、response/output に分けて表示する。デバッグ用途のため prompt 本文は表示するが、機密情報を含む可能性を UI 上で明示する。
@@ -608,7 +608,7 @@ npm run build
 - 画面名は「コマンド実行」とし、サービス常駐操作ではなく一回限りの手動実行であることが UI 構造から分かるようにする。
 - 画面上部は、実行フォームと直近の実行状態が視線移動少なく確認できる配置にする。カードを過度に入れ子にせず、フォーム、調査ログ出力、結果を明確なグループとして並べる。
 - command 入力を自由入力だけでなく、利用可能な command / workflow / routine 候補を選べる UI にする。自由入力は上級者向けに残す。
-- command 候補取得用の backend API を追加する。候補には、表示名、実行 command、説明、引数の有無、GitHub / Slack / AI CLIツール/ LLM などの必要条件、推奨される入力形式を含める。
+- command 候補取得用の backend API を追加する。候補には、表示名、実行 command、説明、引数の有無、GitHub / Slack / AI CLIツール / LLM などの必要条件、推奨される入力形式を含める。
 - command 候補 API は、既存の command 解決順と同じ設定解決を使う。特定 command 名の hard-code ではなく、既存 command metadata または backend 判定に寄せる。
 - GUI の command 候補はユーザーが編集できる member/project/home commands に絞り、`guildbotics/templates/commands` の部品的な組み込み command は一覧から除外する。初期設定作成またはプロジェクト設定保存時に `config/commands` が空なら、custom command guide ベースのサンプル command を配置する。
 - member 選択、message、command、追加 args、cwd の関係を CLI の `guildbotics run` と整合させる。GUI では `cwd` は詳細設定として扱い、通常は現在の workspace 既定値を使う。
