@@ -68,8 +68,11 @@ class ExecutionCoordinator:
         finally:
             with self._condition:
                 self._active.pop(work.id, None)
-                if not self._active and self._draining:
-                    self._draining = False
+                # Do not clear _draining here: the drain gate must stay closed
+                # for the whole stop sequence (begin_drain -> wait_for_drain),
+                # otherwise new work could be accepted after the last in-flight
+                # work finishes but before the stop completes. wait_for_drain is
+                # the sole owner of clearing the flag.
                 self._condition.notify_all()
 
     def snapshot(self) -> list[ActiveWork]:

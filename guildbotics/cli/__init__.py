@@ -180,26 +180,29 @@ def start(
 
     graceful_stop_started = threading.Event()
 
+    def _request_shutdown(*, cancel: bool) -> None:
+        # Signal-handler safe: only sets flags / schedules non-blocking stops
+        # and never joins, so the handler returns immediately and a second
+        # signal can still be delivered to escalate the stop.
+        if event_runner is not None:
+            event_runner.stop()
+        if scheduler is not None:
+            scheduler.request_shutdown(graceful=not cancel)
+
     def _handle_signal(signum, frame):  # type: ignore[no-untyped-def]
         if graceful_stop_started.is_set():
             # Second signal: escalate like the GUI force stop and cancel the
-            # in-flight work the first (graceful) shutdown is still waiting on.
+            # in-flight work the graceful stop is still waiting on. The main
+            # thread does the joining, so this handler must not block.
             click.echo("Cancelling in-flight work...")
-            if scheduler is not None:
-                scheduler.shutdown(graceful=False, timeout=0)
+            _request_shutdown(cancel=True)
             return
         graceful_stop_started.set()
         click.echo(
             f"Received signal {signum}. Waiting for in-flight work to finish "
             "(send the signal again to cancel it)..."
         )
-        try:
-            if event_runner is not None:
-                event_runner.stop()
-            if scheduler is not None:
-                scheduler.shutdown(graceful=True)
-        finally:
-            _remove_pidfile(pid_path)
+        _request_shutdown(cancel=False)
 
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, _handle_signal)
@@ -209,12 +212,17 @@ def start(
         if event_runner is not None:
             event_runner.start()
         if scheduler is not None:
+            # Blocks until workers exit; the signal handler above only requests
+            # the stop, so the join that waits it out happens here in the main
+            # thread and remains interruptible by a second (escalating) signal.
             scheduler.start()
         if event_runner is not None:
             _wait_for_event_runner(event_runner)
     except KeyboardInterrupt:
-        _handle_signal(signal.SIGINT, None)  # type: ignore[arg-type]
+        _request_shutdown(cancel=False)
     finally:
+        if scheduler is not None:
+            scheduler.shutdown(graceful=True)
         if event_runner is not None:
             event_runner.stop()
             event_runner.join(timeout=5.0)

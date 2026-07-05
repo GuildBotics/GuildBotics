@@ -40,9 +40,13 @@ class _FakeScheduler:
         self.start_called = 0
         self.shutdown_called = 0
         self.shutdown_calls: list[dict[str, object]] = []
+        self.request_shutdown_calls: list[dict[str, object]] = []
 
     def start(self):
         self.start_called += 1
+
+    def request_shutdown(self, graceful: bool = True):
+        self.request_shutdown_calls.append({"graceful": graceful})
 
     def shutdown(self, graceful: bool = True, timeout: float | None = None):
         self.shutdown_called += 1
@@ -326,17 +330,13 @@ def test_start_second_signal_cancels_in_flight_work(monkeypatch, tmp_path):
 
         def _start():
             inst.start_called += 1
+            # Two signals arrive while the scheduler runs. The handler must stay
+            # non-blocking, so the second one is delivered and escalates to a
+            # cancel instead of being swallowed by a blocking graceful join.
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
             handlers[signal.SIGTERM](signal.SIGTERM, None)
 
-        def _shutdown(*, graceful=True, timeout=None):
-            _FakeScheduler.shutdown(inst, graceful=graceful, timeout=timeout)
-            if graceful:
-                # A second signal arrives while the graceful shutdown is
-                # still waiting for in-flight work to finish.
-                handlers[signal.SIGTERM](signal.SIGTERM, None)
-
         inst.start = _start
-        inst.shutdown = _shutdown
         return inst
 
     monkeypatch.setattr("guildbotics.cli.TaskScheduler", _task_scheduler_factory)
@@ -344,7 +344,10 @@ def test_start_second_signal_cancels_in_flight_work(monkeypatch, tmp_path):
     result = runner.invoke(cli_main, ["start"])
 
     assert result.exit_code == 0, result.output
-    assert created["scheduler"].shutdown_calls == [
-        {"graceful": True, "timeout": None},
-        {"graceful": False, "timeout": 0},
+    # First signal requests a graceful stop; the second escalates to cancel.
+    assert created["scheduler"].request_shutdown_calls == [
+        {"graceful": True},
+        {"graceful": False},
     ]
+    # The blocking join lives in the main thread's finally, not the handler.
+    assert created["scheduler"].shutdown_calls == [{"graceful": True, "timeout": None}]

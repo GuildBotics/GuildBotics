@@ -65,6 +65,27 @@ def test_begin_drain_rejects_new_work_until_drained() -> None:
         pass
 
 
+def test_drain_gate_stays_closed_until_wait_for_drain() -> None:
+    coordinator = ExecutionCoordinator()
+    release = threading.Event()
+    thread = _start_tracked_work(coordinator, release)
+    coordinator.begin_drain()
+
+    # Finish the in-flight work but do not call wait_for_drain yet: the drain
+    # gate must stay closed for the whole stop sequence, so new work is still
+    # rejected even though nothing is currently active.
+    release.set()
+    thread.join(timeout=5)
+    with pytest.raises(WorkRejectedError):
+        with coordinator.track_work(source="manual", person_id="alice", command="x"):
+            pass
+
+    # wait_for_drain is the sole owner of reopening the gate.
+    assert coordinator.wait_for_drain(timeout=5) is True
+    with coordinator.track_work(source="manual", person_id="alice", command="y"):
+        pass
+
+
 def test_forced_drain_cancels_active_work() -> None:
     coordinator = ExecutionCoordinator()
     release = threading.Event()

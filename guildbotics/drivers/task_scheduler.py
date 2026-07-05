@@ -98,6 +98,21 @@ class TaskScheduler:
         for thread in threads:
             thread.join()
 
+    def request_shutdown(self, graceful: bool = True) -> None:
+        """Signal worker threads to stop without waiting for them.
+
+        Safe to call from a signal handler: it only sets events and never
+        blocks, so a second signal can still be delivered to escalate a
+        graceful stop into a forceful (cancelling) one.
+
+        Args:
+            graceful: When True, only stop accepting new work. When False, also
+                cancel any in-flight command/workflow coroutine.
+        """
+        self._stop_event.set()
+        if not graceful:
+            self._cancel_event.set()
+
     def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
         """Signal all worker threads to stop and wait for them.
 
@@ -107,9 +122,7 @@ class TaskScheduler:
         """
         # The stop event prevents new work from starting. Forceful shutdown also
         # cancels any in-flight command/workflow coroutine.
-        self._stop_event.set()
-        if not graceful:
-            self._cancel_event.set()
+        self.request_shutdown(graceful=graceful)
         deadline = time.monotonic() + timeout if timeout is not None else None
         for t in list(self._threads):
             if t.is_alive():
