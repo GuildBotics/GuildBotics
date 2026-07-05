@@ -1,7 +1,9 @@
 import os
 import re
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from guildbotics.capabilities.completion_retry import (
     CLI_AGENT_CONVERSATION_FILE_ENV,
@@ -13,8 +15,18 @@ from guildbotics.capabilities.task_runs import (
     TaskRunStatus,
     TaskRunStore,
 )
+from guildbotics.capabilities.workflow_rate_limits import (
+    WorkflowRateLimit,
+    record_workflow_rate_limited,
+    workflow_rate_limit_from_exception,
+    workflow_rate_limit_notice_text,
+)
 from guildbotics.entities.task import Task
 from guildbotics.integrations.ticket_manager import TicketManager
+from guildbotics.integrations.workflow_status_comment import (
+    render_workflow_status_comment,
+    workflow_status_comment_payload,
+)
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.observability import set_attributes
 from guildbotics.runtime import Context
@@ -123,7 +135,55 @@ def _task_run_status(
     raise TaskRunError(f"Task run '{run_id}' was not found.")
 
 
-async def _main(context: Context, ticket_manager: TicketManager) -> AgentResponse:
+def _rate_limited_summary(retry_after: WorkflowRateLimit) -> str:
+    """Build a machine-summary for ``AgentResponse.message``."""
+    display = retry_after.retry_after_display
+    if display:
+        return f"Rate limited. Reset: {display}"
+    return "Rate limited."
+
+
+async def _handle_ticket_rate_limit(
+    *,
+    context: Context,
+    ticket_manager: TicketManager,
+    task: Task,
+    run_id: str,
+    retry_after: WorkflowRateLimit,
+) -> None:
+    """Post a rate-limit comment on the ticket and record the event."""
+    try:
+        ticket_url = await ticket_manager.get_ticket_url(task, markdown=False)
+    except Exception:
+        ticket_url = task.url or f"task:{task.id}"
+
+    message = workflow_rate_limit_notice_text(retry_after)
+    body = render_workflow_status_comment(
+        body=message,
+        payload=workflow_status_comment_payload(
+            reason="rate_limited",
+            person_id=context.person.person_id,
+            run_id=run_id,
+            subject_id=ticket_url,
+            retry_after_at=retry_after.retry_after_at,
+            retry_after_text=retry_after.retry_after_text,
+        ),
+    )
+    with suppress(Exception):
+        await ticket_manager.add_comment_to_ticket(task, body)
+    record_workflow_rate_limited(
+        person_id=context.person.person_id,
+        command="workflows/ticket_driven_workflow",
+        run_id=run_id,
+        subject_id=ticket_url,
+        retry_after=retry_after,
+        default_source="routine",
+    )
+
+
+async def _main(
+    context: Context, ticket_manager: TicketManager, run_id: str
+) -> AgentResponse:
     await _move_task_to_working_if_ready(context, ticket_manager)
 
     ticket_url = await ticket_manager.get_ticket_url(context.task, markdown=False)
@@ -180,6 +240,7 @@ async def _main(context: Context, ticket_manager: TicketManager) -> AgentRespons
             rid, workspace_data_root / "task-runs", member_workspace
         ),
         max_attempts=_max_agent_attempts(),
+        run_id=run_id,
     )
     agent_response = _normalize_agent_response(
         last_response[-1] if last_response else None
@@ -253,9 +314,38 @@ async def main(context: Context) -> AgentResponse | None:
 
     context.update_task(task)
     set_attributes(**_ticket_trace_attributes(task))
+    run_id = uuid4().hex
     try:
-        return await _main(context, ticket_manager)
+        return await _main(context, ticket_manager, run_id)
     except Exception as error:
+        rate_limit = workflow_rate_limit_from_exception(error)
+        if rate_limit is not None:
+            await _handle_ticket_rate_limit(
+                context=context,
+                ticket_manager=ticket_manager,
+                task=task,
+                run_id=run_id,
+                retry_after=rate_limit,
+            )
+            return AgentResponse(
+                status=AgentResponse.DONE,
+                message=_rate_limited_summary(rate_limit),
+                skip_ticket_comment=True,
+            )
         message = await _build_task_error_message(context, error)
-        await ticket_manager.add_comment_to_ticket(task, message)
+        try:
+            ticket_url = await ticket_manager.get_ticket_url(task, markdown=False)
+        except Exception:
+            ticket_url = task.url or f"task:{task.id}"
+        message = render_workflow_status_comment(
+            body=message,
+            payload=workflow_status_comment_payload(
+                reason="failed",
+                person_id=context.person.person_id,
+                run_id=run_id,
+                subject_id=ticket_url,
+            ),
+        )
+        with suppress(Exception):
+            await ticket_manager.add_comment_to_ticket(task, message)
         raise

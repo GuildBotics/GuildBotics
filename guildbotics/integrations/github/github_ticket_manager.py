@@ -16,6 +16,10 @@ from guildbotics.integrations.github.github_utils import (
     is_proxy_agent,
 )
 from guildbotics.integrations.ticket_manager import TicketManager
+from guildbotics.integrations.workflow_status_comment import (
+    parse_workflow_status_comment,
+    suppresses_ticket_selection,
+)
 from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
 
@@ -1013,6 +1017,8 @@ class GitHubTicketManager(TicketManager):
         )
 
         if task.status == Task.READY:
+            if _latest_workflow_status_suppresses_selection(task.comments):
+                return None
             if last_comment_is_mine and not mention_pending:
                 return None
             task.trigger_reason = "ready_lane"
@@ -1025,6 +1031,11 @@ class GitHubTicketManager(TicketManager):
                 return None
             if pull.get("state") != "open":
                 return None
+
+        if _latest_workflow_status_suppresses_selection(task.comments):
+            return None
+
+        if pull:
             if await self._has_unhandled_pull_request_review(pull):
                 task.pull_request_url = str(pull["url"])
                 task.trigger_reason = "pull_request_review"
@@ -1455,3 +1466,19 @@ class GitHubTicketManager(TicketManager):
         """
 
         await self._graphql(query, variables)
+
+
+def _latest_workflow_status_suppresses_selection(
+    comments: list[Message],
+) -> bool:
+    """Return True if the latest comment is an assistant workflow status that
+    should prevent ticket selection (rate_limited or failed)."""
+    if not comments:
+        return False
+    latest = comments[-1]
+    if latest.author_type != Message.ASSISTANT:
+        return False
+    status = parse_workflow_status_comment(latest.content)
+    if status is None:
+        return False
+    return suppresses_ticket_selection(status)

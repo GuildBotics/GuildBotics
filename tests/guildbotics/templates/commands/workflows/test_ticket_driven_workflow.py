@@ -457,3 +457,93 @@ async def test_ticket_driven_workflow_reads_from_invocation(monkeypatch):
     assert ctx.task.title == "Payload Task"
     assert len(tm.moved) == 1
     assert tm.moved[0][0].id == "999"
+
+
+def _rate_limit_error():
+    from guildbotics.intelligences.brains.cli_agent import (
+        CliAgentExecutionError,
+        CliAgentExecutionResult,
+    )
+
+    return CliAgentExecutionError(
+        cli_agent="codex",
+        result=CliAgentExecutionResult(
+            stdout="",
+            stderr="rate limit",
+            returncode=75,
+            error_category="rate_limited",
+            error_details={
+                "retry_after_at": "2026-07-04T11:44:00+09:00",
+                "retry_after_text": "11:44 AM",
+            },
+        ),
+    )
+
+
+def _capture_recorded_event(monkeypatch):
+    recorded: dict = {}
+
+    def fake_record(*args, **kwargs):
+        recorded.clear()
+        recorded.update(kwargs)
+
+    monkeypatch.setattr(
+        "guildbotics.capabilities.workflow_rate_limits.record_correlated_event",
+        fake_record,
+    )
+    return recorded
+
+
+@pytest.mark.asyncio
+async def test_ticket_rate_limit_posts_status_comment_and_records_event(monkeypatch):
+    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
+    tm = StubTicketManager(task)
+    ctx = StubContext(task, tm)
+    ctx.invoke_response = _rate_limit_error()
+    recorded_kwargs = _capture_recorded_event(monkeypatch)
+
+    response = await ticket_driven_workflow.main(ctx)
+
+    assert response is not None
+    assert response.status == AgentResponse.DONE
+    assert response.skip_ticket_comment is True
+    assert "Rate limited. Reset: 11:44 AM" in response.message
+
+    assert len(tm.commented) == 1
+    comment = tm.commented[0][1]
+    assert "guildbotics-workflow-status-v1" in comment
+    assert "workflow_error" in comment
+    assert "rate_limited" in comment
+
+    assert recorded_kwargs
+    assert recorded_kwargs["event_type"] == "workflow.rate_limited"
+    assert recorded_kwargs["default_source"] == "routine"
+    assert (
+        recorded_kwargs["attributes"]["rate_limit.retry_after_at"]
+        == "2026-07-04T11:44:00+09:00"
+    )
+    assert recorded_kwargs["payload"]["retry_after_text"] == "11:44 AM"
+
+
+@pytest.mark.asyncio
+async def test_ticket_rate_limit_records_event_even_if_comment_post_fails(monkeypatch):
+    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
+
+    class FailingCommentTicketManager(StubTicketManager):
+        async def add_comment_to_ticket(self, task: Task, message: str):
+            raise RuntimeError("GitHub is down")
+
+    tm = FailingCommentTicketManager(task)
+    ctx = StubContext(task, tm)
+    ctx.invoke_response = _rate_limit_error()
+    recorded_kwargs = _capture_recorded_event(monkeypatch)
+
+    response = await ticket_driven_workflow.main(ctx)
+
+    assert response is not None
+    assert response.status == AgentResponse.DONE
+    assert response.skip_ticket_comment is True
+
+    assert recorded_kwargs
+    assert recorded_kwargs["event_type"] == "workflow.rate_limited"
+    assert recorded_kwargs["payload"]["retry_after_text"] == "11:44 AM"

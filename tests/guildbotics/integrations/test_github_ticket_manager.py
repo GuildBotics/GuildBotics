@@ -253,6 +253,73 @@ async def test_mention_does_not_allow_unassigned_ready_ticket():
 
 
 @pytest.mark.asyncio
+async def test_unhandled_pr_review_is_skipped_if_latest_comment_is_rate_limited_suppress():
+    from guildbotics.integrations.workflow_status_comment import (
+        WORKFLOW_STATUS_CODE_BLOCK,
+    )
+
+    suppressing_body = f"""
+```{WORKFLOW_STATUS_CODE_BLOCK}
+{{
+  "kind": "workflow_error",
+  "routing": "suppress",
+  "reason": "rate_limited",
+  "person_id": "aiko"
+}}
+```
+"""
+    manager = _Manager(
+        items=[_item(number=1, status="In Progress")],
+        responses=_comments(1, [{"user": "aiko-gh", "body": suppressing_body}]),
+    )
+    manager.related_pulls = [_pull()]
+    manager.review_threads = [
+        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
+    ]
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is None
+
+
+@pytest.mark.asyncio
+async def test_unhandled_pr_review_is_selected_if_rate_limited_comment_is_not_latest():
+    from guildbotics.integrations.workflow_status_comment import (
+        WORKFLOW_STATUS_CODE_BLOCK,
+    )
+
+    suppressing_body = f"""
+```{WORKFLOW_STATUS_CODE_BLOCK}
+{{
+  "kind": "workflow_error",
+  "routing": "suppress",
+  "reason": "rate_limited",
+  "person_id": "aiko"
+}}
+```
+"""
+    manager = _Manager(
+        items=[_item(number=1, status="In Progress")],
+        responses=_comments(
+            1,
+            [
+                {"user": "aiko-gh", "body": suppressing_body},
+                {"user": "human", "body": "Try again now"},
+            ],
+        ),
+    )
+    manager.related_pulls = [_pull()]
+    manager.review_threads = [
+        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
+    ]
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "pull_request_review"
+
+
+@pytest.mark.asyncio
 async def test_working_ticket_runs_only_when_last_issue_comment_is_not_mine():
     manager = _Manager(
         items=[_item(number=1, status="In Progress")],

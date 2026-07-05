@@ -1,4 +1,6 @@
 ja:
+  rate_limited_escalation: "AI CLIツールが rate limit 中のため、この workflow を今は続行できません。新しい更新があるまで、この項目は自動再試行しません。"
+  rate_limited_escalation_with_reset: "AI CLIツールが rate limit 中のため、この workflow を今は続行できません。Reset: %{retry_after}。新しい更新があるまで、この項目は自動再試行しません。"
   workflow_contract: |-
     この実行は非対話の workflow 実行です(guildbotics_execution_mode=workflow)。この prompt が primary contract であり、skill から手順を置き換えたり推測したりしないでください。
     - 最初に `guildbotics member context --person %{person_id}` を実行し、出力の capabilities セクション(同内容は `guildbotics member help` でも参照可)を、コマンド構文・安全ルール・communication style・GitHub/git/Slack 書き込み・memory handling・標準作業手順の source of truth としてください。
