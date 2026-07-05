@@ -581,6 +581,20 @@ describe("App close guard", () => {
     expect(screen.queryByText(t("app.closeBlocked.body"))).not.toBeInTheDocument();
   });
 
+  it("skips the guard without crashing when the window API is unavailable", async () => {
+    // Mirrors a harness that only stubs __TAURI_INTERNALS__ (e.g. Commands
+    // shell test): getCurrentWindow throws, and the guard must swallow it
+    // instead of leaking an unhandled rejection.
+    vi.mocked(getCurrentWindow).mockImplementation(() => {
+      throw new TypeError("Cannot read properties of undefined (reading 'currentWindow')");
+    });
+
+    renderApp("/service");
+
+    expect(await screen.findByRole("heading", { name: t("service.title") })).toBeInTheDocument();
+    expect(screen.queryByText(t("app.closeBlocked.body"))).not.toBeInTheDocument();
+  });
+
   it("blocks the close with a modal while work is active and force stops on request", async () => {
     const user = userEvent.setup();
     getSchedulerStatusMock.mockResolvedValue(

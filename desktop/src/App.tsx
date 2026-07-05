@@ -277,23 +277,29 @@ function useAppCloseGuard() {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     void (async () => {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const stop = await getCurrentWindow().onCloseRequested(async (event) => {
-        let busy = false;
-        try {
-          busy = runtimeHasActiveWork(await getSchedulerStatus());
-        } catch {
-          // The backend is unreachable, so there is no work to protect.
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const stop = await getCurrentWindow().onCloseRequested(async (event) => {
+          let busy = false;
+          try {
+            busy = runtimeHasActiveWork(await getSchedulerStatus());
+          } catch {
+            // The backend is unreachable, so there is no work to protect.
+          }
+          if (busy) {
+            event.preventDefault();
+            setBlocked(true);
+          }
+        });
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
         }
-        if (busy) {
-          event.preventDefault();
-          setBlocked(true);
-        }
-      });
-      if (cancelled) {
-        stop();
-      } else {
-        unlisten = stop;
+      } catch {
+        // The window API is unavailable (e.g. a harness that only stubs
+        // __TAURI_INTERNALS__ without the full metadata): skip the guard
+        // rather than leaking an unhandled rejection.
       }
     })();
     return () => {
