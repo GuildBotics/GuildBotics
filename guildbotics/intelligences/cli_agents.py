@@ -18,9 +18,9 @@ _DEFAULT_ORDER = 1000
 
 
 class CliAgentInfo(BaseModel):
-    """A selectable CLI agent, discovered from ``cli_agents/<name>-cli.yml``.
+    """A selectable AI CLI tool, discovered from ``cli_agents/<name>-cli.yml``.
 
-    Single source of truth for the CLI agent catalog: ``name`` is the file stem
+    Single source of truth for the AI CLI tool catalog: ``name`` is the file stem
     (without ``-cli``), and the rest comes from that file.
     """
 
@@ -70,11 +70,11 @@ def resolve_cli_agent_path(executable: str, path: str | None = None) -> str:
 def discover_cli_agents(
     config_dir: Path, person_id: str | None = None
 ) -> list[CliAgentInfo]:
-    """Discover selectable CLI agents from ``cli_agents/<name>-cli.yml``.
+    """Discover selectable AI CLI tools from ``cli_agents/<name>-cli.yml``.
 
-    A CLI agent is any ``*.yml`` (member, team, or template scope); the file in
+    An AI CLI tool is any ``*.yml`` (member, team, or template scope); the file in
     the highest-priority scope wins. This is the only place that enumerates the
-    CLI agent catalog, so adding an agent is just a matter of dropping in
+    AI CLI tool catalog, so adding a tool is just a matter of dropping in
     ``cli_agents/<name>-cli.yml`` with ``label``/``order``/``executable``.
     """
     files: dict[str, Path] = {}
@@ -104,7 +104,7 @@ def discover_cli_agents(
 
 
 def resolve_default_cli_executable() -> str:
-    """Return the executable (binary) of the team's default CLI agent."""
+    """Return the executable (binary) of the team's default AI CLI tool."""
     try:
         mapping = cast(
             dict[str, Any],

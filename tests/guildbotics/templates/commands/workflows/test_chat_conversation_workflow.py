@@ -112,7 +112,7 @@ class FakeInvokeContext(types.SimpleNamespace):
                 ),
             )
         if self.action == "crash":
-            # Simulate the CLI agent exiting non-zero (the brain raises).
+            # Simulate the AI CLI tool exiting non-zero (the brain raises).
             raise RuntimeError("agent exited non-zero")
         if (
             self.complete_on_attempt is not None
@@ -739,7 +739,9 @@ async def test_non_final_agent_run_failure_bubbles_for_pending_backoff(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_missing_retry_context_agent_failure_bubbles_for_pending_backoff(tmp_path):
+async def test_missing_retry_context_agent_failure_bubbles_for_pending_backoff(
+    tmp_path,
+):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")

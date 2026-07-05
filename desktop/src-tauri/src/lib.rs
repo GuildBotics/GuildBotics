@@ -61,7 +61,7 @@ fn force_update_cli_agent_skill(agent: String) -> Result<serde_json::Value, Stri
         .iter()
         .find(|(candidate, _, _)| *candidate == agent)
     else {
-        return Err(format!("unsupported CLI agent: {agent}"));
+        return Err(format!("unsupported AI CLI tool: {agent}"));
     };
     let Some(agent_home) = configured_agent_home(&home, env_name, default_dir) else {
         return Err(format!("skill home for {agent_name} was not detected"));
@@ -554,7 +554,7 @@ pub fn run() {
         ])
         .setup(move |app| {
             if let Err(error) = install_cli_agent_assets() {
-                eprintln!("failed to install GuildBotics CLI agent assets: {error}");
+                eprintln!("failed to install GuildBotics AI CLI tool assets: {error}");
             }
 
             if let Some(window) = app.get_webview_window("main") {

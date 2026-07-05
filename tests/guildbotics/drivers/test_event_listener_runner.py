@@ -221,7 +221,7 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
 ):
     """The member worker's dispatcher runs the real chat workflow end to end.
 
-    The workflow delegates to the ``functions/handle_chat_event`` CLI agent,
+    The workflow delegates to the ``functions/handle_chat_event`` AI CLI tool,
     which records run evidence and completion. That agent invocation is faked at
     the CommandRunner boundary (the real agent is an external process), so the
     test verifies the wiring and the evidence-driven state update.

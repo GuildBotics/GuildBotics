@@ -24,8 +24,7 @@ def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
 
 def test_rate_limit_marker_templates_use_json_serialization() -> None:
     template_dir = (
-        Path(__file__).parents[3]
-        / "guildbotics/templates/intelligences/cli_agents"
+        Path(__file__).parents[3] / "guildbotics/templates/intelligences/cli_agents"
     )
 
     for name in TEMPLATE_CLI_AGENT_NAMES:

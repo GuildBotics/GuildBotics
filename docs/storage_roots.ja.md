@@ -2,7 +2,7 @@
 
 ## 目的
 
-GuildBotics は、設定ファイル、desktop / CLI のマシン状態、runtime の実行データ、CLI agent の作業領域を複数の場所に読み書きする。
+GuildBotics は、設定ファイル、desktop / CLI のマシン状態、runtime の実行データ、AI CLIツールの作業領域を複数の場所に読み書きする。
 
 このドキュメントは、それぞれの保存先を明確に分離し、desktop / CLI / scheduler / member capability / diagnostics の実装者が同じ規則で path を解決できるようにするための実装仕様である。
 
@@ -61,11 +61,11 @@ workspace `.env` に `GUILDBOTICS_DATA_DIR` が設定されている場合、wor
 
 `GUILDBOTICS_DATA_DIR` は workspace data root の override であり、machine state root には効かない。
 
-workspace を適用した process では、最終的に使う workspace data root を `os.environ["GUILDBOTICS_DATA_DIR"]` に必ず設定する。これにより、member CLI や CLI agent subprocess の cwd が runtime workspace root と異なる場合でも、同じ workspace data root を参照できる。
+workspace を適用した process では、最終的に使う workspace data root を `os.environ["GUILDBOTICS_DATA_DIR"]` に必ず設定する。これにより、member CLI や AI CLIツール subprocess の cwd が runtime workspace root と異なる場合でも、同じ workspace data root を参照できる。
 
 `os.environ["GUILDBOTICS_DATA_DIR"]` の書き換えは、workspace 適用境界でのみ行う。workspace 適用境界とは、App API の `set_workspace()`、CLI / member CLI の起動時 workspace 解決、`guildbotics run` / `start` の runtime 初期化のように、まだ member 作業や scheduler worker が走っていない地点を指す。scheduler の per-member worker や command / workflow の個別実行中に process-global な `os.environ` を書き換えてはならない。
 
-per-invocation の値は、従来どおり subprocess 環境 overlay で渡す。例えば run id や CLI agent に渡す追加環境変数は `cli_agent_env` に入れ、process-global `os.environ` には書かない。これは scheduler の複数 worker 間で race を起こさないための不変条件である。
+per-invocation の値は、従来どおり subprocess 環境 overlay で渡す。例えば run id や AI CLIツールに渡す追加環境変数は `cli_agent_env` に入れ、process-global `os.environ` には書かない。これは scheduler の複数 worker 間で race を起こさないための不変条件である。
 
 effective workspace data root の解決順は以下とする。
 
@@ -288,9 +288,9 @@ Desktop 設定画面の挙動:
 
 この配下に ticket / PR 用の clone が作られる。
 
-workflow が CLI agent を起動するときは、`cwd` をこの member workspace にする。
+workflow が AI CLIツールを起動するときは、`cwd` をこの member workspace にする。
 
-CLI agent subprocess には現在の workspace data root を `GUILDBOTICS_DATA_DIR` として必ず渡す。これは利便性ではなく正しさのために必須である。CLI agent の cwd は member workspace なので、この値を渡さないと子プロセスが `<member-workspace>/.guildbotics/data` のような入れ子の誤った data root を計算する。
+AI CLIツール subprocess には現在の workspace data root を `GUILDBOTICS_DATA_DIR` として必ず渡す。これは利便性ではなく正しさのために必須である。AI CLIツールの cwd は member workspace なので、この値を渡さないと子プロセスが `<member-workspace>/.guildbotics/data` のような入れ子の誤った data root を計算する。
 
 ### Task Run / Chat Run Evidence
 
@@ -513,7 +513,7 @@ workspace 適用境界以外では、`os.environ["GUILDBOTICS_DATA_DIR"]` を書
 
 ### 6. Workflow subprocess へ workspace data root を伝播する
 
-ticket / chat workflow が CLI agent を起動するとき、`cli_agent_env` に現在の workspace data root を渡す。
+ticket / chat workflow が AI CLIツールを起動するとき、`cli_agent_env` に現在の workspace data root を渡す。
 
 ```python
 cli_agent_env={
@@ -522,7 +522,7 @@ cli_agent_env={
 }
 ```
 
-これにより、CLI agent の cwd が member workspace になっても、`guildbotics member ...` は同じ task-runs 保存先を使う。
+これにより、AI CLIツールの cwd が member workspace になっても、`guildbotics member ...` は同じ task-runs 保存先を使う。
 
 この伝播は必須である。伝播しない場合、子プロセスは member workspace を cwd として `<member-workspace>/.guildbotics/data` を計算し、親 workflow が期待する task run evidence を見つけられなくなる。
 
@@ -572,7 +572,7 @@ Root 解決は unit test で網羅する。
 - ticket workflow は member workspace を `<workspace-data-root>/workspaces/<person_id>` に作る。
 - chat workflow も同じ member workspace root を使う。
 - `guildbotics member ...` が記録する evidence は `<workspace-data-root>/task-runs/<run_id>.jsonl` に入る。
-- CLI agent subprocess の cwd が `<workspace-data-root>/workspaces/<person_id>` の場合でも、`GUILDBOTICS_DATA_DIR` 伝播により evidence は親 workflow と同じ `<workspace-data-root>/task-runs` に入る。
+- AI CLIツール subprocess の cwd が `<workspace-data-root>/workspaces/<person_id>` の場合でも、`GUILDBOTICS_DATA_DIR` 伝播により evidence は親 workflow と同じ `<workspace-data-root>/task-runs` に入る。
 
 ## ドキュメント更新方針
 

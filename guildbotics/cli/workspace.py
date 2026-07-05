@@ -17,7 +17,7 @@ FormatChoice = click.Choice(["json", "markdown"])
 
 @click.group()
 def workspace() -> None:
-    """Manage the active GuildBotics workspace used by CLI agents."""
+    """Manage the active GuildBotics workspace used by AI CLI tools."""
 
 
 @workspace.command(name="use")
@@ -27,7 +27,7 @@ def workspace() -> None:
 )
 @click.option("--format", "output_format", type=FormatChoice, default="markdown")
 def use_workspace(workspace_dir: Path, output_format: str) -> None:
-    """Persist the active workspace for desktop and external CLI agents."""
+    """Persist the active workspace for desktop and external AI CLI tools."""
     try:
         state = write_active_workspace(workspace_dir)
     except NotADirectoryError as exc:
