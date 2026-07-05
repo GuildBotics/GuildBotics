@@ -245,7 +245,7 @@ describe("ActivityHistoryPage", () => {
 
     await user.hover(bar);
 
-    expect(await screen.findByText("Rate limited")).toBeInTheDocument();
+    expect((await screen.findAllByText("Rate limited")).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Reset:/)).toBeInTheDocument();
   });
 

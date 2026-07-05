@@ -302,7 +302,7 @@ function ActivityTimelineRow({
   const rowMinHeight = team ? 38 : view === "week" ? weekRowMinHeight(weekSessionCount) : 86;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
   const visibleEvents = view === "week" && !team ? [] : events;
-  const activeRateLimit = member ? activeRateLimitForSessions(sessions, new Date()) : null;
+  const activeRateLimit = member ? activeRateLimitForSessions(sessions, now ?? new Date()) : null;
   const activeRateLimitReset = activeRateLimit ? formatRateLimitReset(activeRateLimit) : "";
   return (
     <div className={team ? "activity-row activity-row-events" : "activity-row"}>
