@@ -102,6 +102,8 @@ const ACTIVITY_FIXTURE: ActivityHistoryResponse = {
 };
 
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date("2026-07-01T12:00:00Z"));
   vi.mocked(getActivityHistory).mockResolvedValue(ACTIVITY_FIXTURE);
   vi.mocked(getIntelligenceConfig).mockResolvedValue({
     config_dir: "",
@@ -128,6 +130,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("ActivityHistoryPage", () => {
