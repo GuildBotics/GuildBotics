@@ -9,7 +9,7 @@
 `guildbotics/templates/commands/functions/handle_github_ticket.ja.md` / `.en.md` に、次を明記します。
 
 - Issue 起点で PR を作成・再利用・更新した場合は、元 Issue に `member github issue comment` で短い結果コメントを投稿する
-- コメントには PR URL、実施概要、確認結果、次アクションを含める
+- コメントには PR URL、実施概要、確認結果を含める
 - `task complete --summary-file` は内部 summary であり、GitHub 投稿の代替ではない
 - `AgentResponse.message` も GitHub 投稿の代替ではない
 
