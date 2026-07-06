@@ -36,7 +36,11 @@ def test_reference_includes_standard_work_procedure():
     assert "--start-line" in text
     assert "--start-side" in text
     assert "reply_target_id" in text
-    assert "Leave observable evidence" in text
+    # Observable-outcome principle: leave externally visible traces at the
+    # work's entry point, and avoid duplicate / unwanted posts.
+    assert "externally visible trace" in text
+    assert "entry point" in text
+    assert "Avoid duplicate posts" in text
 
 
 def test_reference_states_pr_work_record_contract():
@@ -83,3 +87,19 @@ def test_reference_excludes_task_contract():
     text = capability_reference_text().lower()
     assert "primary objective" not in text
     assert "you must finish" not in text
+
+
+def test_reference_excludes_ticket_specific_issue_comment_rule():
+    """The shared reference states a generic observable-outcome principle, but
+    must NOT contain the ticket-workflow-specific forced rule like 'Issue 起点
+    なら必ずコメント' or 'always comment on the issue when a PR was created'.
+    The command catalog naturally lists ``issue comment`` as an available
+    capability, so we check only the procedure and rules sections."""
+    text = capability_reference_text()
+    # Extract Standard work procedure + Rules sections only
+    procedure_and_rules = text.split("### Standard work procedure")[1]
+    procedure_and_rules_lower = procedure_and_rules.lower()
+    # Ticket-specific sentinel phrases must not appear in the procedure/rules.
+    assert "member github issue comment" not in procedure_and_rules_lower
+    assert "result comment" not in procedure_and_rules_lower
+    assert "not a substitute" not in procedure_and_rules_lower

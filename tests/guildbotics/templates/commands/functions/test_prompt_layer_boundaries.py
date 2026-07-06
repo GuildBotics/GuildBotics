@@ -102,3 +102,38 @@ def test_chat_prompt_supports_code_work_without_an_issue():
         assert "--repo <owner/repo> --branch <branch>" in body
     assert "no issue has to be created first" in english
     assert "issue を先に作る必要はありません" in japanese
+
+
+def test_ticket_prompt_requires_issue_comment_on_pr_work():
+    """handle_github_ticket must tell the agent to comment on the Issue when
+    a PR is created/reused/updated, with PR URL and verification result."""
+    for language in ("en", "ja"):
+        body = _prompt_body("handle_github_ticket", language)
+        assert "member github issue comment" in body, language
+        assert "PR URL" in body or "PR url" in body, language
+        # Verification result should be mentioned
+        assert ("verification" in body.lower() or "確認結果" in body), language
+
+
+def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
+    """task complete --summary-file and AgentResponse.message must be called
+    out as NOT substitutes for GitHub comments, in both en and ja."""
+    for language in ("en", "ja"):
+        body = _prompt_body("handle_github_ticket", language)
+        assert "task complete --summary-file" in body, language
+        assert "AgentResponse.message" in body, language
+        # Both must appear in a context that says they are NOT substitutes
+        assert ("not a substitute" in body or "代替ではありません" in body), language
+
+
+def test_issue_comment_contract_not_in_chat_prompt():
+    """The Issue comment contract is specific to handle_github_ticket and
+    must NOT leak into handle_chat_event."""
+    for language in ("en", "ja"):
+        body = _prompt_body("handle_chat_event", language)
+        # The chat prompt should not contain the ticket-specific issue
+        # comment instruction sentinel phrases.
+        assert "task complete --summary-file" not in body, language
+        assert (
+            "not a substitute" not in body and "代替ではありません" not in body
+        ), language

@@ -237,8 +237,11 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`). When "
     "addressing existing PR review threads, reply with `member github pr reply` "
     "using the `reply_target_id` from `pr inspect --include-comments`.",
-    "Leave observable evidence even when no change is needed: a comment, a reply, "
-    "or a reaction.",
+    "On completion, leave an externally visible trace at the place that "
+    "corresponds to the work's entry point: a comment or status update on the "
+    "originating issue or PR for issue-driven work, the review thread or PR "
+    "conversation for PR review work, the Slack thread for Slack-driven work. "
+    "Avoid duplicate posts and posts explicitly marked as unnecessary.",
     "Before finishing, maintain memory according to the rules below.",
 ]
 
