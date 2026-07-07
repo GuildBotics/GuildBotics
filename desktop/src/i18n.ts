@@ -48,7 +48,6 @@ const resources = {
       },
       activity: {
         title: "Activity",
-        subtitle: "Member sessions and recorded project events.",
         search: "Search activity",
         searchPlaceholder: "command / member / #42 / GitHub URL...",
         previous: "Previous period",
@@ -258,7 +257,6 @@ const resources = {
         saveMode: {
           manual:
             "Fill in the required items in each section, then click Create initial settings to save.",
-          auto: "Changes are saved automatically.",
         },
         workspaceSwitchBlocked: {
           title: "Service or command is running",
@@ -1208,7 +1206,6 @@ const resources = {
       },
       activity: {
         title: "アクティビティ",
-        subtitle: "メンバーごとの作業セッションと記録済みイベントを確認できます。",
         search: "アクティビティ検索",
         searchPlaceholder: "コマンド / メンバー / #42 / GitHub URL...",
         previous: "前の期間",
@@ -1252,7 +1249,6 @@ const resources = {
         },
         saveMode: {
           manual: "各セクションの必須項目を入力し、「初期設定を作成」を押して設定を保存します。",
-          auto: "変更は自動で保存されます。",
         },
         workspaceSwitchBlocked: {
           title: "サービスまたはコマンドを実行中です",

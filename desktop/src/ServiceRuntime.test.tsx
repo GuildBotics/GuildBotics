@@ -475,6 +475,7 @@ describe("Service Runtime screen", () => {
   });
 
   it("disables the chat receive reset while the runtime is running", async () => {
+    const user = userEvent.setup();
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
         scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
@@ -488,10 +489,13 @@ describe("Service Runtime screen", () => {
       name: t("overview.eventsCard.chatReset.action"),
     });
     expect(resetButton).toBeDisabled();
-    expect(
-      screen.getByText(t("overview.eventsCard.chatReset.stoppedOnlyHint")),
-    ).toBeInTheDocument();
     expect(resetChatReceiveStateMock).not.toHaveBeenCalled();
+
+    // Hover to trigger tooltip containing the stoppedOnlyHint text
+    await user.hover(resetButton);
+    expect(
+      await screen.findByText(new RegExp(t("overview.eventsCard.chatReset.stoppedOnlyHint"))),
+    ).toBeInTheDocument();
   });
 });
 
