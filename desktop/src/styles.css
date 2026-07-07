@@ -44,11 +44,11 @@
 
   --color-border: light-dark(var(--literal-slate-200), var(--literal-slate-800));
   --color-border-subtle: light-dark(var(--literal-slate-100), var(--literal-slate-900));
-  --shadow-premium: light-dark(
-    0 1px 2px rgba(0, 0, 0, 0.02),
-    0 4px 12px rgba(0, 0, 0, 0.03),
-    0 12px 24px rgba(0, 0, 0, 0.04)
-  );
+  --shadow-premium-light:
+    0 1px 2px rgba(0, 0, 0, 0.02), 0 4px 12px rgba(0, 0, 0, 0.03), 0 12px 24px rgba(0, 0, 0, 0.04);
+  --shadow-premium-dark:
+    0 1px 2px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.2), 0 12px 24px rgba(0, 0, 0, 0.25);
+  --shadow-premium: light-dark(var(--shadow-premium-light), var(--shadow-premium-dark));
 
   --color-text-main: light-dark(var(--literal-slate-900), var(--literal-slate-50));
   --color-text-subtle: light-dark(var(--literal-slate-700), var(--literal-slate-300));
@@ -2118,24 +2118,32 @@ pre {
 }
 
 /* 3. Global Danger Button Styler (Avoid cheap red fill) */
-.mantine-Button-root[data-color="danger"][data-variant="light"] {
+.mantine-Button-root[data-color="danger"][data-variant="light"]:not([data-disabled="true"]):not(
+    :disabled
+  ) {
   background-color: transparent !important;
   color: var(--color-danger) !important;
   border: 1px solid var(--color-danger-border) !important;
   border-radius: 6px !important;
 }
 
-.mantine-Button-root[data-color="danger"][data-variant="light"]:hover {
+.mantine-Button-root[data-color="danger"][data-variant="light"]:not([data-disabled="true"]):not(
+    :disabled
+  ):hover {
   background-color: var(--color-danger-bg) !important;
 }
 
-.mantine-Button-root[data-color="danger"]:not([data-variant="light"]) {
+.mantine-Button-root[data-color="danger"][data-variant="filled"]:not([data-disabled="true"]):not(
+    :disabled
+  ) {
   background-color: var(--color-danger) !important;
   color: #ffffff !important;
   border-radius: 6px !important;
 }
 
-.mantine-Button-root[data-color="danger"]:not([data-variant="light"]):hover {
+.mantine-Button-root[data-color="danger"][data-variant="filled"]:not([data-disabled="true"]):not(
+    :disabled
+  ):hover {
   background-color: var(--literal-red-700) !important;
 }
 
