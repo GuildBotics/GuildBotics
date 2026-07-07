@@ -93,16 +93,41 @@ const theme = createTheme({
     },
     Alert: {
       styles: (_theme: MantineTheme, props: { color?: string }) => {
+        const baseStyle = {
+          root: {
+            backgroundColor: "var(--color-bg-panel-subtle)",
+            borderColor: "var(--color-border-subtle)",
+            borderWidth: "1px",
+            borderStyle: "solid",
+            borderLeft: "4px solid var(--alert-indicator-color, var(--color-border))",
+            borderRadius: "10px",
+            color: "var(--color-text-main)",
+            padding: "12px 16px",
+            boxShadow: "var(--shadow-premium)",
+          },
+          title: {
+            color: "var(--color-text-main)",
+            fontWeight: 700,
+          },
+          message: {
+            color: "var(--color-text-subtle)",
+          },
+        };
+
         if (props.color === "warning") {
           return {
             root: {
+              ...baseStyle.root,
               backgroundColor: "var(--color-warning-bg)",
               borderColor: "var(--color-warning-border)",
-              borderWidth: "1px",
-              borderStyle: "solid",
               color: "var(--color-warning-text)",
             },
             title: {
+              ...baseStyle.title,
+              color: "var(--color-warning-text)",
+            },
+            message: {
+              ...baseStyle.message,
               color: "var(--color-warning-text)",
             },
           };
@@ -110,13 +135,17 @@ const theme = createTheme({
         if (props.color === "danger") {
           return {
             root: {
+              ...baseStyle.root,
               backgroundColor: "var(--color-danger-bg)",
               borderColor: "var(--color-danger-border)",
-              borderWidth: "1px",
-              borderStyle: "solid",
               color: "var(--color-danger-text)",
             },
             title: {
+              ...baseStyle.title,
+              color: "var(--color-danger-text)",
+            },
+            message: {
+              ...baseStyle.message,
               color: "var(--color-danger-text)",
             },
           };
@@ -124,13 +153,17 @@ const theme = createTheme({
         if (props.color === "success") {
           return {
             root: {
+              ...baseStyle.root,
               backgroundColor: "var(--color-success-bg)",
               borderColor: "var(--color-success-border)",
-              borderWidth: "1px",
-              borderStyle: "solid",
               color: "var(--color-success-text)",
             },
             title: {
+              ...baseStyle.title,
+              color: "var(--color-success-text)",
+            },
+            message: {
+              ...baseStyle.message,
               color: "var(--color-success-text)",
             },
           };
@@ -138,18 +171,22 @@ const theme = createTheme({
         if (props.color === "info") {
           return {
             root: {
+              ...baseStyle.root,
               backgroundColor: "var(--color-info-bg)",
               borderColor: "var(--color-info-border)",
-              borderWidth: "1px",
-              borderStyle: "solid",
               color: "var(--color-info-text)",
             },
             title: {
+              ...baseStyle.title,
+              color: "var(--color-info-text)",
+            },
+            message: {
+              ...baseStyle.message,
               color: "var(--color-info-text)",
             },
           };
         }
-        return {};
+        return baseStyle;
       },
     },
   },

@@ -2040,26 +2040,6 @@ pre {
    Design System Custom Overrides & Aesthetics Tune-up
    ========================================================================== */
 
-/* 1. Global Alert Refined Minimal Style */
-.mantine-Alert-root {
-  background-color: var(--color-bg-panel-subtle) !important;
-  border: 1px solid var(--color-border-subtle) !important;
-  border-left: 4px solid var(--alert-indicator-color, var(--color-border)) !important;
-  border-radius: 10px !important;
-  color: var(--color-text-main) !important;
-  padding: 12px 16px !important;
-  box-shadow: var(--shadow-premium) !important;
-}
-
-.mantine-Alert-title {
-  color: var(--color-text-main) !important;
-  font-weight: 700 !important;
-}
-
-.mantine-Alert-message {
-  color: var(--color-text-subtle) !important;
-}
-
 /* Alert Indicator Colors resolver */
 .mantine-Alert-root[data-color="success"] {
   --alert-indicator-color: var(--color-success);
@@ -2156,7 +2136,7 @@ pre {
 }
 
 .mantine-Button-root[data-color="danger"]:not([data-variant="light"]):hover {
-  background-color: var(--color-danger-text) !important;
+  background-color: var(--literal-red-700) !important;
 }
 
 /* 5. Inner Element Border Radius (規格化) */
