@@ -191,7 +191,7 @@ function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled:
     return null;
   }
   return (
-    <Badge variant="light" color="grape" style={{ flexShrink: 0 }}>
+    <Badge variant="light" color="neutral" style={{ flexShrink: 0 }}>
       {label}
     </Badge>
   );
@@ -409,7 +409,7 @@ export function SetupPage() {
       if (initialSetupRequest) {
         notifications.show({
           autoClose: false,
-          color: "green",
+          color: "success",
           icon: <Check size={18} />,
           title: t("setup.initialCreated.title"),
           message: (
@@ -515,9 +515,11 @@ export function SetupPage() {
           <Title order={2}>
             {hasExistingProject ? t("setup.configuredTitle") : t("setup.title")}
           </Title>
-          <Text size="sm" c="dimmed" mt={4}>
-            {hasExistingProject ? t("setup.saveMode.auto") : t("setup.saveMode.manual")}
-          </Text>
+          {!hasExistingProject && (
+            <Text size="sm" c="dimmed" mt={4}>
+              {t("setup.saveMode.manual")}
+            </Text>
+          )}
         </Box>
       </Group>
 
@@ -580,7 +582,7 @@ export function SetupPage() {
       </div>
 
       {saveMutation.error ? (
-        <Alert color="red" title={t("setup.saveErrorTitle")}>
+        <Alert color="danger" title={t("setup.saveErrorTitle")}>
           {saveMutation.error.message}
         </Alert>
       ) : null}
@@ -597,7 +599,7 @@ export function SetupPage() {
               {t("setup.workspaceSwitchBlocked.ok")}
             </Button>
             <Button
-              color="red"
+              color="danger"
               loading={forceWorkspaceSwitching}
               onClick={() => void forcePendingWorkspaceSwitch()}
             >
@@ -676,7 +678,7 @@ function SetupStatusBanner({
 
   if (status.ready) {
     return (
-      <Alert color="green" icon={<Check size={18} />} title={t("setup.status.readyTitle")}>
+      <Alert color="success" icon={<Check size={18} />} title={t("setup.status.readyTitle")}>
         {t("setup.status.readyMessage")}
       </Alert>
     );
@@ -737,11 +739,11 @@ function SetupSectionNav({
 
 function StatusIcon({ ok }: { ok: boolean }) {
   return ok ? (
-    <ThemeIcon color="green" radius="xl" size={22}>
+    <ThemeIcon color="success" radius="xl" size={22}>
       <Check size={14} />
     </ThemeIcon>
   ) : (
-    <ThemeIcon color="yellow" radius="xl" size={22}>
+    <ThemeIcon color="warning" radius="xl" size={22}>
       <CircleAlert size={14} />
     </ThemeIcon>
   );
@@ -851,14 +853,14 @@ function IntelligenceSection({
         }),
       );
       notifications.show({
-        color: "green",
+        color: "success",
         title: t("setup.intelligence.skillUpdatedTitle"),
         message: t("setup.intelligence.skillUpdatedBody"),
       });
     },
     onError: (error) => {
       notifications.show({
-        color: "red",
+        color: "danger",
         title: t("setup.intelligence.skillUpdateFailedTitle"),
         message:
           error instanceof Error ? error.message : t("setup.intelligence.skillUpdateFailedBody"),
@@ -957,7 +959,7 @@ function IntelligenceSection({
                         <Popover.Target>
                           <ActionIcon
                             variant="subtle"
-                            color="gray"
+                            color="neutral"
                             size="sm"
                             aria-label={t("setup.intelligence.apiKeyButtonLabel", {
                               provider: option.label,
@@ -1092,14 +1094,14 @@ function IntelligenceSection({
                           <HoverCard.Target>
                             <Indicator
                               disabled={!canForceUpdate}
-                              color="blue"
+                              color="info"
                               size={6}
                               offset={3}
                               processing
                             >
                               <ActionIcon
                                 variant="subtle"
-                                color="gray"
+                                color="neutral"
                                 size="sm"
                                 aria-label={t("setup.intelligence.skillStatusButtonLabel", {
                                   agent: agent.label,
@@ -1138,7 +1140,7 @@ function IntelligenceSection({
                                 </Text>
                               ) : null}
                               {status?.error ? (
-                                <Text size="xs" c="red" style={{ wordBreak: "break-all" }}>
+                                <Text size="xs" c="danger" style={{ wordBreak: "break-all" }}>
                                   {status.error}
                                 </Text>
                               ) : null}
@@ -1206,15 +1208,15 @@ function IntelligenceSection({
 
 function skillStatusColor(status: CliAgentSkillState["status"]) {
   if (status === "up_to_date") {
-    return "green";
+    return "success";
   }
   if (status === "user_modified" || status === "unmanaged" || status === "outdated") {
-    return "yellow";
+    return "warning";
   }
   if (status === "error") {
-    return "red";
+    return "danger";
   }
-  return "gray";
+  return "neutral";
 }
 
 function upsertByAgent(
@@ -1509,7 +1511,7 @@ function IntelligenceEditor({
   }
   if (query.error) {
     return (
-      <Alert color="red" title={t("setup.intelligence.loadAdvancedError")}>
+      <Alert color="danger" title={t("setup.intelligence.loadAdvancedError")}>
         {query.error.message}
       </Alert>
     );
@@ -1913,7 +1915,7 @@ function IntelligenceEditor({
           </Stack>
         )}
         {mutation.error ? (
-          <Alert color="red" title={t("setup.intelligence.saveAdvancedError")}>
+          <Alert color="danger" title={t("setup.intelligence.saveAdvancedError")}>
             {mutation.error.message}
           </Alert>
         ) : null}
@@ -1988,7 +1990,7 @@ function IntelligenceEditor({
                     />
                     {assignment.name !== "default" && assignment.name !== "agent" ? (
                       <ActionIcon
-                        color="red"
+                        color="danger"
                         variant="subtle"
                         onClick={() => handleDeleteBrain(index)}
                         mb="xs"
@@ -2056,7 +2058,7 @@ function IntelligenceEditor({
                       />
                       {slotKey !== "default" ? (
                         <ActionIcon
-                          color="red"
+                          color="danger"
                           variant="subtle"
                           onClick={() => handleDeleteLlmSlot(slotKey)}
                           mb="xs"
@@ -2112,14 +2114,14 @@ function IntelligenceEditor({
                             </Text>
                           </Group>
                           <Group gap="xs" wrap="nowrap">
-                            <Badge color={isDetected ? "green" : "red"} variant="light">
+                            <Badge color={isDetected ? "success" : "danger"} variant="light">
                               {isDetected
                                 ? t("setup.intelligence.detected")
                                 : t("setup.intelligence.notDetected")}
                             </Badge>
                             {slotKey !== "default" ? (
                               <ActionIcon
-                                color="red"
+                                color="danger"
                                 variant="subtle"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -2203,7 +2205,7 @@ function IntelligenceEditor({
         </Stack>
       )}
       {mutation.error ? (
-        <Alert color="red" title={t("setup.intelligence.saveAdvancedError")}>
+        <Alert color="danger" title={t("setup.intelligence.saveAdvancedError")}>
           {mutation.error.message}
         </Alert>
       ) : null}
@@ -2342,7 +2344,7 @@ function MembersSection({
       const result = await uploadMemberAvatar(editingPersonId, file);
       setAvatarTimestamp(result.avatar_timestamp);
       notifications.show({
-        color: "green",
+        color: "success",
         title: t("setup.members.avatar.uploadSuccessTitle", "Success"),
         message: t("setup.members.avatar.uploadSuccess", "Avatar uploaded successfully."),
       });
@@ -2362,7 +2364,7 @@ function MembersSection({
       const result = await importAvatarFromGithub(editingPersonId);
       setAvatarTimestamp(result.avatar_timestamp);
       notifications.show({
-        color: "green",
+        color: "success",
         title: t("setup.members.avatar.importSuccessTitle", "Success"),
         message: t("setup.members.avatar.githubSuccess", "Avatar imported from GitHub."),
       });
@@ -2382,7 +2384,7 @@ function MembersSection({
       const result = await importAvatarFromSlack(editingPersonId);
       setAvatarTimestamp(result.avatar_timestamp);
       notifications.show({
-        color: "green",
+        color: "success",
         title: t("setup.members.avatar.importSuccessTitle", "Success"),
         message: t("setup.members.avatar.slackSuccess", "Avatar imported from Slack."),
       });
@@ -3104,7 +3106,7 @@ function MembersSection({
               {t("setup.members.cancelButton")}
             </Button>
             <Button
-              color="red"
+              color="danger"
               loading={deleteMemberMutation.isPending}
               onClick={() => void handleDeleteMember()}
             >
@@ -3139,7 +3141,7 @@ function MembersSection({
                 <Group gap="xs" wrap="nowrap">
                   <Group w={160} justify="flex-end" gap="xs" wrap="nowrap">
                     {member.person_type === "human" ? (
-                      <Badge color="blue" variant="light" style={{ flexShrink: 0 }}>
+                      <Badge color="neutral" variant="light" style={{ flexShrink: 0 }}>
                         {t("setup.members.memberHuman")}
                       </Badge>
                     ) : (
@@ -3152,7 +3154,7 @@ function MembersSection({
                   <Group w={56} justify="flex-end" gap="xs" wrap="nowrap">
                     {member.person_type !== "human" && (
                       <Badge
-                        color={member.is_active ? "green" : "gray"}
+                        color={member.is_active ? "success" : "neutral"}
                         variant="light"
                         style={{ flexShrink: 0 }}
                       >
@@ -3267,12 +3269,12 @@ function MembersSection({
                           {personName || "—"} ({personId || "—"})
                         </Text>
                         {personType === "human" ? (
-                          <Badge color="blue" variant="light" style={{ flexShrink: 0 }}>
+                          <Badge color="neutral" variant="light" style={{ flexShrink: 0 }}>
                             {t("setup.members.memberHuman")}
                           </Badge>
                         ) : (
                           cliAgentLabel && (
-                            <Badge variant="light" color="grape" style={{ flexShrink: 0 }}>
+                            <Badge variant="light" color="neutral" style={{ flexShrink: 0 }}>
                               {cliAgentLabel}
                             </Badge>
                           )
@@ -3343,7 +3345,7 @@ function MembersSection({
                           </Tooltip>
                         </Group>
                         {avatarError && (
-                          <Text size="xs" color="red">
+                          <Text size="xs" c="danger">
                             {avatarError}
                           </Text>
                         )}
@@ -3679,7 +3681,7 @@ function MembersSection({
                         <div>
                           <Text fw={500} size="sm">
                             {githubResolveLabel}
-                            <Text span c="red" inherit aria-hidden="true">
+                            <Text span c="danger" inherit aria-hidden="true">
                               {" *"}
                             </Text>
                           </Text>
@@ -3713,7 +3715,7 @@ function MembersSection({
                           </Button>
                         </div>
                         {githubResolveError ? (
-                          <Text c="red" size="xs">
+                          <Text c="danger" size="xs">
                             {githubResolveError}
                           </Text>
                         ) : null}
@@ -3882,7 +3884,7 @@ function MembersSection({
                                   />
                                   <ActionIcon
                                     aria-label={t("setup.members.slackChannelRemove")}
-                                    color="red"
+                                    color="danger"
                                     mt={25}
                                     variant="subtle"
                                     onClick={() => removeSlackChannel(index)}
@@ -3963,7 +3965,7 @@ function MembersSection({
               <Box>
                 {formMode === "edit" ? (
                   <Button
-                    color="red"
+                    color="danger"
                     variant="default"
                     loading={deleteMemberMutation.isPending}
                     onClick={() => setDeleteConfirmOpen(true)}
@@ -3985,27 +3987,27 @@ function MembersSection({
           </>
         ) : null}
         {memberConfigMutation.error ? (
-          <Alert color="red" title={t("setup.members.loadError")}>
+          <Alert color="danger" title={t("setup.members.loadError")}>
             {memberConfigMutation.error.message}
           </Alert>
         ) : null}
         {resolveMutation.error ? (
-          <Alert color="red" title={t("setup.members.resolveError")}>
+          <Alert color="danger" title={t("setup.members.resolveError")}>
             {resolveMutation.error.message}
           </Alert>
         ) : null}
         {addMemberMutation.error ? (
-          <Alert color="red" title={t("setup.members.addError")}>
+          <Alert color="danger" title={t("setup.members.addError")}>
             {addMemberMutation.error.message}
           </Alert>
         ) : null}
         {updateMemberMutation.error ? (
-          <Alert color="red" title={t("setup.members.updateError")}>
+          <Alert color="danger" title={t("setup.members.updateError")}>
             {updateMemberMutation.error.message}
           </Alert>
         ) : null}
         {deleteMemberMutation.error ? (
-          <Alert color="red" title={t("setup.members.deleteError")}>
+          <Alert color="danger" title={t("setup.members.deleteError")}>
             {deleteMemberMutation.error.message}
           </Alert>
         ) : null}
@@ -4094,7 +4096,7 @@ function PatrolSettingsEditor({
         </Text>
       ) : null}
       {routineCommandOptionsError ? (
-        <Alert color="red" title={t("setup.members.patrol.routineLoadError")} />
+        <Alert color="danger" title={t("setup.members.patrol.routineLoadError")} />
       ) : null}
       {routineOverrideEnabled ? (
         <MultiSelect
@@ -4188,7 +4190,7 @@ function PatrolSettingsEditor({
                     />
                     <ActionIcon
                       aria-label={t("setup.members.patrol.removeSchedule")}
-                      color="red"
+                      color="danger"
                       variant="subtle"
                       onClick={() =>
                         onScheduledCommandsChange(
@@ -4386,7 +4388,7 @@ function CommandOptionRow({
         </Text>
       ) : null}
       {note ? (
-        <Text size="xs" c="red">
+        <Text size="xs" c="danger">
           {note}
         </Text>
       ) : null}
@@ -4403,7 +4405,7 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
         {option.requirements.map((requirement) => (
           <Badge
             key={requirement.kind}
-            color={requirement.satisfied ? "green" : "yellow"}
+            color={requirement.satisfied ? "success" : "warning"}
             variant="light"
           >
             {t(`commands.requirements.${requirement.kind}`)}
@@ -4668,7 +4670,7 @@ function AgentFieldPanel({ target }: { target: ProjectStatusOptionsRequest | nul
               <Text size="sm" fw={500}>
                 {t("setup.github.agentFieldStatus")}
               </Text>
-              <Badge color={state.exists ? "green" : "gray"} variant="light">
+              <Badge color={state.exists ? "success" : "neutral"} variant="light">
                 {state.exists
                   ? t("setup.github.agentFieldExists")
                   : t("setup.github.agentFieldMissing")}
@@ -4680,7 +4682,7 @@ function AgentFieldPanel({ target }: { target: ProjectStatusOptionsRequest | nul
                   {t("setup.github.agentFieldRegistered")}
                 </Text>
                 {state.options.length > 0 ? (
-                  <AgentFieldMemberBadges options={state.options} color="blue" variant="light" />
+                  <AgentFieldMemberBadges options={state.options} color="neutral" variant="light" />
                 ) : (
                   <Text size="sm" c="dimmed">
                     {t("setup.github.agentFieldNoMembers")}
@@ -4693,7 +4695,7 @@ function AgentFieldPanel({ target }: { target: ProjectStatusOptionsRequest | nul
                 <Text size="sm" fw={500} mb={4}>
                   {t("setup.github.agentFieldMissingMembers")}
                 </Text>
-                <AgentFieldMemberBadges options={state.missing} color="orange" variant="outline" />
+                <AgentFieldMemberBadges options={state.missing} color="warning" variant="outline" />
               </div>
             )}
             <Group>
@@ -4706,7 +4708,7 @@ function AgentFieldPanel({ target }: { target: ProjectStatusOptionsRequest | nul
               </Button>
             </Group>
             {ensureMutation.isError && (
-              <Text size="sm" c="red">
+              <Text size="sm" c="danger">
                 {t("setup.github.agentFieldError")}
               </Text>
             )}
@@ -4758,7 +4760,7 @@ function MemberDiagnosticsPanel({
         </Button>
       </Group>
       {error ? (
-        <Alert color="red" title={t("setup.members.diagnostics.failed")}>
+        <Alert color="danger" title={t("setup.members.diagnostics.failed")}>
           {error.message}
         </Alert>
       ) : null}
@@ -4768,13 +4770,13 @@ function MemberDiagnosticsPanel({
         </Text>
       ) : null}
       {checks.length > 0 && issues.length === 0 ? (
-        <Alert color="green" title={t("setup.members.diagnostics.ok")}>
+        <Alert color="success" title={t("setup.members.diagnostics.ok")}>
           {t("setup.members.diagnostics.okDescription", { count: checks.length })}
         </Alert>
       ) : null}
       {issues.length > 0 ? (
         <Alert
-          color={errorCount > 0 ? "red" : "orange"}
+          color={errorCount > 0 ? "danger" : "warning"}
           icon={diagnosticIcon(errorCount > 0 ? "error" : "warning")}
           title={t("setup.members.diagnostics.issuesTitle")}
         >
@@ -4816,12 +4818,12 @@ function MemberDiagnosticsPanel({
 
 function diagnosticColor(status: DiagnosticCheck["status"]) {
   if (status === "ok") {
-    return "teal";
+    return "success";
   }
   if (status === "warning") {
-    return "orange";
+    return "warning";
   }
-  return "red";
+  return "danger";
 }
 
 function diagnosticIcon(status: DiagnosticCheck["status"]) {
@@ -4891,7 +4893,7 @@ function AutosaveIndicator({ state }: { state: "idle" | "saving" | "saved" | "er
     saved: t("setup.autosave.saved"),
     error: t("setup.autosave.error"),
   }[state];
-  const color = state === "error" ? "red" : state === "saved" ? "green" : "gray";
+  const color = state === "error" ? "danger" : state === "saved" ? "success" : "neutral";
   return (
     <Badge color={color} variant="light" leftSection={<Save size={12} />}>
       {label}
@@ -5028,7 +5030,7 @@ function RequiredLabel({ text }: { text: string }) {
   return (
     <>
       {text}
-      <Text span c="red" inherit aria-hidden="true">
+      <Text span c="danger" inherit aria-hidden="true">
         {" *"}
       </Text>
     </>
@@ -5051,7 +5053,7 @@ function DefaultableLabel({
       <Text size="sm" fw={500}>
         {text}
         {required ? (
-          <Text span c="red" inherit aria-hidden="true">
+          <Text span c="danger" inherit aria-hidden="true">
             {" *"}
           </Text>
         ) : null}
@@ -5068,7 +5070,7 @@ function DefaultableLabel({
 function TabErrorIcon({ label }: { label: string }) {
   return (
     <Tooltip label={label} withArrow>
-      <ThemeIcon color="yellow" variant="light" size="sm" radius="xl">
+      <ThemeIcon color="warning" variant="light" size="sm" radius="xl">
         <CircleAlert size={12} />
       </ThemeIcon>
     </Tooltip>
@@ -5077,7 +5079,7 @@ function TabErrorIcon({ label }: { label: string }) {
 
 function InfoCallout({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <Alert color="yellow" icon={<CircleAlert size={18} />} title={title}>
+    <Alert color="warning" icon={<CircleAlert size={18} />} title={title}>
       {children}
     </Alert>
   );

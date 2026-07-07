@@ -121,9 +121,6 @@ export function ActivityHistoryPage() {
       <Group justify="space-between" align="flex-start">
         <div>
           <Title order={2}>{t("activity.title")}</Title>
-          <Text c="dimmed" size="sm">
-            {t("activity.subtitle")}
-          </Text>
         </div>
       </Group>
       <Card className="activity-card" withBorder radius="md" p="lg">
@@ -173,7 +170,7 @@ export function ActivityHistoryPage() {
           />
         </div>
         {history.error ? (
-          <Alert color="red" title={t("activity.loadError")}>
+          <Alert color="danger" title={t("activity.loadError")}>
             {history.error.message}
           </Alert>
         ) : null}
@@ -542,7 +539,7 @@ function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
       </Group>
       {block.rate_limit ? (
         <Group gap="xs" wrap="nowrap">
-          <Badge color="red" variant="light" style={{ flexShrink: 0 }}>
+          <Badge color="danger" variant="light" style={{ flexShrink: 0 }}>
             {t("activity.rateLimit.label")}
           </Badge>
           {rateLimitReset ? (
@@ -892,7 +889,7 @@ function blockMode(sessions: ActivityHistorySession[]): ActivityBlockMode {
 }
 
 function sessionModeColor(mode: ActivitySessionMode): string {
-  return mode === "interactive" ? "teal" : "blue";
+  return mode === "interactive" ? "teal" : "info";
 }
 
 function formatRateLimitReset(
@@ -1113,12 +1110,12 @@ function eventIcon(type: ActivityHistoryEvent["type"]) {
 
 function eventColor(type: ActivityHistoryEvent["type"]): string {
   return {
-    pr_create: "grape",
-    pr_merge: "violet",
-    pr_closed: "red",
-    push: "orange",
-    issue_resolve: "green",
-    external: "gray",
+    pr_create: "info",
+    pr_merge: "info",
+    pr_closed: "danger",
+    push: "warning",
+    issue_resolve: "success",
+    external: "neutral",
   }[type];
 }
 

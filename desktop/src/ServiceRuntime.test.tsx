@@ -488,9 +488,6 @@ describe("Service Runtime screen", () => {
       name: t("overview.eventsCard.chatReset.action"),
     });
     expect(resetButton).toBeDisabled();
-    expect(
-      screen.getByText(t("overview.eventsCard.chatReset.stoppedOnlyHint")),
-    ).toBeInTheDocument();
     expect(resetChatReceiveStateMock).not.toHaveBeenCalled();
   });
 });

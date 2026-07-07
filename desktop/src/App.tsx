@@ -1,9 +1,9 @@
 import {
-  Avatar,
   ActionIcon,
   Alert,
   Anchor,
   Autocomplete,
+  Avatar,
   Badge,
   Button,
   Card,
@@ -13,8 +13,8 @@ import {
   Group,
   Modal,
   NumberInput,
-  Select,
   SegmentedControl,
+  Select,
   Stack,
   Switch,
   Tabs,
@@ -24,6 +24,8 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
 import {
   Activity,
   CheckCircle2,
@@ -41,29 +43,14 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { NavLink, Navigate, Route, Routes, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
+import { Navigate, NavLink, Route, Routes, useSearchParams } from "react-router-dom";
 
+import { ActivityHistoryPage } from "./activity/ActivityHistory";
 import {
-  type CommandOption,
-  type DiagnosticCheck,
-  type MemoryEvent,
-  type PromptTraceEntry,
-  type RuntimeEvent,
-  type RuntimeLog,
-  type ChatReceiveResetResponse,
-  type RuntimeActiveWork,
-  type RuntimeStatus,
-  type SchedulerStartRequest,
-  type RuntimeUnitStatus,
-  type TraceDetailResponse,
-  type TraceRecord,
-  type TraceSummary,
-  getConfigStatus,
   getCommandOptions,
+  getConfigStatus,
   getGlobalRecords,
   getMemoryEvents,
   getProjectConfig,
@@ -73,6 +60,7 @@ import {
   getTeam,
   getTraceDetail,
   getTraces,
+  memberAvatarUrl,
   resetChatReceiveState,
   runCommand,
   runScenarioDiagnostics,
@@ -82,10 +70,22 @@ import {
   subscribeLogs,
   updatePromptTrace,
   updateRuntimeDebug,
-  memberAvatarUrl,
+  type ChatReceiveResetResponse,
+  type CommandOption,
+  type DiagnosticCheck,
+  type MemoryEvent,
+  type PromptTraceEntry,
+  type RuntimeActiveWork,
+  type RuntimeEvent,
+  type RuntimeLog,
+  type RuntimeStatus,
+  type RuntimeUnitStatus,
+  type SchedulerStartRequest,
+  type TraceDetailResponse,
+  type TraceRecord,
+  type TraceSummary,
 } from "./api/client";
-import { ActivityHistoryPage } from "./activity/ActivityHistory";
-import { type AppLanguage, normalizeLanguage, setAppLanguage } from "./i18n";
+import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
 import { buildTraceGroups, type PromptTraceGroup } from "./trace";
 
@@ -133,10 +133,20 @@ export function App() {
         onCancel={closeGuard.cancel}
         onForceQuit={() => void closeGuard.forceStopAndQuit()}
       />
-      <aside className="sidebar">
-        <div>
-          <h1>GuildBotics</h1>
-        </div>
+      <aside className="sidebar" style={{ position: "relative" }}>
+        <div
+          data-tauri-drag-region
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "44px",
+            zIndex: 10,
+            cursor: "default",
+          }}
+        />
+
         <nav className="nav">
           {configured ? (
             <NavLink className="nav-item" to="/activity">
@@ -186,7 +196,19 @@ export function App() {
         />
       </aside>
 
-      <section className="workspace">
+      <section className="workspace" style={{ position: "relative" }}>
+        <div
+          data-tauri-drag-region
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "24px",
+            zIndex: 10,
+            cursor: "default",
+          }}
+        />
         <Routes>
           <Route
             element={<ConfiguredRoute configured={configured} loading={config.isLoading} />}
@@ -353,7 +375,7 @@ function AppCloseBlockedModal({
       <Stack gap="md">
         <Text size="sm">{t("app.closeBlocked.body")}</Text>
         {error ? (
-          <Alert color="red" title={t("app.closeBlocked.error")}>
+          <Alert color="danger" title={t("app.closeBlocked.error")}>
             {error}
           </Alert>
         ) : null}
@@ -361,7 +383,7 @@ function AppCloseBlockedModal({
           <Button variant="default" onClick={onCancel}>
             {t("app.closeBlocked.cancel")}
           </Button>
-          <Button color="red" loading={forceQuitting} onClick={onForceQuit}>
+          <Button color="danger" loading={forceQuitting} onClick={onForceQuit}>
             {t("app.closeBlocked.force")}
           </Button>
         </Group>
@@ -511,7 +533,7 @@ function ServicePage() {
             </Button>
             {runtimeStopping ? (
               <Button
-                color="red"
+                color="danger"
                 leftSection={<TriangleAlert size={16} />}
                 loading={forceStopMutation.isPending}
                 variant="light"
@@ -535,7 +557,7 @@ function ServicePage() {
       </Group>
 
       {!hasProjectConfig ? (
-        <Alert color="yellow" title={t("overview.setupRequiredTitle")}>
+        <Alert color="warning" title={t("overview.setupRequiredTitle")}>
           <Group justify="space-between" align="center">
             <Text size="sm">{t("overview.setupRequiredBody")}</Text>
             <Button component={NavLink} to="/setup" variant="light">
@@ -545,14 +567,16 @@ function ServicePage() {
         </Alert>
       ) : null}
 
+      {noStartTarget ? (
+        <Alert color="warning" title={t("service.noTargetTitle")}>
+          {t("service.noTargetBody")}
+        </Alert>
+      ) : null}
+
+      {activeWorks.length > 0 ? <ActiveWorkNotice works={activeWorks} /> : null}
+
       <Card withBorder radius="md" p="lg">
         <Stack>
-          {noStartTarget ? (
-            <Alert color="yellow" title={t("service.noTargetTitle")}>
-              {t("service.noTargetBody")}
-            </Alert>
-          ) : null}
-          {activeWorks.length > 0 ? <ActiveWorkNotice works={activeWorks} /> : null}
           <div className="service-unit-grid">
             <ServiceRuntimeSection
               title={t("overview.routineSourceCard.title")}
@@ -574,41 +598,33 @@ function ServicePage() {
                     scheduler.data?.scheduler.routine_source_enabled ?? routineSourceEnabled,
                   ),
                 ],
-                [
-                  t("overview.routineSourceCard.interval"),
-                  String(
-                    scheduler.data?.scheduler.routine_interval_minutes ?? routineIntervalMinutes,
-                  ),
-                ],
               ]}
             >
-              <NumberInput
-                label={t("overview.routineIntervalMinutes")}
-                min={1}
-                max={1440}
-                step={1}
-                allowDecimal={false}
-                disabled={!routineSourceEnabled || runtimeActive}
-                value={routineIntervalMinutes}
-                onChange={(value) => {
-                  if (typeof value === "number") {
-                    setRoutineIntervalMinutes(value);
-                  }
-                }}
-              />
-              <Alert color="blue" title={t("overview.memberPatrolSettings")}>
-                <Stack gap="xs">
-                  <Text size="sm">{t("overview.memberPatrolSettingsBody")}</Text>
+              <Stack gap="xs">
+                <Group>
                   <Button
                     component={NavLink}
-                    size="xs"
                     to="/setup?section=members&tab=patrol"
                     variant="light"
                   >
                     {t("overview.openMemberPatrolSettings")}
                   </Button>
-                </Stack>
-              </Alert>
+                </Group>
+                <NumberInput
+                  label={t("overview.routineIntervalMinutes")}
+                  min={1}
+                  max={1440}
+                  step={1}
+                  allowDecimal={false}
+                  disabled={!routineSourceEnabled || runtimeActive}
+                  value={routineIntervalMinutes}
+                  onChange={(value) => {
+                    if (typeof value === "number") {
+                      setRoutineIntervalMinutes(value);
+                    }
+                  }}
+                />
+              </Stack>
             </ServiceRuntimeSection>
             <ServiceRuntimeSection
               title={t("overview.eventsCard.title")}
@@ -620,22 +636,6 @@ function ServicePage() {
               switchLabel={t("service.sourceTarget")}
               onEnabledChange={setEventQueueSourceEnabled}
               rows={[
-                [
-                  t("overview.eventsCard.sourceStatus"),
-                  sourceEnabledLabel(
-                    t,
-                    scheduler.data?.scheduler.event_queue_source_enabled ?? eventQueueSourceEnabled,
-                  ),
-                ],
-                [
-                  t("overview.eventsCard.supportedEvents"),
-                  t("overview.eventsCard.supportedEventsValue"),
-                ],
-                [t("overview.eventsCard.workflow"), t("overview.eventsCard.workflowValue")],
-                [
-                  t("overview.eventsCard.listeners"),
-                  String(scheduler.data?.events.listener_count ?? 0),
-                ],
                 [
                   t("overview.eventsCard.subscriptions"),
                   String(scheduler.data?.events.subscription_count ?? 0),
@@ -679,25 +679,13 @@ function ServicePage() {
                     scheduler.data?.scheduler.scheduled_source_enabled ?? scheduledSourceEnabled,
                   ),
                 ],
-                [
-                  t("overview.scheduledSourceCard.members"),
-                  String(scheduler.data?.scheduler.active_member_count ?? activeMembers.length),
-                ],
               ]}
             >
-              <Alert color="blue" title={t("overview.scheduledSourceCard.settingsTitle")}>
-                <Stack gap="xs">
-                  <Text size="sm">{t("overview.scheduledSourceCard.settingsBody")}</Text>
-                  <Button
-                    component={NavLink}
-                    size="xs"
-                    to="/setup?section=members&tab=patrol"
-                    variant="light"
-                  >
-                    {t("overview.openMemberPatrolSettings")}
-                  </Button>
-                </Stack>
-              </Alert>
+              <Group>
+                <Button component={NavLink} to="/setup?section=members&tab=patrol" variant="light">
+                  {t("overview.openMemberPatrolSettings")}
+                </Button>
+              </Group>
             </ServiceRuntimeSection>
             <ServiceRuntimeSection
               title={t("overview.workerCard.title")}
@@ -720,7 +708,6 @@ function ServicePage() {
                     eventQueue: eventQueueSourceEnabled,
                   }),
                 ],
-                [t("overview.workerCard.maxConsecutiveErrors"), String(maxConsecutiveErrors)],
               ]}
             >
               <NumberInput
@@ -742,12 +729,12 @@ function ServicePage() {
           <PromptTraceOutputSettings />
           <RuntimeDebugSettings />
           {startMutation.error ? (
-            <Alert color="red" title={t("overview.startError")}>
+            <Alert color="danger" title={t("overview.startError")}>
               {startMutation.error.message}
             </Alert>
           ) : null}
           {stopMutation.error || forceStopMutation.error ? (
-            <Alert color="red" title={t("overview.stopError")}>
+            <Alert color="danger" title={t("overview.stopError")}>
               {(stopMutation.error ?? forceStopMutation.error)?.message}
             </Alert>
           ) : null}
@@ -856,13 +843,13 @@ function DiagnosticsPage() {
             <dl className="status-list">
               <dt>{t("overview.config")}</dt>
               <dd>
-                <Badge color={hasProjectConfig ? "teal" : "orange"} variant="light">
+                <Badge color={hasProjectConfig ? "success" : "warning"} variant="light">
                   {hasProjectConfig ? t("overview.ready") : t("overview.missing")}
                 </Badge>
               </dd>
               <dt>{t("overview.env")}</dt>
               <dd>
-                <Badge color={config.data?.env_file_exists ? "teal" : "gray"} variant="light">
+                <Badge color={config.data?.env_file_exists ? "success" : "neutral"} variant="light">
                   {config.data?.env_file_exists ? t("overview.found") : t("overview.notFound")}
                 </Badge>
               </dd>
@@ -870,7 +857,7 @@ function DiagnosticsPage() {
               <dd>{activeMembers.length}</dd>
               <dt>{t("overview.github")}</dt>
               <dd>
-                <Badge color={githubEnabled ? "teal" : "gray"} variant="light">
+                <Badge color={githubEnabled ? "success" : "neutral"} variant="light">
                   {githubEnabled ? t("overview.enabled") : t("overview.disabled")}
                 </Badge>
               </dd>
@@ -1181,7 +1168,7 @@ function MemoryEventsPanel({
               <ActionIcon
                 size="sm"
                 variant="transparent"
-                color="gray"
+                color="neutral"
                 aria-label={t("diagnostics.memory.searchClear")}
                 onClick={clearSearch}
               >
@@ -1207,7 +1194,7 @@ function MemoryEventsPanel({
       <div className="memory-grid">
         <div className="memory-list">
           {memoryEvents.error ? (
-            <Alert color="red" title={t("diagnostics.memory.loadError")}>
+            <Alert color="danger" title={t("diagnostics.memory.loadError")}>
               {memoryEvents.error.message}
             </Alert>
           ) : events.length === 0 ? (
@@ -1501,7 +1488,7 @@ function TraceExplorer() {
               <ActionIcon
                 size="sm"
                 variant="transparent"
-                color="gray"
+                color="neutral"
                 aria-label={t("diagnostics.executions.searchClear")}
                 onClick={clearSearch}
               >
@@ -1523,13 +1510,13 @@ function TraceExplorer() {
             className="exec-filter-pill"
             size="lg"
             variant="light"
-            color="grape"
+            color="neutral"
             leftSection={<Ticket size={12} />}
             rightSection={
               <ActionIcon
                 size="xs"
                 variant="transparent"
-                color="grape"
+                color="neutral"
                 aria-label={t("diagnostics.executions.ticket.clear")}
                 onClick={clearAttrFilter}
               >
@@ -1562,7 +1549,7 @@ function TraceExplorer() {
               }}
             >
               <div className="exec-row-top">
-                <Badge size="sm" color="teal" variant="light">
+                <Badge size="sm" color="neutral" variant="light">
                   {t("diagnostics.executions.compositeBadge")}
                 </Badge>
                 <span className="exec-row-time">{compositeTraceIds.length}</span>
@@ -1588,7 +1575,7 @@ function TraceExplorer() {
               onClick={() => selectTrace(GLOBAL_TRACE_ID)}
             >
               <div className="exec-row-top">
-                <Badge size="sm" color="gray" variant="light">
+                <Badge size="sm" color="neutral" variant="light">
                   {t("diagnostics.executions.global.badge")}
                 </Badge>
               </div>
@@ -1622,7 +1609,7 @@ function TraceExplorer() {
                     {traceSourceLabel(t, trace.source || "unknown")}
                   </Badge>
                   {ticketChipInfo(trace.attributes) ? (
-                    <Badge size="sm" color="grape" variant="light">
+                    <Badge size="sm" color="neutral" variant="light">
                       {ticketChipInfo(trace.attributes)?.label}
                     </Badge>
                   ) : null}
@@ -1714,7 +1701,7 @@ function TraceExplorer() {
                         })}
                       </Badge>
                       {isComposite ? (
-                        <Badge color="teal" variant="outline">
+                        <Badge color="success" variant="outline">
                           {t("diagnostics.executions.compositeBadge")}
                         </Badge>
                       ) : (
@@ -1730,7 +1717,7 @@ function TraceExplorer() {
                         return (
                           <Tooltip label={t("diagnostics.executions.ticket.filterTo")} withArrow>
                             <Badge
-                              color="grape"
+                              color="info"
                               variant="light"
                               style={{ cursor: "pointer" }}
                               onClick={() =>
@@ -1745,7 +1732,7 @@ function TraceExplorer() {
                                   <ActionIcon
                                     size="xs"
                                     variant="transparent"
-                                    color="grape"
+                                    color="info"
                                     aria-label={t("diagnostics.executions.ticket.open")}
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -1797,7 +1784,7 @@ function TraceExplorer() {
                                 <ActionIcon
                                   variant="subtle"
                                   size="sm"
-                                  color={copied ? "teal" : "gray"}
+                                  color={copied ? "success" : "neutral"}
                                   onClick={copy}
                                 >
                                   {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
@@ -1915,12 +1902,12 @@ function ExecTimeline({
             className="exec-filter-pill exec-record-scope-pill"
             size="lg"
             variant="light"
-            color="blue"
+            color="info"
             rightSection={
               <ActionIcon
                 size="xs"
                 variant="transparent"
-                color="blue"
+                color="info"
                 aria-label={t("diagnostics.executions.recordScope.clear")}
                 onClick={onClearScopeFilter}
               >
@@ -2184,27 +2171,27 @@ function memoryActionLabel(t: TFunction, action: string): string {
 
 function memoryActionColor(action: string): string {
   if (action === "record") {
-    return "green";
+    return "success";
   }
   if (action === "recall") {
-    return "cyan";
+    return "info";
   }
   if (action === "get") {
-    return "indigo";
+    return "info";
   }
   if (action === "update") {
-    return "blue";
+    return "info";
   }
   if (action === "touch") {
-    return "teal";
+    return "success";
   }
   if (action === "archive") {
-    return "gray";
+    return "neutral";
   }
   if (action === "promote") {
-    return "grape";
+    return "info";
   }
-  return "dark";
+  return "neutral";
 }
 
 function memoryEventKey(event: MemoryEvent): string {
@@ -2393,20 +2380,20 @@ function memoryDuration(ms: number): string {
 
 export function traceStatusColor(status: string): string {
   if (status === "success") {
-    return "green";
+    return "success";
   }
   if (status === "failed") {
-    return "red";
+    return "danger";
   }
   if (status === "running") {
-    return "blue";
+    return "info";
   }
-  return "gray";
+  return "neutral";
 }
 
 export function recordBadgeColor(record: TraceRecord): string {
   if (record.kind === "prompt_trace") {
-    return "violet";
+    return "info";
   }
   if (record.kind === "memory") {
     const action =
@@ -2450,49 +2437,45 @@ function ChatReceiveResetControl({ disabled }: { disabled: boolean }) {
     },
   });
 
+  const tooltipLabel = disabled
+    ? `${t("overview.eventsCard.chatReset.description")} (${t("overview.eventsCard.chatReset.stoppedOnlyHint")})`
+    : t("overview.eventsCard.chatReset.description");
+
   return (
-    <Alert
-      color="orange"
-      icon={<RotateCcw size={16} />}
-      title={t("overview.eventsCard.chatReset.title")}
-    >
-      <Stack gap="xs">
-        <Text size="sm">{t("overview.eventsCard.chatReset.description")}</Text>
-        <Group gap="sm" align="center">
-          <Button
-            size="xs"
-            color="red"
-            variant="light"
-            disabled={disabled}
-            loading={resetMutation.isPending}
-            onClick={() => {
-              setResult(null);
-              resetMutation.reset();
-              setConfirmOpen(true);
-            }}
-          >
-            {t("overview.eventsCard.chatReset.action")}
-          </Button>
-          {disabled ? (
-            <Text size="xs" c="dimmed">
-              {t("overview.eventsCard.chatReset.stoppedOnlyHint")}
-            </Text>
-          ) : null}
-        </Group>
-        {result ? (
-          <Text size="sm" c="green">
-            {t("overview.eventsCard.chatReset.successBody", {
-              members: result.members_reset,
-              channels: result.channels_reset,
-            })}
-          </Text>
-        ) : null}
-        {resetMutation.error ? (
-          <Text size="sm" c="red">
-            {resetMutation.error.message}
-          </Text>
-        ) : null}
-      </Stack>
+    <Stack gap="xs">
+      <Group gap="sm" align="center">
+        <Tooltip label={tooltipLabel} withArrow multiline w={300}>
+          <span style={{ display: "inline-block" }}>
+            <Button
+              color="danger"
+              variant="light"
+              disabled={disabled}
+              loading={resetMutation.isPending}
+              leftSection={<RotateCcw size={14} />}
+              onClick={() => {
+                setResult(null);
+                resetMutation.reset();
+                setConfirmOpen(true);
+              }}
+            >
+              {t("overview.eventsCard.chatReset.action")}
+            </Button>
+          </span>
+        </Tooltip>
+      </Group>
+      {result ? (
+        <Text size="sm" c="success">
+          {t("overview.eventsCard.chatReset.successBody", {
+            members: result.members_reset,
+            channels: result.channels_reset,
+          })}
+        </Text>
+      ) : null}
+      {resetMutation.error ? (
+        <Text size="sm" c="danger">
+          {resetMutation.error.message}
+        </Text>
+      ) : null}
       <Modal
         opened={confirmOpen}
         onClose={() => setConfirmOpen(false)}
@@ -2506,7 +2489,7 @@ function ChatReceiveResetControl({ disabled }: { disabled: boolean }) {
               {t("overview.eventsCard.chatReset.cancel")}
             </Button>
             <Button
-              color="red"
+              color="danger"
               loading={resetMutation.isPending}
               onClick={() => resetMutation.mutate()}
             >
@@ -2515,7 +2498,7 @@ function ChatReceiveResetControl({ disabled }: { disabled: boolean }) {
           </Group>
         </Stack>
       </Modal>
-    </Alert>
+    </Stack>
   );
 }
 
@@ -2574,16 +2557,12 @@ function ServiceRuntimeSection({
       </div>
       {children ? <Stack gap="sm">{children}</Stack> : null}
       <dl className="status-list compact">
-        <dt>{t("overview.runtimeFields.startedAt")}</dt>
-        <dd>{formatDateTime(unit?.started_at)}</dd>
-        <dt>{t("overview.runtimeFields.stoppedAt")}</dt>
-        <dd>{formatDateTime(unit?.stopped_at)}</dd>
         {rows.map(([label, value]) => (
           <FragmentRow key={label} label={label} value={value || t("overview.unknown")} />
         ))}
       </dl>
       {(unit?.events_auth_failed_count ?? 0) > 0 ? (
-        <Alert color="red" title={t("overview.eventsCard.authFailedTitle")}>
+        <Alert color="danger" title={t("overview.eventsCard.authFailedTitle")}>
           {t("overview.eventsCard.authFailedBody", {
             persons: (unit?.events_auth_failed_persons ?? []).join(", ") || t("overview.unknown"),
           })}
@@ -2594,7 +2573,7 @@ function ServiceRuntimeSection({
           {t("overview.stopDelayHint")}
         </Text>
       ) : unit?.error ? (
-        <Alert color="red" title={t("overview.runtimeError")}>
+        <Alert color="danger" title={t("overview.runtimeError")}>
           {unit.error}
         </Alert>
       ) : null}
@@ -2619,7 +2598,7 @@ function RuntimeDebugSettings() {
   });
   const enabled = Boolean(runtimeDebug.data?.enabled);
   return (
-    <div className="trace-runtime-settings">
+    <div className="service-unit-panel">
       <Group justify="space-between" align="center">
         <div>
           <Text fw={700} size="sm">
@@ -2640,7 +2619,7 @@ function RuntimeDebugSettings() {
         />
       </Group>
       {runtimeDebugMutation.error ? (
-        <Alert color="red" title={t("overview.runtimeDebug.saveError")}>
+        <Alert color="danger" title={t("overview.runtimeDebug.saveError")}>
           {runtimeDebugMutation.error.message}
         </Alert>
       ) : null}
@@ -2717,7 +2696,7 @@ function PromptTraceOutputSettings() {
     promptTraceOutputPathMutation.mutate(selected);
   };
   return (
-    <div className="trace-runtime-settings">
+    <div className="service-unit-panel">
       <Group justify="space-between" align="center">
         <div>
           <Text fw={700} size="sm">
@@ -2757,7 +2736,7 @@ function PromptTraceOutputSettings() {
         />
       </div>
       {promptTraceMutation.error || promptTraceOutputPathMutation.error ? (
-        <Alert color="red" title={t("overview.promptTrace.saveError")}>
+        <Alert color="danger" title={t("overview.promptTrace.saveError")}>
           {(promptTraceMutation.error ?? promptTraceOutputPathMutation.error)?.message}
         </Alert>
       ) : null}
@@ -2988,7 +2967,7 @@ function PromptTraceDetails({ group }: { group: PromptTraceGroup }) {
         </div>
       </div>
       {errorText ? (
-        <Text c="red" size="sm">
+        <Text c="danger" size="sm">
           {errorText}
         </Text>
       ) : null}
@@ -3008,7 +2987,7 @@ function FragmentRow({ label, value }: { label: string; value: string }) {
 function ActiveWorkNotice({ works }: { works: RuntimeActiveWork[] }) {
   const { t } = useTranslation();
   return (
-    <Alert color="blue" title={t("overview.activeWork.title")}>
+    <Alert color="info" title={t("overview.activeWork.title")}>
       <Stack gap="xs">
         {works.map((work) => (
           <Group key={work.id} gap="xs" justify="space-between">
@@ -3033,12 +3012,12 @@ function RuntimeStateBadge({ state }: { state: RuntimeUnitStatus["state"] }) {
   const { t } = useTranslation();
   const color =
     state === "running"
-      ? "teal"
+      ? "success"
       : state === "failed"
-        ? "red"
+        ? "danger"
         : state === "stopped"
-          ? "gray"
-          : "orange";
+          ? "neutral"
+          : "warning";
   return (
     <Badge color={color} variant="light">
       {t(`overview.runtimeStates.${state}`)}
@@ -3075,7 +3054,7 @@ function ScenarioDiagnosticsSummary({
   }
   if (error) {
     return (
-      <Alert color="red" title={t("overview.scenarioDiagnostics.failed")}>
+      <Alert color="danger" title={t("overview.scenarioDiagnostics.failed")}>
         {error.message}
       </Alert>
     );
@@ -3090,7 +3069,7 @@ function ScenarioDiagnosticsSummary({
   const issues = checks.filter((check) => check.status !== "ok");
   if (issues.length === 0) {
     return (
-      <Alert color="green" title={t("overview.scenarioDiagnostics.ok")}>
+      <Alert color="success" title={t("overview.scenarioDiagnostics.ok")}>
         {t("overview.scenarioDiagnostics.okDescription", { count: checks.length })}
       </Alert>
     );
@@ -3153,12 +3132,12 @@ function diagnosticDetail(t: TFunction, check: DiagnosticCheck) {
 
 function diagnosticColor(status: DiagnosticCheck["status"]) {
   if (status === "ok") {
-    return "teal";
+    return "success";
   }
   if (status === "warning") {
-    return "orange";
+    return "warning";
   }
-  return "red";
+  return "danger";
 }
 
 function diagnosticIcon(status: DiagnosticCheck["status"]) {
@@ -3225,13 +3204,13 @@ function traceKindLabel(t: TFunction, kind: string) {
 
 function traceKindColor(kind: string) {
   if (kind === "llm") {
-    return "blue";
+    return "info";
   }
   if (kind === "cli") {
-    return "violet";
+    return "info";
   }
   if (kind === "chat") {
-    return "indigo";
+    return "info";
   }
   return "gray";
 }
@@ -3335,26 +3314,26 @@ export function eventTypeLabel(t: TFunction, type: string) {
 
 export function eventBadgeColor(type: string) {
   if (type.endsWith(".failed")) {
-    return "red";
+    return "danger";
   }
   if (type.includes("running") || type.includes("started") || type.includes("finished")) {
-    return "teal";
+    return "success";
   }
   if (type.includes("stopping")) {
-    return "orange";
+    return "warning";
   }
-  return "gray";
+  return "neutral";
 }
 
 export function logBadgeColor(level: string) {
   const upper = level.toUpperCase();
   if (upper === "ERROR" || upper === "CRITICAL") {
-    return "red";
+    return "danger";
   }
   if (upper === "WARNING") {
-    return "orange";
+    return "warning";
   }
-  return "gray";
+  return "neutral";
 }
 
 function isTauriRuntime() {
@@ -3615,7 +3594,7 @@ function CommandsPage() {
       </Group>
 
       {!hasProjectConfig ? (
-        <Alert color="yellow" title={t("overview.setupRequiredTitle")}>
+        <Alert color="warning" title={t("overview.setupRequiredTitle")}>
           <Group justify="space-between" align="center">
             <Text size="sm">{t("overview.setupRequiredBody")}</Text>
             <Button component={NavLink} to="/setup" variant="light">
@@ -3626,13 +3605,13 @@ function CommandsPage() {
       ) : null}
 
       {activeMembers.length === 0 && hasProjectConfig ? (
-        <Alert color="yellow" title={t("commands.noMembersTitle")}>
+        <Alert color="warning" title={t("commands.noMembersTitle")}>
           {t("commands.noMembersBody")}
         </Alert>
       ) : null}
 
       {commandBlocked ? (
-        <Alert color="yellow" title={t("commands.requirementsBlockedTitle")}>
+        <Alert color="warning" title={t("commands.requirementsBlockedTitle")}>
           {blockingRequirements
             .map((requirement) => requirementLabel(t, requirement.kind))
             .join(", ")}
@@ -3717,7 +3696,7 @@ function CommandsPage() {
                         {selectedOption.requirements.map((requirement) => (
                           <Badge
                             key={requirement.kind}
-                            color={requirement.satisfied ? "green" : "yellow"}
+                            color={requirement.satisfied ? "success" : "warning"}
                             variant="light"
                           >
                             {requirementLabel(t, requirement.kind)}
@@ -4191,12 +4170,12 @@ export function upsertCommandRecord(
 
 function statusColor(status: CommandRunRecord["status"]): string {
   if (status === "success") {
-    return "green";
+    return "success";
   }
   if (status === "failed") {
-    return "red";
+    return "danger";
   }
-  return "blue";
+  return "info";
 }
 
 function stringPayload(value: unknown): string {

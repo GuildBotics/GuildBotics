@@ -53,7 +53,7 @@ export function Bootstrap() {
           <Title order={3}>{t("app.loading.title")}</Title>
         </Stack>
       ) : (
-        <Alert color="red" title={t("app.loading.failed")} maw={520}>
+        <Alert color="danger" title={t("app.loading.failed")} maw={520}>
           <Stack gap="sm">
             <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
               {status.message}

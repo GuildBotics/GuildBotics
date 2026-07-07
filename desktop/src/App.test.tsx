@@ -625,10 +625,10 @@ describe("ticketChipInfo", () => {
 
 describe("traceStatusColor", () => {
   it("maps statuses to colors", () => {
-    expect(traceStatusColor("success")).toBe("green");
-    expect(traceStatusColor("failed")).toBe("red");
-    expect(traceStatusColor("running")).toBe("blue");
-    expect(traceStatusColor("info")).toBe("gray");
+    expect(traceStatusColor("success")).toBe("success");
+    expect(traceStatusColor("failed")).toBe("danger");
+    expect(traceStatusColor("running")).toBe("info");
+    expect(traceStatusColor("info")).toBe("neutral");
   });
 });
 
@@ -706,7 +706,7 @@ describe("traceDuration", () => {
 describe("recordBadgeColor and recordBadgeLabel", () => {
   it("colors prompt traces violet and labels them by type", () => {
     const record = makeTraceRecord({ kind: "prompt_trace", type: "llm.request" });
-    expect(recordBadgeColor(record)).toBe("violet");
+    expect(recordBadgeColor(record)).toBe("info");
     expect(recordBadgeLabel(t(), record)).toBe("llm.request");
   });
 
@@ -757,19 +757,19 @@ describe("eventTypeLabel", () => {
 
 describe("badge colors", () => {
   it("maps event types to colors", () => {
-    expect(eventBadgeColor("command.failed")).toBe("red");
-    expect(eventBadgeColor("scheduler.running")).toBe("teal");
-    expect(eventBadgeColor("command.started")).toBe("teal");
-    expect(eventBadgeColor("command.finished")).toBe("teal");
-    expect(eventBadgeColor("scheduler.stopping")).toBe("orange");
-    expect(eventBadgeColor("scheduler.stopped")).toBe("gray");
+    expect(eventBadgeColor("command.failed")).toBe("danger");
+    expect(eventBadgeColor("scheduler.running")).toBe("success");
+    expect(eventBadgeColor("command.started")).toBe("success");
+    expect(eventBadgeColor("command.finished")).toBe("success");
+    expect(eventBadgeColor("scheduler.stopping")).toBe("warning");
+    expect(eventBadgeColor("scheduler.stopped")).toBe("neutral");
   });
 
   it("maps log levels to colors", () => {
-    expect(logBadgeColor("error")).toBe("red");
-    expect(logBadgeColor("CRITICAL")).toBe("red");
-    expect(logBadgeColor("warning")).toBe("orange");
-    expect(logBadgeColor("info")).toBe("gray");
+    expect(logBadgeColor("error")).toBe("danger");
+    expect(logBadgeColor("CRITICAL")).toBe("danger");
+    expect(logBadgeColor("warning")).toBe("warning");
+    expect(logBadgeColor("info")).toBe("neutral");
   });
 });
 
