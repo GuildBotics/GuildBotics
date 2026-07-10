@@ -1,9 +1,7 @@
-"""Config-write coverage for the simple setup service (session S17).
+"""Config-write coverage for the simple setup service.
 
 These tests extend ``test_setup_service.py`` and focus on the file/env/YAML
-write behaviours called out in ``docs/test_gap_analysis.ja.md`` under
-"### P1: setup service / config write" that the existing suite did not yet
-exercise:
+write behaviours that the existing suite did not yet exercise:
 
 - project init file set across workspace / home / custom config locations
 - ``.env`` skip / append / overwrite operations for ``write_project``

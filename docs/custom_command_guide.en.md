@@ -23,6 +23,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
   - [7. Using Python commands](#7-using-python-commands)
     - [7.1. Using arguments](#71-using-arguments)
     - [7.2. Invoking other commands](#72-invoking-other-commands)
+  - [8. Declaring a routine (patrol) command](#8-declaring-a-routine-patrol-command)
 
 
 ## 1. Quick Start
@@ -30,7 +31,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
 ### 1.1. Create a prompt file
 Let’s start with a simple command that asks an LLM to translate text.
 
-Create a prompt file named `translate.md` under your prompt configuration folder (default: `~/.guildbotics/config/commands`) with the following content:
+Create a prompt file named `translate.md` under your prompt configuration folder (default: `.guildbotics/config/commands` in the workspace; the configuration directory can be overridden with `GUILDBOTICS_CONFIG_DIR`) with the following content:
 
 ```markdown
 If the following text is in ${1}, translate it to ${2}; if it is in ${2}, translate it to ${1}:
@@ -161,7 +162,7 @@ For AI CLI tools, set the working directory for system commands via the `cwd` pa
 
 
 ## 4. Using built-in commands
-You can use [built-in commands](../guildbotics/templates/intelligences/functions/) shipped with GuildBotics.
+You can use [built-in commands](../guildbotics/templates/commands/functions/) shipped with GuildBotics.
 
 Invocation examples:
 

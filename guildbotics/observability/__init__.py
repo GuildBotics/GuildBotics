@@ -3,7 +3,7 @@
 Provides a single, contextvars-based source of truth for correlation IDs so
 events, logs and prompt traces can be aggregated under the same execution unit.
 
-Design (see ``docs/runtime_diagnostics_todo.ja.md`` 決定事項):
+Design (see ``docs/ARCHITECTURE.md`` "Observability and Diagnostics"):
 
 - ``trace_id`` identifies one bounded unit of work (one manual command run, one
   scheduler routine/scheduled command run, one received event-listener event,

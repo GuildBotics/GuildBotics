@@ -57,7 +57,7 @@ The full testing strategy (which layer to cover, the test pyramid, and the lean-
 - Report results honestly; never state success when failures occurred.
 - Disclose environment limitations early (missing creds, disabled services) instead of silently skipping critical logic.
 - Design for testability: small pure functions, clear side-effect boundaries, explicit dependency injection where helpful.
-- Desktop frontend follows the same pyramid: Vitest + React Testing Library for unit/component tests (assert role/text/value/payload, not implementation detail), plus a small set of lean-but-real Playwright journeys under `desktop/e2e/` for cross-boundary critical paths exercised against a real browser and a real Local API backend. Keep exhaustive branch coverage in unit/component; reserve E2E for what only a real browser + real wire can verify. See `docs/test_gap_analysis.ja.md` for the canonical strategy.
+- Desktop frontend follows the same pyramid: Vitest + React Testing Library for unit/component tests (assert role/text/value/payload, not implementation detail), plus a small set of lean-but-real Playwright journeys under `desktop/e2e/` for cross-boundary critical paths exercised against a real browser and a real Local API backend. Keep exhaustive branch coverage in unit/component; reserve E2E for what only a real browser + real wire can verify. The canonical strategy lives in `AGENTS.md` → "テスト実装の考え方".
 
 ## Commit & Pull Request Guidelines
 - Use Conventional Commits: `feat:`, `fix:`, `chore:`, `refactor:`, etc. Short, imperative subject; details in body. English or Japanese is fine.
