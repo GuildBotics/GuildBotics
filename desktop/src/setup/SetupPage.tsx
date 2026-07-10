@@ -2618,7 +2618,7 @@ function MembersSection({
     setStoredMemberSecrets({
       githubInstallationId: member.has_github_installation_id,
       githubAppId: member.has_github_app_id,
-      githubPrivateKeyPath: member.has_github_private_key_path,
+      githubPrivateKeyPath: member.has_github_private_key_path || member.has_github_private_key,
       githubAccessToken: member.has_github_access_token,
       slackBotToken: member.has_slack_bot_token,
       slackAppToken: member.has_slack_app_token,
@@ -2732,7 +2732,7 @@ function MembersSection({
     : requiresGitHubAppsAuth
       ? githubInstallationId.trim().length > 0 &&
         githubAppId.trim().length > 0 &&
-        githubPrivateKeyPath.trim().length > 0
+        (githubPrivateKeyPath.trim().length > 0 || storedMemberSecrets.githubPrivateKeyPath)
       : true;
   const githubIdentityReady =
     !usesGitHubMember || (githubUsername.trim().length > 0 && gitEmail.trim().length > 0);
@@ -3766,7 +3766,7 @@ function MembersSection({
                       />
                       <FilePicker
                         label={t("setup.members.privateKeyPath")}
-                        withAsterisk
+                        withAsterisk={!storedMemberSecrets.githubPrivateKeyPath}
                         value={githubPrivateKeyPath}
                         onChange={setGithubPrivateKeyPath}
                         error={memberErrors.githubPrivateKeyPath}
@@ -5447,7 +5447,7 @@ export function getMemberFieldErrors(
     } else if (values.githubAppId.trim() && !/^\d+$/.test(values.githubAppId.trim())) {
       errors.githubAppId = t("setup.validation.githubAppIdInvalid");
     }
-    if (!values.githubPrivateKeyPath.trim()) {
+    if (!values.githubPrivateKeyPath.trim() && !values.storedMemberSecrets.githubPrivateKeyPath) {
       errors.githubPrivateKeyPath = t("setup.validation.githubPrivateKeyPathRequired");
     }
   }
@@ -6053,6 +6053,7 @@ function memberRequestToConfig(
     has_github_installation_id: Boolean(request.github_installation_id),
     has_github_app_id: Boolean(request.github_app_id),
     has_github_private_key_path: Boolean(request.github_private_key_path),
+    has_github_private_key: Boolean(request.github_private_key_path),
     has_github_access_token: Boolean(request.github_access_token),
     slack_user_id: request.slack_user_id ?? "",
     has_slack_bot_token: Boolean(request.slack_bot_token),

@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person
 from guildbotics.integrations.github.async_client import get_async_client
+from guildbotics.utils.env_loader import workspace_secret_store
 
 HTTP_UNAUTHORIZED = 401
 
@@ -36,15 +37,14 @@ class GitHubAppAuth(httpx.Auth):
     requires_request_body = True
     requires_response_body = True
 
-    def __init__(self, app_id: str, installation_id: str, private_key_path: str):
+    def __init__(self, app_id: str, installation_id: str, private_key_pem: bytes):
         self.app_id = app_id
         self.installation_id = installation_id
-        self.private_key_path = private_key_path
         self._token: str | None = None
         self._expires_at: dt.datetime | None = None
         self._leeway = dt.timedelta(seconds=120)
 
-        self._private_key = _load_rsa_private_key(self.private_key_path)
+        self._private_key = _load_rsa_private_key(private_key_pem)
 
     def _need_refresh(self) -> bool:
         now = dt.datetime.now(dt.UTC)
@@ -98,12 +98,27 @@ class GitHubAppAuth(httpx.Auth):
                 raise
 
 
-def _load_rsa_private_key(private_key_path: str) -> RSAPrivateKey:
-    with open(private_key_path, "rb") as f:
-        key = serialization.load_pem_private_key(f.read(), password=None)
-        if not isinstance(key, RSAPrivateKey):
-            raise TypeError("Private key must be an RSA private key")
-        return key
+def _load_rsa_private_key(private_key_pem: bytes) -> RSAPrivateKey:
+    key = serialization.load_pem_private_key(private_key_pem, password=None)
+    if not isinstance(key, RSAPrivateKey):
+        raise TypeError("Private key must be an RSA private key")
+    return key
+
+
+def get_person_private_key_pem(person: Person) -> bytes:
+    """Return the PEM for the member's GitHub App.
+
+    The workspace secret store holds the key content (it is deliberately kept
+    out of ``os.environ``, see ``secret_store.is_environment_secret``); the
+    configured ``*_GITHUB_PRIVATE_KEY_PATH`` file is the legacy fallback.
+    """
+    content = workspace_secret_store().get(
+        person.to_person_env_key("GITHUB_PRIVATE_KEY")
+    )
+    if content:
+        return content.encode()
+    with open(person.get_secret("github_private_key_path"), "rb") as f:
+        return f.read()
 
 
 def _build_github_app_jwt(app_id: str, private_key: RSAPrivateKey) -> str:
@@ -113,10 +128,10 @@ def _build_github_app_jwt(app_id: str, private_key: RSAPrivateKey) -> str:
 
 
 async def create_github_app_installation_token(
-    app_id: str, installation_id: str, private_key_path: str, base_url: str
+    app_id: str, installation_id: str, private_key_pem: bytes, base_url: str
 ) -> str:
     """Create a short-lived GitHub App installation token."""
-    private_key = _load_rsa_private_key(private_key_path)
+    private_key = _load_rsa_private_key(private_key_pem)
     jwt_token = _build_github_app_jwt(app_id, private_key)
     async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
         resp = await client.post(
@@ -138,7 +153,7 @@ async def get_person_github_token(person: Person, base_url: str) -> str:
         return await create_github_app_installation_token(
             app_id=person.get_secret("github_app_id"),
             installation_id=person.get_secret("github_installation_id"),
-            private_key_path=person.get_secret("github_private_key_path"),
+            private_key_pem=get_person_private_key_pem(person),
             base_url=base_url,
         )
     return person.get_secret("github_access_token")
@@ -157,13 +172,10 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
 
     if get_github_account_type(person) == GitHubAppAuth.GITHUB_APPS:
         # Use GitHub App authentication with auto-refresh
-        app_id = person.get_secret("github_app_id")
-        installation_id = person.get_secret("github_installation_id")
-        private_key_path = person.get_secret("github_private_key_path")
         auth = GitHubAppAuth(
-            app_id=app_id,
-            installation_id=installation_id,
-            private_key_path=private_key_path,
+            app_id=person.get_secret("github_app_id"),
+            installation_id=person.get_secret("github_installation_id"),
+            private_key_pem=get_person_private_key_pem(person),
         )
     else:
         # Use personal access token

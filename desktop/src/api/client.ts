@@ -528,6 +528,7 @@ export type MemberConfig = {
   has_github_installation_id: boolean;
   has_github_app_id: boolean;
   has_github_private_key_path: boolean;
+  has_github_private_key: boolean;
   has_github_access_token: boolean;
   slack_user_id?: string;
   has_slack_bot_token: boolean;

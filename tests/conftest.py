@@ -6,6 +6,50 @@ import pytest
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
 from guildbotics.utils.import_utils import ClassResolver
+from guildbotics.utils.secret_store import ENV_FILE_BACKEND, SECRETS_BACKEND_ENV
+
+
+@pytest.fixture(autouse=True)
+def _force_env_file_secret_backend(monkeypatch):
+    """Keep tests off the developer's real OS keychain.
+
+    Keyring-path tests opt back in through the ``fake_keyring`` fixture,
+    which removes this override and installs an in-memory backend.
+    """
+    monkeypatch.setenv(SECRETS_BACKEND_ENV, ENV_FILE_BACKEND)
+
+
+@pytest.fixture
+def fake_keyring(monkeypatch):
+    """Install an in-memory keyring backend and re-enable auto-detection."""
+    import keyring
+    from keyring.backend import KeyringBackend
+    from keyring.errors import PasswordDeleteError
+
+    class InMemoryKeyring(KeyringBackend):
+        priority = 1  # type: ignore[assignment]
+
+        def __init__(self):
+            super().__init__()
+            self.passwords: dict[tuple[str, str], str] = {}
+
+        def get_password(self, service, username):
+            return self.passwords.get((service, username))
+
+        def set_password(self, service, username, password):
+            self.passwords[(service, username)] = password
+
+        def delete_password(self, service, username):
+            if (service, username) not in self.passwords:
+                raise PasswordDeleteError(username)
+            del self.passwords[(service, username)]
+
+    backend = InMemoryKeyring()
+    original = keyring.get_keyring()
+    keyring.set_keyring(backend)
+    monkeypatch.delenv(SECRETS_BACKEND_ENV, raising=False)
+    yield backend
+    keyring.set_keyring(original)
 
 
 class FakeProject:

@@ -29,6 +29,7 @@ dependencies = [
   "click>=8.1.8,<9.0",
   "pydantic>=2.11,<3.0",
   "python-dotenv>=1.0",
+  "keyring>=25.0,<26.0",
   "PyYAML>=6.0",
   "httpx>=0.28,<1.0",
   "fastapi>=0.115,<1.0",

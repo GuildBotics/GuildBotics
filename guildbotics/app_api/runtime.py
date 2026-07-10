@@ -90,7 +90,11 @@ from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime import Context
 from guildbotics.runtime.member_context import resolve_person
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE, HOME_ENV_PROTECTED_KEYS
+from guildbotics.utils.env_loader import (
+    GUILDBOTICS_ENV_FILE,
+    HOME_ENV_PROTECTED_KEYS,
+    read_workspace_secrets,
+)
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
     apply_workspace_data_root,
@@ -108,6 +112,7 @@ from guildbotics.utils.prompt_trace import (
     prompt_trace_path,
     read_prompt_trace_events,
 )
+from guildbotics.utils.secret_store import read_env_values, write_env_values
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     write_active_workspace,
@@ -582,7 +587,7 @@ class AppRuntime:
         self, request: PromptTraceUpdateRequest, *, limit: int = 20
     ) -> PromptTraceStatus:
         status = self.get_config_status()
-        env_values = _read_env_values(status.env_file)
+        env_values = read_env_values(status.env_file)
         enabled_value = "1" if request.enabled else "0"
         trace_path_value = request.trace_path.strip()
         env_values["GUILDBOTICS_PROMPT_TRACE"] = enabled_value
@@ -593,12 +598,12 @@ class AppRuntime:
         else:
             env_values.pop("GUILDBOTICS_PROMPT_TRACE_PATH", None)
             os.environ.pop("GUILDBOTICS_PROMPT_TRACE_PATH", None)
-        _write_env_values(status.env_file, env_values)
+        write_env_values(status.env_file, env_values)
         return self.get_prompt_trace_status(limit=limit)
 
     def get_runtime_debug_status(self) -> RuntimeDebugStatus:
         status = self.get_config_status()
-        env_values = _read_env_values(status.env_file)
+        env_values = read_env_values(status.env_file)
         log_level = str(env_values.get("LOG_LEVEL") or os.getenv("LOG_LEVEL") or "INFO")
         agno_debug = _env_truthy(
             str(env_values.get("AGNO_DEBUG") or os.getenv("AGNO_DEBUG") or "")
@@ -616,7 +621,7 @@ class AppRuntime:
         self, request: RuntimeDebugUpdateRequest
     ) -> RuntimeDebugStatus:
         status = self.get_config_status()
-        env_values = _read_env_values(status.env_file)
+        env_values = read_env_values(status.env_file)
         log_level = "DEBUG" if request.enabled else "INFO"
         agno_debug = "true" if request.enabled else "false"
         env_values["LOG_LEVEL"] = log_level
@@ -624,7 +629,7 @@ class AppRuntime:
         os.environ["LOG_LEVEL"] = log_level
         os.environ["AGNO_DEBUG"] = agno_debug
         _apply_runtime_log_level(log_level)
-        _write_env_values(status.env_file, env_values)
+        write_env_values(status.env_file, env_values)
         self._loaded_dotenv_keys.update(env_values)
         return self.get_runtime_debug_status()
 
@@ -1089,28 +1094,37 @@ class AppRuntime:
             ) from exc
 
     def _load_workspace_env(self, *, apply_data_root: bool = False) -> None:
-        dotenv_path = Path.cwd() / ".env"
-        new_values = dotenv_values(dotenv_path) if dotenv_path.exists() else {}
-        dotenv_keys = {
-            key for key, value in new_values.items() if value is not None
-        } - WORKSPACE_DOTENV_PROTECTED_KEYS
-        # Remove keys that a previously selected workspace injected but the
-        # current one no longer defines, so stale credentials (OpenAI, GitHub,
-        # Slack, ...) do not leak across workspace switches.
-        for key in self._loaded_dotenv_keys - dotenv_keys:
-            os.environ.pop(key, None)
-        if dotenv_path.exists():
-            for key, value in new_values.items():
-                if key not in WORKSPACE_DOTENV_PROTECTED_KEYS and value is not None:
-                    os.environ[key] = value
-            os.environ[GUILDBOTICS_ENV_FILE] = str(dotenv_path.resolve())
-            self._loaded_dotenv_keys = {*dotenv_keys, GUILDBOTICS_ENV_FILE}
-        else:
-            os.environ.pop(GUILDBOTICS_ENV_FILE, None)
-            self._loaded_dotenv_keys = set()
         os.environ[GUILDBOTICS_CONFIG_DIR] = str(
             (Path.cwd() / ".guildbotics" / "config").resolve()
         )
+        dotenv_path = Path.cwd() / ".env"
+        new_values = {
+            key: value
+            for key, value in (
+                dotenv_values(dotenv_path) if dotenv_path.exists() else {}
+            ).items()
+            if value is not None
+        }
+        # OS-keychain secrets win over .env values for the same key.
+        new_values.update(read_workspace_secrets(Path.cwd()))
+        loaded_keys = set(new_values) - WORKSPACE_DOTENV_PROTECTED_KEYS
+        # Remove keys that a previously selected workspace injected but the
+        # current one no longer defines, so stale credentials (OpenAI, GitHub,
+        # Slack, ...) do not leak across workspace switches.
+        for key in self._loaded_dotenv_keys - loaded_keys:
+            os.environ.pop(key, None)
+        for key in loaded_keys:
+            # Only overwrite values this runtime injected itself; variables
+            # inherited from the parent process are real environment variables
+            # and take precedence over workspace secrets (see README 7.2).
+            if key in self._loaded_dotenv_keys or key not in os.environ:
+                os.environ[key] = new_values[key]
+        if dotenv_path.exists():
+            os.environ[GUILDBOTICS_ENV_FILE] = str(dotenv_path.resolve())
+            self._loaded_dotenv_keys = loaded_keys | {GUILDBOTICS_ENV_FILE}
+        else:
+            os.environ.pop(GUILDBOTICS_ENV_FILE, None)
+            self._loaded_dotenv_keys = loaded_keys
         if apply_data_root:
             apply_workspace_data_root(
                 Path.cwd(),
@@ -1738,20 +1752,6 @@ def _requirement_message(kind: str) -> str:
 
 def _first_line(text: str) -> str:
     return next((line.strip() for line in text.splitlines() if line.strip()), "")
-
-
-def _read_env_values(env_file_path: Path) -> dict[str, str]:
-    raw_values = dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
-    return {
-        str(key): str(value) for key, value in raw_values.items() if value is not None
-    }
-
-
-def _write_env_values(env_file_path: Path, env_values: dict[str, str]) -> None:
-    env_file_path.parent.mkdir(parents=True, exist_ok=True)
-    env_file_path.write_text(
-        "\n".join(f"{key}={value}" for key, value in env_values.items())
-    )
 
 
 def _env_truthy(value: str) -> bool:

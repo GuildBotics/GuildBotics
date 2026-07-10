@@ -368,6 +368,46 @@ def test_verify_github_credentials_present(
     assert {check.target for check in github_checks} == set(env_keys)
 
 
+def test_verify_accepts_private_key_content_from_keychain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring,
+) -> None:
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    _isolated_config_env(tmp_path, monkeypatch)
+    config = _config_status(tmp_path)
+    config.env_file.write_text(
+        "ALICE_GITHUB_INSTALLATION_ID=1\nALICE_GITHUB_APP_ID=2\n"
+    )
+    KeyringSecretStore(tmp_path / ".guildbotics/config").set(
+        "ALICE_GITHUB_PRIVATE_KEY", "pem-content"
+    )
+    _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
+    _write_cli_agent(tmp_path, "codex-cli.yml", "codex exec")
+    team = Team(
+        project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
+        members=[
+            Person(
+                person_id="alice",
+                name="Alice",
+                is_active=True,
+                person_type=GitHubAppAuth.GITHUB_APPS,
+            )
+        ],
+    )
+
+    response = VerifyService().verify(config=config, team=team)
+
+    github_checks = [
+        check for check in response.checks if check.code == "github_credential"
+    ]
+    assert all(check.status == "ok" for check in github_checks)
+    assert "ALICE_GITHUB_PRIVATE_KEY_PATH" in {
+        check.target for check in github_checks
+    }
+
+
 @pytest.mark.parametrize(
     ("person_type", "env_key"),
     [

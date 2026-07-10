@@ -857,6 +857,7 @@ function memberConfig() {
     has_github_installation_id: false,
     has_github_app_id: false,
     has_github_private_key_path: false,
+    has_github_private_key: false,
     has_github_access_token: false,
     slack_user_id: "",
     has_slack_bot_token: false,
@@ -1410,6 +1411,32 @@ describe("getMemberFieldErrors", () => {
     expect(errors.githubPrivateKeyPath).toBe(t("setup.validation.githubPrivateKeyPathRequired"));
   });
 
+  it("accepts a stored private key for github_apps members", () => {
+    // After `secrets migrate`, the PEM content lives in the OS keychain and
+    // the path entry is gone from .env; editing the member must not force
+    // the user to re-enter a path.
+    const errors = getMemberFieldErrors(
+      baseMemberValues({
+        personType: "agent",
+        githubAccountType: "github_apps",
+        identity: "https://github.com/organizations/acme/settings/apps/my-app",
+        githubInstallationId: "1",
+        githubAppId: "2",
+        githubPrivateKeyPath: "",
+        storedMemberSecrets: {
+          githubInstallationId: false,
+          githubAppId: false,
+          githubPrivateKeyPath: true,
+          githubAccessToken: false,
+          slackBotToken: false,
+          slackAppToken: false,
+        },
+      }),
+      t,
+    );
+    expect(errors.githubPrivateKeyPath).toBeUndefined();
+  });
+
   it("validates Slack channels, bot token, and app token", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
@@ -1790,6 +1817,7 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
     has_github_installation_id: false,
     has_github_app_id: false,
     has_github_private_key_path: false,
+    has_github_private_key: false,
     has_github_access_token: false,
     slack_user_id: "",
     has_slack_bot_token: false,
