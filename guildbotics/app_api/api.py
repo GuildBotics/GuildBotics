@@ -445,9 +445,19 @@ def create_app(
         start: str | None = None,
         end: str | None = None,
         limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+        refresh: bool = False,
+        sync_start: str | None = None,
+        sync_end: str | None = None,
         _: None = Depends(require_token),
     ) -> ActivityHistoryResponse:
-        return app_runtime.get_activity_history(start=start, end=end, limit=limit)
+        return app_runtime.get_activity_history(
+            start=start,
+            end=end,
+            limit=limit,
+            refresh=refresh,
+            sync_start=sync_start,
+            sync_end=sync_end,
+        )
 
     @app.get(
         "/intelligences/cli-agents/detection",

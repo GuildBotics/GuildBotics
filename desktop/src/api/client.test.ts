@@ -251,6 +251,9 @@ describe("GET query parameter encoding", () => {
       start: "2026-07-01T00:00:00+09:00",
       end: "2026-07-02T00:00:00+09:00",
       limit: 75,
+      refresh: true,
+      syncStart: "2026-06-30T00:00:00+09:00",
+      syncEnd: "2026-07-07T00:00:00+09:00",
     });
 
     const url = new URL(calls[0].url);
@@ -258,6 +261,9 @@ describe("GET query parameter encoding", () => {
     expect(url.searchParams.get("start")).toBe("2026-07-01T00:00:00+09:00");
     expect(url.searchParams.get("end")).toBe("2026-07-02T00:00:00+09:00");
     expect(url.searchParams.get("limit")).toBe("75");
+    expect(url.searchParams.get("refresh")).toBe("true");
+    expect(url.searchParams.get("sync_start")).toBe("2026-06-30T00:00:00+09:00");
+    expect(url.searchParams.get("sync_end")).toBe("2026-07-07T00:00:00+09:00");
   });
 
   it("omits the query when runScenarioDiagnostics has no person id", async () => {

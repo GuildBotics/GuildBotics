@@ -59,6 +59,9 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.verify import VerifyService
+from guildbotics.capabilities.github_activity_events import (
+    refresh_github_activity_events,
+)
 from guildbotics.capabilities.member_memory_audit import (
     MemoryAuditStore,
     parse_memory_audit_timestamp,
@@ -115,6 +118,36 @@ WORKSPACE_DOTENV_PROTECTED_KEYS = {
     *HOME_ENV_PROTECTED_KEYS,
 }
 MIN_MEMORY_DOCUMENT_PATH_PARTS = 2
+ACTIVITY_SYNC_COOLDOWN_SECONDS = 5 * 60
+ACTIVITY_SYNC_STATE_FILE = "activity_sync_weeks.json"
+ACTIVITY_SYNC_PERIOD_PARTS = 2
+
+
+def _activity_sync_state_path() -> Path:
+    return get_workspace_data_path("run", ACTIVITY_SYNC_STATE_FILE)
+
+
+def _completed_activity_weeks() -> set[tuple[str, str]]:
+    try:
+        payload = json.loads(_activity_sync_state_path().read_text(encoding="utf-8"))
+        return {
+            tuple(item)
+            for item in payload.get("completed", [])
+            if len(item) == ACTIVITY_SYNC_PERIOD_PARTS
+        }
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def _mark_activity_week_completed(period: tuple[str, str]) -> None:
+    completed = _completed_activity_weeks()
+    completed.add(period)
+    path = _activity_sync_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"completed": sorted(completed)}), encoding="utf-8")
+    except OSError:
+        return
 
 
 class AppRuntime:
@@ -128,6 +161,8 @@ class AppRuntime:
         self._event_bus = event_bus
         self._diagnostics_store = diagnostics_store
         self._lock = threading.Lock()
+        self._activity_sync_lock = threading.Lock()
+        self._activity_sync_attempts: dict[tuple[str, str], float] = {}
         self._running_command_id: str | None = None
         self._execution = ExecutionCoordinator()
         self._loaded_dotenv_keys: set[str] = set()
@@ -690,6 +725,9 @@ class AppRuntime:
         start: str | None = None,
         end: str | None = None,
         limit: int = 1000,
+        refresh: bool = False,
+        sync_start: str | None = None,
+        sync_end: str | None = None,
     ) -> ActivityHistoryResponse:
         end_time = parse_timestamp(end or "") or datetime.now(UTC)
         start_time = parse_timestamp(start or "") or (end_time - timedelta(days=7))
@@ -700,7 +738,45 @@ class AppRuntime:
                 context={"start": start or "", "end": end or ""},
                 status_code=400,
             )
+        if (sync_start is None) != (sync_end is None):
+            raise AppApiError(
+                "invalid_activity_sync_range",
+                "Activity sync start and end must be provided together.",
+                context={"sync_start": sync_start or "", "sync_end": sync_end or ""},
+                status_code=400,
+            )
+        if sync_start is None:
+            sync_start_time = start_time
+            sync_end_time = end_time
+        else:
+            parsed_sync_start = parse_timestamp(sync_start)
+            parsed_sync_end = parse_timestamp(sync_end or "")
+            if parsed_sync_start is None or parsed_sync_end is None:
+                raise AppApiError(
+                    "invalid_activity_sync_range",
+                    "Activity sync start and end must be valid timestamps.",
+                    context={
+                        "sync_start": sync_start or "",
+                        "sync_end": sync_end or "",
+                    },
+                    status_code=400,
+                )
+            sync_start_time = parsed_sync_start
+            sync_end_time = parsed_sync_end
+            if sync_start_time > sync_end_time:
+                raise AppApiError(
+                    "invalid_activity_sync_range",
+                    "Activity sync start must be before end.",
+                    context={
+                        "sync_start": sync_start or "",
+                        "sync_end": sync_end or "",
+                    },
+                    status_code=400,
+                )
         context = self._get_context()
+        self._refresh_activity_events(
+            context.team, sync_start_time, sync_end_time, force=refresh
+        )
         records = self._activity_records_between(start_time, end_time, limit=limit)
         run_store = RunStore()
         run_summaries = run_store.summaries_by_subject()
@@ -715,6 +791,44 @@ class AppRuntime:
             ),
             run_subject=lambda run_id: run_subjects.get(run_id, ""),
         )
+
+    def _refresh_activity_events(
+        self, team: Team, start: datetime, end: datetime, *, force: bool
+    ) -> None:
+        """Refresh GitHub-backed shared activity at most once per five minutes."""
+        with self._activity_sync_lock:
+            completed_weeks = _completed_activity_weeks()
+            period = (start.isoformat(), end.isoformat())
+            if not force and end <= datetime.now(UTC) and period in completed_weeks:
+                return
+            now = time.monotonic()
+            last_attempt = self._activity_sync_attempts.get(period)
+            if (
+                not force
+                and last_attempt is not None
+                and now - last_attempt < ACTIVITY_SYNC_COOLDOWN_SECONDS
+            ):
+                return
+            # Count failed attempts too: a bad credential must not turn the UI's
+            # five-second history refresh into a five-second GitHub retry loop.
+            self._activity_sync_attempts[period] = now
+            threading.Thread(
+                target=self._sync_activity_events,
+                args=(team, start, end, period),
+                daemon=True,
+            ).start()
+
+    def _sync_activity_events(
+        self, team: Team, start: datetime, end: datetime, period: tuple[str, str]
+    ) -> None:
+        try:
+            asyncio.run(refresh_github_activity_events(team, start, end))
+            if end <= datetime.now(UTC):
+                _mark_activity_week_completed(period)
+        except Exception as exc:
+            self._event_bus.publish_log(
+                "WARNING", f"GitHub activity refresh failed: {exc}"
+            )
 
     def _activity_records_between(
         self, start: datetime, end: datetime, *, limit: int

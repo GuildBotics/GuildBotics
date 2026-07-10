@@ -15,6 +15,7 @@ def record_correlated_event(
     default_source: str = "",
     person_id: str = "",
     command: str | None = None,
+    timestamp: str | None = None,
 ) -> None:
     correlation = correlation_fields()
     merged_attributes = dict(correlation.get("attributes") or {})
@@ -38,6 +39,6 @@ def record_correlated_event(
             "workflow": correlation.get("workflow", ""),
             "attributes": merged_attributes,
             "payload": payload,
-            "timestamp": datetime.now().astimezone().isoformat(),
+            "timestamp": timestamp or datetime.now().astimezone().isoformat(),
         }
     )
