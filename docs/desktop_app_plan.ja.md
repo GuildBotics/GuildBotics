@@ -2,15 +2,15 @@
 
 ## 目的
 
-GuildBotics の既存 CLI 体験を維持しながら、macOS 向けのデスクトップ GUI を追加する。GUI は既存 Python 実行基盤を再実装せず、Local API 経由で利用する。
+GuildBotics の既存 CLI 体験を維持しながら、macOS / Linux 向けのデスクトップ GUI を追加する。GUI は既存 Python 実行基盤を再実装せず、Local API 経由で利用する。
 
 ## 決定事項
 
 - リポジトリは分割せず、monorepo として管理する。
 - Python 側は既存 `guildbotics` package を継続し、GUI 用境界として `guildbotics/app_api/` を追加する。
 - Desktop 側は `desktop/` に Tauri v2 + TypeScript frontend として追加する。
-- v1 GUI の正式対応は macOS Apple Silicon arm64 のみとする。
-- v1 の配布物は signed + notarized DMG を直接配布する。
+- GUI の正式対応は macOS Apple Silicon arm64 と Linux x86_64（glibc）とする。
+- macOS の配布物は signed + notarized DMG、Linux の配布物は `.deb` と AppImage とする。
 - v1 では自動更新を実装せず、手動更新を前提にする。
 - Python backend は desktop app に完全同梱する。
 - UI と backend は `127.0.0.1` の Local API で接続し、REST と WebSocket を使う。
@@ -28,7 +28,7 @@ GuildBotics の既存 CLI 体験を維持しながら、macOS 向けのデスク
 | ------------------------- | -------- | -------- |
 | macOS Apple Silicon arm64 | 正式対応 | 継続対応 |
 | macOS Intel               | 対象外   | 継続対応 |
-| Linux                     | 対象外   | 継続対応 |
+| Linux x86_64（glibc）     | 正式対応 | 継続対応 |
 | Windows                   | 対象外   | 将来検討 |
 
 GUI 非対応環境でも、既存 CLI が fallback として動作することを維持する。
@@ -82,8 +82,8 @@ frontend は `message` を表示し、分岐や復旧導線には `code` と `co
 ## Packaging 方針
 
 - Tauri sidecar として Python backend binary を同梱する。
-- v1 の sidecar build target は `aarch64-apple-darwin` のみとする。
-- DMG の署名と notarization を release workflow の完了条件にする。
+- sidecar は macOS `aarch64-apple-darwin` と Linux `x86_64-unknown-linux-gnu` 用に各 OS 上で build する。
+- macOS の DMG 署名と notarization は release workflow の任意機能とする。Linux workflow は `.deb` と AppImage を artifact として生成する。
 - external AI CLIツールは同梱せず、ユーザー環境の PATH と設定を利用する。
 
 ## 大項目 TODO
@@ -94,8 +94,8 @@ frontend は `message` を表示し、分岐や復旧導線には `code` と `co
 4. WebSocket で logs/events/progress を流す仕組みを作る。
 5. Tauri + TypeScript frontend の skeleton を追加する。
 6. 初期セットアップ、設定確認、member 管理、command 実行、scheduler 管理の画面を作る。
-7. Python backend sidecar の Mac arm64 packaging を作る。
-8. signed + notarized DMG の release workflow を作る。
+7. Python backend sidecar の macOS / Linux packaging を作る。
+8. macOS DMG と Linux `.deb` / AppImage の release workflow を作る。
 9. GUI サポート外環境でも CLI が壊れていないことを CI で保証する。
 
 ## 現在の到達点
@@ -139,6 +139,7 @@ frontend は `message` を表示し、分岐や復旧導線には `code` と `co
 - frontend API client に `WS /events` の subscription helper を追加し、command runner 画面で実行イベントを表示するようにした。
 - `desktop/src/api/backend.ts` で Tauri sidecar 起動と health check の入口を追加済み。
 - `.github/workflows/desktop-macos.yml` に macOS arm64 desktop artifact build を実装済み。`desktop/sidecar/guildbotics-app-api.spec` ベースで PyInstaller sidecar を build し、sidecar health smoke test、optional な signing / notarization step を経て `tauri build` で DMG を生成する。secrets 未設定なら unsigned DMG、secrets 設定済みなら signed + notarized DMG を生成する。ローカル実機で unsigned DMG 生成まで検証済み。
+- `.github/workflows/desktop-linux.yml` に Linux x86_64 desktop artifact build を実装済み。Ubuntu 22.04 で PyInstaller sidecar の build / health smoke test と bundled CLI smoke test を実施し、Tauri で `.deb` と AppImage を生成する。
 - `to_pdf` の WeasyPrint import を実行時 lazy import にし、PDF を使わない command 実行が native dependency 不足に巻き込まれないようにした。
 - `GET /config/intelligences` と `PUT /config/intelligences` を追加し、チーム既定と member override の `model_mapping.yml` / `brain_mapping.yml` / `cli_agent_mapping.yml` / `models/*` / `cli_agents/*` を GUI から読み書きできるようにした。
 - Setup UI の `LLM・AI CLIツール` 詳細設定から「準備中」表示を削除し、機能割り当て、モデル定義、AI CLIツール定義を編集できるようにした。
@@ -772,13 +773,13 @@ npm run tauri build -- --target aarch64-apple-darwin
 
 - 既存 CI に app API tests を含める。
 - desktop build check を optional または別 workflow として維持する。
-- Linux CI では GUI artifact を作らず、Python CLI と API importability を確認する。
+- Linux CI では Python CLI / API の確認に加え、Linux desktop artifact を build する。
 - WeasyPrint native dependency がない環境で、PDF 以外の command registry が壊れない regression test を追加する。
 
 完了条件:
 
 - 通常 CI は Python package / CLI / Local API を検証する。
-- desktop packaging は macOS workflow に分離されている。
+- desktop packaging は macOS / Linux workflow に分離されている。
 - GUI 非対応環境でも CLI fallback が正式に守られる。
 
 確認:

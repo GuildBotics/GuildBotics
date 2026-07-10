@@ -1,6 +1,6 @@
 # PyInstaller spec for the GuildBotics desktop sidecar (Local API daemon).
 #
-# Built by `.github/workflows/desktop-macos.yml` and reproducible locally with:
+# Built by the desktop packaging workflows and reproducible locally with:
 #
 #   uv run --with pyinstaller python -m PyInstaller \
 #       desktop/sidecar/guildbotics-app-api.spec --noconfirm
@@ -81,7 +81,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch="arm64",
+    target_arch=os.environ.get("GUILDBOTICS_PYINSTALLER_TARGET_ARCH") or None,
     codesign_identity=None,
     entitlements_file=None,
 )

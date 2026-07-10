@@ -3,7 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
-DESKTOP_TARGET="${DESKTOP_TARGET:-aarch64-apple-darwin}"
+DESKTOP_TARGET="${DESKTOP_TARGET:-$("$SCRIPT_DIR/desktop-target.sh")}"
+case "$DESKTOP_TARGET" in
+  aarch64-apple-darwin) export GUILDBOTICS_PYINSTALLER_TARGET_ARCH=arm64 ;;
+  x86_64-apple-darwin) export GUILDBOTICS_PYINSTALLER_TARGET_ARCH=x86_64 ;;
+  *) unset GUILDBOTICS_PYINSTALLER_TARGET_ARCH ;;
+esac
 APP_API_NAME="guildbotics-app-api-${DESKTOP_TARGET}"
 CLI_NAME="guildbotics-cli-${DESKTOP_TARGET}"
 

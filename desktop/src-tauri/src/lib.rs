@@ -93,27 +93,38 @@ fn home_dir() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))
 }
 
-fn desktop_target_triple() -> &'static str {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
+fn desktop_target_triple_for(os: &str, architecture: &str) -> Option<&'static str> {
+    Some(match (os, architecture) {
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("macos", "x86_64") => "x86_64-apple-darwin",
-        _ => "aarch64-apple-darwin",
-    }
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        _ => return None,
+    })
+}
+
+fn desktop_target_triple() -> Option<&'static str> {
+    desktop_target_triple_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
 fn bundled_cli_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
+    let target_triple = desktop_target_triple();
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(dir) = current_exe.parent() {
             candidates.push(dir.join("guildbotics-cli"));
-            candidates.push(dir.join(format!("guildbotics-cli-{}", desktop_target_triple())));
+            if let Some(target_triple) = target_triple {
+                candidates.push(dir.join(format!("guildbotics-cli-{target_triple}")));
+            }
         }
     }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(format!("guildbotics-cli-{}", desktop_target_triple())),
-    );
+    if let Some(target_triple) = target_triple {
+        candidates.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(format!("guildbotics-cli-{target_triple}")),
+        );
+    }
     candidates
 }
 
@@ -479,6 +490,27 @@ mod tests {
             Some(default_path)
         );
         Ok(())
+    }
+
+    #[test]
+    fn desktop_target_triple_for_maps_supported_platforms() {
+        assert_eq!(
+            desktop_target_triple_for("macos", "aarch64"),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(
+            desktop_target_triple_for("macos", "x86_64"),
+            Some("x86_64-apple-darwin")
+        );
+        assert_eq!(
+            desktop_target_triple_for("linux", "aarch64"),
+            Some("aarch64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            desktop_target_triple_for("linux", "x86_64"),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(desktop_target_triple_for("windows", "x86_64"), None);
     }
 }
 
