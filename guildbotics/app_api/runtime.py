@@ -738,9 +738,42 @@ class AppRuntime:
                 context={"start": start or "", "end": end or ""},
                 status_code=400,
             )
+        if (sync_start is None) != (sync_end is None):
+            raise AppApiError(
+                "invalid_activity_sync_range",
+                "Activity sync start and end must be provided together.",
+                context={"sync_start": sync_start or "", "sync_end": sync_end or ""},
+                status_code=400,
+            )
+        if sync_start is None:
+            sync_start_time = start_time
+            sync_end_time = end_time
+        else:
+            parsed_sync_start = parse_timestamp(sync_start)
+            parsed_sync_end = parse_timestamp(sync_end or "")
+            if parsed_sync_start is None or parsed_sync_end is None:
+                raise AppApiError(
+                    "invalid_activity_sync_range",
+                    "Activity sync start and end must be valid timestamps.",
+                    context={
+                        "sync_start": sync_start or "",
+                        "sync_end": sync_end or "",
+                    },
+                    status_code=400,
+                )
+            sync_start_time = parsed_sync_start
+            sync_end_time = parsed_sync_end
+            if sync_start_time > sync_end_time:
+                raise AppApiError(
+                    "invalid_activity_sync_range",
+                    "Activity sync start must be before end.",
+                    context={
+                        "sync_start": sync_start or "",
+                        "sync_end": sync_end or "",
+                    },
+                    status_code=400,
+                )
         context = self._get_context()
-        sync_start_time = parse_timestamp(sync_start or "") or start_time
-        sync_end_time = parse_timestamp(sync_end or "") or end_time
         self._refresh_activity_events(
             context.team, sync_start_time, sync_end_time, force=refresh
         )

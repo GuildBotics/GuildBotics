@@ -311,7 +311,8 @@ function ActivityTimelineRow({
   const blocks = buildActivityBlocks(sessions);
   const weekSessionCount = view === "week" ? maxWeekSessionCount(sessions, range) : 0;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
-  const eventTops = stackedEventTops(events, eventTop);
+  const visibleEvents = view === "week" ? [] : events;
+  const eventTops = stackedEventTops(visibleEvents, eventTop);
   const eventRows = Math.max(
     1,
     ...Array.from(eventTops.values(), (top) => (top - eventTop) / EVENT_STACK_GAP_PX + 1),
@@ -321,7 +322,6 @@ function ActivityTimelineRow({
     : view === "week"
       ? weekRowMinHeight(weekSessionCount)
       : Math.max(86, eventTop + eventRows * EVENT_STACK_GAP_PX + 8);
-  const visibleEvents = view === "week" ? [] : events;
   const activeRateLimit = member ? activeRateLimitForSessions(sessions, now ?? new Date()) : null;
   const activeRateLimitReset = activeRateLimit ? formatRateLimitReset(activeRateLimit) : "";
   return (

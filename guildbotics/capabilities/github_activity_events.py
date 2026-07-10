@@ -10,6 +10,8 @@ from guildbotics.integrations.github.github_utils import create_github_client
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
+ACTIVITY_DUPLICATE_SCAN_LIMIT = 50_000
+
 
 class GitHubActivityEventPoller:
     """Poll the configured GitHub Project and persist closed work once.
@@ -44,7 +46,7 @@ class GitHubActivityEventPoller:
             pull_requests = await self._closed_pull_requests(client, items)
         finally:
             await client.aclose()
-        existing = _existing_activity_ids()
+        existing = _existing_activity_ids(start, end)
         recorded = 0
         for item in [*items, *pull_requests]:
             event = _closed_event(item, start, end)
@@ -164,14 +166,21 @@ def _closed_event(
     if item.get("state") != "CLOSED" or not item.get("closedAt"):
         return None
     repo = _repository_name(item)
+    if not repo:
+        return None
     number = item.get("number")
+    if not isinstance(number, int) or number <= 0:
+        return None
     url = str(item.get("url") or "")
+    if not url:
+        return None
     merged_at = item.get("mergedAt")
     timestamp = str(merged_at or item["closedAt"])
-    if start and end:
-        occurred = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        if not start <= occurred <= end:
-            return None
+    occurred = _parse_github_timestamp(timestamp)
+    if occurred is None:
+        return None
+    if start and end and not start <= occurred <= end:
+        return None
     is_pull_request = item.get("__typename") == "PullRequest"
     kind = "pull_request" if is_pull_request else "issue"
     event_type = "github.pull_request" if is_pull_request else "github.issue"
@@ -211,11 +220,27 @@ def _repository_parts(repository: str) -> dict[str, Any]:
     return {"name": name, "owner": {"login": owner}}
 
 
-def _existing_activity_ids() -> set[str]:
+def _parse_github_timestamp(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _timestamp_between(timestamp: str, start: datetime, end: datetime) -> bool:
+    occurred = _parse_github_timestamp(timestamp)
+    return occurred is not None and start <= occurred <= end
+
+
+def _existing_activity_ids(start: datetime, end: datetime) -> set[str]:
     return {
         str(attributes.get("github.activity_id"))
-        for item in DiagnosticsStore().records_between(
-            includes=lambda _timestamp: True, limit=5000
+        for item in DiagnosticsStore(
+            memory_limit=ACTIVITY_DUPLICATE_SCAN_LIMIT
+        ).records_between(
+            includes=lambda timestamp: _timestamp_between(timestamp, start, end),
+            limit=ACTIVITY_DUPLICATE_SCAN_LIMIT,
         )
         if isinstance((attributes := item.get("attributes")), dict)
         and attributes.get("github.activity_id")
