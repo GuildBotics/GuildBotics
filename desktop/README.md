@@ -1,8 +1,8 @@
-# GuildBotics Desktop (macOS)
+# GuildBotics Desktop (macOS / Linux)
 
-GuildBotics の macOS 向けデスクトップ GUI です。Tauri v2 + TypeScript frontend と、Python backend（Local API daemon）および GuildBotics CLI を sidecar として同梱します。
+GuildBotics のデスクトップ GUI です。Tauri v2 + TypeScript frontend と、Python backend（Local API daemon）および GuildBotics CLI を sidecar として同梱します。
 
-- 正式対応: macOS Apple Silicon (arm64)
+- 正式対応: macOS Apple Silicon (arm64)、Linux x86_64（glibc）
 - v1 は手動更新前提（自動更新なし）
 - 設計方針の詳細は [../docs/desktop_app_plan.ja.md](../docs/desktop_app_plan.ja.md) を参照
 
@@ -18,18 +18,18 @@ GuildBotics の macOS 向けデスクトップ GUI です。Tauri v2 + TypeScrip
 # Python sidecar（Local API + CLI）のみ
 scripts/desktop-build-backend.sh
 
-# Tauri / DMG のみ（事前に sidecar が必要）
+# Tauri パッケージのみ（事前に sidecar が必要）
 scripts/desktop-build-frontend.sh
 
-# sidecar と Tauri / DMG をまとめて build
+# sidecar と Tauri パッケージをまとめて build
 scripts/desktop-build-all.sh
 ```
 
-`desktop-build-frontend.sh` は `desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` と
-`desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin` を使って DMG を作ります。別ターゲットを使う場合は `DESKTOP_TARGET` を指定してください。
+スクリプトは既定で現在の Rust host target を検出し、対応する sidecar 名を使います。macOS では DMG、Linux では `.deb` と AppImage を生成します。クロスビルドなどで明示する場合は `DESKTOP_TARGET` を指定してください。
 
 ```bash
 DESKTOP_TARGET=aarch64-apple-darwin scripts/desktop-build-all.sh
+DESKTOP_TARGET=x86_64-unknown-linux-gnu scripts/desktop-build-all.sh
 ```
 
 ### 開発モード起動
@@ -115,7 +115,7 @@ npm run e2e
 - レポート / 成果物は `desktop/playwright-report/` と `desktop/test-results/`（いずれも `.gitignore` 済み）。
 - E2E は `npm run quality` と通常 push CI には含めず、専用ジョブ（workflow_dispatch / nightly）で回す方針（`docs/test_gap_analysis.ja.md` 参照）。
 - 接続先 host / ポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。
-- Tauri ネイティブ（packaged app / sidecar 起動 / file picker）の smoke は別ティアで、実 macOS + Tauri runtime が必要（§2〜§3 のビルド手順を参照）。
+- Tauri ネイティブ（packaged app / sidecar 起動 / file picker）の smoke は別ティアで、実 macOS または Linux + Tauri runtime が必要（§2〜§3 のビルド手順を参照）。
 
 ---
 
@@ -125,12 +125,13 @@ npm run e2e
 |---|---|---|
 | [uv](https://docs.astral.sh/uv/) | 最新 | Python 依存解決・sidecar build |
 | Node.js | 24 以上（CI は 24） | frontend build / Tauri CLI |
-| Rust (rustup) | **stable 1.85 以上** | Tauri 本体の build |
-| Xcode Command Line Tools | — | macOS 向けリンク・署名 |
+| Rust (rustup) | **stable 1.88 以上** | Tauri 本体の build |
+| Xcode Command Line Tools（macOS） | — | macOS 向けリンク・署名 |
+| WebKitGTK 4.1 開発パッケージ（Linux） | — | Linux 向けリンク |
 
 ### Rust ツールチェーンの注意（重要）
 
-Tauri の依存に `edition2024` を要求するクレートがあるため、**Cargo 1.85 以上**が必要です。Homebrew 版の `rust`（standalone）が PATH 上で `rustup` より優先されていると、古い Cargo が使われて次のエラーで失敗します。
+Tauri の依存には Rust 1.88 以上を要求するクレートがあるため、**Cargo 1.88 以上**が必要です。Homebrew 版の `rust`（standalone）が PATH 上で `rustup` より優先されていると、古い Cargo が使われて次のエラーで失敗します。
 
 ```
 error: failed to download `idna_adapter vX.Y.Z`
@@ -144,22 +145,31 @@ error: failed to download `idna_adapter vX.Y.Z`
 # rustup の stable を最新化し、PATH 上で優先されるようにする
 rustup default stable
 rustup update
-rustc --version   # 1.85 以上であることを確認
+rustc --version   # 1.88 以上であることを確認
 
-# arm64 ターゲットを追加
-rustup target add aarch64-apple-darwin
+# 現在の target を確認
+rustc -vV | awk '$1 == "host:" { print $2 }'
 ```
 
 `which -a cargo` で Homebrew 版（`/opt/homebrew/bin/cargo`）が先に来る場合は、ビルド時だけ rustup のツールチェーンを優先させることもできます。
 
 ```bash
-PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" \
-  npm run tauri build -- --target aarch64-apple-darwin
+PATH="$(dirname "$(rustup which cargo)"):$PATH" scripts/desktop-build-frontend.sh
 ```
+
+Linux では Rust と Node.js に加えて、使用するディストリビューションの Tauri / WebKitGTK 開発依存が必要です。Debian / Ubuntu では次を実行してください。
+
+```bash
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+
+Linux の Tauri 実行に必要なパッケージはディストリビューションにより異なります。Arch / Fedora などは [Tauri の Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux) を参照してください。
 
 ---
 
-## 2. 配布物（DMG）のローカルビルド手順
+## 2. 配布物のローカルビルド手順
 
 リポジトリのルートで実行します。
 
@@ -174,8 +184,8 @@ uv sync --extra test --extra dev
 scripts/desktop-build-backend.sh
 
 # 生成物:
-# desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin
-# desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin
+# desktop/src-tauri/binaries/guildbotics-app-api-<target>
+# desktop/src-tauri/binaries/guildbotics-cli-<target>
 ```
 
 生成される Local API sidecar は onefile で約 200MB 強です。CLI sidecar は desktop app の初回起動時に managed CLI として `~/.guildbotics/bin/guildbotics` へコピーされます。
@@ -188,23 +198,29 @@ scripts/desktop-build-backend.sh
 > # => {"status":"ok"}
 > ```
 
-### 2.2 frontend 依存をインストールして DMG を build する
+### 2.2 frontend 依存をインストールしてパッケージを build する
 
 ```bash
-cd desktop
-npm install
-npm run tauri build -- --target aarch64-apple-darwin
+# リポジトリルートで実行（§2.1 の sidecar build 後）
+scripts/desktop-build-frontend.sh
 ```
 
-成果物:
+macOS Apple Silicon の成果物:
 
 ```
 desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/GuildBotics_<version>_aarch64.dmg
 ```
 
-（例: `GuildBotics_0.1.0_aarch64.dmg`。`<version>` は [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `version`）
+Linux x86_64 の成果物:
 
-DMG 内の `GuildBotics.app/Contents/MacOS/` に desktop 本体、sidecar `guildbotics-app-api`、sidecar `guildbotics-cli` が同梱されます。secrets を設定していないローカルビルドは **ad-hoc 署名（実質 unsigned）** です。署名・notarization は次節を参照。
+```
+desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/GuildBotics_<version>_amd64.deb
+desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/GuildBotics_<version>_amd64.AppImage
+```
+
+`<version>` は [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `version` です。Tauri は各 OS 用の config を自動選択します。macOS は [src-tauri/tauri.macos.conf.json](src-tauri/tauri.macos.conf.json) で DMG、Linux は [src-tauri/tauri.linux.conf.json](src-tauri/tauri.linux.conf.json) で `.deb` と AppImage を指定しています。
+
+各パッケージには desktop 本体、sidecar `guildbotics-app-api`、sidecar `guildbotics-cli` が同梱されます。macOS の secrets を設定していないローカルビルドは **ad-hoc 署名（実質 unsigned）** です。署名・notarization は次節を参照。
 
 ---
 
@@ -220,7 +236,9 @@ scripts/desktop-dev-tauri.sh
 
 ---
 
-## 4. DMG のインストール手順（利用者向け）
+## 4. インストール手順（利用者向け）
+
+### macOS（DMG）
 
 1. `GuildBotics_<version>_aarch64.dmg` をダブルクリックしてマウントする。
 2. 開いたウィンドウで **`GuildBotics.app` を `Applications` フォルダへドラッグ**する。
@@ -239,6 +257,21 @@ scripts/desktop-dev-tauri.sh
   ```
 
 > signed + notarized された DMG ではこの操作は不要です。
+
+### Linux（`.deb` / AppImage）
+
+Debian / Ubuntu 系では `.deb` を使います。
+
+```bash
+sudo apt install ./GuildBotics_<version>_amd64.deb
+```
+
+その他の対応ディストリビューションでは AppImage に実行権限を付けて起動します。
+
+```bash
+chmod +x GuildBotics_<version>_amd64.AppImage
+./GuildBotics_<version>_amd64.AppImage
+```
 
 ### 起動後
 
@@ -278,10 +311,11 @@ CI（[../.github/workflows/desktop-macos.yml](../.github/workflows/desktop-macos
 
 | 症状 | 原因 / 対処 |
 |---|---|
-| `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.85+ を使う（§1 参照）。 |
-| `tauri build` で sidecar が見つからない | §2.1 を実行し、`desktop/src-tauri/binaries/guildbotics-app-api-aarch64-apple-darwin` と `desktop/src-tauri/binaries/guildbotics-cli-aarch64-apple-darwin` が存在するか確認。 |
+| `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.88+ を使う（§1 参照）。 |
+| `tauri build` で sidecar が見つからない | §2.1 を実行し、現在の target に対応する `desktop/src-tauri/binaries/guildbotics-app-api-<target>` と `desktop/src-tauri/binaries/guildbotics-cli-<target>` が存在するか確認。 |
 | PyInstaller 実行時に `ModuleNotFoundError` | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) または [sidecar/guildbotics-cli.spec](sidecar/guildbotics-cli.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
 | GUI で PDF 変換（`to_pdf`）が使えない | v1 既知の制約。sidecar は `weasyprint` を同梱しない。PDF が必要な場合は native dependency を入れた CLI を使う。 |
 | 「開発元を確認できません」で起動できない | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。 |
+| Linux で WebKitGTK が見つからず build / 起動できない | §1 の Linux 依存を導入し、利用しているディストリビューション用の Tauri prerequisites を確認する。 |
 | 初回起動が遅い | onefile sidecar の自己展開のため。約 10 秒待つ。 |
 | `guildbotics` が PATH で古い CLI を指す | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。 |

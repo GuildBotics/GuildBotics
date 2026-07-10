@@ -297,7 +297,7 @@ desktop packaging / Tauri 変更時の確認:
 - `scripts/desktop-build-backend.sh` は PyInstaller で `guildbotics-app-api` と `guildbotics-cli` の 2 本を build し、`desktop/src-tauri/binaries/*-<target>` に配置する
 - `scripts/desktop-dev-tauri.sh` は `scripts/desktop-write-dev-binaries.sh` で Local API / CLI の開発用 wrapper を生成する
 - Rust/Tauri 側を変更したら `cargo fmt --check`、`cargo check`、必要に応じて `cargo test` を `desktop/src-tauri` で実行する
-- sidecar / packaging script を変更したら `bash -n scripts/desktop-build-backend.sh scripts/desktop-build-frontend.sh scripts/desktop-dev-tauri.sh scripts/desktop-write-dev-binaries.sh` と、可能なら `scripts/desktop-build-backend.sh` による smoke を行う
+- sidecar / packaging script を変更したら `bash -n scripts/desktop-build-backend.sh scripts/desktop-build-frontend.sh scripts/desktop-dev-tauri.sh scripts/desktop-write-dev-binaries.sh scripts/desktop-target.sh scripts/desktop-smoke-sidecars.sh` と、可能なら `scripts/desktop-build-backend.sh` による smoke を行う
 
 エージェント作業時の品質確認:
 

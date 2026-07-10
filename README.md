@@ -153,7 +153,7 @@ Setup is performed with the **GuildBotics Desktop app**; command execution uses 
 
 **Desktop app (setup + managed CLI):** Build or install the GuildBotics Desktop app. See
 [desktop/README.md](desktop/README.md) for build and install instructions
-(currently macOS Apple Silicon). On first launch, the app installs:
+(macOS Apple Silicon and Linux x86_64). On first launch, the app installs:
 
 - `~/.guildbotics/bin/guildbotics`: managed GuildBotics CLI used by AI CLI tools and skills
 - `~/.local/bin/guildbotics`: a small shim, only when the path is missing or already managed

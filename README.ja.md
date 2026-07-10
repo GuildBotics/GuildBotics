@@ -160,7 +160,7 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 セットアップは **GuildBotics デスクトップアプリ** で行い、コマンド実行は **`guildbotics` CLI** で行います。
 
 **デスクトップアプリ（セットアップ + 管理用 CLI）:** GuildBotics デスクトップアプリをビルド／インストールします。
-ビルド・インストール手順は [desktop/README.md](desktop/README.md) を参照してください（現状 macOS Apple Silicon 対応）。
+ビルド・インストール手順は [desktop/README.md](desktop/README.md) を参照してください（macOS Apple Silicon と Linux x86_64 に対応）。
 初回起動時に以下が配置されます。
 
 - `~/.guildbotics/bin/guildbotics`: AI CLIツール / スキルが使う管理用 GuildBotics CLI
