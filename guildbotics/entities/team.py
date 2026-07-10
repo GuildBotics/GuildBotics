@@ -326,6 +326,17 @@ class Person(BaseModel):
             if role_id in role_ids
         }
 
+    # Person-scoped env keys (``to_person_env_key``) whose values are secrets;
+    # IDs and file paths stay in plain configuration. GITHUB_PRIVATE_KEY holds
+    # the App PEM content itself and is never published to the environment
+    # (see ``secret_store.is_environment_secret``).
+    SECRET_ENV_SUFFIXES: ClassVar[tuple[str, ...]] = (
+        "GITHUB_ACCESS_TOKEN",
+        "GITHUB_PRIVATE_KEY",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+    )
+
     def to_person_env_key(self, key) -> str:
         sanitized_id = self.person_id.replace("-", "_")
         return f"{sanitized_id.upper()}_{key.upper()}"

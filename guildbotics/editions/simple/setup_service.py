@@ -8,11 +8,20 @@ from typing import Any, cast
 from urllib.parse import quote
 
 import requests  # type: ignore
-from dotenv import dotenv_values
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
+from guildbotics.entities.team import Person
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
+from guildbotics.utils.secret_store import (
+    KEYRING_BACKEND,
+    KeyringSecretStore,
+    SecretStore,
+    read_env_values,
+    resolve_secret_store,
+    write_env_text,
+    write_env_values,
+)
 
 BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
@@ -317,6 +326,7 @@ class PersonConfigSnapshot(BaseModel):
     has_github_installation_id: bool = False
     has_github_app_id: bool = False
     has_github_private_key_path: bool = False
+    has_github_private_key: bool = False
     has_github_access_token: bool = False
     slack_user_id: str = ""
     has_slack_bot_token: bool = False
@@ -362,11 +372,10 @@ class SimpleProjectSetupService:
 
         from guildbotics.intelligences.llm_providers import provider_env_keys
 
-        env_values = (
-            dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
-        )
+        store = resolve_secret_store(config_dir, env_file_path)
+        env_values = read_env_values(env_file_path)
         provider_api_keys = {
-            provider: bool(env_values.get(env_var))
+            provider: bool(store.get(env_var) or env_values.get(env_var))
             for provider, env_var in provider_env_keys(config_dir).items()
         }
         return ProjectConfigSnapshot(
@@ -441,18 +450,46 @@ class SimpleProjectSetupService:
         files.extend(self.ensure_sample_commands(config.config_dir, config.language))
 
         if config.env_file_option != "skip":
-            env_file = self.render_env_file(config)
-            config.env_file_path.parent.mkdir(parents=True, exist_ok=True)
+            # Initial setup decides the workspace's secret backend: the OS
+            # keychain when one is available, otherwise the legacy .env file.
+            store = resolve_secret_store(
+                config.config_dir, config.env_file_path, create_default=True
+            )
+            if isinstance(store, KeyringSecretStore):
+                # Pin the backend even when no API key is entered yet, so
+                # member tokens added later also land in the keychain.
+                store.ensure_initialized()
+                files.append(CreatedFile(path=store.location, action="create"))
+            self._store_provider_api_keys(config, store)
+            env_file = self.render_env_file(config, store)
             if config.env_file_option == "overwrite":
-                config.env_file_path.write_text(env_file)
+                write_env_text(config.env_file_path, env_file)
                 files.append(CreatedFile(path=config.env_file_path, action="create"))
             elif config.env_file_option == "append":
-                config.env_file_path.write_text(
-                    f"{config.env_file_path.read_text()}\n\n{env_file}"
+                write_env_text(
+                    config.env_file_path,
+                    f"{config.env_file_path.read_text()}\n\n{env_file}",
                 )
                 files.append(CreatedFile(path=config.env_file_path, action="append"))
 
         return ProjectSetupResult(files=files)
+
+    def _store_provider_api_keys(
+        self, config: ProjectSetupInput | ProjectUpdateInput, store: SecretStore
+    ) -> None:
+        """Store non-empty provider API keys in the OS keychain.
+
+        With the legacy .env backend this is a no-op; the keys are written as
+        part of the .env content instead.
+        """
+        if store.backend != KEYRING_BACKEND:
+            return
+        from guildbotics.intelligences.llm_providers import provider_env_keys
+
+        env_keys = provider_env_keys(config.config_dir)
+        for provider, value in config.provider_api_keys.items():
+            if value and provider in env_keys:
+                store.set(env_keys[provider], value)
 
     def ensure_sample_commands(
         self, config_dir: Path, language: str
@@ -556,22 +593,14 @@ class SimpleProjectSetupService:
             if value and provider in env_keys
         }
         if env_updates:
-            env_file_existed = config.env_file_path.exists()
-            env_values = (
-                dict(dotenv_values(config.env_file_path)) if env_file_existed else {}
-            )
-            env_values.update(env_updates)
-            lines = [
-                f"{key}={value}"
-                for key, value in env_values.items()
-                if value is not None
-            ]
-            config.env_file_path.parent.mkdir(parents=True, exist_ok=True)
-            config.env_file_path.write_text("\n".join(lines))
+            store = resolve_secret_store(config.config_dir, config.env_file_path)
+            location_existed = store.location.exists()
+            for key, value in env_updates.items():
+                store.set(key, value)
             files.append(
                 CreatedFile(
-                    path=config.env_file_path,
-                    action="update" if env_file_existed else "create",
+                    path=store.location,
+                    action="update" if location_existed else "create",
                 )
             )
 
@@ -600,7 +629,12 @@ class SimpleProjectSetupService:
             }
         return project
 
-    def render_env_file(self, config: ProjectSetupInput) -> str:
+    def render_env_file(self, config: ProjectSetupInput, store: SecretStore) -> str:
+        tail = (TEMPLATE_PATH / ".env.example").read_text()
+        if store.backend == KEYRING_BACKEND:
+            # API keys live in the OS keychain; the .env keeps only the
+            # non-secret sample settings.
+            return tail
         from guildbotics.intelligences.llm_providers import discover_llm_providers
 
         key_lines = [
@@ -608,7 +642,6 @@ class SimpleProjectSetupService:
             for provider in discover_llm_providers(config.config_dir)
             if provider.api_key_env
         ]
-        tail = (TEMPLATE_PATH / ".env.example").read_text()
         return "\n".join(key_lines) + "\n\n" + tail
 
     def _load_mapping(self, file_path: Path, template_path: Path) -> dict:
@@ -698,8 +731,13 @@ class SimplePersonSetupService:
                 )
                 channel_participation[channel_name] = _chat_participation(participation)
 
-        env = self._read_env_values(env_file_path)
+        store = resolve_secret_store(config_dir, env_file_path)
+        env = read_env_values(env_file_path)
         env_prefix = self._person_env_prefix(person_id)
+
+        def secret_value(key: str) -> str:
+            # Fall back to .env for secrets that predate keychain migration.
+            return store.get(key) or env.get(key) or ""
 
         avatar_timestamp = 0
         from guildbotics.utils.avatar import find_avatar_file
@@ -735,10 +773,15 @@ class SimplePersonSetupService:
             has_github_private_key_path=bool(
                 env.get(f"{env_prefix}_GITHUB_PRIVATE_KEY_PATH")
             ),
-            has_github_access_token=bool(env.get(f"{env_prefix}_GITHUB_ACCESS_TOKEN")),
+            has_github_private_key=bool(
+                secret_value(f"{env_prefix}_GITHUB_PRIVATE_KEY")
+            ),
+            has_github_access_token=bool(
+                secret_value(f"{env_prefix}_GITHUB_ACCESS_TOKEN")
+            ),
             slack_user_id=str(account_info.get("slack_user_id", "")),
-            has_slack_bot_token=bool(env.get(f"{env_prefix}_SLACK_BOT_TOKEN")),
-            has_slack_app_token=bool(env.get(f"{env_prefix}_SLACK_APP_TOKEN")),
+            has_slack_bot_token=bool(secret_value(f"{env_prefix}_SLACK_BOT_TOKEN")),
+            has_slack_app_token=bool(secret_value(f"{env_prefix}_SLACK_APP_TOKEN")),
             slack_channels=channels,
             slack_channel_participation=channel_participation,
             routine_commands=[
@@ -820,10 +863,30 @@ class SimplePersonSetupService:
         )
         files.append(CreatedFile(path=person_config_file, action="create"))
 
-        if config.append_env_file and env_vars:
-            config.env_file_path.write_text(
+        store = resolve_secret_store(config.config_dir, config.env_file_path)
+        plain_vars = env_vars
+        if store.backend == KEYRING_BACKEND:
+            secrets, plain_vars = self._split_secret_env_vars(
+                config.person_id, env_vars
+            )
+            for key, value in secrets.items():
+                store.set(key, value)
+            stored_pem = self._store_private_key_content(store, config)
+            if stored_pem:
+                # The keychain holds the key content, so the plaintext file
+                # (and its path entry) is no longer part of the configuration.
+                path_key = self._private_key_path_env_key(config.person_id)
+                plain_vars = [
+                    line for line in plain_vars if not line.startswith(f"{path_key}=")
+                ]
+            if secrets or stored_pem:
+                files.append(CreatedFile(path=store.location, action="update"))
+
+        if config.append_env_file and plain_vars:
+            write_env_text(
+                config.env_file_path,
                 f"{config.env_file_path.read_text()}\n\n# {config.person_id}\n"
-                + "\n".join(env_vars)
+                + "\n".join(plain_vars),
             )
             files.append(CreatedFile(path=config.env_file_path, action="append"))
 
@@ -855,8 +918,9 @@ class SimplePersonSetupService:
         save_yaml_file(person_file, self.build_person_config(config))
         files.append(CreatedFile(path=person_file, action="update"))
 
+        store = resolve_secret_store(config.config_dir, config.env_file_path)
         env_file_existed = config.env_file_path.exists()
-        env_values = self._read_env_values(config.env_file_path)
+        env_values = read_env_values(config.env_file_path)
         preserved_env_values = self._renamed_existing_person_env_values(
             env_values,
             original_person_id=config.original_person_id,
@@ -868,13 +932,43 @@ class SimplePersonSetupService:
         for line in self.build_environment_variables(config):
             key, _, value = line.partition("=")
             env_values[key] = value
-        self._write_env_values(config.env_file_path, env_values)
+
+        pending_secrets: dict[str, str] = {}
+        if store.backend == KEYRING_BACKEND:
+            old_prefix = self._person_env_prefix(config.original_person_id)
+            new_prefix = self._person_env_prefix(config.person_id)
+            for suffix in Person.SECRET_ENV_SUFFIXES:
+                old_key = f"{old_prefix}_{suffix}"
+                new_key = f"{new_prefix}_{suffix}"
+                # Carry keychain-held secrets across a person rename.
+                if old_key != new_key:
+                    stored_value = store.get(old_key)
+                    if stored_value is not None:
+                        pending_secrets[new_key] = stored_value
+                        store.delete(old_key)
+                # Secrets headed for .env (legacy values or new input) go to
+                # the keychain instead; newer values win over carried ones.
+                if new_key in env_values:
+                    pending_secrets[new_key] = env_values.pop(new_key)
+            self._store_private_key_content(store, config)
+            has_key_content = (
+                f"{new_prefix}_GITHUB_PRIVATE_KEY" in pending_secrets
+                or store.get(f"{new_prefix}_GITHUB_PRIVATE_KEY") is not None
+            )
+            if has_key_content:
+                env_values.pop(self._private_key_path_env_key(config.person_id), None)
+
+        write_env_values(config.env_file_path, env_values)
         files.append(
             CreatedFile(
                 path=config.env_file_path,
                 action="update" if env_file_existed else "create",
             )
         )
+        for key, value in pending_secrets.items():
+            store.set(key, value)
+        if pending_secrets:
+            files.append(CreatedFile(path=store.location, action="update"))
 
         return PersonSetupResult(
             files=files,
@@ -896,15 +990,25 @@ class SimplePersonSetupService:
         shutil.rmtree(person_dir)
         files.append(CreatedFile(path=person_file, action="delete"))
 
-        env_values = self._read_env_values(env_file_path)
+        env_values = read_env_values(env_file_path)
         removed = False
         for key in self._managed_person_env_keys(person_id):
             if key in env_values:
                 removed = True
                 env_values.pop(key, None)
         if removed or env_file_path.exists():
-            self._write_env_values(env_file_path, env_values)
+            write_env_values(env_file_path, env_values)
             files.append(CreatedFile(path=env_file_path, action="update"))
+
+        store = resolve_secret_store(config_dir, env_file_path)
+        if store.backend == KEYRING_BACKEND:
+            deleted = False
+            for key in self._person_secret_env_keys(person_id):
+                if store.get(key) is not None:
+                    store.delete(key)
+                    deleted = True
+            if deleted:
+                files.append(CreatedFile(path=store.location, action="update"))
         return PersonSetupResult(files=files, masked_environment_variables=[])
 
     def build_person_config(
@@ -1058,6 +1162,47 @@ class SimplePersonSetupService:
     def _person_env_prefix(self, person_id: str) -> str:
         return person_id.replace("-", "_").upper()
 
+    def _person_secret_env_keys(self, person_id: str) -> list[str]:
+        prefix = self._person_env_prefix(person_id)
+        return [f"{prefix}_{suffix}" for suffix in Person.SECRET_ENV_SUFFIXES]
+
+    def _private_key_path_env_key(self, person_id: str) -> str:
+        return f"{self._person_env_prefix(person_id)}_GITHUB_PRIVATE_KEY_PATH"
+
+    def _store_private_key_content(
+        self, store: SecretStore, config: PersonSetupInput
+    ) -> bool:
+        """Copy the GitHub App PEM into the keychain.
+
+        Runtime prefers this content over the ``*_GITHUB_PRIVATE_KEY_PATH``
+        file, so the plaintext PEM can be deleted afterwards. An unreadable
+        path is ignored; the path entry in .env stays as the fallback.
+        """
+        if not config.github_private_key_path:
+            return False
+        try:
+            pem = Path(config.github_private_key_path).expanduser().read_text()
+        except OSError:
+            return False
+        prefix = self._person_env_prefix(config.person_id)
+        store.set(f"{prefix}_GITHUB_PRIVATE_KEY", pem)
+        return True
+
+    def _split_secret_env_vars(
+        self, person_id: str, env_vars: list[str]
+    ) -> tuple[dict[str, str], list[str]]:
+        """Split ``KEY=VALUE`` lines into secret values and plain lines."""
+        secret_keys = set(self._person_secret_env_keys(person_id))
+        secrets: dict[str, str] = {}
+        plain: list[str] = []
+        for line in env_vars:
+            key, _, value = line.partition("=")
+            if key in secret_keys:
+                secrets[key] = value
+            else:
+                plain.append(line)
+        return secrets, plain
+
     def _managed_person_env_keys(self, person_id: str) -> list[str]:
         prefix = self._person_env_prefix(person_id)
         return [
@@ -1085,23 +1230,6 @@ class SimplePersonSetupService:
             suffix = old_key.removeprefix(f"{old_prefix}_")
             preserved[f"{new_prefix}_{suffix}"] = env_values[old_key]
         return preserved
-
-    def _read_env_values(self, env_file_path: Path) -> dict[str, str]:
-        raw_values = (
-            dict(dotenv_values(env_file_path)) if env_file_path.exists() else {}
-        )
-        return {
-            str(key): str(value)
-            for key, value in raw_values.items()
-            if value is not None
-        }
-
-    def _write_env_values(
-        self, env_file_path: Path, env_values: dict[str, str]
-    ) -> None:
-        env_file_path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [f"{key}={value}" for key, value in env_values.items()]
-        env_file_path.write_text("\n".join(lines))
 
 
 def _normalize_slack_channel_ref(channel: str) -> str:

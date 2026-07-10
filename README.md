@@ -67,7 +67,8 @@ GuildBotics enables you to:
   - [6.4. Capabilities](#64-capabilities)
 - [7. Reference](#7-reference)
   - [7.1. Account-Related Environment Variables](#71-account-related-environment-variables)
-  - [7.2. Configuration Files](#72-configuration-files)
+  - [7.2. Secret Storage](#72-secret-storage)
+  - [7.3. Configuration Files](#73-configuration-files)
 - [8. Troubleshooting](#8-troubleshooting)
 - [9. Contributing](#9-contributing)
 
@@ -95,9 +96,11 @@ GuildBotics enables you to:
 
 GuildBotics is configured through the **GuildBotics Desktop app (GUI)**, and run through the
 **`guildbotics` CLI**. The desktop app bundles the CLI and installs a managed copy for AI
-CLI tools on first launch. Setup writes plain config files (`.env` and `.guildbotics/config/...`),
-so once configured you can run the CLI on any machine, including headless servers, by copying
-those files over.
+CLI tools on first launch. Setup writes plain config files (`.env` and `.guildbotics/config/...`)
+while secrets such as API keys and account tokens go to the OS keychain when one is available
+(see [7.2. Secret Storage](#72-secret-storage)). Once configured you can run the CLI on any
+machine, including headless servers, by copying those files over and transferring secrets with
+`guildbotics secrets export` / `import`.
 
 ```bash
 # 1. Configure with the GUI
@@ -176,13 +179,18 @@ When you launch the app, the **Project** settings open first. Configure:
 In GuildBotics, a **workspace** is the folder selected as the working location for a project.
 GuildBotics writes configuration files such as the following into the workspace:
 
-- `.env`: Environment variable settings
+- `.env`: Environment variable settings (non-secret settings such as log level)
+- `.guildbotics/config/secrets.yml`: Names of the secrets stored in the OS keychain (no values)
 - `.guildbotics/config/team/project.yml`: Project definition
 - `.guildbotics/config/intelligences/`: Brain and AI CLI tool settings
 
-These are all plain text configuration files.
-Because GuildBotics stores all settings in these files, you can copy the workspace folder to a
-GUI-less environment such as a server and operate it with only the `guildbotics` CLI.
+These are all plain text configuration files, and none of them contains secret values when the
+OS keychain is in use — API keys and account tokens are stored in the keychain and only their
+key names are recorded in `secrets.yml` (see [7.2. Secret Storage](#72-secret-storage)).
+Because GuildBotics stores all non-secret settings in these files, you can copy the workspace
+folder to a GUI-less environment such as a server and operate it with only the `guildbotics`
+CLI; move the secrets separately with `guildbotics secrets export` / `import`, or provide them
+as environment variables.
 
 The selected workspace is recorded in `~/.guildbotics/data/active-workspace.json`.
 Use the following commands to inspect or change the workspace from the CLI:
@@ -661,8 +669,9 @@ This section describes how to use the default `ticket_driven_workflow` which int
   `guildbotics member`.
 - Configure each AI member's GitHub credentials in GuildBotics. GitHub/git writes use the
   assigned member's configured machine-user token or GitHub App installation, not the local
-  `gh auth` user. Credential-required member commands load these values from
-  the selected workspace `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the current directory.
+  `gh auth` user. Credential-required member commands load these values from the selected
+  workspace's OS keychain entries and `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the
+  current directory.
 - For interactive AI CLI tool sessions, launch the GuildBotics Desktop app at least
   once after selecting the workspace. The app installs the GuildBotics skill and managed CLI
   under `~/.guildbotics/bin/guildbotics`. Configure the client to reject or require approval
@@ -802,7 +811,8 @@ With the ticket-driven workflow, you can:
 - `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: PAT for machine accounts/proxy agents
 - `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: For GitHub Apps
 
-If a `.env` file exists in the current directory, it is loaded automatically.
+If a `.env` file exists in the current directory, it is loaded automatically, and secrets held
+in the OS keychain (see [7.2. Secret Storage](#72-secret-storage)) are injected the same way.
 `guildbotics member` commands first honor `--workspace <dir>`. Without that option, they use the
 selected workspace recorded by the desktop app or `guildbotics workspace use`, unless the command is
 already running inside a configured workspace. The selected workspace sets `GUILDBOTICS_CONFIG_DIR`
@@ -824,7 +834,60 @@ set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
 workspace-specific run data. If it is set in the process environment at startup and the workspace
 `.env` does not define it, that process uses the startup value as its shared run-data directory.
 
-## 7.2. Configuration Files
+## 7.2. Secret Storage
+
+GuildBotics keeps secrets (LLM API keys and the account tokens listed above) out of plaintext
+files whenever possible:
+
+- **OS keychain (default for new workspaces):** When a functional keychain is available —
+  macOS Keychain, Windows Credential Manager, or Linux Secret Service (GNOME Keyring etc.) —
+  setup stores secret values there. The workspace keeps only a non-secret index file,
+  `.guildbotics/config/secrets.yml`, that names the stored keys.
+- **`.env` fallback:** Workspaces without that index file — including all workspaces created
+  before this feature — keep using the workspace `.env`. This remains the supported mode for
+  headless servers and CI. `.env` files written by GuildBotics get owner-only (`0600`)
+  permissions.
+- **Precedence:** real environment variable > OS keychain > `.env`. Server deployments can
+  always inject secrets as plain environment variables, regardless of the backend.
+- **GitHub App private keys:** `guildbotics secrets migrate` (and member setup on a
+  keychain-backed workspace) also copies the PEM content referenced by
+  `*_GITHUB_PRIVATE_KEY_PATH` into the keychain and removes the path entry from `.env` —
+  the stored content replaces the file, so all that remains is deleting the plaintext
+  `.pem` file yourself. Unlike other secrets, the key content is never published to
+  environment variables — it is read from the keychain only at the moment a GitHub App
+  token is issued, so AI CLI tool subprocesses never see it.
+- **`GUILDBOTICS_SECRETS_BACKEND`:** set to `keyring` or `env-file` to force a backend for a
+  single process (useful for CI and scripted environments).
+
+Manage secrets with the `guildbotics secrets` CLI:
+
+```bash
+guildbotics secrets status                 # backend in use and keychain availability
+guildbotics secrets migrate                # move secrets from .env into the OS keychain
+guildbotics secrets list                   # stored key names (values are never printed)
+guildbotics secrets set KEY                # add or update one secret (hidden prompt)
+guildbotics secrets delete KEY             # remove one secret
+guildbotics secrets export --file s.env    # dotenv-format export for moving machines
+guildbotics secrets import s.env           # import on the target machine
+```
+
+Secrets are stored per workspace (the keychain entries are namespaced by the `store_id` in
+`secrets.yml`). Like `guildbotics member`, the target workspace can be set with `--workspace`
+before the subcommand; without it, the current directory's workspace or the selected active
+workspace is used. `guildbotics secrets status` always prints the resolved workspace.
+
+```bash
+guildbotics secrets --workspace /path/to/workspace status
+guildbotics secrets --workspace /path/to/workspace migrate
+```
+
+To move a workspace to another machine, copy the workspace folder, then run
+`guildbotics secrets export --file ...` on the source machine and
+`guildbotics secrets import ...` on the target machine (delete the export file afterwards).
+Keychain entries themselves never leave the machine. For servers without a keychain, keep the
+values in `.env` or provide them as environment variables instead.
+
+## 7.3. Configuration Files
 
 **Project Configuration** (`team/project.yml`):
 - `name`: Project name

@@ -17,6 +17,7 @@ from guildbotics.intelligences.cli_agents import (
     resolve_default_cli_executable,
 )
 from guildbotics.intelligences.llm_providers import provider_env_keys
+from guildbotics.utils.env_loader import workspace_secret_store
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
 
@@ -210,10 +211,19 @@ class VerifyService:
             keys = self._github_required_keys(member)
             for key in keys:
                 env_key = member.to_person_env_key(key)
+                configured = self._has_env(env_key, env)
+                if not configured and key == "github_private_key_path":
+                    # The App key may live in the OS keychain as content
+                    # instead of a PEM file path.
+                    configured = bool(
+                        workspace_secret_store().get(
+                            member.to_person_env_key("github_private_key")
+                        )
+                    )
                 checks.append(
                     self._check(
                         "github_credential",
-                        self._has_env(env_key, env),
+                        configured,
                         f"{env_key} is configured.",
                         f"{env_key} is not configured.",
                         target=env_key,

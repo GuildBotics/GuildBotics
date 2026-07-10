@@ -16,6 +16,7 @@ from pathlib import Path
 import click
 
 from guildbotics.cli.member import member
+from guildbotics.cli.secrets import secrets
 from guildbotics.cli.workspace import workspace
 from guildbotics.drivers import (
     CommandError,
@@ -117,6 +118,7 @@ def main() -> None:
 
 
 main.add_command(member)
+main.add_command(secrets)
 main.add_command(workspace)
 
 

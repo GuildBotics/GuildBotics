@@ -101,6 +101,9 @@ const backendEnv = { ...process.env, HOME: homeDir };
 // Force the workspace config layout (`<cwd>/.guildbotics/config`) by removing any
 // inherited override; this yields config-status `primary_config_location=workspace`.
 delete backendEnv.GUILDBOTICS_CONFIG_DIR;
+// Keep e2e secrets in the temp workspace .env instead of polluting the
+// developer's OS keychain with throwaway entries.
+backendEnv.GUILDBOTICS_SECRETS_BACKEND = "env-file";
 // Offline-LLM stacks must NOT inherit a developer's real LLM key from the
 // shell; otherwise the diagnostics missing-key short-circuit cannot be
 // asserted deterministically.
