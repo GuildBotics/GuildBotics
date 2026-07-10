@@ -1,6 +1,5 @@
 from datetime import UTC, datetime
 
-from guildbotics.app_api import runtime as runtime_module
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities.team import Person, Project, Team
@@ -16,11 +15,12 @@ def test_activity_refresh_forces_on_entry_and_throttles_normal_reads(
     team = Team(project=Project(), members=[Person(person_id="aiko", name="Aiko")])
     calls: list[Team] = []
 
-    async def refresh(candidate: Team, _start: datetime, _end: datetime) -> int:
+    def refresh(
+        candidate: Team, _start: datetime, _end: datetime, _period: tuple[str, str]
+    ):
         calls.append(candidate)
-        return 0
 
-    monkeypatch.setattr(runtime_module, "refresh_github_activity_events", refresh)
+    monkeypatch.setattr(runtime, "_sync_activity_events", refresh)
 
     class ImmediateThread:
         def __init__(self, *, target, args, **_kwargs):
@@ -29,7 +29,7 @@ def test_activity_refresh_forces_on_entry_and_throttles_normal_reads(
         def start(self):
             self.target(*self.args)
 
-    monkeypatch.setattr(runtime_module.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr("guildbotics.app_api.runtime.threading.Thread", ImmediateThread)
     monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path / "data"))
 
     start = datetime(2026, 7, 10, tzinfo=UTC)

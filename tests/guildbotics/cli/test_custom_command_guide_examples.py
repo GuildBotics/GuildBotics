@@ -1,3 +1,4 @@
+import asyncio
 import textwrap
 from pathlib import Path
 
@@ -68,7 +69,6 @@ def test_named_args_placeholders(tmp_path, monkeypatch):
     )
 
     ctx = _make_context("Hello")
-    ex = CommandRunner(ctx, "translate", ["source=英語", "target=日本語"])
     # brain: default in absence of front matter, so result is produced by DummyBrain
     # We only assert the parameter expansion occurs at prompt-level for `none` brains.
     # To keep deterministic, write another prompt using none brain.
@@ -82,12 +82,7 @@ def test_named_args_placeholders(tmp_path, monkeypatch):
         """,
     )
     ex2 = CommandRunner(ctx, "translate2", ["source=英語", "target=日本語"])
-    out = pytest.run(async_fn=ex2.run) if hasattr(pytest, "run") else None  # type: ignore[attr-defined]
-    # Fallback to explicit event loop if helper not available
-    if out is None:
-        import asyncio
-
-        out = asyncio.get_event_loop().run_until_complete(ex2.run())
+    out = asyncio.run(ex2.run())
     assert "英語から日本語に翻訳してください" in out
 
 
@@ -626,6 +621,6 @@ async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
     assert "- [ ] Refactor flaky tests (priority: 2)" in out
     shared = ex._context.shared_state
     # Auto-generated name for the second command (the first inline prompt)
-    assert any(k.startswith("coverage__") for k in shared.keys())
+    assert any(key.startswith("coverage__") for key in shared)
     # Named result from the third command should exist
     assert "task_list" in shared and isinstance(shared["task_list"], dict)
