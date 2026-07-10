@@ -769,8 +769,12 @@ class AppRuntime:
             if not force and end <= datetime.now(UTC) and period in completed_weeks:
                 return
             now = time.monotonic()
-            last_attempt = self._activity_sync_attempts.get(period, 0.0)
-            if not force and now - last_attempt < ACTIVITY_SYNC_COOLDOWN_SECONDS:
+            last_attempt = self._activity_sync_attempts.get(period)
+            if (
+                not force
+                and last_attempt is not None
+                and now - last_attempt < ACTIVITY_SYNC_COOLDOWN_SECONDS
+            ):
                 return
             # Count failed attempts too: a bad credential must not turn the UI's
             # five-second history refresh into a five-second GitHub retry loop.
