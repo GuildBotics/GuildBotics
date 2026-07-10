@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
@@ -32,11 +32,11 @@ def test_activity_refresh_forces_on_entry_and_throttles_normal_reads(
     monkeypatch.setattr("guildbotics.app_api.runtime.threading.Thread", ImmediateThread)
     monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path / "data"))
 
-    start = datetime(2026, 7, 10, tzinfo=UTC)
-    end = datetime(2026, 7, 11, tzinfo=UTC)
+    start = datetime.now(UTC) + timedelta(days=7)
+    end = start + timedelta(days=1)
     runtime._refresh_activity_events(team, start, end, force=False)
     runtime._refresh_activity_events(team, start, end, force=False)
     runtime._refresh_activity_events(team, start, end, force=True)
-    runtime._refresh_activity_events(team, start, end.replace(day=12), force=False)
+    runtime._refresh_activity_events(team, start, end + timedelta(days=1), force=False)
 
     assert calls == [team, team, team]
