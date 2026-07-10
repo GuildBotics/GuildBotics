@@ -773,10 +773,20 @@ export async function getActivityHistory(params: {
   start: string;
   end: string;
   limit?: number;
+  refresh?: boolean;
+  syncStart?: string;
+  syncEnd?: string;
 }): Promise<ActivityHistoryResponse> {
   const search = new URLSearchParams({ start: params.start, end: params.end });
   if (params.limit) {
     search.set("limit", String(params.limit));
+  }
+  if (params.refresh) {
+    search.set("refresh", "true");
+  }
+  if (params.syncStart && params.syncEnd) {
+    search.set("sync_start", params.syncStart);
+    search.set("sync_end", params.syncEnd);
   }
   return request(`/activity/history?${search.toString()}`);
 }

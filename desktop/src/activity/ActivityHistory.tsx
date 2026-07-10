@@ -13,7 +13,7 @@ import {
   type FloatingPosition,
 } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import {
@@ -29,9 +29,9 @@ import {
   GitCommitHorizontal,
   GitMerge,
   GitPullRequest,
+  History,
   Search,
   Upload,
-  Users,
 } from "lucide-react";
 
 import {
@@ -53,6 +53,8 @@ const SESSION_MODE_ORDER: ActivitySessionMode[] = ["workflow", "interactive"];
 const HOURS = ["03:00", "06:00", "09:00", "12:00", "15:00", "18:00", "21:00"];
 const ACTIVITY_LIMIT = 1000;
 const ACTIVITY_BLOCK_MINUTES = 60;
+const EVENT_STACK_WINDOW_MS = 60 * 1000;
+const EVENT_STACK_GAP_PX = 18;
 
 // Week-view row height mirrors the stacked-bar geometry of `.activity-week-day`
 // in styles.css: each bar is WEEK_BLOCK_HEIGHT_PX tall, bars are separated by
@@ -88,15 +90,25 @@ export function ActivityHistoryPage() {
   const [view, setView] = useState<ActivityView>("day");
   const [baseDate, setBaseDate] = useState(() => startOfLocalDay(new Date()));
   const [query, setQuery] = useState("");
+  const forceRefresh = useRef(true);
   const range = useMemo(() => activityRange(baseDate, view), [baseDate, view]);
+  const syncRange = useMemo(() => activityRange(baseDate, "week"), [baseDate]);
   const history = useQuery({
     queryKey: ["activity-history", range.start.toISOString(), range.end.toISOString()],
-    queryFn: () =>
-      getActivityHistory({
-        start: range.start.toISOString(),
-        end: range.end.toISOString(),
-        limit: ACTIVITY_LIMIT,
-      }),
+    queryFn: async () => {
+      try {
+        return await getActivityHistory({
+          start: range.start.toISOString(),
+          end: range.end.toISOString(),
+          limit: ACTIVITY_LIMIT,
+          refresh: forceRefresh.current,
+          syncStart: syncRange.start.toISOString(),
+          syncEnd: syncRange.end.toISOString(),
+        });
+      } finally {
+        forceRefresh.current = false;
+      }
+    },
     refetchInterval: 5000,
   });
   const data = history.data ?? emptyActivityHistory(range);
@@ -239,17 +251,19 @@ function ActivityChart({
               ))}
         </div>
       </div>
-      <ActivityTimelineRow
-        label={t("activity.events")}
-        avatar={<Users size={15} />}
-        sessions={[]}
-        events={sharedEvents}
-        range={range}
-        view={view}
-        now={now}
-        matches={matches}
-        team
-      />
+      {view === "day" ? (
+        <ActivityTimelineRow
+          label={t("activity.events")}
+          avatar={<History size={15} />}
+          sessions={[]}
+          events={sharedEvents}
+          range={range}
+          view={view}
+          now={now}
+          matches={matches}
+          team
+        />
+      ) : null}
       {data.members.map((member) => (
         <ActivityTimelineRow
           key={member.person_id}
@@ -296,9 +310,18 @@ function ActivityTimelineRow({
   const { t } = useTranslation();
   const blocks = buildActivityBlocks(sessions);
   const weekSessionCount = view === "week" ? maxWeekSessionCount(sessions, range) : 0;
-  const rowMinHeight = team ? 38 : view === "week" ? weekRowMinHeight(weekSessionCount) : 86;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
-  const visibleEvents = view === "week" && !team ? [] : events;
+  const eventTops = stackedEventTops(events, eventTop);
+  const eventRows = Math.max(
+    1,
+    ...Array.from(eventTops.values(), (top) => (top - eventTop) / EVENT_STACK_GAP_PX + 1),
+  );
+  const rowMinHeight = team
+    ? Math.max(38, eventTop + eventRows * EVENT_STACK_GAP_PX + 8)
+    : view === "week"
+      ? weekRowMinHeight(weekSessionCount)
+      : Math.max(86, eventTop + eventRows * EVENT_STACK_GAP_PX + 8);
+  const visibleEvents = view === "week" ? [] : events;
   const activeRateLimit = member ? activeRateLimitForSessions(sessions, now ?? new Date()) : null;
   const activeRateLimitReset = activeRateLimit ? formatRateLimitReset(activeRateLimit) : "";
   return (
@@ -347,7 +370,7 @@ function ActivityTimelineRow({
             range={range}
             matched={matches.eventIds.has(event.id)}
             searchActive={matches.active}
-            top={eventTop}
+            top={eventTops.get(event.id) ?? eventTop}
           />
         ))}
         {view === "day" && now ? (
@@ -356,6 +379,24 @@ function ActivityTimelineRow({
       </div>
     </div>
   );
+}
+
+export function stackedEventTops(
+  events: ActivityHistoryEvent[],
+  baseTop: number,
+): Map<string, number> {
+  const tops = new Map<string, number>();
+  let previousTimestamp = Number.NEGATIVE_INFINITY;
+  let stackIndex = 0;
+  for (const event of [...events].sort(
+    (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
+  )) {
+    const timestamp = new Date(event.timestamp).getTime();
+    stackIndex = timestamp - previousTimestamp <= EVENT_STACK_WINDOW_MS ? stackIndex + 1 : 0;
+    tops.set(event.id, baseTop + stackIndex * EVENT_STACK_GAP_PX);
+    previousTimestamp = timestamp;
+  }
+  return tops;
 }
 
 // Sub-label under the member name: the AI CLI tool the member runs (matching the

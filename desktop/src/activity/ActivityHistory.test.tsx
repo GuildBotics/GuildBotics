@@ -15,6 +15,7 @@ import {
   buildActivityBlocks,
   matchActivityHistory,
   orderedActivityLinks,
+  stackedEventTops,
   weekRowMinHeight,
 } from "./ActivityHistory";
 import { getActivityHistory, getCliAgentDetections, getIntelligenceConfig } from "../api/client";
@@ -144,6 +145,8 @@ describe("ActivityHistoryPage", () => {
     expect(
       await screen.findByRole("button", { name: "Improve activity history event context" }),
     ).toBeInTheDocument();
+    expect(document.querySelector(".lucide-history")).toBeInTheDocument();
+    expect(getActivityHistory).toHaveBeenCalledWith(expect.objectContaining({ refresh: true }));
   });
 
   it("shows each member's AI CLI tool under the name and Human for human members", async () => {
@@ -264,7 +267,7 @@ describe("ActivityHistoryPage", () => {
     expect(container.querySelector(".activity-now-line")).toBe(null);
   });
 
-  it("hides member event pins in week view", async () => {
+  it("hides all event pins in week view", async () => {
     const user = userEvent.setup();
     renderActivity();
 
@@ -276,7 +279,7 @@ describe("ActivityHistoryPage", () => {
     expect(screen.queryByRole("button", { name: "Improve activity history event context" })).toBe(
       null,
     );
-    expect(screen.getByRole("button", { name: "PR #7 Merged" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "PR #7 Merged" })).toBe(null);
   });
 });
 
@@ -286,6 +289,21 @@ describe("activityRange", () => {
 
     expect(range.start.getDay()).toBe(1);
     expect(range.end.getTime() - range.start.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+});
+
+describe("stackedEventTops", () => {
+  it("stacks near-simultaneous mixed-offset timestamps in chronological order", () => {
+    const tops = stackedEventTops(
+      [
+        { ...ACTIVITY_FIXTURE.events[0], id: "later", timestamp: "2026-07-01T01:01:00Z" },
+        { ...ACTIVITY_FIXTURE.events[0], id: "first", timestamp: "2026-07-01T10:00:30+09:00" },
+      ],
+      10,
+    );
+
+    expect(tops.get("first")).toBe(10);
+    expect(tops.get("later")).toBe(28);
   });
 });
 
