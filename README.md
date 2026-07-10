@@ -33,7 +33,7 @@ GuildBotics enables you to:
 - [4. Installation](#4-installation)
 - [5. Basic Usage](#5-basic-usage)
   - [5.1. Initial Setup](#51-initial-setup)
-  - [5.2. Add Members](#52-add-members)
+  - [5.2. Other Settings](#52-other-settings)
   - [5.3. Run Commands](#53-run-commands)
     - [5.3.1. Command Types and Placement](#531-command-types-and-placement)
     - [5.3.2. Command Execution Methods](#532-command-execution-methods)
@@ -240,21 +240,21 @@ GuildBotics supports multiple types of commands. Commands should be placed in yo
 
 **Command Placement**:
 
-Commands can be placed in any of the following directories (in priority order):
+Commands are resolved from the following locations (in priority order):
 
-1. **Built-in workflows**: Located in `guildbotics/templates/` within the package
-   - Example: `workflows/ticket_driven_workflow`
-
-2. **Per-member commands**: `.guildbotics/config/team/members/<person_id>/commands/`
+1. **Per-member commands**: `.guildbotics/config/team/members/<person_id>/commands/`
    - Commands specific to a particular member
 
-3. **Project-local commands**: `.guildbotics/config/commands/`
+2. **Project-local commands**: `.guildbotics/config/commands/`
    - Commands shared across the project
 
-4. **Global commands**: `~/.guildbotics/config/commands/`
-   - Commands shared across all projects
+3. **Built-in commands**: Located in `guildbotics/templates/` within the package (fallback)
+   - Example: `workflows/ticket_driven_workflow`
 
-**Simple example** (`~/.guildbotics/config/commands/translate.md`):
+The configuration directory is the workspace's `.guildbotics/config` by default and can be
+overridden with the `GUILDBOTICS_CONFIG_DIR` environment variable.
+
+**Simple example** (`.guildbotics/config/commands/translate.md`):
 ```markdown
 If the following text is in ${1}, translate it to ${2}; if it is in ${2}, translate it to ${1}:
 ```
@@ -749,7 +749,7 @@ lanes, while statuses placed **before** ready (for example `Backlog`) or **at/af
 ordering board columns alone, without touching `lane_map`.
 If your GitHub Project uses custom status names for the ready/working/done lanes, map them with
 the `services.ticket_manager.lane_map` key in `team/project.yml`
-(see [Configuration Files](#72-configuration-files)). The desktop setup app also exposes these
+(see [Configuration Files](#73-configuration-files)). The desktop setup app also exposes these
 lanes in the GitHub section: it offers your Project's status options when they can be read, and
 otherwise falls back to manual entry. Defaults work for a standard `Todo` / `In Progress` / `Done`
 board, so no lane configuration is required there.

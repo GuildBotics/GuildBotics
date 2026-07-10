@@ -1,8 +1,8 @@
 """Unified persistence + query layer for runtime diagnostics records.
 
 Events and logs published through :class:`~guildbotics.app_api.events.EventBus`
-are recorded here under the unified schema (see
-``docs/runtime_diagnostics_todo.ja.md``) so they can be aggregated by
+are recorded here under the unified schema (see ``docs/ARCHITECTURE.md``
+"Observability and Diagnostics") so they can be aggregated by
 ``trace_id`` and survive an app restart. Prompt-trace records live in their own
 JSONL file and are merged in by the query layer at read time.
 """

@@ -44,7 +44,7 @@ cd desktop && npm ci && npm run quality
 - 実用的SOLID: 特にSingle Responsibility—肥大化した関数/モジュールを避ける。
 - DRY: コピー&ペーストの重複なし；共有ロジックを `utils/` または適切な共有モジュールにファクタリング。
 - 一方向依存: 循環インポート/アーキテクチャサイクルを防ぐ；低レベルモジュール (`entities/`、`utils/`) は高レベルオーケストレーションレイヤー (`templates/`、`commands/`、`drivers/`) に依存しない。
-- 既存アーキテクチャを尊重: 境界を変更する前に `docs/ARCHITECTURE.*.md` をレビュー。
+- 既存アーキテクチャを尊重: 境界を変更する前に `docs/ARCHITECTURE.md` をレビュー。
 - パフォーマンスマインドセット: 時期尚早の最適化を避けるが、発見された明らかな非効率性 (N+1呼び出し、無駄なI/O、過度の複雑さ) を修正。
 
 ## Testing Guidelines

@@ -1,599 +1,328 @@
 # GuildBotics Architecture
 
-## Document Overview
-
-**Type**: Technical Architecture Documentation
-**Audience**: Developers, Architects
-**Purpose**: Describe the system architecture, module organization, dependencies, and design principles of GuildBotics
+**Audience**: Developers and AI agents working on this repository.
+**Scope**: System-wide concepts and boundaries. Source code is authoritative; when this
+document and the implementation disagree, fix the document (see `AGENTS.md`).
 
 ---
 
 ## 1. System Overview
 
-GuildBotics is a multi-agent task scheduling and command execution framework. It manages multiple AI agents (brains) and executes arbitrary commands (Markdown prompts, Python scripts, Shell scripts, YAML workflows) on configurable schedules. Built on Python asyncio, it provides an extensible architecture supporting multiple LLM providers, integration services, and execution modes.
+GuildBotics runs AI agents as *team members* that collaborate through GitHub and Slack.
+A scheduler starts one worker per active member; workers pick up work from GitHub
+Projects (tickets) or from incoming Slack events, then delegate the actual
+investigation/editing/judgment to an external AI CLI tool (Claude Code, Codex CLI,
+Antigravity CLI, ...). External side effects that the AI agent performs *as the member*
+— git pushes, GitHub comments and PRs, Slack posts, memory writes — go through a single
+boundary: the `guildbotics member ...` CLI (member capability). Workflows additionally
+perform a narrow set of orchestration/status writes of their own (see §3).
 
-### Key Features
+Users interact with the system through:
 
-- **Multi-Agent Support**: Multiple AI agents with different roles and personalities
-- **Task Scheduling**: Cron-based scheduled commands and routine commands per person
-- **Pluggable Commands**: Language-agnostic command execution framework (Markdown/Python/Shell/YAML)
-- **Brain Abstraction**: Supports multiple LLM providers (Google Gemini, OpenAI, Anthropic Claude) and AI CLI tools
-- **Extensible Integrations**: Pluggable integration framework for external services
-- **Internationalization**: Multi-language support via i18n
-- **Desktop Boundary**: Local API daemon for the planned Tauri desktop application
+- **Desktop app** (`desktop/`, Tauri v2 + React): setup, service runtime control,
+  activity history, and diagnostics over a Local API.
+- **CLI** (`guildbotics ...`): headless start/run/stop, workspace selection, secrets
+  migration, and the member capability entry point.
+- **Interactive skill** (`skills/guildbotics/SKILL.md`): lets a user-driven coding agent
+  work as a configured member in the user's current repository.
 
-### Example Use Cases
-
-- **Ticket-Driven Workflow** (default): Processes tasks from GitHub Projects/Issues
-- **Custom Workflows**: Any scheduled automation tasks using the command framework
-- **AI CLI Tool Integration**: Delegates complex tasks to Google Antigravity CLI, OpenAI Codex CLI, or Claude Code
-
----
-
-## 2. Architecture Layers
-
-GuildBotics follows a layered architecture with clear separation of concerns:
-
-```
-┌─────────────────────────────────────────────────┐
-│ Layer 9: User Interfaces                        │
-│  - CLI: start, run, config, stop commands       │
-│  - Desktop: Tauri frontend via Local API        │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 8.5: App API                              │
-│  - Local REST/WebSocket daemon for desktop UI   │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 8: Loader (Configuration)                 │
-│  - YamlTeamLoader, YamlRoleLoader               │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 7: Drivers (Execution Engine)             │
-│  - TaskScheduler, CommandRunner                 │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 6: Templates (Workflow Implementations)   │
-│  - ticket_driven_workflow                       │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 5: Commands (Command Framework)           │
-│  - MarkdownCommand, PythonCommand, etc.         │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 4: Intelligences (AI Layer)               │
-│  - Brain implementations                        │
-│  - Response models, utility functions           │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 3: Integrations (External Services)       │
-│  - TicketManager, ChatService                   │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 2: Runtime (DI Container)                 │
-│  - Context, Factories                           │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│ Layer 1: Entities (Domain Models)               │
-│  - Task, Person, Team, Message                  │
-└─────────────────────────────────────────────────┘
-```
-
-### Dependency Rules
-
-- **One-way dependencies**: Lower-level modules (`entities/`, `utils/`) must NOT depend on higher orchestration layers (`commands/`, `templates/`, `drivers/`)
-- **Interface-based**: Use abstract base classes for cross-layer communication
-- **Factory pattern**: Use factories for dependency injection and testability
-
----
-
-## 3. Module Organization
-
-### 3.1 Core Package Structure
+## 2. Package Map and Dependency Rules
 
 ```
 guildbotics/
-├── cli/                    # CLI entry points (execution: start/run/stop/kill)
-├── editions/               # Runtime editions + setup services (shared by CLI and GUI)
-├── runtime/                # Execution context and factories
-├── entities/               # Domain models
-├── drivers/                # Execution engine
-├── loader/                 # Configuration loaders
-├── integrations/           # External service integrations
-├── intelligences/          # AI intelligence layer
-├── commands/               # Command execution framework
-├── templates/              # Workflow templates
-└── utils/                  # Utilities
+├── app_api/         # Desktop-facing Local API (FastAPI + EventBus + normalizers)
+├── capabilities/    # Member-side git/github/chat/memory operations + domain events
+├── cli/             # Click commands (start/run/stop, workspace, secrets, member)
+├── commands/        # Command framework (md/py/sh/yml + inline commands)
+├── drivers/         # Scheduler, command runner, workflow dispatcher, event listeners
+├── editions/        # Edition abstraction + Simple edition (setup services reused by GUI)
+├── entities/        # Domain models (Team, Person, Task, Message)
+├── integrations/    # GitHub / Slack clients (used by capabilities and workflows)
+├── intelligences/   # Brains (agno_agent / cli_agent), LLM judgment functions, catalogs
+├── loader/          # YAML team/role loaders
+├── observability/   # Diagnostics records, trace/span correlation, interactive sessions
+├── runtime/         # Context, member resolution, factories, WorkflowInvocation
+├── templates/       # Config templates, workflow commands, prompts, locales
+└── utils/           # fileio (config/storage roots), secret store, i18n, ...
 ```
 
-### 3.2 Module Descriptions
+Hard dependency rules (enforced by `tests/guildbotics/test_layer_boundaries.py`):
 
-#### CLI (`guildbotics/cli/`)
+- `app_api` is the top layer: no other guildbotics package may import it. Knowledge
+  needed by both app_api and core (e.g. LLM provider / AI CLI tool catalogs) lives in
+  core (`guildbotics/intelligences/*`); app_api only converts it to API models.
+- `observability` depends on nothing but `utils`. It records; it does not know about
+  app_api or capability concerns.
+- Lower layers (`entities`, `utils`) never depend on orchestration layers
+  (`commands`, `templates`, `drivers`).
 
-**Responsibility**: Command-line entry points for *execution* (not setup)
+Responsibility boundaries between CLI / capabilities / observability / app_api /
+desktop frontend — who may know provider payloads, who normalizes display titles, etc. —
+are specified in `AGENTS.md` (「重要な実装ポイント > 責務境界」). This document covers the
+concepts; `AGENTS.md` is the working rulebook.
 
-**Key Files**:
-- `__init__.py`: Click-based CLI command definitions
+## 3. Member Capability Delegation Model
 
-**Commands**:
-- `start`: Launch member workers / event listener runner
-- `run`: Execute custom commands
-- `stop`/`kill`: Process management
-- `version`: Print version
+The central design of GuildBotics is a three-party delegation chain, identical for the
+ticket workflow, the chat workflow, and interactive skill sessions:
 
-Project and member *setup* is handled by the GUI (`app_api`); the CLI consumes the
-config files it produces. There is no `config` command group.
-
-#### Editions (`guildbotics/editions/`)
-
-**Responsibility**: Runtime edition selection and programmatic setup services
-(shared by both CLI and GUI)
-
-**Key Files**:
-- `edition.py`: `Edition` abstract base class (`get_context()` / `get_default_routines()`)
-- `__init__.py`: `get_edition()` resolves the edition from `GUILDBOTICS_EDITION`
-- `simple/simple_edition.py`: Default YAML-based edition (`SimpleEdition`)
-- `simple/simple_*_factory.py`: Loader / integration / brain factories
-- `simple/setup_service.py`: Programmatic project/member config writers used by the GUI
-- `simple/templates/`: Project / member / sample-command templates
-
-#### App API (`guildbotics/app_api/`)
-
-**Responsibility**: Local API boundary for desktop clients
-
-The desktop GUI does not reimplement the Python execution engine. It starts a local
-backend daemon and talks to it over `127.0.0.1` using REST and WebSocket endpoints.
-The API requires a per-process session token and keeps CLI fallback intact for
-unsupported GUI environments. See `docs/desktop_app_plan.ja.md` for packaging and
-support policy.
-
-Runtime lifecycle differs between CLI and desktop. `guildbotics start` owns the
-user-level daemon pidfile and starts the member workers / event listener runner as a
-CLI process. The App API sidecar does not write that pidfile; it manages
-member-worker and event-listener lifecycles inside the sidecar process and reports
-`starting` / `running` / `stopping` / `stopped` / `failed` states to the desktop
-client.
-
-#### Runtime (`guildbotics/runtime/`)
-
-**Responsibility**: Dependency injection and execution context management
-
-**Key Classes**:
-- `Context`: Central execution context holding all dependencies
-- `LoaderFactory`: Creates TeamLoader instances
-- `BrainFactory`: Creates Brain instances
-- `IntegrationFactory`: Creates TicketManager and ChatService instances
-
-#### Entities (`guildbotics/entities/`)
-
-**Responsibility**: Domain model definitions
-
-**Key Classes**:
-```python
-Team
-  ├── Project (name, language, repositories[], services{})
-  └── members: Person[]
-
-Person
-  ├── person_id, name, is_active
-  ├── roles: dict[str, Role]
-  └── task_schedules: CommandSchedule[]
-
-Task
-  ├── id, title, description
-  ├── status: READY | IN_PROGRESS | DONE
-  └── comments: Message[]
-
-Message
-  ├── content, author, author_type
-  └── reactions, file_info
+```
+workflow (orchestration)
+  -> AI CLI agent (judgment)
+     -> guildbotics member ... CLI (external side-effect boundary)
 ```
 
-#### Drivers (`guildbotics/drivers/`)
+- **Workflow** (`guildbotics/templates/commands/workflows/*`): selects the work item,
+  builds the prompt payload, launches the CLI agent with the member workspace as cwd,
+  and afterwards verifies run completion. It never produces work products
+  (code changes, PRs, replies, review comments) itself, but it does perform a narrow
+  set of orchestration/status writes of its own through its integration clients:
+  moving the Project lane, posting rate-limit / failure status comments on the ticket,
+  and posting failure notices in the Slack thread.
+- **CLI agent**: reads the ticket/thread, investigates, edits, and decides. It never
+  receives GitHub/Slack tokens and never calls provider APIs directly; every external
+  write goes through `guildbotics member ...`.
+- **Member capability** (`guildbotics/capabilities/*` + `guildbotics/cli/member.py`):
+  the boundary for member actions decided by the AI agent — the only path through
+  which the agent's provider operations run and the only layer that resolves the
+  member's credentials for them. It records run evidence (`task_runs.py`) for each
+  side effect.
 
-**Responsibility**: Workflow execution engine
+Trust rules that follow from this shape:
 
-**Key Classes**:
-- `TaskScheduler`: Per-person member worker that serially runs scheduled,
-  routine, and queued event sources
-- `CommandRunner`: Command execution engine with recursive invocation
+- The workflow does not trust the agent's natural-language stdout as the result. Only
+  the completion record (`member task complete` / `member chat complete`) and the run
+  evidence store are authoritative.
+- Credentials are resolved by the member CLI itself from the active workspace (config +
+  secret store), never inherited from the agent's environment — AI CLI tools strip or
+  isolate `*TOKEN*`-like variables from subprocess environments, so inheritance cannot
+  be relied on anyway.
+- The same capability boundary serves both non-interactive runs (scheduler-spawned
+  agents) and interactive runs (a user's coding agent using the GuildBotics skill), so
+  "acting as the member" means the same thing in both modes.
 
-#### Loader (`guildbotics/loader/`)
+Member-facing agent instructions are layered so each contract has exactly one source
+(shared reference → workflow envelope → trigger-specific prompt → interactive SKILL).
+The layer model and its guard tests are described in `AGENTS.md`
+(「member プロンプト層モデル」).
 
-**Responsibility**: Configuration file loading
+## 4. Workflow Invocation
 
-**Key Classes**:
-- `YamlTeamLoader`: Loads team configuration from YAML files
-- `YamlRoleLoader`: Loads role definitions
-
-#### Integrations (`guildbotics/integrations/`)
-
-**Responsibility**: External system integration
-
-**Interfaces**:
-- `TicketManager`: Abstract ticket management interface
-- `ChatService`: Abstract chat service interface
-
-**Implementations**:
-- `GitHubTicketManager`: GitHub Issues/Projects implementation
-- `SlackChatService`: Slack chat implementation
-
-#### Intelligences (`guildbotics/intelligences/`)
-
-**Responsibility**: AI intelligence and LLM management
-
-**Brain Implementations**:
-- `AgnoAgentDefaultBrain`: Agno framework-based implementation
-- `CliAgent`: CLI command execution agent
-- `BrainStub`: Test stub implementation
-
-**Common Models**: Response models for structured outputs (DecisionResponse, MessageResponse, etc.)
-
-**Functions**: Workflow utility functions (talk_as, reply_as, output classification, etc.)
-
-#### Commands (`guildbotics/commands/`)
-
-**Responsibility**: Command execution framework
-
-**Command Types**:
-- `MarkdownCommand`: Execute `.md` files as LLM prompts
-- `PythonCommand`: Execute `.py` scripts
-- `ShellScriptCommand`: Execute `.sh` scripts
-- `YamlCommand`: Execute `.yml` workflow definitions
-- Document conversion commands (PDF, HTML)
-
-**Framework Classes**:
-- `CommandBase`: Abstract base class for commands
-- `Registry`: Command type registry
-- `Discovery`: Command resolution and discovery
-- `CommandSpec`: Command specification data structure
-
-#### Templates (`guildbotics/templates/`)
-
-**Responsibility**: Workflow definitions and templates
-
-**Key Workflows**:
-- `ticket_driven_workflow.py`: Main workflow
-
----
-
-## 4. Key Execution Flows
-
-### 4.1 Scheduler Startup Flow
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant CLI
-    participant Edition
-    participant Context
-    participant TaskScheduler
-    participant CommandRunner
-
-    User->>CLI: guildbotics start
-    CLI->>Edition: get_context()
-    Edition->>Context: create with factories
-    CLI->>TaskScheduler: new(context, commands)
-    CLI->>TaskScheduler: start()
-
-    loop Per Person Thread
-        TaskScheduler->>TaskScheduler: _process_tasks_list()
-        TaskScheduler->>CommandRunner: run_command()
-        CommandRunner-->>TaskScheduler: result
-    end
-```
-
-### 4.2 Ticket-Driven Workflow
-
-```mermaid
-flowchart TD
-    A[GitHub Projects] -->|get_task_to_work_on| B[Issue or PR Review Task]
-    B -->|checkout work branch| C[Repository Workspace]
-    C -->|delegate URL and context| D[AI CLI Tool]
-    D -->|structured result| E[GuildBotics]
-    E -->|member credential| F[GitHub writes]
-    F -->|comments / PR / tickets / lane update| A
-```
-
-### 4.3 Command Execution Flow
-
-```mermaid
-sequenceDiagram
-    participant Runner as CommandRunner
-    participant Discovery
-    participant SpecFactory
-    participant Command as CommandBase
-    participant Brain
-    participant Context
-
-    Runner->>Discovery: resolve_named_command()
-    Discovery-->>Runner: command_path
-    Runner->>SpecFactory: prepare_main_spec()
-    SpecFactory-->>Runner: CommandSpec
-
-    Runner->>Command: new(context, spec)
-    Runner->>Command: run()
-
-    alt MarkdownCommand
-        Command->>Brain: run(message)
-        Brain-->>Command: response
-    else PythonCommand
-        Command->>Command: exec(script)
-    else YamlCommand
-        Command->>Runner: invoke children
-    end
-
-    Command->>Context: update(key, result)
-    Command-->>Runner: CommandOutcome
-```
-
----
-
-## 5. Design Patterns
-
-### 5.1 Factory Pattern
-
-Used for dependency injection and implementation switching:
+Workflow start-up is normalized by `guildbotics/runtime/workflow_invocation.py`:
 
 ```python
-class BrainFactory(ABC):
-    def create_brain(name, config) -> Brain
-
-class SimpleBrainFactory(BrainFactory):
-    def create_brain(name, config) -> AgnoAgentDefaultBrain | CliAgent
+WorkflowInvocation(command, person_id, source, trigger_type, payload, idempotency_key)
+# source:       routine | scheduled | event_queue | manual
+# trigger_type: ticket | chat | scheduled | generic
 ```
 
-### 5.2 Strategy Pattern
-
-Used for swappable implementations:
-
-- Brain implementations: AgnoAgentDefaultBrain, CliAgent, BrainStub
-- Command types: MarkdownCommand, PythonCommand, ShellScriptCommand, YamlCommand
-
-### 5.3 Template Method Pattern
-
-Used in CommandBase:
-
-```python
-class CommandBase(ABC):
-    async def run(self) -> CommandOutcome:
-        # Template method to be overridden
-
-class MarkdownCommand(CommandBase):
-    async def run(self) -> CommandOutcome:
-        # Concrete implementation
-```
-
-### 5.4 Registry Pattern
-
-Used for command type management:
-
-```python
-_COMMAND_REGISTRY = {
-    "md": MarkdownCommand,
-    "py": PythonCommand,
-    "sh": ShellScriptCommand,
-    # ...
-}
-```
-
-### 5.5 Pipeline Pattern
-
-Used for command chaining:
-
-```python
-async def _run_with_children(spec):
-    for child in spec.children:
-        await _run_with_children(child)
-    await _run(spec)
-```
-
----
-
-## 6. Configuration Structure
-
-### 6.1 Team Configuration
-
-```yaml
-# team/project.yml
-name: MyProject
-language: ja
-services:
-  ticket_manager:
-    name: github
-    owner: myorg
-    project_id: 1
-  code_hosting_service:
-    name: github
-```
-
-### 6.2 Person Configuration
-
-```yaml
-# team/members/{person_id}/person.yml
-person_id: alice
-name: Alice
-is_active: true
-profile:
-  roles:
-    architect: {}
-account_info:
-  github_username: alice
-  git_user: alice
-  git_email: alice@example.com
-routine_commands:
-  - workflows/ticket_driven_workflow
-task_schedules:
-  - command: workflows/cleanup
-    schedules:
-      - "0 2 * * *"  # Daily at 2:00 AM
-```
-
-### 6.3 Brain Configuration
-
-```yaml
-# intelligences/agno_agent_mapping.yml
-default:
-  model: gemini/gemini-2.0-flash-exp
-  api_key: ${GOOGLE_API_KEY}
-
-# intelligences/cli_agent_mapping.yml
-default: claude-cli.yml
-```
-
----
-
-## 7. Extension Points
-
-### 7.1 Adding a New Brain
-
-```python
-class CustomBrain(Brain):
-    async def run(self, message: str, **kwargs):
-        # Custom implementation
-        return response
-```
-
-Register in `intelligences/brain_mapping.yml`:
-```yaml
-custom_brain:
-  class: mypackage.CustomBrain
-  args:
-    param1: value1
-```
-
-### 7.2 Adding a New Command Type
-
-```python
-class ToDocxCommand(CommandBase):
-    extensions = [".docx"]
-    inline_key = "to_docx"
-
-    async def run(self) -> CommandOutcome:
-        # Implementation
-        return CommandOutcome(result, text_output)
-```
-
-Automatically registered via registry discovery.
-
-### 7.3 Adding a New Integration
-
-```python
-class CustomTicketManager(TicketManager):
-    async def get_task_to_work_on(self):
-        # Implementation
-        pass
-```
-
-Update `SimpleIntegrationFactory`:
-```python
-def create_ticket_manager(self, ...):
-    if name == "custom":
-        return CustomTicketManager(...)
-```
-
----
-
-## 8. Architecture Principles
-
-### 8.1 Scope Discipline
-
-- Keep every change tightly focused
-- Do not broaden scope without explicit agreement
-
-### 8.2 Simplicity First
-
-- Apply KISS (Keep It Simple, Stupid)
-- Avoid speculative abstraction (YAGNI)
-
-### 8.3 SOLID Principles
-
-- **Single Responsibility**: Each module has one clear purpose
-- **Open/Closed**: Open for extension, closed for modification
-- **Liskov Substitution**: Implementations are substitutable
-- **Interface Segregation**: Small, focused interfaces
-- **Dependency Inversion**: Depend on abstractions, not concretions
-
-### 8.4 DRY (Don't Repeat Yourself)
-
-- No copy-paste duplication
-- Factor shared logic into `utils/` or appropriate shared modules
-
-### 8.5 One-Way Dependencies
-
-- Prevent cyclic imports/architectural cycles
-- Lower-level modules must NOT depend on higher orchestration layers
-
-### 8.6 Performance Mindset
-
-- Do not prematurely optimize
-- Fix evident inefficiencies when discovered (N+1 calls, excessive I/O)
-
----
-
-## 9. Security Considerations
-
-### 9.1 Secret Management
-
-- Never commit secrets (`.env`, credentials)
-- Use environment variables for sensitive data
-- Reference `.env.example` for samples
-
-### 9.2 Input Validation
-
-- Validate external inputs
-- Fail fast with clear errors
-
-### 9.3 Least Privilege
-
-- Use minimum necessary permissions
-- Rotate credentials upon suspicion or exposure
-
----
-
-## 10. Testing Strategy
-
-### 10.1 Test Structure
-
-```
-tests/
-├── guildbotics/        # Unit tests (mirror package structure)
-│   ├── test_entities.py
-│   ├── test_commands.py
-│   └── ...
-└── it/                 # Integration tests
-    ├── test_workflows.py
-    └── config/         # Test configuration samples
-```
-
-### 10.2 Testing Guidelines
-
-- Framework: pytest
-- Use `monkeypatch` for time, randomness, and I/O
-- Keep tests deterministic
-- Maintain or improve coverage
-- Report results honestly
-
----
-
-## 11. Summary
-
-GuildBotics is an enterprise-grade automation platform with the following characteristics:
-
-1. **Multi-Layer Architecture**: Clear separation of concerns across 9 layers
-2. **Factory Pattern**: Dependency injection for flexibility
-3. **Pluggable Commands**: Language-agnostic command execution
-4. **Async Processing**: Built on Python asyncio
-5. **Internationalization**: i18n support
-6. **Testable Design**: Interface-centric architecture
-
-The codebase consists of approximately 9,700 lines implementing a sophisticated workflow automation system with extensible AI agent management.
+`drivers/workflow_dispatcher.py` runs every invocation the same way (trace scope,
+attributes, `Context.shared_state` injection), while discovery stays asymmetric on
+purpose:
+
+- **Ticket workflow** (`workflows/ticket_driven_workflow`, the default routine of the
+  Simple edition): a routine that *polls* GitHub ProjectV2. The project board is treated
+  as a loose queue/trigger — GuildBotics does not reimplement fine-grained GitHub/git
+  operations around it, and there is no GitHub webhook receiver (local-first design).
+  Ticket selection lives in `drivers/ticket_selector.py`.
+- **Chat workflow** (`workflows/chat_conversation_workflow`): Slack Socket Mode events
+  and backfill are persisted as pending events by `drivers/event_listener_runner.py`,
+  then drained per member by `drivers/pending_chat_dispatcher.py`.
+
+Invariants:
+
+- Scheduler-managed work is serial per person: one worker thread per active member
+  (`drivers/task_scheduler.py`) runs scheduled, routine, and queued-event work one at
+  a time, so those runs never use the member's workspace concurrently. This guarantee
+  does not extend to executions started outside the scheduler — App API manual
+  commands, `guildbotics run`, or interactive sessions — which are tracked by
+  `drivers/execution.py` (`ExecutionCoordinator`) but not serialized per person and
+  not excluded across processes.
+- Rate limits from AI CLI tools are detected (`intelligences/brains/cli_agent.py`),
+  handled by shared capability logic (`capabilities/workflow_rate_limits.py`,
+  `capabilities/completion_retry.py`), surfaced as a `workflow.rate_limited`
+  diagnostics event, and never amplified by retries — the run stops with a visible
+  notice on the ticket/thread instead.
+
+## 5. Command Execution Framework
+
+The generic execution substrate used by workflows and custom commands:
+
+- `drivers/command_runner.py` resolves the target member, builds a `CommandSpec`
+  (`commands/models.py`, via `commands/spec_factory.py`), runs child commands
+  (`commands:`) first, then the main command.
+- Command types (`commands/registry.py`): `.md` (LLM prompt), `.py`, `.sh`,
+  `.yml`/`.yaml` (definition), plus inline commands `print`, `to_html`, `to_pdf`.
+- `Context.pipe` carries stdin/stdout-like text between commands;
+  `Context.shared_state` carries structured state. Their update order is workflow
+  compatibility surface — change with care.
+- Config file resolution (`utils/fileio.py`): primary config
+  (`GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`) → package templates.
+  Localized files resolve `.<lang>` → `.en` → bare name; person-specific commands
+  (`team/members/<person_id>/...`) take precedence over shared ones.
+
+See `docs/custom_command_guide.en.md` / `.ja.md` for the user-facing guide.
+
+## 6. Member Memory
+
+Members persist knowledge across runs as a document store (mechanism in
+`capabilities/member_memory.py`; audit in `capabilities/member_memory_audit.py`).
+
+- **Document**: 1 document = 1 directory (`meta.yml` + `body.md` + `assets/`) under
+  `<workspace-data-root>/documents/`. `meta.yml` holds title/summary/keywords, typed
+  `source` entries (ticket/PR/channel/thread URLs), timestamps, `pinned`, and `kind`.
+- **Scopes**: `personal/<person_id>/` and `team/`. `memory promote` moves a document
+  from personal to team.
+- **Operations** (`guildbotics member memory ...`): `record`, `recall` (lexical grep
+  over meta+body; `--meta-only` for source-URL pinpointing), `get`, `update`,
+  `touch` ("this note actually helped" — recency only), `archive`, `promote`.
+- **Recency (MRU)**: `recent.txt` per member; `record`/`update`/`touch` move a doc-id
+  to the top, read operations do not. `member context` output includes a `memory`
+  block: `digest` (top-N recent metas — hints that a relevant note exists) and
+  `pinned` (always-on documents, body included).
+- **Mechanism vs policy**: the code fixes only the mechanism above. What to record and
+  how to classify it is team-owned policy, kept as a pinned team document
+  (`kind: policy`) that agents may not change autonomously (human-approved updates
+  only).
+- **Hot-path upkeep**: every run recalls at the start (source URL first, then keyword
+  OR-search) and tends memory at the end (touch what helped, update what was wrong,
+  record new learnings). Cold-path maintenance of never-recalled documents is a
+  planned follow-up
+  ([GuildBotics/GuildBotics#272](https://github.com/GuildBotics/GuildBotics/issues/272),
+  unimplemented).
+
+## 7. Storage Roots
+
+Path resolution separates four roots (implementation: `utils/fileio.py`).
+
+| Root | Location | Holds |
+|---|---|---|
+| Machine state root | `$HOME/.guildbotics/data` (fixed) | `active-workspace.json`, `run/scheduler.pid` — state needed *before* a workspace is chosen |
+| Runtime workspace root | selected workspace (App API `chdir`s to it; member CLI resolves `--workspace` → explicit config → cwd → active workspace) | `.env`, `.guildbotics/config` |
+| Workspace data root | `<workspace>/.guildbotics/data`, overridable via `GUILDBOTICS_DATA_DIR` | member workspaces (`workspaces/<person_id>`), task-run evidence (`task-runs/*.jsonl`), diagnostics (`run/diagnostics.jsonl`), prompt trace, chat state, documents |
+| Config root | `GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`; package templates as fallback | project / member configuration |
+
+Invariants:
+
+- Machine state root is always derived from `HOME` and never affected by
+  `GUILDBOTICS_DATA_DIR`, `GUILDBOTICS_CONFIG_DIR`, or workspace `.env`.
+- `GUILDBOTICS_CONFIG_DIR` selects the *config source* only; it is not a workspace or
+  data root.
+- The effective workspace data root is fixed at the *workspace application boundary*
+  (App API `set_workspace()`, CLI/member CLI startup, `run`/`start` initialization) and
+  written to `os.environ["GUILDBOTICS_DATA_DIR"]` there — and only there. Workers,
+  workflows, and commands never mutate it mid-run; per-invocation values travel via
+  subprocess env overlays (e.g. `cli_agent_env`).
+- Workflows must pass `GUILDBOTICS_DATA_DIR` (and the run id) to AI CLI tool
+  subprocesses: the agent's cwd is a member workspace, so without the explicit value a
+  child process would compute a wrong, nested data root.
+- Stores that keep a path (diagnostics store, chat state store) must re-resolve or be
+  rebound on workspace switch; App API keeps the process-startup
+  `GUILDBOTICS_DATA_DIR` as the inherited fallback so switching workspaces never leaks
+  the previous workspace's root.
+
+## 8. Secret Storage (SecretStore)
+
+Secrets = LLM provider API keys (`models/<provider>/default.yml` `api_key_env`) and
+person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN` /
+`SLACK_APP_TOKEN`). Non-secret IDs/paths stay in `.env`.
+
+- **Backends** (`utils/secret_store.py`): `keyring` (OS keychain; the workspace keeps
+  only a value-less index in `.guildbotics/config/secrets.yml`) and `env-file`
+  (workspace `.env`; the default for legacy workspaces and the headless path). New
+  workspace setup defaults to keyring; existing workspaces switch only via
+  `guildbotics secrets migrate`. Backend selection: `GUILDBOTICS_SECRETS_BACKEND` env
+  var > `secrets.yml` > legacy env-file.
+- **Resolution priority** at process start: real environment variables > OS keychain >
+  `.env`. Values are injected into `os.environ` once at startup; app_api removes its
+  own injected keys on workspace switch but preserves variables inherited from the
+  parent process.
+- **Exception**: `*_GITHUB_PRIVATE_KEY` (GitHub App PEM content) is *never* injected
+  into the environment — AI CLI tool subprocesses inherit `os.environ` wholesale, so an
+  App private key in the environment would leak to every agent process. Consumers read
+  it on demand through the secret store, falling back to the legacy
+  `*_GITHUB_PRIVATE_KEY_PATH` file.
+- **Writes**: `.env` files written by GuildBotics are always `0600`, written atomically
+  (`mkstemp` + `os.replace`); dotenv serialization round-trips multiline values (PEM).
+  Workspace moves use `guildbotics secrets export` / `import`.
+- **Tests**: an autouse fixture forces `GUILDBOTICS_SECRETS_BACKEND=env-file` so tests
+  never touch a real keychain; keyring paths are tested with the `fake_keyring`
+  fixture.
+
+## 9. Observability and Diagnostics
+
+`guildbotics/observability/` is the recording substrate (depends only on `utils`):
+
+- **Correlation**: `trace_scope` / `span_scope` / `correlation_fields` /
+  `set_attributes` correlate everything that happens in one execution — a manual
+  command, one scheduler cycle, one incoming chat event — under a single `trace_id`,
+  with spans for LLM / AI CLI tool calls (shared with prompt trace via `call_id`).
+  Trace attributes carry structured search keys (e.g. `github.url`, `github.number`).
+- **Persistence**: unified diagnostics records in
+  `<workspace-data-root>/run/diagnostics.jsonl` (`diagnostics_store.py`), with size-
+  and count-based retention. Prompt traces go to `run/prompt_trace.jsonl`
+  (`utils/prompt_trace.py`). Correlated events are recorded via
+  `diagnostics_events.py`; interactive skill sessions via `interactive_sessions.py`.
+- **Consumption**: `app_api` reads the stores, merges traces / logs / events / memory
+  audit / prompt traces, and converts provider payloads into provider-neutral activity
+  events/links/titles for the desktop Activity History (`activity_events.py`,
+  `activity_links.py`). Display normalization lives *only* there — not in
+  observability, not in the frontend.
+
+## 10. Desktop App
+
+`desktop/` is a Tauri v2 + React (Mantine, TanStack Query) frontend; the repository is
+a monorepo on purpose.
+
+- **Local API boundary**: the GUI never reimplements the Python engine. It launches the
+  bundled backend (`python -m guildbotics.app_api`, FastAPI) and talks to it on
+  `127.0.0.1` via REST + WebSocket. Every request requires the per-process
+  `X-GuildBotics-Session-Token`; `/health` is the liveness probe.
+- **Runtime lifecycle**: the sidecar manages member workers / event listeners inside
+  its own process and reports states to the UI; it does not write the CLI scheduler
+  pidfile. CLI `guildbotics start` remains the headless equivalent.
+- **Packaging**: `scripts/desktop-build-backend.sh` builds two PyInstaller sidecars
+  (`guildbotics-app-api`, `guildbotics-cli`) into `desktop/src-tauri/binaries/`. The
+  app also installs a managed `guildbotics` CLI shim and the GuildBotics skill for
+  interactive agents. External AI CLI tools are *not* bundled — the GUI detects,
+  verifies, and configures them only.
+- **Support targets**: macOS Apple Silicon (DMG) and Linux x86_64 (`.deb` / AppImage).
+  The CLI remains the fallback everywhere else.
+
+See `desktop/README.md` for build, development, and test instructions.
+
+## 11. Domain Model Notes
+
+Core entities live in `guildbotics/entities/` (`Team`, `Person`, `Task`, `Message`).
+Two Person distinctions matter architecturally:
+
+- **AI members** are execution subjects: active members get a scheduler worker, Slack
+  subscriptions, credentials, and an intelligence (brain) configuration.
+- **Human members** are *references to real people* (roles, Slack user id, GitHub
+  username, avatar) used for handoff candidates and assignee mapping. They are saved
+  with `is_active: false`, are never scheduled, hold no bot/app credentials, and the
+  desktop settings UI intentionally hides all agent-execution fields for them. Treat
+  any path that would execute a human member as a boundary bug, not a feature.
+
+## 12. Extension Points
+
+- **New brain**: implement `Brain`, register via the intelligence mappings
+  (`guildbotics/templates/intelligences/*.yml`). AI CLI tool definitions are cataloged
+  in `intelligences/cli_agents.py` + `templates/intelligences/cli_agents/*.yml`.
+- **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
+  registry picks it up (`commands/registry.py`).
+- **New integration**: implement `TicketManager` / `ChatService` and wire it in the
+  edition's `SimpleIntegrationFactory`.
+- **New edition**: implement `Edition` (`get_context()` / `get_default_routines()`)
+  and select it via `GUILDBOTICS_EDITION`.
+- **New activity event/link kind**: add the recording payload (capability →
+  observability), the normalizer/API model (app_api), and the frontend rendering
+  (desktop) as three separate responsibilities.
+
+## 13. Related Documents
+
+- `AGENTS.md` — working rules for this repository: responsibility boundaries, CI
+  commands, testing strategy, prompt layer model.
+- `README.md` / `README.ja.md` — user-facing setup and usage.
+- `docs/custom_command_guide.en.md` / `.ja.md` — custom command development guide.
+- `desktop/README.md` — desktop build/dev/test guide.

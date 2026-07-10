@@ -1,6 +1,6 @@
 """Layer-boundary tests for the member prompt sources.
 
-Prompt layer model (see docs/spec/member_prompt_layering_plan.ja.md):
+Prompt layer model (see AGENTS.md「member プロンプト層モデル」):
 - mode-independent knowledge → member capability reference (member context/help)
 - shared workflow envelope → i18n ``workflow_contract`` injected as
   ``{workflow_contract}``
