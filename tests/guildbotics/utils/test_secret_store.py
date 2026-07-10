@@ -13,10 +13,17 @@ from guildbotics.utils.secret_store import (
     EnvFileSecretStore,
     KeyringSecretStore,
     configured_secrets_backend,
+    format_env_line,
     keyring_available,
     read_env_values,
     resolve_secret_store,
     write_env_values,
+)
+
+PEM_VALUE = (
+    "-----BEGIN RSA PRIVATE KEY-----\n"
+    'MIIEow+abc/123 "quoted" back\\slash\n'
+    "-----END RSA PRIVATE KEY-----\n"
 )
 
 
@@ -57,6 +64,48 @@ class TestEnvFileSecretStore:
 
         mode = stat.S_IMODE(os.stat(env_file).st_mode)
         assert mode == 0o600
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+    def test_write_tightens_world_readable_file_and_leaves_no_temp(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("OLD=1\n")
+        env_file.chmod(0o644)
+
+        write_env_values(env_file, {"OPENAI_API_KEY": "sk-test"})
+
+        assert stat.S_IMODE(os.stat(env_file).st_mode) == 0o600
+        assert [path.name for path in tmp_path.iterdir()] == [".env"]
+
+    def test_multiline_value_survives_write_read_roundtrip(self, tmp_path):
+        env_file = tmp_path / ".env"
+        write_env_values(env_file, {"PEM": PEM_VALUE, "PLAIN": "sk-test"})
+
+        assert read_env_values(env_file) == {"PEM": PEM_VALUE, "PLAIN": "sk-test"}
+
+    def test_store_roundtrips_multiline_value(self, tmp_path):
+        store = EnvFileSecretStore(tmp_path / ".env")
+        store.set("PLAIN", "sk-test")
+        store.set("PEM", PEM_VALUE)
+
+        assert store.get("PEM") == PEM_VALUE
+        assert store.get("PLAIN") == "sk-test"
+
+
+class TestFormatEnvLine:
+    def test_plain_value_stays_unquoted(self):
+        assert format_env_line("KEY", "sk-test_1.2/3+=") == "KEY=sk-test_1.2/3+="
+
+    @pytest.mark.parametrize(
+        "value",
+        ["two words", 'with "quote"', "with#hash", "back\\slash", "multi\nline\r"],
+    )
+    def test_special_values_are_quoted_and_roundtrip(self, tmp_path, value):
+        line = format_env_line("KEY", value)
+        assert line.startswith('KEY="')
+        env_file = tmp_path / ".env"
+        env_file.write_text(line + "\nOTHER=x\n")
+        values = read_env_values(env_file)
+        assert values == {"KEY": value, "OTHER": "x"}
 
 
 class TestKeyringSecretStore:

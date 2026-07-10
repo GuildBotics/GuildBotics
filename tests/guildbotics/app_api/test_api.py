@@ -1455,7 +1455,10 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
             return ContextStub()
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "old-key")
+    # Ensure the key is absent so the workspace .env is the source: variables
+    # inherited from the parent process would win over workspace values.
+    monkeypatch.setenv("OPENAI_API_KEY", "placeholder")
+    monkeypatch.delenv("OPENAI_API_KEY")
     (tmp_path / ".env").write_text("OPENAI_API_KEY=new-key\n")
     monkeypatch.setattr(
         "guildbotics.app_api.runtime.get_edition",

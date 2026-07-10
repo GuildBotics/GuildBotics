@@ -1114,7 +1114,11 @@ class AppRuntime:
         for key in self._loaded_dotenv_keys - loaded_keys:
             os.environ.pop(key, None)
         for key in loaded_keys:
-            os.environ[key] = new_values[key]
+            # Only overwrite values this runtime injected itself; variables
+            # inherited from the parent process are real environment variables
+            # and take precedence over workspace secrets (see README 7.2).
+            if key in self._loaded_dotenv_keys or key not in os.environ:
+                os.environ[key] = new_values[key]
         if dotenv_path.exists():
             os.environ[GUILDBOTICS_ENV_FILE] = str(dotenv_path.resolve())
             self._loaded_dotenv_keys = loaded_keys | {GUILDBOTICS_ENV_FILE}

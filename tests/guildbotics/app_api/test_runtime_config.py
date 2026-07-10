@@ -365,6 +365,49 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert status.env_file_exists is True
 
 
+def test_set_workspace_preserves_inherited_environment_variables(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real environment variables outrank workspace secrets (README 7.2)."""
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
+    monkeypatch.setenv("WORKSPACE_MARKER", "from-parent-process")
+
+    workspace = isolated_home / "workspace"
+    workspace.mkdir()
+    _write_project(workspace / ".guildbotics" / "config")
+    (workspace / ".env").write_text("WORKSPACE_MARKER=from-env-file\n")
+
+    runtime.set_workspace(workspace)
+
+    assert os.environ["WORKSPACE_MARKER"] == "from-parent-process"
+
+
+def test_set_workspace_updates_its_own_injections_across_switches(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(
+        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
+    )
+    monkeypatch.setenv("WORKSPACE_MARKER", "placeholder")
+    monkeypatch.delenv("WORKSPACE_MARKER")
+
+    for name, value in (("one", "first"), ("two", "second")):
+        workspace = isolated_home / name
+        workspace.mkdir()
+        _write_project(workspace / ".guildbotics" / "config")
+        (workspace / ".env").write_text(f"WORKSPACE_MARKER={value}\n")
+
+    runtime.set_workspace(isolated_home / "one")
+    assert os.environ["WORKSPACE_MARKER"] == "first"
+
+    runtime.set_workspace(isolated_home / "two")
+    assert os.environ["WORKSPACE_MARKER"] == "second"
+
+
 def _idle_runtime_status() -> RuntimeStatus:
     return RuntimeStatus(
         scheduler=RuntimeUnitStatus(target="scheduler", state="stopped", running=False),

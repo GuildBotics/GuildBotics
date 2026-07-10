@@ -35,7 +35,8 @@
 3. `.env`（`env_loader.load_guildbotics_env` / app_api `_load_workspace_env`）
 
 app_api はワークスペース切替時に注入済みキーを除去する既存機構（`_loaded_dotenv_keys`）へ
-キーチェーン由来のキーも合流させる。
+キーチェーン由来のキーも合流させる。上書きも自分が注入したキーに限定し、親プロセスから
+継承した実環境変数は保持する（優先順位の一貫性のため）。
 
 例外として `*_GITHUB_PRIVATE_KEY`（`secret_store.is_environment_secret` が False）は環境変数へ
 注入しない。AI CLI ツール子プロセスは `os.environ` を丸ごと継承するため、App 秘密鍵を環境に
@@ -47,7 +48,10 @@ app_api はワークスペース切替時に注入済みキーを除去する既
 
 - `setup_service` は keyring バックエンドのとき、provider キーと person トークンをストアへ書き、
   `.env` には非シークレットだけを書く。person の rename / delete はストア側のキーも移動・削除する。
-- GuildBotics が書く `.env` は常に `0600`（`secret_store.write_env_text` / `write_env_values`）。
+- GuildBotics が書く `.env` は常に `0600`。`write_env_text` は `mkstemp`（作成時点で 0600）+
+  `os.replace` の atomic 書き込みで、他ユーザーから読める瞬間を作らない。
+- dotenv 直列化は `format_env_line` に集約。改行・引用符等を含む値（PEM 等）はダブルクォート+
+  エスケープで書き、`dotenv_values` で完全往復する。
 - 引越しは `guildbotics secrets export` / `import`（dotenv 形式、エクスポートは一時ファイル前提）。
 
 ## テスト方針

@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import contextlib
 import os
-import stat
+import re
+import tempfile
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -32,7 +33,10 @@ KEYRING_BACKEND = "keyring"
 ENV_FILE_BACKEND = "env-file"
 SECRETS_INDEX_FILENAME = "secrets.yml"
 _KEYRING_SERVICE_PREFIX = "GuildBotics"
-_ENV_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR  # 0o600
+# Values that dotenv can reproduce without quoting; anything else (newlines,
+# quotes, spaces, comments, backslashes) is written double-quoted with escapes
+# so that multi-line secrets such as PEM keys survive a write/read round-trip.
+_PLAIN_ENV_VALUE = re.compile(r"[^\s#'\"\\]*")
 
 # Secrets that must never be published to process environment variables:
 # child processes (AI CLI tools in particular) inherit the full environment,
@@ -55,16 +59,42 @@ def read_env_values(env_file: Path) -> dict[str, str]:
 
 
 def write_env_text(env_file: Path, text: str) -> None:
-    """Write dotenv content with owner-only permissions."""
+    """Write dotenv content atomically, owner-only from the moment it exists.
+
+    ``mkstemp`` creates the temp file with mode 0600, so the content is never
+    readable by other users — not even between creation and a later chmod —
+    and ``os.replace`` swaps it in atomically.
+    """
     env_file.parent.mkdir(parents=True, exist_ok=True)
-    env_file.write_text(text)
-    os.chmod(env_file, _ENV_FILE_MODE)
+    fd, tmp_name = tempfile.mkstemp(dir=env_file.parent, prefix=f".{env_file.name}.")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.replace(tmp_name, env_file)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+
+
+def format_env_line(key: str, value: str) -> str:
+    """Serialize one dotenv entry so ``dotenv_values`` reads back ``value``."""
+    if _PLAIN_ENV_VALUE.fullmatch(value):
+        return f"{key}={value}"
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+    return f'{key}="{escaped}"'
 
 
 def write_env_values(env_file: Path, values: dict[str, str]) -> None:
     """Serialize a ``{key: value}`` mapping as a dotenv file (owner-only)."""
     write_env_text(
-        env_file, "\n".join(f"{key}={value}" for key, value in values.items())
+        env_file,
+        "\n".join(format_env_line(key, value) for key, value in values.items()),
     )
 
 

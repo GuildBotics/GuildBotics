@@ -236,6 +236,35 @@ def test_export_and_import_roundtrip(fake_keyring, tmp_path, monkeypatch):
     assert KeyringSecretStore(_config_dir(target)).get("OPENAI_API_KEY") == "sk-secret"
 
 
+def test_export_and_import_roundtrip_multiline_pem(fake_keyring, tmp_path, monkeypatch):
+    pem = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        'MIIEow+abc/123 "quoted" back\\slash\n'
+        "-----END RSA PRIVATE KEY-----\n"
+    )
+    source = _workspace(tmp_path, monkeypatch)
+    KeyringSecretStore(_config_dir(source)).set("ALICE_GITHUB_PRIVATE_KEY", pem)
+    runner = CliRunner()
+    export_file = tmp_path / "secrets-export.env"
+
+    exported = runner.invoke(
+        secrets, ["--workspace", str(source), "export", "--file", str(export_file)]
+    )
+    assert exported.exit_code == 0, exported.output
+    assert read_env_values(export_file) == {"ALICE_GITHUB_PRIVATE_KEY": pem}
+
+    target = tmp_path / "target"
+    (target / ".guildbotics" / "config").mkdir(parents=True)
+    KeyringSecretStore(_config_dir(target)).ensure_initialized()
+    imported = runner.invoke(
+        secrets, ["--workspace", str(target), "import", str(export_file)]
+    )
+    assert imported.exit_code == 0, imported.output
+    assert KeyringSecretStore(_config_dir(target)).get("ALICE_GITHUB_PRIVATE_KEY") == (
+        pem
+    )
+
+
 def test_export_to_stdout(fake_keyring, tmp_path, monkeypatch):
     workspace = _workspace(tmp_path, monkeypatch)
     KeyringSecretStore(_config_dir(workspace)).set("OPENAI_API_KEY", "sk-secret")

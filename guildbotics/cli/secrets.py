@@ -14,6 +14,7 @@ from guildbotics.utils.secret_store import (
     KeyringSecretStore,
     SecretStore,
     configured_secrets_backend,
+    format_env_line,
     keyring_available,
     read_env_values,
     resolve_secret_store,
@@ -164,7 +165,7 @@ def secrets_migrate(env: _SecretsContext, extra_keys: tuple[str, ...]) -> None:
 def secrets_export(env: _SecretsContext, file_path: Path | None) -> None:
     """Export stored secrets in dotenv format (for moving machines)."""
     values = env.store().values()
-    content = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+    content = "\n".join(format_env_line(key, values[key]) for key in sorted(values))
     if file_path is None:
         click.echo(content)
         return
