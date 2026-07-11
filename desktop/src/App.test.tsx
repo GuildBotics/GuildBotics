@@ -1,6 +1,6 @@
 import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { TFunction } from "i18next";
 import { HashRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,7 +42,13 @@ import {
   upsertCommandRecord,
   type CommandRunRecord,
 } from "./App";
-import { getConfigStatus } from "./api/client";
+import {
+  dismissSystemAlert,
+  getConfigStatus,
+  getSystemAlerts,
+  runScenarioDiagnostics,
+  verify,
+} from "./api/client";
 import type {
   CommandOption,
   PromptTraceEntry,
@@ -161,6 +167,16 @@ vi.mock("./api/client", async (importOriginal) => {
       warnings: [],
       errors: [],
     })),
+    verify: vi.fn(async () => ({
+      ok: true,
+      config: {},
+      active_members: ["alice"],
+      checks: [],
+      warnings: [],
+      errors: [],
+    })),
+    getSystemAlerts: vi.fn(async () => ({ alerts: [] })),
+    dismissSystemAlert: vi.fn(async () => ({ alerts: [] })),
     subscribeEvents: vi.fn(() => () => {}),
     subscribeLogs: vi.fn(() => () => {}),
   };
@@ -191,6 +207,47 @@ describe("App", () => {
 
     await screen.findByRole("heading", { name: "Service Runtime" });
     expect(screen.queryByRole("link", { name: /Activity/ })).not.toBeInTheDocument();
+  });
+
+  it("shows a system alert on every page with resolution actions", async () => {
+    const alertResponse: Awaited<ReturnType<typeof getSystemAlerts>> = {
+      alerts: [
+        {
+          id: "credential:slack:alice",
+          code: "credential_slack",
+          severity: "critical",
+          opened_at: "2026-07-11T10:00:00+09:00",
+          updated_at: "2026-07-11T10:00:00+09:00",
+          occurrence_count: 1,
+          person_id: "alice",
+          command: "",
+          trace_id: "",
+          actions: ["diagnostics", "setup"],
+        },
+      ],
+    };
+    vi.mocked(getSystemAlerts).mockResolvedValue(alertResponse);
+    window.location.hash = "#/service";
+
+    renderApp();
+
+    expect(
+      await screen.findByText("Slack credentials for alice could not be verified."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open setup" })).toHaveAttribute("href", "#/setup");
+    fireEvent.click(screen.getByRole("button", { name: "Run diagnostics" }));
+    await waitFor(() => {
+      expect(verify).toHaveBeenCalledOnce();
+      expect(runScenarioDiagnostics).toHaveBeenCalledOnce();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => {
+      expect(dismissSystemAlert).toHaveBeenCalledWith("credential:slack:alice");
+    });
+    expect(
+      screen.queryByText("Slack credentials for alice could not be verified."),
+    ).not.toBeInTheDocument();
+    vi.mocked(getSystemAlerts).mockResolvedValue({ alerts: [] });
   });
 });
 

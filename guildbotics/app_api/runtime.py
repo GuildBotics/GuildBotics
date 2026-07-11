@@ -51,6 +51,7 @@ from guildbotics.app_api.models import (
     RuntimeStatus,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
+    SystemAlertsResponse,
     TeamSummary,
     TraceDetailResponse,
     TraceRecord,
@@ -58,6 +59,7 @@ from guildbotics.app_api.models import (
     TraceSummary,
     VerifyResponse,
 )
+from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
@@ -165,6 +167,7 @@ class AppRuntime:
     ) -> None:
         self._event_bus = event_bus
         self._diagnostics_store = diagnostics_store
+        self._system_alerts = SystemAlertService(diagnostics_store)
         self._lock = threading.Lock()
         self._activity_sync_lock = threading.Lock()
         self._activity_sync_attempts: dict[tuple[str, str], float] = {}
@@ -502,6 +505,15 @@ class AppRuntime:
     def get_scheduler_status(self) -> RuntimeStatus:
         return self._lifecycle.get_status()
 
+    def get_system_alerts(self) -> SystemAlertsResponse:
+        return self._system_alerts.list_alerts(self.get_scheduler_status())
+
+    def dismiss_system_alert(self, alert_id: str) -> SystemAlertsResponse:
+        active_ids = {alert.id for alert in self.get_system_alerts().alerts}
+        if alert_id in active_ids:
+            self._system_alerts.dismiss(alert_id)
+        return self.get_system_alerts()
+
     def reset_chat_receive_state(self) -> ChatReceiveResetResponse:
         """Ignore every chat message up to now across all active Slack members.
 
@@ -642,7 +654,18 @@ class AppRuntime:
         except Exception as exc:
             team_error = exc
 
-        return VerifyService().verify(config=status, team=team, team_error=team_error)
+        response = VerifyService().verify(
+            config=status, team=team, team_error=team_error
+        )
+        self._event_bus.publish_event(
+            "verify.completed",
+            {
+                "ok": response.ok,
+                "checks": [check.model_dump() for check in response.checks],
+            },
+            source="diagnostics",
+        )
+        return response
 
     async def run_scenario_diagnostics(
         self, person_id: str | None = None
@@ -654,11 +677,22 @@ class AppRuntime:
         except Exception as exc:
             context_error = exc
         try:
-            return await ScenarioDiagnosticsService().run(
+            response = await ScenarioDiagnosticsService().run(
                 context=context,
                 context_error=context_error,
                 person_id=person_id,
             )
+            self._event_bus.publish_event(
+                "diagnostics.completed",
+                {
+                    "ok": response.ok,
+                    "active_members": response.active_members,
+                    "scope_person_id": person_id or "",
+                    "checks": [check.model_dump() for check in response.checks],
+                },
+                source="diagnostics",
+            )
+            return response
         finally:
             if context is not None:
                 await context.aclose()

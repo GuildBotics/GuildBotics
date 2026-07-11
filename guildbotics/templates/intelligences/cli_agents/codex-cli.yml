@@ -15,6 +15,10 @@ script: |
     python3 -c 'import json, sys; payload = {"category": "rate_limited", "retry_after_text": sys.argv[1]}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))' "$1"
   }
 
+  emit_authentication_marker() {
+    python3 -c 'import json; payload = {"category": "authentication"}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))'
+  }
+
   status=0
 
   # Run non-interactively inside Codex's workspace-write sandbox instead of
@@ -69,6 +73,16 @@ script: |
     emit_rate_limit_marker "$retry_after_text" >&2
 
     exit 75
+  fi
+
+  if [ "$status" -ne 0 ] && grep -Eqi \
+    '401 Unauthorized|authentication(_error| failed|required)|not logged in|login required|token (expired|revoked)' \
+    "$log"
+  then
+    cat "$log" >&2
+    cat "$res"
+    emit_authentication_marker >&2
+    exit 77
   fi
 
   cat "$log" >&2

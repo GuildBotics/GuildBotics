@@ -1,9 +1,15 @@
 import httpx
 
+from guildbotics.observability.diagnostics_events import record_correlated_event
+
+HTTP_UNAUTHORIZED = 401
+
 
 async def raise_for_status_with_text(response: httpx.Response):
     if response.is_error:
         await response.aread()
+        if response.status_code == HTTP_UNAUTHORIZED:
+            record_github_auth_failure()
         message = (
             f"HTTP {response.status_code} Error for {response.url}\n"
             f"Response text: {response.text}"
@@ -14,6 +20,21 @@ async def raise_for_status_with_text(response: httpx.Response):
             response=response,
         )
     return response
+
+
+def record_github_auth_failure(
+    *, person_id: str = "", code: str = "unauthorized"
+) -> None:
+    record_correlated_event(
+        event_type="credential.failed",
+        default_source="github",
+        person_id=person_id,
+        attributes={
+            "credential.provider": "github",
+            "error.category": "authentication",
+        },
+        payload={"provider": "github", "code": code},
+    )
 
 
 def get_async_client(base_url: str, auth: httpx.Auth) -> httpx.AsyncClient:

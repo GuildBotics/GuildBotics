@@ -2056,6 +2056,8 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/runtime/debug"),
     ("PUT", "/runtime/debug"),
     ("POST", "/verify"),
+    ("GET", "/system-alerts"),
+    ("POST", "/system-alerts/dismiss"),
     ("POST", "/diagnostics/scenario"),
     ("GET", "/intelligences/cli-agents/detection"),
     ("GET", "/config/intelligences"),

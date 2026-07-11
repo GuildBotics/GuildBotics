@@ -323,7 +323,13 @@ def test_render_participant_text_converts_hyphenated_person_labels():
 
 
 @pytest.mark.asyncio
-async def test_slack_api_error_raises_runtime_error():
+async def test_slack_api_error_raises_runtime_error(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(
+        "guildbotics.integrations.slack.slack_chat_service.record_correlated_event",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
 
@@ -335,4 +341,9 @@ async def test_slack_api_error_raises_runtime_error():
         await svc.get_bot_identity()
     assert exc_info.value.method == "auth.test"
     assert exc_info.value.error == "invalid_auth"
+    assert recorded[0]["event_type"] == "credential.failed"
+    assert recorded[0]["payload"] == {
+        "provider": "slack",
+        "code": "invalid_auth",
+    }
     await client.aclose()

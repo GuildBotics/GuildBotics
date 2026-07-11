@@ -395,6 +395,41 @@ class ScenarioDiagnosticsResponse(BaseModel):
     errors: list[DiagnosticCheck]
 
 
+SystemAlertCode = Literal[
+    "credential_github",
+    "credential_slack",
+    "credential_cli_agent",
+    "credential_llm",
+    "command_failed",
+    "rate_limited",
+    "scheduler_failed",
+    "worker_stopped",
+]
+SystemAlertSeverity = Literal["critical", "warning"]
+SystemAlertAction = Literal["diagnostics", "setup", "trace", "service"]
+
+
+class SystemAlert(BaseModel):
+    id: str
+    code: SystemAlertCode
+    severity: SystemAlertSeverity
+    opened_at: str
+    updated_at: str
+    occurrence_count: int = 1
+    person_id: str = ""
+    command: str = ""
+    trace_id: str = ""
+    actions: list[SystemAlertAction] = Field(default_factory=list)
+
+
+class SystemAlertsResponse(BaseModel):
+    alerts: list[SystemAlert] = Field(default_factory=list)
+
+
+class SystemAlertDismissRequest(BaseModel):
+    alert_id: str = Field(min_length=1)
+
+
 class CliAgentDetection(BaseModel):
     name: str
     label: str = ""

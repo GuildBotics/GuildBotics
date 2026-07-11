@@ -268,6 +268,21 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   events/links/titles for the desktop Activity History (`activity_events.py`,
   `activity_links.py`). Display normalization lives *only* there — not in
   observability, not in the frontend.
+- **System health alerts**: successful and failed verify/scenario-diagnostics runs are
+  recorded as structured diagnostics events. `app_api/system_alerts.py` folds those
+  events together with command outcomes, rate-limit events, and current runtime state
+  into deduplicated unresolved alerts. The materialized state is retained separately
+  in `<workspace-data-root>/run/system-alerts.json`, so diagnostics rotation does not
+  discard an unresolved condition. Only alert-relevant event records are hashed and
+  tracked; logs and spans do not grow the state file. Credential checks and runtime
+  failures open on the first failure; a matching successful check/execution or removal
+  of the affected member/provider closes the alert. A user may also dismiss the current
+  occurrence; a later occurrence of the same cause opens it again. Provider adapters
+  normalize structured authentication failures to `credential.failed`, allowing a
+  workflow-time failure to become critical without waiting for diagnostics. The desktop
+  polls `/system-alerts` and renders the result above every route with links to
+  diagnostics, setup, service state, or the correlated trace. Provider classification
+  remains in the backend; the frontend only translates stable alert codes.
 
 ## 10. Desktop App
 

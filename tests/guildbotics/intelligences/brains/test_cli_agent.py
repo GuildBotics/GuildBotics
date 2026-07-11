@@ -368,6 +368,61 @@ async def test_cli_agent_run_raises_rate_limit_error_from_marker(monkeypatch, tm
     assert excinfo.value.details["retry_after_text"] == "11:44 AM"
 
 
+@pytest.mark.asyncio
+async def test_cli_agent_authentication_marker_records_credential_failure(
+    monkeypatch, tmp_path
+):
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+    marker = 'GUILDBOTICS_CLI_AGENT_ERROR_JSON: {"category":"authentication"}'
+    recorded = []
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None
+    ):
+        return StubProcess(stdout=b"", stderr=marker.encode(), returncode=77)
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+    monkeypatch.setattr(
+        cli_agent,
+        "record_correlated_event",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "warning": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
+            await brain.run("hello", cwd=tmp_path)
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert excinfo.value.category == "authentication"
+    assert recorded[0]["event_type"] == "credential.failed"
+    assert recorded[0]["payload"] == {
+        "provider": "cli_agent",
+        "code": "authentication",
+    }
+
+
 def test_normalize_retry_after_handles_composite_relative_duration():
     retry_after_at = cli_agent.normalize_cli_agent_retry_after("Resets in 2h30m15s")
 

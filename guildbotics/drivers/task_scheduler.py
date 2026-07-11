@@ -15,6 +15,7 @@ from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
 from guildbotics.observability import trace_scope
+from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
@@ -259,6 +260,11 @@ class TaskScheduler:
                     consecutive_errors=consecutive_errors,
                 )
                 if should_stop:
+                    self._record_worker_failed(
+                        person,
+                        source="scheduled",
+                        consecutive_errors=consecutive_errors,
+                    )
                     return consecutive_errors, True
             if self._stop_event.is_set():
                 break
@@ -317,6 +323,9 @@ class TaskScheduler:
                 consecutive_errors=consecutive_errors,
             )
             if should_stop:
+                self._record_worker_failed(
+                    person, source="routine", consecutive_errors=consecutive_errors
+                )
                 return (
                     routine_command_index,
                     consecutive_errors,
@@ -326,6 +335,21 @@ class TaskScheduler:
             self._sleep_interruptible(1)
 
         return routine_command_index, consecutive_errors, next_routine_time, False
+
+    def _record_worker_failed(
+        self, person: Person, *, source: str, consecutive_errors: int
+    ) -> None:
+        record_correlated_event(
+            event_type="scheduler.worker_failed",
+            default_source="scheduler",
+            person_id=person.person_id,
+            attributes={"service_run_id": self.service_run_id or ""},
+            payload={
+                "source": source,
+                "consecutive_errors": consecutive_errors,
+                "consecutive_error_limit": self.consecutive_error_limit,
+            },
+        )
 
     async def _run_routine_ticket_workflow(
         self, context: Context, person: Person, command: str

@@ -16,6 +16,7 @@ from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_workflow_status import (
     normalize_workflow_status_metadata,
 )
+from guildbotics.integrations.slack.auth_errors import is_slack_auth_error
 from guildbotics.integrations.slack.message_events import (
     is_bot_message,
     is_conversational_message,
@@ -24,21 +25,9 @@ from guildbotics.runtime.event_listener import EventListener, IncomingChatEvent
 
 _MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 
+
 # Slack error codes that will not recover by reconnecting with the same token.
 # Retrying these only produces noise, so the listener surfaces them and stops.
-_PERMANENT_AUTH_ERRORS = frozenset(
-    {
-        "invalid_auth",
-        "not_authed",
-        "account_inactive",
-        "token_revoked",
-        "token_expired",
-        "no_permission",
-        "not_allowed_token_type",
-    }
-)
-
-
 class SlackSocketAuthError(RuntimeError):
     """Raised when Slack rejects the app-level token (permanent failure)."""
 
@@ -192,7 +181,7 @@ class SlackSocketEventListener(EventListener):
                 else "invalid_json"
             )
             message = f"Slack API 'apps.connections.open' failed: {error}"
-            if error in _PERMANENT_AUTH_ERRORS:
+            if is_slack_auth_error(str(error)):
                 raise SlackSocketAuthError(message)
             raise RuntimeError(message)
         url = str(payload.get("url", "") or "")

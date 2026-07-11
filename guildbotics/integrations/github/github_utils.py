@@ -9,7 +9,11 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person
-from guildbotics.integrations.github.async_client import get_async_client
+from guildbotics.integrations.github.async_client import (
+    get_async_client,
+    raise_for_status_with_text,
+    record_github_auth_failure,
+)
 from guildbotics.utils.env_loader import workspace_secret_store
 
 HTTP_UNAUTHORIZED = 401
@@ -143,7 +147,7 @@ async def create_github_app_installation_token(
                 "User-Agent": "GuildBotics/1.0",
             },
         )
-        resp.raise_for_status()
+        await raise_for_status_with_text(resp)
         return str(resp.json()["token"])
 
 
@@ -172,11 +176,17 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
 
     if get_github_account_type(person) == GitHubAppAuth.GITHUB_APPS:
         # Use GitHub App authentication with auto-refresh
-        auth = GitHubAppAuth(
-            app_id=person.get_secret("github_app_id"),
-            installation_id=person.get_secret("github_installation_id"),
-            private_key_pem=get_person_private_key_pem(person),
-        )
+        try:
+            auth = GitHubAppAuth(
+                app_id=person.get_secret("github_app_id"),
+                installation_id=person.get_secret("github_installation_id"),
+                private_key_pem=get_person_private_key_pem(person),
+            )
+        except (OSError, TypeError, ValueError):
+            record_github_auth_failure(
+                person_id=person.person_id, code="invalid_app_credential"
+            )
+            raise
     else:
         # Use personal access token
         auth = GitHubTokenAuth(person.get_secret("github_access_token"))

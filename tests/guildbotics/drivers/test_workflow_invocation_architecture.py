@@ -299,6 +299,8 @@ def test_task_scheduler_ticket_selector_returns_none(monkeypatch):
 
 
 def test_task_scheduler_ticket_selector_raises_error(monkeypatch):
+    worker_events = []
+
     class _FakeTicketSelector:
         def __init__(self, context):
             pass
@@ -320,6 +322,10 @@ def test_task_scheduler_ticket_selector_raises_error(monkeypatch):
     )
     monkeypatch.setattr(
         "guildbotics.drivers.workflow_dispatcher.WorkflowDispatcher", _FakeDispatcher
+    )
+    monkeypatch.setattr(
+        "guildbotics.drivers.task_scheduler.record_correlated_event",
+        lambda **kwargs: worker_events.append(kwargs),
     )
 
     context = _FakeContext()
@@ -370,6 +376,19 @@ def test_task_scheduler_ticket_selector_raises_error(monkeypatch):
         assert should_stop is True
         assert len(dispatched) == 0
         assert len(context.get_ticket_manager().comments) == 0
+        assert worker_events == [
+            {
+                "event_type": "scheduler.worker_failed",
+                "default_source": "scheduler",
+                "person_id": context.person.person_id,
+                "attributes": {"service_run_id": ""},
+                "payload": {
+                    "source": "routine",
+                    "consecutive_errors": 3,
+                    "consecutive_error_limit": 3,
+                },
+            }
+        ]
     finally:
         loop.close()
 

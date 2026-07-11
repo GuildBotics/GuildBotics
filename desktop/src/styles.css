@@ -235,6 +235,11 @@ body {
   min-width: 0;
 }
 
+.system-alert-band {
+  position: relative;
+  z-index: 11;
+}
+
 .mono-text {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   overflow-wrap: anywhere;

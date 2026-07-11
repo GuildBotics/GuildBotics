@@ -57,9 +57,11 @@ import {
   getPromptTrace,
   getRuntimeDebug,
   getSchedulerStatus,
+  getSystemAlerts,
   getTeam,
   getTraceDetail,
   getTraces,
+  dismissSystemAlert,
   memberAvatarUrl,
   resetChatReceiveState,
   runCommand,
@@ -70,6 +72,7 @@ import {
   subscribeLogs,
   updatePromptTrace,
   updateRuntimeDebug,
+  verify as verifyConfiguration,
   type ChatReceiveResetResponse,
   type CommandOption,
   type DiagnosticCheck,
@@ -81,6 +84,7 @@ import {
   type RuntimeStatus,
   type RuntimeUnitStatus,
   type SchedulerStartRequest,
+  type SystemAlert,
   type TraceDetailResponse,
   type TraceRecord,
   type TraceSummary,
@@ -209,6 +213,7 @@ export function App() {
             cursor: "default",
           }}
         />
+        {configured ? <SystemAlertBand /> : null}
         <Routes>
           <Route
             element={<ConfiguredRoute configured={configured} loading={config.isLoading} />}
@@ -224,6 +229,103 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function SystemAlertBand() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const alerts = useQuery({
+    queryKey: ["system-alerts"],
+    queryFn: getSystemAlerts,
+    refetchInterval: 5000,
+  });
+  const diagnostics = useMutation({
+    mutationFn: async () => {
+      await verifyConfiguration();
+      return runScenarioDiagnostics();
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["system-alerts"] });
+    },
+  });
+  const dismiss = useMutation({
+    mutationFn: (alertId: string) => dismissSystemAlert(alertId),
+    onSuccess: (response) => {
+      queryClient.setQueryData(["system-alerts"], response);
+    },
+  });
+  if (!alerts.data?.alerts.length) {
+    return null;
+  }
+  return (
+    <Stack
+      aria-label={t("systemAlerts.region")}
+      className="system-alert-band"
+      gap="xs"
+      role="region"
+    >
+      {alerts.data.alerts.map((alert) => (
+        <Alert
+          color={alert.severity === "critical" ? "danger" : "warning"}
+          icon={<TriangleAlert size={18} />}
+          key={alert.id}
+          title={t(`systemAlerts.severity.${alert.severity}`)}
+        >
+          <Group align="center" justify="space-between" wrap="wrap">
+            <Text size="sm">{systemAlertMessage(t, alert)}</Text>
+            <Group gap="xs">
+              {alert.actions.includes("diagnostics") ? (
+                <Button
+                  loading={diagnostics.isPending}
+                  onClick={() => diagnostics.mutate()}
+                  size="xs"
+                  variant="light"
+                >
+                  {t("systemAlerts.actions.diagnostics")}
+                </Button>
+              ) : null}
+              {alert.actions.includes("setup") ? (
+                <Button component={NavLink} size="xs" to="/setup" variant="light">
+                  {t("systemAlerts.actions.setup")}
+                </Button>
+              ) : null}
+              {alert.actions.includes("service") ? (
+                <Button component={NavLink} size="xs" to="/service" variant="light">
+                  {t("systemAlerts.actions.service")}
+                </Button>
+              ) : null}
+              {alert.actions.includes("trace") && alert.trace_id ? (
+                <Button
+                  component={NavLink}
+                  size="xs"
+                  to={`/diagnostics?tab=executions&trace_id=${encodeURIComponent(alert.trace_id)}`}
+                  variant="light"
+                >
+                  {t("systemAlerts.actions.trace")}
+                </Button>
+              ) : null}
+              <Button
+                loading={dismiss.isPending && dismiss.variables === alert.id}
+                onClick={() => dismiss.mutate(alert.id)}
+                size="xs"
+                variant="subtle"
+              >
+                {t("systemAlerts.actions.dismiss")}
+              </Button>
+            </Group>
+          </Group>
+        </Alert>
+      ))}
+    </Stack>
+  );
+}
+
+function systemAlertMessage(t: TFunction, alert: SystemAlert) {
+  return t(`systemAlerts.codes.${alert.code}`, {
+    person: alert.person_id || t("systemAlerts.unknownMember"),
+    command: alert.command || t("systemAlerts.unknownCommand"),
+    count: alert.occurrence_count,
+  });
 }
 
 function NavStatusIndicator({ state, label }: { state: NavRuntimeState; label: string }) {

@@ -16,6 +16,10 @@ script: |
     python3 -c 'import json, sys; payload = {"category": "rate_limited", "retry_after_text": sys.argv[1]}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))' "$1"
   }
 
+  emit_authentication_marker() {
+    python3 -c 'import json; payload = {"category": "authentication"}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))'
+  }
+
   # Resume this dispatch's own conversation on retries. The workflow points
   # GUILDBOTICS_CLI_AGENT_CONVERSATION_FILE at a per-run file: if it already holds
   # an id (a previous attempt of the same dispatch) we resume that exact
@@ -73,6 +77,16 @@ script: |
     emit_rate_limit_marker "$retry_after_text" >&2
 
     exit 75
+  fi
+
+  if [ "$status" -ne 0 ] && grep -Eqi \
+    '401 Unauthorized|UNAUTHENTICATED|invalid_grant|authentication(_error| failed|required)|token (expired|revoked)' \
+    "$res" "$log" "$agylog"
+  then
+    cat "$log" >&2
+    cat "$res"
+    emit_authentication_marker >&2
+    exit 77
   fi
 
   cat "$log" >&2
