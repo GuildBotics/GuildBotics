@@ -179,6 +179,7 @@ async def test_poller_records_each_closed_project_item_once(monkeypatch, tmp_pat
     end = datetime(2026, 7, 11, tzinfo=UTC)
     assert await poller.poll(start, end) == 1
     assert await poller.poll(start, end) == 0
+    assert queries
     normalized_query = " ".join(queries[0].split())
     assert "items(first:100, after:$cursor) { nodes { content {" in normalized_query
     assert "} } pageInfo { hasNextPage endCursor } }" in normalized_query
