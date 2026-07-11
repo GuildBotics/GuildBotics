@@ -1920,8 +1920,9 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
 
 def test_member_cli_help_stays_in_sync_with_capability_catalog():
     """Every member command documents itself (own docstring or catalog summary),
-    and the capability catalog contains no entries for commands that no longer
-    exist in the CLI."""
+    and the capability catalog and the CLI leaf commands stay in exact sync:
+    a leaf absent from the catalog would be missing from ``member help`` /
+    ``member context`` even when its own docstring satisfies ``--help``."""
     leaves: dict[str, click.Command] = {}
 
     def collect(group: click.Group, path: tuple[str, ...] = ()) -> None:
@@ -1934,4 +1935,4 @@ def test_member_cli_help_stays_in_sync_with_capability_catalog():
     collect(member_module.member)
 
     assert sorted(path for path, cmd in leaves.items() if not cmd.help) == []
-    assert sorted(path for path in command_summaries() if path not in leaves) == []
+    assert sorted(leaves) == sorted(command_summaries())
