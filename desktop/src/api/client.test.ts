@@ -4,6 +4,7 @@ import {
   ApiRequestError,
   configureApi,
   ensureAgentField,
+  dismissSystemAlert,
   getAgentFieldState,
   getApiBase,
   getActivityHistory,
@@ -15,6 +16,7 @@ import {
   getMemberConfig,
   getPromptTrace,
   getRuntimeDebug,
+  getSystemAlerts,
   memberAvatarUrl,
   runScenarioDiagnostics,
   setWorkspace,
@@ -216,6 +218,23 @@ describe("GET query parameter encoding", () => {
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/scenario?person_id=alice%2Fdev");
     expect(calls[0].init.method).toBe("POST");
+  });
+
+  it("fetches active system alerts", async () => {
+    const { calls } = captureFetch(jsonResponse({ alerts: [] }));
+    await getSystemAlerts();
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/system-alerts");
+    expect(calls[0].init.method).toBe("GET");
+  });
+
+  it("dismisses a system alert", async () => {
+    const { calls } = captureFetch(jsonResponse({ alerts: [] }));
+    await dismissSystemAlert("credential:slack:alice/dev");
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/system-alerts/dismiss");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify({ alert_id: "credential:slack:alice/dev" }));
   });
 
   it("encodes filters for getMemoryEvents", async () => {

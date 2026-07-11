@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from guildbotics.drivers.command_runner import CommandRunner
+from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
 
 
@@ -23,6 +24,13 @@ async def run_with_logging(
         context.logger.info(
             f"Running {task_type} command '{command_name}' for person '{person.person_id}'..."
         )
+        record_correlated_event(
+            event_type="command.started",
+            default_source=task_type,
+            person_id=person.person_id,
+            command=command_name,
+            payload={"command": command_name, "person": person.person_id},
+        )
 
         await action()
 
@@ -32,6 +40,13 @@ async def run_with_logging(
             f"Finished running {task_type} command '{command_name}' for person "
             f"'{person.person_id}' in {duration:.2f}s"
         )
+        record_correlated_event(
+            event_type="command.finished",
+            default_source=task_type,
+            person_id=person.person_id,
+            command=command_name,
+            payload={"command": command_name, "person": person.person_id},
+        )
         return True
     except Exception as e:
         context.logger.error(
@@ -39,6 +54,17 @@ async def run_with_logging(
             f"'{person.person_id}': {e}"
         )
         context.logger.error(traceback.format_exc())
+        record_correlated_event(
+            event_type="command.failed",
+            default_source=task_type,
+            person_id=person.person_id,
+            command=command_name,
+            payload={
+                "command": command_name,
+                "person": person.person_id,
+                "error_type": type(e).__name__,
+            },
+        )
         return False
 
 

@@ -18,6 +18,7 @@ from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.observability import span_scope
+from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.log_utils import get_log_output_dir
@@ -460,7 +461,17 @@ class CliAgentBrain(Brain):
         return result
 
     def _raise_if_execution_failed(self, result: CliAgentExecutionResult) -> None:
-        if result.error_category == "rate_limited":
+        if result.error_category in {"authentication", "rate_limited"}:
+            if result.error_category == "authentication":
+                record_correlated_event(
+                    event_type="credential.failed",
+                    default_source="cli_agent",
+                    attributes={
+                        "credential.provider": "cli_agent",
+                        "error.category": "authentication",
+                    },
+                    payload={"provider": "cli_agent", "code": "authentication"},
+                )
             raise CliAgentExecutionError(
                 cli_agent=self.cli_agent,
                 result=result,

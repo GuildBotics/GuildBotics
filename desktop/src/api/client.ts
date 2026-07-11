@@ -197,6 +197,31 @@ export type ScenarioDiagnosticsResponse = {
   errors: DiagnosticCheck[];
 };
 
+export type SystemAlert = {
+  id: string;
+  code:
+    | "credential_github"
+    | "credential_slack"
+    | "credential_cli_agent"
+    | "credential_llm"
+    | "command_failed"
+    | "rate_limited"
+    | "scheduler_failed"
+    | "worker_stopped";
+  severity: "critical" | "warning";
+  opened_at: string;
+  updated_at: string;
+  occurrence_count: number;
+  person_id: string;
+  command: string;
+  trace_id: string;
+  actions: Array<"diagnostics" | "setup" | "trace" | "service">;
+};
+
+export type SystemAlertsResponse = {
+  alerts: SystemAlert[];
+};
+
 export type CliAgentDetection = {
   name: string;
   label: string;
@@ -724,6 +749,17 @@ export async function updateRuntimeDebug(
 
 export async function verify(): Promise<VerifyResponse> {
   return request("/verify", { method: "POST" });
+}
+
+export async function getSystemAlerts(): Promise<SystemAlertsResponse> {
+  return request("/system-alerts");
+}
+
+export async function dismissSystemAlert(alertId: string): Promise<SystemAlertsResponse> {
+  return request("/system-alerts/dismiss", {
+    method: "POST",
+    body: { alert_id: alertId },
+  });
 }
 
 export async function runScenarioDiagnostics(

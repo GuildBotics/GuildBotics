@@ -46,6 +46,34 @@ const resources = {
           retry: "Retry",
         },
       },
+      systemAlerts: {
+        region: "System health alerts",
+        severity: {
+          critical: "System action required",
+          warning: "System warning",
+        },
+        codes: {
+          credential_github: "GitHub credentials for {{person}} could not be verified.",
+          credential_slack: "Slack credentials for {{person}} could not be verified.",
+          credential_cli_agent: "The AI CLI tool credentials for {{person}} could not be verified.",
+          credential_llm: "The configured LLM credentials could not be verified.",
+          command_failed:
+            "{{command}} failed for {{person}}. This alert closes after a successful run.",
+          rate_limited:
+            "{{command}} was rate limited for {{person}}. This alert closes after a later successful run.",
+          scheduler_failed: "The scheduler stopped because of an unexpected error.",
+          worker_stopped: "One or more member workers stopped after repeated errors.",
+        },
+        actions: {
+          diagnostics: "Run diagnostics",
+          setup: "Open setup",
+          trace: "Open trace",
+          service: "Open service",
+          dismiss: "Dismiss",
+        },
+        unknownMember: "an unknown member",
+        unknownCommand: "A command",
+      },
       activity: {
         title: "Activity",
         search: "Search activity",
@@ -1203,6 +1231,33 @@ const resources = {
           failed: "GuildBotics を起動できませんでした",
           retry: "再試行",
         },
+      },
+      systemAlerts: {
+        region: "システム健全性アラート",
+        severity: {
+          critical: "システムへの対応が必要です",
+          warning: "システム警告",
+        },
+        codes: {
+          credential_github: "{{person}} の GitHub 資格情報を検証できませんでした。",
+          credential_slack: "{{person}} の Slack 資格情報を検証できませんでした。",
+          credential_cli_agent: "{{person}} の AI CLI ツール資格情報を検証できませんでした。",
+          credential_llm: "設定された LLM 資格情報を検証できませんでした。",
+          command_failed: "{{person}} の {{command}} が失敗しました。正常実行後に自動で閉じます。",
+          rate_limited:
+            "{{person}} の {{command}} が rate limit を受けました。次の正常実行後に自動で閉じます。",
+          scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
+          worker_stopped: "連続エラーによりメンバーワーカーが停止しました。",
+        },
+        actions: {
+          diagnostics: "診断を実行",
+          setup: "設定を開く",
+          trace: "trace を開く",
+          service: "サービスを開く",
+          dismiss: "閉じる",
+        },
+        unknownMember: "不明なメンバー",
+        unknownCommand: "コマンド",
       },
       activity: {
         title: "アクティビティ",

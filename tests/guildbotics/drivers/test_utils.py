@@ -36,6 +36,8 @@ class FakeContext:
 
 @pytest.mark.asyncio
 async def test_run_command_success_logs_and_returns_true(monkeypatch):
+    events = []
+
     class FakeCommandRunner:
         def __init__(self, context, command, args):
             self.context = context
@@ -47,6 +49,10 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
             await asyncio.sleep(0)
 
     monkeypatch.setattr("guildbotics.drivers.utils.CommandRunner", FakeCommandRunner)
+    monkeypatch.setattr(
+        "guildbotics.drivers.utils.record_correlated_event",
+        lambda **kwargs: events.append(kwargs),
+    )
 
     ctx = FakeContext()
     ok = await run_command(ctx, "test", task_type="scheduled")
@@ -60,10 +66,16 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
     ]
     assert start_logs, "Start log not found"
     assert finish_logs, "Finish log not found"
+    assert [event["event_type"] for event in events] == [
+        "command.started",
+        "command.finished",
+    ]
 
 
 @pytest.mark.asyncio
 async def test_run_command_exception_logs_and_returns_false(monkeypatch):
+    events = []
+
     class FakeCommandRunnerError:
         def __init__(
             self,
@@ -82,6 +94,10 @@ async def test_run_command_exception_logs_and_returns_false(monkeypatch):
     monkeypatch.setattr(
         "guildbotics.drivers.utils.CommandRunner", FakeCommandRunnerError
     )
+    monkeypatch.setattr(
+        "guildbotics.drivers.utils.record_correlated_event",
+        lambda **kwargs: events.append(kwargs),
+    )
 
     ctx = FakeContext()
     ok = await run_command(ctx, "Failing", task_type="scheduled")
@@ -93,3 +109,8 @@ async def test_run_command_exception_logs_and_returns_false(monkeypatch):
     assert error_summary, "Error summary log not found"
     traceback_logs = [e for e in ctx.logger.errors if "RuntimeError: boom" in e]
     assert traceback_logs, "Traceback log not found"
+    assert [event["event_type"] for event in events] == [
+        "command.started",
+        "command.failed",
+    ]
+    assert events[-1]["payload"]["error_type"] == "RuntimeError"

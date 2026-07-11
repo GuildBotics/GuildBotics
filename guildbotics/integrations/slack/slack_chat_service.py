@@ -18,10 +18,12 @@ from guildbotics.integrations.chat_service import (
 from guildbotics.integrations.chat_workflow_status import (
     normalize_workflow_status_metadata,
 )
+from guildbotics.integrations.slack.auth_errors import is_slack_auth_error
 from guildbotics.integrations.slack.message_events import (
     is_bot_message,
     is_conversational_message,
 )
+from guildbotics.observability.diagnostics_events import record_correlated_event
 
 _MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 _EPHEMERAL_PARTICIPANT_LABEL_RE = re.compile(r"^(?:user|agent)_\d+$", re.IGNORECASE)
@@ -32,6 +34,19 @@ _SLACK_REACTION_MAP: dict[SemanticReaction, str] = {
     "celebrate": "tada",
     "support": "heart",
 }
+HTTP_UNAUTHORIZED = 401
+
+
+def _record_slack_auth_failure(code: str) -> None:
+    record_correlated_event(
+        event_type="credential.failed",
+        default_source="slack",
+        attributes={
+            "credential.provider": "slack",
+            "error.category": "authentication",
+        },
+        payload={"provider": "slack", "code": code},
+    )
 
 
 class SlackApiError(RuntimeError):
@@ -254,12 +269,16 @@ class SlackChatService(ChatService):
     async def _post_form(self, method: str, form: dict[str, str]) -> dict[str, Any]:
         client = self._get_client()
         response = await client.post(f"{self._base_url}/{method}", data=form)
+        if response.status_code == HTTP_UNAUTHORIZED:
+            _record_slack_auth_failure("unauthorized")
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
             raise RuntimeError(f"Slack API '{method}' returned non-object JSON.")
         if not payload.get("ok", False):
             error = str(payload.get("error", "unknown_error") or "unknown_error")
+            if is_slack_auth_error(error):
+                _record_slack_auth_failure(error)
             raise SlackApiError(method, error)
         return payload
 

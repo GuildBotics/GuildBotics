@@ -62,6 +62,8 @@ from guildbotics.app_api.models import (
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SchedulerStopRequest,
+    SystemAlertDismissRequest,
+    SystemAlertsResponse,
     TeamSummary,
     TraceDetailResponse,
     TracesResponse,
@@ -350,6 +352,24 @@ def create_app(
     @app.post("/verify", response_model=VerifyResponse, responses=error_responses)
     def verify(_: None = Depends(require_token)) -> VerifyResponse:
         return app_runtime.verify()
+
+    @app.get(
+        "/system-alerts",
+        response_model=SystemAlertsResponse,
+        responses=error_responses,
+    )
+    def system_alerts(_: None = Depends(require_token)) -> SystemAlertsResponse:
+        return app_runtime.get_system_alerts()
+
+    @app.post(
+        "/system-alerts/dismiss",
+        response_model=SystemAlertsResponse,
+        responses=error_responses,
+    )
+    def dismiss_system_alert(
+        request: SystemAlertDismissRequest, _: None = Depends(require_token)
+    ) -> SystemAlertsResponse:
+        return app_runtime.dismiss_system_alert(request.alert_id)
 
     @app.post(
         "/diagnostics/scenario",

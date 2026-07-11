@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
@@ -203,6 +204,44 @@ def test_records_between_orders_and_limits_mixed_offset_timestamps_by_instant(
     records = store.records_between(includes=lambda _timestamp: True, limit=1)
 
     assert [record["trace_id"] for record in records] == ["t2"]
+
+
+def test_records_after_reads_disk_rows_beyond_memory_window(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl", memory_limit=2)
+    store.record(_event("t1", "command.failed"))
+    for index in range(10):
+        store.record(_log(None, "INFO", f"noise-{index}", "2026-07-01T00:00:00Z"))
+
+    records, _ = store.records_after(
+        None, includes=lambda item: item.get("kind") == "event"
+    )
+
+    assert [record["type"] for record in records] == ["command.failed"]
+
+
+def test_records_after_returns_only_rows_appended_after_cursor(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.failed"))
+    _, cursor = store.records_after(None, includes=lambda _: True)
+    store.record(_event("t2", "command.finished"))
+
+    records, next_cursor = store.records_after(cursor, includes=lambda _: True)
+
+    assert [record["type"] for record in records] == ["command.finished"]
+    assert next_cursor.offset > cursor.offset
+
+
+def test_records_after_resets_cursor_when_file_is_rewritten(tmp_path: Path) -> None:
+    path = tmp_path / "diag.jsonl"
+    store = DiagnosticsStore(path)
+    store.record(_event("t1", "command.failed"))
+    _, cursor = store.records_after(None, includes=lambda _: True)
+    replacement = _event("t2", "scheduler.failed")
+    path.write_text(json.dumps(replacement) + "\n", encoding="utf-8")
+
+    records, _ = store.records_after(cursor, includes=lambda _: True)
+
+    assert [record["type"] for record in records] == ["scheduler.failed"]
 
 
 def test_records_persist_across_restart(tmp_path: Path) -> None:

@@ -9,7 +9,11 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person
-from guildbotics.integrations.github.async_client import get_async_client
+from guildbotics.integrations.github.async_client import (
+    get_async_client,
+    raise_for_status_with_text,
+    record_github_auth_failure,
+)
 from guildbotics.utils.env_loader import workspace_secret_store
 
 HTTP_UNAUTHORIZED = 401
@@ -33,13 +37,22 @@ class GitHubAppAuth(httpx.Auth):
     MACHINE_USER: ClassVar[str] = "machine_user"
     GITHUB_APPS: ClassVar[str] = "github_apps"
     PROXY_AGENT: ClassVar[str] = "proxy_agent"
+    handles_unauthorized: ClassVar[bool] = True
 
     requires_request_body = True
     requires_response_body = True
 
-    def __init__(self, app_id: str, installation_id: str, private_key_pem: bytes):
+    def __init__(
+        self,
+        app_id: str,
+        installation_id: str,
+        private_key_pem: bytes,
+        *,
+        person_id: str = "",
+    ):
         self.app_id = app_id
         self.installation_id = installation_id
+        self.person_id = person_id
         self._token: str | None = None
         self._expires_at: dt.datetime | None = None
         self._leeway = dt.timedelta(seconds=120)
@@ -75,27 +88,32 @@ class GitHubAppAuth(httpx.Auth):
         exp = data["expires_at"].replace("Z", "+00:00")
         self._expires_at = dt.datetime.fromisoformat(exp)
 
+    def _raise_final_unauthorized(self, response: httpx.Response) -> None:
+        if response.status_code != HTTP_UNAUTHORIZED:
+            return
+        record_github_auth_failure(person_id=self.person_id)
+        response.raise_for_status()
+
+    def _refresh(self, request: httpx.Request):
+        refresh_resp = yield self._build_refresh_request(request)
+        self._raise_final_unauthorized(refresh_resp)
+        self._update_token_from_response(refresh_resp)
+
     def auth_flow(self, request: httpx.Request):
         if self._need_refresh():
-            refresh_req = self._build_refresh_request(request)
-            refresh_resp = yield refresh_req
-            self._update_token_from_response(refresh_resp)
+            yield from self._refresh(request)
 
         request.headers["Authorization"] = f"token {self._token}"
         request.headers.setdefault("Accept", "application/vnd.github.v3+json")
         request.headers.setdefault("X-GitHub-Api-Version", "2022-11-28")
 
-        try:
-            yield request
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == HTTP_UNAUTHORIZED:
-                refresh_req = self._build_refresh_request(request)
-                refresh_resp = yield refresh_req
-                self._update_token_from_response(refresh_resp)
-                request.headers["Authorization"] = f"token {self._token}"
-                yield request
-            else:
-                raise
+        response = yield request
+        if response.status_code != HTTP_UNAUTHORIZED:
+            return
+        yield from self._refresh(request)
+        request.headers["Authorization"] = f"token {self._token}"
+        response = yield request
+        self._raise_final_unauthorized(response)
 
 
 def _load_rsa_private_key(private_key_pem: bytes) -> RSAPrivateKey:
@@ -143,7 +161,7 @@ async def create_github_app_installation_token(
                 "User-Agent": "GuildBotics/1.0",
             },
         )
-        resp.raise_for_status()
+        await raise_for_status_with_text(resp)
         return str(resp.json()["token"])
 
 
@@ -172,11 +190,18 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
 
     if get_github_account_type(person) == GitHubAppAuth.GITHUB_APPS:
         # Use GitHub App authentication with auto-refresh
-        auth = GitHubAppAuth(
-            app_id=person.get_secret("github_app_id"),
-            installation_id=person.get_secret("github_installation_id"),
-            private_key_pem=get_person_private_key_pem(person),
-        )
+        try:
+            auth = GitHubAppAuth(
+                app_id=person.get_secret("github_app_id"),
+                installation_id=person.get_secret("github_installation_id"),
+                private_key_pem=get_person_private_key_pem(person),
+                person_id=person.person_id,
+            )
+        except (OSError, TypeError, ValueError):
+            record_github_auth_failure(
+                person_id=person.person_id, code="invalid_app_credential"
+            )
+            raise
     else:
         # Use personal access token
         auth = GitHubTokenAuth(person.get_secret("github_access_token"))
