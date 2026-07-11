@@ -297,20 +297,13 @@ guildbotics start --only events
 To stop the running service:
 
 ```bash
-guildbotics stop [--timeout <seconds>] [--force]
+guildbotics stop
 ```
 
-- Sends SIGTERM; the scheduler stops accepting new work, waits for in-flight work to finish, then exits. Waits up to `--timeout` seconds (default: 30).
-- Sending SIGTERM again (for example, running `guildbotics stop` a second time) cancels the in-flight work.
-- With `--force`, after the timeout it sends a second SIGTERM to cancel in-flight work, waits up to `--timeout` seconds again, and sends SIGKILL only if the process is still running.
-
-For an immediate force stop:
-
-```bash
-guildbotics kill
-```
-
-This is equivalent to `guildbotics stop --force --timeout 0`.
+The scheduler stops accepting new work, waits for in-flight work to finish, then exits.
+Running `guildbotics stop` a second time cancels the in-flight work, and `guildbotics kill`
+force-stops immediately. For options such as `--timeout` and `--force`, see the
+[CLI Reference](docs/cli_reference.md#guildbotics-stop).
 
 ## 5.4. Schedule Features
 
@@ -796,6 +789,9 @@ With the ticket-driven workflow, you can:
 
 # 7. Reference
 
+The complete list of CLI commands and their options is generated from the source and
+published as the [CLI Reference](docs/cli_reference.md).
+
 ## 7.1. Account-Related Environment Variables
 
 **LLM API Keys**:
@@ -859,16 +855,12 @@ files whenever possible:
 - **`GUILDBOTICS_SECRETS_BACKEND`:** set to `keyring` or `env-file` to force a backend for a
   single process (useful for CI and scripted environments).
 
-Manage secrets with the `guildbotics secrets` CLI:
+Manage secrets with the `guildbotics secrets` CLI (see the
+[CLI Reference](docs/cli_reference.md#guildbotics-secrets) for all subcommands and options):
 
 ```bash
-guildbotics secrets status                 # backend in use and keychain availability
-guildbotics secrets migrate                # move secrets from .env into the OS keychain
-guildbotics secrets list                   # stored key names (values are never printed)
-guildbotics secrets set KEY                # add or update one secret (hidden prompt)
-guildbotics secrets delete KEY             # remove one secret
-guildbotics secrets export --file s.env    # dotenv-format export for moving machines
-guildbotics secrets import s.env           # import on the target machine
+guildbotics secrets status     # backend in use and keychain availability
+guildbotics secrets migrate    # move secrets from .env into the OS keychain
 ```
 
 Secrets are stored per workspace (the keychain entries are namespaced by the `store_id` in
