@@ -47,6 +47,9 @@ jobs:
       - name: Sync dependencies
         run: uv sync --extra test --extra dev
 
+      - name: Check generated CLI reference
+        run: uv run --no-sync python scripts/generate-cli-reference.py --check
+
       - name: Run Ruff format
         run: uv run --no-sync ruff format --check guildbotics
 

@@ -268,6 +268,10 @@ GuildBoticsでは、複数の種類のコマンドを実行できます。コマ
 
 ### 5.3.2. コマンドの実行方法
 
+コマンド、引数、オプションの完全な一覧は、生成された
+[CLI リファレンス](docs/cli_reference.md)を参照してください。このリファレンスは Click 定義から
+直接生成され、CLI 構文の正となります。
+
 **手動実行**:
 
 ```bash
@@ -293,30 +297,21 @@ guildbotics start [routine_commands...]
 
 コマンドを指定しない場合、メンバーワーカー側のデフォルトルーチンとして `workflows/ticket_driven_workflow` を実行します。
 
-起動対象を片方に限定することもできます:
+たとえば、起動対象を片方に限定できます:
 
 ```bash
 guildbotics start --only scheduler
 guildbotics start --only events
 ```
 
-実行中のサービスを停止するには:
+実行中のサービスを安全に停止するには:
 
 ```bash
-guildbotics stop [--timeout <seconds>] [--force]
+guildbotics stop
 ```
 
-- SIGTERM を送信します。スケジューラは新しい作業の受付を止め、実行中の作業の完了を待ってから終了します。最大 `--timeout` 秒（デフォルト: 30）待機します。
-- もう一度 SIGTERM を送る（例: `guildbotics stop` を再実行する）と、実行中の作業をキャンセルします。
-- `--force` を指定した場合、タイムアウト後に 2 回目の SIGTERM で実行中の作業をキャンセルし、さらに `--timeout` 秒待っても終了しない場合のみ SIGKILL を送信します。
-
-即座に強制停止する場合:
-
-```bash
-guildbotics kill
-```
-
-これは `guildbotics stop --force --timeout 0` と同じです。
+スケジューラは新しい作業の受付を止め、実行中の作業の完了を待ちます。タイムアウト、キャンセル、
+即時停止のオプションは [CLI リファレンス](docs/cli_reference.md)を参照してください。
 
 ## 5.4. スケジュール機能
 

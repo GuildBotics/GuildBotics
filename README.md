@@ -263,6 +263,10 @@ For detailed creation methods, see [Custom Command Development Guide](docs/custo
 
 ### 5.3.2. Command Execution Methods
 
+For the complete, generated list of commands, arguments, and options, see the
+[CLI Reference](docs/cli_reference.md). The reference is generated directly from the Click
+definitions and is the source of truth for CLI syntax.
+
 **Manual execution**:
 
 ```bash
@@ -287,30 +291,21 @@ By default, this starts:
 
 If no command is specified, the member workers run `workflows/ticket_driven_workflow` as the default routine command.
 
-You can also limit startup to one side:
+For example, you can limit startup to one side:
 
 ```bash
 guildbotics start --only scheduler
 guildbotics start --only events
 ```
 
-To stop the running service:
+Stop the running service gracefully with:
 
 ```bash
-guildbotics stop [--timeout <seconds>] [--force]
+guildbotics stop
 ```
 
-- Sends SIGTERM; the scheduler stops accepting new work, waits for in-flight work to finish, then exits. Waits up to `--timeout` seconds (default: 30).
-- Sending SIGTERM again (for example, running `guildbotics stop` a second time) cancels the in-flight work.
-- With `--force`, after the timeout it sends a second SIGTERM to cancel in-flight work, waits up to `--timeout` seconds again, and sends SIGKILL only if the process is still running.
-
-For an immediate force stop:
-
-```bash
-guildbotics kill
-```
-
-This is equivalent to `guildbotics stop --force --timeout 0`.
+The scheduler stops accepting new work and waits for in-flight work to finish. See the
+[CLI Reference](docs/cli_reference.md) for timeout, cancellation, and immediate-stop options.
 
 ## 5.4. Schedule Features
 
