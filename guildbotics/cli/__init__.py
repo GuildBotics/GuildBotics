@@ -106,7 +106,7 @@ def _remove_pidfile(path: Path) -> None:
         pass
 
 
-@click.group()
+@click.group(context_settings={"show_default": True})
 @click.version_option(
     version=_resolve_version(),
     prog_name="guildbotics",
@@ -134,7 +134,6 @@ main.add_command(workspace)
     "--max-consecutive-errors",
     type=int,
     default=3,
-    show_default=True,
     help="Stop a worker after this many consecutive workflow errors.",
 )
 @click.argument("default_routine_commands", nargs=-1)
@@ -335,7 +334,6 @@ def version_cmd() -> None:
 @click.option(
     "--timeout",
     default=30,
-    show_default=True,
     help="Seconds to wait at each stop stage",
 )
 @click.option(

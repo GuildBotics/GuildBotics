@@ -6,13 +6,14 @@ from typing import Any
 
 import click
 
+from guildbotics.cli._options import format_option
 from guildbotics.utils.workspace_state import (
     read_active_workspace,
     workspace_status_payload,
     write_active_workspace,
 )
 
-FormatChoice = click.Choice(["json", "markdown"])
+_format_option = format_option("markdown")
 
 
 @click.group()
@@ -25,7 +26,7 @@ def workspace() -> None:
     "workspace_dir",
     type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
 )
-@click.option("--format", "output_format", type=FormatChoice, default="markdown")
+@_format_option
 def use_workspace(workspace_dir: Path, output_format: str) -> None:
     """Persist the active workspace for desktop and external AI CLI tools."""
     try:
@@ -36,7 +37,7 @@ def use_workspace(workspace_dir: Path, output_format: str) -> None:
 
 
 @workspace.command(name="current")
-@click.option("--format", "output_format", type=FormatChoice, default="markdown")
+@_format_option
 def current_workspace(output_format: str) -> None:
     """Show the persisted active workspace."""
     state = read_active_workspace()
@@ -50,7 +51,7 @@ def current_workspace(output_format: str) -> None:
 
 
 @workspace.command(name="status")
-@click.option("--format", "output_format", type=FormatChoice, default="markdown")
+@_format_option
 def workspace_status(output_format: str) -> None:
     """Show active workspace status without failing when it is missing."""
     _print(workspace_status_payload(), output_format)

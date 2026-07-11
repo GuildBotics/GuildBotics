@@ -16,9 +16,14 @@ across entrypoints belongs here, not in the prompts.
 Consumers render from this one source:
 - ``member context`` embeds it (the mandatory first call in every entrypoint).
 - ``member help`` prints it on demand.
+- The ``member`` Click commands fill missing ``--help`` descriptions from the
+  per-command summaries (see :func:`command_summary`).
 """
 
 from __future__ import annotations
+
+import re
+from collections.abc import Mapping
 
 # (group title, [(command usage, one-line purpose), ...])
 _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
@@ -283,6 +288,46 @@ _CROSS_CUTTING_RULES: list[str] = [
     "only when they are valuable beyond that one PR.",
     "Never display, infer, store, or copy secrets or token values.",
 ]
+
+
+_SUBCOMMAND_NAME = re.compile(r"[a-z][a-z0-9-]*")
+
+
+def _usage_command_path(usage: str) -> str:
+    """Subcommand path (e.g. ``chat inspect thread``) of a catalog usage line."""
+    names: list[str] = []
+    for token in usage.removeprefix("guildbotics member").split():
+        if not _SUBCOMMAND_NAME.fullmatch(token):
+            break
+        names.append(token)
+    return " ".join(names)
+
+
+_COMMAND_SUMMARIES: dict[str, str] = {
+    _usage_command_path(usage): purpose
+    for _, commands in _CAPABILITY_GROUPS
+    for usage, purpose in commands
+}
+
+
+def command_summaries() -> Mapping[str, str]:
+    """One-line purposes of the ``member`` subcommands, keyed by command path."""
+    return _COMMAND_SUMMARIES
+
+
+def command_summary(command_path: str) -> str:
+    """Return the catalog's one-line purpose of a ``member`` subcommand.
+
+    Raises ``KeyError`` for paths without a catalog entry, so a CLI command
+    that is missing from ``_CAPABILITY_GROUPS`` fails fast at import time.
+    """
+    try:
+        return _COMMAND_SUMMARIES[command_path]
+    except KeyError:
+        raise KeyError(
+            f"'guildbotics member {command_path}' has no entry in the member "
+            "capability catalog (_CAPABILITY_GROUPS)."
+        ) from None
 
 
 def capability_reference_text() -> str:

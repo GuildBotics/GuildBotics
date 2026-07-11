@@ -23,7 +23,10 @@ from guildbotics.capabilities.member_memory import (
     MemberMemoryError,
     MemberMemoryService,
 )
-from guildbotics.capabilities.member_reference import capability_reference_text
+from guildbotics.capabilities.member_reference import (
+    capability_reference_text,
+    command_summary,
+)
 from guildbotics.capabilities.task_runs import (
     RUN_ENV,
     TASK_RUN_ENV,
@@ -33,6 +36,7 @@ from guildbotics.capabilities.task_runs import (
     current_run_id,
     current_task_run_id,
 )
+from guildbotics.cli._options import format_option
 from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
@@ -49,9 +53,30 @@ from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.utils.env_loader import load_guildbotics_env
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
-FormatChoice = click.Choice(["json", "markdown"])
 WorkspaceMode = Literal["member", "current"]
 SLACK_TS_FRACTION_DIGITS = 6
+
+_person_option = click.option(
+    "--person", required=True, help="Person ID or name of the member."
+)
+_json_format_option = format_option("json")
+_markdown_format_option = format_option("markdown")
+_service_option = click.option(
+    "--service",
+    "service_name",
+    type=click.Choice(["slack"]),
+    default="slack",
+    help="Chat service to use.",
+)
+_workspace_mode_option = click.option(
+    "--workspace-mode",
+    type=click.Choice(["member", "current"]),
+    default="member",
+    help=(
+        "Use 'member' for isolated workflow workspaces or 'current' for the "
+        "repository currently open in an interactive coding session."
+    ),
+)
 
 
 @click.group()
@@ -85,9 +110,13 @@ def member(ctx: click.Context, workspace_dir: Path | None) -> None:
 
 
 @member.command(name="context")
-@click.option("--person", required=True, help="Person ID or name.")
-@click.option("--check-credentials", is_flag=True)
-@click.option("--format", "output_format", type=FormatChoice, default="markdown")
+@_person_option
+@click.option(
+    "--check-credentials",
+    is_flag=True,
+    help="Also verify the member's provider credentials.",
+)
+@_markdown_format_option
 def context_cmd(person: str, check_credentials: bool, output_format: str) -> None:
     """Show non-secret member context."""
     _run(
@@ -112,27 +141,83 @@ def memory() -> None:
 
 
 @memory.command(name="record")
-@click.option("--person", required=True)
+@_person_option
 @click.option(
     "--scope",
     type=click.Choice(["personal", "team"]),
     default="personal",
-    show_default=True,
+    help="Store as personal or team memory.",
 )
-@click.option("--title", required=True)
-@click.option("--summary", default="")
-@click.option("--keyword", "keywords", multiple=True)
-@click.option("--ticket", "tickets", multiple=True)
-@click.option("--pr", "prs", multiple=True)
-@click.option("--channel", "channels", multiple=True)
-@click.option("--thread", "threads", multiple=True)
-@click.option("--kind", type=click.Choice(["note", "policy"]), default="note")
-@click.option("--pin", "pinned", is_flag=True)
-@click.option("--body-file", type=click.Path(dir_okay=False, path_type=Path))
-@click.option("--body-stdin", is_flag=True)
-@click.option("--policy-approved", is_flag=True)
-@click.option("--set", "set_values", multiple=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option("--title", required=True, help="Document title.")
+@click.option(
+    "--summary",
+    default="",
+    help="One-line summary shown in recall hits and the digest.",
+)
+@click.option(
+    "--keyword",
+    "keywords",
+    multiple=True,
+    help="Recall keyword. May be repeated.",
+)
+@click.option(
+    "--ticket",
+    "tickets",
+    multiple=True,
+    help="Related ticket URL (source anchor). May be repeated.",
+)
+@click.option(
+    "--pr",
+    "prs",
+    multiple=True,
+    help="Related PR URL (source anchor). May be repeated.",
+)
+@click.option(
+    "--channel",
+    "channels",
+    multiple=True,
+    help="Related chat channel URL (source anchor). May be repeated.",
+)
+@click.option(
+    "--thread",
+    "threads",
+    multiple=True,
+    help="Related chat thread URL (source anchor). May be repeated.",
+)
+@click.option(
+    "--kind",
+    type=click.Choice(["note", "policy"]),
+    default="note",
+    help="Document kind; 'policy' requires --policy-approved.",
+)
+@click.option(
+    "--pin",
+    "pinned",
+    is_flag=True,
+    help="Pin as a standing rule included in member context.",
+)
+@click.option(
+    "--body-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="File containing the document body.",
+)
+@click.option(
+    "--body-stdin",
+    is_flag=True,
+    help="Read the document body from standard input.",
+)
+@click.option(
+    "--policy-approved",
+    is_flag=True,
+    help="Confirm that a human approved this policy memory change.",
+)
+@click.option(
+    "--set",
+    "set_values",
+    multiple=True,
+    help="Extra metadata as key=value. May be repeated.",
+)
+@_json_format_option
 def memory_record(
     person: str,
     scope: str,
@@ -199,11 +284,25 @@ async def _memory_record(
 
 
 @memory.command(name="recall")
-@click.option("--person", required=True)
-@click.option("--query", "queries", multiple=True)
-@click.option("--meta-only", is_flag=True)
-@click.option("--limit", type=click.IntRange(1, 200), default=20)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option(
+    "--query",
+    "queries",
+    multiple=True,
+    help="Literal search query; repeat for OR matching.",
+)
+@click.option(
+    "--meta-only",
+    is_flag=True,
+    help="Return hit metadata without body excerpts.",
+)
+@click.option(
+    "--limit",
+    type=click.IntRange(1, 200),
+    default=20,
+    help="Maximum number of hits.",
+)
+@_json_format_option
 def memory_recall(
     person: str,
     queries: tuple[str, ...],
@@ -229,10 +328,15 @@ async def _memory_recall(
 
 
 @memory.command(name="get")
-@click.option("--person", required=True)
-@click.option("--id", "doc_id", required=True)
-@click.option("--team", "team_scope", is_flag=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--id", "doc_id", required=True, help="Memory document id.")
+@click.option(
+    "--team",
+    "team_scope",
+    is_flag=True,
+    help="Operate on team memory instead of personal memory.",
+)
+@_json_format_option
 def memory_get(person: str, doc_id: str, team_scope: bool, output_format: str) -> None:
     _run(
         _memory_get(person, doc_id, "team" if team_scope else None),
@@ -246,26 +350,93 @@ async def _memory_get(person: str, doc_id: str, scope: str | None) -> dict[str, 
 
 
 @memory.command(name="update")
-@click.option("--person", required=True)
-@click.option("--id", "doc_id", required=True)
-@click.option("--team", "team_scope", is_flag=True)
-@click.option("--title")
-@click.option("--summary")
-@click.option("--keyword", "keywords", multiple=True)
-@click.option("--add-keyword", "add_keywords", multiple=True)
-@click.option("--remove-keyword", "remove_keywords", multiple=True)
-@click.option("--ticket", "tickets", multiple=True)
-@click.option("--pr", "prs", multiple=True)
-@click.option("--channel", "channels", multiple=True)
-@click.option("--thread", "threads", multiple=True)
-@click.option("--pin", "pin_value", flag_value=True, default=None)
-@click.option("--unpin", "pin_value", flag_value=False)
-@click.option("--kind", type=click.Choice(["note", "policy"]))
-@click.option("--body-file", type=click.Path(dir_okay=False, path_type=Path))
-@click.option("--body-stdin", is_flag=True)
-@click.option("--policy-approved", is_flag=True)
-@click.option("--set", "set_values", multiple=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--id", "doc_id", required=True, help="Memory document id.")
+@click.option(
+    "--team",
+    "team_scope",
+    is_flag=True,
+    help="Operate on team memory instead of personal memory.",
+)
+@click.option("--title", help="New document title.")
+@click.option("--summary", help="New one-line summary.")
+@click.option(
+    "--keyword",
+    "keywords",
+    multiple=True,
+    help="Replace all recall keywords. May be repeated.",
+)
+@click.option(
+    "--add-keyword",
+    "add_keywords",
+    multiple=True,
+    help="Add a recall keyword. May be repeated.",
+)
+@click.option(
+    "--remove-keyword",
+    "remove_keywords",
+    multiple=True,
+    help="Remove a recall keyword. May be repeated.",
+)
+@click.option(
+    "--ticket",
+    "tickets",
+    multiple=True,
+    help="Related ticket URL (source anchor). May be repeated.",
+)
+@click.option(
+    "--pr",
+    "prs",
+    multiple=True,
+    help="Related PR URL (source anchor). May be repeated.",
+)
+@click.option(
+    "--channel",
+    "channels",
+    multiple=True,
+    help="Related chat channel URL (source anchor). May be repeated.",
+)
+@click.option(
+    "--thread",
+    "threads",
+    multiple=True,
+    help="Related chat thread URL (source anchor). May be repeated.",
+)
+@click.option(
+    "--pin",
+    "pin_value",
+    flag_value=True,
+    default=None,
+    help="Pin as a standing rule included in member context.",
+)
+@click.option("--unpin", "pin_value", flag_value=False, help="Remove the pin.")
+@click.option(
+    "--kind",
+    type=click.Choice(["note", "policy"]),
+    help="Change the document kind; 'policy' requires --policy-approved.",
+)
+@click.option(
+    "--body-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="File containing the document body.",
+)
+@click.option(
+    "--body-stdin",
+    is_flag=True,
+    help="Read the document body from standard input.",
+)
+@click.option(
+    "--policy-approved",
+    is_flag=True,
+    help="Confirm that a human approved this policy memory change.",
+)
+@click.option(
+    "--set",
+    "set_values",
+    multiple=True,
+    help="Extra metadata as key=value. May be repeated.",
+)
+@_json_format_option
 def memory_update(
     person: str,
     doc_id: str,
@@ -316,10 +487,15 @@ async def _memory_update(**kwargs: Any) -> dict[str, Any]:
 
 
 @memory.command(name="touch")
-@click.option("--person", required=True)
-@click.option("--id", "doc_id", required=True)
-@click.option("--team", "team_scope", is_flag=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--id", "doc_id", required=True, help="Memory document id.")
+@click.option(
+    "--team",
+    "team_scope",
+    is_flag=True,
+    help="Operate on team memory instead of personal memory.",
+)
+@_json_format_option
 def memory_touch(
     person: str, doc_id: str, team_scope: bool, output_format: str
 ) -> None:
@@ -337,11 +513,20 @@ async def _memory_touch(person: str, doc_id: str, scope: str | None) -> dict[str
 
 
 @memory.command(name="archive")
-@click.option("--person", required=True)
-@click.option("--id", "doc_id", required=True)
-@click.option("--team", "team_scope", is_flag=True)
-@click.option("--policy-approved", is_flag=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--id", "doc_id", required=True, help="Memory document id.")
+@click.option(
+    "--team",
+    "team_scope",
+    is_flag=True,
+    help="Operate on team memory instead of personal memory.",
+)
+@click.option(
+    "--policy-approved",
+    is_flag=True,
+    help="Confirm that a human approved this policy memory change.",
+)
+@_json_format_option
 def memory_archive(
     person: str,
     doc_id: str,
@@ -369,9 +554,9 @@ async def _memory_archive(
 
 
 @memory.command(name="promote")
-@click.option("--person", required=True)
-@click.option("--id", "doc_id", required=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--id", "doc_id", required=True, help="Memory document id.")
+@_json_format_option
 def memory_promote(person: str, doc_id: str, output_format: str) -> None:
     _run(_memory_promote(person, doc_id), output_format=output_format)
 
@@ -425,11 +610,9 @@ def chat() -> None:
 
 
 @chat.command(name="identity")
-@click.option("--person", required=True)
-@click.option(
-    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
-)
-@click.option("--format", "output_format", type=FormatChoice, default="markdown")
+@_person_option
+@_service_option
+@_markdown_format_option
 def chat_identity(person: str, service_name: str, output_format: str) -> None:
     _run(_chat_identity(person, service_name), output_format=output_format)
 
@@ -455,16 +638,31 @@ def chat_inspect() -> None:
 
 
 @chat_inspect.command(name="channel")
-@click.option("--person", required=True)
+@_person_option
+@_service_option
+@click.option("--channel-id", default="", help="Channel id of the target channel.")
 @click.option(
-    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+    "--channel-name",
+    default="",
+    help="Channel name (alternative to --channel-id).",
 )
-@click.option("--channel-id", default="")
-@click.option("--channel-name", default="")
-@click.option("--oldest-ts", default="")
-@click.option("--latest-ts", default="")
-@click.option("--limit", type=click.IntRange(1, 200), default=50)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option(
+    "--oldest-ts",
+    default="",
+    help="Only include messages at or after this timestamp.",
+)
+@click.option(
+    "--latest-ts",
+    default="",
+    help="Only include messages at or before this timestamp.",
+)
+@click.option(
+    "--limit",
+    type=click.IntRange(1, 200),
+    default=50,
+    help="Maximum number of messages.",
+)
+@_json_format_option
 def chat_inspect_channel(
     person: str,
     service_name: str,
@@ -519,16 +717,27 @@ async def _chat_inspect_channel(
 
 
 @chat_inspect.command(name="thread")
-@click.option("--person", required=True)
+@_person_option
+@_service_option
+@click.option("--channel-id", default="", help="Channel id of the target channel.")
 @click.option(
-    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+    "--channel-name",
+    default="",
+    help="Channel name (alternative to --channel-id).",
 )
-@click.option("--channel-id", default="")
-@click.option("--channel-name", default="")
-@click.option("--thread-ts", default="")
-@click.option("--message-url", default="")
-@click.option("--limit", type=click.IntRange(1, 200), default=100)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option("--thread-ts", default="", help="Thread timestamp (with --channel-id).")
+@click.option(
+    "--message-url",
+    default="",
+    help="Slack message URL (alternative to channel/timestamp options).",
+)
+@click.option(
+    "--limit",
+    type=click.IntRange(1, 200),
+    default=100,
+    help="Maximum number of messages.",
+)
+@_json_format_option
 def chat_inspect_thread(
     person: str,
     service_name: str,
@@ -589,15 +798,25 @@ async def _chat_inspect_thread(
 
 
 @chat.command(name="post")
-@click.option("--person", required=True)
+@_person_option
+@_service_option
+@click.option("--channel-id", default="", help="Channel id of the target channel.")
 @click.option(
-    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+    "--channel-name",
+    default="",
+    help="Channel name (alternative to --channel-id).",
 )
-@click.option("--channel-id", default="")
-@click.option("--channel-name", default="")
-@click.option("--body-file", type=click.Path(path_type=Path))
-@click.option("--body-stdin", is_flag=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option(
+    "--body-file",
+    type=click.Path(path_type=Path),
+    help="File containing the message body.",
+)
+@click.option(
+    "--body-stdin",
+    is_flag=True,
+    help="Read the message body from standard input.",
+)
+@_json_format_option
 def chat_post(
     person: str,
     service_name: str,
@@ -646,17 +865,31 @@ async def _chat_post(
 
 
 @chat.command(name="reply")
-@click.option("--person", required=True)
+@_person_option
+@_service_option
+@click.option("--channel-id", default="", help="Channel id of the target channel.")
 @click.option(
-    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+    "--channel-name",
+    default="",
+    help="Channel name (alternative to --channel-id).",
 )
-@click.option("--channel-id", default="")
-@click.option("--channel-name", default="")
-@click.option("--thread-ts", default="")
-@click.option("--message-url", default="")
-@click.option("--body-file", type=click.Path(path_type=Path))
-@click.option("--body-stdin", is_flag=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option("--thread-ts", default="", help="Thread timestamp (with --channel-id).")
+@click.option(
+    "--message-url",
+    default="",
+    help="Slack message URL (alternative to channel/timestamp options).",
+)
+@click.option(
+    "--body-file",
+    type=click.Path(path_type=Path),
+    help="File containing the message body.",
+)
+@click.option(
+    "--body-stdin",
+    is_flag=True,
+    help="Read the message body from standard input.",
+)
+@_json_format_option
 def chat_reply(
     person: str,
     service_name: str,
@@ -726,20 +959,27 @@ def chat_reaction() -> None:
 
 
 @chat_reaction.command(name="add")
-@click.option("--person", required=True)
+@_person_option
+@_service_option
+@click.option("--channel-id", default="", help="Channel id of the target channel.")
 @click.option(
-    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+    "--channel-name",
+    default="",
+    help="Channel name (alternative to --channel-id).",
 )
-@click.option("--channel-id", default="")
-@click.option("--channel-name", default="")
-@click.option("--message-ts", default="")
-@click.option("--message-url", default="")
+@click.option("--message-ts", default="", help="Message timestamp (with --channel-id).")
+@click.option(
+    "--message-url",
+    default="",
+    help="Slack message URL (alternative to channel/timestamp options).",
+)
 @click.option(
     "--reaction",
     required=True,
     type=click.Choice(["ack", "agree", "celebrate", "support"]),
+    help="Semantic reaction to add.",
 )
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_json_format_option
 def chat_reaction_add(
     person: str,
     service_name: str,
@@ -801,16 +1041,21 @@ async def _chat_reaction_add(
 
 
 @chat.command(name="noop")
-@click.option("--person", required=True)
-@click.option("--run-id", required=True)
+@_person_option
+@click.option("--run-id", required=True, help="Workflow run id.")
+@_service_option
+@click.option("--channel-id", required=True, help="Channel id of the triggering event.")
 @click.option(
-    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+    "--thread-ts", required=True, help="Thread timestamp of the triggering event."
 )
-@click.option("--channel-id", required=True)
-@click.option("--thread-ts", required=True)
-@click.option("--event-id", required=True)
-@click.option("--reason-file", required=True, type=click.Path(path_type=Path))
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option("--event-id", required=True, help="Event id of the chat trigger.")
+@click.option(
+    "--reason-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the reason for the deliberate no-op.",
+)
+@_json_format_option
 def chat_noop(
     person: str,
     run_id: str,
@@ -836,19 +1081,27 @@ def chat_noop(
 
 
 @chat.command(name="complete")
-@click.option("--person", required=True)
-@click.option("--run-id", required=True)
+@_person_option
+@click.option("--run-id", required=True, help="Workflow run id.")
+@_service_option
+@click.option("--channel-id", required=True, help="Channel id of the triggering event.")
 @click.option(
-    "--service", "service_name", type=click.Choice(["slack"]), default="slack"
+    "--thread-ts", required=True, help="Thread timestamp of the triggering event."
 )
-@click.option("--channel-id", required=True)
-@click.option("--thread-ts", required=True)
-@click.option("--event-id", required=True)
+@click.option("--event-id", required=True, help="Event id of the chat trigger.")
 @click.option(
-    "--status", required=True, type=click.Choice(["done", "asking", "blocked"])
+    "--status",
+    required=True,
+    type=click.Choice(["done", "asking", "blocked"]),
+    help="Run outcome.",
 )
-@click.option("--summary-file", required=True, type=click.Path(path_type=Path))
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option(
+    "--summary-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the run summary.",
+)
+@_json_format_option
 def chat_complete(
     person: str,
     run_id: str,
@@ -887,14 +1140,16 @@ def git() -> None:
 
 
 @git.command(name="prepare")
-@click.option("--person", required=True)
-@click.option("--issue-url", default="")
-@click.option("--pr-url", default="")
+@_person_option
+@click.option(
+    "--issue-url", default="", help="Ticket issue URL to prepare a workspace for."
+)
+@click.option("--pr-url", default="", help="PR URL whose head branch to check out.")
 @click.option("--repo", default="", help="Target repository as <owner>/<repo>.")
 @click.option(
     "--branch", default="", help="Branch to create or check out (with --repo)."
 )
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_json_format_option
 def git_prepare(
     person: str,
     issue_url: str,
@@ -947,24 +1202,25 @@ async def _git_prepare(
 
 
 @git.command(name="commit")
-@click.option("--person", required=True)
-@click.option("--repo-path", required=True, type=click.Path(path_type=Path))
-@click.option("--message-file", type=click.Path(path_type=Path))
+@_person_option
+@click.option(
+    "--repo-path",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Path to the member repository workspace.",
+)
+@click.option(
+    "--message-file",
+    type=click.Path(path_type=Path),
+    help="File containing the commit message.",
+)
 @click.option(
     "--message-stdin",
     is_flag=True,
     help="Read the commit message from standard input instead of a file.",
 )
-@click.option(
-    "--workspace-mode",
-    type=click.Choice(["member", "current"]),
-    default="member",
-    help=(
-        "Use 'member' for isolated workflow workspaces or 'current' for the "
-        "repository currently open in an interactive coding session."
-    ),
-)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_workspace_mode_option
+@_json_format_option
 def git_commit(
     person: str,
     repo_path: Path,
@@ -1011,18 +1267,15 @@ async def _git_commit(
 
 
 @git.command(name="push")
-@click.option("--person", required=True)
-@click.option("--repo-path", required=True, type=click.Path(path_type=Path))
+@_person_option
 @click.option(
-    "--workspace-mode",
-    type=click.Choice(["member", "current"]),
-    default="member",
-    help=(
-        "Use 'member' for isolated workflow workspaces or 'current' for the "
-        "repository currently open in an interactive coding session."
-    ),
+    "--repo-path",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Path to the member repository workspace.",
 )
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_workspace_mode_option
+@_json_format_option
 def git_push(
     person: str,
     repo_path: Path,
@@ -1059,24 +1312,25 @@ async def _git_push(
 
 
 @git.command(name="publish")
-@click.option("--person", required=True)
-@click.option("--repo-path", required=True, type=click.Path(path_type=Path))
-@click.option("--message-file", type=click.Path(path_type=Path))
+@_person_option
+@click.option(
+    "--repo-path",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Path to the member repository workspace.",
+)
+@click.option(
+    "--message-file",
+    type=click.Path(path_type=Path),
+    help="File containing the commit message.",
+)
 @click.option(
     "--message-stdin",
     is_flag=True,
     help="Read the commit message from standard input instead of a file.",
 )
-@click.option(
-    "--workspace-mode",
-    type=click.Choice(["member", "current"]),
-    default="member",
-    help=(
-        "Use 'member' for isolated workflow workspaces or 'current' for the "
-        "repository currently open in an interactive coding session."
-    ),
-)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_workspace_mode_option
+@_json_format_option
 def git_publish(
     person: str,
     repo_path: Path,
@@ -1151,9 +1405,9 @@ def issue() -> None:
 
 
 @issue.command(name="inspect")
-@click.option("--person", required=True)
-@click.option("--url", "issue_url", required=True)
-@click.option("--format", "output_format", type=FormatChoice, default="markdown")
+@_person_option
+@click.option("--url", "issue_url", required=True, help="Issue URL.")
+@_markdown_format_option
 def issue_inspect(person: str, issue_url: str, output_format: str) -> None:
     _run(_issue_inspect(person, issue_url), output_format=output_format)
 
@@ -1168,10 +1422,15 @@ async def _issue_inspect(person: str, issue_url: str) -> dict[str, Any]:
 
 
 @issue.command(name="comment")
-@click.option("--person", required=True)
-@click.option("--url", "issue_url", required=True)
-@click.option("--body-file", required=True, type=click.Path(path_type=Path))
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--url", "issue_url", required=True, help="Issue URL.")
+@click.option(
+    "--body-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the comment body.",
+)
+@_json_format_option
 def issue_comment(
     person: str,
     issue_url: str,
@@ -1197,12 +1456,26 @@ async def _issue_comment(person: str, issue_url: str, body: str) -> dict[str, An
 
 
 @issue.command(name="create")
-@click.option("--person", required=True)
-@click.option("--repo", required=True)
-@click.option("--title-file", required=True, type=click.Path(path_type=Path))
-@click.option("--body-file", required=True, type=click.Path(path_type=Path))
-@click.option("--add-to-project/--no-add-to-project", default=True)
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
+@click.option(
+    "--title-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the issue title.",
+)
+@click.option(
+    "--body-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the issue body.",
+)
+@click.option(
+    "--add-to-project/--no-add-to-project",
+    default=True,
+    help="Add the created issue to the configured project board.",
+)
+@_json_format_option
 def issue_create(
     person: str,
     repo: str,
@@ -1242,11 +1515,19 @@ def pr() -> None:
 
 
 @pr.command(name="inspect")
-@click.option("--person", required=True)
-@click.option("--url", "pr_url", required=True)
-@click.option("--include-comments", is_flag=True)
-@click.option("--include-diff", is_flag=True)
-@click.option("--format", "output_format", type=FormatChoice, default="markdown")
+@_person_option
+@click.option("--url", "pr_url", required=True, help="Pull request URL.")
+@click.option(
+    "--include-comments",
+    is_flag=True,
+    help="Include review threads with their reply target ids.",
+)
+@click.option(
+    "--include-diff",
+    is_flag=True,
+    help="Include the diff with commentable line coordinates.",
+)
+@_markdown_format_option
 def pr_inspect(
     person: str,
     pr_url: str,
@@ -1272,16 +1553,24 @@ async def _pr_inspect(
 
 
 @pr.command(name="create")
-@click.option("--person", required=True)
-@click.option("--repo", required=True)
-@click.option("--head", required=True)
+@_person_option
+@click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
+@click.option("--head", required=True, help="Head branch containing the changes.")
 @click.option(
     "--base",
     default="",
     help="Base branch for the pull request. Defaults to the repository default branch.",
 )
-@click.option("--title-file", type=click.Path(path_type=Path))
-@click.option("--body-file", type=click.Path(path_type=Path))
+@click.option(
+    "--title-file",
+    type=click.Path(path_type=Path),
+    help="File containing the PR title.",
+)
+@click.option(
+    "--body-file",
+    type=click.Path(path_type=Path),
+    help="File containing the PR body.",
+)
 @click.option(
     "--content-stdin",
     is_flag=True,
@@ -1290,9 +1579,14 @@ async def _pr_inspect(
         "title; the remaining content is the body."
     ),
 )
-@click.option("--issue-url", default="")
-@click.option("--draft", type=click.Choice(["auto", "true", "false"]), default="auto")
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option("--issue-url", default="", help="Related issue URL to link to the PR.")
+@click.option(
+    "--draft",
+    type=click.Choice(["auto", "true", "false"]),
+    default="auto",
+    help="Open as a draft PR; 'auto' drafts when the member is a proxy agent.",
+)
+@_json_format_option
 def pr_create(
     person: str,
     repo: str,
@@ -1336,10 +1630,15 @@ async def _pr_create(
 
 
 @pr.command(name="comment")
-@click.option("--person", required=True)
-@click.option("--url", "pr_url", required=True)
-@click.option("--body-file", required=True, type=click.Path(path_type=Path))
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--url", "pr_url", required=True, help="Pull request URL.")
+@click.option(
+    "--body-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the comment body.",
+)
+@_json_format_option
 def pr_comment(person: str, pr_url: str, body_file: Path, output_format: str) -> None:
     body = _read_file(body_file, "body-file")
     _run(
@@ -1360,15 +1659,40 @@ async def _pr_comment(person: str, pr_url: str, body: str) -> dict[str, Any]:
 
 
 @pr.command(name="review-comment")
-@click.option("--person", required=True)
-@click.option("--url", "pr_url", required=True)
-@click.option("--path", "file_path", required=True)
-@click.option("--line", required=True, type=click.IntRange(min=1))
-@click.option("--side", type=click.Choice(["LEFT", "RIGHT"]), default="RIGHT")
-@click.option("--start-line", type=click.IntRange(min=1), default=None)
-@click.option("--start-side", type=click.Choice(["LEFT", "RIGHT"]), default=None)
-@click.option("--body-file", required=True, type=click.Path(path_type=Path))
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--url", "pr_url", required=True, help="Pull request URL.")
+@click.option("--path", "file_path", required=True, help="File path in the PR diff.")
+@click.option(
+    "--line",
+    required=True,
+    type=click.IntRange(min=1),
+    help="Line number on the chosen diff side.",
+)
+@click.option(
+    "--side",
+    type=click.Choice(["LEFT", "RIGHT"]),
+    default="RIGHT",
+    help="Diff side of the line.",
+)
+@click.option(
+    "--start-line",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Start line for a multi-line comment.",
+)
+@click.option(
+    "--start-side",
+    type=click.Choice(["LEFT", "RIGHT"]),
+    default=None,
+    help="Diff side of --start-line.",
+)
+@click.option(
+    "--body-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the comment body.",
+)
+@_json_format_option
 def pr_review_comment(
     person: str,
     pr_url: str,
@@ -1418,11 +1742,21 @@ async def _pr_review_comment(
 
 
 @pr.command(name="reply")
-@click.option("--person", required=True)
-@click.option("--url", "pr_url", required=True)
-@click.option("--reply-target-id", required=True, type=int)
-@click.option("--body-file", required=True, type=click.Path(path_type=Path))
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_person_option
+@click.option("--url", "pr_url", required=True, help="Pull request URL.")
+@click.option(
+    "--reply-target-id",
+    required=True,
+    type=int,
+    help="reply_target_id from 'pr inspect --include-comments'.",
+)
+@click.option(
+    "--body-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the comment body.",
+)
+@_json_format_option
 def pr_reply(
     person: str,
     pr_url: str,
@@ -1459,14 +1793,17 @@ def reaction() -> None:
 
 
 @reaction.command(name="add")
-@click.option("--person", required=True)
-@click.option("--repo", required=True)
+@_person_option
+@click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
 @click.option(
     "--target",
     required=True,
     type=click.Choice(["issue-comment", "pr-review-comment"]),
+    help="Kind of comment to react to.",
 )
-@click.option("--comment-id", required=True, type=int)
+@click.option(
+    "--comment-id", required=True, type=int, help="Numeric id of the comment."
+)
 @click.option(
     "--reaction",
     "reaction_content",
@@ -1474,8 +1811,9 @@ def reaction() -> None:
     type=click.Choice(
         ["+1", "eyes", "heart", "hooray", "rocket", "laugh", "confused", "-1"]
     ),
+    help="Reaction to add.",
 )
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_json_format_option
 def reaction_add(
     person: str,
     repo: str,
@@ -1513,14 +1851,24 @@ def task() -> None:
 
 
 @task.command(name="complete")
-@click.option("--person", required=True)
-@click.option("--run-id", required=True)
-@click.option("--ticket-url", required=True)
+@_person_option
+@click.option("--run-id", required=True, help="Workflow run id.")
 @click.option(
-    "--status", required=True, type=click.Choice(["done", "asking", "blocked"])
+    "--ticket-url", required=True, help="Ticket URL the completed run worked on."
 )
-@click.option("--summary-file", required=True, type=click.Path(path_type=Path))
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@click.option(
+    "--status",
+    required=True,
+    type=click.Choice(["done", "asking", "blocked"]),
+    help="Run outcome.",
+)
+@click.option(
+    "--summary-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="File containing the run summary.",
+)
+@_json_format_option
 def task_complete(
     person: str,
     run_id: str,
@@ -1548,13 +1896,13 @@ async def _task_complete(
 
 
 @task.command(name="status")
-@click.option("--run-id", required=True)
+@click.option("--run-id", required=True, help="Workflow run id.")
 @click.option(
     "--person",
     default="",
     help="Accepted for consistency with other member commands; not required.",
 )
-@click.option("--format", "output_format", type=FormatChoice, default="json")
+@_json_format_option
 def task_status(run_id: str, person: str, output_format: str) -> None:
     _run(_task_status(run_id, person), output_format=output_format)
 
@@ -1890,3 +2238,20 @@ def _safe_error(exc: Exception) -> str:
         if marker in text.upper():
             return "Member credential could not be resolved or used safely."
     return text or "Member capability command failed."
+
+
+def _fill_help_from_catalog(group: click.Group, path: tuple[str, ...] = ()) -> None:
+    """Fill missing command help from the member capability catalog.
+
+    The catalog in ``member_reference`` is the single source of the one-line
+    command purposes; commands without their own docstring get theirs from it
+    (and a command absent from the catalog fails fast here).
+    """
+    for name, command in group.commands.items():
+        if isinstance(command, click.Group):
+            _fill_help_from_catalog(command, (*path, name))
+        elif command.help is None:
+            command.help = command_summary(" ".join((*path, name)))
+
+
+_fill_help_from_catalog(member)
