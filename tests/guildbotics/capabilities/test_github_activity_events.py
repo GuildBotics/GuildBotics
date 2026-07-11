@@ -123,11 +123,14 @@ async def test_poller_records_each_closed_project_item_once(monkeypatch, tmp_pat
         members=[person],
     )
 
+    queries: list[str] = []
+
     class Client:
         async def get(self, *_args, **_kwargs):
             return SimpleNamespace(json=lambda: [], raise_for_status=lambda: None)
 
-        async def post(self, *_args, **_kwargs):
+        async def post(self, *_args, **kwargs):
+            queries.append(kwargs["json"]["query"])
             return SimpleNamespace(
                 json=lambda: {
                     "data": {
@@ -176,6 +179,10 @@ async def test_poller_records_each_closed_project_item_once(monkeypatch, tmp_pat
     end = datetime(2026, 7, 11, tzinfo=UTC)
     assert await poller.poll(start, end) == 1
     assert await poller.poll(start, end) == 0
+    assert queries
+    normalized_query = " ".join(queries[0].split())
+    assert "items(first:100, after:$cursor) { nodes { content {" in normalized_query
+    assert "} } pageInfo { hasNextPage endCursor } }" in normalized_query
     records = DiagnosticsStore().records_between(includes=lambda _timestamp: True)
     assert records[0]["person_id"] == ""
     assert records[0]["timestamp"] == "2026-07-10T01:00:00Z"
