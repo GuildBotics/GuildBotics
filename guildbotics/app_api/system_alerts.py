@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import threading
 from collections import defaultdict
@@ -17,7 +16,10 @@ from guildbotics.app_api.models import (
     SystemAlertSeverity,
     SystemAlertsResponse,
 )
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.diagnostics_store import (
+    DiagnosticsCursor,
+    DiagnosticsStore,
+)
 
 _DIAGNOSTIC_CREDENTIAL_CODES = {
     "github": {"github_access", "github_project_access"},
@@ -28,6 +30,7 @@ _DIAGNOSTIC_CREDENTIAL_CODES = {
         "slack_bot_auth",
     },
     "cli_agent": {"cli_agent_brain"},
+    "llm": {"llm_api_key", "llm_live_call"},
 }
 _VERIFY_CREDENTIAL_CODES = {"llm_api_key": "llm"}
 _CREDENTIAL_ALERT_CODES: dict[str, SystemAlertCode] = {
@@ -54,8 +57,7 @@ _RELEVANT_EVENT_TYPES = frozenset(
         "workflow.rate_limited",
     }
 )
-_PROCESSED_RECORD_LIMIT = 10000
-_STATE_VERSION = 2
+_STATE_VERSION = 3
 _ALERT_ID_PARTS = 3
 
 
@@ -66,8 +68,7 @@ class SystemAlertService:
         self._store = store
         self._lock = threading.Lock()
         self._state_path: Path | None = None
-        self._processed: list[str] = []
-        self._processed_set: set[str] = set()
+        self._cursor: DiagnosticsCursor | None = None
         self._alerts: dict[str, SystemAlert] = {}
         self._dismissed: set[str] = set()
 
@@ -76,20 +77,13 @@ class SystemAlertService:
             self._refresh_state()
             changed = False
             if self._store is not None:
-                records = self._store.records_between(
-                    includes=lambda _: True, limit=5000
+                records, cursor = self._store.records_after(
+                    self._cursor, includes=_is_relevant_record
                 )
-                for record in filter(_is_relevant_record, records):
-                    record_id = _record_id(record)
-                    if record_id in self._processed_set:
-                        continue
+                for record in records:
                     self._apply_record(self._alerts, record)
-                    self._processed.append(record_id)
-                    self._processed_set.add(record_id)
-                    changed = True
-                if len(self._processed) > _PROCESSED_RECORD_LIMIT:
-                    self._processed = self._processed[-_PROCESSED_RECORD_LIMIT:]
-                    self._processed_set = set(self._processed)
+                changed = cursor != self._cursor
+                self._cursor = cursor
             changed = self._reconcile_runtime_dismissals(runtime) or changed
             if changed:
                 self._save_state()
@@ -121,20 +115,20 @@ class SystemAlertService:
         if path == self._state_path:
             return
         self._state_path = path
-        self._processed = []
-        self._processed_set = set()
+        self._cursor = None
         self._alerts = {}
         self._dismissed = set()
         if path is None:
             return
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            processed = payload.get("processed", [])
-            if payload.get("version") == _STATE_VERSION and isinstance(processed, list):
-                self._processed = [str(item) for item in processed][
-                    -_PROCESSED_RECORD_LIMIT:
-                ]
-                self._processed_set = set(self._processed)
+            version = payload.get("version")
+            if version == _STATE_VERSION:
+                self._cursor = DiagnosticsCursor.from_dict(payload.get("cursor"))
+            elif self._store is not None:
+                # Preserve existing alert/dismissal state without replaying rows
+                # already represented by the previous hash-based state format.
+                self._cursor = self._store.current_cursor()
             self._alerts = {
                 alert.id: alert
                 for raw in payload.get("alerts", [])
@@ -144,11 +138,10 @@ class SystemAlertService:
             dismissed = payload.get("dismissed", [])
             if isinstance(dismissed, list):
                 self._dismissed = {str(item) for item in dismissed}
-            if payload.get("version") != _STATE_VERSION:
+            if version != _STATE_VERSION:
                 self._save_state()
         except (OSError, ValueError, TypeError):
-            self._processed = []
-            self._processed_set = set()
+            self._cursor = None
             self._alerts = {}
             self._dismissed = set()
 
@@ -157,7 +150,7 @@ class SystemAlertService:
             return
         payload = {
             "version": _STATE_VERSION,
-            "processed": self._processed,
+            "cursor": self._cursor.to_dict() if self._cursor is not None else None,
             "alerts": [alert.model_dump() for alert in self._alerts.values()],
             "dismissed": sorted(self._dismissed),
         }
@@ -225,7 +218,8 @@ class SystemAlertService:
             code = str(check.get("code") or "")
             if code not in _DIAGNOSTIC_CREDENTIAL_CODES.get(section, set()):
                 continue
-            grouped[(section, str(check.get("person_id") or ""))].append(check)
+            person_id = "" if section == "llm" else str(check.get("person_id") or "")
+            grouped[(section, person_id)].append(check)
         self._apply_credential_groups(alerts, record, grouped)
 
     def _resolve_removed_credentials(
@@ -498,11 +492,6 @@ def _checks(record: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _is_relevant_record(record: dict[str, Any]) -> bool:
     return record.get("kind") == "event" and record.get("type") in _RELEVANT_EVENT_TYPES
-
-
-def _record_id(record: dict[str, Any]) -> str:
-    serialized = json.dumps(record, ensure_ascii=False, sort_keys=True, default=str)
-    return hashlib.sha256(serialized.encode()).hexdigest()
 
 
 def _remove_alert_prefix(alerts: dict[str, SystemAlert], prefix: str) -> None:

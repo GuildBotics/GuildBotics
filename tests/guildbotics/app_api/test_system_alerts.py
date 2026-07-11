@@ -185,6 +185,53 @@ def test_non_credential_diagnostic_error_does_not_open_credential_alert(
     assert SystemAlertService(store).list_alerts(_runtime()).alerts == []
 
 
+def test_llm_diagnostics_open_one_workspace_credential_alert(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    store.record(
+        _event(
+            "diagnostics.completed",
+            timestamp="2026-07-11T10:00:00+09:00",
+            payload={
+                "checks": [
+                    {
+                        "section": "llm",
+                        "code": "llm_api_key",
+                        "status": "error",
+                        "person_id": person_id,
+                    }
+                    for person_id in ("alice", "bob")
+                ]
+            },
+        )
+    )
+    service = SystemAlertService(store)
+
+    alerts = service.list_alerts(_runtime()).alerts
+
+    assert [(alert.id, alert.code, alert.person_id) for alert in alerts] == [
+        ("credential:llm:", "credential_llm", "")
+    ]
+
+    store.record(
+        _event(
+            "diagnostics.completed",
+            timestamp="2026-07-11T10:01:00+09:00",
+            payload={
+                "checks": [
+                    {
+                        "section": "llm",
+                        "code": "llm_live_call",
+                        "status": "ok",
+                        "person_id": "alice",
+                    }
+                ]
+            },
+        )
+    )
+
+    assert service.list_alerts(_runtime()).alerts == []
+
+
 def test_full_diagnostics_closes_alert_for_removed_member(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     store.record(
@@ -293,7 +340,31 @@ def test_dismiss_hides_current_occurrence_and_later_failure_reopens(
     ]
 
 
-def test_state_tracks_only_relevant_events(tmp_path: Path) -> None:
+def test_dismissed_failure_is_not_replayed_after_diagnostics_rotation(
+    tmp_path: Path,
+) -> None:
+    store = DiagnosticsStore(
+        tmp_path / "diagnostics.jsonl", memory_limit=2, max_file_bytes=1
+    )
+    store.record(_event("command.failed", timestamp="2026-07-11T10:00:00+09:00"))
+    service = SystemAlertService(store)
+    alert_id = service.list_alerts(_runtime()).alerts[0].id
+    service.dismiss(alert_id)
+
+    for index in range(3):
+        store.record(
+            {
+                "kind": "log",
+                "level": "INFO",
+                "message": f"noise-{index}",
+                "timestamp": "2026-07-11T10:01:00+09:00",
+            }
+        )
+
+    assert service.list_alerts(_runtime()).alerts == []
+
+
+def test_state_tracks_a_compact_incremental_cursor(tmp_path: Path) -> None:
     path = tmp_path / "diagnostics.jsonl"
     store = DiagnosticsStore(path)
     store.record(
@@ -309,7 +380,30 @@ def test_state_tracks_only_relevant_events(tmp_path: Path) -> None:
     SystemAlertService(store).list_alerts(_runtime())
 
     state = json.loads((tmp_path / "system-alerts.json").read_text(encoding="utf-8"))
-    assert len(state["processed"]) == 1
+    assert state["version"] == 3
+    assert state["cursor"]["offset"] == path.stat().st_size
+    assert "processed" not in state
+
+
+def test_hash_state_migrates_without_replaying_old_events(tmp_path: Path) -> None:
+    path = tmp_path / "diagnostics.jsonl"
+    store = DiagnosticsStore(path)
+    store.record(_event("command.failed", timestamp="2026-07-11T10:00:00+09:00"))
+    original = SystemAlertService(store).list_alerts(_runtime()).alerts[0]
+    state_path = tmp_path / "system-alerts.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["version"] = 2
+    state["processed"] = ["legacy-record-hash"]
+    state.pop("cursor")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    migrated = SystemAlertService(DiagnosticsStore(path)).list_alerts(_runtime()).alerts
+
+    assert len(migrated) == 1
+    assert migrated[0].occurrence_count == original.occurrence_count
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["version"] == 3
+    assert "processed" not in saved
 
 
 def test_runtime_failures_are_critical_and_state_based() -> None:
@@ -340,9 +434,7 @@ def test_runtime_failures_are_critical_and_state_based() -> None:
 
 def test_runtime_alert_dismissal_lasts_until_condition_resolves() -> None:
     failed = RuntimeStatus(
-        scheduler=RuntimeUnitStatus(
-            target="scheduler", state="stopped", running=False
-        ),
+        scheduler=RuntimeUnitStatus(target="scheduler", state="stopped", running=False),
         events=RuntimeUnitStatus(
             target="events",
             state="running",

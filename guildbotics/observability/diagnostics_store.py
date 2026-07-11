@@ -10,9 +10,12 @@ JSONL file and are merged in by the query layer at read time.
 from __future__ import annotations
 
 import json
+import os
 import threading
+from base64 import b64decode, b64encode
 from collections import deque
 from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,36 @@ from guildbotics.utils.timestamps import parse_iso_datetime
 
 def default_store_path() -> Path:
     return get_workspace_data_path("run", "diagnostics.jsonl")
+
+
+_CURSOR_ANCHOR_BYTES = 256
+
+
+@dataclass(frozen=True)
+class DiagnosticsCursor:
+    """Durable position in a diagnostics JSONL file."""
+
+    offset: int
+    device: int
+    inode: int
+    anchor: str
+
+    def to_dict(self) -> dict[str, int | str]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: object) -> DiagnosticsCursor | None:
+        if not isinstance(value, dict):
+            return None
+        try:
+            return cls(
+                offset=max(0, int(value["offset"])),
+                device=int(value["device"]),
+                inode=int(value["inode"]),
+                anchor=str(value["anchor"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
 
 class DiagnosticsStore:
@@ -46,8 +79,9 @@ class DiagnosticsStore:
 
     @property
     def path(self) -> Path:
-        self._refresh_path()
-        return self._path
+        with self._lock:
+            self._select_path_locked()
+            return self._path
 
     def record(self, item: dict[str, Any]) -> None:
         with self._lock:
@@ -144,24 +178,115 @@ class DiagnosticsStore:
         records.sort(key=_record_timestamp_sort_key)
         return records[-max(1, limit) :]
 
+    def records_after(
+        self,
+        cursor: DiagnosticsCursor | None,
+        *,
+        includes: Callable[[dict[str, Any]], bool],
+    ) -> tuple[list[dict[str, Any]], DiagnosticsCursor]:
+        """Return matching complete rows appended after ``cursor``.
+
+        The cursor advances across every row, including malformed and filtered
+        rows, so consumers can process an append-only JSONL stream without
+        rescanning the in-memory diagnostics window. File replacement,
+        truncation, and rewrite-based rotation reset the cursor safely.
+        """
+        with self._lock:
+            self._select_path_locked()
+            return self._records_after_locked(cursor, includes=includes)
+
+    def current_cursor(self) -> DiagnosticsCursor:
+        """Return a cursor after the last complete row currently on disk."""
+        with self._lock:
+            self._select_path_locked()
+            _, cursor = self._records_after_locked(None, includes=lambda _: False)
+            return cursor
+
     # -- persistence ---------------------------------------------------------
 
-    def _refresh_path(self) -> None:
-        with self._lock:
-            self._refresh_path_locked()
-
     def _refresh_path_locked(self) -> None:
-        if self._path_override is None:
-            path = default_store_path()
-            if path != self._path:
-                self._path = path
-                self._reload_from_path_locked()
-                return
+        if self._select_path_locked():
+            return
         # Same file, but another process (e.g. a ``guildbotics member`` CLI
         # subprocess) may have appended records to it since we last read. A
         # long-lived reader such as the app_api backend would otherwise serve a
         # stale in-memory snapshot and miss those rows.
         self._reload_if_changed_locked()
+
+    def _select_path_locked(self) -> bool:
+        if self._path_override is None:
+            path = default_store_path()
+            if path != self._path:
+                self._path = path
+                self._reload_from_path_locked()
+                return True
+        return False
+
+    def _records_after_locked(
+        self,
+        cursor: DiagnosticsCursor | None,
+        *,
+        includes: Callable[[dict[str, Any]], bool],
+    ) -> tuple[list[dict[str, Any]], DiagnosticsCursor]:
+        try:
+            with self._path.open("rb") as handle:
+                stat = os.fstat(handle.fileno())
+                offset = self._validated_offset(handle, stat, cursor)
+                handle.seek(offset)
+                records: list[dict[str, Any]] = []
+                while line := handle.readline():
+                    if not line.endswith(b"\n"):
+                        break
+                    offset = handle.tell()
+                    try:
+                        item = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if isinstance(item, dict) and includes(item):
+                        records.append(item)
+                return records, self._cursor_at(handle, stat, offset)
+        except OSError:
+            return [], DiagnosticsCursor(offset=0, device=0, inode=0, anchor="")
+
+    @staticmethod
+    def _validated_offset(
+        handle: Any, stat: Any, cursor: DiagnosticsCursor | None
+    ) -> int:
+        if cursor is None:
+            return 0
+        try:
+            anchor = b64decode(cursor.anchor, validate=True)
+        except ValueError:
+            return 0
+        if not anchor:
+            return 0
+        if (
+            cursor.device == stat.st_dev
+            and cursor.inode == stat.st_ino
+            and cursor.offset <= stat.st_size
+        ):
+            anchor_start = cursor.offset - len(anchor)
+            if anchor_start >= 0:
+                handle.seek(anchor_start)
+                if handle.read(len(anchor)) == anchor:
+                    return cursor.offset
+        # Rewrite-based rotation keeps the newest diagnostics rows. Relocate
+        # the small tail anchor so retained rows are not replayed.
+        handle.seek(0)
+        position = handle.read().rfind(anchor)
+        return position + len(anchor) if position >= 0 else 0
+
+    @staticmethod
+    def _cursor_at(handle: Any, stat: Any, offset: int) -> DiagnosticsCursor:
+        anchor_start = max(0, offset - _CURSOR_ANCHOR_BYTES)
+        handle.seek(anchor_start)
+        anchor = b64encode(handle.read(offset - anchor_start)).decode("ascii")
+        return DiagnosticsCursor(
+            offset=offset,
+            device=stat.st_dev,
+            inode=stat.st_ino,
+            anchor=anchor,
+        )
 
     def _reload_if_changed_locked(self) -> None:
         if self._file_signature_now() != self._file_signature:
