@@ -21,6 +21,11 @@ uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
 
+# Markdown links (repo root; requires lychee v0.24.2)
+lychee --no-progress --scheme file --include-fragments \
+  --exclude-path 'desktop/node_modules' \
+  './*.md' './docs/**/*.md' './desktop/**/*.md' './skills/**/*.md'
+
 # Desktop frontend (desktop/) — when touching desktop/
 cd desktop && npm ci && npm run quality
 # Desktop E2E (real browser + Local API backend; NOT in `npm run quality` or push CI):

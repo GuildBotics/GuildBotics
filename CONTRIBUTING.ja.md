@@ -21,6 +21,11 @@ uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
 
+# Markdown リンク（リポジトリルート。lychee v0.24.2 が必要）
+lychee --no-progress --scheme file --include-fragments \
+  --exclude-path 'desktop/node_modules' \
+  './*.md' './docs/**/*.md' './desktop/**/*.md' './skills/**/*.md'
+
 # desktop frontend（desktop/ を触る場合）
 cd desktop && npm ci && npm run quality
 # desktop E2E（実ブラウザ + 実 Local API backend。`npm run quality` / push CI には含めない）:

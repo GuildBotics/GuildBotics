@@ -3,9 +3,31 @@ name: CI
 on:
   push:
     branches:
-      - "**"
+      - main
+  pull_request:
 
 jobs:
+  markdown-links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check internal Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          lycheeVersion: v0.24.2
+          args: >-
+            --no-progress
+            --scheme file
+            --include-fragments
+            --exclude-path 'desktop/node_modules'
+            './*.md'
+            './docs/**/*.md'
+            './desktop/**/*.md'
+            './skills/**/*.md'
+          fail: true
+
   test:
     runs-on: ubuntu-latest
     env:

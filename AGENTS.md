@@ -255,6 +255,20 @@ uv run --no-sync pylint guildbotics
 uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
 ```
 
+Markdown の内部リンク・見出しアンカー検査（リポジトリルートで実行。CI と同じ
+[`lychee` v0.24.2](https://github.com/lycheeverse/lychee/releases/tag/lychee-v0.24.2)
+をインストールする。Rust toolchain がある場合は
+`cargo install lychee --version 0.24.2 --locked` で導入できる）:
+
+```bash
+lychee --no-progress --scheme file --include-fragments \
+  --exclude-path 'desktop/node_modules' \
+  './*.md' './docs/**/*.md' './desktop/**/*.md' './skills/**/*.md'
+```
+
+`--scheme file` により外部 URL は検査せず、CI の `markdown-links` job と同じく
+相対パスと GitHub 形式の見出しアンカーだけを検査する。
+
 必要に応じて:
 
 ```bash
@@ -304,6 +318,7 @@ desktop packaging / Tauri 変更時の確認:
 - 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で Ruff 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、packaging smoke など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
 - Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics` を実行）
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
+- 対象範囲（リポジトリ直下、`docs/`、`desktop/`、`skills/`）の Markdown を変更したら、上記の `lychee` コマンドを実行する
 - 最低限の確認コマンドは上記「開発時の基本コマンド（CI 準拠）」と同じ（`pytest` は関連範囲に絞ってよい）
 - 型エラーや lint エラーを回避するためだけの `# type: ignore` や noqa は、理由が明確でない限り追加しない
 
