@@ -23,7 +23,10 @@ from guildbotics.capabilities.member_memory import (
     MemberMemoryError,
     MemberMemoryService,
 )
-from guildbotics.capabilities.member_reference import capability_reference_text
+from guildbotics.capabilities.member_reference import (
+    capability_reference_text,
+    command_summary,
+)
 from guildbotics.capabilities.task_runs import (
     RUN_ENV,
     TASK_RUN_ENV,
@@ -1890,3 +1893,20 @@ def _safe_error(exc: Exception) -> str:
         if marker in text.upper():
             return "Member credential could not be resolved or used safely."
     return text or "Member capability command failed."
+
+
+def _fill_help_from_catalog(group: click.Group, path: tuple[str, ...] = ()) -> None:
+    """Fill missing command help from the member capability catalog.
+
+    The catalog in ``member_reference`` is the single source of the one-line
+    command purposes; commands without their own docstring get theirs from it
+    (and a command absent from the catalog fails fast here).
+    """
+    for name, command in group.commands.items():
+        if isinstance(command, click.Group):
+            _fill_help_from_catalog(command, (*path, name))
+        elif command.help is None:
+            command.help = command_summary(" ".join((*path, name)))
+
+
+_fill_help_from_catalog(member)
