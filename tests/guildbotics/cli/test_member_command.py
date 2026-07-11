@@ -2,10 +2,12 @@ import importlib
 import json
 import os
 
+import click
 import pytest
 from click.testing import CliRunner
 
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
+from guildbotics.capabilities.member_reference import command_summaries
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
@@ -1914,3 +1916,22 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
     payload = json.loads(complete.output)
     assert payload["subject_id"] == "slack:C1:100.1:E1"
     assert payload["evidence_types"] == ["chat_noop"]
+
+
+def test_member_cli_help_stays_in_sync_with_capability_catalog():
+    """Every member command documents itself (own docstring or catalog summary),
+    and the capability catalog contains no entries for commands that no longer
+    exist in the CLI."""
+    leaves: dict[str, click.Command] = {}
+
+    def collect(group: click.Group, path: tuple[str, ...] = ()) -> None:
+        for name, command in group.commands.items():
+            if isinstance(command, click.Group):
+                collect(command, path + (name,))
+            else:
+                leaves[" ".join(path + (name,))] = command
+
+    collect(member_module.member)
+
+    assert sorted(path for path, cmd in leaves.items() if not cmd.help) == []
+    assert sorted(path for path in command_summaries() if path not in leaves) == []

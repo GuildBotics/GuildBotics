@@ -1,4 +1,23 @@
-from guildbotics.capabilities.member_reference import capability_reference_text
+import pytest
+
+from guildbotics.capabilities.member_reference import (
+    capability_reference_text,
+    command_summary,
+)
+
+
+def test_command_summary_comes_from_the_catalog():
+    # The Click commands fill their missing --help text from this API, so the
+    # catalog stays the single source of the one-line command purposes.
+    assert (
+        command_summary("git push")
+        == "Push the current branch with the member credential."
+    )
+
+
+def test_command_summary_rejects_unknown_command_path():
+    with pytest.raises(KeyError, match="no entry in the member capability catalog"):
+        command_summary("git shove")
 
 
 def test_reference_covers_every_member_domain():
