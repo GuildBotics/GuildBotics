@@ -78,11 +78,14 @@ class GitHubActivityEventPoller:
         query($owner:String!, $number:Int!, $cursor:String) {{
           {project_type}(login:$owner) {{
             projectV2(number:$number) {{
-              items(first:100, after:$cursor) {{ nodes {{ content {{
-                __typename
-                ... on Issue {{ number title url state closedAt repository {{ name owner {{ login }} }} }}
-                ... on PullRequest {{ number title url state closedAt mergedAt repository {{ name owner {{ login }} }} }}
-              }} }} }} pageInfo {{ hasNextPage endCursor }}
+              items(first:100, after:$cursor) {{
+                nodes {{ content {{
+                  __typename
+                  ... on Issue {{ number title url state closedAt repository {{ name owner {{ login }} }} }}
+                  ... on PullRequest {{ number title url state closedAt mergedAt repository {{ name owner {{ login }} }} }}
+                }} }}
+                pageInfo {{ hasNextPage endCursor }}
+              }}
             }}
           }}
         }}
