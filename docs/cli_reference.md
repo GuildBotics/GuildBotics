@@ -180,7 +180,7 @@ guildbotics member chat complete [OPTIONS]
 | `--thread-ts TEXT` | Thread timestamp of the triggering event. [required] |
 | `--event-id TEXT` | Event id of the chat trigger. [required] |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
-| `--content-stdin` | Read the entire run summary from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -272,7 +272,7 @@ guildbotics member chat noop [OPTIONS]
 | `--channel-id TEXT` | Channel id of the triggering event. [required] |
 | `--thread-ts TEXT` | Thread timestamp of the triggering event. [required] |
 | `--event-id TEXT` | Event id of the chat trigger. [required] |
-| `--content-stdin` | Read the entire no-op reason from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -290,7 +290,7 @@ guildbotics member chat post [OPTIONS]
 | `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
 | `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--content-stdin` | Read the entire message body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -346,7 +346,7 @@ guildbotics member chat reply [OPTIONS]
 | `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
 | `--thread-ts TEXT` | Thread timestamp (with --channel-id). [default: ""] |
 | `--message-url TEXT` | Slack message URL (alternative to channel/timestamp options). [default: ""] |
-| `--content-stdin` | Read the entire message body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -400,7 +400,7 @@ guildbotics member git commit [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--repo-path PATH` | Path to the member repository workspace. [required] |
-| `--content-stdin` | Read the entire commit message from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -439,7 +439,7 @@ guildbotics member git publish [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--repo-path PATH` | Path to the member repository workspace. [required] |
-| `--content-stdin` | Read the entire commit message from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -508,7 +508,7 @@ guildbotics member github issue comment [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Issue URL. [required] |
-| `--content-stdin` | Read the entire comment body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -525,7 +525,7 @@ guildbotics member github issue create [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
 | `--title TEXT` | Issue title. [required] |
-| `--content-stdin` | Read the entire issue body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--add-to-project / --no-add-to-project` | Add the created issue to the configured project board. [default: add-to-project] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -578,7 +578,7 @@ guildbotics member github pr comment [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL. [required] |
-| `--content-stdin` | Read the entire comment body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -597,7 +597,7 @@ guildbotics member github pr create [OPTIONS]
 | `--head TEXT` | Head branch containing the changes. [required] |
 | `--base TEXT` | Base branch for the pull request. Defaults to the repository default branch. [default: ""] |
 | `--title TEXT` | Pull request title. [required] |
-| `--content-stdin` | Read the entire pull request body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--issue-url TEXT` | Related issue URL to link to the PR. [default: ""] |
 | `--draft [auto\|true\|false]` | Open as a draft PR; 'auto' drafts when the member is a proxy agent. [default: auto] |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -633,7 +633,7 @@ guildbotics member github pr reply [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL. [required] |
 | `--reply-target-id INTEGER` | reply_target_id from 'pr inspect --include-comments'. [required] |
-| `--content-stdin` | Read the entire comment body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -654,7 +654,7 @@ guildbotics member github pr review-comment [OPTIONS]
 | `--side [LEFT\|RIGHT]` | Diff side of the line. [default: RIGHT] |
 | `--start-line INTEGER RANGE` | Start line for a multi-line comment. [x\>=1] |
 | `--start-side [LEFT\|RIGHT]` | Diff side of --start-line. |
-| `--content-stdin` | Read the entire comment body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -670,7 +670,7 @@ guildbotics member github pr update [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL. [required] |
-| `--content-stdin` | Read the entire replacement pull request body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -831,7 +831,7 @@ guildbotics member memory record [OPTIONS]
 | `--thread TEXT` | Related chat thread URL (source anchor). May be repeated. |
 | `--kind [note\|policy]` | Document kind; 'policy' requires --policy-approved. [default: note] |
 | `--pin` | Pin as a standing rule included in member context. |
-| `--content-stdin` | Read the entire document body from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--policy-approved` | Confirm that a human approved this policy memory change. |
 | `--set TEXT` | Extra metadata as key=value. May be repeated. |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -915,7 +915,7 @@ guildbotics member task complete [OPTIONS]
 | `--run-id TEXT` | Workflow run id. [required] |
 | `--ticket-url TEXT` | Ticket URL the completed run worked on. [required] |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
-| `--content-stdin` | Read the entire run summary from standard input. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

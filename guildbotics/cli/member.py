@@ -77,6 +77,13 @@ _workspace_mode_option = click.option(
         "repository currently open in an interactive coding session."
     ),
 )
+_required_content_stdin_option = click.option(
+    "--content-stdin",
+    is_flag=True,
+    required=True,
+    expose_value=False,
+    help="Read the command's entire free-form content from standard input.",
+)
 
 
 @click.group()
@@ -196,12 +203,7 @@ def memory() -> None:
     is_flag=True,
     help="Pin as a standing rule included in member context.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire document body from standard input.",
-)
+@_required_content_stdin_option
 @click.option(
     "--policy-approved",
     is_flag=True,
@@ -226,13 +228,12 @@ def memory_record(
     threads: tuple[str, ...],
     kind: str,
     pinned: bool,
-    content_stdin: bool,
     policy_approved: bool,
     set_values: tuple[str, ...],
     output_format: str,
 ) -> None:
     title = _validate_title(title)
-    body = _read_stdin(content_stdin, "memory body")
+    body = _read_stdin("memory body")
     _run(
         _memory_record(
             person,
@@ -798,22 +799,16 @@ async def _chat_inspect_thread(
     default="",
     help="Channel name (alternative to --channel-id).",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire message body from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def chat_post(
     person: str,
     service_name: str,
     channel_id: str,
     channel_name: str,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
-    body = _read_stdin(content_stdin, "message body")
+    body = _read_stdin("message body")
     _run(
         _chat_post(
             person,
@@ -866,12 +861,7 @@ async def _chat_post(
     default="",
     help="Slack message URL (alternative to channel/timestamp options).",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire message body from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def chat_reply(
     person: str,
@@ -880,10 +870,9 @@ def chat_reply(
     channel_name: str,
     thread_ts: str,
     message_url: str,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
-    body = _read_stdin(content_stdin, "message body")
+    body = _read_stdin("message body")
     ref = _resolve_message_reference(
         channel_id=channel_id or None,
         thread_ts=thread_ts or None,
@@ -1031,12 +1020,7 @@ async def _chat_reaction_add(
     "--thread-ts", required=True, help="Thread timestamp of the triggering event."
 )
 @click.option("--event-id", required=True, help="Event id of the chat trigger.")
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire no-op reason from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def chat_noop(
     person: str,
@@ -1045,10 +1029,9 @@ def chat_noop(
     channel_id: str,
     thread_ts: str,
     event_id: str,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
-    reason = _read_stdin(content_stdin, "no-op reason")
+    reason = _read_stdin("no-op reason")
     _resolve(person)
     payload = {
         "service": service_name,
@@ -1077,12 +1060,7 @@ def chat_noop(
     type=click.Choice(["done", "asking", "blocked"]),
     help="Run outcome.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire run summary from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def chat_complete(
     person: str,
@@ -1092,10 +1070,9 @@ def chat_complete(
     thread_ts: str,
     event_id: str,
     status: str,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
-    summary = _read_stdin(content_stdin, "run summary")
+    summary = _read_stdin("run summary")
     _resolve(person)
     subject_id = f"{service_name}:{channel_id}:{thread_ts}:{event_id}"
     try:
@@ -1191,18 +1168,12 @@ async def _git_prepare(
     type=click.Path(path_type=Path),
     help="Path to the member repository workspace.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire commit message from standard input.",
-)
+@_required_content_stdin_option
 @_workspace_mode_option
 @_json_format_option
 def git_commit(
     person: str,
     repo_path: Path,
-    content_stdin: bool,
     workspace_mode: str,
     output_format: str,
 ) -> None:
@@ -1212,7 +1183,7 @@ def git_commit(
     command commits only what is staged and applies the member name/email to
     that single commit without changing the repository's git config.
     """
-    message = _read_stdin(content_stdin, "commit message")
+    message = _read_stdin("commit message")
     _run(
         _git_commit(person, repo_path, message, workspace_mode),
         output_format=output_format,
@@ -1296,18 +1267,12 @@ async def _git_push(
     type=click.Path(path_type=Path),
     help="Path to the member repository workspace.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire commit message from standard input.",
-)
+@_required_content_stdin_option
 @_workspace_mode_option
 @_json_format_option
 def git_publish(
     person: str,
     repo_path: Path,
-    content_stdin: bool,
     workspace_mode: str,
     output_format: str,
 ) -> None:
@@ -1317,7 +1282,7 @@ def git_publish(
     commits only what is staged with the member name/email and pushes the
     branch using the member credential.
     """
-    message = _read_stdin(content_stdin, "commit message")
+    message = _read_stdin("commit message")
     result = _run(
         _git_publish(person, repo_path, message, workspace_mode),
         output_format=output_format,
@@ -1396,20 +1361,14 @@ async def _issue_inspect(person: str, issue_url: str) -> dict[str, Any]:
 @issue.command(name="comment")
 @_person_option
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire comment body from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def issue_comment(
     person: str,
     issue_url: str,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
-    body = _read_stdin(content_stdin, "issue comment body")
+    body = _read_stdin("issue comment body")
     _run(
         _issue_comment(person, issue_url, body),
         output_format=output_format,
@@ -1431,12 +1390,7 @@ async def _issue_comment(person: str, issue_url: str, body: str) -> dict[str, An
 @_person_option
 @click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
 @click.option("--title", required=True, help="Issue title.")
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire issue body from standard input.",
-)
+@_required_content_stdin_option
 @click.option(
     "--add-to-project/--no-add-to-project",
     default=True,
@@ -1447,12 +1401,11 @@ def issue_create(
     person: str,
     repo: str,
     title: str,
-    content_stdin: bool,
     add_to_project: bool,
     output_format: str,
 ) -> None:
     title = _validate_title(title)
-    body = _read_stdin(content_stdin, "issue body")
+    body = _read_stdin("issue body")
     _run(
         _issue_create(person, repo, title, body, add_to_project),
         output_format=output_format,
@@ -1533,12 +1486,7 @@ async def _pr_inspect(
     required=True,
     help="Pull request title.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire pull request body from standard input.",
-)
+@_required_content_stdin_option
 @click.option("--issue-url", default="", help="Related issue URL to link to the PR.")
 @click.option(
     "--draft",
@@ -1553,13 +1501,12 @@ def pr_create(
     head: str,
     base: str,
     title: str,
-    content_stdin: bool,
     issue_url: str,
     draft: str,
     output_format: str,
 ) -> None:
     title = _validate_title(title)
-    body = _read_stdin(content_stdin, "pull request body")
+    body = _read_stdin("pull request body")
     _run(
         _pr_create(person, repo, head, base, title, body, issue_url, draft),
         output_format=output_format,
@@ -1592,20 +1539,14 @@ async def _pr_create(
 @pr.command(name="update")
 @_person_option
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire replacement pull request body from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def pr_update(
     person: str,
     pr_url: str,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
-    body = _read_stdin(content_stdin, "pull request body", allow_empty=True)
+    body = _read_stdin("pull request body", allow_empty=True)
     _run(
         _pr_update(person, pr_url, body),
         output_format=output_format,
@@ -1626,17 +1567,10 @@ async def _pr_update(person: str, pr_url: str, body: str) -> dict[str, Any]:
 @pr.command(name="comment")
 @_person_option
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire comment body from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
-def pr_comment(
-    person: str, pr_url: str, content_stdin: bool, output_format: str
-) -> None:
-    body = _read_stdin(content_stdin, "pull request comment body")
+def pr_comment(person: str, pr_url: str, output_format: str) -> None:
+    body = _read_stdin("pull request comment body")
     _run(
         _pr_comment(person, pr_url, body),
         output_format=output_format,
@@ -1682,12 +1616,7 @@ async def _pr_comment(person: str, pr_url: str, body: str) -> dict[str, Any]:
     default=None,
     help="Diff side of --start-line.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire comment body from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def pr_review_comment(
     person: str,
@@ -1697,14 +1626,13 @@ def pr_review_comment(
     side: str,
     start_line: int | None,
     start_side: str | None,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
     if (start_line is None) != (start_side is None):
         raise click.ClickException(
             "--start-line and --start-side must be provided together."
         )
-    body = _read_stdin(content_stdin, "pull request review comment body")
+    body = _read_stdin("pull request review comment body")
     _run(
         _pr_review_comment(
             person, pr_url, body, file_path, line, side, start_line, start_side
@@ -1746,21 +1674,15 @@ async def _pr_review_comment(
     type=int,
     help="reply_target_id from 'pr inspect --include-comments'.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire comment body from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def pr_reply(
     person: str,
     pr_url: str,
     reply_target_id: int,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
-    body = _read_stdin(content_stdin, "pull request reply body")
+    body = _read_stdin("pull request reply body")
     _run(
         _pr_reply(person, pr_url, reply_target_id, body),
         output_format=output_format,
@@ -1858,22 +1780,16 @@ def task() -> None:
     type=click.Choice(["done", "asking", "blocked"]),
     help="Run outcome.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    help="Read the entire run summary from standard input.",
-)
+@_required_content_stdin_option
 @_json_format_option
 def task_complete(
     person: str,
     run_id: str,
     ticket_url: str,
     status: str,
-    content_stdin: bool,
     output_format: str,
 ) -> None:
-    summary = _read_stdin(content_stdin, "run summary")
+    summary = _read_stdin("run summary")
     _run(
         _task_complete(person, run_id, ticket_url, status, summary),
         output_format=output_format,
@@ -1921,19 +1837,19 @@ def _resolve(person: str):
         raise click.ClickException(message) from exc
 
 
-def _read_stdin(content_stdin: bool, label: str, *, allow_empty: bool = False) -> str:
-    if not content_stdin:
-        raise click.ClickException("--content-stdin is required.")
+def _read_stdin(label: str, *, allow_empty: bool = False) -> str:
     text = click.get_text_stream("stdin").read()
-    if not allow_empty and not text.strip():
-        raise click.ClickException(f"{label} must not be empty.")
-    return text
+    if text.strip():
+        return text
+    if allow_empty:
+        return ""
+    raise click.ClickException(f"{label} must not be empty.")
 
 
 def _read_optional_stdin(content_stdin: bool, label: str) -> str | None:
     if not content_stdin:
         return None
-    return _read_stdin(content_stdin, label)
+    return _read_stdin(label)
 
 
 def _validate_title(title: str) -> str:

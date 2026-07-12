@@ -1033,7 +1033,7 @@ def test_member_git_commit_requires_content_stdin(tmp_path):
 
 def test_member_git_commit_rejects_removed_message_options(tmp_path):
     runner = CliRunner()
-    removed_option = "--" + "message-file"
+    removed_option = "--message-file"
 
     result = runner.invoke(
         member_module.member,
@@ -1482,8 +1482,9 @@ def test_member_github_pr_create_rejects_missing_content_source():
     assert "Missing option '--content-stdin'" in result.output
 
 
-def test_member_github_pr_update_allows_empty_stdin_and_records_evidence(
-    monkeypatch,
+@pytest.mark.parametrize("content", ["", "\n", " \t\n"])
+def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
+    monkeypatch, content
 ):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="human")
@@ -1525,7 +1526,7 @@ def test_member_github_pr_update_allows_empty_stdin_and_records_evidence(
             "https://github.com/owner/repo/pull/7",
             "--content-stdin",
         ],
-        input="",
+        input=content,
     )
 
     assert result.exit_code == 0
