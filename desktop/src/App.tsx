@@ -11,6 +11,7 @@ import {
   Divider,
   Drawer,
   Group,
+  Loader,
   Modal,
   NumberInput,
   SegmentedControl,
@@ -270,49 +271,58 @@ function SystemAlertBand() {
           icon={<TriangleAlert size={18} />}
           key={alert.id}
           title={t(`systemAlerts.severity.${alert.severity}`)}
+          withCloseButton
+          onClose={() => dismiss.mutate(alert.id)}
+          closeButtonLabel={t("systemAlerts.actions.dismiss")}
         >
-          <Group align="center" justify="space-between" wrap="wrap">
+          <Group align="center" gap="md" wrap="wrap">
             <Text size="sm">{systemAlertMessage(t, alert)}</Text>
-            <Group gap="xs">
-              {alert.actions.includes("diagnostics") ? (
-                <Button
-                  loading={diagnostics.isPending}
-                  onClick={() => diagnostics.mutate()}
-                  size="xs"
-                  variant="light"
-                >
-                  {t("systemAlerts.actions.diagnostics")}
-                </Button>
-              ) : null}
-              {alert.actions.includes("setup") ? (
-                <Button component={NavLink} size="xs" to="/setup" variant="light">
-                  {t("systemAlerts.actions.setup")}
-                </Button>
-              ) : null}
-              {alert.actions.includes("service") ? (
-                <Button component={NavLink} size="xs" to="/service" variant="light">
-                  {t("systemAlerts.actions.service")}
-                </Button>
-              ) : null}
-              {alert.actions.includes("trace") && alert.trace_id ? (
-                <Button
-                  component={NavLink}
-                  size="xs"
-                  to={`/diagnostics?tab=executions&trace_id=${encodeURIComponent(alert.trace_id)}`}
-                  variant="light"
-                >
-                  {t("systemAlerts.actions.trace")}
-                </Button>
-              ) : null}
-              <Button
-                loading={dismiss.isPending && dismiss.variables === alert.id}
-                onClick={() => dismiss.mutate(alert.id)}
-                size="xs"
-                variant="subtle"
-              >
-                {t("systemAlerts.actions.dismiss")}
-              </Button>
-            </Group>
+            {alert.actions.length > 0 && (
+              <Group gap="xs">
+                {alert.actions.includes("diagnostics") ? (
+                  <Group gap="xs" align="center" style={{ display: "inline-flex" }}>
+                    <Anchor
+                      component="button"
+                      onClick={() => !diagnostics.isPending && diagnostics.mutate()}
+                      size="sm"
+                      underline="hover"
+                      style={{
+                        border: "none",
+                        background: "none",
+                        padding: 0,
+                        cursor: diagnostics.isPending ? "not-allowed" : "pointer",
+                        opacity: diagnostics.isPending ? 0.6 : 1,
+                        color: "inherit",
+                        font: "inherit",
+                      }}
+                    >
+                      {t("systemAlerts.actions.diagnostics")}
+                    </Anchor>
+                    {diagnostics.isPending && <Loader size="xs" color="currentColor" />}
+                  </Group>
+                ) : null}
+                {alert.actions.includes("setup") ? (
+                  <Anchor component={NavLink} size="sm" to="/setup" underline="hover">
+                    {t("systemAlerts.actions.setup")}
+                  </Anchor>
+                ) : null}
+                {alert.actions.includes("service") ? (
+                  <Anchor component={NavLink} size="sm" to="/service" underline="hover">
+                    {t("systemAlerts.actions.service")}
+                  </Anchor>
+                ) : null}
+                {alert.actions.includes("trace") && alert.trace_id ? (
+                  <Anchor
+                    component={NavLink}
+                    size="sm"
+                    to={`/diagnostics?tab=executions&trace_id=${encodeURIComponent(alert.trace_id)}`}
+                    underline="hover"
+                  >
+                    {t("systemAlerts.actions.trace")}
+                  </Anchor>
+                ) : null}
+              </Group>
+            )}
           </Group>
         </Alert>
       ))}

@@ -57,10 +57,8 @@ const resources = {
           credential_slack: "Slack credentials for {{person}} could not be verified.",
           credential_cli_agent: "The AI CLI tool credentials for {{person}} could not be verified.",
           credential_llm: "The configured LLM credentials could not be verified.",
-          command_failed:
-            "{{command}} failed for {{person}}. This alert closes after a successful run.",
-          rate_limited:
-            "{{command}} was rate limited for {{person}}. This alert closes after a later successful run.",
+          command_failed: "{{command}} failed for {{person}}.",
+          rate_limited: "{{command}} was rate limited for {{person}}.",
           scheduler_failed: "The scheduler stopped because of an unexpected error.",
           worker_stopped: "One or more member workers stopped after repeated errors.",
         },
@@ -1243,9 +1241,8 @@ const resources = {
           credential_slack: "{{person}} の Slack 資格情報を検証できませんでした。",
           credential_cli_agent: "{{person}} の AI CLI ツール資格情報を検証できませんでした。",
           credential_llm: "設定された LLM 資格情報を検証できませんでした。",
-          command_failed: "{{person}} の {{command}} が失敗しました。正常実行後に自動で閉じます。",
-          rate_limited:
-            "{{person}} の {{command}} が rate limit を受けました。次の正常実行後に自動で閉じます。",
+          command_failed: "{{person}} の {{command}} が失敗しました。",
+          rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
           scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
           worker_stopped: "連続エラーによりメンバーワーカーが停止しました。",
         },
