@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 
 import pytest
@@ -64,17 +65,17 @@ def test_service_lock_can_be_reacquired_by_another_owner(tmp_path) -> None:
 
 def test_service_lock_retries_one_transient_conflict(monkeypatch, tmp_path) -> None:
     path = tmp_path / "service.lock"
-    real_flock = service_lock_module.fcntl.flock
+    real_lock = service_lock_module._lock_file_nonblocking
     attempts = 0
 
-    def flaky_flock(file_descriptor: int, operation: int) -> None:
+    def flaky_lock(lock_file) -> None:
         nonlocal attempts
-        if operation & service_lock_module.fcntl.LOCK_NB and attempts == 0:
+        if attempts == 0:
             attempts += 1
             raise BlockingIOError
-        real_flock(file_descriptor, operation)
+        real_lock(lock_file)
 
-    monkeypatch.setattr(service_lock_module.fcntl, "flock", flaky_flock)
+    monkeypatch.setattr(service_lock_module, "_lock_file_nonblocking", flaky_lock)
     monkeypatch.setattr(service_lock_module.time, "sleep", lambda _seconds: None)
     service_lock = ServiceLock(path)
 
@@ -84,3 +85,46 @@ def test_service_lock_retries_one_transient_conflict(monkeypatch, tmp_path) -> N
         assert attempts == 1
     finally:
         service_lock.release()
+
+
+def test_windows_lock_backend_uses_one_byte_range(monkeypatch, tmp_path) -> None:
+    calls: list[tuple[int, int, int]] = []
+
+    class FakeWindowsLocking:
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        @staticmethod
+        def locking(file_descriptor: int, mode: int, length: int) -> None:
+            calls.append((file_descriptor, mode, length))
+
+    monkeypatch.setattr(service_lock_module, "_WINDOWS", True)
+    monkeypatch.setattr(service_lock_module, "_windows_locking", FakeWindowsLocking)
+    path = tmp_path / "service.lock"
+
+    with path.open("a+", encoding="utf-8") as lock_file:
+        service_lock_module._lock_file_nonblocking(lock_file)
+        service_lock_module._unlock_file(lock_file)
+
+    assert [mode for _fd, mode, _length in calls] == [
+        FakeWindowsLocking.LK_NBLCK,
+        FakeWindowsLocking.LK_UNLCK,
+    ]
+    assert all(length == 1 for _fd, _mode, length in calls)
+    assert path.stat().st_size == 1
+
+
+def test_windows_lock_conflict_becomes_blocking_error(monkeypatch, tmp_path) -> None:
+    class BusyWindowsLocking:
+        LK_NBLCK = 1
+
+        @staticmethod
+        def locking(_file_descriptor: int, _mode: int, _length: int) -> None:
+            raise OSError(errno.EACCES, "locked")
+
+    monkeypatch.setattr(service_lock_module, "_WINDOWS", True)
+    monkeypatch.setattr(service_lock_module, "_windows_locking", BusyWindowsLocking)
+
+    with (tmp_path / "service.lock").open("a+", encoding="utf-8") as lock_file:
+        with pytest.raises(BlockingIOError):
+            service_lock_module._lock_file_nonblocking(lock_file)

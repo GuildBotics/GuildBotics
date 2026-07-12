@@ -88,9 +88,7 @@ def test_runner_notifies_when_worker_thread_stops(monkeypatch) -> None:
     monkeypatch.setattr(runner, "_run_loop", finish_immediately)
 
     runner.start()
-    runner.join(timeout=1.0)
-
-    assert stopped.is_set()
+    assert stopped.wait(timeout=1.0)
 
 
 async def _no_backfill(*args, **kwargs):
