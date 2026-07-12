@@ -55,7 +55,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member git commit --person <person> --repo-path <path> "
-                "(--message-file <file> | --message-stdin) "
+                "--content-stdin "
                 "[--workspace-mode member|current]",
                 "Commit already-staged changes with the member identity (git config untouched).",
             ),
@@ -66,7 +66,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member git publish --person <person> --repo-path <path> "
-                "(--message-file <file> | --message-stdin) "
+                "--content-stdin "
                 "[--workspace-mode member|current]",
                 "Commit already-staged changes with the member identity, then push.",
             ),
@@ -80,12 +80,13 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Read an issue and its comments.",
             ),
             (
-                "guildbotics member github issue comment --person <person> --url <issue_url> --body-file <file>",
+                "guildbotics member github issue comment --person <person> --url <issue_url> --content-stdin",
                 "Comment on an issue in the member voice.",
             ),
             (
                 "guildbotics member github issue create --person <person> --repo <owner/repo> "
-                "--title-file <file> --body-file <file> [--add-to-project]",
+                "--title <title> --content-stdin "
+                "[--add-to-project|--no-add-to-project]",
                 "Open a follow-up issue.",
             ),
             (
@@ -95,23 +96,28 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
-                "[--base <branch>] (--title-file <f> --body-file <f> | --content-stdin) "
+                "[--base <branch>] --title <title> --content-stdin "
                 "[--issue-url <url>] [--draft auto|true|false]",
-                "Open or reuse a PR.",
+                "Open a PR, or return the existing open PR for the same head and base branches.",
             ),
             (
-                "guildbotics member github pr comment --person <person> --url <pr_url> --body-file <file>",
+                "guildbotics member github pr update --person <person> --url <pr_url> "
+                "--content-stdin",
+                "Replace a PR body; an empty stdin removes the body.",
+            ),
+            (
+                "guildbotics member github pr comment --person <person> --url <pr_url> --content-stdin",
                 "Comment on a PR conversation.",
             ),
             (
                 "guildbotics member github pr review-comment --person <person> --url <pr_url> "
                 "--path <file> --line <n> [--side LEFT|RIGHT] [--start-line <n> --start-side LEFT|RIGHT] "
-                "--body-file <file>",
+                "--content-stdin",
                 "Create a new inline review comment on a PR diff line.",
             ),
             (
                 "guildbotics member github pr reply --person <person> --url <pr_url> "
-                "--reply-target-id <id> --body-file <file>",
+                "--reply-target-id <id> --content-stdin",
                 "Reply to an inline review thread.",
             ),
             (
@@ -140,14 +146,15 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member chat reply --person <person> --service slack "
-                "(--message-url <url> | --channel-id <id> --thread-ts <ts>) "
-                "(--body-file <file> | --body-stdin)",
+                "(--message-url <url> | (--channel-id <id> | --channel-name <name>) "
+                "--thread-ts <ts>) "
+                "--content-stdin",
                 "Reply in a thread in the member voice.",
             ),
             (
                 "guildbotics member chat post --person <person> --service slack "
                 "(--channel-id <id> | --channel-name <name>) "
-                "(--body-file <file> | --body-stdin)",
+                "--content-stdin",
                 "Post a new channel message.",
             ),
             (
@@ -162,8 +169,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "Memory",
         [
             (
-                "guildbotics member memory record --person <person> --scope personal|team "
-                "--title <title> (--body-file <file> | --body-stdin) "
+                "guildbotics member memory record --person <person> [--scope personal|team] "
+                "--title <title> --content-stdin "
                 "[--summary <text>] [--keyword <word> ...] [--ticket <url>] [--pr <url>] "
                 "[--channel <url>] [--thread <url>] [--kind note|policy] [--pin] "
                 "[--policy-approved] [--set <key=value> ...]",
@@ -180,9 +187,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member memory update --person <person> --id <doc-id> "
-                "[--team] [--body-file <file> | --body-stdin] [--title <title>] "
-                "[--summary <text>] [--add-keyword <word>] [--remove-keyword <word>] "
-                "[--pin|--unpin] [--policy-approved] [--set <key=value> ...]",
+                "[--team] [--content-stdin] [--title <title>] "
+                "[--summary <text>] [--keyword <word> ...] [--add-keyword <word> ...] "
+                "[--remove-keyword <word> ...] [--ticket <url>] [--pr <url>] "
+                "[--channel <url>] [--thread <url>] [--pin|--unpin] "
+                "[--kind note|policy] [--policy-approved] [--set <key=value> ...]",
                 "Replace selected body or metadata fields and move the document to the digest front.",
             ),
             (
@@ -205,17 +214,17 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             (
                 "guildbotics member chat noop --person <person> --run-id <id> --service slack "
-                "--channel-id <id> --thread-ts <ts> --event-id <id> --reason-file <file>",
+                "--channel-id <id> --thread-ts <ts> --event-id <id> --content-stdin",
                 "Record a deliberate no-op for a chat event.",
             ),
             (
                 "guildbotics member chat complete --person <person> --run-id <id> --service slack "
-                "--channel-id <id> --thread-ts <ts> --event-id <id> --status done|asking|blocked --summary-file <file>",
+                "--channel-id <id> --thread-ts <ts> --event-id <id> --status done|asking|blocked --content-stdin",
                 "Finish a chat workflow run with evidence.",
             ),
             (
                 "guildbotics member task complete --person <person> --run-id <id> --ticket-url <url> "
-                "--status done|asking|blocked --summary-file <file>",
+                "--status done|asking|blocked --content-stdin",
                 "Finish a ticket workflow run with evidence.",
             ),
             (
@@ -254,6 +263,9 @@ _CROSS_CUTTING_RULES: list[str] = [
     "Publishing writes go through these `guildbotics member ...` commands: commits, pushes, PRs, "
     "issue/PR comments, and Slack posts/reactions. Never use gh, raw GitHub/Slack tokens or APIs, "
     "raw `git commit` / `git push`, or raw Slack HTTP calls for those.",
+    "Pass every free-form write body, message, reason, or run summary through `--content-stdin`; "
+    "use a quoted heredoc such as `--content-stdin <<'EOF'` ... `EOF` so `$`, backticks, and "
+    "`$()` remain literal. Titles are single-line `--title` values and are never framed into stdin.",
     "Local-only git is the opposite: run `git add` and `git switch -c` yourself as plain git. "
     "`member git commit` / `publish` commit only what you staged and apply the member name/email "
     "to that one commit without changing the repository git config.",

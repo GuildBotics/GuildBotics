@@ -116,11 +116,11 @@ def test_ticket_prompt_requires_issue_comment_on_pr_work():
 
 
 def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
-    """task complete --summary-file and AgentResponse.message must be called
+    """task complete --content-stdin and AgentResponse.message must be called
     out as NOT substitutes for GitHub comments, in both en and ja."""
     for language in ("en", "ja"):
         body = _prompt_body("handle_github_ticket", language)
-        assert "task complete --summary-file" in body, language
+        assert "task complete --content-stdin" in body, language
         assert "AgentResponse.message" in body, language
         # Both must appear in a context that says they are NOT substitutes
         assert ("not a substitute" in body or "代替ではありません" in body), language
@@ -133,7 +133,7 @@ def test_issue_comment_contract_not_in_chat_prompt():
         body = _prompt_body("handle_chat_event", language)
         # The chat prompt should not contain the ticket-specific issue
         # comment instruction sentinel phrases.
-        assert "task complete --summary-file" not in body, language
+        assert "task complete --content-stdin" not in body, language
         assert (
             "not a substitute" not in body and "代替ではありません" not in body
         ), language
