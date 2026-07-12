@@ -35,6 +35,10 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.runtime.service_lock import (
+    ServiceLockMetadata,
+    ServiceLockUnavailableError,
+)
 
 HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
@@ -1231,3 +1235,32 @@ def test_start_scheduler_skips_routine_check_for_events_only(
     )
 
     assert result == "events-status"
+
+
+def test_start_scheduler_maps_service_lock_conflict_to_http_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    metadata = ServiceLockMetadata(
+        pid=4242,
+        owner="cli",
+        workspace="/tmp/other-workspace",
+        started_at="2026-07-12T10:00:00+09:00",
+    )
+
+    def reject_start(_request: SchedulerStartRequest) -> None:
+        raise ServiceLockUnavailableError(metadata)
+
+    monkeypatch.setattr(runtime._lifecycle, "start", reject_start)
+
+    with pytest.raises(AppApiError) as caught:
+        runtime.start_scheduler(SchedulerStartRequest())
+
+    assert caught.value.code == "service_already_running"
+    assert caught.value.status_code == HTTP_CONFLICT
+    assert caught.value.context == {
+        "owner": "cli",
+        "pid": 4242,
+        "workspace": "/tmp/other-workspace",
+        "started_at": "2026-07-12T10:00:00+09:00",
+    }

@@ -6,6 +6,8 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from guildbotics.cli import main as cli_main
+from guildbotics.runtime.service_lock import ServiceLock
+from guildbotics.utils.i18n_tool import t
 
 
 class _FakeEdition:
@@ -73,15 +75,15 @@ class _FakeEventListenerRunner:
         return False
 
 
-def test_pid_file_path_uses_machine_state_root(monkeypatch, tmp_path):
-    from guildbotics.cli import _pid_file_path
+def test_service_lock_path_uses_machine_state_root(monkeypatch, tmp_path):
+    from guildbotics.cli import _service_lock_path
     from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "workspace-data"))
 
-    assert _pid_file_path() == home / ".guildbotics/data/run/scheduler.pid"
+    assert _service_lock_path() == home / ".guildbotics/data/run/service.lock"
 
 
 def _patch_start_dependencies(monkeypatch, tmp_path: Path):
@@ -106,7 +108,7 @@ def _patch_start_dependencies(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("guildbotics.cli.EventListenerRunner", _events_factory)
     monkeypatch.setattr("guildbotics.cli._load_env_from_cwd", lambda: None)
     monkeypatch.setattr(
-        "guildbotics.cli._pid_file_path", lambda: tmp_path / "scheduler.pid"
+        "guildbotics.cli._service_lock_path", lambda: tmp_path / "service.lock"
     )
     monkeypatch.setattr(
         "guildbotics.cli.signal.signal",
@@ -176,6 +178,27 @@ def test_start_only_scheduler(monkeypatch, tmp_path):
     assert created["scheduler"].scheduled_source_enabled is True
     assert created["scheduler"].routine_source_enabled is True
     assert created["scheduler"].event_queue_source_enabled is False
+
+
+def test_start_rejects_when_desktop_holds_service_lock(monkeypatch, tmp_path):
+    created, _handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
+    holder = ServiceLock(tmp_path / "service.lock")
+    metadata = holder.acquire(
+        owner="desktop", workspace=tmp_path / "desktop-workspace"
+    )
+    try:
+        result = CliRunner().invoke(cli_main, ["start"])
+    finally:
+        holder.release()
+
+    assert result.exit_code == 1
+    assert t(
+        "runtime.service_lock.already_running_with_owner",
+        owner=metadata.owner,
+        pid=metadata.pid,
+        workspace=metadata.workspace,
+    ) in result.output
+    assert created == {}
 
 
 def test_start_only_events(monkeypatch, tmp_path):

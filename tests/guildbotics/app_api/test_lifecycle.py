@@ -110,9 +110,15 @@ class FakeRunner:
 
     instances: ClassVar[list[FakeRunner]] = []
 
-    def __init__(self, context: Any, service_run_id: str | None = None) -> None:
+    def __init__(
+        self,
+        context: Any,
+        service_run_id: str | None = None,
+        on_stopped: Any = None,
+    ) -> None:
         self.context = context
         self.service_run_id = service_run_id
+        self.on_stopped = on_stopped
         self._alive = True
         self.start_calls = 0
         self.stop_calls = 0
@@ -144,6 +150,31 @@ class FakeRunner:
     def get_status_summary(self) -> dict[str, Any]:
         return dict(self.summary)
 
+    def finish(self) -> None:
+        self._alive = False
+        if self.on_stopped is not None:
+            self.on_stopped()
+
+
+class FakeServiceLock:
+    instances: ClassVar[list[FakeServiceLock]] = []
+
+    def __init__(self) -> None:
+        self.locked = False
+        self.acquire_calls: list[dict[str, Any]] = []
+        self.release_calls = 0
+        FakeServiceLock.instances.append(self)
+
+    def acquire(self, *, owner: str, workspace: Any) -> None:
+        self.acquire_calls.append({"owner": owner, "workspace": workspace})
+        self.locked = True
+
+    def release(self) -> None:
+        if not self.locked:
+            return
+        self.release_calls += 1
+        self.locked = False
+
 
 @pytest.fixture
 def context_factory() -> Any:
@@ -160,8 +191,10 @@ def context_factory() -> Any:
 def patch_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeScheduler.instances = []
     FakeRunner.instances = []
+    FakeServiceLock.instances = []
     monkeypatch.setattr(lifecycle, "TaskScheduler", FakeScheduler)
     monkeypatch.setattr(lifecycle, "EventListenerRunner", FakeRunner)
+    monkeypatch.setattr(lifecycle, "ServiceLock", FakeServiceLock)
 
 
 def _make_service(
@@ -300,6 +333,78 @@ def test_both_targets_start_when_only_is_none(context_factory: Any) -> None:
         ]
     finally:
         _stop_quietly(service)
+
+
+def test_service_lock_is_shared_by_scheduler_and_events(context_factory: Any) -> None:
+    service, _bus = _make_service(context_factory)
+    service.start(
+        SchedulerStartRequest(
+            sources={"scheduled": True, "routine": True, "event_queue": False}
+        )
+    )
+    service.start(
+        SchedulerStartRequest(
+            sources={"scheduled": False, "routine": False, "event_queue": True}
+        )
+    )
+
+    service_lock = FakeServiceLock.instances[0]
+    assert len(service_lock.acquire_calls) == 1
+    assert service_lock.acquire_calls[0]["owner"] == "desktop"
+
+    service.stop()
+
+    assert service_lock.release_calls == 1
+    assert service_lock.locked is False
+
+
+def test_status_poll_does_not_release_lock_during_start(context_factory: Any) -> None:
+    service, _bus = _make_service(context_factory)
+    entered_start = threading.Event()
+    continue_start = threading.Event()
+    original_start = service._scheduler.start
+
+    def blocked_start(**kwargs: Any) -> Any:
+        entered_start.set()
+        assert continue_start.wait(2.0)
+        return original_start(**kwargs)
+
+    service._scheduler.start = blocked_start  # type: ignore[method-assign]
+    start_thread = threading.Thread(
+        target=service.start,
+        args=(
+            SchedulerStartRequest(
+                sources={"scheduled": True, "routine": True, "event_queue": False}
+            ),
+        ),
+    )
+    start_thread.start()
+    try:
+        assert entered_start.wait(2.0)
+        assert service.get_status().scheduler.running is False
+        assert FakeServiceLock.instances[0].locked is True
+    finally:
+        continue_start.set()
+        start_thread.join(timeout=2.0)
+        _stop_quietly(service)
+    assert not start_thread.is_alive()
+
+
+def test_event_runner_natural_stop_releases_lock_without_status_poll(
+    context_factory: Any,
+) -> None:
+    service, _bus = _make_service(context_factory)
+    service.start(
+        SchedulerStartRequest(
+            sources={"scheduled": False, "routine": False, "event_queue": True}
+        )
+    )
+    # Stop the scheduler first so the event listener is the final active target.
+    service._scheduler.stop()
+
+    FakeRunner.instances[0].finish()
+
+    assert FakeServiceLock.instances[0].locked is False
 
 
 # --------------------------------------------------------------------------- #
@@ -558,6 +663,7 @@ def test_scheduler_stop_timeout_marks_failed_with_running_true(
         assert status.scheduler.running is True
         assert status.scheduler.error == "Scheduler did not stop before timeout."
         assert "scheduler.failed" in _events_for(bus, "scheduler")
+        assert FakeServiceLock.instances[0].locked is True
     finally:
         scheduler._stop.set()
 
@@ -615,6 +721,8 @@ def test_scheduler_start_context_factory_exception_marks_failed() -> None:
         "scheduler.starting",
         "scheduler.failed",
     ]
+    assert FakeServiceLock.instances[0].locked is False
+    assert FakeServiceLock.instances[0].release_calls == 1
 
 
 def test_events_start_context_factory_exception_marks_member_worker_failed() -> None:
@@ -702,8 +810,8 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
                 sources={"scheduled": True, "routine": True, "event_queue": False}
             )
         )
-        # The thread runs start() asynchronously; wait for the failed state.
-        assert _wait_until(lambda: service.get_status().scheduler.state == "failed")
+        # Wait on the emitted event, without polling status as a release trigger.
+        assert _wait_until(lambda: "scheduler.failed" in _events_for(bus, "scheduler"))
     finally:
         FakeScheduler.__init__ = original_init  # type: ignore[method-assign]
 
@@ -711,6 +819,7 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
     assert status.state == "failed"
     assert status.running is False
     assert status.error == "loop exploded"
+    assert FakeServiceLock.instances[0].locked is False
 
     failed_events = [
         item

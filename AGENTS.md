@@ -157,8 +157,13 @@ help / docstring が正であり、member コマンドの一行説明は
 - `run` は `--person` または `<command>@<person_id>` でメンバー指定可能
 - `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
 - `member` group は `--workspace <dir>` を受け取り、AI CLIツール / skill 経由の member capability の入口になる。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（prepare/commit/push/publish）、`github`（issue/pr/reaction）、`context`、`help`
-- `start` は PID ファイルを `~/.guildbotics/data/run/scheduler.pid` に保存
-- `stop` / `kill` は上記 PID を使ってプロセス停止
+- `start` と Desktop Service は共通の OS advisory lock
+  `~/.guildbotics/data/run/service.lock` を使い、background service
+  （scheduler worker / event listener）の machine-wide な二重起動を防ぐ。
+  ファイル内の PID / owner / workspace は診断・停止用メタデータであり、
+  ファイルの存在自体は稼働判定に使わない
+- `stop` / `kill` は `service.lock` の owner が CLI の場合だけ記録 PID を使って
+  プロセス停止する。Desktop owner は sidecar を signal せず、Desktop からの停止を要求する
 
 ### 3. コマンド実行基盤（最重要）
 

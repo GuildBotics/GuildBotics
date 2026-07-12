@@ -28,6 +28,12 @@ from guildbotics.drivers import (
     run_command,
 )
 from guildbotics.editions import get_edition
+from guildbotics.runtime.service_lock import (
+    ServiceLock,
+    ServiceLockMetadata,
+    ServiceLockUnavailableError,
+    inspect_service_lock,
+)
 from guildbotics.utils.env_loader import (
     load_guildbotics_env,
     resolve_guildbotics_env_file,
@@ -37,6 +43,7 @@ from guildbotics.utils.fileio import (
     apply_workspace_data_root,
     get_machine_state_path,
 )
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 
@@ -71,8 +78,8 @@ def _load_env_from_cwd() -> None:
     _apply_runtime_workspace(Path.cwd())
 
 
-def _pid_file_path() -> Path:
-    return get_machine_state_path("run", "scheduler.pid")
+def _service_lock_path() -> Path:
+    return get_machine_state_path("run", "service.lock")
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -83,27 +90,6 @@ def _pid_is_running(pid: int) -> bool:
         return e.errno == errno.EPERM
     else:
         return True
-
-
-def _read_pidfile(path: Path) -> int | None:
-    try:
-        txt = path.read_text().strip()
-        return int(txt) if txt else None
-    except Exception:
-        return None
-
-
-def _write_pidfile(path: Path, pid: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(pid))
-
-
-def _remove_pidfile(path: Path) -> None:
-    try:
-        if path.exists():
-            path.unlink()
-    except Exception:
-        pass
 
 
 @click.group(context_settings={"show_default": True})
@@ -144,20 +130,30 @@ def start(
 ) -> None:
     """Start GuildBotics runtimes (scheduler and event listener runner)."""
     _load_env_from_cwd()
-    pid_path = _pid_file_path()
-    # Prevent multiple instances
-    if pid_path.exists():
-        old_pid = _read_pidfile(pid_path)
-        if old_pid and _pid_is_running(old_pid):
-            click.echo(
-                f"Scheduler already running with PID {old_pid} (pidfile: {pid_path})."
-            )
-            return
-        else:
-            # Stale pidfile
-            _remove_pidfile(pid_path)
+    service_lock = ServiceLock(_service_lock_path())
+    try:
+        service_lock.acquire(owner="cli", workspace=Path.cwd())
+    except ServiceLockUnavailableError as exc:
+        raise click.ClickException(
+            _service_lock_conflict_message(exc.metadata)
+        ) from exc
 
-    _write_pidfile(pid_path, os.getpid())
+    try:
+        _run_cli_background_service(
+            only_target=only_target,
+            max_consecutive_errors=max_consecutive_errors,
+            default_routine_commands=default_routine_commands,
+        )
+    finally:
+        service_lock.release()
+
+
+def _run_cli_background_service(
+    *,
+    only_target: str | None,
+    max_consecutive_errors: int,
+    default_routine_commands: tuple[str, ...],
+) -> None:
 
     edition = get_edition()
 
@@ -227,7 +223,6 @@ def start(
         if event_runner is not None:
             event_runner.stop()
             event_runner.join(timeout=5.0)
-        _remove_pidfile(pid_path)
 
 
 def _wait_for_event_runner(event_runner: EventListenerRunner) -> None:
@@ -342,65 +337,53 @@ def version_cmd() -> None:
     help="Cancel in-flight work after timeout, then SIGKILL as a last resort",
 )
 def stop(timeout: int, force: bool) -> None:
-    """Gracefully stop the running scheduler process."""
+    """Gracefully stop a CLI-managed background service."""
     _load_env_from_cwd()
-    pid_path = _pid_file_path()
-
-    if not pid_path.exists():
-        click.echo("No pidfile found. Is the scheduler running?")
+    status = inspect_service_lock(_service_lock_path())
+    if not status.locked:
+        click.echo(t("runtime.service_lock.not_running"))
         return
+    metadata = status.metadata
+    if metadata is None:
+        raise click.ClickException(t("runtime.service_lock.invalid_metadata"))
+    if metadata.owner == "desktop":
+        raise click.ClickException(t("runtime.service_lock.desktop_managed"))
 
-    pid = _read_pidfile(pid_path)
-    if not pid:
-        click.echo(f"Invalid pidfile: {pid_path}")
-        _remove_pidfile(pid_path)
-        return
-
+    pid = metadata.pid
     if not _pid_is_running(pid):
-        click.echo(f"Process {pid} is not running. Cleaning up pidfile.")
-        _remove_pidfile(pid_path)
-        return
+        raise click.ClickException(t("runtime.service_lock.missing_process", pid=pid))
 
     try:
         os.kill(pid, signal.SIGTERM)
     except PermissionError:
-        click.echo(f"Permission denied to signal process {pid}.")
+        click.echo(t("runtime.service_lock.permission_denied", pid=pid))
         return
     except ProcessLookupError:
-        click.echo(f"Process {pid} does not exist. Cleaning up pidfile.")
-        _remove_pidfile(pid_path)
+        click.echo(t("runtime.service_lock.process_missing", pid=pid))
         return
 
     # Wait for graceful shutdown (the scheduler finishes in-flight work first).
     if _wait_for_process_exit(pid, timeout):
-        click.echo("Scheduler stopped.")
-        _remove_pidfile(pid_path)
+        click.echo(t("runtime.service_lock.stopped"))
         return
 
     if not force:
-        click.echo(
-            "Timeout reached; the scheduler may still be finishing in-flight work. "
-            "Run `guildbotics stop` again to cancel it, or use --force to SIGKILL."
-        )
+        click.echo(t("runtime.service_lock.stop_timeout"))
         return
 
     # Escalate: a second SIGTERM cancels in-flight work, SIGKILL is the last resort.
     with suppress(ProcessLookupError):
         os.kill(pid, signal.SIGTERM)
     if _wait_for_process_exit(pid, timeout):
-        click.echo("Scheduler stopped after cancelling in-flight work.")
-        _remove_pidfile(pid_path)
+        click.echo(t("runtime.service_lock.stopped_after_cancel"))
         return
 
     try:
         os.kill(pid, signal.SIGKILL)
     except Exception as e:
-        click.echo(f"Failed to SIGKILL {pid}: {e}")
+        click.echo(t("runtime.service_lock.sigkill_failed", pid=pid, error=e))
     else:
-        click.echo("Force killed scheduler.")
-    # Best effort cleanup
-    if not _pid_is_running(pid):
-        _remove_pidfile(pid_path)
+        click.echo(t("runtime.service_lock.force_killed"))
 
 
 def _wait_for_process_exit(pid: int, timeout: float) -> bool:
@@ -416,8 +399,19 @@ def _wait_for_process_exit(pid: int, timeout: float) -> bool:
 @main.command()
 @click.pass_context
 def kill(ctx: click.Context) -> None:
-    """Immediately force kill the running scheduler.
+    """Immediately force kill a CLI-managed background service.
 
     Equivalent to: `guildbotics stop --force --timeout 0`.
     """
     ctx.invoke(stop, timeout=0, force=True)
+
+
+def _service_lock_conflict_message(metadata: ServiceLockMetadata | None) -> str:
+    if metadata is None:
+        return t("runtime.service_lock.already_running")
+    return t(
+        "runtime.service_lock.already_running_with_owner",
+        owner=metadata.owner,
+        pid=metadata.pid,
+        workspace=metadata.workspace,
+    )
