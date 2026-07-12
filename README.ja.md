@@ -648,7 +648,9 @@ task_schedules:
 interactive member chat の例:
 
 ```bash
-guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --body-file reply.md
+guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --content-stdin <<'EOF'
+`$HOME`、backtick (`command`)、`$(command)` をそのまま含む返信本文
+EOF
 guildbotics member chat reaction add --person alice --service slack --channel-id C0123456789 --message-ts 1777554000.000000 --reaction ack
 ```
 

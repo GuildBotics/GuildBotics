@@ -126,7 +126,7 @@ def test_member_memory_record_and_recall_cli(monkeypatch):
             "retry",
             "--ticket",
             "https://example.test/issues/1",
-            "--body-stdin",
+            "--content-stdin",
         ],
         input="Retry after refresh.\n",
     )
@@ -149,6 +149,80 @@ def test_member_memory_record_and_recall_cli(monkeypatch):
 
     assert recall.exit_code == 0
     assert json.loads(recall.output)["results"][0]["doc_id"] == doc_id
+
+
+def test_member_memory_update_reads_stdin_only_when_requested(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    runner = CliRunner()
+    record = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "record",
+            "--person",
+            "aiko",
+            "--title",
+            "Original title",
+            "--content-stdin",
+        ],
+        input="Original body\n",
+    )
+    doc_id = json.loads(record.output)["doc_id"]
+
+    metadata_only = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "update",
+            "--person",
+            "aiko",
+            "--id",
+            doc_id,
+            "--title",
+            "Updated title",
+        ],
+        input="This must not be consumed.",
+    )
+    body_update = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "update",
+            "--person",
+            "aiko",
+            "--id",
+            doc_id,
+            "--content-stdin",
+        ],
+        input="Updated body\n",
+    )
+    fetched = runner.invoke(
+        member_module.member,
+        [
+            "memory",
+            "get",
+            "--person",
+            "aiko",
+            "--id",
+            doc_id,
+        ],
+    )
+
+    assert record.exit_code == 0
+    assert metadata_only.exit_code == 0
+    assert body_update.exit_code == 0
+    assert fetched.exit_code == 0
+    payload = json.loads(fetched.output)
+    assert payload["title"] == "Updated title"
+    assert payload["body"] == "Updated body\n"
 
 
 def test_member_cli_reuses_trace_for_interactive_session(monkeypatch):
@@ -179,7 +253,7 @@ def test_member_cli_reuses_trace_for_interactive_session(monkeypatch):
             "Trace summary",
             "--keyword",
             "trace",
-            "--body-stdin",
+            "--content-stdin",
         ],
         input="Trace body.\n",
     )
@@ -500,7 +574,7 @@ def test_member_context_check_credentials_fail_closed(monkeypatch):
     assert "GITHUB_ACCESS_TOKEN" not in result.output
 
 
-def test_member_write_command_requires_existing_body_file(tmp_path):
+def test_member_write_command_requires_content_stdin():
     runner = CliRunner()
 
     result = runner.invoke(
@@ -513,21 +587,187 @@ def test_member_write_command_requires_existing_body_file(tmp_path):
             "aiko",
             "--url",
             "https://github.com/owner/repo/issues/1",
-            "--body-file",
-            str(tmp_path / "missing.md"),
         ],
     )
 
     assert result.exit_code != 0
-    assert "body-file does not exist" in result.output
+    assert "Missing option '--content-stdin'" in result.output
+
+
+CONTENT_COMMANDS = (
+    "memory record --person aiko --title Title",
+    "chat post --person aiko --channel-id C1",
+    "chat reply --person aiko --channel-id C1 --thread-ts 100.1",
+    "chat noop --person aiko --run-id run-1 --channel-id C1 "
+    "--thread-ts 100.1 --event-id E1",
+    "chat complete --person aiko --run-id run-1 --channel-id C1 "
+    "--thread-ts 100.1 --event-id E1 --status done",
+    "git commit --person aiko --repo-path .",
+    "git publish --person aiko --repo-path .",
+    "github issue comment --person aiko "
+    "--url https://github.com/owner/repo/issues/1",
+    "github issue create --person aiko --repo owner/repo --title Title",
+    "github pr create --person aiko --repo owner/repo --head feature --title Title",
+    "github pr comment --person aiko --url https://github.com/owner/repo/pull/1",
+    "github pr review-comment --person aiko "
+    "--url https://github.com/owner/repo/pull/1 --path file.py --line 1",
+    "github pr reply --person aiko --url https://github.com/owner/repo/pull/1 "
+    "--reply-target-id 1",
+    "task complete --person aiko --run-id run-1 "
+    "--ticket-url https://github.com/owner/repo/issues/1 --status done",
+)
+
+
+@pytest.mark.parametrize("command", CONTENT_COMMANDS)
+def test_required_content_commands_reject_empty_stdin(command):
+    result = CliRunner().invoke(
+        member_module.member,
+        [*command.split(), "--content-stdin"],
+        input="",
+    )
+
+    assert result.exit_code != 0
+    assert "must not be empty" in result.output
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "memory record",
+        "memory update",
+        "chat post",
+        "chat reply",
+        "chat noop",
+        "chat complete",
+        "git commit",
+        "git publish",
+        "github issue comment",
+        "github issue create",
+        "github pr create",
+        "github pr update",
+        "github pr comment",
+        "github pr review-comment",
+        "github pr reply",
+        "task complete",
+    ],
+)
+def test_content_command_help_exposes_only_content_stdin(command):
+    result = CliRunner().invoke(member_module.member, [*command.split(), "--help"])
+
+    assert result.exit_code == 0
+    assert "--content-stdin" in result.output
+    for removed in (
+        "--title-file",
+        "--body-file",
+        "--body-stdin",
+        "--message-file",
+        "--message-stdin",
+        "--reason-file",
+        "--summary-file",
+    ):
+        assert removed not in result.output
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "memory record --person aiko",
+        "github issue create --person aiko --repo owner/repo",
+        "github pr create --person aiko --repo owner/repo --head feature",
+    ],
+)
+@pytest.mark.parametrize(
+    ("title", "error"),
+    [("", "title must not be empty"), ("First line\nSecond line", "newlines")],
+)
+def test_write_command_titles_reject_empty_or_multiline_values(command, title, error):
+    result = CliRunner().invoke(
+        member_module.member,
+        [*command.split(), "--title", title, "--content-stdin"],
+        input="Body\n",
+    )
+
+    assert result.exit_code != 0
+    assert error in result.output
+
+
+def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    calls = []
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def issue_comment(self, issue_url, body):
+            calls.append(("comment", issue_url, body))
+            return {"comment_id": 1, "html_url": issue_url}
+
+        async def issue_create(self, repo, title, body, add_to_project):
+            calls.append(("create", repo, title, body, add_to_project))
+            return {"issue_number": 2, "issue_url": "https://github.com/owner/repo/issues/2"}
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    comment = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "comment",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/1",
+            "--content-stdin",
+        ],
+        input="Comment body\n",
+    )
+    create = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--title",
+            "Issue title",
+            "--no-add-to-project",
+            "--content-stdin",
+        ],
+        input="Issue body\n",
+    )
+
+    assert comment.exit_code == 0
+    assert create.exit_code == 0
+    assert calls == [
+        (
+            "comment",
+            "https://github.com/owner/repo/issues/1",
+            "Comment body\n",
+        ),
+        ("create", "owner/repo", "Issue title", "Issue body\n", False),
+    ]
 
 
 def test_member_git_publish_current_mode_uses_current_workspace_service(
     monkeypatch, tmp_path
 ):
     person = Person(person_id="aiko", name="Aiko", person_type="human")
-    message_file = tmp_path / "message.txt"
-    message_file.write_text("publish\n", encoding="utf-8")
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     calls = {}
@@ -575,11 +815,11 @@ def test_member_git_publish_current_mode_uses_current_workspace_service(
             "aiko",
             "--repo-path",
             str(repo_path),
-            "--message-file",
-            str(message_file),
+            "--content-stdin",
             "--workspace-mode",
             "current",
         ],
+        input="publish\n",
     )
 
     assert result.exit_code == 0
@@ -594,8 +834,6 @@ def test_member_git_commit_current_mode_uses_current_workspace_service(
     monkeypatch, tmp_path
 ):
     person = Person(person_id="aiko", name="Aiko", person_type="human")
-    message_file = tmp_path / "message.txt"
-    message_file.write_text("commit\n", encoding="utf-8")
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     calls = {}
@@ -643,11 +881,11 @@ def test_member_git_commit_current_mode_uses_current_workspace_service(
             "aiko",
             "--repo-path",
             str(repo_path),
-            "--message-file",
-            str(message_file),
+            "--content-stdin",
             "--workspace-mode",
             "current",
         ],
+        input="commit\n",
     )
 
     assert result.exit_code == 0
@@ -705,7 +943,7 @@ def test_member_git_commit_reads_message_from_stdin(monkeypatch, tmp_path):
             "aiko",
             "--repo-path",
             str(repo_path),
-            "--message-stdin",
+            "--content-stdin",
             "--workspace-mode",
             "current",
         ],
@@ -774,7 +1012,7 @@ def test_member_git_prepare_rejects_branch_without_repo():
     assert "--branch requires --repo." in result.output
 
 
-def test_member_git_commit_rejects_missing_message_source(tmp_path):
+def test_member_git_commit_requires_content_stdin(tmp_path):
     runner = CliRunner()
 
     result = runner.invoke(
@@ -790,13 +1028,12 @@ def test_member_git_commit_rejects_missing_message_source(tmp_path):
     )
 
     assert result.exit_code != 0
-    assert "Either --message-file or --message-stdin is required" in result.output
+    assert "Missing option '--content-stdin'" in result.output
 
 
-def test_member_git_commit_rejects_multiple_message_sources(tmp_path):
+def test_member_git_commit_rejects_removed_message_options(tmp_path):
     runner = CliRunner()
-    message_file = tmp_path / "message.txt"
-    message_file.write_text("message\n", encoding="utf-8")
+    removed_option = "--message-file"
 
     result = runner.invoke(
         member_module.member,
@@ -807,15 +1044,13 @@ def test_member_git_commit_rejects_multiple_message_sources(tmp_path):
             "aiko",
             "--repo-path",
             str(tmp_path),
-            "--message-file",
-            str(message_file),
-            "--message-stdin",
+            removed_option,
+            "message.txt",
         ],
-        input="message\n",
     )
 
     assert result.exit_code != 0
-    assert "Use either --message-file or --message-stdin" in result.output
+    assert f"No such option: {removed_option}" in result.output
 
 
 def test_member_git_push_current_mode_uses_current_workspace_service(
@@ -916,8 +1151,6 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
-    message_file = tmp_path / "message.txt"
-    message_file.write_text("publish\n", encoding="utf-8")
 
     runner = CliRunner()
     result = runner.invoke(
@@ -929,11 +1162,11 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
             "aiko",
             "--repo-path",
             str(tmp_path),
-            "--message-file",
-            str(message_file),
+            "--content-stdin",
             "--workspace-mode",
             "current",
         ],
+        input="publish\n",
     )
 
     assert result.exit_code != 0
@@ -1010,12 +1243,8 @@ def test_member_github_pr_inspect_passes_include_diff(monkeypatch):
     ]
 
 
-def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
+def test_member_github_pr_create_passes_base(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="human")
-    title_file = tmp_path / "title.txt"
-    body_file = tmp_path / "body.md"
-    title_file.write_text("PR title\n", encoding="utf-8")
-    body_file.write_text("PR body\n", encoding="utf-8")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1070,15 +1299,15 @@ def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
             "feature",
             "--base",
             "ticket-driven-workflow",
-            "--title-file",
-            str(title_file),
-            "--body-file",
-            str(body_file),
+            "--title",
+            "PR title",
+            "--content-stdin",
             "--issue-url",
             "https://github.com/owner/repo/issues/42",
             "--draft",
             "false",
         ],
+        input="PR body\n",
     )
 
     assert result.exit_code == 0
@@ -1086,7 +1315,7 @@ def test_member_github_pr_create_passes_base(monkeypatch, tmp_path):
         "repo": "owner/repo",
         "head": "feature",
         "base": "ticket-driven-workflow",
-        "title": "PR title\n",
+        "title": "PR title",
         "body": "PR body\n",
         "issue_url": "https://github.com/owner/repo/issues/42",
         "draft": "false",
@@ -1182,9 +1411,11 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
             "feature",
             "--base",
             "ticket-driven-workflow",
+            "--title",
+            "PR title",
             "--content-stdin",
         ],
-        input="PR title\n\n## Summary\n\nPR body\n",
+        input="## Summary\n\nPR body\n",
     )
 
     assert result.exit_code == 0
@@ -1201,9 +1432,7 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
     assert '"base": "ticket-driven-workflow"' in result.output
 
 
-def test_member_github_pr_create_rejects_mixed_content_sources(tmp_path):
-    title_file = tmp_path / "title.txt"
-    title_file.write_text("PR title\n", encoding="utf-8")
+def test_member_github_pr_create_rejects_multiline_title():
     runner = CliRunner()
 
     result = runner.invoke(
@@ -1218,17 +1447,15 @@ def test_member_github_pr_create_rejects_mixed_content_sources(tmp_path):
             "owner/repo",
             "--head",
             "feature",
-            "--title-file",
-            str(title_file),
+            "--title",
+            "PR\nTitle",
             "--content-stdin",
         ],
-        input="PR title\n\nPR body\n",
+        input="PR body\n",
     )
 
     assert result.exit_code != 0
-    assert "Use either --content-stdin or both --title-file and --body-file" in (
-        result.output
-    )
+    assert "title must not contain newlines" in result.output
 
 
 def test_member_github_pr_create_rejects_missing_content_source():
@@ -1246,22 +1473,75 @@ def test_member_github_pr_create_rejects_missing_content_source():
             "owner/repo",
             "--head",
             "feature",
+            "--title",
+            "PR title",
         ],
     )
 
     assert result.exit_code != 0
-    assert "Either --content-stdin or both --title-file and --body-file" in (
-        result.output
-    )
+    assert "Missing option '--content-stdin'" in result.output
 
 
-def test_member_github_pr_review_comment_reads_body_file_and_records_evidence(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("content", ["", "\n", " \t\n"])
+def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
+    monkeypatch, content
 ):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="human")
-    body_file = tmp_path / "comment.md"
-    body_file.write_text("Please simplify this branch.\n", encoding="utf-8")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_update(self, pr_url, body):
+            calls.update({"pr_url": pr_url, "body": body})
+            return {
+                "pr_number": 7,
+                "pr_url": pr_url,
+                "body": body,
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/7",
+            "--content-stdin",
+        ],
+        input=content,
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "pr_url": "https://github.com/owner/repo/pull/7",
+        "body": "",
+        "closed": True,
+    }
+    assert json.loads(result.output)["body"] == ""
+    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "pr_update"
+
+
+def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(monkeypatch):
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1321,9 +1601,9 @@ def test_member_github_pr_review_comment_reads_body_file_and_records_evidence(
             "10",
             "--start-side",
             "RIGHT",
-            "--body-file",
-            str(body_file),
+            "--content-stdin",
         ],
+        input="Please simplify this branch.\n",
     )
 
     assert result.exit_code == 0
@@ -1344,9 +1624,7 @@ def test_member_github_pr_review_comment_reads_body_file_and_records_evidence(
     )
 
 
-def test_member_github_pr_review_comment_rejects_partial_range(tmp_path):
-    body_file = tmp_path / "comment.md"
-    body_file.write_text("Please simplify this branch.\n", encoding="utf-8")
+def test_member_github_pr_review_comment_rejects_partial_range():
     runner = CliRunner()
 
     result = runner.invoke(
@@ -1365,9 +1643,9 @@ def test_member_github_pr_review_comment_rejects_partial_range(tmp_path):
             "12",
             "--start-line",
             "10",
-            "--body-file",
-            str(body_file),
+            "--content-stdin",
         ],
+        input="Please simplify this branch.\n",
     )
 
     assert result.exit_code != 0
@@ -1537,8 +1815,6 @@ def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
-    body_file = tmp_path / "reply.md"
-    body_file.write_text("了解しました。", encoding="utf-8")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -1579,9 +1855,9 @@ def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp
             "C1",
             "--thread-ts",
             "100.1",
-            "--body-file",
-            str(body_file),
+            "--content-stdin",
         ],
+        input="了解しました。",
     )
 
     assert result.exit_code == 0
@@ -1595,8 +1871,6 @@ def test_member_chat_reply_accepts_channel_name_and_message_url(monkeypatch, tmp
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
-    body_file = tmp_path / "reply.md"
-    body_file.write_text("了解しました。", encoding="utf-8")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -1637,9 +1911,9 @@ def test_member_chat_reply_accepts_channel_name_and_message_url(monkeypatch, tmp
             "general",
             "--message-url",
             "https://example.slack.com/archives/C1/p1000000000000001",
-            "--body-file",
-            str(body_file),
+            "--content-stdin",
         ],
+        input="了解しました。",
     )
 
     assert result.exit_code == 0
@@ -1770,9 +2044,7 @@ def test_member_chat_inspect_channel_accepts_channel_name(monkeypatch, tmp_path)
     assert payload["latest_ts"] == "200.0"
 
 
-def test_member_chat_body_file_and_stdin_are_exclusive(tmp_path):
-    body_file = tmp_path / "reply.md"
-    body_file.write_text("hello", encoding="utf-8")
+def test_member_chat_rejects_empty_content():
     runner = CliRunner()
 
     result = runner.invoke(
@@ -1786,15 +2058,13 @@ def test_member_chat_body_file_and_stdin_are_exclusive(tmp_path):
             "C1",
             "--thread-ts",
             "100.1",
-            "--body-file",
-            str(body_file),
-            "--body-stdin",
+            "--content-stdin",
         ],
-        input="hello",
+        input="",
     )
 
     assert result.exit_code != 0
-    assert "not both" in result.output
+    assert "message body must not be empty" in result.output
 
 
 def test_member_chat_reaction_accepts_message_url(monkeypatch, tmp_path):
@@ -1864,10 +2134,6 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    reason_file = tmp_path / "reason.md"
-    reason_file.write_text("Not relevant.", encoding="utf-8")
-    summary_file = tmp_path / "summary.md"
-    summary_file.write_text("No response needed.", encoding="utf-8")
     runner = CliRunner()
 
     noop = runner.invoke(
@@ -1885,9 +2151,9 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
             "100.1",
             "--event-id",
             "E1",
-            "--reason-file",
-            str(reason_file),
+            "--content-stdin",
         ],
+        input="Not relevant.",
     )
     complete = runner.invoke(
         member_module.member,
@@ -1906,9 +2172,9 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
             "E1",
             "--status",
             "done",
-            "--summary-file",
-            str(summary_file),
+            "--content-stdin",
         ],
+        input="No response needed.",
     )
 
     assert noop.exit_code == 0
@@ -1916,6 +2182,41 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
     payload = json.loads(complete.output)
     assert payload["subject_id"] == "slack:C1:100.1:E1"
     assert payload["evidence_types"] == ["chat_noop"]
+
+
+def test_member_task_complete_reads_summary_from_stdin(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    TaskRunStore().append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+            "--ticket-url",
+            "https://github.com/owner/repo/issues/1",
+            "--status",
+            "done",
+            "--content-stdin",
+        ],
+        input="Completed with verification.\n",
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["summary"] == "Completed with verification.\n"
 
 
 def test_member_cli_help_stays_in_sync_with_capability_catalog():

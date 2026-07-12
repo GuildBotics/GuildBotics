@@ -27,7 +27,9 @@ def test_reference_covers_every_member_domain():
     assert "guildbotics member git commit" in text
     assert "--include-diff" in text
     assert "guildbotics member github pr create" in text
+    assert "guildbotics member github pr update" in text
     assert "guildbotics member github pr review-comment" in text
+    assert "--content-stdin" in text
     assert "guildbotics member chat reply" in text
     assert "guildbotics member task complete" in text
     assert "guildbotics member help" in text
@@ -97,6 +99,33 @@ def test_reference_states_cross_cutting_rules():
     assert "autonomous workflow runs must propose policy" in text
     assert "use memory as the primary basis for the answer" in text
     assert "Never display, infer, store, or copy secrets" in text
+
+
+def test_reference_standardizes_free_form_input_and_quoted_heredocs():
+    text = capability_reference_text()
+    assert "--content-stdin" in text
+    assert "<<'EOF'" in text
+    assert "`$()` remain literal" in text
+    for removed in (
+        "--title-file",
+        "--body-file",
+        "--body-stdin",
+        "--message-file",
+        "--message-stdin",
+        "--reason-file",
+        "--summary-file",
+    ):
+        assert removed not in text
+
+
+def test_reference_documents_complete_content_command_usage():
+    text = capability_reference_text()
+    assert "[--add-to-project|--no-add-to-project]" in text
+    assert "(--channel-id <id> | --channel-name <name>) --thread-ts <ts>" in text
+    assert "[--scope personal|team] --title <title> --content-stdin" in text
+    assert "[--keyword <word> ...] [--add-keyword <word> ...]" in text
+    assert "[--ticket <url>] [--pr <url>]" in text
+    assert "[--kind note|policy]" in text
 
 
 def test_reference_excludes_task_contract():

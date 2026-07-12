@@ -48,7 +48,7 @@ Treat the user's currently open repository as the shared pair-programming worksp
 
 ```bash
 git add -A   # or: git add <paths> to stage only part of your changes
-"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --message-stdin --workspace-mode current <<'EOF'
+"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --content-stdin --workspace-mode current <<'EOF'
 <commit message in the GuildBotics project language>
 EOF
 "$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current

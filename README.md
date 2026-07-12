@@ -627,7 +627,9 @@ Points:
 Interactive member chat examples:
 
 ```bash
-guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --body-file reply.md
+guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --content-stdin <<'EOF'
+Reply body with literal `$HOME`, backticks (`command`), and `$(command)`.
+EOF
 guildbotics member chat reaction add --person alice --service slack --channel-id C0123456789 --message-ts 1777554000.000000 --reaction ack
 ```
 

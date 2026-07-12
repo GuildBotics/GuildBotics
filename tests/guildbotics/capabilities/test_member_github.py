@@ -32,6 +32,8 @@ class FakeClient:
         self.gets = []
         self.get_payloads = {}
         self.post_payloads = {}
+        self.patches = []
+        self.patch_payloads = {}
         self.graphql_payloads = []
 
     async def get(self, endpoint, params=None, headers=None):
@@ -54,6 +56,23 @@ class FakeClient:
                 "created_at": "2026-01-01T00:00:00Z",
                 "user": {"login": "bot"},
             }
+        )
+
+    async def patch(self, endpoint, json=None, headers=None):
+        self.patches.append((endpoint, json, headers))
+        return FakeResponse(
+            self.patch_payloads.get(
+                endpoint,
+                {
+                    "number": 7,
+                    "html_url": "https://github.com/owner/repo/pull/7",
+                    "body": json.get("body", ""),
+                    "title": "Original title",
+                    "base": {"ref": "main"},
+                    "state": "open",
+                    "draft": False,
+                },
+            )
         )
 
 
@@ -791,6 +810,69 @@ async def test_pr_create_uses_default_branch_when_base_is_empty():
         ),
     ]
     assert fake.posts[0][1]["base"] == "develop"
+
+
+@pytest.mark.asyncio
+async def test_pr_update_patches_only_body_and_returns_updated_pr():
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
+        "number": 7,
+        "html_url": "https://github.com/owner/repo/pull/7",
+        "body": "Updated body",
+        "title": "Original title",
+        "base": {"ref": "main"},
+        "state": "open",
+        "draft": False,
+    }
+    service._client = fake
+
+    result = await service.pr_update(
+        "https://github.com/owner/repo/pull/7", "Updated body"
+    )
+
+    assert result == {
+        "pr_number": 7,
+        "pr_url": "https://github.com/owner/repo/pull/7",
+        "body": "Updated body",
+    }
+    assert fake.patches == [
+        ("/repos/owner/repo/pulls/7", {"body": "Updated body"}, None)
+    ]
+
+
+@pytest.mark.parametrize("requested_body", ["", "Requested body"])
+@pytest.mark.asyncio
+async def test_pr_update_normalizes_null_response_body(requested_body):
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
+        "number": 7,
+        "html_url": "https://github.com/owner/repo/pull/7",
+        "body": None,
+    }
+    service._client = fake
+
+    result = await service.pr_update(
+        "https://github.com/owner/repo/pull/7", requested_body
+    )
+
+    assert result["body"] == ""
+    assert fake.patches == [
+        ("/repos/owner/repo/pulls/7", {"body": requested_body}, None)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pr_update_rejects_non_pull_request_url():
+    service = _service(person_type="human")
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="Expected pull URL"):
+        await service.pr_update("https://github.com/owner/repo/issues/7", "Body")
+
+    assert fake.patches == []
 
 
 @pytest.mark.asyncio

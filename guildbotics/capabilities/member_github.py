@@ -264,6 +264,22 @@ class MemberGitHubCapabilityService:
             "base": base_branch,
         }
 
+    async def pr_update(self, url: str, body: str) -> dict[str, Any]:
+        resource = self.parse_url(url, expected_kind="pull")
+        client = await self._get_client()
+        resp = await client.patch(
+            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}",
+            json={"body": body},
+        )
+        _raise_for_status(resp)
+        pr = resp.json()
+        response_body = pr.get("body")
+        return {
+            "pr_number": pr.get("number", resource.number),
+            "pr_url": pr.get("html_url", url),
+            "body": "" if response_body is None else response_body,
+        }
+
     async def pr_comment(self, url: str, body: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
         comment = await self._post_comment(
