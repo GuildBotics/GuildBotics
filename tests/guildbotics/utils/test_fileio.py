@@ -119,8 +119,8 @@ def test_get_machine_state_root_ignores_data_dir_env(tmp_path, monkeypatch):
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(data_dir))
 
     assert get_machine_state_root() == home / ".guildbotics" / "data"
-    assert get_machine_state_path("run", "scheduler.pid") == (
-        home / ".guildbotics" / "data" / "run" / "scheduler.pid"
+    assert get_machine_state_path("run", "service.lock") == (
+        home / ".guildbotics" / "data" / "run" / "service.lock"
     )
 
 

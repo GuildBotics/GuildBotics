@@ -92,6 +92,7 @@ from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime import Context
 from guildbotics.runtime.member_context import resolve_person
+from guildbotics.runtime.service_lock import ServiceLockUnavailableError
 from guildbotics.utils.env_loader import (
     GUILDBOTICS_ENV_FILE,
     HOME_ENV_PROTECTED_KEYS,
@@ -109,6 +110,7 @@ from guildbotics.utils.fileio import (
     load_markdown_with_frontmatter,
     load_yaml_file,
 )
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.prompt_trace import (
     prompt_trace_enabled,
     prompt_trace_path,
@@ -497,7 +499,25 @@ class AppRuntime:
                         context={"command": command},
                         status_code=400,
                     )
-        return self._lifecycle.start(request)
+        try:
+            return self._lifecycle.start(request)
+        except ServiceLockUnavailableError as exc:
+            metadata = exc.metadata
+            raise AppApiError(
+                "service_already_running",
+                t("runtime.service_lock.already_running"),
+                status_code=409,
+                context=(
+                    {
+                        "owner": metadata.owner,
+                        "pid": metadata.pid,
+                        "workspace": metadata.workspace,
+                        "started_at": metadata.started_at,
+                    }
+                    if metadata is not None
+                    else {}
+                ),
+            ) from exc
 
     def stop_scheduler(self, *, force: bool = False) -> RuntimeStatus:
         return self._lifecycle.stop(force=force)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 import types
 import uuid
 
@@ -73,6 +74,21 @@ class _FakeContext:
 
     async def aclose(self):
         self.closed = True
+
+
+def test_runner_notifies_when_worker_thread_stops(monkeypatch) -> None:
+    stopped = threading.Event()
+    runner = EventListenerRunner(  # type: ignore[arg-type]
+        _FakeContext(), on_stopped=stopped.set
+    )
+
+    async def finish_immediately() -> None:
+        return
+
+    monkeypatch.setattr(runner, "_run_loop", finish_immediately)
+
+    runner.start()
+    assert stopped.wait(timeout=1.0)
 
 
 async def _no_backfill(*args, **kwargs):

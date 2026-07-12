@@ -138,6 +138,12 @@ Invariants:
   commands, `guildbotics run`, or interactive sessions — which are tracked by
   `drivers/execution.py` (`ExecutionCoordinator`) but not serialized per person and
   not excluded across processes.
+- The long-running background service is singleton per machine. CLI `guildbotics
+  start` and the Desktop-managed service contend on the same OS advisory lock at
+  `<machine-state-root>/run/service.lock`; the lock covers scheduler workers and the
+  event listener together. The persistent file contains owner metadata for status and
+  CLI stop handling, but file existence is not a liveness signal. Desktop-owned
+  services must be stopped from Desktop rather than by signalling the sidecar PID.
 - Rate limits from AI CLI tools are detected (`intelligences/brains/cli_agent.py`),
   handled by shared capability logic (`capabilities/workflow_rate_limits.py`,
   `capabilities/completion_retry.py`), surfaced as a `workflow.rate_limited`
@@ -197,7 +203,7 @@ Path resolution separates four roots (implementation: `utils/fileio.py`).
 
 | Root | Location | Holds |
 |---|---|---|
-| Machine state root | `$HOME/.guildbotics/data` (fixed) | `active-workspace.json`, `run/scheduler.pid` — state needed *before* a workspace is chosen |
+| Machine state root | `$HOME/.guildbotics/data` (fixed) | `active-workspace.json`, `run/service.lock` — state needed *before* a workspace is chosen |
 | Runtime workspace root | selected workspace (App API `chdir`s to it; member CLI resolves `--workspace` → explicit config → cwd → active workspace) | `.env`, `.guildbotics/config` |
 | Workspace data root | `<workspace>/.guildbotics/data`, overridable via `GUILDBOTICS_DATA_DIR` | member workspaces (`workspaces/<person_id>`), task-run evidence (`task-runs/*.jsonl`), diagnostics (`run/diagnostics.jsonl`), prompt trace, chat state, documents |
 | Config root | `GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`; package templates as fallback | project / member configuration |
@@ -295,8 +301,10 @@ a monorepo on purpose.
   `127.0.0.1` via REST + WebSocket. Every request requires the per-process
   `X-GuildBotics-Session-Token`; `/health` is the liveness probe.
 - **Runtime lifecycle**: the sidecar manages member workers / event listeners inside
-  its own process and reports states to the UI; it does not write the CLI scheduler
-  pidfile. CLI `guildbotics start` remains the headless equivalent.
+  its own process and reports states to the UI. Desktop and CLI `guildbotics start`
+  use the same machine-wide `service.lock`, so only one background service can own
+  scheduler workers / event listeners at a time. CLI `start` remains the headless
+  equivalent.
 - **Packaging**: `scripts/desktop-build-backend.sh` builds two PyInstaller sidecars
   (`guildbotics-app-api`, `guildbotics-cli`) into `desktop/src-tauri/binaries/`. The
   app also installs a managed `guildbotics` CLI shim and the GuildBotics skill for

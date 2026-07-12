@@ -18,7 +18,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | Command | Summary |
 | --- | --- |
 | [`guildbotics`](#guildbotics) | GuildBotics CLI entrypoint. |
-| [`guildbotics kill`](#guildbotics-kill) | Immediately force kill the running scheduler. |
+| [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish a chat workflow run with evidence. |
@@ -72,7 +72,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show the secret backend used by this workspace. |
 | [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
-| [`guildbotics stop`](#guildbotics-stop) | Gracefully stop the running scheduler process. |
+| [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
@@ -94,18 +94,18 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics kill`](#guildbotics-kill) | Immediately force kill the running scheduler. |
+| [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics run`](#guildbotics-run) | Run the GuildBotics application. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
-| [`guildbotics stop`](#guildbotics-stop) | Gracefully stop the running scheduler process. |
+| [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 
 ## `guildbotics kill`
 
-Immediately force kill the running scheduler.
+Immediately force kill a CLI-managed background service.
 
 Equivalent to: `guildbotics stop --force --timeout 0`.
 
@@ -1062,7 +1062,7 @@ guildbotics start [OPTIONS] [DEFAULT_ROUTINE_COMMANDS]...
 
 ## `guildbotics stop`
 
-Gracefully stop the running scheduler process.
+Gracefully stop a CLI-managed background service.
 
 ```text
 guildbotics stop [OPTIONS]

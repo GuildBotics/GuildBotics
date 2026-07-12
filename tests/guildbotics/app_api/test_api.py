@@ -1703,9 +1703,15 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
     class RunningEventListener:
         instances: ClassVar[list["RunningEventListener"]] = []
 
-        def __init__(self, context: object, service_run_id: str | None = None) -> None:
+        def __init__(
+            self,
+            context: object,
+            service_run_id: str | None = None,
+            on_stopped: Any = None,
+        ) -> None:
             self.alive = False
             self.stop_calls = 0
+            self.on_stopped = on_stopped
             RunningEventListener.instances.append(self)
 
         def start(self) -> None:
@@ -1841,8 +1847,14 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
     class StuckEventListener:
         instances: ClassVar[list["StuckEventListener"]] = []
 
-        def __init__(self, context: object, service_run_id: str | None = None) -> None:
+        def __init__(
+            self,
+            context: object,
+            service_run_id: str | None = None,
+            on_stopped: Any = None,
+        ) -> None:
             self.alive = False
+            self.on_stopped = on_stopped
             StuckEventListener.instances.append(self)
 
         def start(self) -> None:

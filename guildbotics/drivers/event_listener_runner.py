@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
@@ -63,9 +64,11 @@ class EventListenerRunner:
         state_store: ConversationStateStore | None = None,
         startup_backfill_minutes: int = 60,
         backfill_interval_seconds: float = 300.0,
+        on_stopped: Callable[[], None] | None = None,
     ) -> None:
         self.context = context
         self.service_run_id = service_run_id
+        self._on_stopped = on_stopped
         self.poll_interval_seconds = max(0.1, float(poll_interval_seconds))
         self._default_backfill_policy = ChatBackfillPolicy(
             startup_minutes=max(0, int(startup_backfill_minutes)),
@@ -165,6 +168,8 @@ class EventListenerRunner:
                 loop.run_until_complete(self.context.aclose())
             finally:
                 loop.close()
+                if self._on_stopped is not None:
+                    self._on_stopped()
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():

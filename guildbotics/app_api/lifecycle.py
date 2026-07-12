@@ -4,6 +4,7 @@ import threading
 import traceback
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from guildbotics.app_api.events import EventBus
@@ -17,9 +18,11 @@ from guildbotics.drivers import EventListenerRunner, TaskScheduler
 from guildbotics.drivers.execution import ActiveWork, ExecutionCoordinator
 from guildbotics.observability import new_id
 from guildbotics.runtime import Context
+from guildbotics.runtime.service_lock import ServiceLock
 
 RuntimeTarget = Literal["scheduler", "events"]
 RuntimeState = Literal["starting", "running", "stopping", "stopped", "failed"]
+RuntimeStateCallback = Callable[[RuntimeTarget, bool], None]
 
 
 class RuntimeLifecycleService:
@@ -30,18 +33,26 @@ class RuntimeLifecycleService:
         context_factory: Callable[[], Context],
         stop_timeout_seconds: float = 10.0,
         execution_coordinator: ExecutionCoordinator | None = None,
+        service_lock: ServiceLock | None = None,
     ) -> None:
         self._execution = execution_coordinator or ExecutionCoordinator()
+        self._service_lock = service_lock or ServiceLock()
+        self._start_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._active_targets: set[RuntimeTarget] = set()
+        self._start_in_progress = False
         self._scheduler = SchedulerLifecycle(
             event_bus=event_bus,
             context_factory=context_factory,
             stop_timeout_seconds=stop_timeout_seconds,
             execution_coordinator=self._execution,
+            state_callback=self._runtime_state_changed,
         )
         self._events = EventListenerLifecycle(
             event_bus=event_bus,
             context_factory=context_factory,
             stop_timeout_seconds=stop_timeout_seconds,
+            state_callback=self._runtime_state_changed,
         )
 
     def get_status(self) -> RuntimeStatus:
@@ -54,33 +65,46 @@ class RuntimeLifecycleService:
         )
 
     def start(self, request: SchedulerStartRequest) -> RuntimeStatus:
-        sources = request.sources
-        scheduled_source_enabled = sources.scheduled
-        routine_source_enabled = sources.routine
-        event_queue_source_enabled = sources.event_queue
-        scheduler_was_running = self._scheduler.get_status().running
-        if (
-            scheduled_source_enabled
-            or routine_source_enabled
-            or event_queue_source_enabled
-        ):
-            self._scheduler.start(
-                routine_commands=request.routine_commands
-                if routine_source_enabled
-                else [],
-                max_consecutive_errors=request.max_consecutive_errors,
-                routine_interval_minutes=request.routine_interval_minutes,
-                scheduled_source_enabled=scheduled_source_enabled,
-                routine_source_enabled=routine_source_enabled,
-                event_queue_source_enabled=event_queue_source_enabled,
-            )
-        if event_queue_source_enabled:
-            try:
-                self._events.start()
-            except Exception:
-                if not scheduler_was_running:
-                    self._scheduler.stop()
-                raise
+        with self._start_lock:
+            return self._start(request)
+
+    def _start(self, request: SchedulerStartRequest) -> RuntimeStatus:
+        if not self._service_lock.locked:
+            self._service_lock.acquire(owner="desktop", workspace=Path.cwd())
+
+        with self._state_lock:
+            self._start_in_progress = True
+
+        try:
+            sources = request.sources
+            scheduled_source_enabled = sources.scheduled
+            routine_source_enabled = sources.routine
+            event_queue_source_enabled = sources.event_queue
+            scheduler_was_running = self._scheduler.get_status().running
+            if (
+                scheduled_source_enabled
+                or routine_source_enabled
+                or event_queue_source_enabled
+            ):
+                self._scheduler.start(
+                    routine_commands=request.routine_commands
+                    if routine_source_enabled
+                    else [],
+                    max_consecutive_errors=request.max_consecutive_errors,
+                    routine_interval_minutes=request.routine_interval_minutes,
+                    scheduled_source_enabled=scheduled_source_enabled,
+                    routine_source_enabled=routine_source_enabled,
+                    event_queue_source_enabled=event_queue_source_enabled,
+                )
+            if event_queue_source_enabled:
+                try:
+                    self._events.start()
+                except Exception:
+                    if not scheduler_was_running:
+                        self._scheduler.stop()
+                    raise
+        finally:
+            self._finish_start()
         return self.get_status()
 
     def stop(self, *, force: bool = False) -> RuntimeStatus:
@@ -96,6 +120,23 @@ class RuntimeLifecycleService:
         )
         return self.get_status()
 
+    def _runtime_state_changed(self, target: RuntimeTarget, running: bool) -> None:
+        with self._state_lock:
+            if running:
+                self._active_targets.add(target)
+            else:
+                self._active_targets.discard(target)
+            should_release = not self._start_in_progress and not self._active_targets
+        if should_release:
+            self._service_lock.release()
+
+    def _finish_start(self) -> None:
+        with self._state_lock:
+            self._start_in_progress = False
+            should_release = not self._active_targets
+        if should_release:
+            self._service_lock.release()
+
 
 class _RuntimeLifecycle:
     def __init__(
@@ -104,10 +145,12 @@ class _RuntimeLifecycle:
         target: RuntimeTarget,
         event_bus: EventBus,
         stop_timeout_seconds: float,
+        state_callback: RuntimeStateCallback,
     ) -> None:
         self._target = target
         self._event_bus = event_bus
         self._stop_timeout_seconds = stop_timeout_seconds
+        self._state_callback = state_callback
         self._lock = threading.Lock()
         self._service_run_id: str | None = None
         self._status = RuntimeUnitStatus(
@@ -164,6 +207,7 @@ class _RuntimeLifecycle:
                 else None
             ),
         )
+        self._state_callback(self._target, running)
         return self._status
 
     def _update_metadata_locked(self, values: dict[str, Any]) -> None:
@@ -186,11 +230,13 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         context_factory: Callable[[], Context],
         stop_timeout_seconds: float,
         execution_coordinator: ExecutionCoordinator,
+        state_callback: RuntimeStateCallback,
     ) -> None:
         super().__init__(
             target="scheduler",
             event_bus=event_bus,
             stop_timeout_seconds=stop_timeout_seconds,
+            state_callback=state_callback,
         )
         self._context_factory = context_factory
         self._execution = execution_coordinator
@@ -332,11 +378,13 @@ class EventListenerLifecycle(_RuntimeLifecycle):
         event_bus: EventBus,
         context_factory: Callable[[], Context],
         stop_timeout_seconds: float,
+        state_callback: RuntimeStateCallback,
     ) -> None:
         super().__init__(
             target="events",
             event_bus=event_bus,
             stop_timeout_seconds=stop_timeout_seconds,
+            state_callback=state_callback,
         )
         self._context_factory = context_factory
         self._runner: EventListenerRunner | None = None
@@ -351,7 +399,9 @@ class EventListenerLifecycle(_RuntimeLifecycle):
 
         try:
             runner = EventListenerRunner(
-                self._context_factory(), service_run_id=self._service_run_id
+                self._context_factory(),
+                service_run_id=self._service_run_id,
+                on_stopped=lambda: self._runner_stopped(runner),
             )
             runner.start()
         except Exception as exc:
@@ -390,7 +440,18 @@ class EventListenerLifecycle(_RuntimeLifecycle):
             if runner is not None:
                 self._update_metadata_locked(_runtime_summary(runner))
             self._runner = None
-            return self._transition_locked("stopped", running=False).model_copy()
+            if self._status.state != "stopped":
+                return self._transition_locked("stopped", running=False).model_copy()
+            return self._status.model_copy()
+
+    def _runner_stopped(self, runner: EventListenerRunner) -> None:
+        with self._lock:
+            if self._runner is not runner:
+                return
+            self._update_metadata_locked(_runtime_summary(self._runner))
+            self._runner = None
+            if self._status.state not in {"stopping", "stopped"}:
+                self._transition_locked("stopped", running=False)
 
     def _refresh_locked(self) -> None:
         if (
