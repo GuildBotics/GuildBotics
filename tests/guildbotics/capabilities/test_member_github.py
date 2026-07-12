@@ -841,8 +841,9 @@ async def test_pr_update_patches_only_body_and_returns_updated_pr():
     ]
 
 
+@pytest.mark.parametrize("requested_body", ["", "Requested body"])
 @pytest.mark.asyncio
-async def test_pr_update_allows_empty_body():
+async def test_pr_update_normalizes_null_response_body(requested_body):
     service = _service(person_type="human")
     fake = FakeClient()
     fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
@@ -852,10 +853,14 @@ async def test_pr_update_allows_empty_body():
     }
     service._client = fake
 
-    result = await service.pr_update("https://github.com/owner/repo/pull/7", "")
+    result = await service.pr_update(
+        "https://github.com/owner/repo/pull/7", requested_body
+    )
 
     assert result["body"] == ""
-    assert fake.patches == [("/repos/owner/repo/pulls/7", {"body": ""}, None)]
+    assert fake.patches == [
+        ("/repos/owner/repo/pulls/7", {"body": requested_body}, None)
+    ]
 
 
 @pytest.mark.asyncio

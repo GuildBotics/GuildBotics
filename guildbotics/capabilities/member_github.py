@@ -273,10 +273,11 @@ class MemberGitHubCapabilityService:
         )
         _raise_for_status(resp)
         pr = resp.json()
+        response_body = pr.get("body")
         return {
             "pr_number": pr.get("number", resource.number),
             "pr_url": pr.get("html_url", url),
-            "body": pr.get("body") if pr.get("body") is not None else body,
+            "body": "" if response_body is None else response_body,
         }
 
     async def pr_comment(self, url: str, body: str) -> dict[str, Any]:
