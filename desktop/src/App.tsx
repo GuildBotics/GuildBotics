@@ -272,7 +272,12 @@ function SystemAlertBand() {
           key={alert.id}
           title={t(`systemAlerts.severity.${alert.severity}`)}
           withCloseButton
-          onClose={() => dismiss.mutate(alert.id)}
+          onClose={() => {
+            if (dismiss.isPending && dismiss.variables === alert.id) {
+              return;
+            }
+            dismiss.mutate(alert.id);
+          }}
           closeButtonLabel={t("systemAlerts.actions.dismiss")}
         >
           <Group align="center" gap="md" wrap="wrap">
@@ -283,7 +288,9 @@ function SystemAlertBand() {
                   <Group gap="xs" align="center" style={{ display: "inline-flex" }}>
                     <Anchor
                       component="button"
-                      onClick={() => !diagnostics.isPending && diagnostics.mutate()}
+                      type="button"
+                      disabled={diagnostics.isPending}
+                      onClick={() => diagnostics.mutate()}
                       size="sm"
                       underline="hover"
                       style={{
