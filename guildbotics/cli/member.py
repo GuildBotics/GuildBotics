@@ -10,6 +10,8 @@ from urllib.parse import parse_qs, urlparse
 import click
 
 from guildbotics.capabilities.member_activity_events import (
+    record_member_issue_comment_event,
+    record_member_issue_create_event,
     record_member_pr_create_event,
     record_member_push_event,
 )
@@ -1381,6 +1383,7 @@ async def _issue_comment(person: str, issue_url: str, body: str) -> dict[str, An
     try:
         result = await service.issue_comment(issue_url, body)
         TaskRunStore().append_evidence(current_task_run_id(), "issue_comment", result)
+        record_member_issue_comment_event(member_person, result)
         return result
     finally:
         await service.aclose()
@@ -1424,6 +1427,7 @@ async def _issue_create(
     try:
         result = await service.issue_create(repo, title, body, add_to_project)
         TaskRunStore().append_evidence(current_task_run_id(), "issue_create", result)
+        record_member_issue_create_event(member_person, result)
         return result
     finally:
         await service.aclose()

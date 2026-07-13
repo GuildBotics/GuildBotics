@@ -715,6 +715,8 @@ async def test_issue_create_creates_real_issue_and_adds_project_item():
 
     assert result == {
         "issue_number": 43,
+        "issue_title": "Follow-up",
+        "repo": "owner/repo",
         "issue_url": "https://github.com/owner/repo/issues/43",
         "project_item_id": "PROJECT_ITEM_node",
     }
@@ -725,6 +727,34 @@ async def test_issue_create_creates_real_issue_and_adds_project_item():
     )
     assert fake.posts[1][0] == "/graphql"
     assert fake.posts[2][0] == "/graphql"
+
+
+@pytest.mark.asyncio
+async def test_issue_comment_returns_issue_and_comment_activity_fields():
+    service = _service()
+    fake = FakeClient()
+    fake.post_payloads["/repos/owner/repo/issues/42/comments"] = {
+        "id": 123,
+        "html_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
+        "created_at": "2026-07-01T00:00:00Z",
+        "user": {"login": "bot"},
+    }
+    service._client = fake
+
+    result = await service.issue_comment(
+        "https://github.com/owner/repo/issues/42", "Comment"
+    )
+
+    assert result == {
+        "comment_id": 123,
+        "html_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
+        "author": "bot",
+        "created_at": "2026-07-01T00:00:00Z",
+        "comment_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
+        "issue_number": 42,
+        "repo": "owner/repo",
+        "issue_url": "https://github.com/owner/repo/issues/42",
+    }
 
 
 @pytest.mark.asyncio

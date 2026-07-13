@@ -1142,6 +1142,8 @@ function eventIcon(type: ActivityHistoryEvent["type"]) {
       return <GitPullRequest size={12} />;
     case "push":
       return <Upload size={12} />;
+    case "issue_create":
+      return <CircleDot size={12} />;
     case "issue_resolve":
       return <CheckCircle2 size={12} />;
     case "external":
@@ -1155,6 +1157,7 @@ function eventColor(type: ActivityHistoryEvent["type"]): string {
     pr_merge: "info",
     pr_closed: "danger",
     push: "warning",
+    issue_create: "info",
     issue_resolve: "success",
     external: "neutral",
   }[type];

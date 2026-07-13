@@ -162,7 +162,18 @@ class MemberGitHubCapabilityService:
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments",
             body,
         )
-        return _comment_result(comment)
+        result = _comment_result(comment)
+        result.update(
+            {
+                "comment_url": result["html_url"],
+                "issue_number": resource.number,
+                "repo": resource.full_repo,
+                "issue_url": (
+                    f"{self.web_base_url()}/{resource.full_repo}/issues/{resource.number}"
+                ),
+            }
+        )
+        return result
 
     async def issue_create(
         self, repo: str, title: str, body: str, add_to_project: bool
@@ -180,7 +191,10 @@ class MemberGitHubCapabilityService:
             project_item_id = await self.add_project_item(str(issue["node_id"]))
         return {
             "issue_number": issue.get("number"),
-            "issue_url": issue.get("html_url"),
+            "issue_title": issue.get("title", title),
+            "repo": f"{owner}/{repo_name}",
+            "issue_url": issue.get("html_url")
+            or f"{self.web_base_url()}/{owner}/{repo_name}/issues/{issue.get('number')}",
             "project_item_id": project_item_id,
         }
 

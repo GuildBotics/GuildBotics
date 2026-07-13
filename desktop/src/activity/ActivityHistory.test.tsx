@@ -20,7 +20,7 @@ import {
 } from "./ActivityHistory";
 import { getActivityHistory, getCliAgentDetections, getIntelligenceConfig } from "../api/client";
 import type { ActivityHistoryResponse } from "../api/client";
-import "../i18n";
+import i18n from "../i18n";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -147,6 +147,43 @@ describe("ActivityHistoryPage", () => {
     ).toBeInTheDocument();
     expect(document.querySelector(".lucide-history")).toBeInTheDocument();
     expect(getActivityHistory).toHaveBeenCalledWith(expect.objectContaining({ refresh: true }));
+  });
+
+  it("renders issue creation with an issue icon and issue details", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      events: [
+        {
+          id: "issue-create",
+          timestamp: "2026-07-01T02:00:00Z",
+          person_id: "alice",
+          type: "issue_create",
+          title: "Issue #43 Created",
+          detail: "Track issue activity",
+          url: "https://github.com/owner/repo/issues/43",
+          links: [
+            {
+              kind: "issue",
+              label: "Issue #43",
+              url: "https://github.com/owner/repo/issues/43",
+            },
+          ],
+        },
+      ],
+    });
+    renderActivity();
+
+    const pin = await screen.findByRole("button", { name: "Issue #43 Created" });
+    expect(pin.querySelector(".lucide-circle-dot")).toBeInTheDocument();
+    await user.hover(pin);
+
+    expect(await screen.findByText(i18n.t("activity.eventTypes.issue_create"))).toBeInTheDocument();
+    expect(screen.getByText("Track issue activity")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Issue #43" })).toHaveAttribute(
+      "href",
+      "https://github.com/owner/repo/issues/43",
+    );
   });
 
   it("shows each member's AI CLI tool under the name and Human for human members", async () => {

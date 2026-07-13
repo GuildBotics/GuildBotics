@@ -694,6 +694,7 @@ def test_write_command_titles_reject_empty_or_multiline_values(command, title, e
 def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="human")
     calls = []
+    activity_calls = []
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -705,11 +706,22 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
 
         async def issue_comment(self, issue_url, body):
             calls.append(("comment", issue_url, body))
-            return {"comment_id": 1, "html_url": issue_url}
+            return {
+                "comment_id": 1,
+                "comment_url": f"{issue_url}#issuecomment-1",
+                "issue_number": 1,
+                "repo": "owner/repo",
+                "issue_url": issue_url,
+            }
 
         async def issue_create(self, repo, title, body, add_to_project):
             calls.append(("create", repo, title, body, add_to_project))
-            return {"issue_number": 2, "issue_url": "https://github.com/owner/repo/issues/2"}
+            return {
+                "issue_number": 2,
+                "issue_title": title,
+                "repo": repo,
+                "issue_url": "https://github.com/owner/repo/issues/2",
+            }
 
         async def aclose(self):
             pass
@@ -718,6 +730,16 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
         member_module, "resolve_member_context", fake_resolve_member_context
     )
     monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    monkeypatch.setattr(
+        member_module,
+        "record_member_issue_comment_event",
+        lambda member, payload: activity_calls.append(("comment", member, payload)),
+    )
+    monkeypatch.setattr(
+        member_module,
+        "record_member_issue_create_event",
+        lambda member, payload: activity_calls.append(("create", member, payload)),
+    )
     runner = CliRunner()
 
     comment = runner.invoke(
@@ -762,6 +784,82 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
         ),
         ("create", "owner/repo", "Issue title", "Issue body\n", False),
     ]
+    assert [call[0] for call in activity_calls] == ["comment", "create"]
+    assert all(call[1] is person for call in activity_calls)
+    assert activity_calls[0][2]["issue_url"] == "https://github.com/owner/repo/issues/1"
+    assert activity_calls[1][2]["issue_title"] == "Issue title"
+
+
+def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    activity_calls = []
+
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda _identifier: (FakeContext(person), person),
+    )
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def issue_comment(self, _issue_url, _body):
+            raise member_module.MemberCapabilityError("GitHub API failed")
+
+        async def issue_create(self, _repo, _title, _body, _add_to_project):
+            raise member_module.MemberCapabilityError("GitHub API failed")
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    monkeypatch.setattr(
+        member_module,
+        "record_member_issue_comment_event",
+        lambda *_args: activity_calls.append("comment"),
+    )
+    monkeypatch.setattr(
+        member_module,
+        "record_member_issue_create_event",
+        lambda *_args: activity_calls.append("create"),
+    )
+    runner = CliRunner()
+
+    comment = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "comment",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/1",
+            "--content-stdin",
+        ],
+        input="Comment body\n",
+    )
+    create = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--title",
+            "Issue title",
+            "--content-stdin",
+        ],
+        input="Issue body\n",
+    )
+
+    assert comment.exit_code != 0
+    assert create.exit_code != 0
+    assert activity_calls == []
 
 
 def test_member_git_publish_current_mode_uses_current_workspace_service(

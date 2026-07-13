@@ -51,6 +51,65 @@ def record_member_pr_create_event(
     )
 
 
+def record_member_issue_create_event(
+    member_person: Person, payload: dict[str, Any]
+) -> None:
+    number = payload.get("issue_number")
+    title = str(payload.get("issue_title") or "").strip()
+    repo = str(payload.get("repo") or "")
+    url = str(payload.get("issue_url") or "")
+    _record_member_domain_event(
+        member_person,
+        "github.issue",
+        {
+            "action": "opened",
+            "issue": {
+                "number": number,
+                "title": title,
+                "html_url": url,
+            },
+        },
+        {
+            "github.action": "opened",
+            "github.kind": "issue",
+            "github.number": number,
+            "github.repo": repo,
+            "github.url": url,
+        },
+    )
+
+
+def record_member_issue_comment_event(
+    member_person: Person, payload: dict[str, Any]
+) -> None:
+    number = payload.get("issue_number")
+    repo = str(payload.get("repo") or "")
+    issue_url = str(payload.get("issue_url") or "")
+    comment_url = str(payload.get("comment_url") or payload.get("html_url") or "")
+    _record_member_domain_event(
+        member_person,
+        "github.issue_comment",
+        {
+            "action": "commented",
+            "issue": {
+                "number": number,
+                "html_url": issue_url,
+            },
+            "comment": {
+                "id": payload.get("comment_id"),
+                "html_url": comment_url,
+            },
+        },
+        {
+            "github.action": "commented",
+            "github.kind": "issue",
+            "github.number": number,
+            "github.repo": repo,
+            "github.url": issue_url,
+        },
+    )
+
+
 def _record_member_domain_event(
     member_person: Person,
     event_type: str,
