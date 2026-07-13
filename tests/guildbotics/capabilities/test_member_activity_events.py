@@ -20,7 +20,7 @@ def test_record_member_issue_create_event_builds_github_domain_payload(
         Person(person_id="aiko", name="Aiko"),
         {
             "issue_number": 290,
-            "issue_title": "Follow-up",
+            "issue_title": "  Follow-up  ",
             "repo": "owner/repo",
             "issue_url": "https://github.com/owner/repo/issues/290",
         },

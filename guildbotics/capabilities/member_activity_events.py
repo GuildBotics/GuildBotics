@@ -55,7 +55,7 @@ def record_member_issue_create_event(
     member_person: Person, payload: dict[str, Any]
 ) -> None:
     number = payload.get("issue_number")
-    title = str(payload.get("issue_title") or "")
+    title = str(payload.get("issue_title") or "").strip()
     repo = str(payload.get("repo") or "")
     url = str(payload.get("issue_url") or "")
     _record_member_domain_event(
