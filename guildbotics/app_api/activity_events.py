@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any, Literal
 
 type ActivityEventType = Literal[
-    "pr_create", "pr_merge", "pr_closed", "push", "issue_resolve", "external"
+    "pr_create",
+    "pr_merge",
+    "pr_closed",
+    "push",
+    "issue_create",
+    "issue_resolve",
+    "external",
 ]
 
 
@@ -32,10 +38,11 @@ def classify_event(
             return "pr_create"
         if action == "closed" or "closed" in normalized_type:
             return "pr_closed"
-    if (issue is not None or github_kind == "issue" or "issue" in normalized_type) and (
-        action in {"closed", "resolved"} or "resolve" in normalized_type
-    ):
-        return "issue_resolve"
+    if issue is not None or github_kind == "issue" or "issue" in normalized_type:
+        if action in {"opened", "created"} or "create" in normalized_type:
+            return "issue_create"
+        if action in {"closed", "resolved"} or "resolve" in normalized_type:
+            return "issue_resolve"
     return None
 
 
@@ -54,6 +61,7 @@ def event_label(
         "pr_create": "PR",
         "pr_merge": "PR",
         "pr_closed": "PR",
+        "issue_create": "Issue",
         "issue_resolve": "Issue",
         "external": "Event",
     }[classification]
@@ -61,6 +69,7 @@ def event_label(
         "pr_create": "Created",
         "pr_merge": "Merged",
         "pr_closed": "Closed",
+        "issue_create": "Created",
         "issue_resolve": "Resolved",
         "external": "",
     }[classification]

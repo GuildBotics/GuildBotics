@@ -339,7 +339,14 @@ export type ActivityHistoryEvent = {
   id: string;
   timestamp: string;
   person_id: string;
-  type: "pr_create" | "pr_merge" | "pr_closed" | "push" | "issue_resolve" | "external";
+  type:
+    | "pr_create"
+    | "pr_merge"
+    | "pr_closed"
+    | "push"
+    | "issue_create"
+    | "issue_resolve"
+    | "external";
   title: string;
   detail: string;
   url: string;

@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from guildbotics.app_api.activity_events import ActivityEventType
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 
@@ -239,9 +240,7 @@ class ActivityHistoryEvent(BaseModel):
     id: str
     timestamp: str
     person_id: str = ""
-    type: Literal[
-        "pr_create", "pr_merge", "pr_closed", "push", "issue_resolve", "external"
-    ]
+    type: ActivityEventType
     title: str
     detail: str = ""
     url: str = ""

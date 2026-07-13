@@ -1127,6 +1127,12 @@ pre {
   color: var(--color-info-text);
 }
 
+.activity-event-issue_create {
+  background: var(--color-info-bg);
+  border-color: var(--color-info);
+  color: var(--color-info-text);
+}
+
 .activity-event-pr_merge {
   background: var(--color-info-bg);
   border-color: var(--color-info);

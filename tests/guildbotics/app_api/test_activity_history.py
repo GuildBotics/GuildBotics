@@ -450,3 +450,112 @@ def test_interactive_session_still_uses_prompt() -> None:
     ]
     title = _title(records, lambda _subject_id, _person_id: "")
     assert title == "会議の議事録をまとめて"
+
+
+def test_issue_create_event_and_comments_share_one_session_issue_link() -> None:
+    issue_url = "https://github.com/o/r/issues/43"
+    records = [
+        {
+            "trace_id": "t-issue",
+            "person_id": "alice",
+            "timestamp": "2026-07-01T12:00:00+00:00",
+            "source": "interactive",
+            "kind": "event",
+            "type": "github.issue",
+            "attributes": {
+                "github.action": "opened",
+                "github.kind": "issue",
+                "github.number": 43,
+                "github.repo": "o/r",
+                "github.url": issue_url,
+            },
+            "payload": {
+                "action": "opened",
+                "issue": {
+                    "number": 43,
+                    "title": "Track issue activity",
+                    "html_url": issue_url,
+                },
+            },
+        },
+        *[
+            {
+                "trace_id": "t-issue",
+                "person_id": "alice",
+                "timestamp": f"2026-07-01T12:0{index}:00+00:00",
+                "source": "interactive",
+                "kind": "event",
+                "type": "github.issue_comment",
+                "attributes": {
+                    "github.action": "commented",
+                    "github.kind": "issue",
+                    "github.number": 43,
+                    "github.repo": "o/r",
+                    "github.url": issue_url,
+                },
+                "payload": {
+                    "action": "commented",
+                    "issue": {"number": 43, "html_url": issue_url},
+                    "comment": {
+                        "id": index,
+                        "html_url": f"{issue_url}#issuecomment-{index}",
+                    },
+                },
+            }
+            for index in (1, 2)
+        ],
+    ]
+
+    history = build_activity_history(
+        start=START,
+        end=END,
+        members=_members(),
+        records=records,
+    )
+
+    assert [(event.type, event.title, event.detail) for event in history.events] == [
+        ("issue_create", "Issue #43 Created", "Track issue activity")
+    ]
+    assert history.events[0].url == issue_url
+    assert [
+        (link.kind, link.label, link.url) for link in history.sessions[0].links
+    ] == [("issue", "Issue #43", issue_url)]
+
+
+def test_issue_comments_add_session_link_without_event_row() -> None:
+    issue_url = "https://github.com/o/r/issues/44"
+    history = build_activity_history(
+        start=START,
+        end=END,
+        members=_members(),
+        records=[
+            {
+                "trace_id": "t-comment",
+                "person_id": "alice",
+                "timestamp": "2026-07-01T13:00:00+00:00",
+                "source": "interactive",
+                "kind": "event",
+                "type": "github.issue_comment",
+                "attributes": {
+                    "github.action": "commented",
+                    "github.kind": "issue",
+                    "github.number": 44,
+                    "github.repo": "o/r",
+                    "github.url": issue_url,
+                },
+                "payload": {
+                    "action": "commented",
+                    "issue": {"number": 44, "html_url": issue_url},
+                    "comment": {
+                        "id": 1,
+                        "html_url": f"{issue_url}#issuecomment-1",
+                    },
+                },
+            }
+        ],
+    )
+
+    assert history.events == []
+    assert [(link.label, link.url) for link in history.sessions[0].links] == [
+        ("Issue #44", issue_url)
+    ]
