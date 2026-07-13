@@ -34,6 +34,7 @@ class FakeClient:
         self.post_payloads = {}
         self.patches = []
         self.patch_payloads = {}
+        self.patch_status_codes = {}
         self.graphql_payloads = []
 
     async def get(self, endpoint, params=None, headers=None):
@@ -72,7 +73,8 @@ class FakeClient:
                     "state": "open",
                     "draft": False,
                 },
-            )
+            ),
+            status_code=self.patch_status_codes.get(endpoint, 200),
         )
 
 
@@ -813,6 +815,48 @@ async def test_pr_create_uses_default_branch_when_base_is_empty():
 
 
 @pytest.mark.asyncio
+async def test_pr_create_returns_matching_open_pr_without_updating_it():
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls"] = [
+        {
+            "number": 7,
+            "html_url": "https://github.com/owner/repo/pull/7",
+            "draft": False,
+        }
+    ]
+    service._client = fake
+
+    result = await service.pr_create(
+        "owner/repo",
+        "feature",
+        "main",
+        "Replacement title",
+        "Replacement body",
+        "https://github.com/owner/repo/issues/42",
+        "true",
+    )
+
+    assert result == {
+        "pr_number": 7,
+        "pr_url": "https://github.com/owner/repo/pull/7",
+        "created": False,
+        "draft": False,
+        "head": "feature",
+        "base": "main",
+    }
+    assert fake.gets == [
+        (
+            "/repos/owner/repo/pulls",
+            {"head": "owner:feature", "base": "main", "state": "open"},
+            None,
+        )
+    ]
+    assert fake.posts == []
+    assert fake.patches == []
+
+
+@pytest.mark.asyncio
 async def test_pr_update_patches_only_body_and_returns_updated_pr():
     service = _service(person_type="human")
     fake = FakeClient()
@@ -863,16 +907,38 @@ async def test_pr_update_normalizes_null_response_body(requested_body):
     ]
 
 
+@pytest.mark.parametrize(
+    ("url", "error"),
+    [
+        ("not-a-url", "Unsupported GitHub URL"),
+        ("https://github.com/owner/repo/issues/7", "Expected pull URL"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_pr_update_rejects_non_pull_request_url():
+async def test_pr_update_rejects_invalid_or_non_pull_request_url(url, error):
     service = _service(person_type="human")
     fake = FakeClient()
     service._client = fake
 
-    with pytest.raises(MemberCapabilityError, match="Expected pull URL"):
-        await service.pr_update("https://github.com/owner/repo/issues/7", "Body")
+    with pytest.raises(MemberCapabilityError, match=error):
+        await service.pr_update(url, "Body")
 
     assert fake.patches == []
+
+
+@pytest.mark.asyncio
+async def test_pr_update_propagates_github_api_error():
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.patch_status_codes["/repos/owner/repo/pulls/7"] = HTTP_BAD_REQUEST
+    service._client = fake
+
+    with pytest.raises(
+        MemberCapabilityError, match="GitHub API request failed with status 400"
+    ):
+        await service.pr_update("https://github.com/owner/repo/pull/7", "Body")
+
+    assert fake.patches == [("/repos/owner/repo/pulls/7", {"body": "Body"}, None)]
 
 
 @pytest.mark.asyncio

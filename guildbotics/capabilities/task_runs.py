@@ -65,6 +65,7 @@ class RunStore:
         "pr_reply",
         "reaction_add",
         "pr_create",
+        "pr_update",
         "git_publish",
         "issue_create",
     }
