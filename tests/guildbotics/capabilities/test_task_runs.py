@@ -45,6 +45,25 @@ def test_task_run_complete_and_status(tmp_path):
     assert store.status("run-1").completed is True
 
 
+def test_task_run_accepts_pr_update_evidence(tmp_path):
+    store = TaskRunStore(tmp_path)
+    store.append_evidence(
+        "run-1",
+        "pr_update",
+        {"pr_url": "https://github.com/owner/repo/pull/7", "body": "Updated"},
+    )
+
+    status = store.complete(
+        "run-1",
+        "done",
+        "Updated the pull request body.",
+        "https://github.com/owner/repo/issues/1",
+        "aiko",
+    )
+
+    assert status.evidence_types == ["pr_update"]
+
+
 def test_task_run_asking_requires_comment_evidence(tmp_path):
     store = TaskRunStore(tmp_path)
     store.append_evidence("run-1", "git_publish", {"commit_sha": "abc"})
