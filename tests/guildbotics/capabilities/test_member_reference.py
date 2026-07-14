@@ -68,7 +68,7 @@ def test_reference_states_pr_work_record_contract():
     text = capability_reference_text()
     # The PR work-record memory contract is shared by every entrypoint and must
     # not be re-stated in individual prompts.
-    assert "member memory record --pr <pr_url>" in text
+    assert "member memory record --scope team --pr <pr_url>" in text
     assert "--ticket <url>" in text
     assert "--thread <url>" in text
     assert "remaining follow-up" in text

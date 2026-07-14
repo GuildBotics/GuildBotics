@@ -34,7 +34,9 @@ ARCHIVED_DIR = "archived"
 RESERVED_DOC_IDS = {RECENT_FILE, ARCHIVED_DIR}
 POLICY_BASELINE_BODY = """- Keep only reusable lessons: pitfalls, solution steps, and design rationale.
 - Do not keep trivial logs, temporary trial-and-error, or information useful only for one task.
-- Preserve lessons learned from failures. Propose promotion to team memory when the lesson benefits the whole team.
+- Store work records tied to PRs, issues, or team-shared Slack threads in team memory so other members can discover and continue the work.
+- Use personal memory only for member-specific knowledge with no reuse or handoff value for other members.
+- Preserve lessons learned from failures. Store lessons that benefit the whole team in team memory.
 - Keep one topic per document. Write a summary that makes usefulness clear at a glance.
 - Add synonyms and English/Japanese variants to keywords so recall can find the note.
 - Do not write secrets, tokens, or personal data in memory."""
@@ -102,7 +104,9 @@ class MemberMemoryService:
             "keywords": list(keywords or []),
             "source": list(source or []),
             "created_at": now,
+            "created_by": self.person.person_id,
             "updated_at": now,
+            "updated_by": self.person.person_id,
             "pinned": pinned,
             "kind": kind,
         }
@@ -310,6 +314,7 @@ class MemberMemoryService:
             meta.update(params)
         changed_fields = _changed_fields(doc.meta, meta, body_changed=body is not None)
         meta["updated_at"] = _now()
+        meta["updated_by"] = self.person.person_id
         self._write_doc(doc.path, meta, doc.body if body is None else body)
         self._touch_recent(doc.doc_id)
         self._record_audit(

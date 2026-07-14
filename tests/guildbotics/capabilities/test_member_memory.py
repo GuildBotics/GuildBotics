@@ -12,7 +12,11 @@ from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.observability import trace_scope
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, load_yaml_file
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_DATA_DIR,
+    load_yaml_file,
+    save_yaml_file,
+)
 
 EXPECTED_DIGEST_N = 3
 
@@ -88,6 +92,54 @@ def test_record_rejects_set_for_note(person: Person) -> None:
             body="body",
             params={"digest_n": EXPECTED_DIGEST_N},
         )
+
+
+def test_team_memory_tracks_creator_and_updater(
+    monkeypatch: pytest.MonkeyPatch, person: Person, data_root: Path
+) -> None:
+    timestamps = iter(["2026-07-14T01:00:00Z", "2026-07-14T02:00:00Z"])
+    monkeypatch.setattr(member_memory, "_now", lambda: next(timestamps))
+    recorded = MemberMemoryService(person).record(
+        scope="team", title="Shared context", body="Initial context"
+    )
+
+    updater = Person(person_id="yuki", name="Yuki", person_type="human")
+    MemberMemoryService(updater).update(
+        doc_id=recorded["doc_id"], scope="team", body="Updated context"
+    )
+
+    meta = load_yaml_file(
+        data_root / "documents" / "team" / recorded["doc_id"] / "meta.yml"
+    )
+    assert isinstance(meta, dict)
+    assert meta["created_at"] == "2026-07-14T01:00:00Z"
+    assert meta["created_by"] == "aiko"
+    assert meta["updated_at"] == "2026-07-14T02:00:00Z"
+    assert meta["updated_by"] == "yuki"
+
+
+def test_updating_legacy_memory_does_not_fabricate_creator(
+    person: Person, data_root: Path
+) -> None:
+    recorded = MemberMemoryService(person).record(
+        scope="team", title="Legacy context", body="Initial context"
+    )
+    meta_path = data_root / "documents" / "team" / recorded["doc_id"] / "meta.yml"
+    legacy_meta = load_yaml_file(meta_path)
+    assert isinstance(legacy_meta, dict)
+    legacy_meta.pop("created_by")
+    legacy_meta.pop("updated_by")
+    save_yaml_file(meta_path, legacy_meta)
+
+    updater = Person(person_id="yuki", name="Yuki", person_type="human")
+    MemberMemoryService(updater).update(
+        doc_id=recorded["doc_id"], scope="team", body="Updated context"
+    )
+
+    updated_meta = load_yaml_file(meta_path)
+    assert isinstance(updated_meta, dict)
+    assert "created_by" not in updated_meta
+    assert updated_meta["updated_by"] == "yuki"
 
 
 def test_recall_strips_blank_queries(person: Person) -> None:
@@ -350,6 +402,13 @@ def test_team_memory_uses_member_recent_file_only(
         team["path"],
         personal["path"],
     ]
+
+
+def test_baseline_policy_defines_memory_scope(person: Person) -> None:
+    body = MemberMemoryService(person).load_pinned()[0]["body"]
+
+    assert "PRs, issues, or team-shared Slack threads in team memory" in body
+    assert "personal memory only for member-specific knowledge" in body
 
 
 def test_policy_memory_requires_approval_and_controls_context(
