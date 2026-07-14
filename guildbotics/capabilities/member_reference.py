@@ -294,8 +294,9 @@ _CROSS_CUTTING_RULES: list[str] = [
     "human approval through `--policy-approved`; autonomous workflow runs must propose policy "
     "changes in their normal output instead of updating policy directly.",
     "After creating, reusing, or updating a PR, record durable PR work context with "
-    "`member memory record --pr <pr_url>`, adding `--ticket <url>` and/or `--thread <url>` "
-    "when known: include the branch, commit, verification result, what was completed, and "
+    "`member memory record --scope team --pr <pr_url>`, adding `--ticket <url>` "
+    "and/or `--thread <url>` when known: include the branch, commit, verification result, "
+    "what was completed, and "
     "remaining follow-up. Record reusable technical lessons as separate memory documents "
     "only when they are valuable beyond that one PR.",
     "Never display, infer, store, or copy secrets or token values.",

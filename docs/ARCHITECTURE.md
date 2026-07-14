@@ -176,7 +176,9 @@ Members persist knowledge across runs as a document store (mechanism in
 
 - **Document**: 1 document = 1 directory (`meta.yml` + `body.md` + `assets/`) under
   `<workspace-data-root>/documents/`. `meta.yml` holds title/summary/keywords, typed
-  `source` entries (ticket/PR/channel/thread URLs), timestamps, `pinned`, and `kind`.
+  `source` entries (ticket/PR/channel/thread URLs), creation/update timestamps and
+  member IDs (`created_at`/`created_by`, `updated_at`/`updated_by`), `pinned`, and
+  `kind`.
 - **Scopes**: `personal/<person_id>/` and `team/`. `memory promote` moves a document
   from personal to team.
 - **Operations** (`guildbotics member memory ...`): `record`, `recall` (lexical grep
