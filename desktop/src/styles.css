@@ -191,7 +191,9 @@ body {
 
 .nav-item.active {
   background: var(--color-brand-bg-subtle);
-  box-shadow: inset 2px 0 0 var(--color-brand);
+  border-top-left-radius: 2px;
+  border-bottom-left-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--color-brand);
   color: light-dark(var(--literal-teal-800), #ffffff);
   font-weight: 700;
 }
