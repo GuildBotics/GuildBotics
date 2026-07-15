@@ -90,6 +90,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Open a follow-up issue.",
             ),
             (
+                "guildbotics member github issue update --person <person> --url <issue_url> "
+                "--content-stdin",
+                "Replace an issue body; an empty stdin removes the body.",
+            ),
+            (
                 "guildbotics member github pr inspect --person <person> --url <pr_url> "
                 "[--include-comments] [--include-diff]",
                 "Read a PR, optionally including review threads and diff comment coordinates.",

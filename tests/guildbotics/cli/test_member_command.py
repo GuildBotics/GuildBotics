@@ -1703,6 +1703,129 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "pr_update"
 
 
+def test_member_github_issue_update_rejects_missing_content_source():
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/42",
+        ],
+        input="This must not be read.",
+    )
+
+    assert result.exit_code != 0
+    assert "Missing option '--content-stdin'" in result.output
+
+
+def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def issue_update(self, issue_url, body):
+            calls.update({"issue_url": issue_url, "body": body})
+            return {"issue_number": 42, "issue_url": issue_url, "body": body}
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/42",
+            "--content-stdin",
+        ],
+        input="## Summary\n\nUpdated body\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "issue_url": "https://github.com/owner/repo/issues/42",
+        "body": "## Summary\n\nUpdated body\n",
+        "closed": True,
+    }
+
+
+@pytest.mark.parametrize("content", ["", "\n", " \t\n"])
+def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
+    monkeypatch, content
+):
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def issue_update(self, issue_url, body):
+            calls.update({"issue_url": issue_url, "body": body})
+            return {
+                "issue_number": 42,
+                "issue_url": issue_url,
+                "body": body,
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/42",
+            "--content-stdin",
+        ],
+        input=content,
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "issue_url": "https://github.com/owner/repo/issues/42",
+        "body": "",
+        "closed": True,
+    }
+    assert json.loads(result.output)["body"] == ""
+    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "issue_update"
+
+
 def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="human")
