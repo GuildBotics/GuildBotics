@@ -42,6 +42,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
 | [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue. |
 | [`guildbotics member github issue inspect`](#guildbotics-member-github-issue-inspect) | Read an issue and its comments. |
+| [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Replace an issue body; an empty stdin removes the body. |
 | [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
@@ -495,6 +496,7 @@ guildbotics member github issue [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
 | [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue. |
 | [`guildbotics member github issue inspect`](#guildbotics-member-github-issue-inspect) | Read an issue and its comments. |
+| [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Replace an issue body; an empty stdin removes the body. |
 
 ## `guildbotics member github issue comment`
 
@@ -543,6 +545,22 @@ guildbotics member github issue inspect [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Issue URL. [required] |
 | `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member github issue update`
+
+Replace an issue body; an empty stdin removes the body.
+
+```text
+guildbotics member github issue update [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Issue URL. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
+| `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics member github pr`

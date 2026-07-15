@@ -1433,6 +1433,34 @@ async def _issue_create(
         await service.aclose()
 
 
+@issue.command(name="update")
+@_person_option
+@click.option("--url", "issue_url", required=True, help="Issue URL.")
+@_required_content_stdin_option
+@_json_format_option
+def issue_update(
+    person: str,
+    issue_url: str,
+    output_format: str,
+) -> None:
+    body = _read_stdin("issue body", allow_empty=True)
+    _run(
+        _issue_update(person, issue_url, body),
+        output_format=output_format,
+    )
+
+
+async def _issue_update(person: str, issue_url: str, body: str) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberGitHubCapabilityService(member_person, context.team)
+    try:
+        result = await service.issue_update(issue_url, body)
+        TaskRunStore().append_evidence(current_task_run_id(), "issue_update", result)
+        return result
+    finally:
+        await service.aclose()
+
+
 @github.group()
 def pr() -> None:
     """GitHub pull request operations."""

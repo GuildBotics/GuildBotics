@@ -758,6 +758,89 @@ async def test_issue_comment_returns_issue_and_comment_activity_fields():
 
 
 @pytest.mark.asyncio
+async def test_issue_update_patches_only_body_and_returns_updated_issue():
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "body": "Updated body",
+        "title": "Original title",
+        "state": "open",
+    }
+    service._client = fake
+
+    result = await service.issue_update(
+        "https://github.com/owner/repo/issues/42", "Updated body"
+    )
+
+    assert result == {
+        "issue_number": 42,
+        "issue_url": "https://github.com/owner/repo/issues/42",
+        "body": "Updated body",
+    }
+    assert fake.patches == [
+        ("/repos/owner/repo/issues/42", {"body": "Updated body"}, None)
+    ]
+
+
+@pytest.mark.parametrize("requested_body", ["", "Requested body"])
+@pytest.mark.asyncio
+async def test_issue_update_normalizes_null_response_body(requested_body):
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "body": None,
+    }
+    service._client = fake
+
+    result = await service.issue_update(
+        "https://github.com/owner/repo/issues/42", requested_body
+    )
+
+    assert result["body"] == ""
+    assert fake.patches == [
+        ("/repos/owner/repo/issues/42", {"body": requested_body}, None)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("url", "error"),
+    [
+        ("not-a-url", "Unsupported GitHub URL"),
+        ("https://github.com/owner/repo/pull/7", "Expected issue URL"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_issue_update_rejects_invalid_or_non_issue_url(url, error):
+    service = _service(person_type="human")
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match=error):
+        await service.issue_update(url, "Body")
+
+    assert fake.patches == []
+
+
+@pytest.mark.asyncio
+async def test_issue_update_propagates_github_api_error():
+    service = _service(person_type="human")
+    fake = FakeClient()
+    fake.patch_status_codes["/repos/owner/repo/issues/42"] = HTTP_BAD_REQUEST
+    service._client = fake
+
+    with pytest.raises(
+        MemberCapabilityError, match="GitHub API request failed with status 400"
+    ):
+        await service.issue_update("https://github.com/owner/repo/issues/42", "Body")
+
+    assert fake.patches == [("/repos/owner/repo/issues/42", {"body": "Body"}, None)]
+
+
+@pytest.mark.asyncio
 async def test_pr_create_uses_explicit_base_branch():
     service = _service(person_type="human")
     fake = FakeClient()

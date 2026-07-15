@@ -198,6 +198,22 @@ class MemberGitHubCapabilityService:
             "project_item_id": project_item_id,
         }
 
+    async def issue_update(self, url: str, body: str) -> dict[str, Any]:
+        resource = self.parse_url(url, expected_kind="issue")
+        client = await self._get_client()
+        resp = await client.patch(
+            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}",
+            json={"body": body},
+        )
+        _raise_for_status(resp)
+        issue = resp.json()
+        response_body = issue.get("body")
+        return {
+            "issue_number": issue.get("number", resource.number),
+            "issue_url": issue.get("html_url", url),
+            "body": "" if response_body is None else response_body,
+        }
+
     async def pr_inspect(
         self, url: str, include_comments: bool, include_diff: bool = False
     ) -> dict[str, Any]:
