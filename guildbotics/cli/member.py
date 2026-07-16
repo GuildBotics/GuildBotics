@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 import click
 
@@ -53,6 +55,8 @@ from guildbotics.observability.interactive_sessions import (
 )
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.utils.env_loader import load_guildbotics_env
+from guildbotics.utils.fileio import get_workspace_data_root
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
 WorkspaceMode = Literal["member", "current"]
@@ -142,6 +146,81 @@ def help_cmd() -> None:
     the available commands without re-running the full context.
     """
     click.echo(capability_reference_text())
+
+
+@member.group(name="agent", help=t("cli.member.agent.help"))
+def agent() -> None:
+    """Manage native agent runtime state."""
+
+
+@agent.group(name="conversation", help=t("cli.member.agent.conversation_help"))
+def agent_conversation() -> None:
+    """Manage persisted native agent conversations."""
+
+
+@agent_conversation.command(
+    name="reset", help=t("cli.member.agent_conversation_reset.help")
+)
+@_person_option
+@click.option(
+    "--adapter",
+    type=click.Choice(["codex", "claude"]),
+    required=True,
+    help=t("cli.member.agent_conversation_reset.adapter_help"),
+)
+@click.option(
+    "--work-kind",
+    type=click.Choice(["ticket", "chat", "manual"]),
+    required=True,
+    help=t("cli.member.agent_conversation_reset.work_kind_help"),
+)
+@click.option(
+    "--work-identity",
+    required=True,
+    help=t("cli.member.agent_conversation_reset.work_identity_help"),
+)
+@_json_format_option
+def agent_conversation_reset(
+    person: str,
+    adapter: str,
+    work_kind: str,
+    work_identity: str,
+    output_format: str,
+) -> None:
+    """Reset one exact native provider session without deleting history."""
+    _run(
+        _agent_conversation_reset(person, adapter, work_kind, work_identity),
+        output_format=output_format,
+    )
+
+
+async def _agent_conversation_reset(
+    person: str, adapter: str, work_kind: str, work_identity: str
+) -> dict[str, Any]:
+    from guildbotics.intelligences.agent_runtime.models import (
+        ConversationKey,
+        ResumePolicy,
+    )
+    from guildbotics.intelligences.agent_runtime.store import ConversationStore
+
+    _context, member_person = _resolve(person)
+    key = ConversationKey(
+        person_id=member_person.person_id,
+        adapter=adapter,
+        work_kind=work_kind,
+        work_identity=work_identity,
+    )
+    store = ConversationStore(get_workspace_data_root())
+    record = store.resolve(key, ResumePolicy.RESET)
+    store.save(record)
+    return {
+        "person_id": member_person.person_id,
+        "adapter": adapter,
+        "work_kind": work_kind,
+        "work_identity": work_identity,
+        "generation": record.generation,
+        "reset": True,
+    }
 
 
 @member.group()
@@ -1990,15 +2069,80 @@ def _slack_permalink_ts(raw_message_id: str) -> str:
 def _run(coro, *, output_format: str) -> Any:
     interactive_session = _interactive_session_for_current_command()
     command = _current_command_path()
+    started = False
     try:
-        if interactive_session is None:
-            result = asyncio.run(coro)
-        else:
-            result = _run_interactive(coro, interactive_session, command)
+        with _member_execution_guard(command, interactive_session):
+            started = True
+            if interactive_session is None:
+                result = asyncio.run(coro)
+            else:
+                result = _run_interactive(coro, interactive_session, command)
     except (MemberCapabilityError, MemberMemoryError, TaskRunError, KeyError) as exc:
         raise click.ClickException(_safe_error(exc)) from exc
+    except BaseException:
+        if not started and asyncio.iscoroutine(coro):
+            coro.close()
+        raise
     _emit(result, output_format)
     return result
+
+
+@contextmanager
+def _member_execution_guard(command: str, session: InteractiveTraceSession | None):
+    if not _member_command_needs_lease(command):
+        yield
+        return
+    person = _current_person()
+    if not person:
+        yield
+        return
+    from guildbotics.runtime.person_lease import (
+        LEASE_PERSON_ENV,
+        PersonExecutionLease,
+        PersonLeaseUnavailableError,
+        validate_delegation,
+    )
+
+    if _running_under_workflow():
+        delegated_person = os.getenv(LEASE_PERSON_ENV, "")
+        person_id = delegated_person if delegated_person == person else ""
+        if not person_id:
+            _context, member_person = _resolve(person)
+            person_id = member_person.person_id
+        if validate_delegation(person_id) is None:
+            raise click.ClickException(t("cli.member.lease.invalid_delegation"))
+        yield
+        return
+    _context, member_person = _resolve(person)
+    lease = PersonExecutionLease(member_person.person_id)
+    try:
+        lease.acquire(
+            source="interactive",
+            command=command,
+            work_id=session.trace_id if session is not None else uuid4().hex,
+        )
+    except PersonLeaseUnavailableError as exc:
+        raise click.ClickException(str(exc)) from exc
+    try:
+        yield
+    finally:
+        lease.release()
+
+
+def _member_command_needs_lease(command: str) -> bool:
+    read_only = (
+        " context",
+        " help",
+        " memory recall",
+        " memory get",
+        " task status",
+        " chat identity",
+        " chat inspect",
+        " github issue inspect",
+        " github pr inspect",
+    )
+    normalized = f" {command.strip()}"
+    return not any(marker in normalized for marker in read_only)
 
 
 def _run_interactive(

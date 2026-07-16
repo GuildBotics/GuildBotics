@@ -1104,6 +1104,7 @@ class AppRuntime:
                     name=info.name,
                     label=info.label,
                     executable=info.executable,
+                    config_reference=info.config_reference,
                     detected=bool(path),
                     path=path,
                 )

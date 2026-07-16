@@ -55,7 +55,7 @@ const resources = {
         codes: {
           credential_github: "GitHub credentials for {{person}} could not be verified.",
           credential_slack: "Slack credentials for {{person}} could not be verified.",
-          credential_cli_agent: "The AI CLI tool credentials for {{person}} could not be verified.",
+          credential_cli_agent: "The {{command}} credentials for {{person}} could not be verified.",
           credential_llm: "The configured LLM credentials could not be verified.",
           command_failed: "{{command}} failed for {{person}}.",
           rate_limited: "{{command}} was rate limited for {{person}}.",
@@ -418,6 +418,16 @@ const resources = {
           envJson: "Environment variables (JSON)",
           envJsonError: "Enter a JSON object.",
           script: "Script",
+          nativePolicy: "Codex execution permissions",
+          nativePolicyDescription: "Choose where Codex can access files.",
+          filesystemAccess: "File access",
+          filesystemOptions: {
+            workspace: "Workspace only",
+            host: "Unrestricted",
+          },
+          hostAccessWarningTitle: "Unrestricted file access",
+          hostAccessWarningBody:
+            "Codex can read and write files outside the workspace. Select this only when it is genuinely required.",
         },
         members: {
           avatar: {
@@ -1240,7 +1250,7 @@ const resources = {
         codes: {
           credential_github: "{{person}} の GitHub 資格情報を検証できませんでした。",
           credential_slack: "{{person}} の Slack 資格情報を検証できませんでした。",
-          credential_cli_agent: "{{person}} の AI CLI ツール資格情報を検証できませんでした。",
+          credential_cli_agent: "{{person}} の {{command}} 資格情報を検証できませんでした。",
           credential_llm: "設定された LLM 資格情報を検証できませんでした。",
           command_failed: "{{person}} の {{command}} が失敗しました。",
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
@@ -1438,6 +1448,16 @@ const resources = {
           envJson: "環境変数（JSON）",
           envJsonError: "JSONオブジェクトを入力してください。",
           script: "スクリプト",
+          nativePolicy: "Codexの実行権限",
+          nativePolicyDescription: "Codexがアクセスできるファイルの範囲を設定します。",
+          filesystemAccess: "ファイルアクセス",
+          filesystemOptions: {
+            workspace: "ワークスペース内のみ",
+            host: "制限なし",
+          },
+          hostAccessWarningTitle: "ファイルアクセスを制限しない設定",
+          hostAccessWarningBody:
+            "Codexがワークスペース外のファイルも読み書きできるようになります。本当に必要な場合だけ選択してください。",
         },
         members: {
           avatar: {

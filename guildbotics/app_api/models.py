@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from guildbotics.app_api.activity_events import ActivityEventType
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
@@ -433,6 +433,7 @@ class CliAgentDetection(BaseModel):
     name: str
     label: str = ""
     executable: str
+    config_reference: str
     detected: bool
     path: str = ""
 
@@ -464,6 +465,20 @@ class BrainAssignment(BaseModel):
     target: str
 
 
+class CodexNativeAgentPolicySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    filesystem_access: Literal["workspace", "host"] = "workspace"
+
+
+class NativeAgentPolicySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    codex: CodexNativeAgentPolicySettings = Field(
+        default_factory=CodexNativeAgentPolicySettings
+    )
+
+
 class LlmProvidersResponse(BaseModel):
     providers: list[LlmProviderInfo] = Field(default_factory=list)
 
@@ -477,6 +492,9 @@ class IntelligenceConfigResponse(BaseModel):
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
     cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
     brain_mapping: list[BrainAssignment] = Field(default_factory=list)
+    native_agent_policy: NativeAgentPolicySettings = Field(
+        default_factory=NativeAgentPolicySettings
+    )
 
 
 class IntelligenceConfigUpdateRequest(BaseModel):
@@ -488,6 +506,7 @@ class IntelligenceConfigUpdateRequest(BaseModel):
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
     cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
     brain_mapping: list[BrainAssignment] = Field(default_factory=list)
+    native_agent_policy: NativeAgentPolicySettings | None = None
 
 
 class ProjectConfigResponse(BaseModel):

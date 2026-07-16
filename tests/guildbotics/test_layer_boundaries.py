@@ -18,6 +18,7 @@ from pathlib import Path
 import guildbotics
 
 PACKAGE_ROOT = Path(guildbotics.__file__).parent
+REPOSITORY_ROOT = PACKAGE_ROOT.parent
 
 
 def _imports_by_module(subpackage: str, inside: bool) -> dict[Path, set[str]]:
@@ -66,4 +67,28 @@ def test_observability_depends_only_on_utils() -> None:
         for module in sorted(modules)
         if not _matches(module, allowed)
     ]
+    assert offenders == []
+
+
+def test_native_provider_wire_protocol_does_not_leak_into_app_or_frontend() -> None:
+    wire_tokens = (
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "execCommandApproval",
+        "applyPatchApproval",
+        '"workspaceWrite"',
+        '"dangerFullAccess"',
+    )
+    roots = (PACKAGE_ROOT / "app_api", REPOSITORY_ROOT / "desktop/src")
+    offenders: list[str] = []
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if path.suffix not in {".py", ".ts", ".tsx"}:
+                continue
+            contents = path.read_text(encoding="utf-8")
+            offenders.extend(
+                f"{path.relative_to(REPOSITORY_ROOT)}: {token}"
+                for token in wire_tokens
+                if token in contents
+            )
     assert offenders == []

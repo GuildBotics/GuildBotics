@@ -1,6 +1,7 @@
 label: Antigravity
 order: 30
 executable: agy
+conversation_scope: dispatch
 env:
 script: |
   res=$(mktemp)

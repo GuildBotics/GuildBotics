@@ -3,16 +3,21 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.capabilities.task_runs import TASK_RUN_ENV, TaskRunStore
+from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.i18n_tool import get_language, set_language
 
 
 @pytest.fixture(autouse=True)
 def _isolated_workspace_data(monkeypatch, tmp_path):
+    previous_language = get_language()
+    set_language("en")
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / ".guildbotics" / "data"))
+    yield
+    set_language(previous_language)
 
 
 class StubTicketManager:
@@ -81,7 +86,7 @@ class StubContext:
 
     async def invoke(self, command_name: str, *args, **kwargs):
         self.invocations.append(
-            (command_name, args, kwargs, kwargs.get("cli_agent_env"))
+            (command_name, args, kwargs, kwargs.get("agent_execution_context"))
         )
         if isinstance(self.invoke_response, Exception):
             raise self.invoke_response
@@ -129,24 +134,23 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
     assert ctx.task.status == Task.IN_PROGRESS
     assert tm.commented == []
     assert len(ctx.invocations) == 1
-    command_name, args, kwargs, cli_agent_env = ctx.invocations[0]
+    command_name, args, kwargs, execution_context = ctx.invocations[0]
     assert command_name == "functions/handle_github_ticket"
     assert args == ()
-    # Run id is scoped to the agent subprocess via a per-invocation overlay,
-    # not the process-global os.environ.
-    from guildbotics.capabilities.completion_retry import (
-        CLI_AGENT_CONVERSATION_FILE_ENV,
-    )
-
     data_dir = Path(tmp_path) / ".guildbotics" / "data"
-    assert cli_agent_env == {
-        TASK_RUN_ENV: kwargs["workflow_run_id"],
-        GUILDBOTICS_DATA_DIR: str(data_dir),
-        CLI_AGENT_CONVERSATION_FILE_ENV: str(
-            data_dir / "task-runs" / f"{kwargs['workflow_run_id']}.agy-conversation"
+    assert execution_context == {
+        "run_id": kwargs["workflow_run_id"],
+        "workspace_data_root": str(data_dir),
+        "work_kind": "ticket",
+        "work_identity": "https://github.com/GuildBotics/GuildBotics/issues/1",
+        "resume_policy": "fresh",
+        "attempt": 1,
+        "continuation_input": (
+            "Continue the existing workflow conversation from its current state. "
+            "Do not reprocess the triggering event or repeat completed actions. "
+            "Finish the missing work and run the required completion command."
         ),
     }
-    assert os.environ.get(TASK_RUN_ENV) is None
     assert kwargs["person_id"] == "aiko"
     assert kwargs["ticket_url"] == "https://github.com/GuildBotics/GuildBotics/issues/1"
     assert kwargs["pull_request_url"] == ""
@@ -370,10 +374,6 @@ def test_ticket_trace_attributes_for_issue_and_pull_request():
 
 @pytest.mark.asyncio
 async def test_ticket_retries_with_continuation_until_completion(monkeypatch):
-    from guildbotics.capabilities.completion_retry import (
-        CLI_AGENT_CONVERSATION_FILE_ENV,
-    )
-
     monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "5")
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
@@ -390,14 +390,15 @@ async def test_ticket_retries_with_continuation_until_completion(monkeypatch):
         if name == "functions/handle_github_ticket"
     ]
     assert len(handle_calls) == 2
-    # Both attempts reuse one run id and conversation file so evidence
-    # accumulates and the retry resumes the same agent conversation by id.
+    # Both attempts reuse one run id and one stable ticket conversation key.
     assert len({kwargs["workflow_run_id"] for kwargs in handle_calls}) == 1
-    conv_files = {
-        kwargs["cli_agent_env"][CLI_AGENT_CONVERSATION_FILE_ENV]
-        for kwargs in handle_calls
+    conversation_keys = {
+        kwargs["agent_execution_context"]["work_identity"] for kwargs in handle_calls
     }
-    assert len(conv_files) == 1
+    assert conversation_keys == {"https://github.com/GuildBotics/GuildBotics/issues/1"}
+    assert [
+        kwargs["agent_execution_context"]["resume_policy"] for kwargs in handle_calls
+    ] == ["fresh", "auto"]
     # Completed within budget: no error comment, no give-up.
     assert tm.commented == []
 

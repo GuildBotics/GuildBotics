@@ -4,6 +4,7 @@ from guildbotics.intelligences import cli_agents
 from guildbotics.intelligences.cli_agents import (
     discover_cli_agents,
     get_cli_agent_search_path,
+    native_cli_agent_name,
     resolve_cli_agent_path,
     resolve_default_cli_executable,
 )
@@ -12,14 +13,18 @@ CUSTOM_ORDER = 5
 DEFAULT_ORDER = 1000
 TEMPLATE_CLI_AGENT_NAMES = (
     "antigravity-cli.yml",
-    "claude-cli.yml",
-    "codex-cli.yml",
     "copilot-cli.yml",
 )
 
 
 def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
     assert get_cli_agent_search_path("") == ""
+
+
+def test_native_cli_agent_name_normalizes_legacy_mapping_references() -> None:
+    assert native_cli_agent_name("codex") == "codex"
+    assert native_cli_agent_name("claude-cli.yml") == "claude"
+    assert native_cli_agent_name("copilot-cli.yml") == ""
 
 
 def test_rate_limit_marker_templates_use_json_serialization() -> None:
@@ -129,6 +134,18 @@ def test_discover_cli_agents_reads_metadata(tmp_path: Path) -> None:
     assert agents["myagent"].label == "My Agent"
     assert agents["myagent"].order == CUSTOM_ORDER
     assert agents["myagent"].executable == "mybin"
+    assert agents["myagent"].config_reference == "myagent-cli.yml"
+
+
+def test_discover_cli_agents_always_includes_native_codex_and_claude(
+    tmp_path: Path,
+) -> None:
+    agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
+
+    assert agents["codex"].executable == "codex"
+    assert agents["codex"].config_reference == "codex"
+    assert agents["claude"].executable == "claude"
+    assert agents["claude"].config_reference == "claude"
 
 
 def test_discover_cli_agents_defaults_to_name_and_sorts(tmp_path: Path) -> None:

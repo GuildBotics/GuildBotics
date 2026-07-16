@@ -20,6 +20,9 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics`](#guildbotics) | GuildBotics CLI entrypoint. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
+| [`guildbotics member agent`](#guildbotics-member-agent) | Manage native agent runtime state. |
+| [`guildbotics member agent conversation`](#guildbotics-member-agent-conversation) | Manage persisted native agent conversations. |
+| [`guildbotics member agent conversation reset`](#guildbotics-member-agent-conversation-reset) | Reset one exact native provider session without deleting history. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish a chat workflow run with evidence. |
 | [`guildbotics member chat identity`](#guildbotics-member-chat-identity) | Show the member's chat identity. |
@@ -134,6 +137,7 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
+| [`guildbotics member agent`](#guildbotics-member-agent) | Manage native agent runtime state. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
 | [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
@@ -141,6 +145,55 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
+
+## `guildbotics member agent`
+
+Manage native agent runtime state.
+
+```text
+guildbotics member agent [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member agent conversation`](#guildbotics-member-agent-conversation) | Manage persisted native agent conversations. |
+
+## `guildbotics member agent conversation`
+
+Manage persisted native agent conversations.
+
+```text
+guildbotics member agent conversation [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member agent conversation reset`](#guildbotics-member-agent-conversation-reset) | Reset one exact native provider session without deleting history. |
+
+## `guildbotics member agent conversation reset`
+
+Reset one exact native provider session without deleting history.
+
+```text
+guildbotics member agent conversation reset [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--adapter [codex\|claude]` | Native provider adapter whose exact session should be reset. [required] |
+| `--work-kind [ticket\|chat\|manual]` | Kind of logical work owning the conversation. [required] |
+| `--work-identity TEXT` | Stable ticket URL, chat thread identity, or manual work identity. [required] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
 
 ## `guildbotics member chat`
 

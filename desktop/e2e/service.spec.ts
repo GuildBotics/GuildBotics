@@ -10,15 +10,10 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 // pre-seeds the temp workspace with a project + one active member (GitHub
 // integration disabled), so the app boots already-configured.
 //
-// In this seeded workspace the only scheduler routine is
-// `workflows/ticket_driven_workflow`, which the REAL backend reports as
-// requiring GitHub. So the scheduler target is GitHub-blocked, while the events
-// (chat handling) target has no such requirement. This journey therefore:
-//   * starts the events target, observes the UI reach a running state driven by
-//     the REAL backend status/websocket events, then stops and observes stopped;
-//   * asserts the scheduler-only selection is blocked by the backend-derived
-//     GitHub requirement (real start guard), which also proves the per-target
-//     toggle changes what the app is allowed to send.
+// This journey starts only the event-trigger source (chat handling), observes
+// the UI reach a running state driven by the REAL backend status/websocket
+// events, then stops and observes stopped. It proves that the three source
+// toggles select the runtime units sent to the backend.
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -74,12 +69,14 @@ test("starts the events target, reaches running via real events, then stops", as
   await page.goto("/#/service");
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
 
-  const schedulerPanel = panel(page, "Auto patrol");
-  const eventsPanel = panel(page, "Event listener");
+  const patrolPanel = panel(page, "Patrol commands");
+  const eventsPanel = panel(page, "Event triggers");
+  const scheduledPanel = panel(page, "Scheduled commands");
 
-  // Disable the GitHub-requiring scheduler target so the events target alone is
-  // started; with it enabled the backend-derived GitHub guard blocks Start.
-  await toggleTarget(schedulerPanel);
+  // Disable the GitHub-requiring patrol target and scheduled commands so the
+  // event triggers alone are started.
+  await toggleTarget(patrolPanel);
+  await toggleTarget(scheduledPanel);
 
   const start = page.getByRole("button", { name: RUN_BUTTON });
   await expect(start).toBeEnabled();
@@ -93,8 +90,8 @@ test("starts the events target, reaches running via real events, then stops", as
   await expect(eventsPanel.locator(".service-unit-title").getByText("Running")).toBeVisible({
     timeout: 30_000,
   });
-  // The disabled scheduler target never reaches a running state.
-  await expect(schedulerPanel.locator(".service-unit-title").getByText("Running")).toHaveCount(0);
+  // The disabled patrol target never reaches a running state.
+  await expect(patrolPanel.locator(".service-unit-title").getByText("Running")).toHaveCount(0);
 
   // Stop and observe the runtime return to a stopped state driven by the backend.
   await stop.click();
@@ -102,20 +99,4 @@ test("starts the events target, reaches running via real events, then stops", as
   await expect(eventsPanel.locator(".service-unit-title").getByText("Stopped")).toBeVisible({
     timeout: 30_000,
   });
-});
-
-test("scheduler-only is blocked by the backend GitHub requirement", async ({ page }) => {
-  await page.goto("/#/service");
-  await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
-
-  // Leave only the scheduler target enabled.
-  await toggleTarget(panel(page, "Event listener"));
-
-  // The default routine requires GitHub, which is disabled in the seeded
-  // workspace, so the REAL backend-derived guard disables Start and surfaces the
-  // GitHub guard alert.
-  await expect(page.getByText("This routine requires GitHub integration")).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(page.getByRole("button", { name: RUN_BUTTON })).toBeDisabled();
 });

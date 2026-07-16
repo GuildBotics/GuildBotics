@@ -5,6 +5,9 @@ import threading
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from guildbotics.capabilities.workflow_rate_limits import (
+    workflow_rate_limit_from_exception,
+)
 from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 from guildbotics.entities.team import Person
@@ -128,7 +131,12 @@ class PendingChatDispatcher:
         except WorkRejectedError:
             return 0
         except Exception as exc:  # leave queued for retry; do not block the queue
-            pending.next_attempt_at = _next_attempt_at(pending.attempt_count)
+            rate_limit = workflow_rate_limit_from_exception(exc)
+            pending.next_attempt_at = (
+                rate_limit.retry_after_at
+                if rate_limit is not None and rate_limit.retry_after_at
+                else _next_attempt_at(pending.attempt_count)
+            )
             self._state_store.save_pending_event(
                 service, person.person_id, channel_id, pending
             )

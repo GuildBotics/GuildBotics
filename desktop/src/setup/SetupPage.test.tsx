@@ -94,6 +94,7 @@ vi.mock("../api/client", async (importOriginal) => {
           name: "codex",
           label: "OpenAI Codex CLI",
           executable: "codex",
+          config_reference: "codex",
           detected: true,
           path: "/usr/local/bin/codex",
         },
@@ -101,6 +102,7 @@ vi.mock("../api/client", async (importOriginal) => {
           name: "claude",
           label: "Claude Code",
           executable: "claude",
+          config_reference: "claude",
           detected: false,
           path: "",
         },
@@ -159,10 +161,10 @@ vi.mock("../api/client", async (importOriginal) => {
           model_id: "gpt-5",
         },
       ],
-      cli_agent_mapping: { default: "codex-cli.yml", codex: "codex-cli.yml" },
+      cli_agent_mapping: { default: "codex", codex: "codex" },
       cli_agents: [
         {
-          path: "codex-cli.yml",
+          path: "codex",
           name: "codex",
           env: {},
           script: "codex",
@@ -171,6 +173,9 @@ vi.mock("../api/client", async (importOriginal) => {
         },
       ],
       brain_mapping: [],
+      native_agent_policy: {
+        codex: { filesystem_access: "workspace" },
+      },
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
     getProjectStatusOptions: vi.fn(async () => ({ available: false, statuses: [] })),
@@ -292,6 +297,7 @@ beforeEach(() => {
         name: "codex",
         label: "OpenAI Codex CLI",
         executable: "codex",
+        config_reference: "codex",
         detected: true,
         path: "/usr/local/bin/codex",
       },
@@ -299,6 +305,7 @@ beforeEach(() => {
         name: "claude",
         label: "Claude Code",
         executable: "claude",
+        config_reference: "claude",
         detected: false,
         path: "",
       },
@@ -731,6 +738,7 @@ describe("SetupPage", () => {
           name: "codex",
           label: "OpenAI Codex CLI",
           executable: "codex",
+          config_reference: "codex",
           detected: true,
           path: "/usr/local/bin/codex",
         },
@@ -1595,10 +1603,10 @@ describe("toIntelligenceUpdatePayload", () => {
         model_id: "gpt-5",
       },
     ],
-    cli_agent_mapping: { default: "codex-cli.yml" },
+    cli_agent_mapping: { default: "codex" },
     cli_agents: [
       {
-        path: "codex-cli.yml",
+        path: "codex",
         name: "codex" as const,
         env: {},
         script: "codex",
@@ -1607,6 +1615,9 @@ describe("toIntelligenceUpdatePayload", () => {
       },
     ],
     brain_mapping: [],
+    native_agent_policy: {
+      codex: { filesystem_access: "workspace" as const },
+    },
   };
 
   it("emits a full team-default update", () => {
@@ -1618,6 +1629,7 @@ describe("toIntelligenceUpdatePayload", () => {
       models: team.models,
       cli_agents: team.cli_agents,
       brain_mapping: team.brain_mapping,
+      native_agent_policy: team.native_agent_policy,
     });
   });
 
@@ -1629,6 +1641,7 @@ describe("toIntelligenceUpdatePayload", () => {
       inherit_team_defaults: false,
       model_mapping: team.model_mapping,
       cli_agent_mapping: team.cli_agent_mapping,
+      native_agent_policy: team.native_agent_policy,
     });
     expect("models" in payload).toBe(false);
   });
@@ -2712,10 +2725,10 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
         model_id: "gpt-5",
       },
     ],
-    cli_agent_mapping: { default: "codex-cli.yml" },
+    cli_agent_mapping: { default: "codex" },
     cli_agents: [
       {
-        path: "codex-cli.yml",
+        path: "codex",
         name: "codex",
         env: {},
         script: "codex",
@@ -2726,6 +2739,9 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
     brain_mapping: [
       { name: "writer", brain_class: "WriterBrain", engine: "llm", target: "default" },
     ],
+    native_agent_policy: {
+      codex: { filesystem_access: "workspace" },
+    },
     ...overrides,
   };
 }
@@ -2754,13 +2770,13 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
       },
     ],
     cli_agent_mapping: {
-      default: "codex-cli.yml",
-      codex: "codex-cli.yml",
-      claude: "claude-cli.yml",
+      default: "codex",
+      codex: "codex",
+      claude: "claude",
     },
     cli_agents: [
       {
-        path: "codex-cli.yml",
+        path: "codex",
         name: "codex",
         env: {},
         script: "codex",
@@ -2768,7 +2784,7 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
         detected_path: "/usr/local/bin/codex",
       },
       {
-        path: "claude-cli.yml",
+        path: "claude",
         name: "claude",
         env: {},
         script: "claude",
@@ -2806,6 +2822,7 @@ describe("IntelligenceEditor (team default)", () => {
           name: "codex",
           label: "OpenAI Codex CLI",
           executable: "codex",
+          config_reference: "codex",
           detected: true,
           path: "/usr/local/bin/codex",
         },
@@ -2888,6 +2905,27 @@ describe("IntelligenceEditor (team default)", () => {
     expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
   });
 
+  it("autosaves the native Codex execution policy", async () => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    await user.click(
+      await screen.findByRole("textbox", { name: t("setup.intelligence.filesystemAccess") }),
+    );
+    await user.click(
+      await screen.findByRole("option", {
+        name: t("setup.intelligence.filesystemOptions.host"),
+      }),
+    );
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+    });
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].native_agent_policy).toMatchObject({
+      codex: { filesystem_access: "host" },
+    });
+  });
+
   it("surfaces a save error returned by updateIntelligenceConfig", async () => {
     const user = userEvent.setup();
     vi.mocked(updateIntelligenceConfig).mockRejectedValueOnce(new Error("write blew up"));
@@ -2918,6 +2956,7 @@ describe("IntelligenceEditor (member override)", () => {
           name: "codex",
           label: "OpenAI Codex CLI",
           executable: "codex",
+          config_reference: "codex",
           detected: true,
           path: "/usr/local/bin/codex",
         },
@@ -2925,6 +2964,7 @@ describe("IntelligenceEditor (member override)", () => {
           name: "claude",
           label: "Claude Code",
           executable: "claude",
+          config_reference: "claude",
           detected: true,
           path: "/usr/local/bin/claude",
         },
@@ -2962,7 +3002,7 @@ describe("IntelligenceEditor (member override)", () => {
     await openMemberIntelligenceTab(user);
 
     await screen.findByText(t("setup.intelligence.memberDefaultCliAgent"));
-    const claudeButton = screen.getByText("Claude Code").closest("button");
+    const claudeButton = screen.getByRole("button", { name: /Claude Code/ });
     if (!claudeButton) {
       throw new Error("Claude override button not found");
     }
@@ -2972,7 +3012,27 @@ describe("IntelligenceEditor (member override)", () => {
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
-    expect(body.cli_agent_mapping?.default).toBe("claude-cli.yml");
+    expect(body.cli_agent_mapping?.default).toBe("claude");
+  });
+
+  it("persists a member-specific Codex filesystem boundary", async () => {
+    const user = userEvent.setup();
+    await openMemberIntelligenceTab(user);
+
+    await user.click(
+      await screen.findByRole("textbox", { name: t("setup.intelligence.filesystemAccess") }),
+    );
+    await user.click(
+      await screen.findByRole("option", {
+        name: t("setup.intelligence.filesystemOptions.host"),
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].native_agent_policy).toMatchObject({
+      codex: { filesystem_access: "host" },
+    });
   });
 
   it("sends inherit_team_defaults when the inherit switch is enabled", async () => {

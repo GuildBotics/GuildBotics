@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import (
@@ -131,9 +132,36 @@ async def run_command(
     )
     if person.person_type == "human":
         raise PersonExecutionNotAllowedError(person.person_id)
+    from guildbotics.runtime.person_lease import (
+        PersonExecutionLease,
+        PersonLeaseUnavailableError,
+        current_person_lease,
+    )
+
+    inherited_lease = current_person_lease()
+    if inherited_lease is not None and inherited_lease.person_id != person.person_id:
+        raise RuntimeError("The active execution lease belongs to another person.")
+    owned_lease = None
+    if inherited_lease is None:
+        owned_lease = PersonExecutionLease(person.person_id)
+        try:
+            owned_lease.acquire(
+                source="manual",
+                command=command_name,
+                work_id=uuid4().hex,
+            )
+        except PersonLeaseUnavailableError as exc:
+            raise CommandError(str(exc)) from exc
     context = base_context.clone_for(person)
-    runner = CommandRunner(context, command_name, command_args, cwd)
-    return await runner.run()
+    try:
+        runner = CommandRunner(context, command_name, command_args, cwd)
+        return await runner.run()
+    finally:
+        try:
+            await context.aclose()
+        finally:
+            if owned_lease is not None:
+                owned_lease.release()
 
 
 def _resolve_person(members: Sequence[Person], identifier: str | None) -> Person:

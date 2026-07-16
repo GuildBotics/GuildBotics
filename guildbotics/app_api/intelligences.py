@@ -7,15 +7,19 @@ from typing import Any, cast
 from guildbotics.app_api.models import (
     BrainAssignment,
     CliAgentDefinition,
+    CodexNativeAgentPolicySettings,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
+    NativeAgentPolicySettings,
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.editions.simple.setup_service import CreatedFile
+from guildbotics.intelligences.agent_runtime.policy import parse_native_agent_policy
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.cli_agents import (
     discover_cli_agents,
+    native_cli_agent_name,
     resolve_cli_agent_path,
 )
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
@@ -56,6 +60,7 @@ class IntelligenceConfigService:
             cli_agent_mapping=cli_agent_mapping,
             cli_agents=self._read_cli_agents(config_dir, person_id, cli_agent_mapping),
             brain_mapping=self._read_brain_assignments(brain_mapping),
+            native_agent_policy=self._read_native_agent_policy(config_dir, person_id),
         )
 
     def update_config(
@@ -98,12 +103,20 @@ class IntelligenceConfigService:
             files.append(CreatedFile(path=model_file, action="update"))
 
         cli_mapping_file = target_dir / "cli_agent_mapping.yml"
-        save_yaml_file(cli_mapping_file, request.cli_agent_mapping)
+        save_yaml_file(
+            cli_mapping_file,
+            {
+                key: native_cli_agent_name(value) or value
+                for key, value in request.cli_agent_mapping.items()
+            },
+        )
         files.append(CreatedFile(path=cli_mapping_file, action="update"))
 
         cli_agents_dir = target_dir / "cli_agents"
         cli_agents_dir.mkdir(parents=True, exist_ok=True)
         for agent in request.cli_agents:
+            if native_cli_agent_name(agent.path):
+                continue
             agent_file = cli_agents_dir / agent.path
             # Preserve the existing/template script when the request does not
             # carry one. The editor only loads the mapped agent's script, so a
@@ -131,12 +144,19 @@ class IntelligenceConfigService:
         )
         files.append(CreatedFile(path=brain_mapping_file, action="update"))
 
+        self._write_native_agent_policy(target_dir, request.native_agent_policy, files)
+
         self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
 
     def _update_member_overrides(
         self, request: IntelligenceConfigUpdateRequest, target_dir: Path
     ) -> IntelligenceConfigResult:
+        preserved_policy = (
+            self._read_optional_yaml(target_dir / "native_agent_policy.yml")
+            if request.native_agent_policy is None
+            else {}
+        )
         if target_dir.exists():
             shutil.rmtree(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -147,8 +167,20 @@ class IntelligenceConfigService:
         files.append(CreatedFile(path=model_mapping_file, action="update"))
 
         cli_mapping_file = target_dir / "cli_agent_mapping.yml"
-        save_yaml_file(cli_mapping_file, request.cli_agent_mapping)
+        save_yaml_file(
+            cli_mapping_file,
+            {
+                key: native_cli_agent_name(value) or value
+                for key, value in request.cli_agent_mapping.items()
+            },
+        )
         files.append(CreatedFile(path=cli_mapping_file, action="update"))
+
+        self._write_native_agent_policy(target_dir, request.native_agent_policy, files)
+        if preserved_policy:
+            policy_file = target_dir / "native_agent_policy.yml"
+            save_yaml_file(policy_file, preserved_policy)
+            files.append(CreatedFile(path=policy_file, action="update"))
 
         self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
@@ -162,7 +194,13 @@ class IntelligenceConfigService:
         self, config_dir: Path, person_id: str | None, file_name: str
     ) -> dict[str, str]:
         data = self._read_scoped_yaml(config_dir, person_id, file_name)
-        return {str(key): str(value) for key, value in data.items()}
+        mapping = {str(key): str(value) for key, value in data.items()}
+        if file_name == "cli_agent_mapping.yml":
+            return {
+                key: native_cli_agent_name(value) or value
+                for key, value in mapping.items()
+            }
+        return mapping
 
     def _read_scoped_yaml(
         self, config_dir: Path, person_id: str | None, relative_path: str
@@ -224,17 +262,25 @@ class IntelligenceConfigService:
         agents: list[CliAgentDefinition] = []
         seen: set[str] = set()
         for agent_path in cli_agent_mapping.values():
-            if not agent_path.endswith(".yml") or agent_path in seen:
+            if agent_path in seen:
                 continue
             seen.add(agent_path)
-            data = self._read_scoped_yaml(
-                config_dir, person_id, f"cli_agents/{agent_path}"
+            native_name = native_cli_agent_name(agent_path)
+            native = bool(native_name)
+            if not native and not agent_path.endswith(".yml"):
+                continue
+            data = (
+                {}
+                if native
+                else self._read_scoped_yaml(
+                    config_dir, person_id, f"cli_agents/{agent_path}"
+                )
             )
             env = data.get("env", {}) if isinstance(data, dict) else {}
             if not isinstance(env, dict):
                 env = {}
             name = agent_path.removesuffix(".yml")
-            agent_key = name.removesuffix("-cli")
+            agent_key = native_name or name.removesuffix("-cli")
             detected_path = resolve_cli_agent_path(
                 executables.get(agent_key, agent_key)
             )
@@ -280,6 +326,31 @@ class IntelligenceConfigService:
                     )
                 )
         return assignments
+
+    def _read_native_agent_policy(
+        self, config_dir: Path, person_id: str | None
+    ) -> NativeAgentPolicySettings:
+        payload = self._read_scoped_yaml(
+            config_dir, person_id, "native_agent_policy.yml"
+        )
+        policy = parse_native_agent_policy(payload)
+        return NativeAgentPolicySettings(
+            codex=CodexNativeAgentPolicySettings(
+                filesystem_access=cast(Any, policy.filesystem_access)
+            ),
+        )
+
+    def _write_native_agent_policy(
+        self,
+        target_dir: Path,
+        policy: NativeAgentPolicySettings | None,
+        files: list[CreatedFile],
+    ) -> None:
+        if policy is None:
+            return
+        policy_file = target_dir / "native_agent_policy.yml"
+        save_yaml_file(policy_file, policy.model_dump(mode="json"))
+        files.append(CreatedFile(path=policy_file, action="update"))
 
     def _to_brain_config(self, assignment: BrainAssignment) -> dict[str, Any]:
         if assignment.engine == "cli":

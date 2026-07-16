@@ -1,0 +1,13 @@
+ja:
+  agent:
+    help: native agent runtime state を管理します。
+    conversation_help: 永続化された native agent conversation を管理します。
+  agent_conversation_reset:
+    help: 履歴を削除せず、厳密に指定した native provider session を reset します。
+    adapter_help: 厳密な session を reset する native provider adapter。
+    work_kind_help: conversation を所有する論理作業の種類。
+    work_identity_help: 安定した ticket URL、chat thread identity、または manual work identity。
+  lease:
+    invalid_delegation: member command を実行できません。execution lease の委譲が無効です。
+    unavailable: person execution lease は既に使用されています。
+    unavailable_with_holder: "person execution lease は PID %{pid}（%{source}: %{command}）が使用しています。"

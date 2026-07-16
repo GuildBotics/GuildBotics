@@ -8,12 +8,28 @@ from datetime import datetime
 from typing import Literal
 
 from guildbotics.observability import new_id
+from guildbotics.runtime.person_lease import (
+    PersonExecutionLease,
+    PersonLeaseUnavailableError,
+)
 
 WorkSource = Literal["manual", "scheduled", "routine", "event_queue"]
+WorkRejectionReason = Literal["draining", "lease_unavailable"]
 
 
 class WorkRejectedError(RuntimeError):
     """Raised when new work is submitted while the runtime is draining."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: WorkRejectionReason,
+        holder: object | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.holder = holder
 
 
 @dataclass(frozen=True)
@@ -59,7 +75,22 @@ class ExecutionCoordinator:
         with self._condition:
             if self._draining:
                 raise WorkRejectedError(
-                    "Runtime is stopping; new work is not accepted."
+                    "Runtime is stopping; new work is not accepted.",
+                    reason="draining",
+                )
+        lease = PersonExecutionLease(person_id)
+        try:
+            lease.acquire(source=source, command=command, work_id=work.id)
+        except PersonLeaseUnavailableError as exc:
+            raise WorkRejectedError(
+                str(exc), reason="lease_unavailable", holder=exc.metadata
+            ) from exc
+        with self._condition:
+            if self._draining:
+                lease.release()
+                raise WorkRejectedError(
+                    "Runtime is stopping; new work is not accepted.",
+                    reason="draining",
                 )
             self._active[work.id] = _WorkEntry(work=work, cancel=cancel)
             self._condition.notify_all()
@@ -74,6 +105,7 @@ class ExecutionCoordinator:
                 # work finishes but before the stop completes. wait_for_drain is
                 # the sole owner of clearing the flag.
                 self._condition.notify_all()
+            lease.release()
 
     def snapshot(self) -> list[ActiveWork]:
         with self._condition:

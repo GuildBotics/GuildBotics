@@ -133,11 +133,10 @@ Invariants:
 
 - Scheduler-managed work is serial per person: one worker thread per active member
   (`drivers/task_scheduler.py`) runs scheduled, routine, and queued-event work one at
-  a time, so those runs never use the member's workspace concurrently. This guarantee
-  does not extend to executions started outside the scheduler — App API manual
-  commands, `guildbotics run`, or interactive sessions — which are tracked by
-  `drivers/execution.py` (`ExecutionCoordinator`) but not serialized per person and
-  not excluded across processes.
+  a time. `runtime/person_lease.py` extends that guarantee to App API manual commands,
+  `guildbotics run`, interactive sessions, and separate GuildBotics processes with one
+  OS advisory lease per person. Nested `member` writes require the exact delegated
+  lease/run identity; environment-variable presence alone never authorizes them.
 - The long-running background service is singleton per machine. CLI `guildbotics
   start` and the Desktop-managed service contend on the same OS advisory lock at
   `<machine-state-root>/run/service.lock`; the lock covers scheduler workers and the
@@ -147,8 +146,32 @@ Invariants:
 - Rate limits from AI CLI tools are detected (`intelligences/brains/cli_agent.py`),
   handled by shared capability logic (`capabilities/workflow_rate_limits.py`,
   `capabilities/completion_retry.py`), surfaced as a `workflow.rate_limited`
-  diagnostics event, and never amplified by retries — the run stops with a visible
-  notice on the ticket/thread instead.
+  diagnostics event, and never amplified by in-process retries. Ticket selection and
+  the chat pending queue defer re-entry until the provider's exact reset timestamp
+  when one is available.
+
+### Native agent runtime
+
+`intelligences/agent_runtime/*` is the provider-neutral boundary for Codex App Server
+and Claude Code stream-json. It defines execution context, conversation key/record,
+normalized events, terminal results, errors, explicit resume policy, process lifecycle,
+and redacted diagnostics. Provider adapters own only protocol translation.
+
+Logical conversations are keyed by person, adapter, work kind, and stable work identity
+(ticket URL or Slack bot/channel/thread root), not by scheduler run. The versioned
+atomic store under `agent-runtime/conversations/` persists the provider-neutral
+conversation identity plus provider session/turn ids, context cursor, usage, health,
+and rotation metadata. A provider process is an
+execution resource; its session identity survives process restart. Exact resume never
+falls back to a provider's latest session. See
+`docs/native_agent_runtime.en.md` / `.ja.md` for configuration and operations.
+
+Chat context delivery is capability-aware at the brain boundary. The workflow supplies
+the latest event separately from a bounded thread snapshot. A healthy native session
+receives only the new event, a new or rotated native session receives the earlier
+snapshot once, and a conversation-less one-shot tool receives the snapshot on every
+invocation. Dispatch-scoped one-shot resumption is an explicit catalog capability, not
+an inference from the shell script.
 
 ## 5. Command Execution Framework
 
@@ -219,11 +242,9 @@ Invariants:
 - The effective workspace data root is fixed at the *workspace application boundary*
   (App API `set_workspace()`, CLI/member CLI startup, `run`/`start` initialization) and
   written to `os.environ["GUILDBOTICS_DATA_DIR"]` there — and only there. Workers,
-  workflows, and commands never mutate it mid-run; per-invocation values travel via
-  subprocess env overlays (e.g. `cli_agent_env`).
-- Workflows must pass `GUILDBOTICS_DATA_DIR` (and the run id) to AI CLI tool
-  subprocesses: the agent's cwd is a member workspace, so without the explicit value a
-  child process would compute a wrong, nested data root.
+  workflows, and commands never mutate it mid-run; native agent invocations carry the
+  resolved root and run id in `AgentExecutionContext`. One-shot adapters receive an
+  invocation-scoped environment derived from that context for compatibility.
 - Stores that keep a path (diagnostics store, chat state store) must re-resolve or be
   rebound on workspace switch; App API keeps the process-startup
   `GUILDBOTICS_DATA_DIR` as the inherited fallback so switching workspaces never leaks
@@ -334,7 +355,10 @@ Two Person distinctions matter architecturally:
 
 - **New brain**: implement `Brain`, register via the intelligence mappings
   (`guildbotics/templates/intelligences/*.yml`). AI CLI tool definitions are cataloged
-  in `intelligences/cli_agents.py` + `templates/intelligences/cli_agents/*.yml`.
+  in `intelligences/cli_agents.py`. Codex and Claude are built-in native entries;
+  the sole user-configurable Codex filesystem boundary is declared in
+  `templates/intelligences/native_agent_policy.yml`. Other tools use
+  `templates/intelligences/cli_agents/*.yml` one-shot definitions.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
 - **New integration**: implement `TicketManager` / `ChatService` and wire it in the

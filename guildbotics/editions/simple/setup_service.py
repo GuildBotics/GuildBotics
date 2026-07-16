@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
 from guildbotics.entities.team import Person
+from guildbotics.intelligences.cli_agents import native_cli_agent_name
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 from guildbotics.utils.secret_store import (
     KEYRING_BACKEND,
@@ -439,6 +440,16 @@ class SimpleProjectSetupService:
         save_yaml_file(cli_mapping_file, cli_mapping)
         files.append(CreatedFile(path=cli_mapping_file, action="create"))
 
+        native_policy_file = config.config_dir / "intelligences/native_agent_policy.yml"
+        if not native_policy_file.exists():
+            native_policy_template = (
+                get_template_path() / "intelligences/native_agent_policy.yml"
+            )
+            native_policy_file.write_text(
+                native_policy_template.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            files.append(CreatedFile(path=native_policy_file, action="create"))
+
         cli_agent_config_src_dir = get_template_path() / "intelligences/cli_agents"
         cli_agent_config_dst_dir = config.config_dir / "intelligences/cli_agents"
         cli_agent_config_dst_dir.mkdir(parents=True, exist_ok=True)
@@ -655,7 +666,8 @@ class SimpleProjectSetupService:
 
     def _set_default_cli_mapping(self, mapping: dict, agent: str) -> None:
         if agent:
-            mapping["default"] = mapping.get(agent, f"{agent}-cli.yml")
+            native_name = native_cli_agent_name(agent)
+            mapping["default"] = native_name or mapping.get(agent, f"{agent}-cli.yml")
 
     def _resolve_model_default(self, mapping: dict, provider: str) -> str:
         # Honor an explicit per-provider slot when one exists, otherwise fall back
@@ -677,8 +689,7 @@ class SimpleProjectSetupService:
         return parts[1] if len(parts) > 1 else ""
 
     def _infer_cli_agent(self, mapping: dict) -> str:
-        # The default points at ``<agent>-cli.yml``, so the agent name is the
-        # file stem without the ``-cli`` suffix.
+        # Native adapters use their catalog name; one-shot tools point at yaml.
         name = str(mapping.get("default", "")).removesuffix(".yml")
         return name.removesuffix("-cli")
 

@@ -412,13 +412,22 @@ class TaskScheduler:
                 cancel=self._cancel_event.set,
             ):
                 return self._run(loop, coro)
-        except WorkRejectedError:
-            # The runtime is draining, meaning a stop of this scheduler is
-            # already in progress; mirror it locally so worker loops exit
-            # instead of treating the rejection as a command error.
-            self._stop_event.set()
+        except WorkRejectedError as exc:
             coro.close()
-            return False
+            if exc.reason == "draining":
+                # A stop of this scheduler is already in progress; mirror it
+                # locally so worker loops exit without counting a command error.
+                self._stop_event.set()
+                return False
+            # Another frontend is temporarily using this person. Skipping is a
+            # successful scheduler cycle: the next tick can try again and other
+            # members must continue running.
+            self.context.logger.info(
+                "Skipping %s work for %s because the person execution lease is held.",
+                source,
+                person.person_id,
+            )
+            return True
 
     async def _run_cancellable(self, coro: Coroutine) -> Any:
         task: asyncio.Task = asyncio.ensure_future(coro)

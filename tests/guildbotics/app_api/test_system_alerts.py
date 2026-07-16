@@ -316,6 +316,26 @@ def test_credential_failure_replaces_command_warning_for_same_trace(
     assert [alert.code for alert in alerts] == ["credential_github"]
 
 
+def test_cli_agent_credential_failure_identifies_member_and_tool(
+    tmp_path: Path,
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    store.record(
+        _event(
+            "credential.failed",
+            timestamp="2026-07-11T10:00:00+09:00",
+            payload={"provider": "cli_agent", "cli_agent": "codex"},
+        )
+    )
+
+    alerts = SystemAlertService(store).list_alerts(_runtime()).alerts
+
+    assert len(alerts) == 1
+    assert alerts[0].code == "credential_cli_agent"
+    assert alerts[0].person_id == "alice"
+    assert alerts[0].command == "codex"
+
+
 def test_dismiss_hides_current_occurrence_and_later_failure_reopens(
     tmp_path: Path,
 ) -> None:

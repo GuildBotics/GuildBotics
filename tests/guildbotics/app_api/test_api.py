@@ -361,12 +361,14 @@ class RuntimeStub:
                 {
                     "name": "claude",
                     "executable": "claude",
+                    "config_reference": "claude",
                     "detected": True,
                     "path": "/usr/local/bin/claude",
                 },
                 {
                     "name": "codex",
                     "executable": "codex",
+                    "config_reference": "codex",
                     "detected": False,
                     "path": "",
                 },
@@ -657,7 +659,9 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
 
-    options = {option.command: option for option in runtime.get_command_options().options}
+    options = {
+        option.command: option for option in runtime.get_command_options().options
+    }
 
     assert {req.kind for req in options["edit"].requirements} == {"cli_agent"}
     assert {req.kind for req in options["inline-edit"].requirements} == {"cli_agent"}
@@ -2608,7 +2612,9 @@ def test_chat_receive_state_reset_ignores_past_for_active_members(
     monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
 
     seed = FileConversationStateStore()
-    seed.save_channel_cursor("slack", "alice", "C1", ChannelCursorState(oldest_ts="1.0"))
+    seed.save_channel_cursor(
+        "slack", "alice", "C1", ChannelCursorState(oldest_ts="1.0")
+    )
     seed.upsert_pending_event(
         "slack",
         "alice",

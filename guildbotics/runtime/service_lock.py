@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import json
 import os
 import threading
@@ -8,25 +7,17 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Any, Literal
+from typing import IO, Literal
 
+from guildbotics.runtime.advisory_lock import (
+    lock_file_nonblocking as _lock_file_nonblocking,
+)
+from guildbotics.runtime.advisory_lock import open_lock_file as _open_lock_file
+from guildbotics.runtime.advisory_lock import unlock_file as _unlock_file
 from guildbotics.utils.fileio import get_machine_state_path
 
 ServiceOwner = Literal["cli", "desktop"]
 LOCK_RETRY_SECONDS = 0.01
-_WINDOWS = os.name == "nt"
-_windows_locking: Any
-_posix_locking: Any
-if _WINDOWS:
-    import msvcrt
-
-    _windows_locking = msvcrt
-    _posix_locking = None
-else:
-    import fcntl
-
-    _windows_locking = None
-    _posix_locking = fcntl
 
 
 @dataclass(frozen=True)
@@ -164,40 +155,3 @@ def _read_metadata(path: Path) -> ServiceLockMetadata | None:
         )
     except (OSError, ValueError):
         return None
-
-
-def _open_lock_file(path: Path) -> IO[str]:
-    file_descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    return os.fdopen(file_descriptor, "r+", encoding="utf-8")
-
-
-def _lock_file_nonblocking(lock_file: IO[str]) -> None:
-    if not _WINDOWS:
-        _posix_locking.flock(
-            lock_file.fileno(), _posix_locking.LOCK_EX | _posix_locking.LOCK_NB
-        )
-        return
-
-    _ensure_lock_byte(lock_file)
-    lock_file.seek(0)
-    try:
-        _windows_locking.locking(lock_file.fileno(), _windows_locking.LK_NBLCK, 1)
-    except OSError as exc:
-        if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-            raise BlockingIOError(exc.errno, exc.strerror) from exc
-        raise
-
-
-def _unlock_file(lock_file: IO[str]) -> None:
-    if not _WINDOWS:
-        _posix_locking.flock(lock_file.fileno(), _posix_locking.LOCK_UN)
-        return
-    lock_file.seek(0)
-    _windows_locking.locking(lock_file.fileno(), _windows_locking.LK_UNLCK, 1)
-
-
-def _ensure_lock_byte(lock_file: IO[str]) -> None:
-    lock_file.seek(0, os.SEEK_END)
-    if lock_file.tell() == 0:
-        lock_file.write(" ")
-        lock_file.flush()

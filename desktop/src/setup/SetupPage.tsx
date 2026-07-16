@@ -68,6 +68,7 @@ import {
   type ConfigStatus,
   type BrainAssignment,
   type IntelligenceConfig,
+  type NativeAgentPolicySettings,
   type ModelDefinition,
   type MemberSetupRequest,
   type ChatParticipationPolicy,
@@ -1289,6 +1290,52 @@ function withSlotModel(
   return { ...current, model_mapping, models };
 }
 
+function NativeAgentPolicyEditor({
+  policy,
+  onChange,
+}: {
+  policy: NativeAgentPolicySettings;
+  onChange: (policy: NativeAgentPolicySettings) => void;
+}) {
+  const { t } = useTranslation();
+  const setCodex = (updates: Partial<NativeAgentPolicySettings["codex"]>) =>
+    onChange({ ...policy, codex: { ...policy.codex, ...updates } });
+  const filesystemOptions = ["workspace", "host"] as const;
+
+  return (
+    <Card withBorder radius="sm" p="md">
+      <Stack gap="md">
+        <div>
+          <Text fw={700} size="sm">
+            {t("setup.intelligence.nativePolicy")}
+          </Text>
+          <Text size="sm" c="dimmed">
+            {t("setup.intelligence.nativePolicyDescription")}
+          </Text>
+        </div>
+        <Select
+          label={t("setup.intelligence.filesystemAccess")}
+          data={filesystemOptions.map((value) => ({
+            value,
+            label: t(`setup.intelligence.filesystemOptions.${value}`),
+          }))}
+          value={policy.codex.filesystem_access}
+          onChange={(value) =>
+            setCodex({
+              filesystem_access: (value ?? "workspace") as (typeof filesystemOptions)[number],
+            })
+          }
+        />
+        {policy.codex.filesystem_access === "host" ? (
+          <Alert color="warning" title={t("setup.intelligence.hostAccessWarningTitle")}>
+            {t("setup.intelligence.hostAccessWarningBody")}
+          </Alert>
+        ) : null}
+      </Stack>
+    </Card>
+  );
+}
+
 function IntelligenceEditor({
   personId,
   savePersonId,
@@ -1424,7 +1471,8 @@ function IntelligenceEditor({
 
     const currentPath = draft.cli_agent_mapping.default;
     const matchedAgent = draft.cli_agents.find((a) => a.name === teamCliAgent);
-    const expectedPath = matchedAgent ? matchedAgent.path : `${teamCliAgent}-cli.yml`;
+    const matchedDetection = detections.find((agent) => agent.name === teamCliAgent);
+    const expectedPath = matchedAgent?.path ?? matchedDetection?.config_reference ?? teamCliAgent;
 
     if (currentPath !== expectedPath) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded prop→draft sync
@@ -1451,7 +1499,7 @@ function IntelligenceEditor({
         };
       });
     }
-  }, [teamCliAgent, personId]);
+  }, [teamCliAgent, personId, detections]);
 
   // Sync advanced settings (draftState) -> basic settings (props callback)
   const prevDefaultModelPathRef = useRef<string | null>(null);
@@ -1485,15 +1533,17 @@ function IntelligenceEditor({
     if (prevDefaultCliPathRef.current !== currentPath) {
       prevDefaultCliPathRef.current = currentPath;
 
-      const matchedAgent = draft.cli_agents.find((a) => a.name === teamCliAgent);
-      const agentName = matchedAgent
-        ? matchedAgent.name
-        : currentPath.replace("-cli.yml", "").replace(".yml", "");
+      const matchedAgent = draft.cli_agents.find((agent) => agent.path === currentPath);
+      const matchedDetection = detections.find((agent) => agent.config_reference === currentPath);
+      const agentName =
+        matchedDetection?.name ??
+        matchedAgent?.name ??
+        currentPath.replace("-cli.yml", "").replace(".yml", "");
       if (agentName && agentName !== teamCliAgent) {
         onTeamCliAgentChange(agentName);
       }
     }
-  }, [draft?.cli_agent_mapping?.default, teamCliAgent, onTeamCliAgentChange, personId]);
+  }, [draft?.cli_agent_mapping?.default, teamCliAgent, onTeamCliAgentChange, personId, detections]);
 
   if (!enabled) {
     return (
@@ -1525,15 +1575,15 @@ function IntelligenceEditor({
   // the other slots are deleted.
   const cliFileOptions = [
     ...detections.map((agent) => ({
-      value: `${agent.name}-cli.yml`,
+      value: agent.config_reference,
       label: agent.name,
     })),
     ...draft.cli_agents
-      .filter((agent) => !detections.some((d) => `${d.name}-cli.yml` === agent.path))
+      .filter((agent) => !detections.some((d) => d.config_reference === agent.path))
       .map((agent) => ({ value: agent.path, label: agent.name })),
   ];
   const detectedByPath = Object.fromEntries(
-    detections.map((entry) => [`${entry.name}-cli.yml`, entry]),
+    detections.map((entry) => [entry.config_reference, entry]),
   ) as Record<string, CliAgentDetection>;
 
   // --- LLM Slot Helpers ---
@@ -1633,7 +1683,7 @@ function IntelligenceEditor({
         ...current,
         cli_agent_mapping: {
           ...current.cli_agent_mapping,
-          [baseName]: "codex-cli.yml",
+          [baseName]: current.cli_agent_mapping.default,
         },
       };
     });
@@ -1881,7 +1931,7 @@ function IntelligenceEditor({
               </Text>
               <div className="option-card-grid">
                 {detections.map((agent) => {
-                  const agentPath = `${agent.name}-cli.yml`;
+                  const agentPath = agent.config_reference;
                   const available = agent.detected;
                   const active = draft.cli_agent_mapping.default === agentPath;
                   return (
@@ -1912,6 +1962,13 @@ function IntelligenceEditor({
                 })}
               </div>
             </Stack>
+
+            <NativeAgentPolicyEditor
+              policy={draft.native_agent_policy}
+              onChange={(policy) =>
+                updateDraft((current) => ({ ...current, native_agent_policy: policy }))
+              }
+            />
           </Stack>
         )}
         {mutation.error ? (
@@ -2150,9 +2207,7 @@ function IntelligenceEditor({
                               label={t("setup.intelligence.cliAgent")}
                               data={cliFileOptions}
                               value={path}
-                              onChange={(val) =>
-                                handleUpdateCliSlotAgentPath(slotKey, val ?? "codex-cli.yml")
-                              }
+                              onChange={(val) => handleUpdateCliSlotAgentPath(slotKey, val ?? path)}
                               size="xs"
                             />
                           </Group>
@@ -2202,6 +2257,13 @@ function IntelligenceEditor({
               </Accordion>
             </Stack>
           </Card>
+
+          <NativeAgentPolicyEditor
+            policy={draft.native_agent_policy}
+            onChange={(policy) =>
+              updateDraft((current) => ({ ...current, native_agent_policy: policy }))
+            }
+          />
         </Stack>
       )}
       {mutation.error ? (
@@ -5987,6 +6049,7 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
       inherit_team_defaults: false,
       model_mapping: config.model_mapping,
       cli_agent_mapping: config.cli_agent_mapping,
+      native_agent_policy: config.native_agent_policy,
     };
   }
   return {
@@ -5998,6 +6061,7 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
     cli_agent_mapping: config.cli_agent_mapping,
     cli_agents: config.cli_agents,
     brain_mapping: config.brain_mapping,
+    native_agent_policy: config.native_agent_policy,
   };
 }
 

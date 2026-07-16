@@ -22,6 +22,25 @@ class StubProcess:
         return self.stdout, self.stderr
 
 
+@pytest.mark.parametrize(
+    ("mapping_value", "adapter"),
+    [("codex", "codex"), ("codex-cli.yml", "codex"), ("claude", "claude")],
+)
+def test_cli_agent_mapping_selects_native_adapter_without_script_file(
+    monkeypatch, tmp_path, mapping_value, adapter
+) -> None:
+    mapping = tmp_path / "cli_agent_mapping.yml"
+    mapping.write_text(f"default: {mapping_value}\n", encoding="utf-8")
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(cli_agent, "get_person_config_path", lambda *_args: mapping)
+
+    resolved = cli_agent.get_cli_agent_mapping("aiko")
+
+    assert resolved["default"].adapter == adapter
+    assert resolved["default"].script == ""
+    cli_agent.person_cli_agent_mapping.clear()
+
+
 @pytest.mark.asyncio
 async def test_cli_agent_run_passes_cwd_without_mutating_mapping(monkeypatch, tmp_path):
     original = cli_agent.person_cli_agent_mapping.copy()
@@ -33,7 +52,7 @@ async def test_cli_agent_run_passes_cwd_without_mutating_mapping(monkeypatch, tm
     captured = {}
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         captured["script"] = script
         captured["cwd"] = cwd
@@ -87,7 +106,7 @@ async def test_cli_agent_run_inherits_environment_and_overlays_config(
     captured = {}
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         captured["env"] = env
         return StubProcess()
@@ -145,7 +164,7 @@ async def test_cli_agent_run_applies_session_state_env_overlay(monkeypatch, tmp_
     captured = {}
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         captured["env"] = env
         return StubProcess()
@@ -181,6 +200,178 @@ async def test_cli_agent_run_applies_session_state_env_overlay(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_fresh_one_shot_chat_receives_full_context_each_invocation(
+    monkeypatch, tmp_path
+) -> None:
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+    prompts: list[str] = []
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
+    ):
+        prompts.append(cli_agent.Path(env["PROMPT_FILE"]).read_text(encoding="utf-8"))
+        return StubProcess()
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+    state = {
+        "agent_execution_context": {
+            "run_id": "run-1",
+            "workspace_data_root": str(tmp_path),
+            "work_kind": "chat",
+            "work_identity": "slack:bot:C1:100.1",
+            "context_cursor": "101.1",
+            "attempt": 2,
+            "rebuild_context_complete": True,
+            "rebuild_context": json.dumps(
+                [
+                    {"timestamp": "100.1", "content": "older"},
+                    {"timestamp": "101.1", "content": "latest"},
+                ]
+            ),
+            "continuation_input": "continue-only",
+        }
+    }
+    try:
+        brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+        await brain.run("latest-turn", cwd=tmp_path, session_state=state)
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert 'mode="full"' in prompts[0]
+    assert "older" in prompts[0]
+    assert 'latest"' not in prompts[0]
+    assert "latest-turn" in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_scoped_one_shot_retry_uses_exact_session_continuation(
+    monkeypatch, tmp_path
+) -> None:
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(
+            script="echo test", env={}, conversation_scope="dispatch"
+        )
+    }
+    prompts: list[str] = []
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
+    ):
+        prompts.append(cli_agent.Path(env["PROMPT_FILE"]).read_text(encoding="utf-8"))
+        return StubProcess()
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+    conversation_file = tmp_path / "task-runs" / "run-1.agy-conversation"
+    conversation_file.parent.mkdir(parents=True)
+    conversation_file.write_text("exact-session-id", encoding="utf-8")
+    state = {
+        "agent_execution_context": {
+            "run_id": "run-1",
+            "workspace_data_root": str(tmp_path),
+            "work_kind": "chat",
+            "work_identity": "slack:bot:C1:100.1",
+            "context_cursor": "101.1",
+            "attempt": 2,
+            "rebuild_context_complete": True,
+            "rebuild_context": json.dumps([{"timestamp": "100.1", "content": "older"}]),
+            "continuation_input": "continue-only",
+        }
+    }
+    try:
+        brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+        await brain.run("duplicate-latest", cwd=tmp_path, session_state=state)
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert 'mode="continuation"' in prompts[0]
+    assert "continue-only" in prompts[0]
+    assert "older" not in prompts[0]
+    assert "duplicate-latest" not in prompts[0]
+
+
+def _test_logger():
+    return type(
+        "L",
+        (),
+        {
+            "debug": lambda *args, **kwargs: None,
+            "info": lambda *args, **kwargs: None,
+            "error": lambda *args, **kwargs: None,
+        },
+    )()
+
+
+@pytest.mark.asyncio
+async def test_one_shot_agent_inherits_verified_member_delegation(
+    monkeypatch, tmp_path
+) -> None:
+    from guildbotics.runtime.person_lease import (
+        DELEGATION_ID_ENV,
+        LEASE_ID_ENV,
+        LEASE_RUN_ENV,
+        PersonExecutionLease,
+    )
+
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(script="echo test", env={})
+    }
+    captured = {}
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
+    ):
+        captured["env"] = env
+        return StubProcess()
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+    lease = PersonExecutionLease("p1", tmp_path)
+    lease.acquire(source="routine", command="ticket", work_id="work-1")
+    try:
+        brain = cli_agent.CliAgentBrain(
+            "p1",
+            "x",
+            logger=type(
+                "L",
+                (),
+                {
+                    "debug": lambda *a, **k: None,
+                    "info": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )(),
+        )
+        await brain.run(
+            "hello",
+            cwd=tmp_path,
+            session_state={"cli_agent_env": {"GUILDBOTICS_TASK_RUN_ID": "run-123"}},
+        )
+    finally:
+        lease.release()
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert captured["env"][LEASE_RUN_ENV] == "run-123"
+    assert captured["env"][LEASE_ID_ENV]
+    assert captured["env"][DELEGATION_ID_ENV]
+
+
+@pytest.mark.asyncio
 async def test_cli_agent_run_propagates_cwd_workspace_environment(
     monkeypatch, tmp_path
 ):
@@ -200,7 +391,7 @@ async def test_cli_agent_run_propagates_cwd_workspace_environment(
     captured = {}
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         captured["cwd"] = cwd
         captured["env"] = env
@@ -251,7 +442,7 @@ async def test_cli_agent_execution_details_include_stderr_and_returncode(
     returncode = 2
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(stdout=b"", stderr=b"login required", returncode=returncode)
 
@@ -291,7 +482,7 @@ async def test_cli_agent_run_raises_when_script_fails(monkeypatch, tmp_path):
     }
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(stdout=b"", stderr=b"bad option", returncode=2)
 
@@ -334,7 +525,7 @@ async def test_cli_agent_run_raises_rate_limit_error_from_marker(monkeypatch, tm
     )
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(stdout=b"", stderr=marker.encode(), returncode=75)
 
@@ -381,7 +572,7 @@ async def test_cli_agent_authentication_marker_records_credential_failure(
     recorded = []
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(stdout=b"", stderr=marker.encode(), returncode=77)
 
@@ -419,8 +610,12 @@ async def test_cli_agent_authentication_marker_records_credential_failure(
     assert recorded[0]["event_type"] == "credential.failed"
     assert recorded[0]["payload"] == {
         "provider": "cli_agent",
+        "cli_agent": "default",
+        "person_id": "p1",
         "code": "authentication",
     }
+    assert recorded[0]["attributes"]["credential.provider"] == "cli_agent"
+    assert recorded[0]["attributes"]["credential.cli_agent"] == "default"
 
 
 def test_normalize_retry_after_handles_composite_relative_duration():
@@ -452,7 +647,7 @@ async def test_cli_agent_marker_normalizes_retry_after_text(monkeypatch, tmp_pat
     )
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(stdout=b"", stderr=marker.encode(), returncode=75)
 
@@ -495,7 +690,7 @@ async def test_cli_agent_broken_error_marker_remains_regular_failure(
     }
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(
             stdout=b"",
@@ -538,7 +733,7 @@ async def test_cli_agent_run_raises_when_response_is_empty(monkeypatch, tmp_path
     }
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(stdout=b"", stderr=b"usage error", returncode=0)
 
@@ -579,7 +774,7 @@ async def test_cli_agent_prompt_trace_records_request_and_response(
     }
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(stdout=b"done", stderr=b"debug output", returncode=0)
 
@@ -645,7 +840,7 @@ async def test_asking_response_omits_log_reference_when_output_dir_unset(
     }
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
         return StubProcess(
             stdout=b'{"status": "asking", "message": "need input"}', returncode=0
@@ -689,6 +884,7 @@ class _BlockingProcess:
 
     def __init__(self) -> None:
         self.returncode = None
+        self.pid = 0
         self.killed = False
         self.started = __import__("asyncio").Event()
 
@@ -700,6 +896,9 @@ class _BlockingProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = -9
+
+    def terminate(self) -> None:
+        self.kill()
 
     async def wait(self) -> int:
         return self.returncode if self.returncode is not None else 0
@@ -718,8 +917,9 @@ async def test_cli_agent_kills_subprocess_on_cancellation(monkeypatch, tmp_path)
     proc = _BlockingProcess()
 
     async def fake_create_subprocess_shell(
-        script, cwd=None, env=None, stdout=None, stderr=None
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
+        assert _kwargs["start_new_session"] is True
         return proc
 
     monkeypatch.setattr(
@@ -747,7 +947,8 @@ async def test_cli_agent_kills_subprocess_on_cancellation(monkeypatch, tmp_path)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        # The in-flight agent subprocess must be killed, not left running.
+        # The independently grouped in-flight agent subprocess must be terminated
+        # and reaped, not left running behind its wrapper shell.
         assert proc.killed is True
     finally:
         cli_agent.person_cli_agent_mapping.clear()

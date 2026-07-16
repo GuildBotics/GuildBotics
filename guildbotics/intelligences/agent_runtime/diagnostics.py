@@ -1,0 +1,81 @@
+"""Redacted provider-neutral event recording."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from guildbotics.intelligences.agent_runtime.models import (
+    AgentEvent,
+    AgentEventKind,
+    AgentExecutionContext,
+    ConversationRecord,
+)
+from guildbotics.observability.diagnostics_events import record_correlated_event
+
+_MAX_MESSAGE = 8_192
+_SENSITIVE_PARTS = ("token", "secret", "password", "credential", "authorization")
+_INLINE_SECRET = re.compile(
+    r"(?i)(?P<label>(?:--)?(?:access[-_]?token|api[-_]?key|token|password|secret|authorization))"
+    r"(?P<separator>\s*(?:=|:)\s*|\s+)"
+    r"(?P<value>(?:bearer\s+)?[^\s,;]+)"
+)
+
+
+def record_agent_event(
+    event: AgentEvent,
+    context: AgentExecutionContext,
+    conversation: ConversationRecord,
+) -> None:
+    # Provider text deltas can number in the thousands. The completed assistant
+    # event contains the auditable response, while persisting every fragment
+    # would crowd out command/file/error records and amplify JSONL I/O.
+    if event.kind is AgentEventKind.ASSISTANT and event.name == "delta":
+        return
+    payload: dict[str, Any] = {
+        "name": event.name,
+        "message": _redact_text(event.message),
+        "command": _redact_text(event.command),
+        "path": event.path[:_MAX_MESSAGE],
+        "approval": event.approval,
+        "usage": dict(event.usage),
+        "details": _redact(event.details),
+    }
+    record_correlated_event(
+        event_type=f"agent_runtime.{event.kind.value}",
+        default_source="agent_runtime",
+        person_id=context.person_id,
+        attributes={
+            "agent.adapter": conversation.key.adapter,
+            "agent.run_id": context.run_id,
+            "agent.conversation_id": conversation.key.stable_id,
+            "agent.conversation_generation": conversation.generation,
+            "agent.provider_session_id": event.provider_session_id,
+            "agent.provider_turn_id": event.provider_turn_id,
+            "agent.context_cursor": context.context_cursor,
+            "agent.lease_id": context.lease_id,
+        },
+        payload=payload,
+    )
+
+
+def _redact(value: Any, *, key: str = "") -> Any:
+    if any(part in key.lower() for part in _SENSITIVE_PARTS):
+        return "***"
+    if isinstance(value, dict):
+        return {str(k): _redact(v, key=str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(item, key=key) for item in value[:100]]
+    if isinstance(value, str):
+        return _redact_text(value)
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    return _redact_text(str(value))
+
+
+def _redact_text(value: str) -> str:
+    bounded = value[:_MAX_MESSAGE]
+    return _INLINE_SECRET.sub(
+        lambda match: f"{match.group('label')}{match.group('separator')}***",
+        bounded,
+    )

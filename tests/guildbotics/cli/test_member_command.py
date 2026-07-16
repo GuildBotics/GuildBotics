@@ -21,6 +21,19 @@ from guildbotics.utils.workspace_state import (
 member_module = importlib.import_module("guildbotics.cli.member")
 
 
+def _set_workflow_delegation(monkeypatch, person_id="aiko", run_id="run-1"):
+    from guildbotics.runtime.person_lease import (
+        PersonExecutionLease,
+        delegation_environment,
+    )
+
+    lease = PersonExecutionLease(person_id)
+    lease.acquire(source="routine", command="test", work_id="work-1")
+    for key, value in delegation_environment(run_id).items():
+        monkeypatch.setenv(key, value)
+    return lease
+
+
 class FakeContext:
     def __init__(self, person):
         self.person = person
@@ -94,7 +107,89 @@ def test_member_help_prints_capability_reference():
     assert "guildbotics member git commit" in result.output
     assert "guildbotics member chat reply" in result.output
     assert "guildbotics member memory recall" in result.output
+    assert "guildbotics member agent conversation reset" in result.output
     assert "### Rules" in result.output
+
+
+def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_path):
+    from guildbotics.intelligences.agent_runtime.models import (
+        ConversationKey,
+        ResumePolicy,
+    )
+    from guildbotics.intelligences.agent_runtime.store import ConversationStore
+
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    key = ConversationKey("aiko", "codex", "ticket", "issue-300")
+    store = ConversationStore(tmp_path / "data")
+    record = store.resolve(key, ResumePolicy.AUTO)
+    record.provider_session_id = "thread-1"
+    store.save(record)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "agent",
+            "conversation",
+            "reset",
+            "--person",
+            "aiko",
+            "--adapter",
+            "codex",
+            "--work-kind",
+            "ticket",
+            "--work-identity",
+            "issue-300",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["reset"] is True
+    assert payload["generation"] == 1
+    persisted = store.load(key)
+    assert persisted is not None
+    assert persisted.provider_session_id == ""
+    assert persisted.rotation_reason == "reset"
+
+
+def test_workflow_member_write_rejects_missing_delegation(monkeypatch) -> None:
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda _identifier: (FakeContext(person), person),
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "agent",
+            "conversation",
+            "reset",
+            "--person",
+            "aiko",
+            "--adapter",
+            "codex",
+            "--work-kind",
+            "manual",
+            "--work-identity",
+            "forged",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "execution lease delegation is invalid" in result.output
 
 
 def test_member_memory_record_and_recall_cli(monkeypatch):
@@ -604,8 +699,7 @@ CONTENT_COMMANDS = (
     "--thread-ts 100.1 --event-id E1 --status done",
     "git commit --person aiko --repo-path .",
     "git publish --person aiko --repo-path .",
-    "github issue comment --person aiko "
-    "--url https://github.com/owner/repo/issues/1",
+    "github issue comment --person aiko --url https://github.com/owner/repo/issues/1",
     "github issue create --person aiko --repo owner/repo --title Title",
     "github pr create --person aiko --repo owner/repo --head feature --title Title",
     "github pr comment --person aiko --url https://github.com/owner/repo/pull/1",
@@ -1055,9 +1149,7 @@ def test_member_git_commit_reads_message_from_stdin(monkeypatch, tmp_path):
 def test_member_git_prepare_rejects_missing_anchor():
     runner = CliRunner()
 
-    result = runner.invoke(
-        member_module.member, ["git", "prepare", "--person", "aiko"]
-    )
+    result = runner.invoke(member_module.member, ["git", "prepare", "--person", "aiko"])
 
     assert result.exit_code != 0
     assert "Provide --issue-url, --pr-url, or --repo with --branch." in result.output
@@ -1249,6 +1341,7 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
+    lease = _set_workflow_delegation(monkeypatch)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1266,6 +1359,7 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
         ],
         input="publish\n",
     )
+    lease.release()
 
     assert result.exit_code != 0
     assert "only for interactive use" in result.output
@@ -1336,9 +1430,7 @@ def test_member_github_pr_inspect_passes_include_diff(monkeypatch):
         "closed": True,
     }
     payload = json.loads(result.output)
-    assert payload["files"][0]["commentable_lines"] == [
-        {"line": 12, "side": "RIGHT"}
-    ]
+    assert payload["files"][0]["commentable_lines"] == [{"line": 12, "side": "RIGHT"}]
 
 
 def test_member_github_pr_create_passes_base(monkeypatch):
@@ -1651,6 +1743,7 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
     monkeypatch, content
 ):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    lease = _set_workflow_delegation(monkeypatch)
     person = Person(person_id="aiko", name="Aiko", person_type="human")
     calls = {}
 
@@ -1692,6 +1785,7 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
         ],
         input=content,
     )
+    lease.release()
 
     assert result.exit_code == 0
     assert calls == {
@@ -1774,6 +1868,7 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
     monkeypatch, content
 ):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    lease = _set_workflow_delegation(monkeypatch)
     person = Person(person_id="aiko", name="Aiko", person_type="human")
     calls = {}
 
@@ -1815,6 +1910,7 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
         ],
         input=content,
     )
+    lease.release()
 
     assert result.exit_code == 0
     assert calls == {
@@ -1828,6 +1924,7 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
 
 def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    lease = _set_workflow_delegation(monkeypatch)
     person = Person(person_id="aiko", name="Aiko", person_type="human")
     calls = {}
 
@@ -1892,6 +1989,7 @@ def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(monkey
         ],
         input="Please simplify this branch.\n",
     )
+    lease.release()
 
     assert result.exit_code == 0
     assert calls == {
@@ -1906,9 +2004,7 @@ def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(monkey
     }
     payload = json.loads(result.output)
     assert payload["review_comment_id"] == 123
-    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == (
-        "pr_review_comment"
-    )
+    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == ("pr_review_comment")
 
 
 def test_member_github_pr_review_comment_rejects_partial_range():
@@ -2099,6 +2195,7 @@ def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp
     # The run id is injected by the workflow via env, not a CLI flag; the write
     # command records its evidence under the env-provided run id.
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    lease = _set_workflow_delegation(monkeypatch)
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
@@ -2146,6 +2243,7 @@ def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp
         ],
         input="了解しました。",
     )
+    lease.release()
 
     assert result.exit_code == 0
     payload = json.loads(result.output)

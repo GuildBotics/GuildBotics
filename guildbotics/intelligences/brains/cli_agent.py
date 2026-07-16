@@ -10,10 +10,12 @@ from datetime import datetime, timedelta
 from logging import Logger
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
+from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
@@ -62,7 +64,14 @@ class ExecutableInfo:
     Information about an executable script.
     """
 
-    def __init__(self, script: str, env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        script: str = "",
+        env: dict[str, str] | None = None,
+        adapter: str = "",
+        conversation_scope: str = "none",
+        agent_name: str = "",
+    ):
         """
         Initialize the executable information.
 
@@ -72,6 +81,9 @@ class ExecutableInfo:
         """
         self.script = script
         self.env = {} if env is None else env
+        self.adapter = adapter
+        self.conversation_scope = conversation_scope
+        self.agent_name = agent_name
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
@@ -84,6 +96,10 @@ class CliAgentExecutionResult:
     returncode: int
     error_category: str = ""
     error_details: dict[str, str] = field(default_factory=dict)
+    provider_session_id: str = ""
+    provider_turn_id: str = ""
+    finish_reason: str = ""
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 class CliAgentExecutionError(RuntimeError):
@@ -255,17 +271,121 @@ def _parse_cli_agent_error_marker(
 
 
 def _extra_env(kwargs: dict[str, Any]) -> dict[str, str]:
-    """Per-invocation environment overlay passed via ``session_state``.
+    """Build the compatibility environment for one-shot script adapters.
 
-    Callers (e.g. ticket workflow) put a ``cli_agent_env`` mapping into the
-    invoke params so values like the workflow run id reach this single agent
-    subprocess only, instead of mutating the process-global ``os.environ``
-    (which would race across the scheduler's per-member worker threads).
+    New workflows pass the provider-neutral execution context. The explicit
+    ``cli_agent_env`` branch remains for custom callers using legacy one-shot
+    definitions; neither path mutates process-global environment variables.
     """
     overlay = (kwargs.get("session_state") or {}).get("cli_agent_env")
-    if not isinstance(overlay, dict):
+    if isinstance(overlay, dict):
+        return {str(key): str(value) for key, value in overlay.items()}
+    context = (kwargs.get("session_state") or {}).get("agent_execution_context")
+    if not isinstance(context, dict):
         return {}
-    return {str(key): str(value) for key, value in overlay.items()}
+    from guildbotics.capabilities.completion_retry import (
+        CLI_AGENT_CONVERSATION_FILE_ENV,
+    )
+    from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+    from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+
+    run_id = str(context.get("run_id") or "")
+    data_root = str(context.get("workspace_data_root") or "")
+    work_kind = str(context.get("work_kind") or "")
+    result = {
+        GUILDBOTICS_DATA_DIR: data_root,
+        RUN_ENV if work_kind == "chat" else TASK_RUN_ENV: run_id,
+    }
+    participant_labels = str(context.get("participant_labels") or "")
+    if participant_labels:
+        result["GUILDBOTICS_CHAT_PARTICIPANT_LABELS"] = participant_labels
+    if run_id and data_root:
+        conversation_file = Path(data_root) / "task-runs" / f"{run_id}.agy-conversation"
+        conversation_file.parent.mkdir(parents=True, exist_ok=True)
+        result[CLI_AGENT_CONVERSATION_FILE_ENV] = str(conversation_file)
+    return {key: value for key, value in result.items() if value}
+
+
+def _agent_execution_context(kwargs: dict[str, Any]) -> dict[str, Any]:
+    raw = (kwargs.get("session_state") or {}).get("agent_execution_context")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _attempt(context: dict[str, Any]) -> int:
+    try:
+        return max(1, int(context.get("attempt") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _context_is_complete(context: dict[str, Any]) -> bool:
+    value = context.get("rebuild_context_complete", False)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _thread_messages_before_current(context: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        decoded = json.loads(str(context.get("rebuild_context") or "[]"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    current_cursor = str(context.get("context_cursor") or "")
+    messages = [dict(item) for item in decoded if isinstance(item, dict)]
+    if current_cursor:
+        messages = [
+            message
+            for message in messages
+            if _cursor_is_before(str(message.get("timestamp") or ""), current_cursor)
+        ]
+    return messages
+
+
+def _thread_context_input(input: str, context: dict[str, Any], *, mode: str) -> str:
+    if str(context.get("work_kind") or "") != "chat":
+        return input
+    if mode == "full":
+        payload = json.dumps(
+            _thread_messages_before_current(context),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return (
+            '<guildbotics_thread_context mode="full">'
+            f"{payload}</guildbotics_thread_context>\n\n{input}"
+        )
+    return f'<guildbotics_thread_context mode="{mode}" />\n\n{input}'
+
+
+def _continuation_input(input: str, context: dict[str, Any]) -> str:
+    continuation = str(context.get("continuation_input") or "").strip() or input
+    return _thread_context_input(continuation, context, mode="continuation")
+
+
+def _one_shot_input(
+    input: str,
+    context: dict[str, Any],
+    *,
+    conversation_scope: str,
+    extra_env: dict[str, str],
+) -> str:
+    from guildbotics.capabilities.completion_retry import (
+        CLI_AGENT_CONVERSATION_FILE_ENV,
+    )
+
+    conversation_file = Path(extra_env.get(CLI_AGENT_CONVERSATION_FILE_ENV, ""))
+    has_exact_session = False
+    if conversation_scope == "dispatch" and _attempt(context) > 1:
+        with suppress(OSError):
+            has_exact_session = bool(
+                conversation_file.read_text(encoding="utf-8").strip()
+            )
+    if has_exact_session:
+        return _continuation_input(input, context)
+    mode = "full" if _context_is_complete(context) else "inspect_required"
+    return _thread_context_input(input, context, mode=mode)
 
 
 def _propagate_cwd_workspace_environment(env: dict[str, str]) -> None:
@@ -288,8 +408,16 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
         person_id, "intelligences/cli_agent_mapping.yml"
     )
     mapping = cast(dict, load_yaml_file(config_file))
+    from guildbotics.intelligences.cli_agents import native_cli_agent_name
+
     cli_agent_mapping = {}
     for name, executable_info_file in mapping.items():
+        native_name = native_cli_agent_name(str(executable_info_file))
+        if native_name:
+            cli_agent_mapping[name] = ExecutableInfo(
+                adapter=native_name, agent_name=native_name
+            )
+            continue
         executable_info_path = get_person_config_path(
             person_id, f"intelligences/cli_agents/{executable_info_file}"
         )
@@ -297,6 +425,12 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
         cli_agent_mapping[name] = ExecutableInfo(
             script=executable_info.get("script", ""),
             env=executable_info.get("env", {}),
+            conversation_scope=str(
+                executable_info.get("conversation_scope", "none") or "none"
+            ),
+            agent_name=str(executable_info_file)
+            .removesuffix(".yml")
+            .removesuffix("-cli"),
         )
     person_cli_agent_mapping[person_id] = cli_agent_mapping
     return cli_agent_mapping
@@ -408,9 +542,7 @@ class CliAgentBrain(Brain):
                 )
                 log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-            result = await self._execute_script(
-                input, response_file, log_file, cwd, _extra_env(kwargs)
-            )
+            result = await self._execute(input, response_file, log_file, cwd, kwargs)
             output: Any = result.stdout
             self._write_response_trace(result)
             self._raise_if_execution_failed(result)
@@ -454,26 +586,267 @@ class CliAgentBrain(Brain):
                 )
                 log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
 
-            result = await self._execute_script(
-                input, response_file, log_file, cwd, _extra_env(kwargs)
-            )
+            result = await self._execute(input, response_file, log_file, cwd, kwargs)
             self._write_response_trace(result)
         return result
 
+    async def _execute(
+        self,
+        input: str,
+        response_file: str,
+        log_file: str,
+        cwd: Path | str,
+        kwargs: dict[str, Any],
+    ) -> CliAgentExecutionResult:
+        if self.executable_info.adapter:
+            return await self._execute_native(input, cwd, kwargs)
+        extra_env = _extra_env(kwargs)
+        script_input = _one_shot_input(
+            input,
+            _agent_execution_context(kwargs),
+            conversation_scope=self.executable_info.conversation_scope,
+            extra_env=extra_env,
+        )
+        return await self._execute_script(
+            script_input, response_file, log_file, cwd, extra_env
+        )
+
+    async def _execute_native(
+        self, input: str, cwd: Path | str, kwargs: dict[str, Any]
+    ) -> CliAgentExecutionResult:
+        from guildbotics.intelligences.agent_runtime.models import (
+            ConversationKey,
+            ResumePolicy,
+        )
+        from guildbotics.observability import correlation_fields
+        from guildbotics.runtime.person_lease import (
+            PersonExecutionLease,
+            PersonLeaseUnavailableError,
+            current_person_lease,
+        )
+        from guildbotics.utils.fileio import get_workspace_data_root
+
+        configured = _agent_execution_context(kwargs)
+        adapter_name = self.executable_info.adapter
+        run_id = str(
+            configured.get("run_id")
+            or correlation_fields().get("trace_id")
+            or uuid4().hex
+        )
+        data_root = Path(
+            str(configured.get("workspace_data_root") or get_workspace_data_root())
+        )
+        work_kind = str(configured.get("work_kind") or "manual")
+        work_identity = str(configured.get("work_identity") or run_id)
+        key = ConversationKey(
+            person_id=self.person_id,
+            adapter=adapter_name,
+            work_kind=work_kind,
+            work_identity=work_identity,
+        )
+        try:
+            policy = ResumePolicy(str(configured.get("resume_policy") or "fresh"))
+        except ValueError:
+            policy = ResumePolicy.FRESH
+        lease = current_person_lease()
+        owned_lease: PersonExecutionLease | None = None
+        if lease is None:
+            owned_lease = PersonExecutionLease(self.person_id, data_root)
+            try:
+                owned_lease.acquire(
+                    source="manual",
+                    command=f"agent:{adapter_name}",
+                    work_id=run_id,
+                )
+            except PersonLeaseUnavailableError as exc:
+                return CliAgentExecutionResult(
+                    stdout="",
+                    stderr=str(exc),
+                    returncode=1,
+                    error_category="lease_unavailable",
+                    error_details={"cli_agent": adapter_name},
+                )
+            lease = owned_lease
+        try:
+            lease_metadata = lease.bind_run_id(run_id)
+            context = AgentExecutionContext(
+                person_id=self.person_id,
+                run_id=run_id,
+                cwd=Path(cwd),
+                workspace_data_root=data_root,
+                conversation_key=key,
+                resume_policy=policy,
+                context_cursor=str(configured.get("context_cursor") or ""),
+                lease_id=lease_metadata.lease_id,
+                delegation_id=lease_metadata.delegation_id,
+                model=str(configured.get("model") or ""),
+                rebuild_context=str(configured.get("rebuild_context") or ""),
+                rebuild_context_complete=_context_is_complete(configured),
+                attempt=_attempt(configured),
+                continuation_input=str(configured.get("continuation_input") or ""),
+                participant_labels=str(configured.get("participant_labels") or ""),
+            )
+            return await self._execute_native_turn(
+                input=input,
+                configured=configured,
+                context=context,
+                adapter_name=adapter_name,
+                run_id=run_id,
+            )
+        finally:
+            lease.unbind_run_id(run_id)
+            if owned_lease is not None:
+                owned_lease.release()
+
+    async def _execute_native_turn(
+        self,
+        *,
+        input: str,
+        configured: dict[str, Any],
+        context: AgentExecutionContext,
+        adapter_name: str,
+        run_id: str,
+    ) -> CliAgentExecutionResult:
+        from guildbotics.intelligences.agent_runtime.diagnostics import (
+            record_agent_event,
+        )
+        from guildbotics.intelligences.agent_runtime.models import (
+            AgentEvent,
+            AgentEventKind,
+            AgentRuntimeError,
+            AgentRuntimeErrorCategory,
+        )
+        from guildbotics.intelligences.agent_runtime.registry import get_native_adapter
+        from guildbotics.intelligences.agent_runtime.store import ConversationStore
+
+        store = ConversationStore(context.workspace_data_root)
+        try:
+            conversation = store.resolve(
+                context.conversation_key,
+                context.resume_policy,
+                model=context.model,
+            )
+        except LookupError as exc:
+            return CliAgentExecutionResult(
+                stdout="",
+                stderr=str(exc),
+                returncode=1,
+                error_category="session_unavailable",
+            )
+        adapter = await get_native_adapter(self.person_id, adapter_name, run_id)
+
+        async def emit(event: Any) -> None:
+            record_agent_event(event, context, conversation)
+
+        try:
+            native_input = input
+            if conversation.provider_session_id:
+                same_or_older_cursor = _same_or_older_cursor(
+                    context.context_cursor, conversation.context_cursor
+                )
+                completion_retry = (
+                    context.conversation_key.work_kind != "chat" and context.attempt > 1
+                )
+                if completion_retry or same_or_older_cursor:
+                    native_input = _continuation_input(input, configured)
+                else:
+                    native_input = _thread_context_input(
+                        input, configured, mode="incremental"
+                    )
+            elif context.conversation_key.work_kind == "chat":
+                mode = (
+                    "full" if context.rebuild_context_complete else "inspect_required"
+                )
+                native_input = _thread_context_input(input, configured, mode=mode)
+            await emit(
+                AgentEvent(
+                    AgentEventKind.TURN,
+                    "started",
+                    provider_session_id=conversation.provider_session_id,
+                    details={"work_kind": context.conversation_key.work_kind},
+                )
+            )
+            terminal = await adapter.run_turn(native_input, context, conversation, emit)
+        except asyncio.CancelledError:
+            store.mark_unhealthy(conversation, "cancelled")
+            raise
+        except AgentRuntimeError as exc:
+            await emit(
+                AgentEvent(
+                    AgentEventKind.ERROR,
+                    exc.category.value,
+                    message=str(exc),
+                    provider_session_id=conversation.provider_session_id,
+                    details=exc.details,
+                )
+            )
+            if exc.rotate_session:
+                store.mark_unhealthy(conversation, exc.category.value)
+            details = {str(key): str(value) for key, value in exc.details.items()}
+            details["cli_agent"] = adapter_name
+            if exc.category is AgentRuntimeErrorCategory.RATE_LIMITED:
+                _normalize_native_retry_after(details)
+            return CliAgentExecutionResult(
+                stdout="",
+                stderr=str(exc),
+                returncode=1,
+                error_category=exc.category.value,
+                error_details=details,
+                provider_session_id=conversation.provider_session_id,
+            )
+        conversation.provider_session_id = terminal.provider_session_id
+        conversation.provider_turn_id = terminal.provider_turn_id
+        conversation.provider = adapter_name
+        conversation.context_cursor = (
+            context.context_cursor or conversation.context_cursor
+        )
+        conversation.turn_count += 1
+        conversation.input_tokens += terminal.usage.get("input_tokens", 0)
+        conversation.output_tokens += terminal.usage.get("output_tokens", 0)
+        compacted = any(
+            event.kind is AgentEventKind.TURN and event.name == "context_compaction"
+            for event in terminal.events
+        )
+        conversation.healthy = not compacted
+        if compacted:
+            conversation.rotation_reason = "context_compaction"
+        store.save(conversation)
+        return CliAgentExecutionResult(
+            stdout=terminal.output.strip(),
+            stderr=terminal.stderr.strip(),
+            returncode=terminal.returncode,
+            provider_session_id=terminal.provider_session_id,
+            provider_turn_id=terminal.provider_turn_id,
+            finish_reason=terminal.finish_reason,
+            usage=dict(terminal.usage),
+        )
+
     def _raise_if_execution_failed(self, result: CliAgentExecutionResult) -> None:
         if result.error_category in {"authentication", "rate_limited"}:
+            agent_name = (
+                result.error_details.get("cli_agent")
+                or self.executable_info.agent_name
+                or self.cli_agent
+            )
             if result.error_category == "authentication":
                 record_correlated_event(
                     event_type="credential.failed",
                     default_source="cli_agent",
                     attributes={
                         "credential.provider": "cli_agent",
+                        "credential.cli_agent": agent_name,
                         "error.category": "authentication",
                     },
-                    payload={"provider": "cli_agent", "code": "authentication"},
+                    person_id=self.person_id,
+                    payload={
+                        "provider": "cli_agent",
+                        "cli_agent": agent_name,
+                        "person_id": self.person_id,
+                        "code": "authentication",
+                    },
                 )
             raise CliAgentExecutionError(
-                cli_agent=self.cli_agent,
+                cli_agent=agent_name,
                 result=result,
             )
         if result.returncode != 0:
@@ -518,6 +891,12 @@ class CliAgentBrain(Brain):
         # subprocess without mutating the shared process environment.
         if extra_env:
             env.update(extra_env)
+            from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+            from guildbotics.runtime.person_lease import delegation_environment
+
+            run_id = extra_env.get(TASK_RUN_ENV) or extra_env.get(RUN_ENV) or ""
+            if run_id:
+                env.update(delegation_environment(run_id))
 
         # Create temporary file for the prompt input
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
@@ -535,6 +914,7 @@ class CliAgentBrain(Brain):
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
             self.logger.info(
                 f"Running AI CLI tool '{self.cli_agent}' with script: {self.executable_info.script}"
@@ -578,12 +958,12 @@ class CliAgentBrain(Brain):
             # not keep running detached and block a clean shutdown, and reap it so
             # it does not linger as a zombie.
             if process is not None and process.returncode is None:
-                with suppress(ProcessLookupError):
-                    process.kill()
+                from guildbotics.intelligences.agent_runtime.environment import (
+                    terminate_process_tree,
+                )
+
                 with suppress(asyncio.CancelledError, Exception):
-                    # Shield so the reap completes even though our own task is
-                    # being cancelled.
-                    await asyncio.shield(process.wait())
+                    await asyncio.shield(terminate_process_tree(process))
             self.remove_temp_file(temp_file_name)
             shutil.rmtree(gh_config_dir, ignore_errors=True)
 
@@ -649,3 +1029,38 @@ class CliAgentBrain(Brain):
                 "stderr": result.stderr,
             },
         )
+
+
+def _normalize_native_retry_after(details: dict[str, str]) -> None:
+    if details.get("retry_after_at"):
+        return
+    try:
+        seconds = float(details.get("retry_after_seconds", "0") or 0)
+    except ValueError:
+        return
+    if seconds > 0:
+        details["retry_after_at"] = (
+            datetime.now().astimezone() + timedelta(seconds=seconds)
+        ).isoformat(timespec="seconds")
+
+
+def _same_or_older_cursor(current: str, persisted: str) -> bool:
+    if not current or not persisted:
+        return False
+    try:
+        current_parts = tuple(int(part) for part in current.split("."))
+        persisted_parts = tuple(int(part) for part in persisted.split("."))
+    except ValueError:
+        return current == persisted
+    return current_parts <= persisted_parts
+
+
+def _cursor_is_before(candidate: str, current: str) -> bool:
+    if not candidate or not current:
+        return False
+    try:
+        candidate_parts = tuple(int(part) for part in candidate.split("."))
+        current_parts = tuple(int(part) for part in current.split("."))
+    except ValueError:
+        return candidate != current
+    return candidate_parts < current_parts
