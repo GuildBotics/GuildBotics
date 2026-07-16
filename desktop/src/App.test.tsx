@@ -39,6 +39,7 @@ import {
   traceStatusColor,
   traceDuration,
   shortTraceId,
+  systemAlertSetupTarget,
   upsertCommandRecord,
   type CommandRunRecord,
 } from "./App";
@@ -248,6 +249,23 @@ describe("App", () => {
       screen.queryByText("Slack credentials for alice could not be verified."),
     ).not.toBeInTheDocument();
     vi.mocked(getSystemAlerts).mockResolvedValue({ alerts: [] });
+  });
+
+  it("links a GitHub credential alert to the affected member's GitHub settings", () => {
+    expect(
+      systemAlertSetupTarget({
+        id: "credential:github:alice",
+        code: "credential_github",
+        severity: "critical",
+        opened_at: "2026-07-11T10:00:00+09:00",
+        updated_at: "2026-07-11T10:00:00+09:00",
+        occurrence_count: 1,
+        person_id: "alice",
+        command: "",
+        trace_id: "",
+        actions: ["diagnostics", "setup"],
+      }),
+    ).toBe("/setup?section=members&person_id=alice&tab=github");
   });
 });
 
