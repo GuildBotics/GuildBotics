@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -61,6 +62,16 @@ from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
 WorkspaceMode = Literal["member", "current"]
 SLACK_TS_FRACTION_DIGITS = 6
+_READ_ONLY_COMMAND_ATTRIBUTE = "__guildbotics_member_read_only__"
+
+
+def _read_only_member_command(
+    callback: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Declare that a member command cannot mutate local or remote state."""
+    setattr(callback, _READ_ONLY_COMMAND_ATTRIBUTE, True)
+    return callback
+
 
 _person_option = click.option(
     "--person", required=True, help="Person ID or name of the member."
@@ -123,6 +134,7 @@ def member(ctx: click.Context, workspace_dir: Path | None) -> None:
 
 
 @member.command(name="context")
+@_read_only_member_command
 @_person_option
 @click.option(
     "--check-credentials",
@@ -139,6 +151,7 @@ def context_cmd(person: str, check_credentials: bool, output_format: str) -> Non
 
 
 @member.command(name="help")
+@_read_only_member_command
 def help_cmd() -> None:
     """Print the member capability reference (commands and cross-cutting rules).
 
@@ -362,6 +375,7 @@ async def _memory_record(
 
 
 @memory.command(name="recall")
+@_read_only_member_command
 @_person_option
 @click.option(
     "--query",
@@ -406,6 +420,7 @@ async def _memory_recall(
 
 
 @memory.command(name="get")
+@_read_only_member_command
 @_person_option
 @click.option("--id", "doc_id", required=True, help="Memory document id.")
 @click.option(
@@ -684,6 +699,7 @@ def chat() -> None:
 
 
 @chat.command(name="identity")
+@_read_only_member_command
 @_person_option
 @_service_option
 @_markdown_format_option
@@ -712,6 +728,7 @@ def chat_inspect() -> None:
 
 
 @chat_inspect.command(name="channel")
+@_read_only_member_command
 @_person_option
 @_service_option
 @click.option("--channel-id", default="", help="Channel id of the target channel.")
@@ -791,6 +808,7 @@ async def _chat_inspect_channel(
 
 
 @chat_inspect.command(name="thread")
+@_read_only_member_command
 @_person_option
 @_service_option
 @click.option("--channel-id", default="", help="Channel id of the target channel.")
@@ -1423,6 +1441,7 @@ def issue() -> None:
 
 
 @issue.command(name="inspect")
+@_read_only_member_command
 @_person_option
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
 @_markdown_format_option
@@ -1546,6 +1565,7 @@ def pr() -> None:
 
 
 @pr.command(name="inspect")
+@_read_only_member_command
 @_person_option
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
 @click.option(
@@ -1919,6 +1939,7 @@ async def _task_complete(
 
 
 @task.command(name="status")
+@_read_only_member_command
 @click.option("--run-id", required=True, help="Workflow run id.")
 @click.option(
     "--person",
@@ -2089,7 +2110,7 @@ def _run(coro, *, output_format: str) -> Any:
 
 @contextmanager
 def _member_execution_guard(command: str, session: InteractiveTraceSession | None):
-    if not _member_command_needs_lease(command):
+    if not _member_command_needs_lease():
         yield
         return
     person = _current_person()
@@ -2129,20 +2150,12 @@ def _member_execution_guard(command: str, session: InteractiveTraceSession | Non
         lease.release()
 
 
-def _member_command_needs_lease(command: str) -> bool:
-    read_only = (
-        " context",
-        " help",
-        " memory recall",
-        " memory get",
-        " task status",
-        " chat identity",
-        " chat inspect",
-        " github issue inspect",
-        " github pr inspect",
-    )
-    normalized = f" {command.strip()}"
-    return not any(marker in normalized for marker in read_only)
+def _member_command_needs_lease() -> bool:
+    context = click.get_current_context(silent=True)
+    callback = context.command.callback if context is not None else None
+    # New or malformed commands fail closed as write-capable until their callback
+    # explicitly declares that it is read-only.
+    return not bool(getattr(callback, _READ_ONLY_COMMAND_ATTRIBUTE, False))
 
 
 def _run_interactive(

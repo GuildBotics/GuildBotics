@@ -111,6 +111,22 @@ def test_member_help_prints_capability_reference():
     assert "### Rules" in result.output
 
 
+def test_member_command_lease_classification_uses_callback_metadata() -> None:
+    @click.command(name="context")
+    def unmarked_command() -> None:
+        """A write-capable command whose name resembles a read-only command."""
+
+    @click.command(name="write-looking-command")
+    @member_module._read_only_member_command
+    def read_only_command() -> None:
+        """A read-only command whose name does not imply its access mode."""
+
+    with click.Context(unmarked_command):
+        assert member_module._member_command_needs_lease() is True
+    with click.Context(read_only_command):
+        assert member_module._member_command_needs_lease() is False
+
+
 def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_path):
     from guildbotics.intelligences.agent_runtime.models import (
         ConversationKey,
