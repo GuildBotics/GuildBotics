@@ -309,7 +309,12 @@ function SystemAlertBand() {
                   </Group>
                 ) : null}
                 {alert.actions.includes("setup") ? (
-                  <Anchor component={NavLink} size="sm" to="/setup" underline="hover">
+                  <Anchor
+                    component={NavLink}
+                    size="sm"
+                    to={systemAlertSetupTarget(alert)}
+                    underline="hover"
+                  >
                     {t("systemAlerts.actions.setup")}
                   </Anchor>
                 ) : null}
@@ -343,6 +348,18 @@ function systemAlertMessage(t: TFunction, alert: SystemAlert) {
     command: alert.command || t("systemAlerts.unknownCommand"),
     count: alert.occurrence_count,
   });
+}
+
+export function systemAlertSetupTarget(alert: SystemAlert): string {
+  if (alert.code !== "credential_github" || !alert.person_id) {
+    return "/setup";
+  }
+  const search = new URLSearchParams({
+    section: "members",
+    person_id: alert.person_id,
+    tab: "github",
+  });
+  return `/setup?${search.toString()}`;
 }
 
 function NavStatusIndicator({ state, label }: { state: NavRuntimeState; label: string }) {

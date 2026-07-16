@@ -312,6 +312,19 @@ afterEach(() => {
 });
 
 describe("SetupPage", () => {
+  it("opens the requested member and editor tab from a deep link", async () => {
+    renderSetupPage("/setup?section=members&person_id=alice&tab=github");
+
+    await waitFor(() => expect(vi.mocked(getMemberConfig).mock.calls[0]?.[0]).toBe("alice"));
+    expect(
+      await screen.findByText(t("setup.members.editingBadge", { id: "alice" })),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: t("setup.members.tabs.github") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("allows sidebar navigation after opening a members deep link", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup?section=members&tab=patrol");

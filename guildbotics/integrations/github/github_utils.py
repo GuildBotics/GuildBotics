@@ -23,8 +23,9 @@ class GitHubTokenAuth(httpx.Auth):
     requires_request_body = False
     requires_response_body = False
 
-    def __init__(self, token: str):
+    def __init__(self, token: str, *, person_id: str = ""):
         self.token = token
+        self.person_id = person_id
 
     def auth_flow(self, request: httpx.Request):
         request.headers["Authorization"] = f"token {self.token}"
@@ -204,7 +205,9 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
             raise
     else:
         # Use personal access token
-        auth = GitHubTokenAuth(person.get_secret("github_access_token"))
+        auth = GitHubTokenAuth(
+            person.get_secret("github_access_token"), person_id=person.person_id
+        )
 
     client = get_async_client(base_url=base_url, auth=auth)
     client.headers.update(

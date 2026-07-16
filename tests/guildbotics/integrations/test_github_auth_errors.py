@@ -6,8 +6,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from guildbotics.integrations.github import async_client
-from guildbotics.integrations.github import github_utils
+from guildbotics.integrations.github import async_client, github_utils
 
 
 def _github_app_auth(monkeypatch: pytest.MonkeyPatch) -> github_utils.GitHubAppAuth:
@@ -48,6 +47,28 @@ async def test_unauthorized_response_records_credential_failure(monkeypatch) -> 
         "provider": "github",
         "code": "unauthorized",
     }
+
+
+@pytest.mark.asyncio
+async def test_token_auth_unauthorized_records_member_id(monkeypatch) -> None:
+    recorded = []
+    monkeypatch.setattr(
+        async_client,
+        "record_correlated_event",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+    auth = github_utils.GitHubTokenAuth("expired", person_id="alice")
+    request = httpx.Request("GET", "https://api.github.com/rate_limit")
+    response = httpx.Response(401, request=request, text="unauthorized")
+    client = async_client.get_async_client("https://api.github.com", auth)
+
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.event_hooks["response"][0](response)
+    finally:
+        await client.aclose()
+
+    assert recorded[0]["person_id"] == "alice"
 
 
 @pytest.mark.asyncio

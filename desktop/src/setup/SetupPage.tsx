@@ -213,6 +213,14 @@ const CHAT_PARTICIPATION_OPTIONS = ["social", "strict", "muted"] as const;
 type GitHubAccountType = (typeof GITHUB_ACCOUNT_TYPE_OPTIONS)[number];
 type GitHubMemberType = Exclude<GitHubAccountType, "none">;
 type MemberEditorTab = "basic" | "intelligence" | "patrol" | "github" | "slack" | "diagnostics";
+const MEMBER_EDITOR_TABS = new Set<MemberEditorTab>([
+  "basic",
+  "intelligence",
+  "patrol",
+  "github",
+  "slack",
+  "diagnostics",
+]);
 type CronPreset = "hourly" | "daily" | "weekly" | "custom";
 export type ScheduledCommandDraft = {
   id: string;
@@ -311,9 +319,13 @@ export function SetupPage() {
   const [section, setSection] = useState<CoreSection>(
     searchParams.get("section") === "members" ? "members" : "project",
   );
+  const requestedMemberTab = searchParams.get("tab");
   const [focusMemberTab] = useState<MemberEditorTab | undefined>(
-    searchParams.get("tab") === "patrol" ? "patrol" : undefined,
+    requestedMemberTab && MEMBER_EDITOR_TABS.has(requestedMemberTab as MemberEditorTab)
+      ? (requestedMemberTab as MemberEditorTab)
+      : undefined,
   );
+  const [focusMemberId] = useState(searchParams.get("person_id")?.trim() || undefined);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
@@ -570,6 +582,7 @@ export function SetupPage() {
               llmProviderAvailability={llmProviderAvailability}
               providers={llmProviders.data ?? []}
               initialTab={focusMemberTab}
+              initialMemberId={focusMemberId}
               onMemberActiveDelta={(delta) => {
                 if (!hasExistingProject && delta !== 0) {
                   setDraftActiveMemberCount((count) => Math.max(0, count + delta));
@@ -2223,6 +2236,7 @@ function MembersSection({
   llmProviderAvailability,
   providers,
   initialTab,
+  initialMemberId,
   onMemberActiveDelta,
 }: {
   activeMemberCount: number;
@@ -2240,13 +2254,14 @@ function MembersSection({
   llmProviderAvailability: LlmProviderAvailability;
   providers: LlmProviderInfo[];
   initialTab?: MemberEditorTab;
+  initialMemberId?: string;
   onMemberActiveDelta: (delta: number) => void;
 }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const hasActiveMember = activeMemberCount > 0;
-  const [mode, setMode] = useState<"idle" | "add" | "edit">("idle");
-  const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
+  const [mode, setMode] = useState<"idle" | "add" | "edit">(initialMemberId ? "edit" : "idle");
+  const [editingPersonId, setEditingPersonId] = useState<string | null>(initialMemberId ?? null);
   const [activeTab, setActiveTab] = useState<string | null>(initialTab ?? "basic");
   const [personType, setPersonType] = useState<MemberType>("agent");
   const [githubAccountType, setGithubAccountType] = useState<GitHubAccountType>("none");
@@ -2633,6 +2648,15 @@ function MembersSection({
       setMode("edit");
     },
   });
+  const requestMemberConfig = memberConfigMutation.mutate;
+  const initialMemberRequested = useRef(false);
+  useEffect(() => {
+    if (!initialMemberId || initialMemberRequested.current) {
+      return;
+    }
+    initialMemberRequested.current = true;
+    requestMemberConfig(initialMemberId);
+  }, [initialMemberId, requestMemberConfig]);
   const resolveMutation = useMutation({
     mutationFn: resolveMemberIdentity,
   });

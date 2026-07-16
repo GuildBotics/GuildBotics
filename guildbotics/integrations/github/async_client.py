@@ -6,14 +6,17 @@ HTTP_UNAUTHORIZED = 401
 
 
 async def raise_for_status_with_text(
-    response: httpx.Response, *, handle_unauthorized: bool = True
+    response: httpx.Response,
+    *,
+    handle_unauthorized: bool = True,
+    person_id: str = "",
 ):
     if response.is_error:
         await response.aread()
         if response.status_code == HTTP_UNAUTHORIZED and not handle_unauthorized:
             return response
         if response.status_code == HTTP_UNAUTHORIZED:
-            record_github_auth_failure()
+            record_github_auth_failure(person_id=person_id)
         message = (
             f"HTTP {response.status_code} Error for {response.url}\n"
             f"Response text: {response.text}"
@@ -57,6 +60,7 @@ def get_async_client(base_url: str, auth: httpx.Auth) -> httpx.AsyncClient:
         await raise_for_status_with_text(
             response,
             handle_unauthorized=not bool(getattr(auth, "handles_unauthorized", False)),
+            person_id=str(getattr(auth, "person_id", "")),
         )
 
     return httpx.AsyncClient(
