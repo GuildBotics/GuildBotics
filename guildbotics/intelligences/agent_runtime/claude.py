@@ -9,6 +9,7 @@ from dataclasses import replace
 from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
+    STREAM_READ_LIMIT,
     isolated_agent_environment,
     member_command_environment,
     remove_isolated_config,
@@ -83,6 +84,7 @@ class ClaudeStreamJsonAdapter:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
+                limit=STREAM_READ_LIMIT,
             )
         except OSError as exc:
             remove_isolated_config(gh_config_dir)
@@ -192,6 +194,13 @@ class ClaudeStreamJsonAdapter:
             raise
         except AgentRuntimeError:
             raise
+        except ValueError as exc:
+            await self.interrupt()
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROTOCOL,
+                f"Claude Code stream-json output could not be read: {exc}",
+                rotate_session=True,
+            ) from exc
         finally:
             stderr = ""
             if process.returncode is None:

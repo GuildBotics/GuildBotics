@@ -15,6 +15,7 @@ from guildbotics.intelligences.agent_runtime.codex import (
     _decode_notification,
     _sandbox_policy,
 )
+from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentEventKind,
@@ -54,8 +55,10 @@ class _Process:
         emit_assistant: bool = True,
         approval_method: str = "item/commandExecution/requestApproval",
         eof_turn: bool = False,
+        oversized_turn: bool = False,
+        stream_limit: int = 2**16,
     ) -> None:
-        self.stdout = asyncio.StreamReader()
+        self.stdout = asyncio.StreamReader(limit=stream_limit)
         self.stderr = asyncio.StreamReader()
         self.stdin = _Writer(self)
         self.returncode: int | None = None
@@ -66,6 +69,7 @@ class _Process:
         self.emit_assistant = emit_assistant
         self.approval_method = approval_method
         self.eof_turn = eof_turn
+        self.oversized_turn = oversized_turn
 
     def handle(self, message: dict[str, Any]) -> None:
         self.messages.append(message)
@@ -95,6 +99,17 @@ class _Process:
                 return
             if not self.complete_turn:
                 return
+            if self.oversized_turn:
+                self._feed(
+                    {
+                        "method": "item/agentMessage/delta",
+                        "params": {
+                            "threadId": "thread-1",
+                            "turnId": "turn-1",
+                            "delta": "x" * (2 * 2**16),
+                        },
+                    }
+                )
             if self.emit_assistant:
                 self._feed(
                     {
@@ -460,6 +475,59 @@ async def test_codex_stdout_eof_is_process_failure(monkeypatch, tmp_path) -> Non
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
     assert excinfo.value.rotate_session is True
     await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_requests_stream_limit_for_oversized_lines(
+    monkeypatch, tmp_path
+) -> None:
+    process = _Process(oversized_turn=True, stream_limit=STREAM_READ_LIMIT)
+    limits: list[Any] = []
+
+    async def create_process(*_args, **kwargs):
+        limits.append(kwargs.get("limit"))
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = CodexAppServerAdapter()
+
+    result = await adapter.run_turn(
+        "hello",
+        _context(tmp_path),
+        ConversationRecord(key=_context(tmp_path).conversation_key),
+        lambda _event: None,
+    )
+    await adapter.close()
+
+    assert result.output.endswith("hello world")
+    assert len(result.output) > 2**17
+    assert limits == [STREAM_READ_LIMIT]
+
+
+@pytest.mark.asyncio
+async def test_codex_oversized_line_beyond_limit_is_protocol_error(
+    monkeypatch, tmp_path
+) -> None:
+    process = _Process(oversized_turn=True)
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = CodexAppServerAdapter()
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await adapter.run_turn(
+            "hello",
+            _context(tmp_path),
+            ConversationRecord(key=_context(tmp_path).conversation_key),
+            lambda _event: None,
+        )
+    await adapter.close()
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.PROTOCOL
+    assert excinfo.value.rotate_session is True
+    assert "longer than limit" in str(excinfo.value)
 
 
 def test_codex_compaction_notifications_are_provider_neutral() -> None:

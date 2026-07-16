@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
+    STREAM_READ_LIMIT,
     isolated_agent_environment,
     member_command_environment,
     remove_isolated_config,
@@ -273,6 +274,7 @@ class CodexAppServerAdapter:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
+                limit=STREAM_READ_LIMIT,
             )
         except OSError as exc:
             remove_isolated_config(self._gh_config_dir)
@@ -453,17 +455,7 @@ class CodexAppServerAdapter:
         assert process is not None and process.stdout is not None
         try:
             while line := await process.stdout.readline():
-                try:
-                    message = json.loads(line)
-                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                    self._fatal_error = AgentRuntimeError(
-                        AgentRuntimeErrorCategory.PROTOCOL,
-                        f"Malformed Codex App Server message: {exc}",
-                        rotate_session=True,
-                    )
-                    self._fail_pending(self._fatal_error)
-                    await self._notifications.put({"method": "guildbotics/fatal"})
-                    return
+                message = json.loads(line)
                 if not isinstance(message, dict):
                     continue
                 response_id = message.get("id")
@@ -481,11 +473,22 @@ class CodexAppServerAdapter:
                     await self._handle_server_request(message)
                     continue
                 await self._notifications.put(message)
+        except ValueError as exc:
+            # Covers oversized readline() chunks and malformed JSON alike.
+            self._fatal_error = AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROTOCOL,
+                f"Codex App Server output could not be read: {exc}",
+                rotate_session=True,
+            )
         finally:
             if self._fatal_error is None:
                 self._fatal_error = AgentRuntimeError(
                     AgentRuntimeErrorCategory.PROCESS,
                     "Codex App Server stdout closed unexpectedly.",
+                    details={
+                        "returncode": process.returncode,
+                        "stderr": "\n".join(self._stderr[-5:]),
+                    },
                     rotate_session=True,
                 )
             self._fail_pending(self._fatal_error)
