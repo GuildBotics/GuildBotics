@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import types
 
 import pytest
@@ -8,6 +9,7 @@ from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person, Role
 from guildbotics.integrations.chat_service import (
     ChatEvent,
+    ChatEventPage,
     ChatIdentity,
     ChatPostResult,
 )
@@ -54,6 +56,11 @@ class FakeChatService:
         if self.fail_identity:
             raise RuntimeError("invalid_auth")
         return self.identity
+
+    async def list_thread_events(
+        self, channel_id, *, thread_ts, cursor=None, limit=100
+    ) -> ChatEventPage:
+        return ChatEventPage(events=[])
 
     async def post_message(self, channel_id, text, *, thread_ts=None, metadata=None):
         if self.fail_post:
@@ -241,7 +248,12 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert kwargs["person_id"] == "alice"
     assert kwargs["service_name"] == "slack"
     assert kwargs["channel_id"] == "C1"
-    assert kwargs["cli_agent_env"]["GUILDBOTICS_RUN_ID"] == kwargs["workflow_run_id"]
+    execution_context = kwargs["agent_execution_context"]
+    assert execution_context["run_id"] == kwargs["workflow_run_id"]
+    assert execution_context["work_kind"] == "chat"
+    assert execution_context["work_identity"] == "slack:U_ALICE:C1:100.1"
+    assert execution_context["context_cursor"] == "100.1"
+    assert execution_context["resume_policy"] == "auto"
     assert kwargs["cwd"].name == "alice"
     assert kwargs["handoff_candidates"] == "[]"
     assert kwargs["chat_participation"] == "strict"
@@ -260,6 +272,95 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert thread_messages[1].is_bot_message is True
     thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     assert "alice" in thread_state.participants
+
+
+@pytest.mark.asyncio
+async def test_two_messages_in_one_thread_share_conversation_and_advance_cursor(
+    tmp_path,
+) -> None:
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    first = FakeInvokeContext("reply")
+    _set_incoming_event(first, event_id="E1", message_ts="100.1")
+    await chat_conversation_workflow.main(
+        first, chat_service=service, state_store=state_store
+    )
+    second = FakeInvokeContext("reply")
+    _set_incoming_event(second, event_id="E2", message_ts="101.1")
+    await chat_conversation_workflow.main(
+        second, chat_service=service, state_store=state_store
+    )
+
+    first_context = first.invocations[0][1]["agent_execution_context"]
+    second_context = second.invocations[0][1]["agent_execution_context"]
+    assert first_context["work_identity"] == second_context["work_identity"]
+    assert first_context["context_cursor"] == "100.1"
+    assert second_context["context_cursor"] == "101.1"
+    assert second_context["rebuild_context_complete"] is True
+    assert second_context["attempt"] == 1
+    rebuilt = json.loads(second_context["rebuild_context"])
+    assert len(rebuilt) == 3
+    contents = [message["content"] for message in rebuilt]
+    assert contents.count("@alice please check") == 2
+    assert "確認します。" in contents
+    assert {message["timestamp"] for message in rebuilt} == {
+        "100.1",
+        "101.1",
+        "200.1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_live_thread_snapshot_paginates_and_keeps_latest_bound() -> None:
+    class PaginatedChatService(FakeChatService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cursors: list[str | None] = []
+
+        async def list_thread_events(
+            self, channel_id, *, thread_ts, cursor=None, limit=100
+        ) -> ChatEventPage:
+            self.cursors.append(cursor)
+            start, stop, next_cursor = (
+                (1, 101, "page-2") if cursor is None else (101, 151, None)
+            )
+            return ChatEventPage(
+                events=[
+                    ChatEvent(
+                        event_id=f"E{index}",
+                        channel_id=channel_id,
+                        message_ts=f"{index}.1",
+                        thread_ts=thread_ts,
+                        author_id="U_USER",
+                        text=f"message-{index}",
+                    )
+                    for index in range(start, stop)
+                ],
+                cursor=next_cursor,
+            )
+
+    service = PaginatedChatService()
+    payload = await chat_conversation_workflow._build_agent_prompt_payload(
+        context=FakeInvokeContext("noop"),
+        chat_service=service,
+        event=ChatEvent(
+            event_id="E150",
+            channel_id="C1",
+            message_ts="150.1",
+            thread_ts="1.1",
+            author_id="U_USER",
+            text="message-150",
+        ),
+        thread_messages=[],
+        self_user_id="U_ALICE",
+        thread_state=ThreadConversationState(channel_id="C1", thread_ts="1.1"),
+    )
+
+    assert service.cursors == [None, "page-2"]
+    assert payload["thread_context_complete"] is True
+    assert len(payload["thread_context"]) == 100
+    assert payload["thread_context"][0]["timestamp"] == "51.1"
+    assert payload["thread_context"][-1]["timestamp"] == "150.1"
 
 
 @pytest.mark.asyncio
@@ -624,9 +725,6 @@ async def test_prompt_payload_includes_existing_handoffs():
 
 @pytest.mark.asyncio
 async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
-    from guildbotics.capabilities.completion_retry import (
-        CLI_AGENT_CONVERSATION_FILE_ENV,
-    )
     from guildbotics.utils.i18n_tool import t
 
     monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "3")
@@ -653,16 +751,17 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
         if name == "functions/handle_chat_event"
     ]
     assert len(handle_calls) == 2
-    # All attempts share one run id and one conversation file so partial evidence
-    # accumulates and retries resume the same agent conversation by id.
+    # All attempts share one run id and the same provider-neutral conversation.
     run_ids = {kwargs["workflow_run_id"] for kwargs in handle_calls}
     assert len(run_ids) == 1
-    conv_files = {
-        kwargs["cli_agent_env"][CLI_AGENT_CONVERSATION_FILE_ENV]
-        for kwargs in handle_calls
+    conversation_keys = {
+        kwargs["agent_execution_context"]["work_identity"] for kwargs in handle_calls
     }
-    assert len(conv_files) == 1
-    assert next(iter(run_ids)) in next(iter(conv_files))
+    assert conversation_keys == {"slack:U_ALICE:C1:100.1"}
+    assert [call["agent_execution_context"]["attempt"] for call in handle_calls] == [
+        3,
+        4,
+    ]
 
     # Escalated to the thread and stopped (event marked processed, no re-dispatch).
     assert state_store.load_channel_cursor(
@@ -760,15 +859,16 @@ async def test_missing_retry_context_agent_failure_bubbles_for_pending_backoff(
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_posts_suppressed_notice_and_marks_processed(tmp_path):
+async def test_rate_limit_posts_notice_and_leaves_event_pending(tmp_path):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("rate_limit")
     _set_incoming_event(ctx)
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    with pytest.raises(CliAgentExecutionError):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
 
     assert len(service.posts) == 1
     _channel_id, text, _thread_ts, metadata = service.posts[0]
@@ -779,9 +879,10 @@ async def test_rate_limit_posts_suppressed_notice_and_marks_processed(tmp_path):
     assert payload["reason"] == "rate_limited"
     assert payload["routing"] == "suppress"
     assert payload["retry_after_at"] == "2026-07-04T11:44:00+09:00"
-    assert state_store.load_channel_cursor(
-        "slack", "alice", "C1"
-    ).processed_event_ids == ["E1"]
+    assert (
+        state_store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+        == []
+    )
     thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     assert len(thread_state.system_notices) == 1
     assert thread_state.system_notices[0].reason == "rate_limited"
@@ -898,10 +999,6 @@ async def test_non_final_prerun_identity_failure_bubbles(tmp_path):
 
 @pytest.mark.asyncio
 async def test_completion_on_retry_stops_early(tmp_path, monkeypatch):
-    from guildbotics.capabilities.completion_retry import (
-        CLI_AGENT_CONVERSATION_FILE_ENV,
-    )
-
     monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "5")
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
@@ -921,9 +1018,16 @@ async def test_completion_on_retry_stops_early(tmp_path, monkeypatch):
     ]
     # Stops as soon as a turn records a terminal completion: no extra retries.
     assert len(handle_calls) == 2
-    # Both attempts reuse the same run id and conversation file.
+    # Both attempts reuse the same run id and conversation key.
     assert handle_calls[0]["workflow_run_id"] == handle_calls[1]["workflow_run_id"]
-    assert CLI_AGENT_CONVERSATION_FILE_ENV in handle_calls[1]["cli_agent_env"]
+    assert (
+        handle_calls[0]["agent_execution_context"]["work_identity"]
+        == handle_calls[1]["agent_execution_context"]["work_identity"]
+    )
+    assert [call["agent_execution_context"]["attempt"] for call in handle_calls] == [
+        1,
+        2,
+    ]
     assert service.posts == []  # no escalation; it completed
     assert state_store.load_channel_cursor(
         "slack", "alice", "C1"

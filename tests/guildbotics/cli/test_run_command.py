@@ -6,6 +6,7 @@ import pytest
 
 import guildbotics.cli as cli_module
 from guildbotics.cli import _parse_command_spec
+from guildbotics.commands.errors import CommandError
 from guildbotics.drivers.command_runner import (
     CommandRunner,
     PersonExecutionNotAllowedError,
@@ -133,6 +134,20 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
 
     result = await run_command(_get_context("stdin text"), "solo", ["world"])
     assert result == "Greetings world\nstdin text"
+
+
+@pytest.mark.asyncio
+async def test_run_command_releases_person_lease_when_discovery_fails(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    context = _get_context()
+
+    with pytest.raises(CommandError):
+        await run_command(context, "missing", [])
+
+    _write(tmp_path / "commands/solo.md", "---\nbrain: none\n---\ndone")
+    assert await run_command(context, "solo", []) == "done"
 
 
 @pytest.mark.asyncio

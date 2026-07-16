@@ -6,6 +6,8 @@ from typing import Any
 from guildbotics.observability import correlation_fields
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
+_STORE = DiagnosticsStore()
+
 
 def record_correlated_event(
     *,
@@ -22,7 +24,7 @@ def record_correlated_event(
     merged_attributes.update(
         {key: value for key, value in (attributes or {}).items() if value}
     )
-    DiagnosticsStore().record(
+    _STORE.record(
         {
             "kind": "event",
             "type": event_type,

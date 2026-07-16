@@ -1,8 +1,12 @@
+import i18n  # type: ignore
+import pytest
+
 from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
 from guildbotics.capabilities.workflow_rate_limits import (
     WorkflowRateLimit,
     record_workflow_rate_limited,
     workflow_rate_limit_from_exception,
+    workflow_rate_limit_notice_text,
 )
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
@@ -72,6 +76,37 @@ def test_workflow_rate_limit_retry_after_display():
 
     rl3 = WorkflowRateLimit("", "")
     assert rl3.retry_after_display == ""
+
+
+@pytest.mark.parametrize(
+    ("language", "automatic_retry", "unknown_restart"),
+    [
+        ("en", "retry automatically at or after this time", "restart time is unknown"),
+        ("ja", "この時刻以降に自動再試行します", "再開時刻は不明です"),
+    ],
+)
+def test_workflow_rate_limit_notice_matches_retry_behavior(
+    language: str, automatic_retry: str, unknown_restart: str
+) -> None:
+    previous_locale = i18n.get("locale")
+    previous_fallback = i18n.get("fallback")
+    try:
+        from guildbotics.utils.i18n_tool import set_language
+
+        set_language(language)
+        scheduled = workflow_rate_limit_notice_text(
+            WorkflowRateLimit("2026-07-04T11:44:00+09:00", "11:44 AM")
+        )
+        unscheduled = workflow_rate_limit_notice_text(WorkflowRateLimit())
+    finally:
+        i18n.set("locale", previous_locale)
+        i18n.set("fallback", previous_fallback)
+
+    assert "11:44 AM" in scheduled
+    assert automatic_retry in scheduled
+    assert unknown_restart in unscheduled
+    assert "not be retried automatically" not in scheduled
+    assert "自動再試行しません" not in scheduled
 
 
 def test_record_workflow_rate_limited(monkeypatch):

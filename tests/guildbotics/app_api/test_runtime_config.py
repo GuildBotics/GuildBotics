@@ -988,7 +988,13 @@ def test_update_runtime_debug_disables_both_debug_flags(
 
 def _cli_infos(*items: tuple[str, str, int, str]) -> list[CliAgentInfo]:
     return [
-        CliAgentInfo(name=name, label=label, order=order, executable=executable)
+        CliAgentInfo(
+            name=name,
+            label=label,
+            order=order,
+            executable=executable,
+            config_reference=name if name in {"codex", "claude"} else f"{name}-cli.yml",
+        )
         for name, label, order, executable in items
     ]
 
@@ -1016,11 +1022,13 @@ def test_detect_cli_agents_resolves_executable_and_path(
 
     assert agents["codex"].label == "OpenAI Codex CLI"
     assert agents["codex"].executable == "codex"
+    assert agents["codex"].config_reference == "codex"
     assert agents["codex"].detected is True
     assert agents["codex"].path == "/usr/local/bin/codex"
     # The agent name and binary differ for antigravity (agy); detection uses the
     # declared executable.
     assert agents["antigravity"].executable == "agy"
+    assert agents["antigravity"].config_reference == "antigravity-cli.yml"
     assert agents["antigravity"].detected is False
     assert agents["antigravity"].path == ""
 

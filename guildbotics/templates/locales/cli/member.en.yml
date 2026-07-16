@@ -1,0 +1,13 @@
+en:
+  agent:
+    help: Manage native agent runtime state.
+    conversation_help: Manage persisted native agent conversations.
+  agent_conversation_reset:
+    help: Reset one exact native provider session without deleting history.
+    adapter_help: Native provider adapter whose exact session should be reset.
+    work_kind_help: Kind of logical work owning the conversation.
+    work_identity_help: Stable ticket URL, chat thread identity, or manual work identity.
+  lease:
+    invalid_delegation: "Nested member command rejected: execution lease delegation is invalid."
+    unavailable: Person execution lease is already held.
+    unavailable_with_holder: "Person execution lease is already held by pid %{pid} (%{source}: %{command})."

@@ -5,12 +5,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from guildbotics.capabilities.completion_retry import (
-    CLI_AGENT_CONVERSATION_FILE_ENV,
-    run_with_completion_retry,
-)
+from guildbotics.capabilities.completion_retry import run_with_completion_retry
 from guildbotics.capabilities.task_runs import (
-    TASK_RUN_ENV,
     TaskRunError,
     TaskRunStatus,
     TaskRunStore,
@@ -30,10 +26,7 @@ from guildbotics.integrations.workflow_status_comment import (
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.observability import set_attributes
 from guildbotics.runtime import Context
-from guildbotics.utils.fileio import (
-    GUILDBOTICS_DATA_DIR,
-    get_workspace_data_root,
-)
+from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.i18n_tool import t
 
 TICKET_MAX_ATTEMPTS_ENV = "GUILDBOTICS_TICKET_MAX_ATTEMPTS"
@@ -193,23 +186,15 @@ async def _main(
 
     last_response: list[Any] = []
 
-    async def _invoke_ticket_turn(run_id: str, _attempt: int) -> None:
-        # Scope the run id to this agent subprocess only. Mutating the
-        # process-global os.environ would race across the scheduler's
-        # per-member worker threads; the brain merges this overlay into the
-        # subprocess env so child ``guildbotics member`` calls record evidence
-        # under the correct run id. The conversation file pins this dispatch's
-        # agent conversation so retries resume it by id (not whatever last ran in
-        # this cwd). Ensure its parent exists so the agent can write it even when
-        # the first attempt records no evidence (task-runs not created yet).
-        conversation_file = (
-            workspace_data_root / "task-runs" / f"{run_id}.agy-conversation"
-        )
-        conversation_file.parent.mkdir(parents=True, exist_ok=True)
-        cli_agent_env = {
-            TASK_RUN_ENV: run_id,
-            GUILDBOTICS_DATA_DIR: str(workspace_data_root),
-            CLI_AGENT_CONVERSATION_FILE_ENV: str(conversation_file),
+    async def _invoke_ticket_turn(run_id: str, attempt: int) -> None:
+        execution_context = {
+            "run_id": run_id,
+            "workspace_data_root": str(workspace_data_root),
+            "work_kind": "ticket",
+            "work_identity": ticket_url,
+            "resume_policy": "fresh" if attempt == 1 else "auto",
+            "attempt": attempt,
+            "continuation_input": t("commands.workflows.common.agent_continuation"),
         }
         response = await context.invoke(
             "functions/handle_github_ticket",
@@ -226,7 +211,7 @@ async def _main(
             member_workspace=str(member_workspace),
             workflow_run_id=run_id,
             prepare_command=_prepare_command(context, ticket_url),
-            cli_agent_env=cli_agent_env,
+            agent_execution_context=execution_context,
             cwd=member_workspace,
         )
         last_response.append(response)

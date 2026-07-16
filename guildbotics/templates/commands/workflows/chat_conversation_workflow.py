@@ -9,11 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from guildbotics.capabilities.completion_retry import (
-    CLI_AGENT_CONVERSATION_FILE_ENV,
-    run_with_completion_retry,
-)
-from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
+from guildbotics.capabilities.completion_retry import run_with_completion_retry
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.capabilities.workflow_rate_limits import (
     WorkflowRateLimit,
     record_workflow_rate_limited,
@@ -41,14 +38,11 @@ from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
 )
-from guildbotics.utils.fileio import (
-    GUILDBOTICS_DATA_DIR,
-    get_workspace_data_root,
-)
+from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.i18n_tool import t
 
-CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
 CHAT_MAX_ATTEMPTS_ENV = "GUILDBOTICS_CHAT_MAX_ATTEMPTS"
+_MAX_THREAD_CONTEXT_MESSAGES = 100
 _SLACK_MENTION_RE = re.compile(r"<@([^>|]+)(?:\|[^>]+)?>")
 _MAX_HANDOFF_TEXT_LENGTH = 240
 _DEFAULT_MAX_ATTEMPTS = 5
@@ -263,23 +257,32 @@ async def _handle_event(
     async def _invoke_chat_turn(run_id: str, _attempt: int) -> None:
         nonlocal current_run_id
         current_run_id = run_id
-        # Pin this dispatch's agent conversation to a per-run file so retries
-        # resume the same conversation by id (not whatever last ran in this cwd).
-        # Ensure the parent exists so the agent can write the file even when the
-        # first attempt records no evidence (task-runs not created yet).
-        conversation_file = (
-            workspace_data_root / "task-runs" / f"{run_id}.agy-conversation"
-        )
-        conversation_file.parent.mkdir(parents=True, exist_ok=True)
-        cli_agent_env = {
-            RUN_ENV: run_id,
-            GUILDBOTICS_DATA_DIR: str(workspace_data_root),
-            CHAT_PARTICIPANT_LABELS_ENV: json.dumps(
+        logical_attempt = retry_context.attempt_count + _attempt - 1
+        execution_context = {
+            "run_id": run_id,
+            "workspace_data_root": str(workspace_data_root),
+            "work_kind": "chat",
+            "work_identity": ":".join(
+                (
+                    service_name,
+                    identity_user_id,
+                    channel_id,
+                    event.thread_ts or event.message_ts,
+                )
+            ),
+            "resume_policy": "auto",
+            "context_cursor": event.message_ts,
+            "attempt": logical_attempt,
+            "rebuild_context": json.dumps(
+                prompt_payload["thread_context"], ensure_ascii=False, sort_keys=True
+            ),
+            "rebuild_context_complete": prompt_payload["thread_context_complete"],
+            "continuation_input": t("commands.workflows.common.agent_continuation"),
+            "participant_labels": json.dumps(
                 prompt_payload["participant_labels"],
                 ensure_ascii=False,
                 sort_keys=True,
             ),
-            CLI_AGENT_CONVERSATION_FILE_ENV: str(conversation_file),
         }
         await invoke(
             "functions/handle_chat_event",
@@ -313,7 +316,7 @@ async def _handle_event(
             chat_participation=prompt_payload["chat_participation"],
             language=getattr(context, "language_name", ""),
             member_workspace=str(member_workspace),
-            cli_agent_env=cli_agent_env,
+            agent_execution_context=execution_context,
             cwd=member_workspace,
         )
 
@@ -357,10 +360,7 @@ async def _handle_event(
                 retry_after=rate_limit,
                 default_source="event_listener",
             )
-            state_store.mark_processed_event(
-                service_name, person_id, channel_id, event.event_id
-            )
-            return
+            raise
         if retry_context.is_final_attempt:
             await _escalate_incomplete(
                 chat_service=chat_service,
@@ -533,13 +533,94 @@ async def _build_agent_prompt_payload(
         "latest_focus": thread_state.latest_focus,
         "handoffs": [_handoff_to_prompt_dict(item) for item in thread_state.handoffs],
     }
+    cached_thread_context = [
+        _message_to_prompt_dict(
+            _to_prompt_message_from_state(
+                message, self_user_id, author_labels, chat_service
+            )
+        )
+        for message in thread_messages
+    ]
+    thread_context, thread_context_complete = await _live_thread_context(
+        context=context,
+        chat_service=chat_service,
+        event=event,
+        self_user_id=self_user_id,
+        author_labels=author_labels,
+        cached_thread_context=cached_thread_context,
+    )
     return {
         "latest_message": _message_to_prompt_dict(prompt_latest_message),
         "participant_labels": author_labels,
         "handoff_candidates": _build_handoff_candidates(context, person_labels),
         "chat_participation": _chat_participation(chat_participation),
         "previous_thread_context": previous_thread_context,
+        "thread_context": thread_context,
+        "thread_context_complete": thread_context_complete,
     }
+
+
+async def _live_thread_context(
+    *,
+    context: Any,
+    chat_service: ChatService,
+    event: ChatEvent,
+    self_user_id: str,
+    author_labels: dict[str, str],
+    cached_thread_context: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], bool]:
+    messages = {
+        message.get("timestamp", ""): message
+        for message in cached_thread_context[-_MAX_THREAD_CONTEXT_MESSAGES:]
+        if message.get("timestamp")
+    }
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    try:
+        while True:
+            page = await chat_service.list_thread_events(
+                event.channel_id,
+                thread_ts=event.thread_ts or event.message_ts,
+                cursor=cursor,
+                limit=_MAX_THREAD_CONTEXT_MESSAGES,
+            )
+            for thread_event in page.events:
+                prompt_message = _to_prompt_message_from_event(
+                    thread_event, self_user_id, author_labels, chat_service
+                )
+                messages[prompt_message.timestamp] = _message_to_prompt_dict(
+                    prompt_message
+                )
+            messages = {
+                message["timestamp"]: message
+                for message in _bounded_thread_context(messages)
+            }
+            next_cursor = str(page.cursor or "")
+            if not next_cursor:
+                break
+            if next_cursor in seen_cursors:
+                raise RuntimeError("Chat thread pagination cursor repeated.")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+    except Exception as exc:
+        _log_warning(context, "live chat thread context unavailable: %s", exc)
+        return _bounded_thread_context(messages), False
+    return _bounded_thread_context(messages), True
+
+
+def _bounded_thread_context(
+    messages: dict[str, dict[str, str]],
+) -> list[dict[str, str]]:
+    ordered = sorted(messages.values(), key=lambda message: _timestamp_key(message))
+    return ordered[-_MAX_THREAD_CONTEXT_MESSAGES:]
+
+
+def _timestamp_key(message: dict[str, str]) -> tuple[int, ...]:
+    timestamp = message.get("timestamp", "")
+    try:
+        return tuple(int(part) for part in timestamp.split("."))
+    except ValueError:
+        return (0,)
 
 
 def _chat_run_status(
@@ -913,6 +994,7 @@ def _message_to_prompt_dict(message: Message) -> dict[str, str]:
         "content": message.content,
         "author": message.author,
         "author_type": message.author_type,
+        "timestamp": message.timestamp,
     }
 
 
@@ -922,6 +1004,16 @@ def _log_info(context: Any, msg: str, *args: Any) -> None:
         return
     try:
         logger.info(msg, *args)
+    except Exception:
+        return
+
+
+def _log_warning(context: Any, msg: str, *args: Any) -> None:
+    logger = getattr(context, "logger", None)
+    if logger is None:
+        return
+    try:
+        logger.warning(msg, *args)
     except Exception:
         return
 

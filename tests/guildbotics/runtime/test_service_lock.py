@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from guildbotics.runtime import advisory_lock as advisory_lock_module
 from guildbotics.runtime import service_lock as service_lock_module
 from guildbotics.runtime.service_lock import (
     ServiceLock,
@@ -98,8 +99,8 @@ def test_windows_lock_backend_uses_one_byte_range(monkeypatch, tmp_path) -> None
         def locking(file_descriptor: int, mode: int, length: int) -> None:
             calls.append((file_descriptor, mode, length))
 
-    monkeypatch.setattr(service_lock_module, "_WINDOWS", True)
-    monkeypatch.setattr(service_lock_module, "_windows_locking", FakeWindowsLocking)
+    monkeypatch.setattr(advisory_lock_module, "_WINDOWS", True)
+    monkeypatch.setattr(advisory_lock_module, "_windows_locking", FakeWindowsLocking)
     path = tmp_path / "service.lock"
 
     with path.open("a+", encoding="utf-8") as lock_file:
@@ -122,8 +123,8 @@ def test_windows_lock_conflict_becomes_blocking_error(monkeypatch, tmp_path) -> 
         def locking(_file_descriptor: int, _mode: int, _length: int) -> None:
             raise OSError(errno.EACCES, "locked")
 
-    monkeypatch.setattr(service_lock_module, "_WINDOWS", True)
-    monkeypatch.setattr(service_lock_module, "_windows_locking", BusyWindowsLocking)
+    monkeypatch.setattr(advisory_lock_module, "_WINDOWS", True)
+    monkeypatch.setattr(advisory_lock_module, "_windows_locking", BusyWindowsLocking)
 
     with (tmp_path / "service.lock").open("a+", encoding="utf-8") as lock_file:
         with pytest.raises(BlockingIOError):

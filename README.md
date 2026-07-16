@@ -145,6 +145,10 @@ Please install one of the following AI CLI tools and authenticate:
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
 - [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
 
+Codex and Claude Code use GuildBotics' native resumable runtime; authentication,
+conversation identity, approval policy, reset, and troubleshooting are documented in
+[Native Agent Runtime](docs/native_agent_runtime.en.md).
+
 
 # 4. Installation
 
@@ -904,8 +908,16 @@ values in `.env` or provide them as environment variables instead.
 
 **Brain/AI CLI Tool Configuration**:
 - `intelligences/cli_agent_mapping.yml`: Default AI CLI tool selection
-- `intelligences/cli_agents/*.yml`: AI CLI tool scripts
-- `team/members/<person_id>/intelligences/`: Per-member overrides
+- `intelligences/native_agent_policy.yml`: Codex filesystem scope (`workspace` or
+  `host`). New workspace setup creates it; configure it in Desktop under **LLM / AI
+  CLI tools → Advanced**, or edit it directly for headless operation. Network and
+  non-interactive approval behavior are fixed by the native adapters.
+- `intelligences/cli_agents/*.yml`: One-shot AI CLI tool scripts (not Codex / Claude)
+- `team/members/<person_id>/intelligences/`: Per-member overrides, including an
+  optional native policy; members inherit the team policy by default
+
+The accepted policy values and security implications are documented in
+[Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).
 
 
 # 8. Troubleshooting

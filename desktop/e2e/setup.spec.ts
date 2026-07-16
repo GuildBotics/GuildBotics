@@ -46,17 +46,20 @@ test("first-run setup happy path writes project.yml and enters the service view"
     .poll(async () => (await workspaceField.inputValue()).replace(/^\/private/, ""))
     .toBe(ctx.workspaceDir.replace(/^\/private/, ""));
 
-  // Project section: description + the GitHub use/don't decision (the decision
-  // now lives here because it gates member requirements and the GitHub section).
+  // Project section: start without GitHub so the first member can be completed
+  // before GitHub-specific patrol defaults are enabled.
   await page.getByLabel("Project description").fill("E2E automation workspace");
   await page.getByRole("textbox", { name: "GitHub integration" }).click();
-  await page.getByRole("option", { name: "Use GitHub", exact: true }).click();
+  await page.getByRole("option", { name: "Do not use GitHub", exact: true }).click();
 
   // LLM / AI CLI tools section: provide an API key for the default OpenAI provider.
   // The section nav buttons share text with option cards (e.g. "GitHub" vs
   // "GitHub Copilot CLI"), so match the nav buttons exactly.
   await page.getByRole("button", { name: "LLM / AI CLI tools", exact: true }).click();
-  await page.getByLabel("OpenAI API key").fill("sk-e2e-test-key");
+  await page.getByRole("button", { name: "Configure OpenAI API key" }).click();
+  // Use an exact match so the input is not confused with the surrounding
+  // "Configure OpenAI API key" action.
+  await page.getByLabel("OpenAI API key", { exact: true }).fill("sk-e2e-test-key");
 
   // Members section (now before GitHub): add one active member so the section is
   // complete. The add form is shown by default and pre-filled with defaults.
@@ -67,10 +70,13 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("option", { name: "product" }).click();
   await page.getByRole("button", { name: "Add member" }).click();
 
-  // GitHub section (now last): provide the Project URL and override the lane
-  // mapping with custom status names. The backend cannot reach GitHub in CI, so
-  // the status-options fetch reports unavailable and the lane fields behave as
-  // free text; the typed names must still persist.
+  // Enable GitHub after the member draft is complete, then provide the Project
+  // URL and override the lane mapping with custom status names. The backend
+  // cannot reach GitHub in CI, so the status-options fetch reports unavailable
+  // and the lane fields behave as free text; the typed names must still persist.
+  await page.getByRole("button", { name: "Project", exact: true }).click();
+  await page.getByRole("textbox", { name: "GitHub integration" }).click();
+  await page.getByRole("option", { name: "Use GitHub", exact: true }).click();
   await page.getByRole("button", { name: "GitHub", exact: true }).click();
   await page.getByLabel("GitHub Project URL").fill("https://github.com/orgs/acme/projects/9");
   await page.getByRole("textbox", { name: "Ready lane" }).fill("Ready");

@@ -115,6 +115,9 @@ beforeEach(() => {
     cli_agent_mapping: { default: "claude-code.yml" },
     cli_agents: [],
     brain_mapping: [],
+    native_agent_policy: {
+      codex: { filesystem_access: "workspace" },
+    },
   });
   vi.mocked(getCliAgentDetections).mockResolvedValue({
     agents: [
@@ -122,6 +125,7 @@ beforeEach(() => {
         name: "claude-code",
         label: "Claude Code",
         executable: "claude",
+        config_reference: "claude-code.yml",
         detected: true,
         path: "",
       },

@@ -226,6 +226,7 @@ export type CliAgentDetection = {
   name: string;
   label: string;
   executable: string;
+  config_reference: string;
   detected: boolean;
   path: string;
 };
@@ -634,6 +635,12 @@ export type BrainAssignment = {
   target: string;
 };
 
+export type NativeAgentPolicySettings = {
+  codex: {
+    filesystem_access: "workspace" | "host";
+  };
+};
+
 // A selectable LLM provider, discovered server-side from
 // `models/<provider>/default.yml`. Single source of truth for the catalog.
 export type LlmProviderInfo = {
@@ -654,6 +661,7 @@ export type IntelligenceConfig = {
   cli_agent_mapping: Record<string, string>;
   cli_agents: CliAgentDefinition[];
   brain_mapping: BrainAssignment[];
+  native_agent_policy: NativeAgentPolicySettings;
 };
 
 export type IntelligenceConfigUpdateRequest = {
@@ -665,6 +673,7 @@ export type IntelligenceConfigUpdateRequest = {
   cli_agent_mapping?: Record<string, string>;
   cli_agents?: CliAgentDefinition[];
   brain_mapping?: BrainAssignment[];
+  native_agent_policy?: NativeAgentPolicySettings;
 };
 
 export type ConfigWriteResponse = {

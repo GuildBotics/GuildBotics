@@ -45,17 +45,39 @@ def test_track_work_snapshot_and_completion() -> None:
     assert coordinator.snapshot() == []
 
 
+def test_person_lease_rejects_same_person_and_allows_different_person() -> None:
+    coordinator = ExecutionCoordinator()
+    release = threading.Event()
+    thread = _start_tracked_work(coordinator, release)
+    try:
+        with pytest.raises(WorkRejectedError) as excinfo:
+            with coordinator.track_work(
+                source="event_queue", person_id="alice", command="chat"
+            ):
+                pass
+        assert excinfo.value.holder is not None
+        assert excinfo.value.reason == "lease_unavailable"
+        with coordinator.track_work(
+            source="event_queue", person_id="bob", command="chat"
+        ):
+            pass
+    finally:
+        release.set()
+        thread.join(timeout=5)
+
+
 def test_begin_drain_rejects_new_work_until_drained() -> None:
     coordinator = ExecutionCoordinator()
     release = threading.Event()
     thread = _start_tracked_work(coordinator, release)
     coordinator.begin_drain()
 
-    with pytest.raises(WorkRejectedError):
+    with pytest.raises(WorkRejectedError) as excinfo:
         with coordinator.track_work(
             source="manual", person_id="alice", command="rejected"
         ):
             pass
+    assert excinfo.value.reason == "draining"
 
     release.set()
     assert coordinator.wait_for_drain(timeout=5) is True
@@ -107,9 +129,9 @@ def test_wait_for_drain_timeout_closes_drain_window() -> None:
 
     assert coordinator.wait_for_drain(timeout=0.05) is False
 
-    # The drain window closed even though the stuck work never finished, so
-    # the runtime accepts new work again instead of rejecting it forever.
-    with coordinator.track_work(source="manual", person_id="alice", command="next"):
+    # The drain window closes, but the still-running Alice work retains its
+    # cross-process lease. Work for another person is accepted immediately.
+    with coordinator.track_work(source="manual", person_id="bob", command="next"):
         pass
 
     release.set()

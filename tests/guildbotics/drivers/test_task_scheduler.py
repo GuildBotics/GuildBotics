@@ -17,6 +17,9 @@ def _isolated_data_dir(monkeypatch, tmp_path):
 
 
 class _Logger:
+    def info(self, message: str, *args: object) -> None:
+        return None
+
     def debug(self, message: str) -> None:
         return None
 
@@ -245,3 +248,30 @@ def test_run_work_rejection_during_drain_mirrors_stop() -> None:
     # The drain means a stop is in progress; the worker mirrors it locally so
     # the rejection is treated as shutdown, not as a command error.
     assert scheduler._stop_event.is_set()
+
+
+def test_run_work_lease_conflict_skips_without_stopping_scheduler(monkeypatch) -> None:
+    import asyncio
+    from contextlib import contextmanager
+
+    from guildbotics.drivers.execution import WorkRejectedError
+
+    scheduler = TaskScheduler(_Context(_Person()), [])
+    loop = asyncio.new_event_loop()
+
+    @contextmanager
+    def reject_lease(**_kwargs):
+        raise WorkRejectedError("busy", reason="lease_unavailable")
+        yield
+
+    async def _never_runs() -> bool:
+        raise AssertionError("rejected work must not run")
+
+    monkeypatch.setattr(scheduler._execution, "track_work", reject_lease)
+    try:
+        ok = scheduler._run_work(loop, _Person(), "routine", "cmd", _never_runs())
+    finally:
+        loop.close()
+
+    assert ok is True
+    assert not scheduler._stop_event.is_set()

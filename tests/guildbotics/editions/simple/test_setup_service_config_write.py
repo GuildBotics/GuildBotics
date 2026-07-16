@@ -42,6 +42,7 @@ PROJECT_RELATIVE_FILES = {
     "team/project.yml",
     "intelligences/model_mapping.yml",
     "intelligences/cli_agent_mapping.yml",
+    "intelligences/native_agent_policy.yml",
     "commands/translate.md",
     "commands/summarize.md",
     "commands/context-info.md",
@@ -245,7 +246,30 @@ def test_write_project_empty_intelligence_selection_keeps_template_defaults(
     model_mapping = load_yaml_file(config_dir / "intelligences/model_mapping.yml")
     cli_mapping = load_yaml_file(config_dir / "intelligences/cli_agent_mapping.yml")
     assert model_mapping["default"] == "models/openai/default.yml"
-    assert cli_mapping["default"] == "codex-cli.yml"
+    assert cli_mapping["default"] == "codex"
+
+
+def test_write_project_creates_policy_from_template_without_overwriting(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    env_file_path = tmp_path / ".env"
+    service = SimpleProjectSetupService()
+
+    service.write_project(_project_input(config_dir, env_file_path))
+    policy_file = config_dir / "intelligences/native_agent_policy.yml"
+    template_file = get_template_path() / "intelligences/native_agent_policy.yml"
+    assert policy_file.read_text(encoding="utf-8") == template_file.read_text(
+        encoding="utf-8"
+    )
+
+    policy_file.write_text("codex:\n  filesystem_access: host\n", encoding="utf-8")
+    result = service.write_project(_project_input(config_dir, env_file_path))
+
+    assert policy_file.read_text(encoding="utf-8") == (
+        "codex:\n  filesystem_access: host\n"
+    )
+    assert policy_file not in {created.path for created in result.files}
 
 
 # --------------------------------------------------------------------------- #
@@ -366,7 +390,7 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
     model_mapping = load_yaml_file(config_dir / "intelligences/model_mapping.yml")
     cli_mapping = load_yaml_file(config_dir / "intelligences/cli_agent_mapping.yml")
     assert model_mapping["default"] == "models/gemini/default.yml"
-    assert cli_mapping["default"] == "claude-cli.yml"
+    assert cli_mapping["default"] == "claude"
 
 
 # --------------------------------------------------------------------------- #

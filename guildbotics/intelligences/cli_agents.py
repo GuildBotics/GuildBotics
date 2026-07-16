@@ -18,16 +18,32 @@ _DEFAULT_ORDER = 1000
 
 
 class CliAgentInfo(BaseModel):
-    """A selectable AI CLI tool, discovered from ``cli_agents/<name>-cli.yml``.
-
-    Single source of truth for the AI CLI tool catalog: ``name`` is the file stem
-    (without ``-cli``), and the rest comes from that file.
-    """
+    """A selectable native or YAML-configured AI CLI tool."""
 
     name: str
     label: str = ""
     order: int = 1000
     executable: str = ""
+    config_reference: str = ""
+
+
+_NATIVE_AGENTS = (
+    CliAgentInfo(
+        name="codex",
+        label="Codex",
+        order=10,
+        executable="codex",
+        config_reference="codex",
+    ),
+    CliAgentInfo(
+        name="claude",
+        label="Claude Code",
+        order=20,
+        executable="claude",
+        config_reference="claude",
+    ),
+)
+_NATIVE_AGENT_NAMES = frozenset(agent.name for agent in _NATIVE_AGENTS)
 
 
 GUI_APP_PATHS = (
@@ -67,15 +83,21 @@ def resolve_cli_agent_path(executable: str, path: str | None = None) -> str:
     return shutil.which(executable, path=get_cli_agent_search_path(path)) or ""
 
 
+def native_cli_agent_name(reference: str) -> str:
+    """Return the native catalog name represented by a mapping value."""
+    name = reference.removesuffix(".yml").removesuffix("-cli")
+    return name if name in _NATIVE_AGENT_NAMES else ""
+
+
 def discover_cli_agents(
     config_dir: Path, person_id: str | None = None
 ) -> list[CliAgentInfo]:
-    """Discover selectable AI CLI tools from ``cli_agents/<name>-cli.yml``.
+    """Discover native and YAML-configured selectable AI CLI tools.
 
     An AI CLI tool is any ``*.yml`` (member, team, or template scope); the file in
     the highest-priority scope wins. This is the only place that enumerates the
-    AI CLI tool catalog, so adding a tool is just a matter of dropping in
-    ``cli_agents/<name>-cli.yml`` with ``label``/``order``/``executable``.
+    YAML AI CLI tool catalog, so adding a one-shot tool is just a matter of dropping
+    in ``cli_agents/<name>-cli.yml`` with ``label``/``order``/``executable``.
     """
     files: dict[str, Path] = {}
     for root in get_intelligence_roots(config_dir, person_id, "cli_agents"):
@@ -84,19 +106,22 @@ def discover_cli_agents(
                 name = path.name.removesuffix(".yml").removesuffix("-cli")
                 files.setdefault(name, path)
 
-    agents: list[CliAgentInfo] = []
+    agents: list[CliAgentInfo] = list(_NATIVE_AGENTS)
     for name, path in files.items():
         data = load_yaml_dict(path)
         try:
             order = int(data.get("order", _DEFAULT_ORDER))
         except (TypeError, ValueError):
             order = _DEFAULT_ORDER
+        if name in _NATIVE_AGENT_NAMES:
+            continue
         agents.append(
             CliAgentInfo(
                 name=name,
                 label=str(data.get("label", "") or name),
                 order=order,
                 executable=str(data.get("executable", "") or name),
+                config_reference=path.name,
             )
         )
     agents.sort(key=lambda agent: (agent.order, agent.name))

@@ -9,6 +9,10 @@ from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+)
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
@@ -190,6 +194,48 @@ async def test_dispatcher_leaves_event_queued_on_error(monkeypatch, tmp_path):
     pending = store.load_pending_events("slack", "alice", "C1")[0]
     assert pending.attempt_count == 1
     assert pending.run_id == first_run_id
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_uses_provider_exact_rate_limit_reset(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    retry_after_at = "2999-01-01T00:00:00+00:00"
+
+    class _RateLimitedRunner:
+        def __init__(self, *args):
+            pass
+
+        async def run(self):
+            raise CliAgentExecutionError(
+                cli_agent="codex",
+                result=CliAgentExecutionResult(
+                    stdout="",
+                    stderr="rate limited",
+                    returncode=1,
+                    error_category="rate_limited",
+                    error_details={"retry_after_at": retry_after_at},
+                ),
+            )
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner",
+        _RateLimitedRunner,
+    )
+    dispatcher = PendingChatDispatcher(  # type: ignore[arg-type]
+        _FakeContext(), state_store=store
+    )
+
+    assert (
+        await dispatcher.process_person(
+            Person(person_id="alice", name="A", is_active=True)
+        )
+        == 0
+    )
+
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    assert pending.attempt_count == 1
+    assert pending.next_attempt_at == retry_after_at
 
 
 @pytest.mark.asyncio

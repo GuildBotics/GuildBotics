@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from guildbotics.app_api import intelligences as intelligences_module
 from guildbotics.app_api.intelligences import (
@@ -13,8 +14,10 @@ from guildbotics.app_api.intelligences import (
 from guildbotics.app_api.models import (
     BrainAssignment,
     CliAgentDefinition,
+    CodexNativeAgentPolicySettings,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
+    NativeAgentPolicySettings,
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.intelligences.brains import agno_agent, cli_agent
@@ -94,6 +97,41 @@ def test_read_config_template_fallback_when_team_config_absent(tmp_path: Path) -
     assert response.models, "template models should be read via fallback"
     assert all(model.path.startswith("models/") for model in response.models)
     assert response.brain_mapping, "template brain mapping should be parsed"
+    assert response.native_agent_policy.codex.filesystem_access == "workspace"
+
+
+def test_policy_update_model_rejects_coercion_and_unknown_keys(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        IntelligenceConfigUpdateRequest(
+            config_dir=tmp_path,
+            native_agent_policy={
+                "codex": {
+                    "filesystem_access": "workspace",
+                    "network_access": True,
+                }
+            },
+        )
+
+
+def test_read_config_member_policy_uses_member_then_team_scope(tmp_path: Path) -> None:
+    _write_yaml(
+        _team_intelligences(tmp_path) / "native_agent_policy.yml",
+        {"codex": {"filesystem_access": "host"}},
+    )
+
+    inherited = IntelligenceConfigService().read_config(
+        config_dir=tmp_path, person_id="alice"
+    )
+    assert inherited.native_agent_policy.codex.filesystem_access == "host"
+
+    _write_yaml(
+        _member_intelligences(tmp_path, "alice") / "native_agent_policy.yml",
+        {"codex": {"filesystem_access": "workspace"}},
+    )
+    overridden = IntelligenceConfigService().read_config(
+        config_dir=tmp_path, person_id="alice"
+    )
+    assert overridden.native_agent_policy.codex.filesystem_access == "workspace"
 
 
 def test_read_config_member_without_override_is_inherited(tmp_path: Path) -> None:
@@ -107,6 +145,7 @@ def test_read_config_member_without_override_is_inherited(tmp_path: Path) -> Non
     assert response.inherited is True
     # Inherited values come from the team scope.
     assert response.model_mapping["default"] == "models/openai/gpt.yml"
+    assert response.cli_agent_mapping["default"] == "codex"
     assert response.models[0].model_id == "team-model-id"
 
 
@@ -191,10 +230,10 @@ def test_read_config_handles_malformed_yaml(tmp_path: Path) -> None:
 def test_read_config_cli_agent_env_not_dict_falls_back(tmp_path: Path) -> None:
     base = _team_intelligences(tmp_path)
     _write_yaml(base / "model_mapping.yml", {})
-    _write_yaml(base / "cli_agent_mapping.yml", {"default": "codex-cli.yml"})
+    _write_yaml(base / "cli_agent_mapping.yml", {"default": "custom-cli.yml"})
     # env is a list rather than a dict.
     (base / "cli_agents").mkdir(parents=True, exist_ok=True)
-    (base / "cli_agents/codex-cli.yml").write_text(
+    (base / "cli_agents/custom-cli.yml").write_text(
         "env:\n  - not-a-dict\nscript: run\n", encoding="utf-8"
     )
     _write_yaml(base / "brain_mapping.yml", {})
@@ -205,7 +244,7 @@ def test_read_config_cli_agent_env_not_dict_falls_back(tmp_path: Path) -> None:
     agent = response.cli_agents[0]
     assert agent.env == {}
     assert agent.script == "run"
-    assert agent.name == "codex-cli"
+    assert agent.name == "custom-cli"
 
 
 def test_read_config_cli_agent_detected_path(
@@ -213,8 +252,7 @@ def test_read_config_cli_agent_detected_path(
 ) -> None:
     base = _team_intelligences(tmp_path)
     _write_yaml(base / "model_mapping.yml", {})
-    _write_yaml(base / "cli_agent_mapping.yml", {"default": "codex-cli.yml"})
-    _write_yaml(base / "cli_agents/codex-cli.yml", {"env": {}, "script": "codex run"})
+    _write_yaml(base / "cli_agent_mapping.yml", {"default": "codex"})
     _write_yaml(base / "brain_mapping.yml", {})
 
     def fake_resolve_cli_agent_path(executable: str) -> str:
@@ -273,13 +311,13 @@ def _team_update_request(config_dir: Path) -> IntelligenceConfigUpdateRequest:
                 model_id="gpt-test",
             )
         ],
-        cli_agent_mapping={"default": "codex-cli.yml"},
+        cli_agent_mapping={"default": "codex"},
         cli_agents=[
             CliAgentDefinition(
-                path="codex-cli.yml",
-                name="codex-cli",
-                env={"KEY": "value"},
-                script="codex exec",
+                path="codex",
+                name="codex",
+                env={},
+                script="",
             )
         ],
         brain_mapping=[
@@ -306,13 +344,13 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
 
     base = _team_intelligences(tmp_path)
     model_file = base / "models/openai/gpt.yml"
-    cli_file = base / "cli_agents/codex-cli.yml"
+    cli_file = base / "cli_agents/codex"
 
     written = {f.path for f in result.files}
     assert (base / "model_mapping.yml") in written
     assert model_file in written
     assert (base / "cli_agent_mapping.yml") in written
-    assert cli_file in written
+    assert cli_file not in written
     assert (base / "brain_mapping.yml") in written
     assert all(f.action == "update" for f in result.files)
 
@@ -320,12 +358,11 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
     assert load_yaml_file(base / "model_mapping.yml") == {
         "default": "models/openai/gpt.yml"
     }
+    assert load_yaml_file(base / "cli_agent_mapping.yml") == {"default": "codex"}
     model_data = load_yaml_file(model_file)
     assert model_data["model_class"] == "openai.Class"
     assert model_data["parameters"]["id"] == "gpt-test"
-    cli_data = load_yaml_file(cli_file)
-    assert cli_data["env"] == {"KEY": "value"}
-    assert cli_data["script"] == "codex exec"
+    assert not cli_file.exists()
 
     brain_data = load_yaml_file(base / "brain_mapping.yml")
     assert brain_data["default"] == {
@@ -335,6 +372,24 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
     assert brain_data["agent"] == {
         "class": CLI_BRAIN_CLASS,
         "args": {"cli_agent": "codex"},
+    }
+
+
+def test_team_update_writes_native_agent_policy(tmp_path: Path) -> None:
+    request = _team_update_request(tmp_path).model_copy(
+        update={
+            "native_agent_policy": NativeAgentPolicySettings(
+                codex=CodexNativeAgentPolicySettings(filesystem_access="host")
+            )
+        }
+    )
+
+    result = IntelligenceConfigService().update_config(request)
+
+    policy_file = _team_intelligences(tmp_path) / "native_agent_policy.yml"
+    assert policy_file in {item.path for item in result.files}
+    assert load_yaml_file(policy_file) == {
+        "codex": {"filesystem_access": "host"},
     }
 
 
@@ -403,6 +458,26 @@ def test_member_override_update_writes_only_member_mapping_files(
     }
 
 
+def test_member_override_update_writes_native_agent_policy(tmp_path: Path) -> None:
+    policy = NativeAgentPolicySettings(
+        codex=CodexNativeAgentPolicySettings(filesystem_access="host"),
+    )
+    request = IntelligenceConfigUpdateRequest(
+        config_dir=tmp_path,
+        person_id="alice",
+        model_mapping={},
+        cli_agent_mapping={},
+        native_agent_policy=policy,
+    )
+
+    IntelligenceConfigService().update_config(request)
+
+    stored = load_yaml_file(
+        _member_intelligences(tmp_path, "alice") / "native_agent_policy.yml"
+    )
+    assert stored == {"codex": {"filesystem_access": "host"}}
+
+
 def test_member_override_update_replaces_existing_dir(tmp_path: Path) -> None:
     base = _member_intelligences(tmp_path, "alice")
     stale = base / "stale.yml"
@@ -418,6 +493,25 @@ def test_member_override_update_replaces_existing_dir(tmp_path: Path) -> None:
 
     assert not stale.exists()
     assert (base / "model_mapping.yml").exists()
+
+
+def test_member_override_update_preserves_policy_when_request_omits_it(
+    tmp_path: Path,
+) -> None:
+    base = _member_intelligences(tmp_path, "alice")
+    existing = {"codex": {"filesystem_access": "host"}}
+    _write_yaml(base / "native_agent_policy.yml", existing)
+
+    IntelligenceConfigService().update_config(
+        IntelligenceConfigUpdateRequest(
+            config_dir=tmp_path,
+            person_id="alice",
+            model_mapping={},
+            cli_agent_mapping={},
+        )
+    )
+
+    assert load_yaml_file(base / "native_agent_policy.yml") == existing
 
 
 def test_member_override_update_clears_only_member_cache(tmp_path: Path) -> None:

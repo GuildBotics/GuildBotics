@@ -155,6 +155,11 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Pro または Max サブスクリプションが必要)
 - [GitHub Copilot CLI](https://docs.github.com/ja/copilot/concepts/agents/about-copilot-cli)
 
+GuildBoticsでCodexまたはClaude Codeを利用する場合は、セッションを引き継ぎ、前回の
+続きから作業を再開できます。認証方法、Slackスレッドやチケットとセッションの対応付け、
+実行権限の設定、セッションのリセット方法、問題が起きたときの対処については、
+[Codex・Claude Codeのセッション連携](docs/native_agent_runtime.ja.md)をご覧ください。
+
 # 4. インストール
 
 セットアップは **GuildBotics デスクトップアプリ** で行い、コマンド実行は **`guildbotics` CLI** で行います。
@@ -939,8 +944,17 @@ guildbotics secrets --workspace /path/to/workspace migrate
 **Brain/AI CLIツール設定**:
 
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLIツール選択
-- `intelligences/cli_agents/*.yml`: AI CLIツールスクリプト
-- `team/members/<person_id>/intelligences/`: person毎の上書き
+- `intelligences/native_agent_policy.yml`: Codexのファイルアクセス範囲（`workspace`または
+  `host`）。新規workspaceのsetup時に作成され、Desktopの **LLM・AI CLIツール → 詳細設定**
+  または画面を利用できない環境でのファイル直接編集により設定します。ネットワークアクセスと
+  確認を求めない実行方式はGuildBoticsのCodex連携内で固定します
+- `intelligences/cli_agents/*.yml`: Codex・Claude Code以外のAI CLIツールをスクリプト経由で
+  実行するための設定
+- `team/members/<person_id>/intelligences/`: Codexの実行権限を含むメンバーごとの任意の上書き。
+  既定ではチーム設定を継承します
+
+設定可能な値とセキュリティ上の注意事項は、
+[Codex・Claude Codeのセッション連携](docs/native_agent_runtime.ja.md#設定)をご覧ください。
 
 # 8. トラブルシューティング
 

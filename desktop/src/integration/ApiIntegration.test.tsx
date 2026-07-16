@@ -501,7 +501,15 @@ describe("Setup integration (real client + mock server)", () => {
       .json("GET", "/commands/options", { options: [] })
       .json("GET", "/commands/routine-options", { options: [] })
       .json("GET", "/intelligences/cli-agents/detection", {
-        agents: [{ name: "codex", executable: "codex", detected: true, path: "/usr/bin/codex" }],
+        agents: [
+          {
+            name: "codex",
+            executable: "codex",
+            config_reference: "codex",
+            detected: true,
+            path: "/usr/bin/codex",
+          },
+        ],
       })
       .json("GET", "/intelligences/model-providers", llmProviders())
       .json("GET", "/config/roles", {

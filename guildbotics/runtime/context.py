@@ -180,6 +180,11 @@ class Context:
         """Close cached integrations that hold network resources."""
         await _maybe_aclose(self.chat_service)
         self.chat_service = None
+        from guildbotics.intelligences.agent_runtime.registry import (
+            close_native_adapters,
+        )
+
+        await close_native_adapters(self.person.person_id)
 
     def _normalize_for_shared_state(self, value: Any) -> Any:
         if isinstance(value, BaseModel):
