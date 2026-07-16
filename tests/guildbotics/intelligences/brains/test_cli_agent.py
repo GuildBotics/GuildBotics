@@ -953,3 +953,20 @@ async def test_cli_agent_kills_subprocess_on_cancellation(monkeypatch, tmp_path)
     finally:
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)
+
+
+def test_mask_env_masks_api_keys_and_other_secret_names():
+    env = {
+        "OPENAI_API_KEY": "real-secret",
+        "LLM_API_KEY": "real-secret",
+        "embedding_api_key": "real-secret",
+        "SLACK_BOT_TOKEN": "real-secret",
+        "MY_PASSWORD": "real-secret",
+        "AWS_CREDENTIALS": "real-secret",
+        "PATH": "/usr/bin",
+    }
+
+    masked = cli_agent.CliAgentBrain._mask_env(None, env)
+
+    assert masked["PATH"] == "/usr/bin"
+    assert all(value == "***" for key, value in masked.items() if key != "PATH")

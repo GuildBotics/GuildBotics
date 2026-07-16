@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -151,8 +150,17 @@ async def main(
                 event=incoming.event,
                 chat_participation=incoming.chat_participation,
             )
-        except Exception:
+        except Exception as exc:
             if _read_retry_context_from_context(context).is_final_attempt:
+                _log(
+                    context,
+                    "error",
+                    "chat event abandoned after final attempt: "
+                    "channel=%s event=%s error=%s",
+                    incoming.channel_id,
+                    incoming.event.event_id,
+                    exc,
+                )
                 state_store.mark_processed_event(
                     incoming.service_name,
                     context.person.person_id,
@@ -362,6 +370,15 @@ async def _handle_event(
             )
             raise
         if retry_context.is_final_attempt:
+            _log(
+                context,
+                "error",
+                "chat event abandoned after final attempt: "
+                "channel=%s event=%s error=%s",
+                channel_id,
+                event.event_id,
+                exc,
+            )
             await _escalate_incomplete(
                 chat_service=chat_service,
                 state_store=state_store,
@@ -379,16 +396,16 @@ async def _handle_event(
             )
             return
         raise
-    if hasattr(context, "logger"):
-        with suppress(Exception):
-            context.logger.info(
-                "chat completion=%s evidence=%s channel=%s thread=%s event=%s",
-                completion.status,
-                completion.evidence_types,
-                channel_id,
-                event.thread_ts,
-                event.event_id,
-            )
+    _log(
+        context,
+        "info",
+        "chat completion=%s evidence=%s channel=%s thread=%s event=%s",
+        completion.status,
+        completion.evidence_types,
+        channel_id,
+        event.thread_ts,
+        event.event_id,
+    )
 
     state_store.mark_processed_event(
         service_name, person_id, channel_id, event.event_id
@@ -603,7 +620,7 @@ async def _live_thread_context(
             seen_cursors.add(next_cursor)
             cursor = next_cursor
     except Exception as exc:
-        _log_warning(context, "live chat thread context unavailable: %s", exc)
+        _log(context, "warning", "live chat thread context unavailable: %s", exc)
         return _bounded_thread_context(messages), False
     return _bounded_thread_context(messages), True
 
@@ -998,22 +1015,12 @@ def _message_to_prompt_dict(message: Message) -> dict[str, str]:
     }
 
 
-def _log_info(context: Any, msg: str, *args: Any) -> None:
+def _log(context: Any, level: str, msg: str, *args: Any) -> None:
     logger = getattr(context, "logger", None)
     if logger is None:
         return
     try:
-        logger.info(msg, *args)
-    except Exception:
-        return
-
-
-def _log_warning(context: Any, msg: str, *args: Any) -> None:
-    logger = getattr(context, "logger", None)
-    if logger is None:
-        return
-    try:
-        logger.warning(msg, *args)
+        getattr(logger, level)(msg, *args)
     except Exception:
         return
 

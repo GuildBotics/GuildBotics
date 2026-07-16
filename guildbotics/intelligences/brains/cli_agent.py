@@ -989,7 +989,7 @@ class CliAgentBrain(Brain):
         )
 
     def _mask_env(self, env: dict[str, str]) -> dict[str, str]:
-        sensitive = ("TOKEN", "PASSWORD", "SECRET", "PRIVATE_KEY", "ASKPASS")
+        sensitive = ("KEY", "TOKEN", "PASSWORD", "SECRET", "CREDENTIAL", "ASKPASS")
         return {
             key: "***" if any(part in key.upper() for part in sensitive) else value
             for key, value in env.items()

@@ -12,6 +12,7 @@ from guildbotics.intelligences.agent_runtime.claude import (
     ClaudeStreamJsonAdapter,
     _decode_events,
 )
+from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentEventKind,
@@ -54,9 +55,10 @@ class _StreamProcess:
         *,
         returncode: int | None = 0,
         stderr: bytes = b"",
+        stream_limit: int = 2**16,
     ) -> None:
         self.stdin = _Input()
-        self.stdout = asyncio.StreamReader()
+        self.stdout = asyncio.StreamReader(limit=stream_limit)
         self.stderr = asyncio.StreamReader()
         self.returncode = returncode
         for message in messages:
@@ -200,6 +202,86 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     assert all(event.path == "guildbotics/a.py" for event in file_events)
     sent = json.loads(bytes(stream.stdin.data))
     assert sent["message"]["content"][0]["text"] == "continue"
+
+
+def _oversized_replay_messages() -> list[Any]:
+    return [
+        {"type": "system", "subtype": "init", "session_id": "session-1"},
+        {
+            "type": "user",
+            "session_id": "session-1",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "x" * (2 * 2**16),
+                    }
+                ]
+            },
+        },
+        {
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-1",
+            "result": "final",
+            "usage": {},
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_claude_requests_stream_limit_for_oversized_lines(
+    monkeypatch, tmp_path
+) -> None:
+    stream = _StreamProcess(
+        _oversized_replay_messages(), stream_limit=STREAM_READ_LIMIT
+    )
+    limits: list[Any] = []
+
+    async def create_process(*args, **kwargs):
+        if args[-1] == "--help":
+            return _HelpProcess()
+        limits.append(kwargs.get("limit"))
+        return stream
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = ClaudeStreamJsonAdapter()
+
+    result = await adapter.run_turn(
+        "hello",
+        _context(tmp_path),
+        ConversationRecord(key=_context(tmp_path).conversation_key),
+        lambda _event: None,
+    )
+
+    assert result.output == "final"
+    assert limits == [STREAM_READ_LIMIT]
+
+
+@pytest.mark.asyncio
+async def test_claude_oversized_line_beyond_limit_is_protocol_error(
+    monkeypatch, tmp_path
+) -> None:
+    stream = _StreamProcess(_oversized_replay_messages())
+
+    async def create_process(*args, **_kwargs):
+        return _HelpProcess() if args[-1] == "--help" else stream
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = ClaudeStreamJsonAdapter()
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await adapter.run_turn(
+            "hello",
+            _context(tmp_path),
+            ConversationRecord(key=_context(tmp_path).conversation_key),
+            lambda _event: None,
+        )
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.PROTOCOL
+    assert excinfo.value.rotate_session is True
+    assert "longer than limit" in str(excinfo.value)
 
 
 def test_claude_compaction_event_is_provider_neutral() -> None:
