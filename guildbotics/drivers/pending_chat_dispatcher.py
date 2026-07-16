@@ -16,6 +16,7 @@ from guildbotics.integrations.chat_state_store import (
     PendingChatEvent,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.observability import trace_scope
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
@@ -108,53 +109,66 @@ class PendingChatDispatcher:
         pending: PendingChatEvent,
     ) -> int:
         event_id = pending.event.event_id
-        try:
-            with self._execution.track_work(
-                source="event_queue",
-                person_id=person.person_id,
-                command=self._workflow_command,
-            ):
-                # Consume a retry attempt only once the work is accepted, so a
-                # dispatch rejected while the runtime drains does not burn the
-                # event's retry budget without ever running the workflow.
-                if not pending.run_id:
-                    pending.run_id = uuid4().hex
-                if pending.attempt_count <= 0:
-                    pending.max_attempts = _max_pending_attempts()
-                pending.attempt_count = max(0, pending.attempt_count) + 1
-                pending.max_attempts = max(1, pending.max_attempts)
-                pending.next_attempt_at = None
+        with trace_scope(
+            "event_listener",
+            person_id=person.person_id,
+            command=self._workflow_command,
+        ):
+            try:
+                with self._execution.track_work(
+                    source="event_queue",
+                    person_id=person.person_id,
+                    command=self._workflow_command,
+                ):
+                    # Consume a retry attempt only once the work is accepted, so a
+                    # dispatch rejected while the runtime drains does not burn the
+                    # event's retry budget without ever running the workflow.
+                    if not pending.run_id:
+                        pending.run_id = uuid4().hex
+                    if pending.attempt_count <= 0:
+                        pending.max_attempts = _max_pending_attempts()
+                    pending.attempt_count = max(0, pending.attempt_count) + 1
+                    pending.max_attempts = max(1, pending.max_attempts)
+                    pending.next_attempt_at = None
+                    self._state_store.save_pending_event(
+                        service, person.person_id, channel_id, pending
+                    )
+                    await self._run_workflow(person, service, channel_id, pending)
+            except WorkRejectedError:
+                return 0
+            except Exception as exc:  # leave queued for retry; do not block the queue
+                rate_limit = workflow_rate_limit_from_exception(exc)
+                pending.next_attempt_at = (
+                    rate_limit.retry_after_at
+                    if rate_limit is not None and rate_limit.retry_after_at
+                    else _next_attempt_at(pending.attempt_count)
+                )
                 self._state_store.save_pending_event(
                     service, person.person_id, channel_id, pending
                 )
-                await self._run_workflow(person, service, channel_id, pending)
-        except WorkRejectedError:
-            return 0
-        except Exception as exc:  # leave queued for retry; do not block the queue
-            rate_limit = workflow_rate_limit_from_exception(exc)
-            pending.next_attempt_at = (
-                rate_limit.retry_after_at
-                if rate_limit is not None and rate_limit.retry_after_at
-                else _next_attempt_at(pending.attempt_count)
+                log = (
+                    self._context.logger.error
+                    if pending.attempt_count >= pending.max_attempts
+                    else self._context.logger.warning
+                )
+                log(
+                    "chat event processing failed: person=%s channel=%s event=%s "
+                    "attempt=%s/%s error=%s",
+                    person.person_id,
+                    channel_id,
+                    event_id,
+                    pending.attempt_count,
+                    pending.max_attempts,
+                    exc,
+                )
+                return 0
+            self._state_store.mark_processed_event(
+                service, person.person_id, channel_id, event_id
             )
-            self._state_store.save_pending_event(
-                service, person.person_id, channel_id, pending
+            self._state_store.remove_pending_event(
+                service, person.person_id, channel_id, event_id
             )
-            self._context.logger.warning(
-                "chat event processing failed: person=%s channel=%s event=%s error=%s",
-                person.person_id,
-                channel_id,
-                event_id,
-                exc,
-            )
-            return 0
-        self._state_store.mark_processed_event(
-            service, person.person_id, channel_id, event_id
-        )
-        self._state_store.remove_pending_event(
-            service, person.person_id, channel_id, event_id
-        )
-        return 1
+            return 1
 
     async def _run_workflow(
         self,

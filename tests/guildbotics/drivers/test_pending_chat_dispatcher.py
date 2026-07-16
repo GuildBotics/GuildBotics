@@ -13,6 +13,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
+from guildbotics.observability import current_trace
 from guildbotics.runtime.event_listener import (
     INCOMING_CHAT_EVENT_KEY,
     IncomingChatEvent,
@@ -194,6 +195,72 @@ async def test_dispatcher_leaves_event_queued_on_error(monkeypatch, tmp_path):
     pending = store.load_pending_events("slack", "alice", "C1")[0]
     assert pending.attempt_count == 1
     assert pending.run_id == first_run_id
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_failure_log_shares_workflow_trace(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    workflow_traces = []
+
+    class _FailingRunner:
+        def __init__(self, *a):
+            pass
+
+        async def run(self):
+            workflow_traces.append(current_trace())
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FailingRunner
+    )
+    context = _FakeContext()
+    logged = []
+    context.logger.warning = lambda *a, **k: logged.append(current_trace())
+    dispatcher = PendingChatDispatcher(context, state_store=store)  # type: ignore[arg-type]
+
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    # The failure log is emitted inside the same trace the workflow ran under,
+    # so diagnostics can correlate it instead of recording trace_id=null.
+    assert len(logged) == 1 and logged[0] is not None
+    assert workflow_traces[0] is not None
+    assert logged[0].trace_id == workflow_traces[0].trace_id
+    assert logged[0].person_id == "alice"
+    assert logged[0].command == "workflows/chat_conversation_workflow"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_escalates_final_attempt_failure_to_error(
+    monkeypatch, tmp_path
+):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    pending.attempt_count = 4
+    pending.max_attempts = 5
+    store.save_pending_event("slack", "alice", "C1", pending)
+
+    class _FailingRunner:
+        def __init__(self, *a):
+            pass
+
+        async def run(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FailingRunner
+    )
+    context = _FakeContext()
+    logged = []
+    context.logger.warning = lambda *a, **k: logged.append(("warning",) + a)
+    context.logger.error = lambda *a, **k: logged.append(("error",) + a)
+    dispatcher = PendingChatDispatcher(context, state_store=store)  # type: ignore[arg-type]
+
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert [entry[0] for entry in logged] == ["error"]
+    assert logged[0][1].startswith("chat event processing failed")
 
 
 @pytest.mark.asyncio

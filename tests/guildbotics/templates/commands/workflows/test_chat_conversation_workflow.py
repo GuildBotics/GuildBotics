@@ -41,7 +41,13 @@ class StubLogger:
         self.lines: list[tuple] = []
 
     def info(self, *args):
-        self.lines.append(args)
+        self.lines.append(("info",) + args)
+
+    def warning(self, *args):
+        self.lines.append(("warning",) + args)
+
+    def error(self, *args):
+        self.lines.append(("error",) + args)
 
 
 class FakeChatService:
@@ -778,6 +784,10 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
     assert metadata["event_type"] == "guildbotics.workflow_status"
     assert metadata["event_payload"]["routing"] == "suppress"
     assert metadata["event_payload"]["reason"] == "failed"
+    # Giving up must be visible in the logs as an error, not silent.
+    error_lines = [line for line in ctx.logger.lines if line[0] == "error"]
+    assert len(error_lines) == 1
+    assert error_lines[0][1].startswith("chat event abandoned after final attempt")
 
 
 @pytest.mark.asyncio
@@ -970,6 +980,10 @@ async def test_final_prerun_identity_failure_marks_processed(tmp_path):
     assert state_store.load_channel_cursor(
         "slack", "alice", "C1"
     ).processed_event_ids == ["E1"]
+    # Giving up must be visible in the logs as an error, not silent.
+    error_lines = [line for line in ctx.logger.lines if line[0] == "error"]
+    assert len(error_lines) == 1
+    assert error_lines[0][1].startswith("chat event abandoned after final attempt")
 
 
 @pytest.mark.asyncio
