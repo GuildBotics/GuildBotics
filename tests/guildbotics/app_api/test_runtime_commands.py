@@ -35,6 +35,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.service_lock import (
     ServiceLockMetadata,
     ServiceLockUnavailableError,
@@ -1040,6 +1041,41 @@ async def test_run_command_rejects_concurrent_run_with_conflict(
     assert exc_info.value.code == "command_already_running"
     assert exc_info.value.status_code == HTTP_CONFLICT
     assert exc_info.value.context == {"trace_id": "inflight-id"}
+
+
+@pytest.mark.asyncio
+async def test_run_command_rejects_person_lease_conflict_with_http_409(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(data_root))
+    context = _make_context([_make_person("bot")])
+    runtime = _runtime_with_context(monkeypatch, context)
+    calls: list[str] = []
+
+    async def fake_run_command(*_: Any, **__: Any) -> str:
+        calls.append("called")
+        return "ok"
+
+    monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
+    holder = PersonExecutionLease("bot", data_root)
+    holder.acquire(source="routine", command="ticket", work_id="existing-work")
+    try:
+        with pytest.raises(AppApiError) as exc_info:
+            await runtime.run_command(
+                CommandRunRequest(command="demo", person="bot")
+            )
+    finally:
+        holder.release()
+
+    assert exc_info.value.code == "work_rejected"
+    assert exc_info.value.status_code == HTTP_CONFLICT
+    assert calls == []
+
+    response = await runtime.run_command(
+        CommandRunRequest(command="demo", person="bot")
+    )
+    assert response.output == "ok"
 
 
 @pytest.mark.asyncio

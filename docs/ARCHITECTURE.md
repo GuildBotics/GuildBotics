@@ -137,6 +137,9 @@ Invariants:
   `guildbotics run`, interactive sessions, and separate GuildBotics processes with one
   OS advisory lease per person. Nested `member` writes require the exact delegated
   lease/run identity; environment-variable presence alone never authorizes them.
+  Read-only `member` commands declare that capability on their Click callback;
+  undeclared commands fail closed as write-capable instead of being classified from
+  command-name strings.
 - The long-running background service is singleton per machine. CLI `guildbotics
   start` and the Desktop-managed service contend on the same OS advisory lock at
   `<machine-state-root>/run/service.lock`; the lock covers scheduler workers and the
