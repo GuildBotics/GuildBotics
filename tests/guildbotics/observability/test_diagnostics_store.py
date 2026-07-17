@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
@@ -63,7 +66,10 @@ def test_list_traces_aggregates_records(tmp_path: Path) -> None:
     assert summary["log_count"] == 1
     assert summary["started_at"] == "2026-06-12T00:00:01+09:00"
     assert summary["updated_at"] == "2026-06-12T00:00:03+09:00"
-    assert summary["attributes"] == {"service_run_id": "svc-1"}
+    assert summary["attributes"] == {
+        "service_run_id": "svc-1",
+        "session.path": "sessions/t1.jsonl",
+    }
 
 
 def test_list_traces_orders_mixed_offset_timestamps_by_instant(tmp_path: Path) -> None:
@@ -92,8 +98,8 @@ def test_list_traces_treats_naive_timestamp_as_utc(tmp_path: Path) -> None:
 def test_failed_event_sets_failed_status_and_error_count(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     store.record(_event("t1", "command.started"))
-    store.record(_event("t1", "command.failed"))
     store.record(_log("t1", "ERROR", "boom", "2026-06-12T00:00:05+09:00"))
+    store.record(_event("t1", "command.failed", timestamp="2026-06-12T00:00:06+09:00"))
 
     summary = store.list_traces()[0]
     assert summary["status"] == "failed"
@@ -132,6 +138,7 @@ def test_list_traces_filters_by_exact_attribute(tmp_path: Path) -> None:
 
 def test_global_records_returns_unscoped_events_and_logs(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.start_system_session("service-1")
     store.record(_log(None, "INFO", "global", "2026-06-12T00:00:01+09:00"))
     store.record(
         _event(
@@ -146,25 +153,30 @@ def test_global_records_returns_unscoped_events_and_logs(tmp_path: Path) -> None
     records = store.global_records()
     # Unscoped service events and global logs are returned (oldest-first);
     # records tied to a trace are excluded.
-    assert [record.get("type") or record.get("message") for record in records] == [
+    values = [record.get("type") or record.get("message") for record in records]
+    assert [value for value in values if value != "system.started"] == [
         "global",
         "scheduler.running",
     ]
+    assert values.count("system.started") == 1
 
 
 def test_global_records_orders_mixed_offset_timestamps_by_instant(
     tmp_path: Path,
 ) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
-    store.record(_event("", "scheduler.running", timestamp="2026-07-01T09:00:00+09:00"))
-    store.record(_log(None, "INFO", "later", "2026-07-01T00:30:00Z"))
+    store.start_system_session("service-1")
+    store.record(_event("", "scheduler.running", timestamp="2099-07-01T09:00:00+09:00"))
+    store.record(_log(None, "INFO", "later", "2099-07-01T00:30:00Z"))
 
     records = store.global_records()
 
-    assert [record.get("type") or record.get("message") for record in records] == [
+    values = [record.get("type") or record.get("message") for record in records]
+    assert [value for value in values if value != "system.started"] == [
         "scheduler.running",
         "later",
     ]
+    assert values.count("system.started") == 1
     assert [record.get("message") for record in store.global_records(limit=1)] == [
         "later"
     ]
@@ -216,7 +228,10 @@ def test_records_after_reads_disk_rows_beyond_memory_window(tmp_path: Path) -> N
         None, includes=lambda item: item.get("kind") == "event"
     )
 
-    assert [record["type"] for record in records] == ["command.failed"]
+    assert [record["type"] for record in records] == [
+        "session.pointer",
+        "command.failed",
+    ]
 
 
 def test_records_after_returns_only_rows_appended_after_cursor(tmp_path: Path) -> None:
@@ -227,7 +242,10 @@ def test_records_after_returns_only_rows_appended_after_cursor(tmp_path: Path) -
 
     records, next_cursor = store.records_after(cursor, includes=lambda _: True)
 
-    assert [record["type"] for record in records] == ["command.finished"]
+    assert [record["type"] for record in records] == [
+        "session.pointer",
+        "command.finished",
+    ]
     assert next_cursor.offset > cursor.offset
 
 
@@ -270,6 +288,80 @@ def test_rotation_does_not_duplicate_the_record_on_disk(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8").count('"command.finished"') == 1
 
 
+def test_default_store_migrates_legacy_diagnostics_and_prompt_trace_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    diagnostics = run_dir / "diagnostics.jsonl"
+    prompt_trace = run_dir / "prompt_trace.jsonl"
+    diagnostics.write_text('{"kind":"log","message":"legacy"}\n')
+    prompt_trace.write_text('{"event":"llm.request"}\n')
+
+    store = DiagnosticsStore()
+
+    assert store.records_between(includes=lambda _timestamp: True) == []
+    assert diagnostics.read_text() == ""
+    assert prompt_trace.exists() is False
+    assert (run_dir / ".session-transcripts-v1").is_file()
+
+    diagnostics.write_text('{"kind":"event","type":"github.push"}\n')
+    DiagnosticsStore()
+    assert "github.push" in diagnostics.read_text()
+
+
+def test_default_store_construction_does_not_create_workspace_files(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path))
+
+    store = DiagnosticsStore()
+
+    assert store.path == tmp_path / "run/diagnostics.jsonl"
+    assert (tmp_path / "run").exists() is False
+
+
+def test_importing_diagnostics_events_does_not_mutate_cwd(tmp_path: Path) -> None:
+    repository_root = Path(__file__).parents[3]
+    env = os.environ.copy()
+    env.pop("GUILDBOTICS_DATA_DIR", None)
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(repository_root), env.get("PYTHONPATH", "")])
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import guildbotics.observability.diagnostics_events"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / ".guildbotics").exists() is False
+
+
+def test_default_store_recovers_stale_migration_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    lock = run_dir / ".session-transcripts-v1.lock"
+    lock.write_text("999999999\n", encoding="utf-8")
+    diagnostics = run_dir / "diagnostics.jsonl"
+    diagnostics.write_text('{"kind":"log","message":"legacy"}\n')
+
+    store = DiagnosticsStore()
+    records = store.records_between(includes=lambda _timestamp: True)
+
+    assert records == []
+    assert (run_dir / ".session-transcripts-v1").is_file()
+    assert lock.exists() is False
+
+
 def test_reads_pick_up_records_appended_by_another_process(tmp_path: Path) -> None:
     # A long-lived reader (e.g. the app_api backend) and a separate writer
     # (e.g. a ``guildbotics member`` CLI subprocess) share one JSONL file. The
@@ -283,6 +375,7 @@ def test_reads_pick_up_records_appended_by_another_process(tmp_path: Path) -> No
 
     records = reader.records_between(includes=lambda _timestamp: True, limit=10)
     assert [record["trace_id"] for record in records] == ["t1"]
+    assert [record["type"] for record in records] == ["github.push"]
     assert reader.list_traces()[0]["trace_id"] == "t1"
 
 

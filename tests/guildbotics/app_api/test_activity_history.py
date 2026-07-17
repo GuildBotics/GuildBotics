@@ -61,7 +61,7 @@ def _chat_records() -> list[dict[str, Any]]:
             "source": "event_listener",
             "command": "workflows/chat_conversation_workflow",
             "workflow": "",
-            "kind": "prompt_trace",
+            "kind": "io",
             "attributes": {
                 "service_run_id": "scheduler-run",
                 "event.provider": "slack",
@@ -379,7 +379,7 @@ def test_read_only_memory_title_is_skipped_for_session_title() -> None:
         "source": "interactive",
         "command": "member chat reply",
         "workflow": "",
-        "kind": "prompt_trace",
+        "kind": "io",
         "attributes": {},
         "payload": {"fields": {"prompt": "作業して"}},
     }
@@ -443,7 +443,7 @@ def test_interactive_session_still_uses_prompt() -> None:
             "source": "interactive",
             "command": "member chat reply",
             "workflow": "",
-            "kind": "prompt_trace",
+            "kind": "io",
             "attributes": {},
             "payload": {"fields": {"prompt": "会議の議事録をまとめて"}},
         }

@@ -336,7 +336,7 @@ def test_member_memory_update_reads_stdin_only_when_requested(monkeypatch):
     assert payload["body"] == "Updated body\n"
 
 
-def test_member_cli_reuses_trace_for_interactive_session(monkeypatch):
+def test_member_cli_reuses_trace_for_interactive_session(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
@@ -352,6 +352,8 @@ def test_member_cli_reuses_trace_for_interactive_session(monkeypatch):
     record = runner.invoke(
         member_module.member,
         [
+            "--workspace",
+            str(tmp_path),
             "memory",
             "record",
             "--person",
@@ -373,6 +375,8 @@ def test_member_cli_reuses_trace_for_interactive_session(monkeypatch):
     recall = runner.invoke(
         member_module.member,
         [
+            "--workspace",
+            str(tmp_path),
             "memory",
             "recall",
             "--person",
@@ -388,13 +392,14 @@ def test_member_cli_reuses_trace_for_interactive_session(monkeypatch):
     assert len(traces) == 1
     trace_id = traces[0]["trace_id"]
     records = DiagnosticsStore().get_records(trace_id)
-    assert [item["type"] for item in records] == [
+    events = [item for item in records if item.get("kind") == "event"]
+    assert [item["type"] for item in events] == [
         "member.command.started",
         "member.command.finished",
         "member.command.started",
         "member.command.finished",
     ]
-    assert {item["command"] for item in records} == {
+    assert {item["command"] for item in events} == {
         "member memory recall",
         "member memory record",
     }

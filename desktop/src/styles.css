@@ -1259,7 +1259,7 @@ pre {
 }
 
 /* Execution history (実行履歴) UI. Namespaced as exec-* to avoid colliding
-   with the prompt-trace list/detail styles, which own the trace-* names. */
+   with the execution list/detail styles, which own the trace-* names. */
 .exec-header {
   display: flex;
   flex-direction: column;

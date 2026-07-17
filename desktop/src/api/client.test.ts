@@ -14,15 +14,16 @@ import {
   getIntelligenceConfig,
   getMemoryEvents,
   getMemberConfig,
-  getPromptTrace,
   getRuntimeDebug,
   getSystemAlerts,
+  getTranscriptSettings,
   memberAvatarUrl,
   runScenarioDiagnostics,
   setWorkspace,
   subscribeEvents,
   subscribeLogs,
   updateRuntimeDebug,
+  updateTranscriptSettings,
   verify,
   type RuntimeEvent,
   type RuntimeLog,
@@ -177,23 +178,15 @@ describe("request headers and body", () => {
 });
 
 describe("GET query parameter encoding", () => {
-  it("encodes limit and path for getPromptTrace", async () => {
-    const { calls } = captureFetch(jsonResponse({ events: [] }));
-    await getPromptTrace(50, "/var/logs/trace file.jsonl");
+  it("gets and updates transcript settings", async () => {
+    const { calls } = captureFetch(jsonResponse({ detail: "standard" }));
+    await getTranscriptSettings();
+    await updateTranscriptSettings({ detail: "full", retention_days: 14 });
 
-    const url = new URL(calls[0].url);
-    expect(url.pathname).toBe("/prompt-trace");
-    expect(url.searchParams.get("limit")).toBe("50");
-    expect(url.searchParams.get("path")).toBe("/var/logs/trace file.jsonl");
-    // The space must be percent-encoded in the raw query string.
-    expect(calls[0].url).toContain("trace+file.jsonl");
-  });
-
-  it("omits the path parameter when not provided", async () => {
-    const { calls } = captureFetch(jsonResponse({ events: [] }));
-    await getPromptTrace();
-
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/prompt-trace?limit=20");
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/transcripts/settings");
+    expect(calls[1].url).toBe("http://127.0.0.1:8765/transcripts/settings");
+    expect(calls[1].init.method).toBe("PUT");
+    expect(calls[1].init.body).toBe(JSON.stringify({ detail: "full", retention_days: 14 }));
   });
 
   it("fetches runtime debug status", async () => {

@@ -42,9 +42,6 @@ from guildbotics.app_api.models import (
     ProjectStatusOptionsRequest,
     ProjectStatusOptionsResponse,
     ProjectSummary,
-    PromptTraceEntry,
-    PromptTraceStatus,
-    PromptTraceUpdateRequest,
     RoutineCommandOptionsResponse,
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
@@ -57,6 +54,8 @@ from guildbotics.app_api.models import (
     TraceRecord,
     TracesResponse,
     TraceSummary,
+    TranscriptSettingsStatus,
+    TranscriptSettingsUpdateRequest,
     VerifyResponse,
 )
 from guildbotics.app_api.system_alerts import SystemAlertService
@@ -65,6 +64,7 @@ from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
 )
 from guildbotics.capabilities.member_memory_audit import (
+    DEFAULT_MEMORY_AUDIT_MAX_BYTES,
     MemoryAuditStore,
     parse_memory_audit_timestamp,
 )
@@ -89,7 +89,16 @@ from guildbotics.intelligences.cli_agents import (
     resolve_cli_agent_path,
 )
 from guildbotics.observability import new_id, trace_scope
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.diagnostics_store import (
+    DEFAULT_DIAGNOSTICS_MAX_BYTES,
+    DiagnosticsStore,
+)
+from guildbotics.observability.session_transcripts import (
+    TRANSCRIPT_DETAIL_ENV,
+    TRANSCRIPT_RETENTION_DAYS_ENV,
+    transcript_detail,
+    transcript_retention_days,
+)
 from guildbotics.runtime import Context
 from guildbotics.runtime.member_context import resolve_person
 from guildbotics.runtime.service_lock import ServiceLockUnavailableError
@@ -111,11 +120,6 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.prompt_trace import (
-    prompt_trace_enabled,
-    prompt_trace_path,
-    read_prompt_trace_events,
-)
 from guildbotics.utils.secret_store import read_env_values, write_env_values
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
@@ -132,8 +136,29 @@ ACTIVITY_SYNC_STATE_FILE = "activity_sync_weeks.json"
 ACTIVITY_SYNC_PERIOD_PARTS = 2
 
 
+class _UseProcessDataDir:
+    pass
+
+
+_USE_PROCESS_DATA_DIR = _UseProcessDataDir()
+
+
 def _activity_sync_state_path() -> Path:
     return get_workspace_data_path("run", ACTIVITY_SYNC_STATE_FILE)
+
+
+def _remove_legacy_prompt_trace_settings(env_path: Path) -> None:
+    if not env_path.exists():
+        return
+    values = read_env_values(env_path)
+    changed = False
+    for key in ("GUILDBOTICS_PROMPT_TRACE", "GUILDBOTICS_PROMPT_TRACE_PATH"):
+        if key in values:
+            values.pop(key)
+            changed = True
+        os.environ.pop(key, None)
+    if changed:
+        write_env_values(env_path, values)
 
 
 def _completed_activity_weeks() -> set[tuple[str, str]]:
@@ -166,9 +191,12 @@ class AppRuntime:
         *,
         stop_timeout_seconds: float = 10.0,
         diagnostics_store: DiagnosticsStore | None = None,
+        inherited_data_dir: str | None | _UseProcessDataDir = _USE_PROCESS_DATA_DIR,
+        load_workspace_environment: bool = False,
     ) -> None:
         self._event_bus = event_bus
         self._diagnostics_store = diagnostics_store
+        self._system_service_run_id = new_id()
         self._system_alerts = SystemAlertService(diagnostics_store)
         self._lock = threading.Lock()
         self._activity_sync_lock = threading.Lock()
@@ -176,18 +204,27 @@ class AppRuntime:
         self._running_command_id: str | None = None
         self._execution = ExecutionCoordinator()
         self._loaded_dotenv_keys: set[str] = set()
-        self._inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
-        apply_workspace_data_root(
-            Path.cwd(),
-            Path.cwd() / ".env",
-            inherited_data_dir=self._inherited_data_dir,
-        )
+        if isinstance(inherited_data_dir, _UseProcessDataDir):
+            inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
+        self._inherited_data_dir = inherited_data_dir
+        if load_workspace_environment:
+            self._load_workspace_env(apply_data_root=True)
+        else:
+            apply_workspace_data_root(
+                Path.cwd(),
+                Path.cwd() / ".env",
+                inherited_data_dir=self._inherited_data_dir,
+            )
         self._lifecycle = RuntimeLifecycleService(
             event_bus=event_bus,
             context_factory=self._get_context,
             stop_timeout_seconds=stop_timeout_seconds,
             execution_coordinator=self._execution,
         )
+
+    @property
+    def system_service_run_id(self) -> str:
+        return self._system_service_run_id
 
     def get_config_status(self) -> ConfigStatus:
         cwd = Path.cwd()
@@ -233,9 +270,14 @@ class AppRuntime:
         stopped = self.stop_scheduler(force=True)
         if _runtime_has_active_work(stopped):
             raise _workspace_switch_blocked_error(stopped)
+        if self._diagnostics_store is not None:
+            self._diagnostics_store.finish_system_session()
         os.chdir(workspace)
         write_active_workspace(workspace)
         self._load_workspace_env(apply_data_root=True)
+        if self._diagnostics_store is not None:
+            self._diagnostics_store.start_system_session(self._system_service_run_id)
+            self._diagnostics_store.start_maintenance()
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
@@ -592,46 +634,48 @@ class AppRuntime:
                 return True
         return False
 
-    def get_prompt_trace_status(
-        self, limit: int = 20, read_path: str | None = None
-    ) -> PromptTraceStatus:
-        output_trace_file = prompt_trace_path()
-        trace_file = (
-            Path(read_path).expanduser()
-            if read_path and read_path.strip()
-            else output_trace_file
-        )
-        event_count, events = read_prompt_trace_events(limit, trace_file)
+    def get_transcript_settings(self) -> TranscriptSettingsStatus:
         status = self.get_config_status()
-        return PromptTraceStatus(
-            enabled=prompt_trace_enabled(),
+        usage = (
+            self._diagnostics_store.transcript_usage()
+            if self._diagnostics_store is not None
+            else {
+                "total_size_bytes": 0,
+                "index_size_bytes": 0,
+            }
+        )
+        memory_path = MemoryAuditStore().path
+        try:
+            memory_size = memory_path.stat().st_size
+        except OSError:
+            memory_size = 0
+        return TranscriptSettingsStatus(
+            detail=cast(Any, transcript_detail()),
+            retention_days=transcript_retention_days(),
             env_file=status.env_file,
             env_file_exists=status.env_file.exists(),
-            trace_file=trace_file,
-            output_trace_file=output_trace_file,
-            default_trace_file=get_workspace_data_path("run", "prompt_trace.jsonl"),
-            trace_file_exists=trace_file.exists(),
-            event_count=event_count,
-            events=[_prompt_trace_entry(event) for event in events],
+            sessions_dir=get_workspace_data_path("run", "sessions"),
+            total_size_bytes=int(usage["total_size_bytes"]),
+            index_size_bytes=int(usage["index_size_bytes"]),
+            index_rewrite_threshold_bytes=DEFAULT_DIAGNOSTICS_MAX_BYTES,
+            memory_size_bytes=memory_size,
+            memory_max_size_bytes=DEFAULT_MEMORY_AUDIT_MAX_BYTES,
         )
 
-    def update_prompt_trace(
-        self, request: PromptTraceUpdateRequest, *, limit: int = 20
-    ) -> PromptTraceStatus:
+    def update_transcript_settings(
+        self, request: TranscriptSettingsUpdateRequest
+    ) -> TranscriptSettingsStatus:
         status = self.get_config_status()
         env_values = read_env_values(status.env_file)
-        enabled_value = "1" if request.enabled else "0"
-        trace_path_value = request.trace_path.strip()
-        env_values["GUILDBOTICS_PROMPT_TRACE"] = enabled_value
-        os.environ["GUILDBOTICS_PROMPT_TRACE"] = enabled_value
-        if trace_path_value:
-            env_values["GUILDBOTICS_PROMPT_TRACE_PATH"] = trace_path_value
-            os.environ["GUILDBOTICS_PROMPT_TRACE_PATH"] = trace_path_value
-        else:
-            env_values.pop("GUILDBOTICS_PROMPT_TRACE_PATH", None)
-            os.environ.pop("GUILDBOTICS_PROMPT_TRACE_PATH", None)
+        env_values[TRANSCRIPT_DETAIL_ENV] = request.detail
+        env_values[TRANSCRIPT_RETENTION_DAYS_ENV] = str(request.retention_days)
+        for key in ("GUILDBOTICS_PROMPT_TRACE", "GUILDBOTICS_PROMPT_TRACE_PATH"):
+            env_values.pop(key, None)
+            os.environ.pop(key, None)
+        os.environ[TRANSCRIPT_DETAIL_ENV] = request.detail
+        os.environ[TRANSCRIPT_RETENTION_DAYS_ENV] = str(request.retention_days)
         write_env_values(status.env_file, env_values)
-        return self.get_prompt_trace_status(limit=limit)
+        return self.get_transcript_settings()
 
     def get_runtime_debug_status(self) -> RuntimeDebugStatus:
         status = self.get_config_status()
@@ -738,16 +782,6 @@ class AppRuntime:
             limit=limit,
         )
         traces = [TraceSummary.model_validate(summary) for summary in summaries]
-        # Surface traces that exist only as prompt-trace records (e.g. an LLM
-        # call whose enclosing events were rotated out) so they remain findable.
-        # Their source/person are unknown, so only include them in the
-        # unfiltered ("all") view — otherwise they leak across source filters.
-        if source is None and person_id is None and not query and not attr_key:
-            known = {summary["trace_id"] for summary in summaries}
-            traces += [
-                TraceSummary(trace_id=trace_id, source="", status="info")
-                for trace_id in sorted(self._prompt_trace_trace_ids() - known)
-            ]
         return TracesResponse(traces=traces)
 
     def get_trace_detail(self, trace_id: str) -> TraceDetailResponse:
@@ -765,18 +799,42 @@ class AppRuntime:
                 for item in self._diagnostics_store.get_records(trace_id)
             )
         records.extend(self._memory_trace_records(trace_id))
-        records.extend(self._prompt_trace_records(trace_id))
         records.sort(key=_trace_record_sort_key)
-        return TraceDetailResponse(trace_id=trace_id, summary=summary, records=records)
+        transcript_available = (
+            self._diagnostics_store.transcript_exists(trace_id)
+            if self._diagnostics_store is not None
+            else False
+        )
+        return TraceDetailResponse(
+            trace_id=trace_id,
+            summary=summary,
+            records=records,
+            transcript_available=transcript_available,
+        )
 
     def get_global_records(self, limit: int = 200) -> TraceDetailResponse:
         records: list[TraceRecord] = []
+        trace_id = ""
+        summary = None
         if self._diagnostics_store is not None:
+            trace_id = self._diagnostics_store.latest_system_trace_id() or ""
+            if trace_id:
+                raw_summary = self._diagnostics_store.get_summary(trace_id)
+                summary = (
+                    TraceSummary.model_validate(raw_summary)
+                    if raw_summary is not None
+                    else None
+                )
             records.extend(
                 _to_trace_record(item)
                 for item in self._diagnostics_store.global_records(limit=limit)
             )
-        return TraceDetailResponse(trace_id="", summary=None, records=records)
+        return TraceDetailResponse(
+            trace_id=trace_id,
+            summary=summary,
+            records=records,
+            transcript_available=bool(records),
+        )
 
     def get_activity_history(
         self,
@@ -899,10 +957,12 @@ class AppRuntime:
 
         if self._diagnostics_store is not None:
             records.extend(
-                self._diagnostics_store.records_between(
-                    includes=includes,
-                    limit=limit,
+                item
+                for item in self._diagnostics_store.records_between(
+                    includes=includes, limit=limit
                 )
+                if item.get("type")
+                not in {"session.pointer", "system.started", "system.finished"}
             )
         records.extend(
             MemoryAuditStore().list_events(
@@ -911,7 +971,6 @@ class AppRuntime:
                 limit=limit,
             )
         )
-        records.extend(self._prompt_trace_activity_records(includes, limit))
         records.sort(key=_activity_record_sort_key)
         return records[-max(1, limit) :]
 
@@ -944,43 +1003,11 @@ class AppRuntime:
             events=[_memory_event(item) for item in raw_events],
         )
 
-    def _prompt_trace_records(self, trace_id: str) -> list[TraceRecord]:
-        records: list[TraceRecord] = []
-        for item in self._read_all_prompt_trace_events():
-            if str(item.get("trace_id") or "") != trace_id:
-                continue
-            records.append(_prompt_trace_record(item))
-        return records
-
-    def _prompt_trace_activity_records(
-        self, includes: Callable[[str], bool], limit: int
-    ) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
-        for item in self._read_all_prompt_trace_events():
-            record = _prompt_trace_record(item).model_dump()
-            if includes(str(record.get("timestamp", ""))):
-                records.append(record)
-        records.sort(key=_activity_record_sort_key)
-        return records[-max(1, limit) :]
-
     def _memory_trace_records(self, trace_id: str) -> list[TraceRecord]:
         return [
             _to_trace_record(item)
             for item in MemoryAuditStore().list_events(trace_id=trace_id, limit=1000)
         ]
-
-    def _prompt_trace_trace_ids(self) -> set[str]:
-        return {
-            str(item.get("trace_id"))
-            for item in self._read_all_prompt_trace_events()
-            if item.get("trace_id")
-        }
-
-    def _read_all_prompt_trace_events(self) -> list[dict[str, Any]]:
-        if not prompt_trace_enabled() and not prompt_trace_path().exists():
-            return []
-        _, events = read_prompt_trace_events(10000, prompt_trace_path())
-        return events
 
     async def fetch_project_status_options(
         self, request: ProjectStatusOptionsRequest
@@ -1153,6 +1180,7 @@ class AppRuntime:
             (Path.cwd() / ".guildbotics" / "config").resolve()
         )
         dotenv_path = Path.cwd() / ".env"
+        _remove_legacy_prompt_trace_settings(dotenv_path)
         new_values = {
             key: value
             for key, value in (
@@ -1944,97 +1972,6 @@ def _memory_body_preview(path: str, *, limit: int = 800) -> str:
     return body[:limit]
 
 
-def _prompt_trace_record(item: dict[str, Any]) -> TraceRecord:
-    entry = _prompt_trace_entry(item)
-    return TraceRecord(
-        kind="prompt_trace",
-        timestamp=str(item.get("timestamp", "")),
-        trace_id=item.get("trace_id"),
-        span_id=item.get("span_id"),
-        parent_id=item.get("parent_id"),
-        call_id=item.get("call_id"),
-        span=str(item.get("span") or ""),
-        source=str(item.get("source") or ""),
-        person_id=entry.person_id,
-        command=entry.command,
-        type=entry.event,
-        message=entry.description or entry.event,
-        payload={
-            "prompt": entry.prompt,
-            "response": entry.response,
-            "transcript": entry.transcript,
-            "error": entry.error,
-            "brain": entry.brain,
-            "fields": entry.fields,
-        },
-    )
-
-
-def _prompt_trace_entry(item: dict[str, Any]) -> PromptTraceEntry:
-    fields = _prompt_trace_fields(item)
-    payload = item.get("payload")
-    prompt = _first_text(item, "prompt", "message") or _chat_prompt(payload)
-    response = _first_text(item, "content", "stdout")
-    transcript = _first_text(item, "transcript") or _chat_transcript(payload)
-    return PromptTraceEntry(
-        event=str(item.get("event", "")),
-        timestamp=str(item.get("timestamp", "")),
-        person_id=str(item.get("person_id", "")),
-        brain=str(item.get("brain", "")),
-        command=str(item.get("command", "")),
-        target=str(item.get("target", "")),
-        cwd=str(item.get("cwd", "")),
-        description=_first_text(item, "description"),
-        transcript=transcript,
-        prompt=prompt,
-        response=response,
-        error=_first_text(item, "error", "stderr"),
-        fields=fields,
-    )
-
-
-def _prompt_trace_fields(item: dict[str, Any]) -> dict[str, Any]:
-    hidden = {
-        "event",
-        "timestamp",
-        "prompt",
-        "message",
-        "content",
-        "description",
-        "stdout",
-        "stderr",
-        "error",
-        "payload",
-        "session_state",
-        "transcript",
-    }
-    fields: dict[str, Any] = {}
-    for key, value in item.items():
-        if key in hidden or value in (None, ""):
-            continue
-        if isinstance(value, str | int | float | bool):
-            fields[key] = value
-    return fields
-
-
-def _first_text(item: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = _display_text(item.get(key))
-        if value:
-            return value
-    return ""
-
-
-def _display_text(value: object) -> str:
-    if value in (None, ""):
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool | int | float):
-        return str(value)
-    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
-
-
 def _runtime_has_active_work(status: RuntimeStatus) -> bool:
     return (
         status.scheduler.running
@@ -2056,25 +1993,3 @@ def _workspace_switch_blocked_error(status: RuntimeStatus) -> AppApiError:
         },
         status_code=409,
     )
-
-
-def _chat_prompt(payload: object) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    parts = []
-    agent_profile = payload.get("agent_profile")
-    if agent_profile:
-        parts.append(f"agent_profile:\n{agent_profile}")
-    transcript = payload.get("thread_messages")
-    if transcript:
-        parts.append(f"thread_messages:\n{transcript}")
-    reply_intent = payload.get("reply_intent")
-    if reply_intent:
-        parts.append(f"reply_intent:\n{reply_intent}")
-    return "\n\n".join(str(part) for part in parts)
-
-
-def _chat_transcript(payload: object) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    return _display_text(payload.get("thread_messages"))

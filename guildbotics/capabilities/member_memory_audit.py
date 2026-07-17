@@ -14,6 +14,7 @@ from guildbotics.utils.timestamps import parse_iso_datetime
 
 MEMORY_AUDIT_FILE = "memory_events.jsonl"
 DEFAULT_MEMORY_AUDIT_LIMIT = 5000
+DEFAULT_MEMORY_AUDIT_MAX_BYTES = 8 * 1024 * 1024
 _MEMORY_AUDIT_LOCK = threading.Lock()
 
 
@@ -103,8 +104,14 @@ def append_memory_event(
 
 
 class MemoryAuditStore:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        max_file_bytes: int = DEFAULT_MEMORY_AUDIT_MAX_BYTES,
+    ) -> None:
         self._path = path
+        self._max_file_bytes = max_file_bytes
 
     @property
     def path(self) -> Path:
@@ -112,13 +119,18 @@ class MemoryAuditStore:
 
     def record(self, item: dict[str, Any]) -> None:
         path = self.path
+        line = self._bounded_line(item)
+        if not line:
+            return
         try:
             with _MEMORY_AUDIT_LOCK:
                 path.parent.mkdir(parents=True, exist_ok=True)
+                current_size = path.stat().st_size if path.exists() else 0
+                if current_size + len(line.encode("utf-8")) + 1 > self._max_file_bytes:
+                    self._rewrite_with_newest(path, line)
+                    return
                 with path.open("a", encoding="utf-8") as handle:
-                    handle.write(
-                        json.dumps(item, ensure_ascii=False, default=str) + "\n"
-                    )
+                    handle.write(line + "\n")
         except OSError:
             return
 
@@ -167,6 +179,57 @@ class MemoryAuditStore:
             for item in (_json_object(line.strip()) for line in lines)
             if item is not None
         ]
+
+    def _rewrite_with_newest(self, path: Path, newest: str) -> None:
+        try:
+            existing = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            existing = []
+        retained = [newest]
+        size = len(newest.encode("utf-8")) + 1
+        for line in reversed(existing):
+            line_size = len(line.encode("utf-8")) + 1
+            if size + line_size > self._max_file_bytes:
+                break
+            retained.append(line)
+            size += line_size
+        try:
+            path.write_text("\n".join(reversed(retained)) + "\n", encoding="utf-8")
+        except OSError:
+            return
+
+    def _bounded_line(self, item: dict[str, Any]) -> str:
+        line = json.dumps(item, ensure_ascii=False, default=str)
+        size = len(line.encode("utf-8")) + 1
+        if size <= self._max_file_bytes:
+            return line
+        compact = {
+            key: value
+            for key, value in item.items()
+            if key not in {"attributes", "payload", "message"}
+        }
+        compact["message"] = (
+            "memory audit payload omitted because it exceeded the file limit"
+        )
+        compact["attributes"] = {
+            key: value
+            for key, value in _dict(item.get("attributes")).items()
+            if key in {"memory.action", "memory.doc_id", "memory.scope", "memory.kind"}
+        }
+        compact["payload"] = {
+            "truncated": True,
+            "original_size_bytes": size,
+        }
+        line = json.dumps(compact, ensure_ascii=False, default=str)
+        if len(line.encode("utf-8")) + 1 <= self._max_file_bytes:
+            return line
+        fallback = json.dumps(
+            {"truncated": True, "original_size_bytes": size},
+            ensure_ascii=False,
+        )
+        if len(fallback.encode("utf-8")) + 1 <= self._max_file_bytes:
+            return fallback
+        return ""
 
 
 def _matches_event(

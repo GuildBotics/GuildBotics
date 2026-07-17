@@ -1,5 +1,5 @@
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -18,8 +18,14 @@ use tauri_plugin_shell::ShellExt;
 struct BackendState {
     token: String,
     port: u16,
+    boot_log_path: PathBuf,
     child: Mutex<Option<CommandChild>>,
 }
+
+const BOOT_LOG_MAX_BYTES: usize = 1024 * 1024;
+const BOOT_LOG_COMPACT_BYTES: usize = BOOT_LOG_MAX_BYTES / 2;
+const BOOT_LOG_TAIL_BYTES: usize = 64 * 1024;
+const BOOT_LOG_TAIL_LINES: usize = 100;
 
 const CLI_AGENT_HOMES: [(&str, &str, &str); 4] = [
     ("codex", "CODEX_HOME", ".codex"),
@@ -36,6 +42,45 @@ fn backend_info(state: tauri::State<'_, BackendState>) -> serde_json::Value {
         "port": state.port,
         "token": state.token,
     })
+}
+
+#[tauri::command]
+fn bootstrap_log(state: tauri::State<'_, BackendState>) -> serde_json::Value {
+    let tail = read_boot_log_tail(&state.boot_log_path).unwrap_or_default();
+    serde_json::json!({
+        "path": state.boot_log_path.display().to_string(),
+        "tail": tail,
+    })
+}
+
+fn append_boot_log(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    file.write_all(bytes)?;
+    if !bytes.ends_with(b"\n") {
+        file.write_all(b"\n")?;
+    }
+    file.flush()?;
+    if file.metadata()?.len() as usize <= BOOT_LOG_MAX_BYTES {
+        return Ok(());
+    }
+    drop(file);
+    let mut content = Vec::new();
+    fs::File::open(path)?.read_to_end(&mut content)?;
+    let start = content.len().saturating_sub(BOOT_LOG_COMPACT_BYTES);
+    fs::write(path, &content[start..])
+}
+
+fn read_boot_log_tail(path: &Path) -> io::Result<String> {
+    let mut content = Vec::new();
+    fs::File::open(path)?.read_to_end(&mut content)?;
+    let start = content.len().saturating_sub(BOOT_LOG_TAIL_BYTES);
+    let bounded = String::from_utf8_lossy(&content[start..]);
+    let lines = bounded.lines().collect::<Vec<_>>();
+    let first = lines.len().saturating_sub(BOOT_LOG_TAIL_LINES);
+    Ok(lines[first..].join("\n"))
 }
 
 #[tauri::command]
@@ -385,6 +430,36 @@ mod tests {
     }
 
     #[test]
+    fn boot_log_is_bounded_to_one_mebibyte() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let path = temp_dir.path().join("bootstrap.log");
+        append_boot_log(&path, &vec![b'a'; BOOT_LOG_MAX_BYTES - 1])?;
+        append_boot_log(&path, b"last line")?;
+
+        assert!(fs::metadata(&path)?.len() as usize <= BOOT_LOG_COMPACT_BYTES);
+        assert!(fs::read_to_string(path)?.ends_with("last line\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn boot_log_tail_returns_at_most_one_hundred_lines() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let path = temp_dir.path().join("bootstrap.log");
+        let content = (0..120)
+            .map(|index| format!("line-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, content)?;
+
+        let tail = read_boot_log_tail(&path)?;
+
+        assert_eq!(tail.lines().count(), BOOT_LOG_TAIL_LINES);
+        assert!(tail.starts_with("line-20\n"));
+        assert!(tail.ends_with("line-119"));
+        Ok(())
+    }
+
+    #[test]
     fn install_skill_file_writes_skill_and_metadata() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
 
@@ -581,6 +656,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             backend_info,
+            bootstrap_log,
             cli_agent_skill_statuses,
             force_update_cli_agent_skill,
         ])
@@ -594,39 +670,73 @@ pub fn run() {
             }
 
             let port_arg = port.to_string();
-            let (mut rx, child) = app
+            let boot_log_path = app.path().app_log_dir()?.join("bootstrap.log");
+            let _ = append_boot_log(&boot_log_path, b"--- GuildBotics backend start ---");
+            let spawn_result = app
                 .shell()
-                .sidecar("guildbotics-app-api")?
-                // The sidecar is a PyInstaller one-file binary whose worker can
-                // outlive a killed bootloader. Hand it our PID so it can exit on
-                // its own if this app ever dies without a clean teardown.
-                .env(
-                    "GUILDBOTICS_APP_API_PARENT_PID",
-                    std::process::id().to_string(),
-                )
-                .args([
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    &port_arg,
-                    "--token",
-                    &token,
-                ])
-                .spawn()?;
-
-            // Keep the child's stdout/stderr pipe drained so it never blocks.
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    if let CommandEvent::Terminated(_) = event {
-                        break;
-                    }
+                .sidecar("guildbotics-app-api")
+                .and_then(|command| {
+                    command
+                        // The sidecar is a PyInstaller one-file binary whose worker can
+                        // outlive a killed bootloader. Hand it our PID so it can exit on
+                        // its own if this app ever dies without a clean teardown.
+                        .env(
+                            "GUILDBOTICS_APP_API_PARENT_PID",
+                            std::process::id().to_string(),
+                        )
+                        .args([
+                            "--host",
+                            "127.0.0.1",
+                            "--port",
+                            &port_arg,
+                            "--token",
+                            &token,
+                        ])
+                        .spawn()
+                });
+            let child = match spawn_result {
+                Ok((mut rx, child)) => {
+                    // Keep the child's stdout/stderr pipe drained so it never blocks.
+                    let event_log_path = boot_log_path.clone();
+                    tauri::async_runtime::spawn(async move {
+                        while let Some(event) = rx.recv().await {
+                            match event {
+                                CommandEvent::Stderr(bytes) => {
+                                    let _ = append_boot_log(&event_log_path, &bytes);
+                                }
+                                CommandEvent::Error(error) => {
+                                    let _ = append_boot_log(
+                                        &event_log_path,
+                                        format!("sidecar error: {error}").as_bytes(),
+                                    );
+                                }
+                                CommandEvent::Terminated(status) => {
+                                    let _ = append_boot_log(
+                                        &event_log_path,
+                                        format!("sidecar terminated: {status:?}").as_bytes(),
+                                    );
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+                    Some(child)
                 }
-            });
+                Err(error) => {
+                    let _ = append_boot_log(
+                        &boot_log_path,
+                        format!("sidecar spawn failed: {error}").as_bytes(),
+                    );
+                    None
+                }
+            };
 
             app.manage(BackendState {
                 token,
                 port,
-                child: Mutex::new(Some(child)),
+                boot_log_path,
+                child: Mutex::new(child),
             });
             Ok(())
         })

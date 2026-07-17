@@ -10,13 +10,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { App } from "./App";
 import {
   getConfigStatus,
-  getRuntimeDebug,
   getSchedulerStatus,
   getTeam,
   resetChatReceiveState,
   startScheduler,
   stopScheduler,
-  updateRuntimeDebug,
   type ConfigStatus,
   type RuntimeStatus,
   type RuntimeUnitStatus,
@@ -45,12 +43,9 @@ vi.mock("./api/client", async (importOriginal) => {
     getSchedulerStatus: vi.fn(),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
-    getPromptTrace: vi.fn(async () => promptTrace()),
-    getRuntimeDebug: vi.fn(async () => runtimeDebug()),
     startScheduler: vi.fn(),
     stopScheduler: vi.fn(),
     resetChatReceiveState: vi.fn(),
-    updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => runtimeDebug(body)),
     subscribeEvents: vi.fn(() => () => {}),
     subscribeLogs: vi.fn(() => () => {}),
   };
@@ -62,8 +57,6 @@ const getSchedulerStatusMock = vi.mocked(getSchedulerStatus);
 const startSchedulerMock = vi.mocked(startScheduler);
 const stopSchedulerMock = vi.mocked(stopScheduler);
 const resetChatReceiveStateMock = vi.mocked(resetChatReceiveState);
-const getRuntimeDebugMock = vi.mocked(getRuntimeDebug);
-const updateRuntimeDebugMock = vi.mocked(updateRuntimeDebug);
 
 beforeEach(() => {
   // The Service screen now persists run-target preferences, so clear storage
@@ -78,8 +71,6 @@ beforeEach(() => {
   startSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   stopSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   resetChatReceiveStateMock.mockReset().mockResolvedValue({ members_reset: 1, channels_reset: 3 });
-  getRuntimeDebugMock.mockReset().mockResolvedValue(runtimeDebug());
-  updateRuntimeDebugMock.mockReset().mockImplementation(async (body) => runtimeDebug(body));
 });
 
 describe("Service Runtime screen", () => {
@@ -172,17 +163,12 @@ describe("Service Runtime screen", () => {
     expect(startSchedulerMock.mock.calls[0][0]).not.toHaveProperty("routine_commands");
   });
 
-  it("toggles runtime debug from the service screen", async () => {
-    const user = userEvent.setup();
+  it("keeps diagnostics settings off the service screen", async () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    await user.click(
-      await screen.findByRole("switch", { name: t("overview.runtimeDebug.disabled") }),
-    );
-
-    await waitFor(() => expect(updateRuntimeDebugMock).toHaveBeenCalledTimes(1));
-    expect(updateRuntimeDebugMock.mock.calls[0][0]).toEqual({ enabled: true });
+    expect(screen.queryByText(t("diagnostics.runtimeDebug.title"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("diagnostics.transcripts.title"))).not.toBeInTheDocument();
   });
 
   it("omits routine_commands and sends only the event queue source when event-only is selected", async () => {
@@ -752,30 +738,5 @@ function runtimeUnit(
     events_auth_failed_count: 0,
     events_auth_failed_persons: [],
     ...overrides,
-  };
-}
-
-function promptTrace() {
-  return {
-    enabled: false,
-    env_file: "",
-    env_file_exists: false,
-    trace_file: "",
-    output_trace_file: "",
-    default_trace_file: "",
-    trace_file_exists: false,
-    event_count: 0,
-    events: [],
-  };
-}
-
-function runtimeDebug(overrides: { enabled?: boolean } = {}) {
-  const enabled = overrides.enabled ?? false;
-  return {
-    enabled,
-    log_level: enabled ? "DEBUG" : "INFO",
-    agno_debug: enabled,
-    env_file: "/workspace/.env",
-    env_file_exists: true,
   };
 }

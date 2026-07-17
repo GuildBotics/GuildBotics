@@ -196,7 +196,9 @@ folder to a GUI-less environment such as a server and operate it with only the `
 CLI; move the secrets separately with `guildbotics secrets export` / `import`, or provide them
 as environment variables.
 
-The selected workspace is recorded in `~/.guildbotics/data/active-workspace.json`.
+The selected workspace is recorded in `~/.guildbotics/data/active-workspace.json`. Desktop and
+the Local API restore this backend-owned state before runtime services are created; if it is
+missing, invalid, or points to a missing directory, they use the process startup directory.
 Use the following commands to inspect or change the workspace from the CLI:
 
 ```bash
@@ -209,7 +211,7 @@ GuildBotics writes two kinds of local data:
 - Computer-wide control files, such as the selected workspace and the CLI scheduler PID,
   are stored under `$HOME/.guildbotics/data`.
 - Workspace-specific run data, such as member work directories, task and chat run records,
-  diagnostics, prompt traces, and chat state, is stored under `<workspace>/.guildbotics/data` by
+  execution transcripts, and chat state, is stored under `<workspace>/.guildbotics/data` by
   default. To change this location, set `GUILDBOTICS_DATA_DIR` in `.env`.
 
 ## 5.2. Other Settings
@@ -433,7 +435,9 @@ The scheduler behavior (from `guildbotics/drivers/task_scheduler.py` and `guildb
 
 **Error handling**:
 - Consecutive command failures (default: 3) stop the worker thread
-- Runtime diagnostics are recorded under `<workspace>/.guildbotics/data/run/diagnostics.jsonl` by default
+- Searchable execution summaries are recorded in
+  `<workspace>/.guildbotics/data/run/diagnostics.jsonl`; full per-execution records are stored
+  under `run/sessions/`
 
 ## 5.5. Schedule Configuration Examples
 
@@ -922,12 +926,17 @@ The accepted policy values and security implications are documented in
 
 # 8. Troubleshooting
 
-**Diagnostics**: Runtime events and errors are recorded under `<workspace>/.guildbotics/data/run/diagnostics.jsonl` by default. You can also check them in the Desktop diagnostics view.
+**Diagnostics**: Searchable execution summaries are recorded in
+`<workspace>/.guildbotics/data/run/diagnostics.jsonl`. Full event, log, span, and I/O records
+are stored as one JSONL file per execution under `run/sessions/`. The Desktop diagnostics view
+shows both execution history and the latest global/system session.
 
 **Debug Output**: Set environment variables for detailed logging:
 - `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
-- `LOG_OUTPUT_DIR`: Directory to write log files (e.g., `./tmp/logs`)
 - `AGNO_DEBUG`: Extra debug output for the Agno engine (`true`/`false`)
+- `GUILDBOTICS_TRANSCRIPT_DETAIL`: `standard` (default) or `full`; `standard` omits
+  high-volume thinking/delta events and keeps only the final 8 KiB of AI CLI tool stderr
+- `GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS`: Days to retain session JSONL files (default: `30`)
 
 # 9. Contributing
 

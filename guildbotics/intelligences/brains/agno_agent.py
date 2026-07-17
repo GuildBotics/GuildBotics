@@ -1,19 +1,21 @@
+import time
 from copy import deepcopy
 from logging import Logger
-from typing import cast
+from typing import Any, cast
 
 from agno.agent import Agent
 from agno.models.base import Model
-from agno.utils import log
 from pydantic import BaseModel
 
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.observability import span_scope
+from guildbotics.observability.diagnostics_events import (
+    record_correlated_io,
+    record_span_summary,
+)
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 from guildbotics.utils.import_utils import instantiate_class
-from guildbotics.utils.log_utils import get_file_handler
-from guildbotics.utils.prompt_trace import write_prompt_trace
 from guildbotics.utils.rate_limiter import acquire
 from guildbotics.utils.text_utils import replace_placeholders
 
@@ -83,9 +85,6 @@ class AgnoAgentDefaultBrain(Brain):
         )
         model_mapping = get_model_mapping(person_id)
         self.model_config = model_mapping[model]
-        file_handler = get_file_handler()
-        if file_handler and file_handler not in log.logger.handlers:
-            log.logger.addHandler(file_handler)
 
     async def run(self, message: str, **kwargs):
         kwargs["name"] = kwargs.get("name", self.name)
@@ -124,10 +123,24 @@ class AgnoAgentDefaultBrain(Brain):
             )
         message = self.patch_message(message)
         with span_scope("llm"):
-            self._write_request_trace(message, description, kwargs)
-            response = await agent.arun(message)
+            started = time.monotonic()
+            self._write_request_io(message, description, kwargs)
+            try:
+                response = await agent.arun(message)
+            except Exception:
+                record_span_summary(
+                    status="failed",
+                    model=self.model_config.name,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                )
+                raise
             content = response.content
-            self._write_response_trace(content)
+            self._write_response_io(content)
+            record_span_summary(
+                model=self.model_config.name,
+                duration_ms=(time.monotonic() - started) * 1000,
+                usage=_response_usage(response),
+            )
         if self.response_class and (
             self.model_config.is_restricted_model
             or not isinstance(content, self.response_class)
@@ -156,12 +169,10 @@ class AgnoAgentDefaultBrain(Brain):
 
         return "Execute exactly as specified in the system message."
 
-    def _write_request_trace(
-        self, message: str, description: str, kwargs: dict
-    ) -> None:
-        write_prompt_trace(
-            "llm.request",
-            {
+    def _write_request_io(self, message: str, description: str, kwargs: dict) -> None:
+        record_correlated_io(
+            io_type="llm.request",
+            payload={
                 "person_id": self.person_id,
                 "brain": self.name,
                 "model": self.model_config.name,
@@ -177,13 +188,22 @@ class AgnoAgentDefaultBrain(Brain):
             },
         )
 
-    def _write_response_trace(self, content: object) -> None:
-        write_prompt_trace(
-            "llm.response",
-            {
+    def _write_response_io(self, content: object) -> None:
+        record_correlated_io(
+            io_type="llm.response",
+            payload={
                 "person_id": self.person_id,
                 "brain": self.name,
                 "model": self.model_config.name,
                 "content": content,
             },
         )
+
+
+def _response_usage(response: object) -> dict[str, Any]:
+    metrics = getattr(response, "metrics", None)
+    if isinstance(metrics, BaseModel):
+        return cast(dict[str, Any], metrics.model_dump())
+    if isinstance(metrics, dict):
+        return {str(key): value for key, value in metrics.items()}
+    return {}

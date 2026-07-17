@@ -233,13 +233,16 @@ Path resolution separates four roots (implementation: `utils/fileio.py`).
 |---|---|---|
 | Machine state root | `$HOME/.guildbotics/data` (fixed) | `active-workspace.json`, `run/service.lock` — state needed *before* a workspace is chosen |
 | Runtime workspace root | selected workspace (App API `chdir`s to it; member CLI resolves `--workspace` → explicit config → cwd → active workspace) | `.env`, `.guildbotics/config` |
-| Workspace data root | `<workspace>/.guildbotics/data`, overridable via `GUILDBOTICS_DATA_DIR` | member workspaces (`workspaces/<person_id>`), task-run evidence (`task-runs/*.jsonl`), diagnostics (`run/diagnostics.jsonl`), prompt trace, chat state, documents |
+| Workspace data root | `<workspace>/.guildbotics/data`, overridable via `GUILDBOTICS_DATA_DIR` | member workspaces (`workspaces/<person_id>`), task-run evidence (`task-runs/*.jsonl`), diagnostics index (`run/diagnostics.jsonl`), execution transcripts (`run/sessions/*.jsonl`), chat state, documents |
 | Config root | `GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`; package templates as fallback | project / member configuration |
 
 Invariants:
 
 - Machine state root is always derived from `HOME` and never affected by
   `GUILDBOTICS_DATA_DIR`, `GUILDBOTICS_CONFIG_DIR`, or workspace `.env`.
+- App API startup restores `active-workspace.json` before constructing stores and runtime
+  services. Missing or invalid state falls back to the process startup directory. The Desktop
+  frontend neither persists nor restores workspace state from browser storage.
 - `GUILDBOTICS_CONFIG_DIR` selects the *config source* only; it is not a workspace or
   data root.
 - The effective workspace data root is fixed at the *workspace application boundary*
@@ -288,15 +291,17 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
 - **Correlation**: `trace_scope` / `span_scope` / `correlation_fields` /
   `set_attributes` correlate everything that happens in one execution — a manual
   command, one scheduler cycle, one incoming chat event — under a single `trace_id`,
-  with spans for LLM / AI CLI tool calls (shared with prompt trace via `call_id`).
+  with spans for LLM / AI CLI tool calls and `call_id` correlation.
   Trace attributes carry structured search keys (e.g. `github.url`, `github.number`).
-- **Persistence**: unified diagnostics records in
-  `<workspace-data-root>/run/diagnostics.jsonl` (`diagnostics_store.py`), with size-
-  and count-based retention. Prompt traces go to `run/prompt_trace.jsonl`
-  (`utils/prompt_trace.py`). Correlated events are recorded via
-  `diagnostics_events.py`; interactive skill sessions via `interactive_sessions.py`.
-- **Consumption**: `app_api` reads the stores, merges traces / logs / events / memory
-  audit / prompt traces, and converts provider payloads into provider-neutral activity
+- **Persistence**: `run/diagnostics.jsonl` is a small searchable index containing session
+  pointers, execution boundaries, span summaries, and domain events. Complete events, logs,
+  spans, and request/response I/O are stored as one JSONL transcript per execution or system
+  session under `run/sessions/` (`session_transcripts.py`). `standard` detail omits high-volume
+  thinking/delta events and bounds AI CLI tool stderr to its final 8 KiB; `full` keeps them.
+  Session transcripts default to 30-day retention. Memory audit remains a separate bounded
+  store under `documents/memory_events.jsonl`.
+- **Consumption**: `app_api` reads the index, selected execution transcript, and memory
+  audit, and converts provider payloads into provider-neutral activity
   events/links/titles for the desktop Activity History (`activity_events.py`,
   `activity_links.py`). Display normalization lives *only* there — not in
   observability, not in the frontend.

@@ -1,7 +1,7 @@
 """Correlation core for runtime diagnostics.
 
 Provides a single, contextvars-based source of truth for correlation IDs so
-events, logs and prompt traces can be aggregated under the same execution unit.
+events, logs, spans, and I/O can be aggregated under the same execution unit.
 
 Design (see ``docs/ARCHITECTURE.md`` "Observability and Diagnostics"):
 

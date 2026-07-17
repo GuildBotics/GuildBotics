@@ -114,7 +114,7 @@ def memory_diagnostics_url(
     params = {
         "tab": "memory",
         "doc_id": str(attributes.get("memory.doc_id") or ""),
-        "trace_id": str(record.get("trace_id") or "") if record else "",
+        "memory_trace_id": str(record.get("trace_id") or "") if record else "",
         "timestamp": str(record.get("timestamp") or "") if record else "",
         "action": str(attributes.get("memory.action") or ""),
         "person_id": str(record.get("person_id") or "") if record else "",

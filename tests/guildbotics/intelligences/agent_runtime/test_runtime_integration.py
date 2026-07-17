@@ -207,17 +207,11 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
         return adapter
 
     recorded_events: list[AgentEvent] = []
-    legacy_traces: list[str] = []
     monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
     monkeypatch.setattr(
         diagnostics,
         "record_agent_event",
         lambda event, *_args: recorded_events.append(event),
-    )
-    monkeypatch.setattr(
-        cli_agent,
-        "write_prompt_trace",
-        lambda event, _payload: legacy_traces.append(event),
     )
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     try:
@@ -246,7 +240,6 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
         event.kind is AgentEventKind.TURN and event.name == "started"
         for event in recorded_events
     )
-    assert legacy_traces == ["cli_agent.request", "cli_agent.response"]
 
     async def interrupt(self):
         return None
@@ -771,6 +764,7 @@ def test_agent_diagnostics_redact_credentials_and_keep_correlation(
 
 def test_agent_diagnostics_skips_assistant_deltas(monkeypatch, tmp_path) -> None:
     recorded = []
+    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_DETAIL", "standard")
     monkeypatch.setattr(
         diagnostics,
         "record_correlated_event",

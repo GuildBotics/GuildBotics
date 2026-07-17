@@ -51,8 +51,6 @@ from guildbotics.app_api.models import (
     ProjectConfigUpdateRequest,
     ProjectStatusOptionsRequest,
     ProjectStatusOptionsResponse,
-    PromptTraceStatus,
-    PromptTraceUpdateRequest,
     RoleOption,
     RoleOptionsResponse,
     RoutineCommandOptionsResponse,
@@ -67,6 +65,8 @@ from guildbotics.app_api.models import (
     TeamSummary,
     TraceDetailResponse,
     TracesResponse,
+    TranscriptSettingsStatus,
+    TranscriptSettingsUpdateRequest,
     VerifyResponse,
     WorkspaceChangeRequest,
 )
@@ -111,25 +111,54 @@ def create_app(
     runtime: AppRuntime | None = None,
     event_bus: EventBus | None = None,
     diagnostics_store: DiagnosticsStore | None = None,
+    restore_workspace_environment: bool = False,
+    inherited_data_dir: str | None = None,
 ) -> FastAPI:
     token = session_token or secrets.token_urlsafe(32)
     store = diagnostics_store or DiagnosticsStore()
     bus = event_bus or EventBus(store=store)
-    app_runtime = runtime or AppRuntime(bus, diagnostics_store=store)
+    if runtime is not None:
+        app_runtime = runtime
+    elif restore_workspace_environment:
+        app_runtime = AppRuntime(
+            bus,
+            diagnostics_store=store,
+            inherited_data_dir=inherited_data_dir,
+            load_workspace_environment=True,
+        )
+    else:
+        app_runtime = AppRuntime(bus, diagnostics_store=store)
     log_handler = EventBusLogHandler(bus)
+    system_service_run_id = getattr(
+        app_runtime, "system_service_run_id", secrets.token_urlsafe(16)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger = logging.getLogger("guildbotics")
+        uvicorn_error_logger = logging.getLogger("uvicorn.error")
+        store.start_system_session(system_service_run_id)
+        store.start_maintenance()
+        added_app_handler = False
         if not any(
             isinstance(handler, EventBusLogHandler) for handler in logger.handlers
         ):
             logger.addHandler(log_handler)
+            added_app_handler = True
+        added_uvicorn_handler = False
+        if log_handler not in uvicorn_error_logger.handlers:
+            uvicorn_error_logger.addHandler(log_handler)
+            added_uvicorn_handler = True
         try:
             yield
         finally:
             app_runtime.stop_scheduler(force=True)
-            logger.removeHandler(log_handler)
+            if added_app_handler:
+                logger.removeHandler(log_handler)
+            if added_uvicorn_handler:
+                uvicorn_error_logger.removeHandler(log_handler)
+            store.finish_system_session()
+            store.stop_maintenance()
 
     app = FastAPI(title="GuildBotics App API", version="0.1.0", lifespan=lifespan)
     app.state.session_token = token
@@ -307,28 +336,25 @@ def create_app(
         return app_runtime.reset_chat_receive_state()
 
     @app.get(
-        "/prompt-trace",
-        response_model=PromptTraceStatus,
+        "/transcripts/settings",
+        response_model=TranscriptSettingsStatus,
         responses=error_responses,
     )
-    def prompt_trace_status(
-        limit: Annotated[int, Query(ge=1, le=1000)] = 20,
-        path: str | None = None,
+    def transcript_settings(
         _: None = Depends(require_token),
-    ) -> PromptTraceStatus:
-        return app_runtime.get_prompt_trace_status(limit=limit, read_path=path)
+    ) -> TranscriptSettingsStatus:
+        return app_runtime.get_transcript_settings()
 
     @app.put(
-        "/prompt-trace",
-        response_model=PromptTraceStatus,
+        "/transcripts/settings",
+        response_model=TranscriptSettingsStatus,
         responses=error_responses,
     )
-    def prompt_trace_update(
-        request: PromptTraceUpdateRequest,
-        limit: Annotated[int, Query(ge=1, le=1000)] = 20,
+    def transcript_settings_update(
+        request: TranscriptSettingsUpdateRequest,
         _: None = Depends(require_token),
-    ) -> PromptTraceStatus:
-        return app_runtime.update_prompt_trace(request, limit=limit)
+    ) -> TranscriptSettingsStatus:
+        return app_runtime.update_transcript_settings(request)
 
     @app.get(
         "/runtime/debug",

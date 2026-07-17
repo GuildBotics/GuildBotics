@@ -6,6 +6,7 @@ import pytest
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
 from guildbotics.utils.import_utils import ClassResolver
+from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.secret_store import ENV_FILE_BACKEND, SECRETS_BACKEND_ENV
 
 
@@ -17,6 +18,12 @@ def _force_env_file_secret_backend(monkeypatch):
     which removes this override and installs an in-memory backend.
     """
     monkeypatch.setenv(SECRETS_BACKEND_ENV, ENV_FILE_BACKEND)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_workspace_data(monkeypatch, tmp_path):
+    """Keep runtime files created by tests inside each test's temporary tree."""
+    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "workspace-data"))
 
 
 @pytest.fixture

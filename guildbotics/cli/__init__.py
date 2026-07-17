@@ -28,6 +28,12 @@ from guildbotics.drivers import (
     run_command,
 )
 from guildbotics.editions import get_edition
+from guildbotics.observability import new_id
+from guildbotics.observability.diagnostics_events import (
+    finish_system_session,
+    install_diagnostics_log_handler,
+    start_system_session,
+)
 from guildbotics.runtime.service_lock import (
     ServiceLock,
     ServiceLockMetadata,
@@ -44,6 +50,7 @@ from guildbotics.utils.fileio import (
     get_machine_state_path,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 
@@ -100,7 +107,7 @@ def _pid_is_running(pid: int) -> bool:
 )
 def main() -> None:
     """GuildBotics CLI entrypoint."""
-    pass
+    install_diagnostics_log_handler(get_logger())
 
 
 main.add_command(member)
@@ -154,7 +161,23 @@ def _run_cli_background_service(
     max_consecutive_errors: int,
     default_routine_commands: tuple[str, ...],
 ) -> None:
+    start_system_session(new_id())
+    try:
+        _run_cli_background_service_session(
+            only_target=only_target,
+            max_consecutive_errors=max_consecutive_errors,
+            default_routine_commands=default_routine_commands,
+        )
+    finally:
+        finish_system_session()
 
+
+def _run_cli_background_service_session(
+    *,
+    only_target: str | None,
+    max_consecutive_errors: int,
+    default_routine_commands: tuple[str, ...],
+) -> None:
     edition = get_edition()
 
     scheduler_sources_enabled = only_target in (None, "scheduler")
