@@ -120,6 +120,8 @@ class MemoryAuditStore:
     def record(self, item: dict[str, Any]) -> None:
         path = self.path
         line = self._bounded_line(item)
+        if not line:
+            return
         try:
             with _MEMORY_AUDIT_LOCK:
                 path.parent.mkdir(parents=True, exist_ok=True)

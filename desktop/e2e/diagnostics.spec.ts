@@ -68,7 +68,11 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
 
   await page.getByRole("tab", { name: "Diagnostics settings" }).click();
   await expect(page.getByText("Session transcripts", { exact: true })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "Detail" })).toHaveValue("Standard");
+  await expect(page.getByRole("textbox", { name: "Detail" })).toHaveValue(
+    "Standard (recommended)",
+  );
+  await expect(page.getByText("rebuild threshold: 8.0 MiB", { exact: false })).toBeVisible();
+  await expect(page.getByText("0 B / 8.0 MiB", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Retention days" })).toHaveValue("30");
 
   await page.getByRole("tab", { name: "Executions" }).click();

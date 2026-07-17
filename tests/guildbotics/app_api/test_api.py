@@ -256,7 +256,9 @@ class RuntimeStub:
             sessions_dir=self.config_status.storage_dir / "run/sessions",
             total_size_bytes=0,
             index_size_bytes=0,
+            index_rewrite_threshold_bytes=8 * 1024 * 1024,
             memory_size_bytes=0,
+            memory_max_size_bytes=8 * 1024 * 1024,
         )
 
     def update_transcript_settings(

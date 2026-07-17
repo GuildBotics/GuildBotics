@@ -251,6 +251,8 @@ describe("Diagnostics settings tab", () => {
     await openTab(user, t("diagnostics.tabs.settings"));
 
     expect(await screen.findByText("2.0 KiB")).toBeInTheDocument();
+    expect(screen.getByText("512 B (rebuild threshold: 8.0 MiB)")).toBeInTheDocument();
+    expect(screen.getByText("256 B / 8.0 MiB")).toBeInTheDocument();
     const retention = await screen.findByLabelText(t("diagnostics.transcripts.retentionDays"));
     await user.clear(retention);
     await user.type(retention, "14");
@@ -261,6 +263,27 @@ describe("Diagnostics settings tab", () => {
     expect(calls[calls.length - 1]?.[0]).toEqual({
       detail: "standard",
       retention_days: 14,
+    });
+  });
+
+  it("explains the selected transcript detail level", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.settings"));
+
+    expect(
+      await screen.findByText(t("diagnostics.transcripts.standardDescription")),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("textbox", { name: t("diagnostics.transcripts.detail") }));
+    await user.click(screen.getByRole("option", { name: t("diagnostics.transcripts.full") }));
+
+    expect(
+      await screen.findByText(t("diagnostics.transcripts.fullDescription")),
+    ).toBeInTheDocument();
+    expect(vi.mocked(updateTranscriptSettings).mock.calls[0]?.[0]).toEqual({
+      detail: "full",
+      retention_days: 30,
     });
   });
 
@@ -908,7 +931,9 @@ function transcriptSettings(
     sessions_dir: "/workspace/.guildbotics/data/run/sessions",
     total_size_bytes: 0,
     index_size_bytes: 0,
+    index_rewrite_threshold_bytes: 8 * 1024 * 1024,
     memory_size_bytes: 0,
+    memory_max_size_bytes: 8 * 1024 * 1024,
     ...overrides,
   };
 }

@@ -1022,7 +1022,7 @@ class CliAgentBrain(Brain):
                 "returncode": result.returncode,
                 "stdout": result.stdout,
                 "stderr": stderr,
-                "stderr_truncated": len(stderr) < len(result.stderr),
+                "stderr_truncated": stderr != result.stderr,
             },
         )
 

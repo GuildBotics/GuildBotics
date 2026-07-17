@@ -136,12 +136,18 @@ const resources = {
           title: "Session transcripts",
           description: "Control transcript detail and retention, and review storage usage.",
           detail: "Detail",
-          standard: "Standard",
-          full: "Full",
+          standard: "Standard (recommended)",
+          standardDescription:
+            "Keeps normal events and final results, omits thinking/reasoning/delta events, and retains only the final 8 KiB of AI CLI stderr.",
+          full: "Full (detailed investigation)",
+          fullDescription:
+            "Also keeps thinking/reasoning/delta events and full AI CLI stderr. Storage usage may increase substantially.",
           retentionDays: "Retention days",
           sessionsTotal: "All sessions",
           indexSize: "Execution index",
+          indexUsage: "{{current}} (rebuild threshold: {{threshold}})",
           memorySize: "Memory audit",
+          memoryUsage: "{{current}} / {{maximum}}",
           saveError: "Could not save transcript settings",
         },
         executions: {
@@ -1768,12 +1774,18 @@ const resources = {
           title: "セッショントランスクリプト",
           description: "記録の詳細度・保持日数と、保存領域の使用量を管理します。",
           detail: "詳細度",
-          standard: "標準",
-          full: "完全",
+          standard: "標準（推奨）",
+          standardDescription:
+            "通常イベントと最終結果を保存し、thinking/reasoning/deltaイベントを省略します。AI CLIのstderrは末尾8 KiBのみ保持します。",
+          full: "完全（詳細調査向け）",
+          fullDescription:
+            "thinking/reasoning/deltaイベントとAI CLIのstderr全文も保存します。保存量が大きく増える場合があります。",
           retentionDays: "保持日数",
           sessionsTotal: "全セッション",
           indexSize: "実行インデックス",
+          indexUsage: "{{current}}（再構成基準: {{threshold}}）",
           memorySize: "Memory監査",
+          memoryUsage: "{{current}} / {{maximum}}",
           saveError: "トランスクリプト設定を保存できませんでした",
         },
         executions: {

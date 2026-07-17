@@ -766,6 +766,8 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
     original = cli_agent.person_cli_agent_mapping.copy()
     io_records: list[tuple[str, dict]] = []
     span_records: list[dict] = []
+    multibyte_stderr = "あ" * 2731
+    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_DETAIL", raising=False)
     cli_agent.person_cli_agent_mapping.clear()
     cli_agent.person_cli_agent_mapping["p1"] = {
         "default": cli_agent.ExecutableInfo(script="echo test", env={})
@@ -774,7 +776,9 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
     async def fake_create_subprocess_shell(
         script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
     ):
-        return StubProcess(stdout=b"done", stderr=b"debug output", returncode=0)
+        return StubProcess(
+            stdout=b"done", stderr=multibyte_stderr.encode(), returncode=0
+        )
 
     monkeypatch.setattr(
         cli_agent,
@@ -827,7 +831,8 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
     assert io_records[0][1]["brain"] == "functions/handle_chat_event"
     assert "Reply as Alice." in io_records[0][1]["prompt"]
     assert io_records[1][1]["stdout"] == "done"
-    assert io_records[1][1]["stderr"] == "debug output"
+    assert io_records[1][1]["stderr"] != multibyte_stderr
+    assert io_records[1][1]["stderr_truncated"] is True
     assert span_records[0]["status"] == "finished"
 
 

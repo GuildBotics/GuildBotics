@@ -125,7 +125,9 @@ export type TranscriptSettingsStatus = {
   sessions_dir: string;
   total_size_bytes: number;
   index_size_bytes: number;
+  index_rewrite_threshold_bytes: number;
   memory_size_bytes: number;
+  memory_max_size_bytes: number;
 };
 
 export type TranscriptSettingsUpdateRequest = {

@@ -348,7 +348,9 @@ class TranscriptSettingsStatus(BaseModel):
     sessions_dir: Path
     total_size_bytes: int
     index_size_bytes: int
+    index_rewrite_threshold_bytes: int
     memory_size_bytes: int
+    memory_max_size_bytes: int
 
 
 class VerifyResponse(BaseModel):

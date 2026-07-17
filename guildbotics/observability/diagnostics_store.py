@@ -21,6 +21,8 @@ from guildbotics.observability.session_transcripts import (
 from guildbotics.utils.fileio import get_workspace_data_path
 from guildbotics.utils.timestamps import parse_iso_datetime
 
+DEFAULT_DIAGNOSTICS_MAX_BYTES = 8 * 1024 * 1024
+
 
 def default_store_path() -> Path:
     return get_workspace_data_path("run", "diagnostics.jsonl")
@@ -65,7 +67,7 @@ class DiagnosticsStore:
         path: Path | None = None,
         *,
         memory_limit: int = 5000,
-        max_file_bytes: int = 8 * 1024 * 1024,
+        max_file_bytes: int = DEFAULT_DIAGNOSTICS_MAX_BYTES,
     ) -> None:
         self._path_override = path
         self._path = path or default_store_path()

@@ -2734,6 +2734,7 @@ function TranscriptSettingsPanel() {
     refetchInterval: 5000,
   });
   const [retentionDraft, setRetentionDraft] = useState<number | null>(null);
+  const detail = settings.data?.detail ?? "standard";
   const retentionDays = retentionDraft ?? settings.data?.retention_days ?? 30;
   const mutation = useMutation({
     mutationFn: updateTranscriptSettings,
@@ -2744,7 +2745,7 @@ function TranscriptSettingsPanel() {
   });
   const saveRetention = () => {
     mutation.mutate({
-      detail: settings.data?.detail ?? "standard",
+      detail,
       retention_days: retentionDays,
     });
   };
@@ -2762,12 +2763,17 @@ function TranscriptSettingsPanel() {
         <Group align="flex-end" grow>
           <Select
             label={t("diagnostics.transcripts.detail")}
+            description={t(
+              detail === "full"
+                ? "diagnostics.transcripts.fullDescription"
+                : "diagnostics.transcripts.standardDescription",
+            )}
             data={[
               { value: "standard", label: t("diagnostics.transcripts.standard") },
               { value: "full", label: t("diagnostics.transcripts.full") },
             ]}
             disabled={mutation.isPending || settings.isLoading}
-            value={settings.data?.detail ?? "standard"}
+            value={detail}
             onChange={(value) => {
               if (value === "standard" || value === "full") {
                 mutation.mutate({
@@ -2801,9 +2807,19 @@ function TranscriptSettingsPanel() {
           <dt>{t("diagnostics.transcripts.sessionsTotal")}</dt>
           <dd>{formatBytes(settings.data?.total_size_bytes ?? 0)}</dd>
           <dt>{t("diagnostics.transcripts.indexSize")}</dt>
-          <dd>{formatBytes(settings.data?.index_size_bytes ?? 0)}</dd>
+          <dd>
+            {t("diagnostics.transcripts.indexUsage", {
+              current: formatBytes(settings.data?.index_size_bytes ?? 0),
+              threshold: formatBytes(settings.data?.index_rewrite_threshold_bytes ?? 0),
+            })}
+          </dd>
           <dt>{t("diagnostics.transcripts.memorySize")}</dt>
-          <dd>{formatBytes(settings.data?.memory_size_bytes ?? 0)}</dd>
+          <dd>
+            {t("diagnostics.transcripts.memoryUsage", {
+              current: formatBytes(settings.data?.memory_size_bytes ?? 0),
+              maximum: formatBytes(settings.data?.memory_max_size_bytes ?? 0),
+            })}
+          </dd>
         </dl>
       </Stack>
       {mutation.error ? (

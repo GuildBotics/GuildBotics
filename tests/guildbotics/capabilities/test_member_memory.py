@@ -411,6 +411,17 @@ def test_memory_audit_compacts_oversized_newest_record(tmp_path: Path) -> None:
     assert events[0]["payload"]["original_size_bytes"] > 512
 
 
+def test_memory_audit_preserves_file_when_no_record_fits(tmp_path: Path) -> None:
+    path = tmp_path / "memory_events.jsonl"
+    original = '{"existing":true}\n'
+    path.write_text(original, encoding="utf-8")
+    store = MemoryAuditStore(path, max_file_bytes=1)
+
+    store.record({"message": "too large"})
+
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_memory_audit_normalizes_document_path(
     monkeypatch: pytest.MonkeyPatch, person: Person
 ) -> None:

@@ -827,7 +827,9 @@ def test_transcript_settings_defaults_and_usage(
     assert status.retention_days == 30
     assert status.total_size_bytes == 0
     assert status.index_size_bytes == 0
+    assert status.index_rewrite_threshold_bytes == 8 * 1024 * 1024
     assert status.memory_size_bytes == 0
+    assert status.memory_max_size_bytes == 8 * 1024 * 1024
 
 
 def test_update_transcript_settings_writes_env_and_removes_legacy_keys(

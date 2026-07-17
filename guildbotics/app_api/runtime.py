@@ -64,6 +64,7 @@ from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
 )
 from guildbotics.capabilities.member_memory_audit import (
+    DEFAULT_MEMORY_AUDIT_MAX_BYTES,
     MemoryAuditStore,
     parse_memory_audit_timestamp,
 )
@@ -88,7 +89,10 @@ from guildbotics.intelligences.cli_agents import (
     resolve_cli_agent_path,
 )
 from guildbotics.observability import new_id, trace_scope
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.diagnostics_store import (
+    DEFAULT_DIAGNOSTICS_MAX_BYTES,
+    DiagnosticsStore,
+)
 from guildbotics.observability.session_transcripts import (
     TRANSCRIPT_DETAIL_ENV,
     TRANSCRIPT_RETENTION_DAYS_ENV,
@@ -653,7 +657,9 @@ class AppRuntime:
             sessions_dir=get_workspace_data_path("run", "sessions"),
             total_size_bytes=int(usage["total_size_bytes"]),
             index_size_bytes=int(usage["index_size_bytes"]),
+            index_rewrite_threshold_bytes=DEFAULT_DIAGNOSTICS_MAX_BYTES,
             memory_size_bytes=memory_size,
+            memory_max_size_bytes=DEFAULT_MEMORY_AUDIT_MAX_BYTES,
         )
 
     def update_transcript_settings(
