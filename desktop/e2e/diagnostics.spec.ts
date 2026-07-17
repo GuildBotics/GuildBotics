@@ -49,10 +49,6 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
   await expect(page.getByText("Configured", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Detected", { exact: true })).toBeVisible();
   await expect(page.getByText("Disabled", { exact: true })).toBeVisible();
-  await expect(page.getByText("Session transcripts", { exact: true })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "Detail" })).toHaveValue("Standard");
-  await expect(page.getByRole("textbox", { name: "Retention days" })).toHaveValue("30");
-
   // Run the real read-only scenario diagnostics. With no OpenAI key configured
   // the backend short-circuits BEFORE any network call, so this resolves in
   // milliseconds rather than waiting for a live HTTPS round-trip.
@@ -69,6 +65,11 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
 
   // The all-ok summary must NOT appear when a check failed.
   await expect(page.getByText("Settings validated")).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "Diagnostics settings" }).click();
+  await expect(page.getByText("Session transcripts", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Detail" })).toHaveValue("Standard");
+  await expect(page.getByRole("textbox", { name: "Retention days" })).toHaveValue("30");
 
   await page.getByRole("tab", { name: "Executions" }).click();
   await expect(page.getByText("Global / system", { exact: true }).first()).toBeVisible();
