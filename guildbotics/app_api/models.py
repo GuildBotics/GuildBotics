@@ -173,6 +173,7 @@ class TraceDetailResponse(BaseModel):
     trace_id: str
     summary: TraceSummary | None = None
     records: list[TraceRecord] = Field(default_factory=list)
+    transcript_available: bool = True
 
 
 class MemoryEvent(BaseModel):
@@ -322,11 +323,6 @@ class ChatReceiveResetResponse(BaseModel):
     channels_reset: int
 
 
-class PromptTraceUpdateRequest(BaseModel):
-    enabled: bool
-    trace_path: str = ""
-
-
 class RuntimeDebugUpdateRequest(BaseModel):
     enabled: bool
 
@@ -339,32 +335,20 @@ class RuntimeDebugStatus(BaseModel):
     env_file_exists: bool
 
 
-class PromptTraceEntry(BaseModel):
-    event: str
-    timestamp: str = ""
-    person_id: str = ""
-    brain: str = ""
-    command: str = ""
-    target: str = ""
-    cwd: str = ""
-    description: str = ""
-    transcript: str = ""
-    prompt: str = ""
-    response: str = ""
-    error: str = ""
-    fields: dict[str, Any] = Field(default_factory=dict)
+class TranscriptSettingsUpdateRequest(BaseModel):
+    detail: Literal["standard", "full"]
+    retention_days: int = Field(ge=1, le=3650)
 
 
-class PromptTraceStatus(BaseModel):
-    enabled: bool
+class TranscriptSettingsStatus(BaseModel):
+    detail: Literal["standard", "full"]
+    retention_days: int
     env_file: Path
     env_file_exists: bool
-    trace_file: Path
-    output_trace_file: Path
-    default_trace_file: Path
-    trace_file_exists: bool
-    event_count: int
-    events: list[PromptTraceEntry] = Field(default_factory=list)
+    sessions_dir: Path
+    total_size_bytes: int
+    index_size_bytes: int
+    memory_size_bytes: int
 
 
 class VerifyResponse(BaseModel):

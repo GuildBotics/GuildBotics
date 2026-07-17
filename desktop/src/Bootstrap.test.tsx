@@ -4,13 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Bootstrap } from "./Bootstrap";
-import { startBackend } from "./api/backend";
+import { getBootstrapLog, startBackend } from "./api/backend";
 import i18n from "./i18n";
 import "./i18n";
 
 const t = i18n.getFixedT("en");
 
 vi.mock("./api/backend", () => ({
+  getBootstrapLog: vi.fn(async () => null),
   startBackend: vi.fn(async () => undefined),
 }));
 
@@ -19,6 +20,7 @@ vi.mock("./App", () => ({
 }));
 
 const startBackendMock = vi.mocked(startBackend);
+const getBootstrapLogMock = vi.mocked(getBootstrapLog);
 
 function renderBootstrap() {
   return render(
@@ -31,6 +33,7 @@ function renderBootstrap() {
 describe("Bootstrap", () => {
   beforeEach(() => {
     startBackendMock.mockReset();
+    getBootstrapLogMock.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -65,11 +68,17 @@ describe("Bootstrap", () => {
 
   it("shows an error alert with a retry button when startBackend fails", async () => {
     startBackendMock.mockRejectedValue(new Error("backend exploded"));
+    getBootstrapLogMock.mockResolvedValue({
+      path: "/logs/bootstrap.log",
+      tail: "sidecar stderr",
+    });
 
     renderBootstrap();
 
     expect(await screen.findByText(t("app.loading.failed"))).toBeInTheDocument();
     expect(screen.getByText(/backend exploded/)).toBeInTheDocument();
+    expect(screen.getByText(/\/logs\/bootstrap\.log/)).toBeInTheDocument();
+    expect(screen.getByText("sidecar stderr")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("app.loading.retry") })).toBeInTheDocument();
     expect(screen.queryByText("App Mock Loaded")).not.toBeInTheDocument();
   });

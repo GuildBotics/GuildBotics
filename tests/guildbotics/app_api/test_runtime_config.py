@@ -1,4 +1,4 @@
-"""Direct unit tests for the config / workspace / team / prompt-trace /
+"""Direct unit tests for the config / workspace / team / transcript /
 cli-agent-detection behaviors of :class:`guildbotics.app_api.runtime.AppRuntime`.
 
 These exercise finer branch granularity than the API-level tests in
@@ -10,6 +10,7 @@ and never touch the real home directory or network.
 from __future__ import annotations
 
 import logging
+import json
 import os
 from pathlib import Path
 
@@ -19,15 +20,16 @@ from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
     ProjectStatusOptionsRequest,
-    PromptTraceUpdateRequest,
     RuntimeActiveWork,
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
     RuntimeUnitStatus,
+    TranscriptSettingsUpdateRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities import Person, Project, Team
 from guildbotics.intelligences.cli_agents import CliAgentInfo
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.workspace_state import (
@@ -36,8 +38,6 @@ from guildbotics.utils.workspace_state import (
 )
 
 HTTP_BAD_REQUEST = 400
-TRACE_EVENT_TOTAL = 5
-TRACE_EVENT_LIMIT = 2
 
 
 class _FakeContext:
@@ -363,6 +363,39 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert status.storage_dir == status.workspace_data_dir
     assert status.config_dir == workspace.resolve() / ".guildbotics" / "config"
     assert status.env_file_exists is True
+
+
+def test_set_workspace_splits_system_session_with_same_service_run_id(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticsStore(isolated_home / "diagnostics.jsonl")
+    runtime = AppRuntime(EventBus(store=store), diagnostics_store=store)
+    monkeypatch.setattr(
+        runtime,
+        "stop_scheduler",
+        lambda *, force=False: _idle_runtime_status(),
+    )
+    workspace = isolated_home / "workspace-sessions"
+    workspace.mkdir()
+    store.start_system_session(runtime.system_service_run_id)
+
+    runtime.set_workspace(workspace)
+    store.finish_system_session()
+
+    boundaries = [
+        json.loads(line)
+        for line in store.path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["type"] in {"system.started", "system.finished"}
+    ]
+    started = [item for item in boundaries if item["type"] == "system.started"]
+    assert len(started) == 2
+    assert (
+        started[0]["attributes"]["system_session_id"]
+        != started[1]["attributes"]["system_session_id"]
+    )
+    assert {item["attributes"]["service_run_id"] for item in started} == {
+        runtime.system_service_run_id
+    }
 
 
 def test_set_workspace_preserves_inherited_environment_variables(
@@ -778,132 +811,62 @@ def test_team_summary_includes_inactive_members(
     assert by_id["inactive"].roles == []
 
 
-# --- prompt trace -----------------------------------------------------------
+# --- transcript settings ---------------------------------------------------
 
 
-def test_prompt_trace_status_reflects_limit_and_read_path(
+def test_transcript_settings_defaults_and_usage(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_DETAIL", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", raising=False)
+    runtime = AppRuntime(EventBus())
+
+    status = runtime.get_transcript_settings()
+
+    assert status.detail == "standard"
+    assert status.retention_days == 30
+    assert status.total_size_bytes == 0
+    assert status.index_size_bytes == 0
+    assert status.memory_size_bytes == 0
+
+
+def test_update_transcript_settings_writes_env_and_removes_legacy_keys(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_DETAIL", "standard")
+    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", "30")
     monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE_PATH", raising=False)
-    output_trace = isolated_home / "output.jsonl"
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(output_trace))
-    read_trace = isolated_home / "history.jsonl"
-    read_trace.write_text(
-        "\n".join(
-            f'{{"event":"llm.request","timestamp":"t{index}",'
-            f'"person_id":"p{index}","message":"m{index}"}}'
-            for index in range(5)
-        )
-        + "\n"
-    )
-    runtime = AppRuntime(EventBus())
-
-    status = runtime.get_prompt_trace_status(limit=2, read_path=str(read_trace))
-
-    assert status.enabled is True
-    assert status.trace_file == read_trace
-    assert status.output_trace_file == output_trace
-    assert status.trace_file_exists is True
-    assert status.event_count == TRACE_EVENT_TOTAL
-    assert len(status.events) == TRACE_EVENT_LIMIT
-    # The reader returns the most recent ``limit`` events, newest first.
-    assert [event.person_id for event in status.events] == ["p4", "p3"]
-
-
-def test_prompt_trace_status_uses_output_path_when_read_path_blank(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    output_trace = isolated_home / "output.jsonl"
-    output_trace.write_text(
-        '{"event":"llm.request","timestamp":"t","person_id":"p","message":"m"}\n'
-    )
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "0")
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(output_trace))
-    runtime = AppRuntime(EventBus())
-
-    status = runtime.get_prompt_trace_status(read_path="   ")
-
-    assert status.enabled is False
-    assert status.trace_file == output_trace
-    assert status.event_count == 1
-
-
-def test_update_prompt_trace_writes_env_and_environ(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE_PATH", raising=False)
-    trace_path = isolated_home / "trace.jsonl"
-    runtime = AppRuntime(EventBus())
-
-    status = runtime.update_prompt_trace(
-        PromptTraceUpdateRequest(enabled=True, trace_path=f"  {trace_path}  ")
-    )
-
-    assert os.environ["GUILDBOTICS_PROMPT_TRACE"] == "1"
-    assert os.environ["GUILDBOTICS_PROMPT_TRACE_PATH"] == str(trace_path)
-    env_text = (isolated_home / ".env").read_text()
-    assert "GUILDBOTICS_PROMPT_TRACE=1" in env_text
-    assert f"GUILDBOTICS_PROMPT_TRACE_PATH={trace_path}" in env_text
-    assert status.enabled is True
-    assert status.trace_file == trace_path
-
-
-def test_update_prompt_trace_empty_path_removes_env_key(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
     monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", "/old/trace.jsonl")
-    (isolated_home / ".env").write_text(
-        "GUILDBOTICS_PROMPT_TRACE=1\nGUILDBOTICS_PROMPT_TRACE_PATH=/old/trace.jsonl\n"
-    )
-    runtime = AppRuntime(EventBus())
-
-    runtime.update_prompt_trace(PromptTraceUpdateRequest(enabled=False, trace_path=""))
-
-    assert "GUILDBOTICS_PROMPT_TRACE_PATH" not in os.environ
-    env_text = (isolated_home / ".env").read_text()
-    assert "GUILDBOTICS_PROMPT_TRACE=0" in env_text
-    assert "GUILDBOTICS_PROMPT_TRACE_PATH" not in env_text
-
-
-def test_update_prompt_trace_preserves_existing_keys_and_order(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE", raising=False)
     (isolated_home / ".env").write_text(
         "\n".join(
             [
                 "# leading comment",
                 "OPENAI_API_KEY=first",
                 "GUILDBOTICS_PROMPT_TRACE=0",
+                "GUILDBOTICS_PROMPT_TRACE_PATH=/old/trace.jsonl",
                 "EXTRA=keep",
             ]
         )
         + "\n"
     )
-    trace_path = isolated_home / "trace.jsonl"
     runtime = AppRuntime(EventBus())
 
-    runtime.update_prompt_trace(
-        PromptTraceUpdateRequest(enabled=True, trace_path=str(trace_path))
+    status = runtime.update_transcript_settings(
+        TranscriptSettingsUpdateRequest(detail="full", retention_days=14)
     )
 
-    lines = (isolated_home / ".env").read_text().splitlines()
-    keys = [line.split("=", 1)[0] for line in lines if "=" in line]
-    # Existing keys retain their original relative order; the toggled key is
-    # updated in place and the new path key is appended after them.
-    assert keys == [
-        "OPENAI_API_KEY",
-        "GUILDBOTICS_PROMPT_TRACE",
-        "EXTRA",
-        "GUILDBOTICS_PROMPT_TRACE_PATH",
-    ]
-    env_map = dict(line.split("=", 1) for line in lines if "=" in line)
-    assert env_map["OPENAI_API_KEY"] == "first"
-    assert env_map["GUILDBOTICS_PROMPT_TRACE"] == "1"
-    assert env_map["EXTRA"] == "keep"
-    assert env_map["GUILDBOTICS_PROMPT_TRACE_PATH"] == str(trace_path)
+    assert status.detail == "full"
+    assert status.retention_days == 14
+    assert os.environ["GUILDBOTICS_TRANSCRIPT_DETAIL"] == "full"
+    assert os.environ["GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS"] == "14"
+    assert "GUILDBOTICS_PROMPT_TRACE" not in os.environ
+    assert "GUILDBOTICS_PROMPT_TRACE_PATH" not in os.environ
+    env_text = (isolated_home / ".env").read_text()
+    assert "OPENAI_API_KEY=first" in env_text
+    assert "EXTRA=keep" in env_text
+    assert "GUILDBOTICS_TRANSCRIPT_DETAIL=full" in env_text
+    assert "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS=14" in env_text
+    assert "GUILDBOTICS_PROMPT_TRACE" not in env_text
 
 
 # --- runtime debug ----------------------------------------------------------

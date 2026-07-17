@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import pytest
@@ -7,11 +6,12 @@ from guildbotics.intelligences.brains import agno_agent
 
 
 @pytest.mark.asyncio
-async def test_agno_agent_prompt_trace_records_request_and_response(
+async def test_agno_agent_records_request_response_and_span(
     monkeypatch, tmp_path: Path
 ) -> None:
     original = agno_agent.person_model_mapping.copy()
-    trace_path = tmp_path / "prompt_trace.jsonl"
+    io_records: list[tuple[str, dict]] = []
+    span_records: list[dict] = []
     agno_agent.person_model_mapping.clear()
     agno_agent.person_model_mapping["p1"] = {
         "default": agno_agent.ModelConfig(
@@ -32,8 +32,16 @@ async def test_agno_agent_prompt_trace_records_request_and_response(
             assert message == "hello"
             return FakeResponse()
 
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(trace_path))
+    monkeypatch.setattr(
+        agno_agent,
+        "record_correlated_io",
+        lambda *, io_type, payload: io_records.append((io_type, payload)),
+    )
+    monkeypatch.setattr(
+        agno_agent,
+        "record_span_summary",
+        lambda **kwargs: span_records.append(kwargs),
+    )
     monkeypatch.setattr(
         agno_agent, "instantiate_class", lambda *args, **kwargs: object()
     )
@@ -52,14 +60,13 @@ async def test_agno_agent_prompt_trace_records_request_and_response(
         agno_agent.person_model_mapping.update(original)
 
     assert output == "reply"
-    events = [
-        json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [event["event"] for event in events] == ["llm.request", "llm.response"]
-    assert events[0]["person_id"] == "p1"
-    assert events[0]["brain"] == "functions/reply"
-    assert events[0]["model"] == "models/test.yml"
-    assert events[0]["description"] == "System prompt"
-    assert events[0]["message"] == "hello"
-    assert events[0]["session_state"] == {"topic": "style"}
-    assert events[1]["content"] == "reply"
+    assert [record[0] for record in io_records] == ["llm.request", "llm.response"]
+    assert io_records[0][1]["person_id"] == "p1"
+    assert io_records[0][1]["brain"] == "functions/reply"
+    assert io_records[0][1]["model"] == "models/test.yml"
+    assert io_records[0][1]["description"] == "System prompt"
+    assert io_records[0][1]["message"] == "hello"
+    assert io_records[0][1]["session_state"] == {"topic": "style"}
+    assert io_records[1][1]["content"] == "reply"
+    assert span_records[0].get("status", "finished") == "finished"
+    assert span_records[0]["model"] == "models/test.yml"

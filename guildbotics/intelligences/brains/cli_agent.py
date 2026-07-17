@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -19,12 +20,19 @@ from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
-from guildbotics.observability import span_scope
-from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.observability import correlation_fields, span_scope
+from guildbotics.observability.diagnostics_events import (
+    record_correlated_event,
+    record_correlated_io,
+    record_span_summary,
+)
+from guildbotics.observability.session_transcripts import (
+    standard_stderr_tail,
+    transcript_detail,
+)
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
-from guildbotics.utils.log_utils import get_log_output_dir
-from guildbotics.utils.prompt_trace import write_prompt_trace
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.text_utils import replace_placeholders
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
@@ -527,39 +535,38 @@ class CliAgentBrain(Brain):
         # The span wraps the whole call (including this brain's own logging) so
         # logs emitted here are attributed to the "cli_agent" span in diagnostics.
         with span_scope("cli_agent"):
-            self.logger.debug(
-                f"Running AI CLI tool '{self.cli_agent}' with input:\n{input}\n\n"
-            )
-            self._write_request_trace(input, kwargs)
-
-            response_file = ""
-            log_file = ""
-            output_dir = get_log_output_dir()
-            if output_dir:
-                current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-                response_file = str(
-                    output_dir / f"cli_agent_response_{current_time}.log"
+            started = time.monotonic()
+            self._write_request_io(input, kwargs)
+            try:
+                result = await self._execute(input, cwd, kwargs)
+            except Exception:
+                record_span_summary(
+                    status="failed",
+                    model=self.cli_agent,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    attributes={"agent.kind": "cli_agent"},
                 )
-                log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
-
-            result = await self._execute(input, response_file, log_file, cwd, kwargs)
+                raise
             output: Any = result.stdout
-            self._write_response_trace(result)
+            self._write_response_io(result)
+            record_span_summary(
+                status="finished" if result.returncode == 0 else "failed",
+                model=self.cli_agent,
+                duration_ms=(time.monotonic() - started) * 1000,
+                usage=result.usage,
+                attributes={"agent.kind": "cli_agent"},
+            )
             self._raise_if_execution_failed(result)
 
-            self.logger.debug(
-                f"AI CLI tool '{self.cli_agent}' produced output:\n{output}\n\n"
-            )
             if self.response_class:
                 output = to_response_class(output, self.response_class)
             if isinstance(output, AgentResponse):
-                log_file_path = Path(log_file)
-                if (
-                    output.status == AgentResponse.ASKING
-                    and log_file
-                    and log_file_path.exists()
-                ):
-                    output.message = f"{output.message}\n\nSee: {log_file_path.name}"
+                trace_id = str(correlation_fields().get("trace_id") or "")
+                if output.status == AgentResponse.ASKING and trace_id:
+                    output.message = (
+                        f"{output.message}\n\n"
+                        f"{t('intelligences.cli_agent.trace_reference', trace_id=trace_id)}"
+                    )
 
         return output
 
@@ -571,30 +578,31 @@ class CliAgentBrain(Brain):
             message, kwargs.get("session_state", {}), self.template_engine
         )
         with span_scope("cli_agent"):
-            self.logger.debug(
-                f"Running AI CLI tool '{self.cli_agent}' with input:\n{input}\n\n"
-            )
-            self._write_request_trace(input, kwargs)
-
-            response_file = ""
-            log_file = ""
-            output_dir = get_log_output_dir()
-            if output_dir:
-                current_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-                response_file = str(
-                    output_dir / f"cli_agent_response_{current_time}.log"
+            started = time.monotonic()
+            self._write_request_io(input, kwargs)
+            try:
+                result = await self._execute(input, cwd, kwargs)
+            except Exception:
+                record_span_summary(
+                    status="failed",
+                    model=self.cli_agent,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    attributes={"agent.kind": "cli_agent"},
                 )
-                log_file = str(output_dir / f"cli_agent_output_{current_time}.log")
-
-            result = await self._execute(input, response_file, log_file, cwd, kwargs)
-            self._write_response_trace(result)
+                raise
+            self._write_response_io(result)
+            record_span_summary(
+                status="finished" if result.returncode == 0 else "failed",
+                model=self.cli_agent,
+                duration_ms=(time.monotonic() - started) * 1000,
+                usage=result.usage,
+                attributes={"agent.kind": "cli_agent"},
+            )
         return result
 
     async def _execute(
         self,
         input: str,
-        response_file: str,
-        log_file: str,
         cwd: Path | str,
         kwargs: dict[str, Any],
     ) -> CliAgentExecutionResult:
@@ -607,9 +615,7 @@ class CliAgentBrain(Brain):
             conversation_scope=self.executable_info.conversation_scope,
             extra_env=extra_env,
         )
-        return await self._execute_script(
-            script_input, response_file, log_file, cwd, extra_env
-        )
+        return await self._execute_script(script_input, cwd, extra_env)
 
     async def _execute_native(
         self, input: str, cwd: Path | str, kwargs: dict[str, Any]
@@ -863,8 +869,6 @@ class CliAgentBrain(Brain):
     async def _execute_script(
         self,
         input: str,
-        response_file: str,
-        log_file: str,
         cwd: Path | str,
         extra_env: dict[str, str] | None = None,
     ) -> CliAgentExecutionResult:
@@ -906,6 +910,7 @@ class CliAgentBrain(Brain):
         env["PROMPT_FILE"] = temp_file_name
 
         process: asyncio.subprocess.Process | None = None
+        started = time.monotonic()
         try:
             # Launch subprocess in the cloned repository directory
             process = await asyncio.create_subprocess_shell(
@@ -917,27 +922,19 @@ class CliAgentBrain(Brain):
                 start_new_session=True,
             )
             self.logger.info(
-                f"Running AI CLI tool '{self.cli_agent}' with script: {self.executable_info.script}"
+                f"AI CLI '{self.cli_agent}' started "
+                f"(prompt {len(input.encode('utf-8')) / 1024:.1f}KB)"
             )
-            self.logger.debug(f"Environment: {self._mask_env(env)}")
             stdout, stderr = await process.communicate()
-            self.logger.info(
-                f"AI CLI tool '{self.cli_agent}' finished execution with return code {process.returncode}"
-            )
 
-            # Log the outputs
             stderr_output = stderr.decode(errors="replace")
-            if stderr_output:
-                self.logger.debug(stderr_output)
-                if log_file:
-                    with open(log_file, "w") as f:
-                        f.write(stderr_output)
-
             response = stdout.decode(errors="replace")
-            self.logger.info(f"AI CLI tool '{self.cli_agent}' response:\n{response}")
-            if response_file:
-                with open(response_file, "w") as f:
-                    f.write(response)
+            duration = time.monotonic() - started
+            self.logger.info(
+                f"AI CLI '{self.cli_agent}' finished rc={process.returncode} "
+                f"in {duration:.1f}s "
+                f"(response {len(response.encode('utf-8')) / 1024:.1f}KB)"
+            )
 
             if process.returncode != 0:
                 self.logger.error(f"AI CLI tool exited with code {process.returncode}")
@@ -988,13 +985,6 @@ class CliAgentBrain(Brain):
             "-o IdentitiesOnly=yes -o IdentityFile=/dev/null"
         )
 
-    def _mask_env(self, env: dict[str, str]) -> dict[str, str]:
-        sensitive = ("KEY", "TOKEN", "PASSWORD", "SECRET", "CREDENTIAL", "ASKPASS")
-        return {
-            key: "***" if any(part in key.upper() for part in sensitive) else value
-            for key, value in env.items()
-        }
-
     def remove_temp_file(self, file_name: str):
         """
         Remove temporary files created during the execution of the AI CLI tool.
@@ -1002,10 +992,10 @@ class CliAgentBrain(Brain):
         with suppress(OSError):
             os.remove(file_name)
 
-    def _write_request_trace(self, prompt: str, kwargs: dict[str, Any]) -> None:
-        write_prompt_trace(
-            "cli_agent.request",
-            {
+    def _write_request_io(self, prompt: str, kwargs: dict[str, Any]) -> None:
+        record_correlated_io(
+            io_type="cli_agent.request",
+            payload={
                 "person_id": self.person_id,
                 "brain": self.name,
                 "cli_agent": self.cli_agent,
@@ -1017,16 +1007,22 @@ class CliAgentBrain(Brain):
             },
         )
 
-    def _write_response_trace(self, result: CliAgentExecutionResult) -> None:
-        write_prompt_trace(
-            "cli_agent.response",
-            {
+    def _write_response_io(self, result: CliAgentExecutionResult) -> None:
+        stderr = (
+            result.stderr
+            if transcript_detail() == "full"
+            else standard_stderr_tail(result.stderr)
+        )
+        record_correlated_io(
+            io_type="cli_agent.response",
+            payload={
                 "person_id": self.person_id,
                 "brain": self.name,
                 "cli_agent": self.cli_agent,
                 "returncode": result.returncode,
                 "stdout": result.stdout,
-                "stderr": result.stderr,
+                "stderr": stderr,
+                "stderr_truncated": len(stderr) < len(result.stderr),
             },
         )
 

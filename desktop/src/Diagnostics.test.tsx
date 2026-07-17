@@ -1,6 +1,6 @@
 import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,23 +11,24 @@ import {
   getGlobalRecords,
   getMemoryEvents,
   getProjectConfig,
-  getPromptTrace,
+  getRuntimeDebug,
   getTeam,
   getTraceDetail,
   getTraces,
+  getTranscriptSettings,
   runScenarioDiagnostics,
   subscribeEvents,
   subscribeLogs,
-  updatePromptTrace,
+  updateTranscriptSettings,
+  updateRuntimeDebug,
   type ConfigStatus,
   type DiagnosticCheck,
   type MemoryEvent,
   type ProjectConfig,
-  type PromptTraceEntry,
-  type PromptTraceStatus,
   type RuntimeStatus,
   type RuntimeUnitStatus,
   type ScenarioDiagnosticsResponse,
+  type TranscriptSettingsStatus,
 } from "./api/client";
 import i18n from "./i18n";
 import { makeTraceRecord } from "./test/factories";
@@ -57,9 +58,9 @@ vi.mock("./api/client", async (importOriginal) => {
     })),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
-    getPromptTrace: vi.fn(),
+    getTranscriptSettings: vi.fn(),
     getMemoryEvents: vi.fn(),
-    updatePromptTrace: vi.fn(),
+    updateTranscriptSettings: vi.fn(),
     getRuntimeDebug: vi.fn(async () => ({
       enabled: false,
       log_level: "INFO",
@@ -115,7 +116,14 @@ beforeEach(() => {
       ],
     });
   vi.mocked(getProjectConfig).mockReset().mockResolvedValue(projectConfig());
-  vi.mocked(getPromptTrace).mockReset().mockResolvedValue(promptTrace());
+  vi.mocked(getTranscriptSettings).mockReset().mockResolvedValue(transcriptSettings());
+  vi.mocked(getRuntimeDebug).mockReset().mockResolvedValue({
+    enabled: false,
+    log_level: "INFO",
+    agno_debug: false,
+    env_file: "/workspace/.env",
+    env_file_exists: true,
+  });
   vi.mocked(getMemoryEvents)
     .mockReset()
     .mockResolvedValue({
@@ -128,9 +136,18 @@ beforeEach(() => {
         }),
       ],
     });
-  vi.mocked(updatePromptTrace)
+  vi.mocked(updateTranscriptSettings)
     .mockReset()
-    .mockResolvedValue(promptTrace({ enabled: true, output_trace_file: "/workspace/trace.jsonl" }));
+    .mockResolvedValue(transcriptSettings({ detail: "full" }));
+  vi.mocked(updateRuntimeDebug)
+    .mockReset()
+    .mockImplementation(async (body) => ({
+      enabled: body.enabled,
+      log_level: body.enabled ? "DEBUG" : "INFO",
+      agno_debug: body.enabled,
+      env_file: "/workspace/.env",
+      env_file_exists: true,
+    }));
   vi.mocked(runScenarioDiagnostics).mockReset().mockResolvedValue(scenarioResponse());
   vi.mocked(getTraces).mockReset().mockResolvedValue({ traces: [] });
   vi.mocked(getTraceDetail)
@@ -220,113 +237,43 @@ describe("Diagnostics readiness tab", () => {
   });
 });
 
-describe("Diagnostics prompt trace tab", () => {
-  it("applies an edited read path and refetches with the new path", async () => {
+describe("Diagnostics settings tab", () => {
+  it("updates retention and displays storage usage", async () => {
     const user = userEvent.setup();
-    renderApp();
-    await openTab(user, t("diagnostics.tabs.promptTrace"));
-
-    const field = await screen.findByLabelText(t("overview.promptTrace.readPath"));
-    await user.clear(field);
-    await user.type(field, "/custom/trace.jsonl");
-    await user.keyboard("{Enter}");
-
-    await waitFor(() =>
-      expect(
-        vi.mocked(getPromptTrace).mock.calls.some((call) => call[1] === "/custom/trace.jsonl"),
-      ).toBe(true),
-    );
-  });
-
-  it("resets the read path back to the default trace file", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await openTab(user, t("diagnostics.tabs.promptTrace"));
-
-    const field = await screen.findByLabelText(t("overview.promptTrace.readPath"));
-    await waitFor(() => expect(field).toHaveValue("/workspace/.guildbotics/trace.jsonl"));
-    await user.clear(field);
-    await user.type(field, "/other/path.jsonl");
-
-    await user.click(
-      screen.getByRole("button", { name: t("overview.promptTrace.resetDefaultPath") }),
-    );
-
-    // Reset loads the default trace file and refetches the trace list with it.
-    await waitFor(() =>
-      expect(
-        vi
-          .mocked(getPromptTrace)
-          .mock.calls.some((call) => call[1] === "/workspace/.guildbotics/default.jsonl"),
-      ).toBe(true),
-    );
-  });
-
-  // The prompt-trace OUTPUT settings (enable switch + output path) live in the
-  // PromptTraceOutputSettings panel rendered on the Service Runtime page, not on
-  // the Diagnostics prompt-trace tab (which only shows the read path). See the
-  // spec-vs-source note in the session report.
-  it("toggles the runtime output trace on and persists the choice", async () => {
-    const user = userEvent.setup();
-    renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
-
-    await user.click(
-      await screen.findByRole("switch", { name: t("overview.promptTrace.disabled") }),
-    );
-
-    await waitFor(() => expect(updatePromptTrace).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(updatePromptTrace).mock.calls[0][0]).toMatchObject({ enabled: true });
-  });
-
-  it("updates the output trace path through updatePromptTrace", async () => {
-    const user = userEvent.setup();
-    renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
-
-    const field = await screen.findByLabelText(t("overview.promptTrace.outputPath"));
-    await user.clear(field);
-    await user.type(field, "/workspace/new-output.jsonl");
-    await user.keyboard("{Enter}");
-
-    await waitFor(() => expect(updatePromptTrace).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(updatePromptTrace).mock.calls[0][0]).toMatchObject({
-      trace_path: "/workspace/new-output.jsonl",
-    });
-  });
-
-  it("opens the trace details drawer when a trace row is selected", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getPromptTrace).mockResolvedValue(
-      promptTrace({
-        event_count: 2,
-        // Trace events arrive newest-first, so the response precedes its request;
-        // buildTraceGroups pairs a response with the earlier-listed request.
-        events: [
-          traceEntry({
-            event: "llm.response",
-            person_id: "alice",
-            brain: "brains/writer.yml",
-            response: "Here is the summary",
-          }),
-          traceEntry({
-            event: "llm.request",
-            person_id: "alice",
-            brain: "brains/writer.yml",
-            prompt: "Write a summary",
-          }),
-        ],
+    vi.mocked(getTranscriptSettings).mockResolvedValue(
+      transcriptSettings({
+        total_size_bytes: 2048,
+        index_size_bytes: 512,
+        memory_size_bytes: 256,
       }),
     );
     renderApp();
-    await openTab(user, t("diagnostics.tabs.promptTrace"));
+    await openTab(user, t("diagnostics.tabs.settings"));
 
-    const row = await screen.findByRole("button", { name: /writer/ });
-    await user.click(row);
+    expect(await screen.findByText("2.0 KiB")).toBeInTheDocument();
+    const retention = await screen.findByLabelText(t("diagnostics.transcripts.retentionDays"));
+    await user.clear(retention);
+    await user.type(retention, "14");
+    await user.tab();
 
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Write a summary")).toBeInTheDocument();
-    expect(within(dialog).getByText("Here is the summary")).toBeInTheDocument();
+    await waitFor(() => expect(updateTranscriptSettings).toHaveBeenCalled());
+    const calls = vi.mocked(updateTranscriptSettings).mock.calls;
+    expect(calls[calls.length - 1]?.[0]).toEqual({
+      detail: "standard",
+      retention_days: 14,
+    });
+  });
+
+  it("updates runtime debug", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.settings"));
+
+    await user.click(
+      await screen.findByRole("switch", { name: t("diagnostics.runtimeDebug.disabled") }),
+    );
+
+    await waitFor(() => expect(updateRuntimeDebug).toHaveBeenCalledWith({ enabled: true }));
   });
 });
 
@@ -516,6 +463,51 @@ describe("Diagnostics executions tab", () => {
     const live = screen.getByText("working on it");
     const started = screen.getByText("command.started");
     expect(live.compareDocumentPosition(started) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps memory records visible when the transcript has expired", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-1",
+          source: "manual",
+          person_id: "alice",
+          command: "workflows/demo",
+          workflow: "",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "success",
+          event_count: 2,
+          log_count: 0,
+          error_count: 0,
+          span_count: 0,
+          attributes: {},
+        },
+      ],
+    });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-1",
+      summary: null,
+      transcript_available: false,
+      records: [
+        makeTraceRecord({
+          kind: "memory",
+          type: "memory.record",
+          message: "retained memory audit",
+          timestamp: "2026-06-12T00:00:02Z",
+        }),
+      ],
+    });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.executions"));
+    await user.click(await screen.findByText("workflows/demo"));
+
+    expect(
+      await screen.findByText(t("diagnostics.executions.transcriptDeleted")),
+    ).toBeInTheDocument();
+    expect(screen.getByText("retained memory audit")).toBeInTheDocument();
   });
 
   it("opens a combined execution timeline from trace_ids query parameters", async () => {
@@ -885,36 +877,18 @@ function projectConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   };
 }
 
-function promptTrace(overrides: Partial<PromptTraceStatus> = {}): PromptTraceStatus {
+function transcriptSettings(
+  overrides: Partial<TranscriptSettingsStatus> = {},
+): TranscriptSettingsStatus {
   return {
-    enabled: false,
+    detail: "standard",
+    retention_days: 30,
     env_file: "/workspace/.env",
     env_file_exists: true,
-    trace_file: "/workspace/.guildbotics/trace.jsonl",
-    output_trace_file: "/workspace/.guildbotics/trace.jsonl",
-    default_trace_file: "/workspace/.guildbotics/default.jsonl",
-    trace_file_exists: true,
-    event_count: 0,
-    events: [],
-    ...overrides,
-  };
-}
-
-function traceEntry(overrides: Partial<PromptTraceEntry> = {}): PromptTraceEntry {
-  return {
-    event: "llm.request",
-    timestamp: "2026-01-01T00:00:00Z",
-    person_id: "alice",
-    brain: "brains/writer.yml",
-    command: "",
-    target: "",
-    cwd: "",
-    description: "",
-    transcript: "",
-    prompt: "",
-    response: "",
-    error: "",
-    fields: {},
+    sessions_dir: "/workspace/.guildbotics/data/run/sessions",
+    total_size_bytes: 0,
+    index_size_bytes: 0,
+    memory_size_bytes: 0,
     ...overrides,
   };
 }

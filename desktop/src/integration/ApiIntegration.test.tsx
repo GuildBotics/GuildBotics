@@ -251,17 +251,16 @@ function runtimeStatus(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function promptTrace() {
+function transcriptSettings() {
   return {
-    enabled: false,
+    detail: "standard",
+    retention_days: 30,
     env_file: "",
     env_file_exists: false,
-    trace_file: "",
-    output_trace_file: "",
-    default_trace_file: "",
-    trace_file_exists: false,
-    event_count: 0,
-    events: [],
+    sessions_dir: "",
+    total_size_bytes: 0,
+    index_size_bytes: 0,
+    memory_size_bytes: 0,
   };
 }
 
@@ -312,7 +311,7 @@ function serviceServer(): MockServer {
     .json("GET", "/config/project", projectConfig())
     .json("GET", "/commands/options", { options: [] })
     .json("GET", "/commands/routine-options", { options: [] })
-    .json("GET", "/prompt-trace", promptTrace())
+    .json("GET", "/transcripts/settings", transcriptSettings())
     .json("GET", "/runtime/debug", runtimeDebug())
     .json("PUT", "/runtime/debug", runtimeDebug({ enabled: true }))
     .json("POST", "/scheduler/start", runtimeStatus())
@@ -577,7 +576,6 @@ describe("Setup integration (real client + mock server)", () => {
     // restartBackend -> setWorkspace fires a real POST /workspace.
     await waitFor(() => expect(server.requestsFor("POST", "/workspace")).toHaveLength(1));
     expect(server.lastBody("POST", "/workspace")).toEqual({ workspace_dir: "/workspace" });
-    expect(localStorage.getItem("guildbotics.workspace")).toBe("/workspace");
     expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
     expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
     expect(screen.getByText(/\/workspace\/\.env/)).toBeInTheDocument();
@@ -589,7 +587,7 @@ describe("Commands integration (real client + mock server)", () => {
     const server = new MockServer()
       .json("GET", "/config/status", configStatus())
       .json("GET", "/team", team())
-      .json("GET", "/prompt-trace", promptTrace())
+      .json("GET", "/transcripts/settings", transcriptSettings())
       .json("GET", "/runtime/debug", runtimeDebug())
       .json("PUT", "/runtime/debug", runtimeDebug({ enabled: true }))
       .json("POST", "/commands/run", { trace_id: "req-1", output: "hello output" })

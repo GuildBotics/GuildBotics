@@ -7,11 +7,11 @@ from typing import Any
 
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
-    AgentEventKind,
     AgentExecutionContext,
     ConversationRecord,
 )
 from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.observability.session_transcripts import should_record_agent_event
 
 _MAX_MESSAGE = 8_192
 _SENSITIVE_PARTS = ("token", "secret", "password", "credential", "authorization")
@@ -27,10 +27,7 @@ def record_agent_event(
     context: AgentExecutionContext,
     conversation: ConversationRecord,
 ) -> None:
-    # Provider text deltas can number in the thousands. The completed assistant
-    # event contains the auditable response, while persisting every fragment
-    # would crowd out command/file/error records and amplify JSONL I/O.
-    if event.kind is AgentEventKind.ASSISTANT and event.name == "delta":
+    if not should_record_agent_event(event.kind.value, event.name):
         return
     payload: dict[str, Any] = {
         "name": event.name,

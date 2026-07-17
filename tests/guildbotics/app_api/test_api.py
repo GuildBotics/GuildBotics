@@ -24,8 +24,6 @@ from guildbotics.app_api.models import (
     DiagnosticCheck,
     ProjectStatusOptionsRequest,
     ProjectStatusOptionsResponse,
-    PromptTraceStatus,
-    PromptTraceUpdateRequest,
     RoutineCommandOptionsResponse,
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
@@ -34,6 +32,8 @@ from guildbotics.app_api.models import (
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     TeamSummary,
+    TranscriptSettingsStatus,
+    TranscriptSettingsUpdateRequest,
     VerifyCheck,
     VerifyResponse,
 )
@@ -247,42 +247,26 @@ class RuntimeStub:
             events_state="running" if request.sources.event_queue else "stopped",
         )
 
-    def get_prompt_trace_status(
-        self, limit: int = 20, read_path: str | None = None
-    ) -> PromptTraceStatus:
-        output_trace_file = self.config_status.storage_dir / "run/prompt_trace.jsonl"
-        trace_file = Path(read_path) if read_path else output_trace_file
-        return PromptTraceStatus(
-            enabled=False,
+    def get_transcript_settings(self) -> TranscriptSettingsStatus:
+        return TranscriptSettingsStatus(
+            detail="standard",
+            retention_days=30,
             env_file=self.config_status.env_file,
             env_file_exists=self.config_status.env_file.exists(),
-            trace_file=trace_file,
-            output_trace_file=output_trace_file,
-            default_trace_file=output_trace_file,
-            trace_file_exists=False,
-            event_count=0,
-            events=[],
+            sessions_dir=self.config_status.storage_dir / "run/sessions",
+            total_size_bytes=0,
+            index_size_bytes=0,
+            memory_size_bytes=0,
         )
 
-    def update_prompt_trace(
-        self, request: PromptTraceUpdateRequest, *, limit: int = 20
-    ) -> PromptTraceStatus:
-        output_trace_file = (
-            Path(request.trace_path)
-            if request.trace_path
-            else self.config_status.storage_dir / "run/prompt_trace.jsonl"
-        )
-        return PromptTraceStatus(
-            enabled=request.enabled,
-            env_file=self.config_status.env_file,
-            env_file_exists=True,
-            trace_file=output_trace_file,
-            output_trace_file=output_trace_file,
-            default_trace_file=self.config_status.storage_dir
-            / "run/prompt_trace.jsonl",
-            trace_file_exists=False,
-            event_count=0,
-            events=[],
+    def update_transcript_settings(
+        self, request: TranscriptSettingsUpdateRequest
+    ) -> TranscriptSettingsStatus:
+        return self.get_transcript_settings().model_copy(
+            update={
+                "detail": request.detail,
+                "retention_days": request.retention_days,
+            }
         )
 
     def get_runtime_debug_status(self) -> RuntimeDebugStatus:
@@ -820,41 +804,26 @@ def test_scheduler_start_event_queue_source_uses_runtime(tmp_path: Path) -> None
     assert response.json()["scheduler"]["state"] == "running"
 
 
-def test_prompt_trace_status_endpoint_uses_runtime(tmp_path: Path) -> None:
+def test_transcript_settings_endpoints_use_runtime(tmp_path: Path) -> None:
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
-    read_path = tmp_path / "old_trace.jsonl"
 
     with TestClient(app) as client:
-        response = client.get(
-            "/prompt-trace",
+        status = client.get(
+            "/transcripts/settings",
             headers={"X-GuildBotics-Session-Token": "secret"},
-            params={"path": str(read_path)},
+        )
+        updated = client.put(
+            "/transcripts/settings",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+            json={"detail": "full", "retention_days": 14},
         )
 
-    assert response.status_code == HTTP_OK
-    assert response.json()["enabled"] is False
-    assert response.json()["trace_file"] == str(read_path)
-    assert response.json()["output_trace_file"] == str(
-        tmp_path / "home/.guildbotics/data/run/prompt_trace.jsonl"
-    )
-    assert response.json()["event_count"] == 0
-
-
-def test_prompt_trace_update_endpoint_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
-    trace_path = tmp_path / "trace.jsonl"
-
-    with TestClient(app) as client:
-        response = client.put(
-            "/prompt-trace",
-            headers={"X-GuildBotics-Session-Token": "secret"},
-            json={"enabled": True, "trace_path": str(trace_path)},
-        )
-
-    assert response.status_code == HTTP_OK
-    assert response.json()["enabled"] is True
-    assert response.json()["trace_file"] == str(trace_path)
-    assert response.json()["output_trace_file"] == str(trace_path)
+    assert status.status_code == HTTP_OK
+    assert status.json()["detail"] == "standard"
+    assert status.json()["retention_days"] == 30
+    assert updated.status_code == HTTP_OK
+    assert updated.json()["detail"] == "full"
+    assert updated.json()["retention_days"] == 14
 
 
 def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
@@ -1474,78 +1443,23 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
     runtime.get_team_summary()
 
 
-def test_app_runtime_updates_prompt_trace_env(monkeypatch, tmp_path: Path) -> None:
+def test_app_runtime_updates_transcript_settings(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE_PATH", raising=False)
-    trace_path = tmp_path / "trace.jsonl"
-    trace_path.write_text(
-        '{"event":"llm.request","timestamp":"2026-06-01T12:00:00+09:00",'
-        '"person_id":"alice","brain":"default","message":"hello"}\n'
-    )
+    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_DETAIL", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", raising=False)
     runtime = AppRuntime(EventBus())
 
-    status = runtime.update_prompt_trace(
-        PromptTraceUpdateRequest(enabled=True, trace_path=str(trace_path))
+    status = runtime.update_transcript_settings(
+        TranscriptSettingsUpdateRequest(detail="full", retention_days=14)
     )
 
-    assert os.environ["GUILDBOTICS_PROMPT_TRACE"] == "1"
-    assert os.environ["GUILDBOTICS_PROMPT_TRACE_PATH"] == str(trace_path)
-    assert "GUILDBOTICS_PROMPT_TRACE=1" in (tmp_path / ".env").read_text()
-    assert status.enabled is True
-    assert status.trace_file == trace_path
-    assert status.event_count == 1
-    assert status.events[0].person_id == "alice"
-    assert status.events[0].prompt == "hello"
-
-
-def test_app_runtime_formats_prompt_trace_description_and_transcript(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    trace_path = tmp_path / "trace.jsonl"
-    trace_path.write_text(
-        '{"event":"chat.reply_input","timestamp":"2026-06-01T12:00:00+09:00",'
-        '"person_id":"alice","transcript":"one\\ntwo",'
-        '"payload":{"thread_messages":[{"author":"alice","content":"hello"}]}}\n'
-        '{"event":"llm.request","timestamp":"2026-06-01T12:00:01+09:00",'
-        '"person_id":"alice","brain":"functions/answer",'
-        '"description":"system\\nprompt","message":"hello"}\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(trace_path))
-    runtime = AppRuntime(EventBus())
-
-    status = runtime.get_prompt_trace_status()
-
-    assert status.events[0].description == "system\nprompt"
-    assert status.events[0].fields.get("description") is None
-    assert status.events[1].transcript == "one\ntwo"
-    assert status.events[1].fields.get("transcript") is None
-
-
-def test_app_runtime_formats_structured_prompt_trace_response(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    trace_path = tmp_path / "trace.jsonl"
-    trace_path.write_text(
-        '{"event":"llm.response","timestamp":"2026-06-01T12:00:00+09:00",'
-        '"person_id":"alice","brain":"functions/answer",'
-        '"content":{"status":"ok","message":"こんにちは"}}\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(trace_path))
-    runtime = AppRuntime(EventBus())
-
-    status = runtime.get_prompt_trace_status()
-
-    assert status.event_count == 1
-    assert status.events[0].response == (
-        '{\n  "message": "こんにちは",\n  "status": "ok"\n}'
-    )
+    assert os.environ["GUILDBOTICS_TRANSCRIPT_DETAIL"] == "full"
+    assert os.environ["GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS"] == "14"
+    env_text = (tmp_path / ".env").read_text()
+    assert "GUILDBOTICS_TRANSCRIPT_DETAIL=full" in env_text
+    assert "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS=14" in env_text
+    assert status.detail == "full"
+    assert status.retention_days == 14
 
 
 def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
@@ -2067,8 +1981,8 @@ PROTECTED_ENDPOINTS = [
     ("POST", "/scheduler/start"),
     ("POST", "/scheduler/stop"),
     ("POST", "/chat/receive-state/reset"),
-    ("GET", "/prompt-trace"),
-    ("PUT", "/prompt-trace"),
+    ("GET", "/transcripts/settings"),
+    ("PUT", "/transcripts/settings"),
     ("GET", "/runtime/debug"),
     ("PUT", "/runtime/debug"),
     ("POST", "/verify"),
@@ -2683,34 +2597,19 @@ def test_chat_receive_state_reset_rejected_while_running(
     assert exc_info.value.status_code == HTTP_CONFLICT
 
 
-# --- prompt trace --------------------------------------------------------
+# --- transcript settings -------------------------------------------------
 
 
-@pytest.mark.parametrize("limit", [0, 1001])
-def test_prompt_trace_get_rejects_out_of_range_limit(
-    tmp_path: Path, limit: int
-) -> None:
-    client = _client(RuntimeStub(tmp_path))
-
-    response = client.get(
-        "/prompt-trace", headers=AUTH_HEADERS, params={"limit": limit}
-    )
-
-    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
-    assert response.json()["code"] == "validation_error"
-
-
-@pytest.mark.parametrize("limit", [0, 1001])
-def test_prompt_trace_put_rejects_out_of_range_limit(
-    tmp_path: Path, limit: int
+@pytest.mark.parametrize("retention_days", [0, 3651])
+def test_transcript_settings_reject_invalid_retention(
+    tmp_path: Path, retention_days: int
 ) -> None:
     client = _client(RuntimeStub(tmp_path))
 
     response = client.put(
-        "/prompt-trace",
+        "/transcripts/settings",
         headers=AUTH_HEADERS,
-        params={"limit": limit},
-        json={"enabled": True},
+        json={"detail": "standard", "retention_days": retention_days},
     )
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY

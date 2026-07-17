@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,16 +20,6 @@ from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
 HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 HTTP_OK = 200
-
-
-@pytest.fixture(autouse=True)
-def _isolate_prompt_trace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Point the prompt-trace path at an absent file so list_traces does not read
-    # a real prompt_trace.jsonl from the developer's storage.
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE", raising=False)
-    monkeypatch.setenv(
-        "GUILDBOTICS_PROMPT_TRACE_PATH", str(tmp_path / "absent_prompt_trace.jsonl")
-    )
 
 
 def _app(tmp_path: Path) -> tuple[TestClient, EventBus]:
@@ -55,11 +44,10 @@ def test_traces_endpoint_lists_published_traces(tmp_path: Path) -> None:
 
     assert response.status_code == HTTP_OK
     traces = response.json()["traces"]
-    assert len(traces) == 1
-    assert traces[0]["trace_id"] == "t1"
-    assert traces[0]["source"] == "manual"
-    assert traces[0]["command"] == "demo"
-    assert traces[0]["status"] == "success"
+    trace = next(item for item in traces if item["trace_id"] == "t1")
+    assert trace["source"] == "manual"
+    assert trace["command"] == "demo"
+    assert trace["status"] == "success"
 
 
 def test_traces_endpoint_filters_by_source(tmp_path: Path) -> None:
@@ -113,42 +101,14 @@ def test_trace_detail_returns_ordered_records(tmp_path: Path) -> None:
     assert kinds == ["event", "log", "event"]
 
 
-def test_prompt_only_traces_only_appear_under_all_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = DiagnosticsStore(tmp_path / "diag.jsonl")
-    bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
-    with trace_scope("manual", trace_id="m1"):
-        bus.publish_event("command.started", {})
-    # "p1" exists only as a prompt-trace record (no store events/logs).
-    monkeypatch.setattr(runtime, "_prompt_trace_trace_ids", lambda: {"p1", "m1"})
-
-    # Unfiltered ("all") surfaces the prompt-only trace alongside the real one.
-    all_ids = {trace.trace_id for trace in runtime.list_traces().traces}
-    assert {"m1", "p1"} <= all_ids
-
-    # A source filter must not leak the prompt-only trace (unknown source).
-    routine_ids = {
-        trace.trace_id for trace in runtime.list_traces(source="routine").traces
-    }
-    assert "p1" not in routine_ids
-    manual_ids = {
-        trace.trace_id for trace in runtime.list_traces(source="manual").traces
-    }
-    assert "p1" not in manual_ids
-    assert "m1" in manual_ids
-
-
 def test_global_endpoint_returns_unscoped_events_and_logs(tmp_path: Path) -> None:
     client, bus = _app(tmp_path)
-    bus.publish_log("INFO", "global line")
-    # A service lifecycle event has no trace and only appears in the global view.
-    bus.publish_event("scheduler.running", {"state": "running"}, source="scheduler")
-    with trace_scope("manual", trace_id="t1"):
-        bus.publish_log("INFO", "scoped line")
-
     with client:
+        bus.publish_log("INFO", "global line")
+        # A service lifecycle event has no trace and only appears in the global view.
+        bus.publish_event("scheduler.running", {"state": "running"}, source="scheduler")
+        with trace_scope("manual", trace_id="t1"):
+            bus.publish_log("INFO", "scoped line")
         response = client.get("/diagnostics/global", headers=HEADERS)
 
     records = response.json()["records"]
@@ -411,158 +371,6 @@ def test_activity_history_sorts_mixed_timestamp_offsets_by_time(
     assert history.sessions[0].status == "success"
     assert history.sessions[0].started_at == "2026-07-01T09:00:00+09:00"
     assert history.sessions[0].ended_at == "2026-07-01T00:30:00+00:00"
-
-
-def test_activity_history_filters_prompt_trace_before_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = DiagnosticsStore(tmp_path / "diag.jsonl")
-    bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
-    team = Team(
-        project=Project(name="demo"),
-        members=[
-            Person(person_id="alice", name="Alice", person_type="agent", is_active=True)
-        ],
-    )
-    monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
-    events = [
-        {
-            "event": "prompt.completed",
-            "timestamp": "2026-06-01T10:00:00Z",
-            "trace_id": "old-prompt",
-            "source": "prompt_trace",
-            "person_id": "alice",
-            "command": "old command",
-        }
-    ]
-    events.extend(
-        {
-            "event": "prompt.completed",
-            "timestamp": f"2026-07-01T{index % 24:02d}:00:00Z",
-            "trace_id": f"recent-{index}",
-            "source": "prompt_trace",
-            "person_id": "alice",
-            "command": "recent command",
-        }
-        for index in range(1001)
-    )
-    monkeypatch.setattr(runtime, "_read_all_prompt_trace_events", lambda: events)
-
-    history = runtime.get_activity_history(
-        start="2026-06-01T00:00:00Z",
-        end="2026-06-02T00:00:00Z",
-        limit=1000,
-    )
-
-    assert [session.trace_id for session in history.sessions] == ["old-prompt"]
-
-
-def test_activity_history_merges_memory_and_prompt_trace_records(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
-    prompt_trace = tmp_path / "prompt_trace.jsonl"
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(prompt_trace))
-    store = DiagnosticsStore(tmp_path / "diag.jsonl")
-    bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
-    team = Team(
-        project=Project(name="demo"),
-        members=[
-            Person(person_id="alice", name="Alice", person_type="agent", is_active=True)
-        ],
-    )
-    monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
-
-    MemoryAuditStore().record(
-        {
-            "kind": "memory",
-            "type": "memory.write",
-            "timestamp": "2026-07-01T10:00:00+00:00",
-            "trace_id": "memory-trace",
-            "source": "manual",
-            "person_id": "alice",
-            "command": "functions/talk_as",
-            "message": "memory write: Desktop API 仕様書",
-            "attributes": {
-                "memory.action": "write",
-                "memory.doc_id": "desktop-api",
-                "memory.path": "documents/desktop-api",
-                "memory.scope": "project",
-            },
-            "payload": {
-                "title": "Desktop API 仕様書",
-                "summary": "API notes",
-                "source": [
-                    {
-                        "type": "pr",
-                        "url": "https://github.com/owner/repo/pull/240",
-                    }
-                ],
-            },
-        }
-    )
-    prompt_trace.write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "event": "cli_agent.request",
-                        "timestamp": "2026-07-01T11:00:00+00:00",
-                        "trace_id": "prompt-trace",
-                        "source": "manual",
-                        "person_id": "alice",
-                        "command": "functions/talk_as",
-                        "brain": "Codex",
-                        "prompt": "調査して",
-                    }
-                ),
-                json.dumps(
-                    {
-                        "event": "cli_agent.response",
-                        "timestamp": "2026-07-01T11:05:00+00:00",
-                        "trace_id": "prompt-trace",
-                        "source": "manual",
-                        "person_id": "alice",
-                        "command": "functions/talk_as",
-                        "brain": "Codex",
-                        "stdout": "done",
-                    }
-                ),
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    history = runtime.get_activity_history(
-        start="2026-07-01T00:00:00Z",
-        end="2026-07-02T00:00:00Z",
-    )
-
-    sessions = {session.trace_id: session for session in history.sessions}
-    assert set(sessions) == {"memory-trace", "prompt-trace"}
-    assert [link.model_dump() for link in sessions["memory-trace"].links] == [
-        {
-            "kind": "pull_request",
-            "label": "Desktop API 仕様書",
-            "url": "https://github.com/owner/repo/pull/240",
-            "timestamp": "2026-07-01T10:00:00+00:00",
-        },
-        {
-            "kind": "doc",
-            "label": "Desktop API 仕様書",
-            "url": (
-                "/diagnostics?tab=memory&doc_id=desktop-api&trace_id=memory-trace"
-                "&timestamp=2026-07-01T10%3A00%3A00%2B00%3A00"
-                "&action=write&person_id=alice"
-            ),
-            "timestamp": "2026-07-01T10:00:00+00:00",
-        },
-    ]
-    assert sessions["prompt-trace"].mode == "workflow"
-    assert sessions["memory-trace"].title == "Desktop API 仕様書"
-    assert sessions["prompt-trace"].title == "調査して"
 
 
 def test_memory_events_endpoint_filters_and_returns_body_preview(

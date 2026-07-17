@@ -14,7 +14,6 @@ import {
   loadServicePreferences,
   saveServicePreferences,
   SERVICE_PREFERENCES_KEY,
-  decodeTraceText,
   eventBadgeColor,
   eventTypeLabel,
   formatCommandEvent,
@@ -31,11 +30,7 @@ import {
   recordAttributeRows,
   recordDisplayMessage,
   ticketChipInfo,
-  selectTraceFile,
   splitCommandLine,
-  traceBrainLabel,
-  traceFieldRows,
-  traceGroupMetadata,
   traceStatusColor,
   traceDuration,
   shortTraceId,
@@ -50,28 +45,15 @@ import {
   runScenarioDiagnostics,
   verify,
 } from "./api/client";
-import type {
-  CommandOption,
-  PromptTraceEntry,
-  RuntimeEvent,
-  RuntimeUnitStatus,
-} from "./api/client";
+import type { CommandOption, RuntimeEvent, RuntimeUnitStatus } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
 import { makeRuntimeEvent, makeRuntimeLog, makeTraceRecord } from "./test/factories";
-import { buildTraceGroups, type PromptTraceGroup } from "./trace";
 
 const openShell = vi.fn();
-const openDialog = vi.fn();
-const saveDialog = vi.fn();
 
 vi.mock("@tauri-apps/plugin-shell", () => ({
   open: (path: string) => openShell(path),
-}));
-
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: (options: unknown) => openDialog(options),
-  save: (options: unknown) => saveDialog(options),
 }));
 
 function t(): TFunction {
@@ -136,16 +118,15 @@ vi.mock("./api/client", async (importOriginal) => {
       events: [],
       unsupported_event_sources: [],
     })),
-    getPromptTrace: vi.fn(async () => ({
-      enabled: false,
-      env_file: "",
-      env_file_exists: false,
-      trace_file: "",
-      output_trace_file: "",
-      default_trace_file: "",
-      trace_file_exists: false,
-      event_count: 0,
-      events: [],
+    getTranscriptSettings: vi.fn(async () => ({
+      detail: "standard",
+      retention_days: 30,
+      env_file: "/workspace/.env",
+      env_file_exists: true,
+      sessions_dir: "/workspace/.guildbotics/data/run/sessions",
+      total_size_bytes: 0,
+      index_size_bytes: 0,
+      memory_size_bytes: 0,
     })),
     getRuntimeDebug: vi.fn(async () => ({
       enabled: false,
@@ -266,44 +247,6 @@ describe("App", () => {
         actions: ["diagnostics", "setup"],
       }),
     ).toBe("/setup?section=members&person_id=alice&tab=github");
-  });
-});
-
-describe("buildTraceGroups", () => {
-  it("pairs response entries with later request entries from the same trace target", () => {
-    const response = traceEntry({
-      event: "llm.response",
-      timestamp: "2026-06-04T01:00:02Z",
-      response: "done",
-      fields: { model: "gpt" },
-    });
-    const request = traceEntry({
-      event: "llm.request",
-      timestamp: "2026-06-04T01:00:01Z",
-      prompt: "hello",
-      fields: { model: "gpt" },
-    });
-
-    const groups = buildTraceGroups([response, request]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0]).toMatchObject({
-      kind: "llm",
-      request,
-      response,
-      single: null,
-      personId: "alice",
-      brain: "brains/default.yml",
-    });
-  });
-
-  it("keeps unmatched trace entries as individual groups", () => {
-    const entry = traceEntry({ event: "chat.message", timestamp: "2026-06-04T01:00:03Z" });
-
-    const groups = buildTraceGroups([entry]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.single).toBe(entry);
   });
 });
 
@@ -484,21 +427,15 @@ describe("matchesRecordFilter", () => {
     );
   });
 
-  it("matches llm and cli_agent prompt traces by type prefix", () => {
+  it("matches llm and cli_agent I/O records by type prefix", () => {
+    expect(matchesRecordFilter(makeTraceRecord({ kind: "io", type: "llm.request" }), "llm")).toBe(
+      true,
+    );
     expect(
-      matchesRecordFilter(makeTraceRecord({ kind: "prompt_trace", type: "llm.request" }), "llm"),
+      matchesRecordFilter(makeTraceRecord({ kind: "io", type: "cli_agent.response" }), "cli_agent"),
     ).toBe(true);
     expect(
-      matchesRecordFilter(
-        makeTraceRecord({ kind: "prompt_trace", type: "cli_agent.response" }),
-        "cli_agent",
-      ),
-    ).toBe(true);
-    expect(
-      matchesRecordFilter(
-        makeTraceRecord({ kind: "prompt_trace", type: "llm.request" }),
-        "cli_agent",
-      ),
+      matchesRecordFilter(makeTraceRecord({ kind: "io", type: "llm.request" }), "cli_agent"),
     ).toBe(false);
   });
 
@@ -735,11 +672,9 @@ describe("recordDisplayMessage", () => {
     ).toBe("command.started");
   });
 
-  it("uses description or type for prompt traces", () => {
+  it("uses the type for I/O records", () => {
     expect(
-      recordDisplayMessage(
-        makeTraceRecord({ kind: "prompt_trace", type: "llm.request", message: "" }),
-      ),
+      recordDisplayMessage(makeTraceRecord({ kind: "io", type: "llm.request", message: "" })),
     ).toBe("llm.request");
   });
 });
@@ -779,8 +714,8 @@ describe("traceDuration", () => {
 });
 
 describe("recordBadgeColor and recordBadgeLabel", () => {
-  it("colors prompt traces violet and labels them by type", () => {
-    const record = makeTraceRecord({ kind: "prompt_trace", type: "llm.request" });
+  it("colors I/O records and labels them by type", () => {
+    const record = makeTraceRecord({ kind: "io", type: "llm.request" });
     expect(recordBadgeColor(record)).toBe("info");
     expect(recordBadgeLabel(t(), record)).toBe("llm.request");
   });
@@ -879,91 +814,6 @@ describe("isStopTimeoutPending", () => {
   });
 });
 
-describe("decodeTraceText", () => {
-  it("decodes unicode escapes, newlines, and tabs", () => {
-    expect(decodeTraceText("a\\nb\\tc")).toBe("a\nb\tc");
-    expect(decodeTraceText("\\u3042")).toBe("あ");
-  });
-
-  it("leaves plain text untouched", () => {
-    expect(decodeTraceText("plain text")).toBe("plain text");
-  });
-});
-
-describe("traceBrainLabel", () => {
-  it("returns the file stem of a brain path", () => {
-    expect(traceBrainLabel("brains/default.yml")).toBe("default");
-    expect(traceBrainLabel("nested/dir/coder.yaml")).toBe("coder");
-  });
-
-  it("returns a dash for an empty brain", () => {
-    expect(traceBrainLabel("")).toBe("-");
-  });
-});
-
-describe("traceFieldRows", () => {
-  it("includes base fields and extra string/number/boolean fields", () => {
-    const rows = traceFieldRows(
-      traceEntry({
-        brain: "brains/default.yml",
-        command: "demo",
-        target: "",
-        cwd: "/workspace",
-        fields: { model: "gpt", count: 3, flag: true, obj: { a: 1 } },
-      }),
-    );
-
-    expect(rows).toContainEqual(["brain", "brains/default.yml"]);
-    expect(rows).toContainEqual(["command", "demo"]);
-    expect(rows).toContainEqual(["cwd", "/workspace"]);
-    expect(rows).toContainEqual(["model", "gpt"]);
-    expect(rows).toContainEqual(["count", "3"]);
-    expect(rows).toContainEqual(["flag", "true"]);
-    expect(rows.some(([label]) => label === "obj")).toBe(false);
-    expect(rows.some(([label]) => label === "target")).toBe(false);
-  });
-
-  it("does not duplicate a field already present as a base field", () => {
-    const rows = traceFieldRows(
-      traceEntry({ brain: "brains/default.yml", fields: { brain: "override" } }),
-    );
-
-    expect(rows.filter(([label]) => label === "brain")).toHaveLength(1);
-    expect(rows).toContainEqual(["brain", "brains/default.yml"]);
-  });
-});
-
-describe("traceGroupMetadata", () => {
-  function group(overrides: Partial<PromptTraceGroup>): PromptTraceGroup {
-    return {
-      id: "g1",
-      kind: "llm",
-      request: null,
-      response: null,
-      single: null,
-      timestamp: "2026-06-04T01:00:00Z",
-      personId: "alice",
-      brain: "brains/default.yml",
-      ...overrides,
-    };
-  }
-
-  it("merges request and response field rows and adds the decoded brain", () => {
-    const rows = traceGroupMetadata(
-      group({
-        request: traceEntry({ command: "demo", fields: { model: "gpt" } }),
-        response: traceEntry({ fields: { tokens: 12 } }),
-      }),
-    );
-
-    const map = new Map(rows);
-    expect(map.get("command")).toBe("demo");
-    expect(map.get("model")).toBe("gpt");
-    expect(map.get("tokens")).toBe("12");
-    expect(map.get("brain")).toBe("brains/default.yml");
-  });
-});
-
 describe("localFileHref", () => {
   it("builds a file URL for an absolute POSIX path", () => {
     expect(localFileHref("/workspace/trace.log")).toBe("file:///workspace/trace.log");
@@ -981,8 +831,6 @@ describe("localFileHref", () => {
 describe("file helpers outside Tauri runtime", () => {
   beforeEach(() => {
     openShell.mockClear();
-    openDialog.mockClear();
-    saveDialog.mockClear();
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
 
@@ -993,13 +841,6 @@ describe("file helpers outside Tauri runtime", () => {
   it("openLocalFile is a no-op when not in Tauri", async () => {
     await openLocalFile("/workspace/trace.log");
     expect(openShell).not.toHaveBeenCalled();
-  });
-
-  it("selectTraceFile resolves to null when not in Tauri", async () => {
-    await expect(selectTraceFile("open", "/workspace/trace.log")).resolves.toBeNull();
-    await expect(selectTraceFile("save", "/workspace/trace.log")).resolves.toBeNull();
-    expect(openDialog).not.toHaveBeenCalled();
-    expect(saveDialog).not.toHaveBeenCalled();
   });
 });
 
@@ -1104,23 +945,4 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
 
 function runtimeEvent(overrides: Partial<RuntimeEvent>): RuntimeEvent {
   return makeRuntimeEvent({ trace_id: "req-1", ...overrides });
-}
-
-function traceEntry(overrides: Partial<PromptTraceEntry>): PromptTraceEntry {
-  return {
-    event: "llm.request",
-    timestamp: "2026-06-04T01:00:00Z",
-    person_id: "alice",
-    brain: "brains/default.yml",
-    command: "",
-    target: "",
-    cwd: "/workspace",
-    description: "",
-    transcript: "",
-    prompt: "",
-    response: "",
-    error: "",
-    fields: {},
-    ...overrides,
-  };
 }

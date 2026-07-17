@@ -801,7 +801,6 @@ describe("SetupPage", () => {
       provider_api_keys: { openai: "sk-test" },
     });
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/workspace"));
-    expect(localStorage.getItem("guildbotics.workspace")).toBe("/workspace");
     expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
     expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
     expect(screen.getByText(/\/workspace\/\.env/)).toBeInTheDocument();
@@ -1105,8 +1104,8 @@ describe("parseGitHub", () => {
 });
 
 describe("initialProjectValues", () => {
-  it("returns defaults when no config exists", () => {
-    localStorage.clear();
+  it("ignores legacy browser-stored workspace when no config exists", () => {
+    localStorage.setItem("guildbotics.workspace", "/legacy-workspace");
     const values = initialProjectValues(undefined, "ja", null, undefined);
     expect(values).toMatchObject({
       workspaceDir: "",

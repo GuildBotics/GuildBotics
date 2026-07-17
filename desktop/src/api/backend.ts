@@ -3,8 +3,6 @@ import { configureApi, getApiBase, setWorkspace } from "./client";
 const STATIC_TOKEN = import.meta.env.VITE_GUILDBOTICS_API_TOKEN ?? "";
 const STATIC_BASE = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
 
-let currentWorkspace = localStorage.getItem("guildbotics.workspace") ?? "";
-
 export type CliAgentSkillStatus =
   | "up_to_date"
   | "user_modified"
@@ -28,6 +26,19 @@ export type CliAgentSkillStatusesResponse = {
   error?: string;
 };
 
+export type BootstrapLog = {
+  path: string;
+  tail: string;
+};
+
+export async function getBootstrapLog(): Promise<BootstrapLog | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<BootstrapLog>("bootstrap_log");
+}
+
 /**
  * Connect the frontend to the Local API backend.
  *
@@ -42,7 +53,6 @@ export async function startBackend() {
   if (STATIC_TOKEN) {
     configureApi(STATIC_TOKEN, STATIC_BASE);
     await waitForHealth(STATIC_TOKEN);
-    await restoreWorkspace();
     return;
   }
 
@@ -54,7 +64,6 @@ export async function startBackend() {
   const info = await invoke<{ port: number; token: string }>("backend_info");
   configureApi(info.token, `http://127.0.0.1:${info.port}`);
   await waitForHealth(info.token);
-  await restoreWorkspace();
 }
 
 /**
@@ -63,9 +72,7 @@ export async function startBackend() {
  * sidecar (which would orphan the previous process).
  */
 export async function restartBackend(workspace: string) {
-  localStorage.setItem("guildbotics.workspace", workspace);
-  currentWorkspace = workspace;
-  await applyWorkspace(workspace);
+  await setWorkspace({ workspace_dir: workspace });
 }
 
 export async function stopBackend() {
@@ -89,27 +96,6 @@ export async function forceUpdateCliAgentSkill(
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<CliAgentSkillState>("force_update_cli_agent_skill", { agent });
-}
-
-async function restoreWorkspace() {
-  if (!currentWorkspace) {
-    return;
-  }
-  try {
-    await applyWorkspace(currentWorkspace);
-  } catch (error) {
-    console.warn("Unable to restore GuildBotics workspace", error);
-  }
-}
-
-async function applyWorkspace(workspace: string) {
-  try {
-    await setWorkspace({ workspace_dir: workspace });
-  } catch (error) {
-    localStorage.removeItem("guildbotics.workspace");
-    currentWorkspace = "";
-    throw error;
-  }
 }
 
 function isTauriRuntime() {

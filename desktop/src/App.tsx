@@ -32,7 +32,6 @@ import {
   CheckCircle2,
   Copy,
   ExternalLink,
-  FolderOpen,
   History,
   Play,
   RotateCcw,
@@ -44,7 +43,14 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, NavLink, Route, Routes, useSearchParams } from "react-router-dom";
 
@@ -55,13 +61,13 @@ import {
   getGlobalRecords,
   getMemoryEvents,
   getProjectConfig,
-  getPromptTrace,
   getRuntimeDebug,
   getSchedulerStatus,
   getSystemAlerts,
   getTeam,
   getTraceDetail,
   getTraces,
+  getTranscriptSettings,
   dismissSystemAlert,
   memberAvatarUrl,
   resetChatReceiveState,
@@ -71,14 +77,13 @@ import {
   stopScheduler,
   subscribeEvents,
   subscribeLogs,
-  updatePromptTrace,
   updateRuntimeDebug,
+  updateTranscriptSettings,
   verify as verifyConfiguration,
   type ChatReceiveResetResponse,
   type CommandOption,
   type DiagnosticCheck,
   type MemoryEvent,
-  type PromptTraceEntry,
   type RuntimeActiveWork,
   type RuntimeEvent,
   type RuntimeLog,
@@ -89,22 +94,15 @@ import {
   type TraceDetailResponse,
   type TraceRecord,
   type TraceSummary,
+  type TranscriptSettingsStatus,
 } from "./api/client";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
-import { buildTraceGroups, type PromptTraceGroup } from "./trace";
-
-const PROMPT_TRACE_LIMIT = 500;
 const EXECUTION_LIMIT = 200;
 const MEMORY_EVENT_LIMIT = 500;
 const MEMORY_FILTER_ALL = "__all__";
-type DiagnosticsTab = "readiness" | "executions" | "memory" | "promptTrace";
-const DIAGNOSTICS_TABS = new Set<DiagnosticsTab>([
-  "readiness",
-  "executions",
-  "memory",
-  "promptTrace",
-]);
+type DiagnosticsTab = "readiness" | "executions" | "memory" | "settings";
+const DIAGNOSTICS_TABS = new Set<DiagnosticsTab>(["readiness", "executions", "memory", "settings"]);
 type NavRuntimeState = "running" | "stopping" | "stopped";
 
 type MemoryEventFocus = {
@@ -862,8 +860,6 @@ function ServicePage() {
               />
             </ServiceRuntimeSection>
           </div>
-          <PromptTraceOutputSettings />
-          <RuntimeDebugSettings />
           {startMutation.error ? (
             <Alert color="danger" title={t("overview.startError")}>
               {startMutation.error.message}
@@ -885,20 +881,8 @@ function DiagnosticsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = diagnosticsTabFromSearch(searchParams.get("tab"));
   const memoryFocus = memoryFocusFromSearch(searchParams);
-  const [readTracePath, setReadTracePath] = useState("");
-  const [readTracePathEdited, setReadTracePathEdited] = useState(false);
-  const [loadedTracePath, setLoadedTracePath] = useState("");
-  const canPickFile = isTauriRuntime();
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
-  const promptTrace = useQuery({
-    queryKey: ["prompt-trace", loadedTracePath],
-    queryFn: () => getPromptTrace(PROMPT_TRACE_LIMIT, loadedTracePath.trim() || undefined),
-    refetchInterval: 5000,
-  });
-  const effectiveReadTracePath = readTracePathEdited
-    ? readTracePath
-    : (promptTrace.data?.trace_file ?? loadedTracePath);
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
   const projectConfig = useQuery({
     queryKey: ["project-config"],
@@ -921,35 +905,6 @@ function DiagnosticsPage() {
     }
     setSearchParams(next);
   };
-  const applyReadTracePath = (tracePath: string = effectiveReadTracePath) => {
-    const normalizedPath = tracePath.trim();
-    if (!readTracePathEdited && normalizedPath === loadedTracePath) {
-      return;
-    }
-    setLoadedTracePath(normalizedPath);
-    setReadTracePathEdited(false);
-  };
-  const resetReadTracePath = () => {
-    const defaultPath = promptTrace.data?.default_trace_file ?? "";
-    if (!defaultPath) {
-      return;
-    }
-    setReadTracePath(defaultPath);
-    setLoadedTracePath(defaultPath);
-    setReadTracePathEdited(false);
-  };
-  const pickReadTracePath = async () => {
-    const selected = await selectTraceFile(
-      "open",
-      effectiveReadTracePath || promptTrace.data?.default_trace_file || "",
-    );
-    if (!selected) {
-      return;
-    }
-    setReadTracePath(selected);
-    setLoadedTracePath(selected);
-    setReadTracePathEdited(false);
-  };
   return (
     <Stack className="diagnostics-page" gap="lg">
       <Group justify="space-between">
@@ -962,7 +917,7 @@ function DiagnosticsPage() {
           <Tabs.Tab value="readiness">{t("diagnostics.tabs.readiness")}</Tabs.Tab>
           <Tabs.Tab value="executions">{t("diagnostics.tabs.executions")}</Tabs.Tab>
           <Tabs.Tab value="memory">{t("diagnostics.tabs.memory")}</Tabs.Tab>
-          <Tabs.Tab value="promptTrace">{t("diagnostics.tabs.promptTrace")}</Tabs.Tab>
+          <Tabs.Tab value="settings">{t("diagnostics.tabs.settings")}</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="readiness" pt="md">
           <Card withBorder radius="md" p="lg">
@@ -1005,46 +960,6 @@ function DiagnosticsPage() {
             />
           </Card>
         </Tabs.Panel>
-        <Tabs.Panel className="diagnostics-fill-panel" value="promptTrace" pt="md">
-          <Card className="diagnostics-fill-card trace-fill-card" withBorder radius="md" p="lg">
-            <Group justify="space-between" align="flex-start">
-              <div>
-                <Title order={3}>{t("overview.promptTrace.title")}</Title>
-                <Text c="dimmed" size="sm">
-                  {t("overview.promptTrace.description")}
-                </Text>
-              </div>
-            </Group>
-            <div className="trace-settings">
-              <TracePathField
-                label={t("overview.promptTrace.readPath")}
-                value={effectiveReadTracePath}
-                edited={readTracePathEdited}
-                applying={promptTrace.isFetching}
-                canPickFile={canPickFile}
-                onChange={(value) => {
-                  setReadTracePath(value);
-                  setReadTracePathEdited(true);
-                }}
-                onApply={applyReadTracePath}
-                onPick={pickReadTracePath}
-                onResetDefault={resetReadTracePath}
-                defaultDisabled={!promptTrace.data?.default_trace_file}
-                pickLabel={t("overview.promptTrace.chooseReadPath")}
-              />
-            </div>
-            <div className="diagnostics-count">
-              <Text size="sm">
-                <b>{t("overview.promptTrace.displayedCount")}</b>{" "}
-                {t("overview.promptTrace.displayedCountValue", {
-                  count: promptTrace.data?.events.length ?? 0,
-                  limit: PROMPT_TRACE_LIMIT,
-                })}
-              </Text>
-            </div>
-            <PromptTraceList entries={promptTrace.data?.events ?? []} />
-          </Card>
-        </Tabs.Panel>
         <Tabs.Panel className="diagnostics-fill-panel" value="executions" pt="md">
           <TraceExplorer />
         </Tabs.Panel>
@@ -1054,6 +969,14 @@ function DiagnosticsPage() {
             members={team.data?.members ?? []}
             focus={memoryFocus}
           />
+        </Tabs.Panel>
+        <Tabs.Panel value="settings" pt="md">
+          <Card withBorder radius="md" p="lg">
+            <Stack gap="md">
+              <RuntimeDebugSettings />
+              <TranscriptSettingsPanel />
+            </Stack>
+          </Card>
         </Tabs.Panel>
       </Tabs>
     </Stack>
@@ -1773,10 +1696,12 @@ function TraceExplorer() {
                     <span className="exec-row-person">{trace.person_id || "—"}</span>
                   </Group>
                   <span className="exec-row-counts">
-                    {t("diagnostics.executions.counts", {
-                      events: trace.event_count,
-                      logs: trace.log_count,
-                    })}
+                    {trace.status === "success" || trace.status === "failed"
+                      ? t("diagnostics.executions.counts", {
+                          events: trace.event_count,
+                          logs: trace.log_count,
+                        })
+                      : null}
                     {trace.error_count > 0 ? (
                       <span className="exec-row-errors">
                         {" · "}
@@ -1943,12 +1868,14 @@ function TraceExplorer() {
                     <span>
                       {t("diagnostics.executions.meta.duration")}: {traceDuration(selectedSummary)}
                     </span>
-                    <span>
-                      {t("diagnostics.executions.counts", {
-                        events: selectedSummary.event_count,
-                        logs: selectedSummary.log_count,
-                      })}
-                    </span>
+                    {selectedSummary.status === "success" || selectedSummary.status === "failed" ? (
+                      <span>
+                        {t("diagnostics.executions.counts", {
+                          events: selectedSummary.event_count,
+                          logs: selectedSummary.log_count,
+                        })}
+                      </span>
+                    ) : null}
                     {selectedSummary.error_count > 0 ? (
                       <span className="exec-row-errors">
                         {t("diagnostics.executions.errorChip", {
@@ -1969,6 +1896,9 @@ function TraceExplorer() {
                   </Avatar>
                 )}
               </div>
+              {detail.data?.transcript_available === false ? (
+                <Alert color="neutral" title={t("diagnostics.executions.transcriptDeleted")} />
+              ) : null}
               <ExecTimeline
                 records={records}
                 filter={recordFilter}
@@ -2244,17 +2174,17 @@ export function matchesRecordFilter(record: TraceRecord, filter: string): boolea
       record.type.endsWith(".failed")
     );
   }
-  // LLM / AI CLI tool group both the prompt-trace request/response records and
+  // LLM / AI CLI tool group both the transcript request/response records and
   // the logs emitted during that tool's span (tagged via record.span).
   if (filter === "llm") {
     return (
-      (record.kind === "prompt_trace" && record.type.startsWith("llm")) ||
+      (record.kind === "io" && record.type.startsWith("llm")) ||
       (record.kind === "log" && record.span === "llm")
     );
   }
   if (filter === "cli_agent") {
     return (
-      (record.kind === "prompt_trace" && record.type.startsWith("cli_agent")) ||
+      (record.kind === "io" && record.type.startsWith("cli_agent")) ||
       (record.kind === "log" && record.span === "cli_agent")
     );
   }
@@ -2473,14 +2403,14 @@ async function openExternal(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-// Surface the most useful one-line summary per record: log message, prompt
+// Surface the most useful one-line summary per record: log message, I/O type,
 // description, or — for events — the payload detail (e.g. a failure reason)
 // falling back to the raw event type.
 export function recordDisplayMessage(record: TraceRecord): string {
   if (record.kind === "log") {
     return record.message;
   }
-  if (record.kind === "prompt_trace") {
+  if (record.kind === "io") {
     return record.message || record.type;
   }
   if (record.kind === "memory") {
@@ -2528,7 +2458,7 @@ export function traceStatusColor(status: string): string {
 }
 
 export function recordBadgeColor(record: TraceRecord): string {
-  if (record.kind === "prompt_trace") {
+  if (record.kind === "io") {
     return "info";
   }
   if (record.kind === "memory") {
@@ -2545,8 +2475,8 @@ export function recordBadgeColor(record: TraceRecord): string {
 }
 
 export function recordBadgeLabel(t: TFunction, record: TraceRecord): string {
-  if (record.kind === "prompt_trace") {
-    return record.type || t("diagnostics.executions.kinds.prompt_trace");
+  if (record.kind === "io") {
+    return record.type || t("diagnostics.executions.kinds.io");
   }
   if (record.kind === "memory") {
     const action =
@@ -2738,10 +2668,10 @@ function RuntimeDebugSettings() {
       <Group justify="space-between" align="center">
         <div>
           <Text fw={700} size="sm">
-            {t("overview.runtimeDebug.title")}
+            {t("diagnostics.runtimeDebug.title")}
           </Text>
           <Text c="dimmed" size="xs">
-            {t("overview.runtimeDebug.status", {
+            {t("diagnostics.runtimeDebug.status", {
               logLevel: runtimeDebug.data?.log_level ?? "-",
               agnoDebug: runtimeDebug.data?.agno_debug ? "true" : "false",
             })}
@@ -2750,12 +2680,14 @@ function RuntimeDebugSettings() {
         <Switch
           checked={enabled}
           disabled={runtimeDebugMutation.isPending || runtimeDebug.isLoading}
-          label={enabled ? t("overview.runtimeDebug.enabled") : t("overview.runtimeDebug.disabled")}
+          label={
+            enabled ? t("diagnostics.runtimeDebug.enabled") : t("diagnostics.runtimeDebug.disabled")
+          }
           onChange={(event) => runtimeDebugMutation.mutate(event.currentTarget.checked)}
         />
       </Group>
       {runtimeDebugMutation.error ? (
-        <Alert color="danger" title={t("overview.runtimeDebug.saveError")}>
+        <Alert color="danger" title={t("diagnostics.runtimeDebug.saveError")}>
           {runtimeDebugMutation.error.message}
         </Alert>
       ) : null}
@@ -2763,354 +2695,105 @@ function RuntimeDebugSettings() {
   );
 }
 
-function PromptTraceOutputSettings() {
+function TranscriptSettingsPanel() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [outputTracePath, setOutputTracePath] = useState("");
-  const [outputTracePathEdited, setOutputTracePathEdited] = useState(false);
-  const canPickFile = isTauriRuntime();
-  const promptTrace = useQuery({
-    queryKey: ["prompt-trace-output"],
-    queryFn: () => getPromptTrace(PROMPT_TRACE_LIMIT),
+  const settings = useQuery({
+    queryKey: ["transcript-settings"],
+    queryFn: getTranscriptSettings,
     refetchInterval: 5000,
   });
-  const promptTraceMutation = useMutation({
-    mutationFn: (enabled: boolean) =>
-      updatePromptTrace({ enabled, trace_path: outputTracePath.trim() }, PROMPT_TRACE_LIMIT),
+  const [retentionDraft, setRetentionDraft] = useState<number | null>(null);
+  const retentionDays = retentionDraft ?? settings.data?.retention_days ?? 30;
+  const mutation = useMutation({
+    mutationFn: updateTranscriptSettings,
     onSuccess: (data) => {
-      setOutputTracePath(data.output_trace_file);
-      setOutputTracePathEdited(false);
-      queryClient.invalidateQueries({ queryKey: ["prompt-trace"] });
-      queryClient.invalidateQueries({ queryKey: ["prompt-trace-output"] });
+      queryClient.setQueryData<TranscriptSettingsStatus>(["transcript-settings"], data);
+      setRetentionDraft(null);
     },
   });
-  const promptTraceOutputPathMutation = useMutation({
-    mutationFn: (tracePath: string) =>
-      updatePromptTrace(
-        {
-          enabled: Boolean(promptTrace.data?.enabled),
-          trace_path: tracePath,
-        },
-        PROMPT_TRACE_LIMIT,
-      ),
-    onSuccess: (data) => {
-      setOutputTracePath(data.output_trace_file);
-      setOutputTracePathEdited(false);
-      queryClient.invalidateQueries({ queryKey: ["prompt-trace"] });
-      queryClient.invalidateQueries({ queryKey: ["prompt-trace-output"] });
-    },
-  });
-  const effectiveOutputTracePath = outputTracePathEdited
-    ? outputTracePath
-    : (promptTrace.data?.output_trace_file ?? "");
-  const applyOutputTracePath = (tracePath: string = effectiveOutputTracePath) => {
-    const normalizedPath = tracePath.trim();
-    if (!outputTracePathEdited && normalizedPath === (promptTrace.data?.output_trace_file ?? "")) {
-      return;
-    }
-    promptTraceOutputPathMutation.mutate(normalizedPath);
-  };
-  const resetOutputTracePath = () => {
-    const defaultPath = promptTrace.data?.default_trace_file ?? "";
-    if (!defaultPath) {
-      return;
-    }
-    setOutputTracePath(defaultPath);
-    setOutputTracePathEdited(false);
-    promptTraceOutputPathMutation.mutate(defaultPath);
-  };
-  const pickOutputTracePath = async () => {
-    const selected = await selectTraceFile(
-      "save",
-      effectiveOutputTracePath || promptTrace.data?.default_trace_file || "",
-    );
-    if (!selected) {
-      return;
-    }
-    setOutputTracePath(selected);
-    setOutputTracePathEdited(false);
-    promptTraceOutputPathMutation.mutate(selected);
+  const saveRetention = () => {
+    mutation.mutate({
+      detail: settings.data?.detail ?? "standard",
+      retention_days: retentionDays,
+    });
   };
   return (
     <div className="service-unit-panel">
-      <Group justify="space-between" align="center">
+      <Stack gap="sm">
         <div>
           <Text fw={700} size="sm">
-            {t("overview.promptTrace.runtimeTitle")}
+            {t("diagnostics.transcripts.title")}
           </Text>
           <Text c="dimmed" size="xs">
-            {t("overview.promptTrace.runtimeDescription")}
+            {t("diagnostics.transcripts.description")}
           </Text>
         </div>
-        <Switch
-          checked={Boolean(promptTrace.data?.enabled)}
-          disabled={promptTraceMutation.isPending}
-          label={
-            promptTrace.data?.enabled
-              ? t("overview.promptTrace.enabled")
-              : t("overview.promptTrace.disabled")
-          }
-          onChange={(event) => promptTraceMutation.mutate(event.currentTarget.checked)}
-        />
-      </Group>
-      <div className="trace-settings">
-        <TracePathField
-          label={t("overview.promptTrace.outputPath")}
-          value={effectiveOutputTracePath}
-          edited={outputTracePathEdited}
-          applying={promptTraceOutputPathMutation.isPending}
-          canPickFile={canPickFile}
-          onChange={(value) => {
-            setOutputTracePath(value);
-            setOutputTracePathEdited(true);
-          }}
-          onApply={applyOutputTracePath}
-          onPick={pickOutputTracePath}
-          onResetDefault={resetOutputTracePath}
-          defaultDisabled={!promptTrace.data?.default_trace_file}
-          pickLabel={t("overview.promptTrace.chooseOutputPath")}
-        />
-      </div>
-      {promptTraceMutation.error || promptTraceOutputPathMutation.error ? (
-        <Alert color="danger" title={t("overview.promptTrace.saveError")}>
-          {(promptTraceMutation.error ?? promptTraceOutputPathMutation.error)?.message}
+        <Group align="flex-end" grow>
+          <Select
+            label={t("diagnostics.transcripts.detail")}
+            data={[
+              { value: "standard", label: t("diagnostics.transcripts.standard") },
+              { value: "full", label: t("diagnostics.transcripts.full") },
+            ]}
+            disabled={mutation.isPending || settings.isLoading}
+            value={settings.data?.detail ?? "standard"}
+            onChange={(value) => {
+              if (value === "standard" || value === "full") {
+                mutation.mutate({
+                  detail: value,
+                  retention_days: settings.data?.retention_days ?? retentionDays,
+                });
+              }
+            }}
+          />
+          <NumberInput
+            label={t("diagnostics.transcripts.retentionDays")}
+            min={1}
+            max={3650}
+            allowDecimal={false}
+            disabled={mutation.isPending || settings.isLoading}
+            value={retentionDays}
+            onChange={(value) => {
+              if (typeof value === "number") {
+                setRetentionDraft(value);
+              }
+            }}
+            onBlur={saveRetention}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.currentTarget.blur();
+              }
+            }}
+          />
+        </Group>
+        <dl className="status-list">
+          <dt>{t("diagnostics.transcripts.sessionsTotal")}</dt>
+          <dd>{formatBytes(settings.data?.total_size_bytes ?? 0)}</dd>
+          <dt>{t("diagnostics.transcripts.indexSize")}</dt>
+          <dd>{formatBytes(settings.data?.index_size_bytes ?? 0)}</dd>
+          <dt>{t("diagnostics.transcripts.memorySize")}</dt>
+          <dd>{formatBytes(settings.data?.memory_size_bytes ?? 0)}</dd>
+        </dl>
+      </Stack>
+      {mutation.error ? (
+        <Alert color="danger" title={t("diagnostics.transcripts.saveError")}>
+          {mutation.error.message}
         </Alert>
       ) : null}
     </div>
   );
 }
 
-function TracePathField({
-  label,
-  value,
-  edited,
-  applying,
-  canPickFile,
-  defaultDisabled,
-  pickLabel,
-  onChange,
-  onApply,
-  onPick,
-  onResetDefault,
-}: {
-  label: string;
-  value: string;
-  edited: boolean;
-  applying: boolean;
-  canPickFile: boolean;
-  defaultDisabled: boolean;
-  pickLabel: string;
-  onChange: (value: string) => void;
-  onApply: (value: string) => void;
-  onPick: () => void;
-  onResetDefault: () => void;
-}) {
-  const { t } = useTranslation();
-  const applyCurrentValue = () => onApply(value);
-  return (
-    <div className="trace-path-field">
-      <TextInput
-        label={label}
-        value={value}
-        rightSectionWidth={76}
-        rightSection={
-          <Group gap={4} wrap="nowrap">
-            <Tooltip
-              label={canPickFile ? pickLabel : t("overview.promptTrace.filePickerUnavailable")}
-            >
-              <ActionIcon
-                aria-label={pickLabel}
-                disabled={!canPickFile}
-                size="sm"
-                variant="subtle"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={onPick}
-              >
-                <FolderOpen size={16} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label={t("overview.promptTrace.resetDefaultPath")}>
-              <ActionIcon
-                aria-label={t("overview.promptTrace.resetDefaultPath")}
-                disabled={defaultDisabled}
-                size="sm"
-                variant="subtle"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={onResetDefault}
-              >
-                <RotateCcw size={16} />
-              </ActionIcon>
-            </Tooltip>
-          </Group>
-        }
-        rightSectionPointerEvents="auto"
-        onBlur={applyCurrentValue}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.currentTarget.blur();
-          }
-        }}
-      />
-      {edited || applying ? (
-        <Text c="dimmed" className="trace-path-status" size="xs">
-          {applying ? t("overview.promptTrace.pathApplying") : t("overview.promptTrace.pathEdited")}
-        </Text>
-      ) : null}
-    </div>
-  );
-}
-
-function PromptTraceList({ entries }: { entries: PromptTraceEntry[] }) {
-  const { t } = useTranslation();
-  const groups = useMemo(() => buildTraceGroups(entries), [entries]);
-  const [selectedId, setSelectedId] = useState("");
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  if (entries.length === 0) {
-    return <div className="empty-row">{t("overview.promptTrace.empty")}</div>;
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
   }
-  const selected = groups.find((group) => group.id === selectedId) ?? groups[0];
-  return (
-    <div className="trace-browser">
-      <div className="trace-list">
-        <div className="trace-header">
-          <span>{t("overview.promptTrace.columns.kind")}</span>
-          <span>{t("overview.promptTrace.columns.person")}</span>
-          <span>{t("overview.promptTrace.columns.time")}</span>
-          <span>{t("overview.promptTrace.columns.brain")}</span>
-          <span>{t("overview.promptTrace.columns.io")}</span>
-        </div>
-        {groups.map((group) => (
-          <button
-            className={`trace-row ${group.id === selected.id ? "active" : ""}`}
-            key={group.id}
-            type="button"
-            onClick={() => {
-              setSelectedId(group.id);
-              setDrawerOpen(true);
-            }}
-          >
-            <span>
-              <Badge color={traceKindColor(group.kind)} variant="light">
-                {traceKindLabel(t, group.kind)}
-              </Badge>
-            </span>
-            <span>
-              <Group gap={4} align="center" style={{ display: "inline-flex" }}>
-                <Avatar
-                  src={group.personId ? memberAvatarUrl(group.personId) : undefined}
-                  size={16}
-                  radius="xl"
-                >
-                  {group.personId ? group.personId.substring(0, 2).toUpperCase() : "-"}
-                </Avatar>
-                {group.personId || "-"}
-              </Group>
-            </span>
-            <span>{group.timestamp ? formatTime(group.timestamp) : "-"}</span>
-            <span title={group.brain}>{traceBrainLabel(group.brain)}</span>
-            <span className="trace-io">
-              {group.request ? <i>{t("overview.promptTrace.requestShort")}</i> : null}
-              {group.response ? <i>{t("overview.promptTrace.responseShort")}</i> : null}
-              {group.single ? <i>{traceEventLabel(t, group.single.event)}</i> : null}
-            </span>
-          </button>
-        ))}
-      </div>
-      <Drawer
-        opened={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        position="right"
-        size="80%"
-        title={`${traceKindLabel(t, selected.kind)} / ${traceBrainLabel(selected.brain)}`}
-      >
-        <PromptTraceDetails group={selected} />
-      </Drawer>
-    </div>
-  );
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KiB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
-
-function PromptTraceDetails({ group }: { group: PromptTraceGroup }) {
-  const { t } = useTranslation();
-  const request = group.request ?? group.single;
-  const response = group.response ?? group.single;
-  const requestText = request?.prompt ? decodeTraceText(request.prompt) : "";
-  const responseText = response?.response ? decodeTraceText(response.response) : "";
-  const descriptionText = request?.description ? decodeTraceText(request.description) : "";
-  const transcriptText =
-    request?.transcript || response?.transcript || group.single?.transcript
-      ? decodeTraceText(
-          request?.transcript || response?.transcript || group.single?.transcript || "",
-        )
-      : "";
-  const contextText = descriptionText || transcriptText;
-  const contextLabel = descriptionText
-    ? t("overview.promptTrace.descriptionLabel")
-    : t("overview.promptTrace.transcriptLabel");
-  const errorText = decodeTraceText(
-    group.response?.error || group.request?.error || group.single?.error || "",
-  );
-  const metadata = traceGroupMetadata(group);
-  return (
-    <div className="trace-detail">
-      <Group justify="space-between" align="flex-start" style={{ width: "100%" }}>
-        <div>
-          <Text fw={700}>
-            {traceKindLabel(t, group.kind)} / {traceBrainLabel(group.brain)}
-          </Text>
-          <Text c="dimmed" size="xs">
-            {group.personId || "-"} · {group.timestamp ? formatDateTime(group.timestamp) : "-"}
-          </Text>
-          <Badge color={traceKindColor(group.kind)} variant="light" mt={6}>
-            {group.request && group.response
-              ? t("overview.promptTrace.requestResponse")
-              : t("overview.promptTrace.singleEvent")}
-          </Badge>
-        </div>
-        {group.personId && (
-          <Avatar src={memberAvatarUrl(group.personId)} size="lg" radius="md">
-            {group.personId.substring(0, 2).toUpperCase()}
-          </Avatar>
-        )}
-      </Group>
-      <div className="trace-detail-meta">
-        {metadata.map(([label, value]) => (
-          <span key={label}>
-            {label}: <b>{value}</b>
-          </span>
-        ))}
-      </div>
-      <div className={`trace-detail-grid ${contextText ? "with-context" : ""}`}>
-        {contextText ? (
-          <div className="trace-preview">
-            <Text fw={700} size="xs">
-              {contextLabel}
-            </Text>
-            <pre>{contextText}</pre>
-          </div>
-        ) : null}
-        <div className="trace-preview">
-          <Text fw={700} size="xs">
-            {t("overview.promptTrace.prompt")}
-          </Text>
-          <pre>{requestText || t("overview.promptTrace.noRequest")}</pre>
-        </div>
-        <div className="trace-preview">
-          <Text fw={700} size="xs">
-            {t("overview.promptTrace.response")}
-          </Text>
-          <pre>{responseText || t("overview.promptTrace.noResponse")}</pre>
-        </div>
-      </div>
-      {errorText ? (
-        <Text c="danger" size="sm">
-          {errorText}
-        </Text>
-      ) : null}
-    </div>
-  );
-}
-
 function FragmentRow({ label, value }: { label: string; value: string }) {
   return (
     <>
@@ -3328,86 +3011,6 @@ function sourceEnabledLabel(t: TFunction, enabled: boolean | null | undefined) {
   return enabled ? t("overview.enabled") : t("overview.disabled");
 }
 
-function traceEventLabel(t: TFunction, event: string) {
-  return t(`overview.promptTrace.events.${event.replace(/\./g, "_")}`, {
-    defaultValue: event,
-  });
-}
-
-function traceKindLabel(t: TFunction, kind: string) {
-  return t(`overview.promptTrace.kinds.${kind}`, { defaultValue: kind });
-}
-
-function traceKindColor(kind: string) {
-  if (kind === "llm") {
-    return "info";
-  }
-  if (kind === "cli") {
-    return "info";
-  }
-  if (kind === "chat") {
-    return "info";
-  }
-  return "gray";
-}
-
-export function traceBrainLabel(brain: string) {
-  return (
-    brain
-      .split("/")
-      .pop()
-      ?.replace(/\.[^.]+$/, "") || "-"
-  );
-}
-
-export function traceGroupMetadata(group: PromptTraceGroup): Array<[string, string]> {
-  const rows = new Map<string, string>();
-  for (const entry of [group.request, group.response, group.single]) {
-    if (!entry) {
-      continue;
-    }
-    for (const [label, value] of traceFieldRows(entry)) {
-      rows.set(label, value);
-    }
-  }
-  if (group.brain) {
-    rows.set("brain", decodeTraceText(group.brain));
-  }
-  return Array.from(rows.entries()).slice(0, 10);
-}
-
-export function traceFieldRows(entry: PromptTraceEntry): Array<[string, string]> {
-  const rows: Array<[string, string]> = [];
-  for (const [label, value] of [
-    ["brain", entry.brain],
-    ["command", entry.command],
-    ["target", entry.target],
-    ["cwd", entry.cwd],
-  ]) {
-    if (value) {
-      rows.push([label, decodeTraceText(value)]);
-    }
-  }
-  for (const [label, value] of Object.entries(entry.fields)) {
-    if (rows.some(([existing]) => existing === label)) {
-      continue;
-    }
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      rows.push([label, decodeTraceText(String(value))]);
-    }
-  }
-  return rows.slice(0, 8);
-}
-
-export function decodeTraceText(value: string) {
-  return value
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
-      String.fromCharCode(Number.parseInt(hex, 16)),
-    )
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t");
-}
-
 function formatDateTime(value: string | null | undefined) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) {
@@ -3488,29 +3091,6 @@ export function localFileHref(path: string) {
   const normalizedPath = path.replace(/\\/g, "/");
   const prefix = normalizedPath.startsWith("/") ? "file://" : "file:///";
   return encodeURI(`${prefix}${normalizedPath}`);
-}
-
-export async function selectTraceFile(mode: "open" | "save", currentPath: string) {
-  if (!isTauriRuntime()) {
-    return null;
-  }
-  const selected =
-    mode === "open"
-      ? await (
-          await import("@tauri-apps/plugin-dialog")
-        ).open({
-          defaultPath: currentPath || undefined,
-          directory: false,
-          multiple: false,
-          title: "Prompt trace file",
-        })
-      : await (
-          await import("@tauri-apps/plugin-dialog")
-        ).save({
-          defaultPath: currentPath || undefined,
-          title: "Prompt trace file",
-        });
-  return typeof selected === "string" ? selected : null;
 }
 
 function CommandsPage() {
@@ -3972,9 +3552,6 @@ function CommandsPage() {
               </div>
             </Stack>
           </div>
-
-          <PromptTraceOutputSettings />
-          <RuntimeDebugSettings />
         </Stack>
       </Card>
     </Stack>

@@ -409,7 +409,6 @@ export function SetupPage() {
     setSaveState("saving");
     try {
       await saveMutation.mutateAsync(form.values);
-      localStorage.setItem("guildbotics.workspace", form.values.workspaceDir);
       if (creatingInitialSetup) {
         await restartBackend(form.values.workspaceDir);
         await Promise.all([
@@ -492,7 +491,6 @@ export function SetupPage() {
     const currentWorkspace = config.data?.cwd ?? "";
     if (currentWorkspace) {
       form.setFieldValue("workspaceDir", currentWorkspace);
-      localStorage.setItem("guildbotics.workspace", currentWorkspace);
     }
   };
   const forcePendingWorkspaceSwitch = async () => {
@@ -5704,7 +5702,7 @@ export function initialProjectValues(
 ): ProjectFormValues {
   if (projectConfig) {
     return {
-      workspaceDir: config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "",
+      workspaceDir: config?.cwd ?? "",
       envFileOption: getInitialEnvFileOption(config),
       language: projectConfig.language,
       description: projectConfig.description ?? "",
@@ -5719,7 +5717,7 @@ export function initialProjectValues(
       laneDone: projectConfig.lane_map?.done ?? DEFAULT_LANE_DONE,
     };
   }
-  const cwd = config?.cwd ?? localStorage.getItem("guildbotics.workspace") ?? "";
+  const cwd = config?.cwd ?? "";
   return {
     workspaceDir: cwd,
     envFileOption: getInitialEnvFileOption(config),

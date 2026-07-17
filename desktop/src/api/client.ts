@@ -117,37 +117,20 @@ export type SchedulerStopRequest = {
   force?: boolean;
 };
 
-export type PromptTraceEntry = {
-  event: string;
-  timestamp: string;
-  person_id: string;
-  brain: string;
-  command: string;
-  target: string;
-  cwd: string;
-  description: string;
-  transcript: string;
-  prompt: string;
-  response: string;
-  error: string;
-  fields: Record<string, unknown>;
-};
-
-export type PromptTraceStatus = {
-  enabled: boolean;
+export type TranscriptSettingsStatus = {
+  detail: "standard" | "full";
+  retention_days: number;
   env_file: string;
   env_file_exists: boolean;
-  trace_file: string;
-  output_trace_file: string;
-  default_trace_file: string;
-  trace_file_exists: boolean;
-  event_count: number;
-  events: PromptTraceEntry[];
+  sessions_dir: string;
+  total_size_bytes: number;
+  index_size_bytes: number;
+  memory_size_bytes: number;
 };
 
-export type PromptTraceUpdateRequest = {
-  enabled: boolean;
-  trace_path?: string;
+export type TranscriptSettingsUpdateRequest = {
+  detail: "standard" | "full";
+  retention_days: number;
 };
 
 export type RuntimeDebugStatus = {
@@ -275,7 +258,7 @@ export type TraceSummary = {
 };
 
 export type TraceRecord = {
-  kind: "event" | "log" | "prompt_trace" | "memory";
+  kind: "event" | "log" | "io" | "memory";
   timestamp: string;
   trace_id: string | null;
   span_id: string | null;
@@ -301,6 +284,7 @@ export type TraceDetailResponse = {
   trace_id: string;
   summary: TraceSummary | null;
   records: TraceRecord[];
+  transcript_available?: boolean;
 };
 
 export type ActivityHistoryMember = {
@@ -735,19 +719,14 @@ export async function resetChatReceiveState(): Promise<ChatReceiveResetResponse>
   return request("/chat/receive-state/reset", { method: "POST" });
 }
 
-export async function getPromptTrace(limit = 20, path?: string): Promise<PromptTraceStatus> {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (path) {
-    params.set("path", path);
-  }
-  return request(`/prompt-trace?${params.toString()}`);
+export async function getTranscriptSettings(): Promise<TranscriptSettingsStatus> {
+  return request("/transcripts/settings");
 }
 
-export async function updatePromptTrace(
-  body: PromptTraceUpdateRequest,
-  limit = 20,
-): Promise<PromptTraceStatus> {
-  return request(`/prompt-trace?limit=${encodeURIComponent(String(limit))}`, {
+export async function updateTranscriptSettings(
+  body: TranscriptSettingsUpdateRequest,
+): Promise<TranscriptSettingsStatus> {
+  return request("/transcripts/settings", {
     method: "PUT",
     body,
   });

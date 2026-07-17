@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// backend.ts reads `import.meta.env` and `localStorage` at module-evaluation
-// time, so every test resets the module registry and re-imports it freshly.
+// backend.ts reads `import.meta.env` at module-evaluation time, so every test
+// resets the module registry and re-imports it freshly.
 
 const configureApi = vi.fn();
 const setWorkspace = vi.fn(async () => ({}));
@@ -168,22 +168,18 @@ describe("waitForHealth", () => {
 });
 
 describe("restartBackend", () => {
-  it("updates localStorage and the backend workspace", async () => {
+  it("updates the backend workspace", async () => {
     const backend = await loadBackend();
     await backend.restartBackend("/projects/demo");
 
-    expect(localStorage.getItem("guildbotics.workspace")).toBe("/projects/demo");
     expect(setWorkspace).toHaveBeenCalledWith({ workspace_dir: "/projects/demo" });
   });
 
-  it("clears guildbotics.workspace when setWorkspace fails", async () => {
-    localStorage.setItem("guildbotics.workspace", "/old");
+  it("propagates backend workspace failures", async () => {
     setWorkspace.mockRejectedValueOnce(new Error("boom"));
 
     const backend = await loadBackend();
     await expect(backend.restartBackend("/projects/demo")).rejects.toThrow("boom");
-
-    expect(localStorage.getItem("guildbotics.workspace")).toBeNull();
   });
 });
 
@@ -235,44 +231,9 @@ describe("AI CLI tool skill commands", () => {
   });
 });
 
-describe("restoreWorkspace via startBackend", () => {
-  it("applies a previously stored workspace on startup", async () => {
+describe("workspace persistence", () => {
+  it("does not read the legacy frontend workspace value on startup", async () => {
     localStorage.setItem("guildbotics.workspace", "/restored");
-    vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "preview-token");
-    vi.stubEnv("VITE_GUILDBOTICS_API_BASE", "http://preview.test:9000");
-    setApiBase("http://preview.test:9000");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => okResponse()),
-    );
-
-    const backend = await loadBackend();
-    await backend.startBackend();
-
-    expect(setWorkspace).toHaveBeenCalledWith({ workspace_dir: "/restored" });
-  });
-
-  it("cleans localStorage on restore failure without breaking startup", async () => {
-    localStorage.setItem("guildbotics.workspace", "/restored");
-    vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "preview-token");
-    vi.stubEnv("VITE_GUILDBOTICS_API_BASE", "http://preview.test:9000");
-    setApiBase("http://preview.test:9000");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => okResponse()),
-    );
-    setWorkspace.mockRejectedValueOnce(new Error("restore failed"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    const backend = await loadBackend();
-    // startBackend must resolve even though workspace restore failed.
-    await expect(backend.startBackend()).resolves.toBeUndefined();
-
-    expect(localStorage.getItem("guildbotics.workspace")).toBeNull();
-    expect(warn).toHaveBeenCalled();
-  });
-
-  it("does nothing when no workspace is stored", async () => {
     vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "preview-token");
     vi.stubEnv("VITE_GUILDBOTICS_API_BASE", "http://preview.test:9000");
     setApiBase("http://preview.test:9000");
@@ -285,6 +246,7 @@ describe("restoreWorkspace via startBackend", () => {
     await backend.startBackend();
 
     expect(setWorkspace).not.toHaveBeenCalled();
+    expect(localStorage.getItem("guildbotics.workspace")).toBe("/restored");
   });
 });
 

@@ -187,7 +187,7 @@ def _attribute_has_value(attributes: dict[str, Any], key: str) -> bool:
 
 def _record_indicates_work(item: dict[str, Any]) -> bool:
     kind = str(item.get("kind") or "")
-    if kind in {"memory", "prompt_trace"}:
+    if kind == "memory":
         return True
     payload = item.get("payload")
     if not isinstance(payload, dict):

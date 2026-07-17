@@ -30,8 +30,8 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_PROMPT_TRACE_PATH", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_DETAIL", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", raising=False)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -182,36 +182,30 @@ def test_temp_workspace_intelligence_update_writes_files(
     assert (config_dir / "intelligences/brain_mapping.yml").exists()
 
 
-def test_temp_workspace_prompt_trace_update_then_status(
+def test_temp_workspace_transcript_settings_update_then_status(
     client: TestClient, workspace: Path
 ) -> None:
     config_dir = workspace / ".guildbotics/config"
     env_file = workspace / ".env"
-    trace_file = workspace / "trace.jsonl"
-    trace_file.write_text(
-        '{"event":"llm.request","timestamp":"2026-06-01T12:00:00+09:00",'
-        '"person_id":"alice","brain":"default","message":"hello"}\n',
-        encoding="utf-8",
-    )
 
     with client:
         _init_project(client, config_dir, env_file)
 
         update = client.put(
-            "/prompt-trace",
+            "/transcripts/settings",
             headers=AUTH_HEADERS,
-            json={"enabled": True, "trace_path": str(trace_file)},
+            json={"detail": "full", "retention_days": 14},
         )
         assert update.status_code == HTTP_OK
-        assert update.json()["enabled"] is True
-        assert update.json()["trace_file"] == str(trace_file)
+        assert update.json()["detail"] == "full"
+        assert update.json()["retention_days"] == 14
 
-        status = client.get("/prompt-trace", headers=AUTH_HEADERS)
+        status = client.get("/transcripts/settings", headers=AUTH_HEADERS)
 
     assert status.status_code == HTTP_OK
     status_payload = status.json()
-    assert status_payload["enabled"] is True
-    assert status_payload["trace_file"] == str(trace_file)
-    assert status_payload["event_count"] == 1
-    # The enabling flag was persisted to the workspace .env file.
-    assert "GUILDBOTICS_PROMPT_TRACE=1" in env_file.read_text()
+    assert status_payload["detail"] == "full"
+    assert status_payload["retention_days"] == 14
+    env_text = env_file.read_text()
+    assert "GUILDBOTICS_TRANSCRIPT_DETAIL=full" in env_text
+    assert "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS=14" in env_text

@@ -4,9 +4,12 @@ import { HashRouter } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { App } from "./App";
-import { startBackend } from "./api/backend";
+import { getBootstrapLog, startBackend } from "./api/backend";
 
-type BootStatus = { state: "loading" } | { state: "ready" } | { state: "error"; message: string };
+type BootStatus =
+  | { state: "loading" }
+  | { state: "ready" }
+  | { state: "error"; message: string; logPath: string; logTail: string };
 
 export function Bootstrap() {
   const { t } = useTranslation();
@@ -14,24 +17,16 @@ export function Bootstrap() {
 
   const connect = useCallback(() => {
     setStatus({ state: "loading" });
-    startBackend()
-      .then(() => setStatus({ state: "ready" }))
-      .catch((error: unknown) => setStatus({ state: "error", message: String(error) }));
+    void connectBackend(setStatus);
   }, []);
 
   useEffect(() => {
     let active = true;
-    startBackend()
-      .then(() => {
-        if (active) {
-          setStatus({ state: "ready" });
-        }
-      })
-      .catch((error: unknown) => {
-        if (active) {
-          setStatus({ state: "error", message: String(error) });
-        }
-      });
+    void connectBackend((next) => {
+      if (active) {
+        setStatus(next);
+      }
+    });
     return () => {
       active = false;
     };
@@ -58,6 +53,12 @@ export function Bootstrap() {
             <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
               {status.message}
             </Text>
+            {status.logPath ? (
+              <Text size="xs">
+                {t("app.loading.logPath")}: <code>{status.logPath}</code>
+              </Text>
+            ) : null}
+            {status.logTail ? <pre className="command-output">{status.logTail}</pre> : null}
             <Button variant="light" onClick={connect}>
               {t("app.loading.retry")}
             </Button>
@@ -66,4 +67,19 @@ export function Bootstrap() {
       )}
     </Center>
   );
+}
+
+async function connectBackend(update: (status: BootStatus) => void) {
+  try {
+    await startBackend();
+    update({ state: "ready" });
+  } catch (error) {
+    const log = await getBootstrapLog().catch(() => null);
+    update({
+      state: "error",
+      message: String(error),
+      logPath: log?.path ?? "",
+      logTail: log?.tail ?? "",
+    });
+  }
 }

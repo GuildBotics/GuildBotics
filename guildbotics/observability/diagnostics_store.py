@@ -1,24 +1,23 @@
-"""Unified persistence + query layer for runtime diagnostics records.
-
-Events and logs published through :class:`~guildbotics.app_api.events.EventBus`
-are recorded here under the unified schema (see ``docs/ARCHITECTURE.md``
-"Observability and Diagnostics") so they can be aggregated by
-``trace_id`` and survive an app restart. Prompt-trace records live in their own
-JSONL file and are merged in by the query layer at read time.
-"""
+"""Small shared execution index and per-session transcript queries."""
 
 from __future__ import annotations
 
 import json
 import os
 import threading
+import time
 from base64 import b64decode, b64encode
 from collections import deque
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from guildbotics.observability.session_transcripts import (
+    SYSTEM_TRACE_PREFIX,
+    SessionTranscriptStore,
+)
 from guildbotics.utils.fileio import get_workspace_data_path
 from guildbotics.utils.timestamps import parse_iso_datetime
 
@@ -28,6 +27,7 @@ def default_store_path() -> Path:
 
 
 _CURSOR_ANCHOR_BYTES = 256
+_MIGRATION_LOCK_STALE_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -69,11 +69,15 @@ class DiagnosticsStore:
     ) -> None:
         self._path_override = path
         self._path = path or default_store_path()
+        self._migrated_path: Path | None = path
         self._memory_limit = memory_limit
         self._max_file_bytes = max_file_bytes
         self._records: deque[dict[str, Any]] = deque(maxlen=memory_limit)
         self._file_signature: tuple[int, int] | None = None
         self._lock = threading.Lock()
+        self._transcripts = SessionTranscriptStore(self._path)
+        self._maintenance_stop = threading.Event()
+        self._maintenance_thread: threading.Thread | None = None
         self._load_from_path(self._path)
         self._file_signature = self._file_signature_now()
 
@@ -86,13 +90,51 @@ class DiagnosticsStore:
     def record(self, item: dict[str, Any]) -> None:
         with self._lock:
             self._refresh_path_locked()
-            self._records.append(item)
-            self._append_to_file(item)
-            # Our own append changed the file. Capture the new signature so this
-            # process does not reload the whole file on its next read, while
-            # appends from *other* processes still change the signature and are
-            # picked up (see ``_reload_if_changed_locked``).
-            self._file_signature = self._file_signature_now()
+            route = self._transcripts.route(item)
+            for index_item in route.index_records:
+                self._record_index_locked(index_item)
+
+    def start_system_session(self, service_run_id: str = "") -> None:
+        with self._lock:
+            self._refresh_path_locked()
+            route = self._transcripts.start_system_session(service_run_id)
+            for item in route.index_records:
+                self._record_index_locked(item)
+
+    def finish_system_session(self) -> None:
+        with self._lock:
+            self._refresh_path_locked()
+            route = self._transcripts.finish_system_session()
+            for item in route.index_records:
+                self._record_index_locked(item)
+
+    def start_maintenance(self) -> None:
+        with self._lock:
+            self._refresh_path_locked()
+            self._transcripts.prune_expired()
+            if self._maintenance_thread is not None:
+                return
+            self._maintenance_stop.clear()
+            self._maintenance_thread = threading.Thread(
+                target=self._maintenance_loop,
+                name="guildbotics-transcript-retention",
+                daemon=True,
+            )
+            self._maintenance_thread.start()
+
+    def stop_maintenance(self) -> None:
+        self._maintenance_stop.set()
+        thread = self._maintenance_thread
+        if thread is not None:
+            thread.join(timeout=1.0)
+        self._maintenance_thread = None
+
+    def transcript_usage(self) -> dict[str, Any]:
+        with self._lock:
+            self._refresh_path_locked()
+            usage = self._transcripts.usage()
+            usage["index_size_bytes"] = _file_size(self._path)
+            return usage
 
     def list_traces(
         self,
@@ -119,6 +161,8 @@ class DiagnosticsStore:
             for summary in summaries.values()
             if _summary_matches(summary, source, person_id, query, attr_key, attr_value)
         ]
+        if source is None and person_id is None and attr_key is None:
+            result.extend(_system_summaries(records, query=query, include_latest=False))
         # _summary_matches reads "_text" before _finalize_summary drops it.
         result.sort(
             key=lambda summary: _timestamp_sort_key(summary["started_at"]), reverse=True
@@ -128,33 +172,64 @@ class DiagnosticsStore:
     def get_records(self, trace_id: str) -> list[dict[str, Any]]:
         with self._lock:
             self._refresh_path_locked()
-            records = [
-                item for item in self._records if item.get("trace_id") == trace_id
-            ]
+            if trace_id.startswith(SYSTEM_TRACE_PREFIX):
+                _, records = self._transcripts.system_records(
+                    trace_id.removeprefix(SYSTEM_TRACE_PREFIX)
+                )
+            else:
+                _, records = self._transcripts.trace_records(trace_id)
         records.sort(key=_record_timestamp_sort_key)
         return records
 
+    def transcript_exists(self, trace_id: str) -> bool:
+        with self._lock:
+            self._refresh_path_locked()
+            if trace_id.startswith(SYSTEM_TRACE_PREFIX):
+                exists, _ = self._transcripts.system_records(
+                    trace_id.removeprefix(SYSTEM_TRACE_PREFIX)
+                )
+            else:
+                exists, _ = self._transcripts.trace_records(trace_id)
+            return exists
+
     def get_summary(self, trace_id: str) -> dict[str, Any] | None:
+        if trace_id.startswith(SYSTEM_TRACE_PREFIX):
+            with self._lock:
+                self._refresh_path_locked()
+                summaries = _system_summaries(
+                    list(self._records), query=None, include_latest=True
+                )
+            return next(
+                (item for item in summaries if item["trace_id"] == trace_id), None
+            )
         summary = _new_summary(trace_id)
         found = False
-        for item in self.get_records(trace_id):
+        with self._lock:
+            self._refresh_path_locked()
+            records = [
+                item for item in self._records if item.get("trace_id") == trace_id
+            ]
+        for item in records:
             found = True
             _accumulate(summary, item)
         return _finalize_summary(summary) if found else None
 
     def global_records(self, *, limit: int = 200) -> list[dict[str, Any]]:
-        """Return unscoped (``trace_id`` is empty) events and logs.
-
-        These are records that do not belong to any execution unit — service
-        lifecycle events (``scheduler.*`` / ``events.*``) and global/unscoped
-        logs (app startup, diagnostics, background). Returned oldest-first
-        (callers/UI reverse for display), capped to the most recent ``limit``.
-        """
+        """Return records from the most recent system session."""
         with self._lock:
             self._refresh_path_locked()
-            records = [item for item in self._records if not item.get("trace_id")]
+            session_id = self._transcripts.latest_system_session_id(list(self._records))
+            if session_id is None:
+                return []
+            _, records = self._transcripts.system_records(session_id)
         records.sort(key=_record_timestamp_sort_key)
         return records[-max(1, limit) :]
+
+    def latest_system_trace_id(self) -> str | None:
+        with self._lock:
+            self._refresh_path_locked()
+            session_id = self._transcripts.latest_system_session_id(list(self._records))
+        return f"{SYSTEM_TRACE_PREFIX}{session_id}" if session_id else None
 
     def records_between(
         self,
@@ -174,6 +249,8 @@ class DiagnosticsStore:
                 item
                 for item in self._records
                 if includes(str(item.get("timestamp", "")))
+                and item.get("type")
+                not in {"session.pointer", "system.started", "system.finished"}
             ]
         records.sort(key=_record_timestamp_sort_key)
         return records[-max(1, limit) :]
@@ -192,20 +269,22 @@ class DiagnosticsStore:
         truncation, and rewrite-based rotation reset the cursor safely.
         """
         with self._lock:
-            self._select_path_locked()
+            self._refresh_path_locked()
             return self._records_after_locked(cursor, includes=includes)
 
     def current_cursor(self) -> DiagnosticsCursor:
         """Return a cursor after the last complete row currently on disk."""
         with self._lock:
-            self._select_path_locked()
+            self._refresh_path_locked()
             _, cursor = self._records_after_locked(None, includes=lambda _: False)
             return cursor
 
     # -- persistence ---------------------------------------------------------
 
     def _refresh_path_locked(self) -> None:
-        if self._select_path_locked():
+        path_changed = self._select_path_locked()
+        migration_completed = self._ensure_migrated_locked()
+        if path_changed or migration_completed:
             return
         # Same file, but another process (e.g. a ``guildbotics member`` CLI
         # subprocess) may have appended records to it since we last read. A
@@ -218,9 +297,20 @@ class DiagnosticsStore:
             path = default_store_path()
             if path != self._path:
                 self._path = path
+                self._migrated_path = None
+                self._transcripts = SessionTranscriptStore(self._path)
                 self._reload_from_path_locked()
                 return True
         return False
+
+    def _ensure_migrated_locked(self) -> bool:
+        if self._path_override is not None or self._migrated_path == self._path:
+            return False
+        if not _migrate_legacy_store(self._path):
+            return False
+        self._migrated_path = self._path
+        self._reload_from_path_locked()
+        return True
 
     def _records_after_locked(
         self,
@@ -280,12 +370,18 @@ class DiagnosticsStore:
     def _cursor_at(handle: Any, stat: Any, offset: int) -> DiagnosticsCursor:
         anchor_start = max(0, offset - _CURSOR_ANCHOR_BYTES)
         handle.seek(anchor_start)
-        anchor = b64encode(handle.read(offset - anchor_start)).decode("ascii")
+        anchor = handle.read(offset - anchor_start)
+        # Prefer an anchor wholly contained in the final JSONL row. Rotation
+        # can discard the preceding pointer while retaining the terminal event;
+        # including bytes from both rows would make that retained event look new.
+        if anchor.endswith(b"\n"):
+            final_row_start = anchor.rfind(b"\n", 0, len(anchor) - 1) + 1
+            anchor = anchor[final_row_start:]
         return DiagnosticsCursor(
             offset=offset,
             device=stat.st_dev,
             inode=stat.st_ino,
-            anchor=anchor,
+            anchor=b64encode(anchor).decode("ascii"),
         )
 
     def _reload_if_changed_locked(self) -> None:
@@ -338,6 +434,20 @@ class DiagnosticsStore:
                 handle.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
         except OSError:
             return
+
+    def _record_index_locked(self, item: dict[str, Any]) -> None:
+        self._records.append(item)
+        self._append_to_file(item)
+        # Our own append changed the file. Capture the new signature so this
+        # process does not reload the whole file on its next read, while
+        # appends from other processes still trigger a reload.
+        self._file_signature = self._file_signature_now()
+
+    def _maintenance_loop(self) -> None:
+        while not self._maintenance_stop.wait(24 * 60 * 60):
+            with self._lock:
+                self._refresh_path_locked()
+                self._transcripts.prune_expired()
 
     def _rewrite_file(self) -> None:
         try:
@@ -404,7 +514,7 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
     if kind == "event":
         summary["event_count"] += 1
         event_type = str(item.get("type", ""))
-        if event_type.endswith(".failed"):
+        if event_type.endswith((".failed", ".error")):
             summary["status"] = "failed"
             summary["error_count"] += 1
         elif event_type.endswith(".finished") and summary["status"] != "failed":
@@ -412,6 +522,12 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
         elif event_type.endswith(".started") and summary["status"] == "info":
             summary["status"] = "running"
         summary["_text"].append(event_type)
+        payload = item.get("payload")
+        if event_type.endswith((".finished", ".failed")) and isinstance(payload, dict):
+            for key in ("event_count", "log_count", "error_count", "span_count"):
+                value = payload.get(key)
+                if isinstance(value, int):
+                    summary[key] = value
     elif kind == "log":
         summary["log_count"] += 1
         level = str(item.get("level", "")).upper()
@@ -431,7 +547,7 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
 
 def _finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary = dict(summary)
-    summary["span_count"] = len(summary.pop("_spans"))
+    summary["span_count"] = max(summary["span_count"], len(summary.pop("_spans")))
     summary.pop("_text", None)
     summary.pop("_started_at_key", None)
     summary.pop("_updated_at_key", None)
@@ -487,3 +603,114 @@ def _summary_matches(
         if needle not in haystack:
             return False
     return True
+
+
+def _system_summaries(
+    records: list[dict[str, Any]], *, query: str | None, include_latest: bool
+) -> list[dict[str, Any]]:
+    summaries: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    finished: set[str] = set()
+    for item in records:
+        if item.get("type") not in {"system.started", "system.finished"}:
+            continue
+        attributes = item.get("attributes")
+        if not isinstance(attributes, dict):
+            continue
+        session_id = str(attributes.get("system_session_id") or "")
+        if not session_id:
+            continue
+        if session_id not in summaries:
+            order.append(session_id)
+            summaries[session_id] = _new_summary(f"{SYSTEM_TRACE_PREFIX}{session_id}")
+            summaries[session_id]["source"] = "system"
+            summaries[session_id]["command"] = "Global / system"
+        _accumulate(summaries[session_id], item)
+        if item.get("type") == "system.finished":
+            finished.add(session_id)
+    latest = order[-1] if order else ""
+    result: list[dict[str, Any]] = []
+    for session_id, summary in summaries.items():
+        if session_id == latest and not include_latest:
+            continue
+        if session_id not in finished and session_id != latest:
+            summary["status"] = "interrupted"
+        if query and not _summary_matches(summary, None, None, query, None, None):
+            continue
+        result.append(_finalize_summary(summary))
+    return result
+
+
+def _migrate_legacy_store(path: Path) -> bool:
+    """Discard the pre-transcript index once per workspace data root."""
+    marker = path.parent / ".session-transcripts-v1"
+    if marker.exists():
+        return True
+    lock_path = path.parent / ".session-transcripts-v1.lock"
+    descriptor: int | None = None
+    for _ in range(2):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(descriptor, f"{os.getpid()}\n".encode())
+            break
+        except FileExistsError:
+            if not _migration_lock_is_stale(lock_path):
+                for _ in range(100):
+                    if marker.exists():
+                        return True
+                    if _migration_lock_is_stale(lock_path):
+                        break
+                    time.sleep(0.01)
+                if not _migration_lock_is_stale(lock_path):
+                    return False
+            with suppress(OSError):
+                lock_path.unlink()
+        except OSError:
+            return False
+    if descriptor is None:
+        return marker.exists()
+    try:
+        os.close(descriptor)
+        try:
+            path.with_name("prompt_trace.jsonl").unlink(missing_ok=True)
+            path.write_text("", encoding="utf-8")
+            marker.write_text("1\n", encoding="utf-8")
+        except OSError:
+            return False
+    finally:
+        with suppress(OSError):
+            lock_path.unlink(missing_ok=True)
+    return True
+
+
+def _migration_lock_is_stale(path: Path) -> bool:
+    try:
+        raw_pid = path.read_text(encoding="utf-8").strip()
+        modified_at = path.stat().st_mtime
+    except OSError:
+        return True
+    if time.time() - modified_at >= _MIGRATION_LOCK_STALE_SECONDS:
+        return True
+    try:
+        pid = int(raw_pid)
+    except ValueError:
+        pid = 0
+    if pid > 0:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        except OSError:
+            return True
+        return False
+    return False
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0

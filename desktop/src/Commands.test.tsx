@@ -17,12 +17,10 @@ import {
 import {
   getCommandOptions,
   getConfigStatus,
-  getRuntimeDebug,
   getTeam,
   runCommand,
   subscribeEvents,
   subscribeLogs,
-  updateRuntimeDebug,
   type CommandOption,
   type ConfigStatus,
   type RuntimeEvent,
@@ -52,10 +50,7 @@ vi.mock("./api/client", async (importOriginal) => {
     getConfigStatus: vi.fn(),
     getTeam: vi.fn(),
     getCommandOptions: vi.fn(),
-    getPromptTrace: vi.fn(async () => promptTrace()),
-    getRuntimeDebug: vi.fn(async () => runtimeDebug()),
     runCommand: vi.fn(),
-    updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => runtimeDebug(body)),
     subscribeEvents: vi.fn(),
     subscribeLogs: vi.fn(),
   };
@@ -64,11 +59,9 @@ vi.mock("./api/client", async (importOriginal) => {
 const getConfigStatusMock = vi.mocked(getConfigStatus);
 const getTeamMock = vi.mocked(getTeam);
 const getCommandOptionsMock = vi.mocked(getCommandOptions);
-const getRuntimeDebugMock = vi.mocked(getRuntimeDebug);
 const runCommandMock = vi.mocked(runCommand);
 const subscribeEventsMock = vi.mocked(subscribeEvents);
 const subscribeLogsMock = vi.mocked(subscribeLogs);
-const updateRuntimeDebugMock = vi.mocked(updateRuntimeDebug);
 
 beforeEach(() => {
   eventListener = null;
@@ -76,9 +69,7 @@ beforeEach(() => {
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getTeamMock.mockReset().mockResolvedValue(team());
   getCommandOptionsMock.mockReset().mockResolvedValue({ options: [catalogCommand()] });
-  getRuntimeDebugMock.mockReset().mockResolvedValue(runtimeDebug());
   runCommandMock.mockReset().mockResolvedValue({ trace_id: "req-1", output: "hello output" });
-  updateRuntimeDebugMock.mockReset().mockImplementation(async (body) => runtimeDebug(body));
   subscribeEventsMock.mockReset().mockImplementation((listener) => {
     eventListener = listener;
     return () => {
@@ -95,17 +86,12 @@ beforeEach(() => {
 });
 
 describe("Commands screen", () => {
-  it("toggles runtime debug from the command screen", async () => {
-    const user = userEvent.setup();
+  it("keeps diagnostics settings off the command screen", async () => {
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
 
-    await user.click(
-      await screen.findByRole("switch", { name: t("overview.runtimeDebug.disabled") }),
-    );
-
-    await waitFor(() => expect(updateRuntimeDebugMock).toHaveBeenCalledTimes(1));
-    expect(updateRuntimeDebugMock.mock.calls[0][0]).toEqual({ enabled: true });
+    expect(screen.queryByText(t("diagnostics.runtimeDebug.title"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("diagnostics.transcripts.title"))).not.toBeInTheDocument();
   });
 
   it("shows the no-active-member blocked alert and disables run", async () => {
@@ -609,30 +595,5 @@ function catalogCommand(overrides: Partial<CommandOption> = {}): CommandOption {
     recommended_input: "",
     requirements: [],
     ...overrides,
-  };
-}
-
-function promptTrace() {
-  return {
-    enabled: false,
-    env_file: "",
-    env_file_exists: false,
-    trace_file: "",
-    output_trace_file: "",
-    default_trace_file: "",
-    trace_file_exists: false,
-    event_count: 0,
-    events: [],
-  };
-}
-
-function runtimeDebug(overrides: { enabled?: boolean } = {}) {
-  const enabled = overrides.enabled ?? false;
-  return {
-    enabled,
-    log_level: enabled ? "DEBUG" : "INFO",
-    agno_debug: enabled,
-    env_file: "/workspace/.env",
-    env_file_exists: true,
   };
 }

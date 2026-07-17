@@ -364,6 +364,53 @@ def test_memory_audit_filters_timestamps_by_instant(tmp_path: Path) -> None:
     ] == ["first"]
 
 
+def test_memory_audit_rewrites_to_bounded_newest_rows(tmp_path: Path) -> None:
+    path = tmp_path / "memory_events.jsonl"
+    store = MemoryAuditStore(path, max_file_bytes=240)
+    for index in range(8):
+        store.record(
+            {
+                "timestamp": f"2026-06-21T01:00:0{index}Z",
+                "message": f"event-{index}-" + "x" * 40,
+                "attributes": {},
+                "payload": {},
+            }
+        )
+
+    events = store.list_events()
+
+    assert path.stat().st_size <= 240
+    assert events[0]["message"].startswith("event-7-")
+    assert all(json.loads(line) for line in path.read_text().splitlines())
+
+
+def test_memory_audit_compacts_oversized_newest_record(tmp_path: Path) -> None:
+    path = tmp_path / "memory_events.jsonl"
+    store = MemoryAuditStore(path, max_file_bytes=512)
+    store.record(
+        {
+            "kind": "memory",
+            "type": "memory.record",
+            "timestamp": "2026-06-21T01:00:00Z",
+            "trace_id": "trace-1",
+            "message": "oversized",
+            "attributes": {
+                "memory.action": "record",
+                "memory.doc_id": "doc-1",
+            },
+            "payload": {"summary": "x" * 2048},
+        }
+    )
+
+    events = store.list_events()
+
+    assert path.stat().st_size <= 512
+    assert len(events) == 1
+    assert events[0]["trace_id"] == "trace-1"
+    assert events[0]["payload"]["truncated"] is True
+    assert events[0]["payload"]["original_size_bytes"] > 512
+
+
 def test_memory_audit_normalizes_document_path(
     monkeypatch: pytest.MonkeyPatch, person: Person
 ) -> None:

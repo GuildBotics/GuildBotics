@@ -9,6 +9,7 @@ the server binds a dynamically chosen free port on ``127.0.0.1`` and uses a
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -61,17 +62,25 @@ class _Sidecar:
 
 @pytest.fixture
 def sidecar(tmp_path: Path) -> Iterator[_Sidecar]:
+    home = tmp_path / "home"
+    home.mkdir()
+    running_sidecar = _start_sidecar(tmp_path, home)
+    try:
+        yield running_sidecar
+    finally:
+        _terminate(running_sidecar.process)
+
+
+def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
     port = _find_free_port()
     base_url = f"http://127.0.0.1:{port}"
     # Fully hermetic: redirect HOME to the tmp tree and drop any inherited config
     # overrides so the subprocess never reads or writes the real ~/.guildbotics.
-    home = tmp_path / "home"
-    home.mkdir()
     env = {**os.environ, "HOME": str(home)}
     for key in (
         "GUILDBOTICS_CONFIG_DIR",
-        "GUILDBOTICS_PROMPT_TRACE",
-        "GUILDBOTICS_PROMPT_TRACE_PATH",
+        "GUILDBOTICS_TRANSCRIPT_DETAIL",
+        "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS",
     ):
         env.pop(key, None)
     process = subprocess.Popen(
@@ -86,17 +95,14 @@ def sidecar(tmp_path: Path) -> Iterator[_Sidecar]:
             "--token",
             TOKEN,
         ],
-        cwd=str(tmp_path),
+        cwd=str(startup_dir),
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
     )
-    try:
-        _wait_for_health(base_url, process)
-        yield _Sidecar(base_url, process)
-    finally:
-        _terminate(process)
+    _wait_for_health(base_url, process)
+    return _Sidecar(base_url, process)
 
 
 def _drain_output(process: subprocess.Popen[str]) -> str:
@@ -180,6 +186,38 @@ def test_sidecar_config_status_reports_working_directory(
     assert response.status_code == HTTP_OK
     payload = response.json()
     assert Path(payload["cwd"]).resolve() == tmp_path.resolve()
+
+
+def test_sidecar_restores_backend_active_workspace(tmp_path: Path) -> None:
+    startup = tmp_path / "startup"
+    workspace = tmp_path / "selected"
+    home = tmp_path / "home"
+    for path in (startup, workspace, home):
+        path.mkdir()
+    (workspace / ".env").write_text(
+        "GUILDBOTICS_DATA_DIR=selected-data\n", encoding="utf-8"
+    )
+    state_path = home / ".guildbotics" / "data" / "active-workspace.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps({"workspace": str(workspace)}),
+        encoding="utf-8",
+    )
+
+    running_sidecar = _start_sidecar(startup, home)
+    try:
+        response = httpx.get(
+            f"{running_sidecar.base_url}/config/status",
+            headers=AUTH_HEADERS,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+
+        assert response.status_code == HTTP_OK
+        payload = response.json()
+        assert Path(payload["cwd"]) == workspace
+        assert Path(payload["workspace_data_dir"]) == workspace / "selected-data"
+    finally:
+        _terminate(running_sidecar.process)
 
 
 def test_sidecar_shuts_down_cleanly(sidecar: _Sidecar) -> None:

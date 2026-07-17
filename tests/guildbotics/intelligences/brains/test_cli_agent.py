@@ -86,7 +86,6 @@ async def test_cli_agent_run_passes_cwd_without_mutating_mapping(monkeypatch, tm
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)
 
-
 @pytest.mark.asyncio
 async def test_cli_agent_run_inherits_environment_and_overlays_config(
     monkeypatch, tmp_path
@@ -763,11 +762,10 @@ async def test_cli_agent_run_raises_when_response_is_empty(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_cli_agent_prompt_trace_records_request_and_response(
-    monkeypatch, tmp_path
-):
+async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path):
     original = cli_agent.person_cli_agent_mapping.copy()
-    trace_path = tmp_path / "prompt_trace.jsonl"
+    io_records: list[tuple[str, dict]] = []
+    span_records: list[dict] = []
     cli_agent.person_cli_agent_mapping.clear()
     cli_agent.person_cli_agent_mapping["p1"] = {
         "default": cli_agent.ExecutableInfo(script="echo test", env={})
@@ -778,8 +776,16 @@ async def test_cli_agent_prompt_trace_records_request_and_response(
     ):
         return StubProcess(stdout=b"done", stderr=b"debug output", returncode=0)
 
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", str(trace_path))
+    monkeypatch.setattr(
+        cli_agent,
+        "record_correlated_io",
+        lambda *, io_type, payload: io_records.append((io_type, payload)),
+    )
+    monkeypatch.setattr(
+        cli_agent,
+        "record_span_summary",
+        lambda **kwargs: span_records.append(kwargs),
+    )
     monkeypatch.setattr(
         cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
     )
@@ -813,18 +819,16 @@ async def test_cli_agent_prompt_trace_records_request_and_response(
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)
 
-    events = [
-        json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [event["event"] for event in events] == [
+    assert [record[0] for record in io_records] == [
         "cli_agent.request",
         "cli_agent.response",
     ]
-    assert events[0]["person_id"] == "p1"
-    assert events[0]["brain"] == "functions/handle_chat_event"
-    assert "Reply as Alice." in events[0]["prompt"]
-    assert events[1]["stdout"] == "done"
-    assert events[1]["stderr"] == "debug output"
+    assert io_records[0][1]["person_id"] == "p1"
+    assert io_records[0][1]["brain"] == "functions/handle_chat_event"
+    assert "Reply as Alice." in io_records[0][1]["prompt"]
+    assert io_records[1][1]["stdout"] == "done"
+    assert io_records[1][1]["stderr"] == "debug output"
+    assert span_records[0]["status"] == "finished"
 
 
 @pytest.mark.asyncio
@@ -846,9 +850,6 @@ async def test_asking_response_omits_log_reference_when_output_dir_unset(
             stdout=b'{"status": "asking", "message": "need input"}', returncode=0
         )
 
-    # LOG_OUTPUT_DIR unset -> no per-call log file is created, so the ASKING
-    # message must not gain a misleading empty "See:" reference.
-    monkeypatch.setattr(cli_agent, "get_log_output_dir", lambda *a, **k: None)
     monkeypatch.setattr(
         cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
     )
@@ -953,20 +954,3 @@ async def test_cli_agent_kills_subprocess_on_cancellation(monkeypatch, tmp_path)
     finally:
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)
-
-
-def test_mask_env_masks_api_keys_and_other_secret_names():
-    env = {
-        "OPENAI_API_KEY": "real-secret",
-        "LLM_API_KEY": "real-secret",
-        "embedding_api_key": "real-secret",
-        "SLACK_BOT_TOKEN": "real-secret",
-        "MY_PASSWORD": "real-secret",
-        "AWS_CREDENTIALS": "real-secret",
-        "PATH": "/usr/bin",
-    }
-
-    masked = cli_agent.CliAgentBrain._mask_env(None, env)
-
-    assert masked["PATH"] == "/usr/bin"
-    assert all(value == "***" for key, value in masked.items() if key != "PATH")
