@@ -43,14 +43,7 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, NavLink, Route, Routes, useSearchParams } from "react-router-dom";
 
@@ -112,6 +105,13 @@ type MemoryEventFocus = {
   action: string;
   personId: string;
 };
+const MEMORY_FOCUS_SEARCH_PARAMS = [
+  "memory_trace_id",
+  "doc_id",
+  "timestamp",
+  "action",
+  "person_id",
+] as const;
 
 export function App() {
   const { t, i18n } = useTranslation();
@@ -898,6 +898,9 @@ function DiagnosticsPage() {
   const changeDiagnosticsTab = (value: string | null) => {
     const next = new URLSearchParams(searchParams);
     const tab = diagnosticsTabFromSearch(value);
+    if (tab === "memory") {
+      clearMemoryFocusSearchParams(next);
+    }
     if (tab === "readiness") {
       next.delete("tab");
     } else {
@@ -992,7 +995,7 @@ function diagnosticsTabFromSearch(value: string | null): DiagnosticsTab {
 function memoryFocusFromSearch(searchParams: URLSearchParams): MemoryEventFocus {
   return {
     docId: searchParams.get("doc_id") ?? "",
-    traceId: searchParams.get("trace_id") ?? "",
+    traceId: searchParams.get("memory_trace_id") ?? "",
     timestamp: searchParams.get("timestamp") ?? "",
     action: searchParams.get("action") ?? "",
     personId: searchParams.get("person_id") ?? "",
@@ -1467,6 +1470,8 @@ function TraceExplorer() {
   const timelineRecords = isComposite
     ? compositeTraceRecords(compositeDetail.data ?? [])
     : (detail.data?.records ?? []);
+  const hasMemoryRecords =
+    !isComposite && timelineRecords.some((record) => record.kind === "memory");
   const records = timelineRecords
     .filter((record) => matchesRecordFilter(record, recordFilter))
     .filter((record) => matchesRecordScopeFilter(record, recordScopeFilter))
@@ -1810,6 +1815,17 @@ function TraceExplorer() {
                           </Tooltip>
                         );
                       })()}
+                      {hasMemoryRecords ? (
+                        <Badge
+                          component={NavLink}
+                          color="info"
+                          variant="light"
+                          style={{ cursor: "pointer", textDecoration: "none" }}
+                          to={traceMemoryUrl(searchParams, selectedSummary.trace_id)}
+                        >
+                          {t("diagnostics.tabs.memory")}
+                        </Badge>
+                      ) : null}
                     </Group>
                   </div>
                   <Tooltip
@@ -2262,6 +2278,20 @@ function memoryActionColor(action: string): string {
 
 function memoryEventKey(event: MemoryEvent): string {
   return `${event.timestamp}-${event.action}-${event.person_id}-${event.doc_id}`;
+}
+
+function clearMemoryFocusSearchParams(searchParams: URLSearchParams): void {
+  for (const key of MEMORY_FOCUS_SEARCH_PARAMS) {
+    searchParams.delete(key);
+  }
+}
+
+function traceMemoryUrl(searchParams: URLSearchParams, traceId: string): string {
+  const next = new URLSearchParams(searchParams);
+  clearMemoryFocusSearchParams(next);
+  next.set("tab", "memory");
+  next.set("memory_trace_id", traceId);
+  return `/diagnostics?${next.toString()}`;
 }
 
 function memoryFocusKey(focus: MemoryEventFocus): string {

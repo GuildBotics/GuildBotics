@@ -5,6 +5,7 @@ from guildbotics.app_api.activity_links import (
     doc_link_from_memory,
     links_from_attributes,
     links_from_record,
+    memory_diagnostics_url,
 )
 from guildbotics.app_api.models import ActivityHistoryLink
 
@@ -84,6 +85,20 @@ def test_content_changing_memory_record_yields_links() -> None:
     kinds = {link.kind for link in links}
     assert "pull_request" in kinds
     assert "doc" in kinds
+
+
+def test_memory_diagnostics_url_namespaces_the_trace_filter() -> None:
+    url = memory_diagnostics_url(
+        {"memory.action": "record", "memory.doc_id": "d1"},
+        {
+            "trace_id": "trace-1",
+            "timestamp": "2026-07-01T10:00:00Z",
+            "person_id": "alice",
+        },
+    )
+
+    assert "memory_trace_id=trace-1" in url
+    assert "&trace_id=" not in url
 
 
 def test_dedupe_collapses_same_pr_url_with_different_labels() -> None:

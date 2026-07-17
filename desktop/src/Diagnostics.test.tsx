@@ -380,7 +380,7 @@ describe("Diagnostics memory tab", () => {
     });
 
     renderApp(
-      "/diagnostics?tab=memory&doc_id=doc-2&trace_id=trace-2&timestamp=2026-01-01T00%3A00%3A00Z&action=touch&person_id=bob",
+      "/diagnostics?tab=memory&doc_id=doc-2&memory_trace_id=trace-2&timestamp=2026-01-01T00%3A00%3A00Z&action=touch&person_id=bob",
     );
 
     expect(await screen.findByRole("tab", { name: t("diagnostics.tabs.memory") })).toHaveAttribute(
@@ -442,7 +442,7 @@ describe("Diagnostics executions tab", () => {
       ],
     });
 
-    renderApp();
+    renderApp("/diagnostics?tab=executions&memory_trace_id=stale-trace");
     await openTab(user, t("diagnostics.tabs.executions"));
 
     const traceButton = await screen.findByText("workflows/demo");
@@ -463,6 +463,15 @@ describe("Diagnostics executions tab", () => {
     const live = screen.getByText("working on it");
     const started = screen.getByText("command.started");
     expect(live.compareDocumentPosition(started) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: t("diagnostics.tabs.memory") }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: t("diagnostics.tabs.memory") }));
+    await waitFor(() => {
+      const calls = vi.mocked(getMemoryEvents).mock.calls;
+      expect(calls[calls.length - 1]?.[0]).toMatchObject({ traceId: undefined });
+    });
   });
 
   it("keeps memory records visible when the transcript has expired", async () => {
@@ -508,6 +517,17 @@ describe("Diagnostics executions tab", () => {
       await screen.findByText(t("diagnostics.executions.transcriptDeleted")),
     ).toBeInTheDocument();
     expect(screen.getByText("retained memory audit")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: t("diagnostics.tabs.memory") }));
+
+    expect(screen.getByRole("tab", { name: t("diagnostics.tabs.memory") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await waitFor(() => {
+      const calls = vi.mocked(getMemoryEvents).mock.calls;
+      expect(calls[calls.length - 1]?.[0]).toMatchObject({ traceId: "trace-1" });
+    });
   });
 
   it("opens a combined execution timeline from trace_ids query parameters", async () => {
