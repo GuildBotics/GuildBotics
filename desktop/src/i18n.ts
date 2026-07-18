@@ -224,6 +224,8 @@ const resources = {
             failed: "Failed",
             info: "Info",
             interrupted: "Interrupted",
+            retry_scheduled: "Retry scheduled",
+            abandoned: "Abandoned",
           },
           sources: {
             all: "All",
@@ -1892,6 +1894,8 @@ const resources = {
             failed: "失敗",
             info: "情報",
             interrupted: "中断",
+            retry_scheduled: "再試行待ち",
+            abandoned: "打ち切り",
           },
           sources: {
             all: "すべて",

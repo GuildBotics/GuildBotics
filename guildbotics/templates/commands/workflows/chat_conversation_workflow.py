@@ -10,6 +10,10 @@ from typing import Any
 
 from guildbotics.capabilities.completion_retry import run_with_completion_retry
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.capabilities.workflow_completion_events import (
+    record_chat_dispatch_abandoned,
+    record_workflow_completed,
+)
 from guildbotics.capabilities.workflow_rate_limits import (
     WorkflowRateLimit,
     record_workflow_rate_limited,
@@ -151,7 +155,15 @@ async def main(
                 chat_participation=incoming.chat_participation,
             )
         except Exception as exc:
-            if _read_retry_context_from_context(context).is_final_attempt:
+            retry_context = _read_retry_context_from_context(context)
+            if retry_context.is_final_attempt:
+                record_chat_dispatch_abandoned(
+                    event_id=incoming.event.event_id,
+                    run_id=retry_context.run_id,
+                    attempt_count=retry_context.attempt_count,
+                    max_attempts=retry_context.max_attempts,
+                    error=str(exc),
+                )
                 _log(
                     context,
                     "error",
@@ -342,6 +354,7 @@ async def _handle_event(
             retry_context.run_id, workspace_data_root / "task-runs", member_workspace
         )
         if recovered is not None:
+            record_workflow_completed(run_id=retry_context.run_id, recovered=True)
             _log(
                 context,
                 "info",
@@ -389,6 +402,13 @@ async def _handle_event(
             )
             raise
         if retry_context.is_final_attempt:
+            record_chat_dispatch_abandoned(
+                event_id=event.event_id,
+                run_id=retry_context.run_id,
+                attempt_count=retry_context.attempt_count,
+                max_attempts=retry_context.max_attempts,
+                error=str(exc),
+            )
             _log(
                 context,
                 "error",

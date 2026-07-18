@@ -31,6 +31,7 @@ import {
   recordDisplayMessage,
   ticketChipInfo,
   splitCommandLine,
+  isTerminalTraceStatus,
   traceStatusColor,
   traceDuration,
   shortTraceId,
@@ -656,6 +657,22 @@ describe("traceStatusColor", () => {
     expect(traceStatusColor("failed")).toBe("danger");
     expect(traceStatusColor("running")).toBe("info");
     expect(traceStatusColor("info")).toBe("neutral");
+  });
+
+  it("distinguishes workflow completion layers from provider success", () => {
+    expect(traceStatusColor("retry_scheduled")).toBe("warning");
+    expect(traceStatusColor("abandoned")).toBe("danger");
+  });
+});
+
+describe("isTerminalTraceStatus", () => {
+  it("treats retry_scheduled and abandoned as terminal for count display", () => {
+    expect(isTerminalTraceStatus("success")).toBe(true);
+    expect(isTerminalTraceStatus("failed")).toBe(true);
+    expect(isTerminalTraceStatus("retry_scheduled")).toBe(true);
+    expect(isTerminalTraceStatus("abandoned")).toBe(true);
+    expect(isTerminalTraceStatus("running")).toBe(false);
+    expect(isTerminalTraceStatus("info")).toBe(false);
   });
 });
 

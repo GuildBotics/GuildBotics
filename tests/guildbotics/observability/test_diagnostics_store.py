@@ -404,3 +404,73 @@ def test_record_with_non_serializable_attribute_does_not_raise(tmp_path: Path) -
     traces = store.list_traces(query=tmp_path.name)
     assert [s["trace_id"] for s in traces] == ["t1"]
     assert DiagnosticsStore(path).list_traces()[0]["trace_id"] == "t1"
+
+
+def test_finished_span_with_missing_completion_is_not_success(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started"))
+    store.record(_event("t1", "span.finished", timestamp="2026-06-12T00:00:02+09:00"))
+    store.record(
+        _event(
+            "t1",
+            "workflow.completion_missing",
+            timestamp="2026-06-12T00:00:03+09:00",
+            payload={"run_id": "run-1", "attempt": 1, "max_attempts": 2},
+        )
+    )
+    store.record(
+        _event(
+            "t1",
+            "chat_dispatch.retry_scheduled",
+            timestamp="2026-06-12T00:00:04+09:00",
+            payload={"next_attempt_at": "2026-06-12T00:05:00+09:00"},
+        )
+    )
+
+    summary = store.list_traces()[0]
+    assert summary["status"] == "retry_scheduled"
+
+
+def test_abandoned_dispatch_overrides_provider_span_success(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "span.finished"))
+    store.record(
+        _event(
+            "t1",
+            "chat_dispatch.abandoned",
+            timestamp="2026-06-12T00:00:02+09:00",
+            payload={"run_id": "run-1"},
+        )
+    )
+
+    summary = store.list_traces()[0]
+    assert summary["status"] == "abandoned"
+
+
+def test_recorded_completion_after_missing_resolves_to_success(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "span.finished"))
+    store.record(
+        _event(
+            "t1",
+            "workflow.completion_missing",
+            timestamp="2026-06-12T00:00:02+09:00",
+        )
+    )
+    store.record(
+        _event("t1", "workflow.completed", timestamp="2026-06-12T00:00:03+09:00")
+    )
+
+    summary = store.list_traces()[0]
+    assert summary["status"] == "success"
+
+
+def test_recorded_completion_overrides_earlier_failed_attempt(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "cli_agent.failed"))
+    store.record(
+        _event("t1", "workflow.completed", timestamp="2026-06-12T00:00:02+09:00")
+    )
+
+    summary = store.list_traces()[0]
+    assert summary["status"] == "success"

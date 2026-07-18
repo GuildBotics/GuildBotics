@@ -162,6 +162,15 @@ Invariants:
   diagnostics event, and never amplified by in-process retries. Ticket selection and
   the chat pending queue defer re-entry until the provider's exact reset timestamp
   when one is available.
+- Diagnostics keep provider turn success, workflow completion evidence, and dispatch
+  lifecycle as separate layers (`capabilities/workflow_completion_events.py`): a
+  clean provider turn without a recorded completion raises
+  `workflow.completion_missing`, the dispatcher records
+  `chat_dispatch.retry_scheduled` / `chat_dispatch.abandoned`, and status
+  derivation (execution index summaries and activity history sessions) never
+  reports workflow success from `span.finished` alone when completion-layer events
+  exist. Traces without completion gating (manual/interactive) keep the
+  span-derived status.
 
 ### Native agent runtime
 

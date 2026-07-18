@@ -375,6 +375,10 @@ def _belongs_in_index(item: dict[str, Any]) -> bool:
         "scheduler.failed",
         "scheduler.running",
         "scheduler.worker.failed",
+        "workflow.completed",
+        "workflow.completion_missing",
+        "chat_dispatch.retry_scheduled",
+        "chat_dispatch.abandoned",
     }:
         return True
     return event_type.startswith(("github.", "credential.")) or event_type == (

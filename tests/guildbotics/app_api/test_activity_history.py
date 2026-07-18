@@ -559,3 +559,95 @@ def test_issue_comments_add_session_link_without_event_row() -> None:
     assert [(link.label, link.url) for link in history.sessions[0].links] == [
         ("Issue #44", issue_url)
     ]
+
+
+def _chat_event_record(
+    event_type: str, timestamp: str, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    record = dict(_chat_records()[0])
+    record.update(
+        kind="event",
+        type=event_type,
+        timestamp=timestamp,
+        payload=payload or {},
+    )
+    return record
+
+
+def test_finished_provider_span_without_completion_shows_retry_scheduled() -> None:
+    session = _session(
+        [
+            *_chat_records(),
+            _chat_event_record("span.finished", "2026-07-01T10:00:10+00:00"),
+            _chat_event_record(
+                "workflow.completion_missing",
+                "2026-07-01T10:00:11+00:00",
+                {"run_id": "run-1", "attempt": 2, "max_attempts": 2},
+            ),
+            _chat_event_record(
+                "chat_dispatch.retry_scheduled",
+                "2026-07-01T10:00:12+00:00",
+                {"next_attempt_at": "2026-07-01T10:05:00+00:00"},
+            ),
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+    assert session.status == "retry_scheduled"
+
+
+def test_abandoned_dispatch_wins_over_provider_success_and_rate_limit() -> None:
+    session = _session(
+        [
+            *_chat_records(),
+            _chat_event_record("span.finished", "2026-07-01T10:00:10+00:00"),
+            _chat_event_record(
+                "workflow.rate_limited",
+                "2026-07-01T10:00:11+00:00",
+                {"retry_after_at": "2026-07-01T12:00:00+00:00"},
+            ),
+            _chat_event_record(
+                "chat_dispatch.abandoned",
+                "2026-07-01T10:00:12+00:00",
+                {"run_id": "run-1"},
+            ),
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+    assert session.status == "abandoned"
+
+
+def test_recorded_completion_shows_success_even_after_failed_attempt() -> None:
+    session = _session(
+        [
+            *_chat_records(),
+            _chat_event_record("cli_agent.failed", "2026-07-01T10:00:10+00:00"),
+            _chat_event_record(
+                "workflow.completion_missing", "2026-07-01T10:00:11+00:00"
+            ),
+            _chat_event_record("workflow.completed", "2026-07-01T10:00:12+00:00"),
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+    assert session.status == "success"
+
+
+def test_rate_limited_retry_keeps_rate_limit_status_and_details() -> None:
+    session = _session(
+        [
+            *_chat_records(),
+            _chat_event_record(
+                "workflow.rate_limited",
+                "2026-07-01T10:00:10+00:00",
+                {"retry_after_at": "2026-07-01T12:00:00+00:00"},
+            ),
+            _chat_event_record(
+                "chat_dispatch.retry_scheduled",
+                "2026-07-01T10:00:11+00:00",
+                {"error_category": "rate_limited"},
+            ),
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+    assert session.status == "rate_limited"
+    assert session.rate_limit is not None
+    assert session.rate_limit.retry_after_at == "2026-07-01T12:00:00+00:00"

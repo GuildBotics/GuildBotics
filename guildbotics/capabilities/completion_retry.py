@@ -62,6 +62,11 @@ async def run_with_completion_retry[T](
     Raises:
         CompletionRetryExhausted: when no attempt completed within the budget.
     """
+    from guildbotics.capabilities.workflow_completion_events import (
+        record_workflow_completed,
+        record_workflow_completion_missing,
+    )
+
     run_id = run_id or uuid4().hex
     last_error: Exception = RuntimeError("no attempts were made")
     attempts = max(1, max_attempts)
@@ -76,11 +81,23 @@ async def run_with_completion_retry[T](
             last_error = exc
             continue
         try:
-            return check_completion(run_id), run_id
+            completion = check_completion(run_id)
         except Exception as exc:
             if found := find_cli_agent_execution_error(exc, category="rate_limited"):
                 raise found from exc
+            # The provider turn succeeded but left no terminal completion
+            # record; make that gap an explicit diagnostics event so the trace
+            # is never mistaken for a completed workflow.
+            record_workflow_completion_missing(
+                run_id=run_id,
+                attempt=attempt,
+                max_attempts=attempts,
+                error=str(exc),
+            )
             last_error = exc
+            continue
+        record_workflow_completed(run_id=run_id, attempt=attempt)
+        return completion, run_id
     raise CompletionRetryExhausted(attempts, last_error)
 
 

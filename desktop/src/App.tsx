@@ -1088,11 +1088,14 @@ function compositeTraceSummary(
 }
 
 function compositeTraceStatus(summaries: TraceSummary[]): TraceSummary["status"] {
-  if (summaries.some((summary) => summary.status === "failed")) {
+  if (summaries.some((summary) => summary.status === "failed" || summary.status === "abandoned")) {
     return "failed";
   }
   if (summaries.some((summary) => summary.status === "running")) {
     return "running";
+  }
+  if (summaries.some((summary) => summary.status === "retry_scheduled")) {
+    return "retry_scheduled";
   }
   if (summaries.length > 0 && summaries.every((summary) => summary.status === "success")) {
     return "success";
@@ -1714,7 +1717,7 @@ function TraceExplorer() {
                     <span className="exec-row-person">{trace.person_id || "—"}</span>
                   </Group>
                   <span className="exec-row-counts">
-                    {trace.status === "success" || trace.status === "failed"
+                    {isTerminalTraceStatus(trace.status)
                       ? t("diagnostics.executions.counts", {
                           events: trace.event_count,
                           logs: trace.log_count,
@@ -1898,7 +1901,7 @@ function TraceExplorer() {
                     <span>
                       {t("diagnostics.executions.meta.duration")}: {traceDuration(selectedSummary)}
                     </span>
-                    {selectedSummary.status === "success" || selectedSummary.status === "failed" ? (
+                    {isTerminalTraceStatus(selectedSummary.status) ? (
                       <span>
                         {t("diagnostics.executions.counts", {
                           events: selectedSummary.event_count,
@@ -2523,13 +2526,22 @@ export function traceStatusColor(status: string): string {
   if (status === "success") {
     return "success";
   }
-  if (status === "failed") {
+  if (status === "failed" || status === "abandoned") {
     return "danger";
+  }
+  if (status === "retry_scheduled") {
+    return "warning";
   }
   if (status === "running") {
     return "info";
   }
   return "neutral";
+}
+
+const TERMINAL_TRACE_STATUSES = new Set(["success", "failed", "retry_scheduled", "abandoned"]);
+
+export function isTerminalTraceStatus(status: string): boolean {
+  return TERMINAL_TRACE_STATUSES.has(status);
 }
 
 export function recordBadgeColor(record: TraceRecord): string {
