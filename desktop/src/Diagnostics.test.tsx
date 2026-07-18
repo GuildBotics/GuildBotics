@@ -1,6 +1,6 @@
 import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -164,79 +164,6 @@ beforeEach(() => {
     .mockReturnValue(() => {});
 });
 
-describe("Diagnostics readiness tab", () => {
-  it("renders the config / env / member / github readiness badges", async () => {
-    renderApp();
-    await screen.findByRole("heading", { name: t("diagnostics.title") });
-
-    expect(await screen.findByText(t("overview.ready"))).toBeInTheDocument();
-    expect(screen.getByText(t("overview.found"))).toBeInTheDocument();
-    // The GitHub badge depends on the project-config query, which resolves after
-    // the config query, so await it rather than asserting synchronously.
-    expect(await screen.findByText(t("overview.enabled"))).toBeInTheDocument();
-    // Only the active member is counted.
-    expect(screen.getByText("1")).toBeInTheDocument();
-  });
-
-  it("runs readiness diagnostics and reports an all-ok summary", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await screen.findByRole("heading", { name: t("diagnostics.title") });
-
-    await user.click(screen.getByRole("button", { name: t("overview.scenarioDiagnostics.run") }));
-
-    await waitFor(() => expect(runScenarioDiagnostics).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(t("overview.scenarioDiagnostics.ok"))).toBeInTheDocument();
-  });
-
-  it("renders warning and error scenario checks with their messages", async () => {
-    const user = userEvent.setup();
-    vi.mocked(runScenarioDiagnostics).mockResolvedValue(
-      scenarioResponse({
-        ok: false,
-        checks: [
-          diagnosticCheck({ status: "ok", code: "config_load" }),
-          diagnosticCheck({
-            status: "warning",
-            section: "slack",
-            code: "slack_missing",
-            message: "Slack token is not configured",
-          }),
-          diagnosticCheck({
-            status: "error",
-            section: "llm",
-            code: "llm_missing",
-            message: "LLM API key is missing",
-          }),
-        ],
-      }),
-    );
-    renderApp();
-    await screen.findByRole("heading", { name: t("diagnostics.title") });
-
-    await user.click(screen.getByRole("button", { name: t("overview.scenarioDiagnostics.run") }));
-
-    // No localized title/description exists for these codes, so the raw message
-    // appears in both the alert title and body.
-    expect((await screen.findAllByText("Slack token is not configured")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("LLM API key is missing").length).toBeGreaterThan(0);
-    // The passing check is not surfaced as an issue alert.
-    expect(screen.queryByText(t("overview.scenarioDiagnostics.ok"))).not.toBeInTheDocument();
-  });
-
-  it("shows an alert when scenario diagnostics fail", async () => {
-    const user = userEvent.setup();
-    vi.mocked(runScenarioDiagnostics).mockRejectedValue(new Error("scenario blew up"));
-    renderApp();
-    await screen.findByRole("heading", { name: t("diagnostics.title") });
-
-    await user.click(screen.getByRole("button", { name: t("overview.scenarioDiagnostics.run") }));
-
-    expect(await screen.findByText(t("overview.scenarioDiagnostics.failed"))).toBeInTheDocument();
-    expect(screen.getByText("scenario blew up")).toBeInTheDocument();
-  });
-});
-
 describe("Diagnostics settings tab", () => {
   it("updates retention and displays storage usage", async () => {
     const user = userEvent.setup();
@@ -314,13 +241,23 @@ describe("Diagnostics memory tab", () => {
     expect(screen.getAllByText("Refresh before retry.").length).toBeGreaterThan(0);
     expect(screen.getByText("Retry after refreshing the token.")).toBeInTheDocument();
 
-    await user.click(screen.getAllByLabelText(t("diagnostics.memory.person"))[0]);
-    expect(await screen.findByText("Alice (alice)")).toBeInTheDocument();
-    expect(screen.getByText("Bob (bob)")).toBeInTheDocument();
-    expect(screen.queryByText("Hana (hana)")).not.toBeInTheDocument();
+    const memoryToolbar = document.querySelector(".memory-toolbar")!;
+    await user.click(
+      within(memoryToolbar as HTMLElement).getByLabelText(t("diagnostics.memory.person")),
+    );
+    expect(await screen.findByRole("option", { name: "Alice (alice)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Bob (bob)" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Hana (hana)" })).not.toBeInTheDocument();
 
-    await user.click(screen.getAllByLabelText(t("diagnostics.memory.action"))[0]);
-    await user.click(await screen.findByText(t("diagnostics.memory.actions.touch")));
+    // Close member dropdown by choosing Alice
+    await user.click(screen.getByRole("option", { name: "Alice (alice)" }));
+
+    await user.click(
+      within(memoryToolbar as HTMLElement).getByLabelText(t("diagnostics.memory.action")),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: t("diagnostics.memory.actions.touch") }),
+    );
 
     await waitFor(() => {
       const calls = vi.mocked(getMemoryEvents).mock.calls;
@@ -771,15 +708,28 @@ describe("Diagnostics executions tab", () => {
     renderApp();
     await openTab(user, t("diagnostics.tabs.executions"));
 
-    expect(screen.getByText(t("diagnostics.executions.sources.manual"))).toBeInTheDocument();
-    expect(screen.getByText(t("diagnostics.executions.sources.interactive"))).toBeInTheDocument();
-    expect(screen.getByText(t("diagnostics.executions.sources.routine"))).toBeInTheDocument();
-    expect(screen.getByText(t("diagnostics.executions.sources.scheduled"))).toBeInTheDocument();
+    const sourceSelect = document.querySelector(
+      `input[aria-label="${t("diagnostics.executions.source")}"]`,
+    )!;
+    await user.click(sourceSelect);
+
     expect(
-      screen.getByText(t("diagnostics.executions.sources.event_listener")),
+      await screen.findByRole("option", { name: t("diagnostics.executions.sources.manual") }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("radio", { name: t("diagnostics.executions.sources.diagnostics") }),
+      screen.getByRole("option", { name: t("diagnostics.executions.sources.interactive") }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: t("diagnostics.executions.sources.routine") }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: t("diagnostics.executions.sources.scheduled") }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: t("diagnostics.executions.sources.event_listener") }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: t("diagnostics.executions.sources.diagnostics") }),
     ).toBeInTheDocument();
   });
 
@@ -789,7 +739,13 @@ describe("Diagnostics executions tab", () => {
 
     renderApp();
     await openTab(user, t("diagnostics.tabs.executions"));
-    await user.click(screen.getByText(t("diagnostics.executions.sources.interactive")));
+    const sourceSelect = document.querySelector(
+      `input[aria-label="${t("diagnostics.executions.source")}"]`,
+    )!;
+    await user.click(sourceSelect);
+    await user.click(
+      await screen.findByRole("option", { name: t("diagnostics.executions.sources.interactive") }),
+    );
 
     await waitFor(() =>
       expect(

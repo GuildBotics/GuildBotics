@@ -183,8 +183,20 @@ type IntelligenceDraftState = {
   config: IntelligenceConfig;
   savedSerialized: string;
 };
-const CORE_SETUP_SECTIONS_INITIAL = ["project", "intelligence", "members", "github"] as const;
-const CORE_SETUP_SECTIONS_CONFIGURED = ["project", "intelligence", "members", "github"] as const;
+const CORE_SETUP_SECTIONS_INITIAL = [
+  "project",
+  "intelligence",
+  "members",
+  "github",
+  "verification",
+] as const;
+const CORE_SETUP_SECTIONS_CONFIGURED = [
+  "project",
+  "intelligence",
+  "members",
+  "github",
+  "verification",
+] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
 function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
   const label = useMemberCliAgentLabel(personId, enabled);
@@ -317,9 +329,12 @@ export function SetupPage() {
   const selectedCliAgentDetected = cliDetections.isLoading
     ? true
     : detectedCliAgentNames.has(form.values.cliAgent);
-  const [section, setSection] = useState<CoreSection>(
-    searchParams.get("section") === "members" ? "members" : "project",
-  );
+  const sectionParam = searchParams.get("section");
+  const initialSection =
+    sectionParam && (CORE_SETUP_SECTIONS_CONFIGURED as readonly string[]).includes(sectionParam)
+      ? (sectionParam as CoreSection)
+      : "project";
+  const [section, setSection] = useState<CoreSection>(initialSection);
   const requestedMemberTab = searchParams.get("tab");
   const [focusMemberTab] = useState<MemberEditorTab | undefined>(
     requestedMemberTab && MEMBER_EDITOR_TABS.has(requestedMemberTab as MemberEditorTab)
@@ -570,6 +585,13 @@ export function SetupPage() {
             />
           ) : null}
           {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
+          {activeSection === "verification" ? (
+            <VerificationSection
+              config={config.data}
+              projectConfig={projectConfig.data}
+              activeMemberCount={effectiveActiveMemberCount}
+            />
+          ) : null}
           {activeSection === "members" ? (
             <MembersSection
               activeMemberCount={effectiveActiveMemberCount}
@@ -731,6 +753,7 @@ function SetupSectionNav({
     ["intelligence", t("setup.nav.intelligence"), status.intelligenceReady],
     ["members", t("setup.nav.members"), status.membersReady],
     ["github", t("setup.nav.github"), status.githubReady],
+    ["verification", t("setup.nav.verification"), status.verificationReady],
   ];
   return (
     <Card withBorder radius="md" p="xs" className="setup-nav">
@@ -933,9 +956,6 @@ function IntelligenceSection({
                       disabled={!available}
                       className={`option-card ${active ? "active" : ""}`}
                       style={{
-                        background: available ? "#fff" : "#f7f9f8",
-                        color: available ? "#202124" : "#7f8b85",
-                        cursor: available ? "pointer" : "default",
                         paddingRight: "40px",
                         width: "100%",
                         textAlign: "left",
@@ -1061,9 +1081,6 @@ function IntelligenceSection({
                       disabled={!detected}
                       className={`option-card ${active ? "active" : ""}`}
                       style={{
-                        background: detected ? "#fff" : "#f7f9f8",
-                        color: detected ? "#202124" : "#7f8b85",
-                        cursor: detected ? "pointer" : "default",
                         paddingRight: "40px",
                         width: "100%",
                         textAlign: "left",
@@ -5276,12 +5293,14 @@ function useSetupStatus(
   const githubReady = isGitHubDecisionComplete(values);
   const intelligenceReady = projectReady;
   const membersReady = activeMemberCount > 0;
+  const verificationReady = projectReady && githubReady && intelligenceReady && membersReady;
   const done = [projectReady, intelligenceReady, githubReady, membersReady].filter(Boolean).length;
   return {
     projectReady,
     intelligenceReady,
     githubReady,
     membersReady,
+    verificationReady,
     done,
     total: 4,
     ready: projectReady && intelligenceReady && githubReady && membersReady,
@@ -5293,6 +5312,7 @@ type SetupStatus = {
   intelligenceReady: boolean;
   githubReady: boolean;
   membersReady: boolean;
+  verificationReady: boolean;
   done: number;
   total: number;
   ready: boolean;
@@ -5303,6 +5323,7 @@ type InitialProgress = {
   intelligenceReady: boolean;
   githubReady: boolean;
   membersReady: boolean;
+  verificationReady: boolean;
   done: number;
   total: number;
   percent: number;
@@ -5321,6 +5342,9 @@ function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialP
   }
   if (section === "members") {
     return status.membersReady;
+  }
+  if (section === "verification") {
+    return status.verificationReady;
   }
   return false;
 }
@@ -5341,6 +5365,7 @@ function getInitialCoreStatus(
     isProviderKeyProvided(values);
   const githubReady = isGitHubDecisionComplete(values);
   const membersReady = activeMemberCount > 0;
+  const verificationReady = projectReady && intelligenceReady && githubReady && membersReady;
   const checks = [projectReady, intelligenceReady, githubReady, membersReady];
   const done = checks.filter(Boolean).length;
   const total = checks.length;
@@ -5349,6 +5374,7 @@ function getInitialCoreStatus(
     intelligenceReady,
     githubReady,
     membersReady,
+    verificationReady,
     done,
     total,
     percent: Math.round((done / total) * 100),
@@ -6366,4 +6392,141 @@ function localFileHref(path: string) {
 
 function resolveConfigDir(workspaceDir: string): string {
   return joinPath(workspaceDir, ".guildbotics/config");
+}
+
+function ScenarioDiagnosticsSummary({
+  checks,
+  error,
+  loading,
+}: {
+  checks: DiagnosticCheck[];
+  error: Error | null;
+  loading: boolean;
+}) {
+  const { t } = useTranslation();
+  if (loading) {
+    return (
+      <Text size="sm" c="dimmed">
+        {t("overview.scenarioDiagnostics.running")}
+      </Text>
+    );
+  }
+  if (error) {
+    return (
+      <Alert color="danger" title={t("overview.scenarioDiagnostics.failed")}>
+        {error.message}
+      </Alert>
+    );
+  }
+  if (checks.length === 0) {
+    return (
+      <Text size="sm" c="dimmed">
+        {t("overview.scenarioDiagnostics.notRun")}
+      </Text>
+    );
+  }
+  const issues = checks.filter((check) => check.status !== "ok");
+  if (issues.length === 0) {
+    return (
+      <Alert color="success" title={t("overview.scenarioDiagnostics.ok")}>
+        {t("overview.scenarioDiagnostics.okDescription", { count: checks.length })}
+      </Alert>
+    );
+  }
+  return (
+    <Stack gap="xs">
+      {issues.map((check, index) => (
+        <Alert
+          color={diagnosticColor(check.status)}
+          icon={diagnosticIcon(check.status)}
+          className={`diagnostic-alert ${check.status}`}
+          key={`${check.code}-${check.target}-${index}`}
+          title={diagnosticTitle(t, check)}
+        >
+          <Text size="xs" c="dimmed" mb={4}>
+            {t(`overview.diagnosticSections.${check.section}`)}
+            {check.person_id ? ` / ${check.person_id}` : ""}
+          </Text>
+          <Text size="sm">{diagnosticDescription(t, check)}</Text>
+          {diagnosticDetail(t, check) ? (
+            <Text size="xs" c="dimmed" mt={6}>
+              {diagnosticDetail(t, check)}
+            </Text>
+          ) : null}
+          {check.target ? (
+            <Text size="xs" c="dimmed" mt={4}>
+              {t("overview.scenarioDiagnostics.target")}: {check.target}
+            </Text>
+          ) : null}
+        </Alert>
+      ))}
+    </Stack>
+  );
+}
+
+function VerificationSection({
+  config,
+  projectConfig,
+  activeMemberCount,
+}: {
+  config: ConfigStatus | undefined;
+  projectConfig: ProjectConfig | undefined;
+  activeMemberCount: number;
+}) {
+  const { t } = useTranslation();
+  const diagnosticsMutation = useMutation({
+    mutationFn: () => runScenarioDiagnostics(),
+  });
+
+  const hasProjectConfig = Boolean(config?.project_file_exists);
+  const githubEnabled = Boolean(projectConfig?.github_enabled);
+
+  return (
+    <Card withBorder radius="md" p="lg">
+      <Stack gap="md">
+        <PanelHeader
+          title={t("setup.verification.title")}
+          subtitle={t("setup.verification.subtitle")}
+        />
+        <Group justify="space-between">
+          <Text fw={700} size="sm">
+            {t("overview.configuration")}
+          </Text>
+          <Button
+            loading={diagnosticsMutation.isPending}
+            onClick={() => diagnosticsMutation.mutate()}
+          >
+            {t("overview.scenarioDiagnostics.run")}
+          </Button>
+        </Group>
+        <dl className="status-list">
+          <dt>{t("overview.config")}</dt>
+          <dd>
+            <Badge color={hasProjectConfig ? "success" : "warning"} variant="light">
+              {hasProjectConfig ? t("overview.ready") : t("overview.missing")}
+            </Badge>
+          </dd>
+          <dt>{t("overview.env")}</dt>
+          <dd>
+            <Badge color={config?.env_file_exists ? "success" : "neutral"} variant="light">
+              {config?.env_file_exists ? t("overview.found") : t("overview.notFound")}
+            </Badge>
+          </dd>
+          <dt>{t("overview.activeMembers")}</dt>
+          <dd>{activeMemberCount}</dd>
+          <dt>{t("overview.github")}</dt>
+          <dd>
+            <Badge color={githubEnabled ? "success" : "neutral"} variant="light">
+              {githubEnabled ? t("overview.enabled") : t("overview.disabled")}
+            </Badge>
+          </dd>
+        </dl>
+        <ScenarioDiagnosticsSummary
+          checks={diagnosticsMutation.data?.checks ?? []}
+          error={diagnosticsMutation.error}
+          loading={diagnosticsMutation.isPending}
+        />
+      </Stack>
+    </Card>
+  );
 }

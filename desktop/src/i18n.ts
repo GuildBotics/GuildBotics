@@ -124,10 +124,9 @@ const resources = {
         title: "Diagnostics",
         refresh: "Refresh",
         tabs: {
-          readiness: "Readiness",
           executions: "Executions",
           memory: "Memory",
-          settings: "Diagnostics settings",
+          settings: "Settings",
           runtimeStream: "Runtime stream",
         },
         runtimeDebug: {
@@ -159,6 +158,9 @@ const resources = {
           title: "Executions",
           description:
             "Pick an execution (manual command, patrol cycle, chat message, diagnostics) and follow its I/O, events, logs and memory operations on one timeline.",
+          person: "Member",
+          allPeople: "All members",
+          source: "Source",
           search: "Search",
           searchPlaceholder: "trace id / command / error / #42 / GitHub URL...",
           searchButton: "Search",
@@ -234,7 +236,7 @@ const resources = {
             incomplete: "Incomplete",
           },
           sources: {
-            all: "All",
+            all: "All sources",
             manual: "Manual",
             interactive: "Interactive",
             routine: "Patrol",
@@ -421,8 +423,13 @@ const resources = {
         nav: {
           project: "Project",
           intelligence: "LLM / AI CLI tools",
-          github: "GitHub",
           members: "Members",
+          github: "GitHub",
+          verification: "Verification",
+        },
+        verification: {
+          title: "Verification",
+          subtitle: "Verify the configuration and connection status of integrations.",
         },
         project: {
           title: "Project",
@@ -861,7 +868,7 @@ const resources = {
       overview: {
         title: "Runtime Control",
         refresh: "Refresh",
-        configuration: "Configuration",
+        configuration: "Verification",
         verify: "Run diagnostics",
         scenarioDiagnostics: {
           run: "Validate settings",
@@ -1378,8 +1385,13 @@ const resources = {
         nav: {
           project: "プロジェクト",
           intelligence: "LLM・AI CLIツール",
-          github: "GitHub",
           members: "メンバー",
+          github: "GitHub",
+          verification: "検証",
+        },
+        verification: {
+          title: "検証",
+          subtitle: "設定したプロジェクトや連携サービスの動作状況をチェックします。",
         },
         project: {
           title: "プロジェクト",
@@ -1831,10 +1843,9 @@ const resources = {
         title: "診断",
         refresh: "更新",
         tabs: {
-          readiness: "準備状態",
           executions: "実行履歴",
           memory: "Memory",
-          settings: "診断設定",
+          settings: "設定",
           runtimeStream: "実行ストリーム",
         },
         runtimeDebug: {
@@ -1866,6 +1877,9 @@ const resources = {
           title: "実行履歴",
           description:
             "実行単位（手動コマンド / 巡回サイクル / チャット受信 / 診断）を選ぶと、入出力・イベント・ログ・memory 操作を1つのタイムラインで追えます。",
+          person: "メンバー",
+          allPeople: "すべてのメンバー",
+          source: "ソース",
           search: "検索",
           searchPlaceholder: "trace id / コマンド / エラー / #42 / GitHub URL...",
           searchButton: "検索",
@@ -1941,7 +1955,7 @@ const resources = {
             incomplete: "未完了",
           },
           sources: {
-            all: "すべて",
+            all: "すべてのソース",
             manual: "手動",
             interactive: "対話",
             routine: "巡回",
@@ -2096,7 +2110,7 @@ const resources = {
       overview: {
         title: "運用ホーム",
         refresh: "更新",
-        configuration: "準備状態",
+        configuration: "検証",
         verify: "診断を実行",
         scenarioDiagnostics: {
           run: "設定を検証",
