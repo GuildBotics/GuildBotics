@@ -269,6 +269,21 @@ describe("ActivityHistoryPage", () => {
     expect(bar).toHaveClass("activity-session-mixed");
   });
 
+  // Mirror the component's Intl formatting options so date assertions stay
+  // valid whatever locale the test runtime uses.
+  function localeShortDate(iso: string): string {
+    return new Date(iso).toLocaleDateString([], { month: "numeric", day: "numeric" });
+  }
+
+  function localeShortDateTime(iso: string): string {
+    return new Date(iso).toLocaleString([], {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
   it("marks rate limited sessions and shows active member rate limits", async () => {
     const user = userEvent.setup();
     vi.mocked(getActivityHistory).mockResolvedValue({
@@ -297,7 +312,7 @@ describe("ActivityHistoryPage", () => {
       ".activity-member-rate-limit",
     );
     expect(memberRateLimit).not.toBe(null);
-    expect(memberRateLimit).toHaveTextContent("7/1");
+    expect(memberRateLimit).toHaveTextContent(localeShortDateTime("2999-07-01T03:30:00Z"));
 
     await user.hover(bar);
 
@@ -394,14 +409,14 @@ describe("ActivityHistoryPage", () => {
     expect(screen.getByRole("meter", { name: "1w 78%" })).toBeInTheDocument();
     // Same-day resets show only the time inline to fit the narrow member
     // cell; the full timestamp lives in the row tooltip.
-    expect(screen.getByText(/42%/)).not.toHaveTextContent("7/1");
+    expect(screen.getByText(/42%/)).not.toHaveTextContent(localeShortDate("2026-07-01T14:00:00Z"));
     expect(screen.getByText(/42%/)).toHaveTextContent(/42% · \d{1,2}:\d{2}/);
     expect(screen.getByText(/42%/).closest(".activity-member-usage-row")).toHaveAttribute(
       "title",
-      expect.stringContaining("7/1"),
+      expect.stringContaining(localeShortDateTime("2026-07-01T14:00:00Z")),
     );
     // Later resets show only the date inline.
-    expect(screen.getByText(/78%/)).toHaveTextContent("7/4");
+    expect(screen.getByText(/78%/)).toHaveTextContent(localeShortDate("2026-07-04T09:00:00Z"));
     expect(screen.getByText(/78%/)).not.toHaveTextContent(/\d{1,2}:\d{2}/);
     expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
   });
@@ -465,7 +480,7 @@ describe("ActivityHistoryPage", () => {
       ".activity-member-rate-limit",
     );
     expect(memberRateLimit).not.toBe(null);
-    expect(memberRateLimit).toHaveTextContent("7/1");
+    expect(memberRateLimit).toHaveTextContent(localeShortDateTime("2026-07-01T13:17:00Z"));
   });
 
   it.each([

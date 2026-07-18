@@ -1122,8 +1122,11 @@ function activeRateLimitForSessions(
 ): NonNullable<ActivityHistorySession["rate_limit"]> | null {
   const nowMs = now.getTime();
   // A provider can lift a limit before its announced reset time, so a
-  // successful session that started after the rate-limited one is treated as
-  // proof that the limit is no longer active.
+  // successful session that started after the rate-limited one ended is
+  // treated as proof that the limit is no longer active. The comparison uses
+  // the rate-limited session's ended_at because the rate-limit event is
+  // recorded at its end; a success that started earlier merely ran
+  // concurrently and proves nothing about recovery.
   const latestSuccessStartMs = sessions.reduce((latest, session) => {
     if (session.status !== "success") {
       return latest;

@@ -118,10 +118,20 @@ def _first_present(raw: dict[str, Any], keys: tuple[str, ...]) -> Any:
 
 
 def _parse_reset(raw: Any) -> str:
+    """Normalize a reset timestamp to ISO, dropping anything unparseable.
+
+    Only valid epoch seconds or ISO timestamps survive; other values become
+    "" so downstream date parsing never sees garbage.
+    """
     try:
         epoch = int(raw or 0)
     except (TypeError, ValueError):
-        return str(raw or "")
+        if not isinstance(raw, str):
+            return ""
+        try:
+            return datetime.fromisoformat(raw).isoformat()
+        except ValueError:
+            return ""
     if epoch <= 0:
         return ""
     return datetime.fromtimestamp(epoch, UTC).isoformat()

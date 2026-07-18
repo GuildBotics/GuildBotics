@@ -72,6 +72,27 @@ def test_parse_codex_rate_limits_honors_reached_type_flag() -> None:
     assert snapshot.limit_reached
 
 
+def test_parse_codex_rate_limits_drops_unparseable_reset_values() -> None:
+    # Anything that is neither epoch seconds nor an ISO timestamp must not
+    # leak to the UI as a bogus date string.
+    bad = parse_codex_rate_limits(
+        {"rate_limits": {"primary": {"used_percent": 10, "resets_at": "bad"}}}
+    )
+    assert bad.windows[0].resets_at == ""
+
+    iso = parse_codex_rate_limits(
+        {
+            "rate_limits": {
+                "primary": {
+                    "used_percent": 10,
+                    "resets_at": "2026-07-18T05:00:00+00:00",
+                }
+            }
+        }
+    )
+    assert iso.windows[0].resets_at == "2026-07-18T05:00:00+00:00"
+
+
 def test_parse_codex_rate_limits_tolerates_empty_and_malformed_input() -> None:
     for raw in ({}, {"rate_limits": {}}, {"rateLimitsByLimitId": {"x": "bad"}}, None):
         snapshot = parse_codex_rate_limits(raw)
