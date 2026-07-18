@@ -331,8 +331,7 @@ export function SetupPage() {
     : detectedCliAgentNames.has(form.values.cliAgent);
   const sectionParam = searchParams.get("section");
   const initialSection =
-    sectionParam &&
-    ["project", "intelligence", "github", "verification", "members"].includes(sectionParam)
+    sectionParam && (CORE_SETUP_SECTIONS_CONFIGURED as readonly string[]).includes(sectionParam)
       ? (sectionParam as CoreSection)
       : "project";
   const [section, setSection] = useState<CoreSection>(initialSection);
