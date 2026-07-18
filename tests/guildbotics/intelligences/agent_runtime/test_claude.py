@@ -11,6 +11,7 @@ from guildbotics.capabilities.task_runs import RUN_ENV
 from guildbotics.intelligences.agent_runtime.claude import (
     ClaudeStreamJsonAdapter,
     _decode_events,
+    _session_limit_error,
 )
 from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.models import (
@@ -447,6 +448,72 @@ async def test_claude_terminal_error_after_rate_limit_preserves_session(
     assert excinfo.value.category is AgentRuntimeErrorCategory.RATE_LIMITED
     assert excinfo.value.details["retry_after_seconds"] == 2.5
     assert excinfo.value.rotate_session is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("subtype", "message", "category", "details", "rotate_session"),
+    [
+        pytest.param(
+            "success",
+            "You've hit your session limit · resets 12:50pm (Asia/Tokyo)",
+            AgentRuntimeErrorCategory.RATE_LIMITED,
+            {
+                "retry_after_text": "resets 12:50pm (Asia/Tokyo)",
+                "retry_after_timezone": "Asia/Tokyo",
+            },
+            False,
+            id="session-limit",
+        ),
+        pytest.param(
+            "error_during_execution",
+            "provider stopped unexpectedly",
+            AgentRuntimeErrorCategory.PROCESS,
+            {"subtype": "error_during_execution"},
+            True,
+            id="process-failure",
+        ),
+    ],
+)
+async def test_claude_terminal_result_error_classification(
+    monkeypatch, tmp_path, subtype, message, category, details, rotate_session
+) -> None:
+    stream = _StreamProcess(
+        [
+            {
+                "type": "result",
+                "subtype": subtype,
+                "session_id": "session-1",
+                "result": message,
+                "is_error": True,
+            }
+        ]
+    )
+
+    async def create_process(*args, **_kwargs):
+        return _HelpProcess() if args[-1] == "--help" else stream
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await ClaudeStreamJsonAdapter().run_turn(
+            "hello",
+            _context(tmp_path),
+            ConversationRecord(key=_context(tmp_path).conversation_key),
+            lambda _event: None,
+        )
+
+    assert excinfo.value.category is category
+    assert excinfo.value.details == details
+    assert excinfo.value.rotate_session is rotate_session
+
+
+def test_claude_session_limit_without_reset_time_is_rate_limited() -> None:
+    error = _session_limit_error("You've hit your session limit")
+
+    assert error is not None
+    assert error.category is AgentRuntimeErrorCategory.RATE_LIMITED
+    assert error.details == {}
 
 
 @pytest.mark.asyncio

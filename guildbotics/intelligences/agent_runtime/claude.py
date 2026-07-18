@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from contextlib import suppress
 from dataclasses import replace
 from typing import Any
@@ -31,6 +32,12 @@ _PERMISSION_MODE = "bypassPermissions"
 _SESSION_SETTINGS = json.dumps({"sandbox": {"enabled": False}}, separators=(",", ":"))
 _PROCESS_EXIT_GRACE_SECONDS = 2.0
 _PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
+_SESSION_LIMIT_PATTERN = re.compile(
+    r"\AYou've hit your session limit"
+    r"(?:\s*·\s*(?P<retry_after_text>resets\s+\d{1,2}:\d{2}\s*(?:am|pm)"
+    r"\s+\((?P<retry_after_timezone>[^()\r\n]+)\)))?\s*\Z",
+    re.IGNORECASE,
+)
 
 
 class ClaudeStreamJsonAdapter:
@@ -174,6 +181,8 @@ class ClaudeStreamJsonAdapter:
                         if bool(raw.get("is_error")):
                             if retry_error is not None:
                                 raise retry_error
+                            if session_limit := _session_limit_error(terminal_output):
+                                raise session_limit
                             raise AgentRuntimeError(
                                 AgentRuntimeErrorCategory.PROCESS,
                                 terminal_output
@@ -344,6 +353,24 @@ def _structured_error(raw: dict[str, Any]) -> AgentRuntimeError | None:
             rotate_session=False,
         )
     return None
+
+
+def _session_limit_error(message: str) -> AgentRuntimeError | None:
+    """Normalize Claude Code's terminal subscription-limit result."""
+    match = _SESSION_LIMIT_PATTERN.fullmatch(message)
+    if match is None:
+        return None
+    details = {
+        key: value
+        for key in ("retry_after_text", "retry_after_timezone")
+        if (value := str(match.group(key) or "").strip())
+    }
+    return AgentRuntimeError(
+        AgentRuntimeErrorCategory.RATE_LIMITED,
+        "Claude Code session limit is active.",
+        details=details,
+        rotate_session=False,
+    )
 
 
 def _decode_events(raw: dict[str, Any], session_id: str) -> list[AgentEvent]:

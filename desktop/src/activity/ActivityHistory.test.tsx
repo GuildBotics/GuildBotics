@@ -286,9 +286,11 @@ describe("ActivityHistoryPage", () => {
     const bar = await screen.findByRole("button", { name: /Rate limited: Slack thread/ });
     expect(bar).toHaveClass("activity-session-rate-limited");
     expect(bar.querySelector(".activity-session-alert-icon")).not.toBe(null);
-    expect(
-      (await screen.findByText("Rate limited")).closest(".activity-member-rate-limit"),
-    ).not.toBe(null);
+    const memberRateLimit = (await screen.findByText("Rate limited")).closest(
+      ".activity-member-rate-limit",
+    );
+    expect(memberRateLimit).not.toBe(null);
+    expect(memberRateLimit).toHaveTextContent("7/1");
 
     await user.hover(bar);
 
