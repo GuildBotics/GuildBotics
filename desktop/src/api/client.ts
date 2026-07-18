@@ -220,6 +220,24 @@ export type CliAgentDetectionsResponse = {
   agents: CliAgentDetection[];
 };
 
+export type CliAgentUsageWindow = {
+  window: string;
+  used_percent: number;
+  resets_at: string;
+  window_minutes: number | null;
+};
+
+export type CliAgentUsage = {
+  agent: string;
+  windows: CliAgentUsageWindow[];
+  limit_reached: boolean;
+  checked_at: string;
+};
+
+export type CliAgentUsagesResponse = {
+  usages: CliAgentUsage[];
+};
+
 export type Correlation = {
   trace_id: string | null;
   span_id: string | null;
@@ -880,6 +898,10 @@ export async function getMemoryEvents(params?: {
 
 export async function getCliAgentDetections(): Promise<CliAgentDetectionsResponse> {
   return request("/intelligences/cli-agents/detection");
+}
+
+export async function getCliAgentUsage(): Promise<CliAgentUsagesResponse> {
+  return request("/intelligences/cli-agents/usage");
 }
 
 export async function getLlmProviders(): Promise<LlmProviderInfo[]> {

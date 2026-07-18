@@ -16,6 +16,9 @@ from guildbotics.app_api.models import (
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
     CliAgentDetectionsResponse,
+    CliAgentUsage,
+    CliAgentUsagesResponse,
+    CliAgentUsageWindow,
     CommandOption,
     CommandOptionsResponse,
     CommandRequirement,
@@ -358,6 +361,25 @@ class RuntimeStub:
                     "detected": False,
                     "path": "",
                 },
+            ]
+        )
+
+    async def get_cli_agent_usage(self, refresh: bool = False) -> CliAgentUsagesResponse:
+        return CliAgentUsagesResponse(
+            usages=[
+                CliAgentUsage(
+                    agent="codex",
+                    windows=[
+                        CliAgentUsageWindow(
+                            window="primary",
+                            used_percent=42.5,
+                            resets_at="2026-07-18T05:00:00+00:00",
+                            window_minutes=300,
+                        )
+                    ],
+                    limit_reached=False,
+                    checked_at="2026-07-18T00:00:00+00:00",
+                )
             ]
         )
 
@@ -862,6 +884,115 @@ def test_cli_agent_detection_endpoint_uses_runtime(tmp_path: Path) -> None:
     assert payload["agents"][0]["detected"] is True
     assert payload["agents"][1]["name"] == "codex"
     assert payload["agents"][1]["detected"] is False
+
+
+def test_cli_agent_usage_endpoint_uses_runtime(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/intelligences/cli-agents/usage",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+        )
+
+    assert response.status_code == HTTP_OK
+    payload = response.json()
+    assert payload["usages"][0]["agent"] == "codex"
+    assert payload["usages"][0]["windows"][0]["used_percent"] == 42.5
+    assert payload["usages"][0]["windows"][0]["resets_at"] == "2026-07-18T05:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_app_runtime_cli_agent_usage_probes_detected_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from guildbotics.intelligences.agent_runtime.usage import (
+        CliAgentUsageSnapshot,
+        CliAgentUsageWindow as UsageWindow,
+    )
+
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(
+        runtime,
+        "detect_cli_agents",
+        lambda: CliAgentDetectionsResponse(
+            agents=[
+                {
+                    "name": "claude",
+                    "executable": "claude",
+                    "config_reference": "claude",
+                    "detected": True,
+                    "path": "/usr/local/bin/claude",
+                },
+                {
+                    "name": "codex",
+                    "executable": "codex",
+                    "config_reference": "codex",
+                    "detected": True,
+                    "path": "/usr/local/bin/codex",
+                },
+            ]
+        ),
+    )
+    probed: list[str] = []
+
+    async def fake_read(executable: str, timeout: float = 20.0):
+        probed.append(executable)
+        return CliAgentUsageSnapshot(
+            agent="codex",
+            windows=[UsageWindow(window="primary", used_percent=12.0)],
+            limit_reached=False,
+            checked_at="2026-07-18T00:00:00+00:00",
+        )
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.read_codex_usage", fake_read
+    )
+
+    first = await runtime.get_cli_agent_usage()
+    second = await runtime.get_cli_agent_usage()
+
+    # Claude has no structured usage interface, so only Codex is probed, and
+    # the second call is served from the TTL cache without a new probe.
+    assert probed == ["/usr/local/bin/codex"]
+    assert first.usages[0].agent == "codex"
+    assert first.usages[0].windows[0].used_percent == 12.0
+    assert second == first
+
+
+@pytest.mark.asyncio
+async def test_app_runtime_cli_agent_usage_degrades_on_probe_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from guildbotics.intelligences.agent_runtime.usage import CliAgentUsageError
+
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(
+        runtime,
+        "detect_cli_agents",
+        lambda: CliAgentDetectionsResponse(
+            agents=[
+                {
+                    "name": "codex",
+                    "executable": "codex",
+                    "config_reference": "codex",
+                    "detected": True,
+                    "path": "/usr/local/bin/codex",
+                }
+            ]
+        ),
+    )
+
+    async def failing_read(executable: str, timeout: float = 20.0):
+        raise CliAgentUsageError("not logged in")
+
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.read_codex_usage", failing_read
+    )
+
+    response = await runtime.get_cli_agent_usage()
+
+    assert response.usages == []
 
 
 def test_scenario_diagnostics_endpoint_uses_runtime(tmp_path: Path) -> None:

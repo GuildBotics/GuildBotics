@@ -30,6 +30,9 @@ from guildbotics.app_api.models import (
     ChatReceiveResetResponse,
     CliAgentDetection,
     CliAgentDetectionsResponse,
+    CliAgentUsage,
+    CliAgentUsagesResponse,
+    CliAgentUsageWindow,
     CommandArgumentOption,
     CommandOption,
     CommandOptionsResponse,
@@ -86,6 +89,11 @@ from guildbotics.entities import Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.intelligences.agent_runtime.usage import (
+    CliAgentUsageError,
+    CliAgentUsageSnapshot,
+    read_codex_usage,
+)
 from guildbotics.intelligences.cli_agents import (
     discover_cli_agents,
     resolve_cli_agent_path,
@@ -143,6 +151,25 @@ class _UseProcessDataDir:
 
 
 _USE_PROCESS_DATA_DIR = _UseProcessDataDir()
+
+_CLI_AGENT_USAGE_TTL_SECONDS = 300.0
+
+
+def _cli_agent_usage_model(snapshot: CliAgentUsageSnapshot) -> CliAgentUsage:
+    return CliAgentUsage(
+        agent=snapshot.agent,
+        windows=[
+            CliAgentUsageWindow(
+                window=window.window,
+                used_percent=window.used_percent,
+                resets_at=window.resets_at,
+                window_minutes=window.window_minutes,
+            )
+            for window in snapshot.windows
+        ],
+        limit_reached=snapshot.limit_reached,
+        checked_at=snapshot.checked_at,
+    )
 
 
 def _activity_sync_state_path() -> Path:
@@ -205,6 +232,8 @@ class AppRuntime:
         self._activity_sync_attempts: dict[tuple[str, str], float] = {}
         self._running_command_id: str | None = None
         self._execution = ExecutionCoordinator()
+        self._cli_agent_usage_lock = asyncio.Lock()
+        self._cli_agent_usage_cache: tuple[float, CliAgentUsagesResponse] | None = None
         self._loaded_dotenv_keys: set[str] = set()
         if isinstance(inherited_data_dir, _UseProcessDataDir):
             inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
@@ -1143,6 +1172,39 @@ class AppRuntime:
                 )
             )
         return CliAgentDetectionsResponse(agents=agents)
+
+    async def get_cli_agent_usage(
+        self, refresh: bool = False
+    ) -> CliAgentUsagesResponse:
+        """Return account usage per AI CLI tool, cached for a short TTL.
+
+        Only tools with a structured usage interface (currently Codex) appear
+        in the response; the frontend shows nothing for the rest.
+        """
+        async with self._cli_agent_usage_lock:
+            now = time.monotonic()
+            cached = self._cli_agent_usage_cache
+            if (
+                not refresh
+                and cached is not None
+                and now - cached[0] < _CLI_AGENT_USAGE_TTL_SECONDS
+            ):
+                return cached[1]
+            usages: list[CliAgentUsage] = []
+            for agent in self.detect_cli_agents().agents:
+                if agent.name != "codex" or not agent.detected:
+                    continue
+                try:
+                    snapshot = await read_codex_usage(agent.path or agent.executable)
+                except CliAgentUsageError as exc:
+                    logging.getLogger("guildbotics.app_api.cli_agent_usage").warning(
+                        "Could not read %s usage: %s", agent.name, exc
+                    )
+                    continue
+                usages.append(_cli_agent_usage_model(snapshot))
+            response = CliAgentUsagesResponse(usages=usages)
+            self._cli_agent_usage_cache = (now, response)
+            return response
 
     def is_github_integration_enabled(self) -> bool:
         try:

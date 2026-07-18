@@ -18,7 +18,12 @@ import {
   stackedEventTops,
   weekRowMinHeight,
 } from "./ActivityHistory";
-import { getActivityHistory, getCliAgentDetections, getIntelligenceConfig } from "../api/client";
+import {
+  getActivityHistory,
+  getCliAgentDetections,
+  getCliAgentUsage,
+  getIntelligenceConfig,
+} from "../api/client";
 import type { ActivityHistoryResponse } from "../api/client";
 import i18n from "../i18n";
 
@@ -28,6 +33,7 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     getActivityHistory: vi.fn(),
     getCliAgentDetections: vi.fn(),
+    getCliAgentUsage: vi.fn(),
     getIntelligenceConfig: vi.fn(),
     memberAvatarUrl: (personId: string) => `http://avatar.test/${personId}`,
   };
@@ -131,6 +137,7 @@ beforeEach(() => {
       },
     ],
   });
+  vi.mocked(getCliAgentUsage).mockResolvedValue({ usages: [] });
 });
 
 afterEach(() => {
@@ -296,6 +303,169 @@ describe("ActivityHistoryPage", () => {
 
     expect((await screen.findAllByText("Rate limited")).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Reset:/)).toBeInTheDocument();
+  });
+
+  it("clears the member rate limit once a later session succeeds", async () => {
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      events: [],
+      sessions: [
+        {
+          ...ACTIVITY_FIXTURE.sessions[0],
+          trace_id: "rate",
+          title: "Slack thread",
+          mode: "workflow",
+          status: "rate_limited",
+          started_at: "2026-07-01T01:00:00Z",
+          ended_at: "2026-07-01T02:30:00Z",
+          rate_limit: {
+            retry_after_at: "2999-07-01T03:30:00Z",
+            retry_after_text: "3:30 AM",
+          },
+        },
+        {
+          ...ACTIVITY_FIXTURE.sessions[0],
+          trace_id: "recovered",
+          title: "Recovered task",
+          mode: "workflow",
+          status: "success",
+          started_at: "2026-07-01T03:00:00Z",
+          ended_at: "2026-07-01T03:20:00Z",
+        },
+      ],
+    });
+    renderActivity();
+
+    // The historical session keeps its rate-limited styling, but the member
+    // header no longer claims the limit is active.
+    const bar = await screen.findByRole("button", { name: /Rate limited: Slack thread/ });
+    expect(bar).toHaveClass("activity-session-rate-limited");
+    expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
+  });
+
+  function mockCodexMember(usage: {
+    windows: {
+      window: string;
+      used_percent: number;
+      resets_at: string;
+      window_minutes: number | null;
+    }[];
+    limit_reached: boolean;
+  }) {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue({
+      config_dir: "",
+      person_id: "alice",
+      inherited: false,
+      model_mapping: {},
+      models: [],
+      cli_agent_mapping: { default: "codex-cli.yml" },
+      cli_agents: [],
+      brain_mapping: [],
+      native_agent_policy: {
+        codex: { filesystem_access: "workspace" },
+      },
+    });
+    vi.mocked(getCliAgentUsage).mockResolvedValue({
+      usages: [{ agent: "codex", checked_at: "2026-07-01T11:59:00Z", ...usage }],
+    });
+  }
+
+  it("shows usage meters for members whose AI CLI tool reports usage", async () => {
+    mockCodexMember({
+      windows: [
+        {
+          window: "primary",
+          used_percent: 42,
+          resets_at: "2026-07-01T14:00:00Z",
+          window_minutes: 300,
+        },
+        {
+          window: "secondary",
+          used_percent: 78,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+        },
+      ],
+      limit_reached: false,
+    });
+    renderActivity();
+
+    expect(await screen.findByRole("meter", { name: "5h 42%" })).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "1w 78%" })).toBeInTheDocument();
+    // Same-day resets show only the time inline to fit the narrow member
+    // cell; the full timestamp lives in the row tooltip.
+    expect(screen.getByText(/42%/)).not.toHaveTextContent("7/1");
+    expect(screen.getByText(/42%/)).toHaveTextContent(/42% · \d{1,2}:\d{2}/);
+    expect(screen.getByText(/42%/).closest(".activity-member-usage-row")).toHaveAttribute(
+      "title",
+      expect.stringContaining("7/1"),
+    );
+    // Later resets show only the date inline.
+    expect(screen.getByText(/78%/)).toHaveTextContent("7/4");
+    expect(screen.getByText(/78%/)).not.toHaveTextContent(/\d{1,2}:\d{2}/);
+    expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
+  });
+
+  it("prefers measured usage over stale rate-limit events for the member badge", async () => {
+    mockCodexMember({
+      windows: [
+        {
+          window: "primary",
+          used_percent: 12,
+          resets_at: "2026-07-01T14:00:00Z",
+          window_minutes: 300,
+        },
+      ],
+      limit_reached: false,
+    });
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      events: [],
+      sessions: [
+        {
+          ...ACTIVITY_FIXTURE.sessions[0],
+          trace_id: "rate",
+          title: "Slack thread",
+          mode: "workflow",
+          status: "rate_limited",
+          rate_limit: {
+            retry_after_at: "2999-07-01T03:30:00Z",
+            retry_after_text: "3:30 AM",
+          },
+        },
+      ],
+    });
+    renderActivity();
+
+    await screen.findByRole("meter", { name: "5h 12%" });
+    expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
+  });
+
+  it("shows the member badge when measured usage reports the limit reached", async () => {
+    mockCodexMember({
+      windows: [
+        {
+          window: "primary",
+          used_percent: 100,
+          resets_at: "2026-07-01T13:17:00Z",
+          window_minutes: 300,
+        },
+        {
+          window: "secondary",
+          used_percent: 64,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+        },
+      ],
+      limit_reached: true,
+    });
+    renderActivity();
+
+    const memberRateLimit = (await screen.findByText("Rate limited")).closest(
+      ".activity-member-rate-limit",
+    );
+    expect(memberRateLimit).not.toBe(null);
+    expect(memberRateLimit).toHaveTextContent("7/1");
   });
 
   it.each([
