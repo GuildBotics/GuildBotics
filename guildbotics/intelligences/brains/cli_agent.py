@@ -1030,6 +1030,13 @@ class CliAgentBrain(Brain):
 def _normalize_native_retry_after(details: dict[str, str]) -> None:
     if details.get("retry_after_at"):
         return
+    retry_after_at = normalize_cli_agent_retry_after(
+        details.get("retry_after_text", ""),
+        details.get("retry_after_timezone", ""),
+    )
+    if retry_after_at:
+        details["retry_after_at"] = retry_after_at
+        return
     try:
         seconds = float(details.get("retry_after_seconds", "0") or 0)
     except ValueError:

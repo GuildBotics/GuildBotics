@@ -937,7 +937,12 @@ function formatRateLimitReset(
   rateLimit: NonNullable<ActivityHistorySession["rate_limit"]>,
 ): string {
   if (rateLimit.retry_after_at) {
-    return formatTime(rateLimit.retry_after_at);
+    return new Date(rateLimit.retry_after_at).toLocaleString([], {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
   return rateLimit.retry_after_text;
 }

@@ -632,6 +632,17 @@ def test_normalize_retry_after_handles_date_text():
     assert retry_after_at == "2026-07-08T11:44:00+09:00"
 
 
+def test_normalize_native_retry_after_handles_provider_text():
+    details = {
+        "retry_after_text": "resets 12:50pm (Asia/Tokyo)",
+        "retry_after_timezone": "Asia/Tokyo",
+    }
+
+    cli_agent._normalize_native_retry_after(details)
+
+    assert details["retry_after_at"].endswith("T12:50:00+09:00")
+
+
 @pytest.mark.asyncio
 async def test_cli_agent_marker_normalizes_retry_after_text(monkeypatch, tmp_path):
     original = cli_agent.person_cli_agent_mapping.copy()
