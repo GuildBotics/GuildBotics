@@ -33,6 +33,8 @@ import {
   type ConfigStatus,
   type IntelligenceConfig,
   type MemberConfig,
+  type ScenarioDiagnosticsResponse,
+  type DiagnosticCheck,
 } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import i18n from "../i18n";
@@ -833,6 +835,75 @@ describe("SetupPage", () => {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(updateProjectConfig).not.toHaveBeenCalled();
   });
+
+  it("renders the verification section and runs diagnostics", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ github_enabled: true }));
+    vi.mocked(runScenarioDiagnostics).mockResolvedValue(scenarioResponse());
+    renderSetupPage("/setup?section=verification");
+
+    await screen.findByRole("heading", { name: t("setup.verification.title") });
+
+    expect(await screen.findByText(t("overview.ready"))).toBeInTheDocument();
+    expect(screen.getByText(t("overview.found"))).toBeInTheDocument();
+    expect(await screen.findByText(t("overview.enabled"))).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("overview.scenarioDiagnostics.run") }));
+
+    await waitFor(() => expect(runScenarioDiagnostics).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(t("overview.scenarioDiagnostics.ok"))).toBeInTheDocument();
+  });
+
+  it("renders warning and error scenario checks in verification section", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ github_enabled: true }));
+    vi.mocked(runScenarioDiagnostics).mockResolvedValue(
+      scenarioResponse({
+        ok: false,
+        checks: [
+          diagnosticCheck({ status: "ok", code: "config_load" }),
+          diagnosticCheck({
+            status: "warning",
+            section: "slack",
+            code: "slack_missing",
+            message: "Slack token is not configured",
+          }),
+          diagnosticCheck({
+            status: "error",
+            section: "llm",
+            code: "llm_missing",
+            message: "LLM API key is missing",
+          }),
+        ],
+      }),
+    );
+    renderSetupPage("/setup?section=verification");
+
+    const runBtn = await screen.findByRole("button", {
+      name: t("overview.scenarioDiagnostics.run"),
+    });
+    await user.click(runBtn);
+
+    expect((await screen.findAllByText("Slack token is not configured")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("LLM API key is missing").length).toBeGreaterThan(0);
+    expect(screen.queryByText(t("overview.scenarioDiagnostics.ok"))).not.toBeInTheDocument();
+  });
+
+  it("shows an alert when scenario diagnostics fail in verification section", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ github_enabled: true }));
+    vi.mocked(runScenarioDiagnostics).mockRejectedValue(new Error("scenario blew up"));
+    renderSetupPage("/setup?section=verification");
+
+    const runBtn = await screen.findByRole("button", {
+      name: t("overview.scenarioDiagnostics.run"),
+    });
+    await user.click(runBtn);
+
+    expect(await screen.findByText(t("overview.scenarioDiagnostics.failed"))).toBeInTheDocument();
+    expect(screen.getByText("scenario blew up")).toBeInTheDocument();
+  });
 });
 
 function renderSetupPage(path: string) {
@@ -1013,6 +1084,32 @@ function firstError(
     return undefined;
   }
   return result.error.issues.find((issue) => issue.path.join(".") === path)?.message;
+}
+
+function scenarioResponse(
+  overrides: Partial<ScenarioDiagnosticsResponse> = {},
+): ScenarioDiagnosticsResponse {
+  const checks = overrides.checks ?? [diagnosticCheck({ status: "ok", code: "config_load" })];
+  return {
+    ok: overrides.ok ?? true,
+    active_members: overrides.active_members ?? ["alice"],
+    checks,
+    warnings: overrides.warnings ?? checks.filter((c) => c.status === "warning"),
+    errors: overrides.errors ?? checks.filter((c) => c.status === "error"),
+  };
+}
+
+function diagnosticCheck(overrides: Partial<DiagnosticCheck> = {}): DiagnosticCheck {
+  return {
+    section: "config",
+    code: "config_load",
+    status: "ok",
+    message: "ok",
+    target: "",
+    person_id: "",
+    context: {},
+    ...overrides,
+  };
 }
 
 describe("createProjectSchema", () => {

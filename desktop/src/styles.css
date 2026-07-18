@@ -1438,22 +1438,8 @@ pre {
   align-items: center;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(150px, 180px) minmax(140px, 160px) minmax(0, 1fr);
   min-width: 0;
-}
-
-.exec-source-filter {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.exec-source-segmented {
-  max-width: 100%;
-}
-
-.exec-source-segmented-label {
-  padding-left: 8px;
-  padding-right: 8px;
 }
 
 .exec-search {

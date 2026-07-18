@@ -53,7 +53,6 @@ import {
   getConfigStatus,
   getGlobalRecords,
   getMemoryEvents,
-  getProjectConfig,
   getRuntimeDebug,
   getSchedulerStatus,
   getSystemAlerts,
@@ -75,7 +74,6 @@ import {
   verify as verifyConfiguration,
   type ChatReceiveResetResponse,
   type CommandOption,
-  type DiagnosticCheck,
   type MemoryEvent,
   type RuntimeActiveWork,
   type RuntimeEvent,
@@ -100,8 +98,8 @@ import { isTerminalTraceStatus, traceStatusColor } from "./traceStatus";
 const EXECUTION_LIMIT = 200;
 const MEMORY_EVENT_LIMIT = 500;
 const MEMORY_FILTER_ALL = "__all__";
-type DiagnosticsTab = "readiness" | "executions" | "memory" | "settings";
-const DIAGNOSTICS_TABS = new Set<DiagnosticsTab>(["readiness", "executions", "memory", "settings"]);
+type DiagnosticsTab = "executions" | "memory" | "settings";
+const DIAGNOSTICS_TABS = new Set<DiagnosticsTab>(["executions", "memory", "settings"]);
 type NavRuntimeState = "running" | "stopping" | "stopped";
 
 type MemoryEventFocus = {
@@ -887,27 +885,15 @@ function DiagnosticsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = diagnosticsTabFromSearch(searchParams.get("tab"));
   const memoryFocus = memoryFocusFromSearch(searchParams);
-  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
-  const hasProjectConfig = Boolean(config.data?.project_file_exists);
-  const projectConfig = useQuery({
-    queryKey: ["project-config"],
-    queryFn: getProjectConfig,
-    enabled: hasProjectConfig,
-    retry: false,
-  });
-  const githubEnabled = projectConfig.data?.github_enabled ?? false;
-  const activeMembers = team.data?.members.filter((member) => member.is_active) ?? [];
-  const diagnosticsMutation = useMutation({
-    mutationFn: () => runScenarioDiagnostics(),
-  });
+
   const changeDiagnosticsTab = (value: string | null) => {
     const next = new URLSearchParams(searchParams);
     const tab = diagnosticsTabFromSearch(value);
     if (tab === "memory") {
       clearMemoryFocusSearchParams(next);
     }
-    if (tab === "readiness") {
+    if (tab === "executions") {
       next.delete("tab");
     } else {
       next.set("tab", tab);
@@ -923,54 +909,12 @@ function DiagnosticsPage() {
       </Group>
       <Tabs className="diagnostics-tabs" value={activeTab} onChange={changeDiagnosticsTab}>
         <Tabs.List>
-          <Tabs.Tab value="readiness">{t("diagnostics.tabs.readiness")}</Tabs.Tab>
           <Tabs.Tab value="executions">{t("diagnostics.tabs.executions")}</Tabs.Tab>
           <Tabs.Tab value="memory">{t("diagnostics.tabs.memory")}</Tabs.Tab>
           <Tabs.Tab value="settings">{t("diagnostics.tabs.settings")}</Tabs.Tab>
         </Tabs.List>
-        <Tabs.Panel value="readiness" pt="md">
-          <Card withBorder radius="md" p="lg">
-            <Group justify="space-between">
-              <Title order={3}>{t("overview.configuration")}</Title>
-              <Button
-                loading={diagnosticsMutation.isPending}
-                variant="default"
-                onClick={() => diagnosticsMutation.mutate()}
-              >
-                {t("overview.scenarioDiagnostics.run")}
-              </Button>
-            </Group>
-            <dl className="status-list">
-              <dt>{t("overview.config")}</dt>
-              <dd>
-                <Badge color={hasProjectConfig ? "success" : "warning"} variant="light">
-                  {hasProjectConfig ? t("overview.ready") : t("overview.missing")}
-                </Badge>
-              </dd>
-              <dt>{t("overview.env")}</dt>
-              <dd>
-                <Badge color={config.data?.env_file_exists ? "success" : "neutral"} variant="light">
-                  {config.data?.env_file_exists ? t("overview.found") : t("overview.notFound")}
-                </Badge>
-              </dd>
-              <dt>{t("overview.activeMembers")}</dt>
-              <dd>{activeMembers.length}</dd>
-              <dt>{t("overview.github")}</dt>
-              <dd>
-                <Badge color={githubEnabled ? "success" : "neutral"} variant="light">
-                  {githubEnabled ? t("overview.enabled") : t("overview.disabled")}
-                </Badge>
-              </dd>
-            </dl>
-            <ScenarioDiagnosticsSummary
-              checks={diagnosticsMutation.data?.checks ?? []}
-              error={diagnosticsMutation.error}
-              loading={diagnosticsMutation.isPending}
-            />
-          </Card>
-        </Tabs.Panel>
         <Tabs.Panel className="diagnostics-fill-panel" value="executions" pt="md">
-          <TraceExplorer />
+          <TraceExplorer members={team.data?.members ?? []} />
         </Tabs.Panel>
         <Tabs.Panel className="diagnostics-fill-panel" value="memory" pt="md">
           <MemoryEventsPanel
@@ -995,7 +939,7 @@ function DiagnosticsPage() {
 function diagnosticsTabFromSearch(value: string | null): DiagnosticsTab {
   return value && DIAGNOSTICS_TABS.has(value as DiagnosticsTab)
     ? (value as DiagnosticsTab)
-    : "readiness";
+    : "executions";
 }
 
 function memoryFocusFromSearch(searchParams: URLSearchParams): MemoryEventFocus {
@@ -1434,13 +1378,18 @@ function MemoryEventDetail({ event }: { event: MemoryEvent }) {
   );
 }
 
-function TraceExplorer() {
+function TraceExplorer({
+  members,
+}: {
+  members: Array<{ person_id: string; name: string; person_type?: string }>;
+}) {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const focusedTraceId = searchParams.get("trace_id") ?? "";
   const compositeTraceIds = useMemo(() => traceIdsFromSearch(searchParams), [searchParams]);
   const isComposite = compositeTraceIds.length > 0;
   const [source, setSource] = useState("all");
+  const [personId, setPersonId] = useState("all");
   const [searchInput, setSearchInput] = useState("");
   const [query, setQuery] = useState("");
   // Default to the pinned Global / system view so unscoped records (service
@@ -1456,11 +1405,14 @@ function TraceExplorer() {
   const [attrFilter, setAttrFilter] = useState<AttrFilter | null>(null);
   const isGlobal = !isComposite && selectedTraceId === GLOBAL_TRACE_ID;
 
+  const selectableMembers = members.filter((member) => member.person_type !== "human");
+
   const traces = useQuery({
-    queryKey: ["diagnostics-traces", source, query, attrFilter?.key, attrFilter?.value],
+    queryKey: ["diagnostics-traces", source, personId, query, attrFilter?.key, attrFilter?.value],
     queryFn: () =>
       getTraces({
         source: source === "all" ? undefined : source,
+        personId: personId === "all" ? undefined : personId,
         query: query.trim() || undefined,
         attrKey: attrFilter?.key,
         attrValue: attrFilter?.value,
@@ -1532,6 +1484,14 @@ function TraceExplorer() {
     }
   };
 
+  const changePerson = (value: string | null) => {
+    const nextVal = value ?? "all";
+    setPersonId(nextVal);
+    if (nextVal !== "all" && selectedTraceId === GLOBAL_TRACE_ID) {
+      setSelectedTraceId(null);
+    }
+  };
+
   const applySearch = () => {
     const parsed = parseTraceSearch(searchInput);
     setQuery(parsed.query);
@@ -1548,7 +1508,7 @@ function TraceExplorer() {
   const clearAttrFilter = () => {
     setAttrFilter(null);
   };
-  const showGlobalEntry = source === "all" && !attrFilter;
+  const showGlobalEntry = source === "all" && !attrFilter && personId === "all";
 
   return (
     <Card className="diagnostics-fill-card executions-fill-card" withBorder radius="md" p="lg">
@@ -1559,18 +1519,27 @@ function TraceExplorer() {
         </Text>
       </div>
       <div className="exec-toolbar">
-        <div className="exec-source-filter">
-          <SegmentedControl
-            className="exec-source-segmented"
-            classNames={{ label: "exec-source-segmented-label" }}
-            value={source}
-            onChange={changeSource}
-            data={TRACE_SOURCES.map((value) => ({
-              value,
-              label: traceSourceLabel(t, value),
-            }))}
-          />
-        </div>
+        <Select
+          aria-label={t("diagnostics.executions.person")}
+          data={[
+            { value: "all", label: t("diagnostics.executions.allPeople") },
+            ...selectableMembers.map((member) => ({
+              value: member.person_id,
+              label: `${member.name} (${member.person_id})`,
+            })),
+          ]}
+          value={personId}
+          onChange={changePerson}
+        />
+        <Select
+          aria-label={t("diagnostics.executions.source")}
+          data={TRACE_SOURCES.map((value) => ({
+            value,
+            label: traceSourceLabel(t, value),
+          }))}
+          value={source}
+          onChange={(val) => changeSource(val || "all")}
+        />
         <TextInput
           className="exec-search"
           aria-label={t("diagnostics.executions.search")}
@@ -2866,121 +2835,6 @@ export function isStopTimeoutPending(unit: RuntimeUnitStatus | undefined) {
 
 function activeWorkSourceLabel(t: TFunction, source: RuntimeActiveWork["source"]) {
   return t(`overview.activeWork.sources.${source}`);
-}
-
-function ScenarioDiagnosticsSummary({
-  checks,
-  error,
-  loading,
-}: {
-  checks: DiagnosticCheck[];
-  error: Error | null;
-  loading: boolean;
-}) {
-  const { t } = useTranslation();
-  if (loading) {
-    return (
-      <Text size="sm" c="dimmed">
-        {t("overview.scenarioDiagnostics.running")}
-      </Text>
-    );
-  }
-  if (error) {
-    return (
-      <Alert color="danger" title={t("overview.scenarioDiagnostics.failed")}>
-        {error.message}
-      </Alert>
-    );
-  }
-  if (checks.length === 0) {
-    return (
-      <Text size="sm" c="dimmed">
-        {t("overview.scenarioDiagnostics.notRun")}
-      </Text>
-    );
-  }
-  const issues = checks.filter((check) => check.status !== "ok");
-  if (issues.length === 0) {
-    return (
-      <Alert color="success" title={t("overview.scenarioDiagnostics.ok")}>
-        {t("overview.scenarioDiagnostics.okDescription", { count: checks.length })}
-      </Alert>
-    );
-  }
-  return (
-    <Stack gap="xs">
-      {issues.map((check, index) => (
-        <Alert
-          color={diagnosticColor(check.status)}
-          icon={diagnosticIcon(check.status)}
-          className={`diagnostic-alert ${check.status}`}
-          key={`${check.code}-${check.target}-${index}`}
-          title={diagnosticTitle(t, check)}
-        >
-          <Text size="xs" c="dimmed" mb={4}>
-            {t(`overview.diagnosticSections.${check.section}`)}
-            {check.person_id ? ` / ${check.person_id}` : ""}
-          </Text>
-          <Text size="sm">{diagnosticDescription(t, check)}</Text>
-          {diagnosticDetail(t, check) ? (
-            <Text size="xs" c="dimmed" mt={6}>
-              {diagnosticDetail(t, check)}
-            </Text>
-          ) : null}
-          {check.target ? (
-            <Text size="xs" c="dimmed" mt={4}>
-              {t("overview.scenarioDiagnostics.target")}:{" "}
-              <Text span ff="monospace">
-                {check.target}
-              </Text>
-            </Text>
-          ) : null}
-        </Alert>
-      ))}
-    </Stack>
-  );
-}
-
-function diagnosticTitle(t: TFunction, check: DiagnosticCheck) {
-  const namespace =
-    check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
-  return t(`${namespace}.${check.code}.title`, { defaultValue: check.message });
-}
-
-function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
-  const namespace =
-    check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
-  return t(`${namespace}.${check.code}.description`, {
-    defaultValue: check.status === "ok" ? "" : check.message,
-  });
-}
-
-function diagnosticDetail(t: TFunction, check: DiagnosticCheck) {
-  if (check.status === "ok") {
-    return "";
-  }
-  const description = diagnosticDescription(t, check);
-  return description && description !== check.message ? check.message : "";
-}
-
-function diagnosticColor(status: DiagnosticCheck["status"]) {
-  if (status === "ok") {
-    return "success";
-  }
-  if (status === "warning") {
-    return "warning";
-  }
-  return "danger";
-}
-
-function diagnosticIcon(status: DiagnosticCheck["status"]) {
-  if (status === "ok") {
-    return <CheckCircle2 size={18} />;
-  }
-  if (status === "warning") {
-    return <TriangleAlert size={18} />;
-  }
-  return <XCircle size={18} />;
 }
 
 function sourceState(
