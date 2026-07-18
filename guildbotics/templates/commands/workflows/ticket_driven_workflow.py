@@ -194,7 +194,9 @@ async def _main(
             "work_identity": ticket_url,
             "resume_policy": "fresh" if attempt == 1 else "auto",
             "attempt": attempt,
-            "continuation_input": t("commands.workflows.common.agent_continuation"),
+            "continuation_input": t(
+                "commands.workflows.common.agent_continuation", run_id=run_id
+            ),
         }
         response = await context.invoke(
             "functions/handle_github_ticket",

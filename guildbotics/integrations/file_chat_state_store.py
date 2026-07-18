@@ -322,6 +322,10 @@ class FileConversationStateStore(ConversationStateStore):
                         ),
                         next_attempt_at=_to_str_or_none(item.get("next_attempt_at")),
                         run_id=str(item.get("run_id", "") or ""),
+                        last_error_category=str(
+                            item.get("last_error_category", "") or ""
+                        ),
+                        wake_cursor=str(item.get("wake_cursor", "") or ""),
                     )
                 )
             return out
@@ -355,6 +359,10 @@ class FileConversationStateStore(ConversationStateStore):
                         ),
                         next_attempt_at=_to_str_or_none(raw.get("next_attempt_at")),
                         run_id=str(raw.get("run_id", "") or ""),
+                        last_error_category=str(
+                            raw.get("last_error_category", "") or ""
+                        ),
+                        wake_cursor=str(raw.get("wake_cursor", "") or ""),
                     )
                     item = _pending_event_to_item(pending)
                     merged.append(item)
@@ -629,6 +637,8 @@ def _pending_event_to_item(pending: PendingChatEvent) -> dict[str, object]:
         "max_attempts": max(1, int(pending.max_attempts)),
         "next_attempt_at": pending.next_attempt_at,
         "run_id": pending.run_id,
+        "last_error_category": pending.last_error_category,
+        "wake_cursor": pending.wake_cursor,
     }
 
 

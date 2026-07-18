@@ -29,6 +29,7 @@ from guildbotics.runtime.event_listener import (
     IncomingChatEvent,
 )
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
+from guildbotics.utils.i18n_tool import t
 
 
 @pytest.fixture(autouse=True)
@@ -259,7 +260,18 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert execution_context["work_kind"] == "chat"
     assert execution_context["work_identity"] == "slack:U_ALICE:C1:100.1"
     assert execution_context["context_cursor"] == "100.1"
+    assert execution_context["event_id"] == "E1"
     assert execution_context["resume_policy"] == "auto"
+    # The continuation prompt names the exact run/event and the missing
+    # completion record, so a resumed session cannot mistake another run's
+    # completion for this one.
+    assert execution_context["continuation_input"] == t(
+        "commands.workflows.common.agent_chat_continuation",
+        run_id=kwargs["workflow_run_id"],
+        event_id="E1",
+    )
+    assert kwargs["workflow_run_id"] in execution_context["continuation_input"]
+    assert "E1" in execution_context["continuation_input"]
     assert kwargs["cwd"].name == "alice"
     assert kwargs["handoff_candidates"] == "[]"
     assert kwargs["chat_participation"] == "strict"
@@ -271,6 +283,61 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert "guildbotics_execution_mode=workflow" in kwargs["workflow_contract"]
     assert "guildbotics member context --person alice" in kwargs["workflow_contract"]
 
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert channel_state.processed_event_ids == ["E1"]
+    thread_messages = state_store.load_thread_messages("slack", "alice", "C1", "100.1")
+    assert [message.message_ts for message in thread_messages] == ["100.1", "200.1"]
+    assert thread_messages[1].is_bot_message is True
+    thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
+    assert "alice" in thread_state.participants
+
+
+@pytest.mark.asyncio
+async def test_redispatch_of_completed_run_skips_agent_and_reuses_evidence(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    # The "crash" action raises if the agent is invoked, so the test fails
+    # loudly if the completed run is re-executed.
+    ctx = FakeInvokeContext("crash")
+    _set_incoming_event(ctx)
+    run_id = "run-recovered"
+    store = RunStore()
+    store.append_evidence(
+        run_id,
+        "chat_reply",
+        {
+            "service": "slack",
+            "channel_id": "C1",
+            "message_ts": "200.1",
+            "thread_ts": "100.1",
+            "text": "確認します。",
+            "posted": True,
+        },
+    )
+    store.complete_run(
+        run_id,
+        "done",
+        "Posted a reply.",
+        subject_type="chat",
+        subject_id="slack:C1:100.1:E1",
+        person_id="alice",
+    )
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 2,
+        "max_attempts": 5,
+        "is_final_attempt": False,
+        "run_id": run_id,
+    }
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    # A crash between the agent's completion record and the dispatcher marking
+    # the event processed must resume from the recorded evidence: the agent is
+    # never re-invoked (no duplicated replies/reactions) and the event still
+    # terminalizes normally.
+    assert ctx.invocations == []
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E1"]
     thread_messages = state_store.load_thread_messages("slack", "alice", "C1", "100.1")

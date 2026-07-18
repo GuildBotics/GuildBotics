@@ -81,6 +81,8 @@ class PendingChatEvent:
     max_attempts: int = 5
     next_attempt_at: str | None = None
     run_id: str = ""
+    last_error_category: str = ""
+    wake_cursor: str = ""
 
 
 class ConversationStateStore(ABC):

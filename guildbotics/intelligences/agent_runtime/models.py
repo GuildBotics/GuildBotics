@@ -76,6 +76,7 @@ class AgentExecutionContext:
     conversation_key: ConversationKey
     resume_policy: ResumePolicy = ResumePolicy.AUTO
     context_cursor: str = ""
+    event_id: str = ""
     lease_id: str = ""
     delegation_id: str = ""
     model: str = ""
@@ -99,6 +100,8 @@ class ConversationRecord:
     provider_session_id: str = ""
     provider_turn_id: str = ""
     context_cursor: str = ""
+    last_event_id: str = ""
+    last_run_id: str = ""
     provider: str = ""
     model: str = ""
     healthy: bool = True
@@ -114,6 +117,8 @@ class ConversationRecord:
         self.provider_session_id = ""
         self.provider_turn_id = ""
         self.context_cursor = ""
+        self.last_event_id = ""
+        self.last_run_id = ""
         self.healthy = True
         self.turn_count = 0
         self.input_tokens = 0

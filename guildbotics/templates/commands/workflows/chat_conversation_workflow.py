@@ -280,12 +280,17 @@ async def _handle_event(
             ),
             "resume_policy": "auto",
             "context_cursor": event.message_ts,
+            "event_id": event.event_id,
             "attempt": logical_attempt,
             "rebuild_context": json.dumps(
                 prompt_payload["thread_context"], ensure_ascii=False, sort_keys=True
             ),
             "rebuild_context_complete": prompt_payload["thread_context_complete"],
-            "continuation_input": t("commands.workflows.common.agent_continuation"),
+            "continuation_input": t(
+                "commands.workflows.common.agent_chat_continuation",
+                run_id=run_id,
+                event_id=event.event_id,
+            ),
             "participant_labels": json.dumps(
                 prompt_payload["participant_labels"],
                 ensure_ascii=False,
@@ -333,15 +338,29 @@ async def _handle_event(
     # ticket workflow uses the same helper); the outer pending queue is left only
     # as a crash-recovery net.
     try:
-        (completion, evidence), _run_id = await run_with_completion_retry(
-            invoke=_invoke_chat_turn,
-            check_completion=lambda rid: _chat_run_status(
-                rid, workspace_data_root / "task-runs", member_workspace
-            ),
-            max_attempts=_IN_DISPATCH_COMPLETION_ATTEMPTS,
-            run_id=retry_context.run_id or None,
-            retry_invoke_exceptions=False,
+        recovered = _recorded_chat_completion(
+            retry_context.run_id, workspace_data_root / "task-runs", member_workspace
         )
+        if recovered is not None:
+            _log(
+                context,
+                "info",
+                "chat run already completed; skipping agent re-invocation: "
+                "run=%s event=%s",
+                retry_context.run_id,
+                event.event_id,
+            )
+            completion, evidence = recovered
+        else:
+            (completion, evidence), _run_id = await run_with_completion_retry(
+                invoke=_invoke_chat_turn,
+                check_completion=lambda rid: _chat_run_status(
+                    rid, workspace_data_root / "task-runs", member_workspace
+                ),
+                max_attempts=_IN_DISPATCH_COMPLETION_ATTEMPTS,
+                run_id=retry_context.run_id or None,
+                retry_invoke_exceptions=False,
+            )
     except Exception as exc:
         rate_limit = workflow_rate_limit_from_exception(exc)
         if rate_limit is not None:
@@ -638,6 +657,24 @@ def _timestamp_key(message: dict[str, str]) -> tuple[int, ...]:
         return tuple(int(part) for part in timestamp.split("."))
     except ValueError:
         return (0,)
+
+
+def _recorded_chat_completion(
+    run_id: str, task_run_root: Path, member_workspace: Path
+) -> tuple[Any, list[dict[str, Any]]] | None:
+    """Return the completion a re-dispatched run already recorded, if any.
+
+    A crash between the agent recording `chat complete` and the dispatcher
+    marking the event processed leaves a completed run in the pending queue.
+    Re-running the agent for it would repeat external actions (replies,
+    reactions), so such a run must resume from its recorded evidence instead.
+    """
+    if not run_id:
+        return None
+    try:
+        return _chat_run_status(run_id, task_run_root, member_workspace)
+    except Exception:
+        return None
 
 
 def _chat_run_status(

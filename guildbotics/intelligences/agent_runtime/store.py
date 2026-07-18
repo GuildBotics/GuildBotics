@@ -91,6 +91,8 @@ class ConversationStore:
             provider_session_id=_text(payload.get("provider_session_id")),
             provider_turn_id=_text(payload.get("provider_turn_id")),
             context_cursor=_text(payload.get("context_cursor")),
+            last_event_id=_text(payload.get("last_event_id")),
+            last_run_id=_text(payload.get("last_run_id")),
             provider=_text(payload.get("provider")),
             model=_text(payload.get("model")),
             healthy=bool(payload.get("healthy", True)),
