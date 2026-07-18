@@ -14,21 +14,15 @@ import {
   loadServicePreferences,
   saveServicePreferences,
   SERVICE_PREFERENCES_KEY,
-  eventBadgeColor,
-  eventTypeLabel,
   formatCommandEvent,
   isStopTimeoutPending,
   localFileHref,
-  logBadgeColor,
   matchesRecordFilter,
   matchesRecordScopeFilter,
   parseTraceSearch,
   openLocalFile,
   parseTicketQuery,
-  recordBadgeColor,
-  recordBadgeLabel,
   recordAttributeRows,
-  recordDisplayMessage,
   ticketChipInfo,
   splitCommandLine,
   isTerminalTraceStatus,
@@ -678,107 +672,6 @@ describe("isTerminalTraceStatus", () => {
   });
 });
 
-describe("recordDisplayMessage", () => {
-  it("uses the log message for log records", () => {
-    expect(recordDisplayMessage(t(), makeTraceRecord({ kind: "log", message: "disk full" }))).toBe(
-      "disk full",
-    );
-  });
-
-  it("surfaces the payload failure reason for failed events", () => {
-    expect(
-      recordDisplayMessage(
-        t(),
-        makeTraceRecord({
-          kind: "event",
-          type: "command.failed",
-          message: "",
-          payload: { code: "command_error", message: "boom" },
-        }),
-      ),
-    ).toBe("boom");
-  });
-
-  it("falls back to the translated event label when there is no payload detail", () => {
-    expect(
-      recordDisplayMessage(
-        t(),
-        makeTraceRecord({ kind: "event", type: "command.started", message: "", payload: {} }),
-      ),
-    ).toBe(i18n.t("overview.eventTypes.command_started", { lng: "en" }));
-  });
-
-  it("uses the type for I/O records without a payload excerpt", () => {
-    expect(
-      recordDisplayMessage(t(), makeTraceRecord({ kind: "io", type: "llm.request", message: "" })),
-    ).toBe("llm.request");
-  });
-
-  it("excerpts the payload prompt or stdout for I/O records", () => {
-    expect(
-      recordDisplayMessage(
-        t(),
-        makeTraceRecord({
-          kind: "io",
-          type: "cli_agent.request",
-          message: "",
-          payload: { prompt: "please fix the bug" },
-        }),
-      ),
-    ).toBe("please fix the bug");
-    expect(
-      recordDisplayMessage(
-        t(),
-        makeTraceRecord({
-          kind: "io",
-          type: "cli_agent.response",
-          message: "",
-          payload: { stdout: "done" },
-        }),
-      ),
-    ).toBe("done");
-  });
-
-  it("shows the translated phase name for message-less agent events", () => {
-    expect(
-      recordDisplayMessage(
-        t(),
-        makeTraceRecord({
-          kind: "event",
-          type: "agent_runtime.turn",
-          message: "",
-          payload: { name: "started", message: "" },
-        }),
-      ),
-    ).toBe(i18n.t("diagnostics.executions.eventNames.started", { lng: "en" }));
-    expect(
-      recordDisplayMessage(
-        t(),
-        makeTraceRecord({
-          kind: "event",
-          type: "agent_runtime.process",
-          message: "",
-          payload: { name: "initialized", message: "" },
-        }),
-      ),
-    ).toBe(i18n.t("diagnostics.executions.eventNames.initialized", { lng: "en" }));
-  });
-
-  it("summarizes span events with the model and duration", () => {
-    expect(
-      recordDisplayMessage(
-        t(),
-        makeTraceRecord({
-          kind: "event",
-          type: "span.finished",
-          message: "",
-          payload: { model: "claude-code", duration_ms: 24_100 },
-        }),
-      ),
-    ).toBe("claude-code · 24.1s");
-  });
-});
-
 describe("shortTraceId", () => {
   it("keeps short ids unchanged", () => {
     expect(shortTraceId("trace-1")).toBe("trace-1");
@@ -813,51 +706,6 @@ describe("traceDuration", () => {
   });
 });
 
-describe("recordBadgeColor and recordBadgeLabel", () => {
-  it("colors I/O records and labels them with translated type names", () => {
-    const record = makeTraceRecord({ kind: "io", type: "llm.request" });
-    expect(recordBadgeColor(record)).toBe("info");
-    expect(recordBadgeLabel(t(), record)).toBe(
-      i18n.t("diagnostics.executions.ioTypes.llm_request", { lng: "en" }),
-    );
-  });
-
-  it("labels logs by level", () => {
-    const record = makeTraceRecord({ kind: "log", level: "WARNING" });
-    expect(recordBadgeLabel(t(), record)).toBe("WARNING");
-  });
-
-  it("labels approval policy announcements distinctly from decisions", () => {
-    const policy = makeTraceRecord({
-      kind: "event",
-      type: "agent_runtime.approval",
-      payload: { name: "policy", message: "never" },
-    });
-    expect(recordBadgeLabel(t(), policy)).toBe(
-      i18n.t("diagnostics.executions.agentRuntime.approval_policy", { lng: "en" }),
-    );
-    const decision = makeTraceRecord({
-      kind: "event",
-      type: "agent_runtime.approval",
-      payload: { name: "decision", message: "approved" },
-    });
-    expect(recordBadgeLabel(t(), decision)).toBe(
-      i18n.t("diagnostics.executions.agentRuntime.approval", { lng: "en" }),
-    );
-  });
-
-  it("labels a collapsed partial assistant stream distinctly", () => {
-    const record = makeTraceRecord({
-      kind: "event",
-      type: "agent_runtime.assistant",
-      payload: { name: "partial", message: "partial output", partial: true },
-    });
-    expect(recordBadgeLabel(t(), record)).toBe(
-      i18n.t("diagnostics.executions.agentRuntime.assistant_partial", { lng: "en" }),
-    );
-  });
-});
-
 describe("recordAttributeRows", () => {
   it("labels known diagnostic attributes for display", () => {
     expect(
@@ -870,69 +718,6 @@ describe("recordAttributeRows", () => {
       ["GitHub repository", "owner/repo"],
       ["Ticket / PR number", "42"],
     ]);
-  });
-});
-
-describe("eventTypeLabel", () => {
-  it("labels command events from the command_ namespace", () => {
-    expect(eventTypeLabel(t(), "command.started")).toBe(
-      i18n.t("overview.eventTypes.command_started", { lng: "en" }),
-    );
-    expect(eventTypeLabel(t(), "command.finished")).toBe(
-      i18n.t("overview.eventTypes.command_finished", { lng: "en" }),
-    );
-    expect(eventTypeLabel(t(), "member.command.failed")).toBe(
-      i18n.t("overview.eventTypes.command_failed", { lng: "en" }),
-    );
-  });
-
-  it("labels scheduler and events families", () => {
-    expect(eventTypeLabel(t(), "scheduler.running")).toBe(
-      i18n.t("overview.eventTypes.scheduler", { lng: "en" }),
-    );
-    expect(eventTypeLabel(t(), "events.stopped")).toBe(
-      i18n.t("overview.eventTypes.events", { lng: "en" }),
-    );
-  });
-
-  it("labels agent runtime activity events", () => {
-    expect(eventTypeLabel(t(), "agent_runtime.assistant")).toBe(
-      i18n.t("diagnostics.executions.agentRuntime.assistant", { lng: "en" }),
-    );
-    expect(eventTypeLabel(t(), "agent_runtime.tool")).toBe(
-      i18n.t("diagnostics.executions.agentRuntime.tool", { lng: "en" }),
-    );
-  });
-
-  it("labels span summary events", () => {
-    expect(eventTypeLabel(t(), "span.finished")).toBe(
-      i18n.t("diagnostics.executions.spanEvents.finished", { lng: "en" }),
-    );
-    expect(eventTypeLabel(t(), "span.failed")).toBe(
-      i18n.t("diagnostics.executions.spanEvents.failed", { lng: "en" }),
-    );
-  });
-
-  it("returns the raw type for unknown families", () => {
-    expect(eventTypeLabel(t(), "mystery.thing")).toBe("mystery.thing");
-  });
-});
-
-describe("badge colors", () => {
-  it("maps event types to colors", () => {
-    expect(eventBadgeColor("command.failed")).toBe("danger");
-    expect(eventBadgeColor("scheduler.running")).toBe("success");
-    expect(eventBadgeColor("command.started")).toBe("success");
-    expect(eventBadgeColor("command.finished")).toBe("success");
-    expect(eventBadgeColor("scheduler.stopping")).toBe("warning");
-    expect(eventBadgeColor("scheduler.stopped")).toBe("neutral");
-  });
-
-  it("maps log levels to colors", () => {
-    expect(logBadgeColor("error")).toBe("danger");
-    expect(logBadgeColor("CRITICAL")).toBe("danger");
-    expect(logBadgeColor("warning")).toBe("warning");
-    expect(logBadgeColor("info")).toBe("neutral");
   });
 });
 

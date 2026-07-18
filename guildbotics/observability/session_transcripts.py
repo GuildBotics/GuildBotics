@@ -25,6 +25,30 @@ _WRITE_LOCK = threading.Lock()
 _SYSTEM_LOCK = threading.Lock()
 _SYSTEM_SESSIONS: dict[Path, SystemSession] = {}
 
+INDEX_EVENT_TYPES = frozenset(
+    {
+        "command.started",
+        "command.finished",
+        "command.failed",
+        "member.command.started",
+        "member.command.finished",
+        "member.command.failed",
+        "diagnostics.completed",
+        "verify.completed",
+        "span.finished",
+        "span.failed",
+        "scheduler.failed",
+        "scheduler.running",
+        "scheduler.worker.failed",
+        "workflow.completed",
+        "workflow.completion_missing",
+        "chat_dispatch.retry_scheduled",
+        "chat_dispatch.abandoned",
+        "workflow.rate_limited",
+    }
+)
+INDEX_EVENT_PREFIXES = ("github.", "credential.")
+
 
 @dataclass
 class TranscriptCounts:
@@ -361,29 +385,9 @@ def _belongs_in_index(item: dict[str, Any]) -> bool:
     event_type = str(item.get("type") or "")
     if event_type == "session.pointer" or event_type.startswith("system."):
         return True
-    if event_type in {
-        "command.started",
-        "command.finished",
-        "command.failed",
-        "member.command.started",
-        "member.command.finished",
-        "member.command.failed",
-        "diagnostics.completed",
-        "verify.completed",
-        "span.finished",
-        "span.failed",
-        "scheduler.failed",
-        "scheduler.running",
-        "scheduler.worker.failed",
-        "workflow.completed",
-        "workflow.completion_missing",
-        "chat_dispatch.retry_scheduled",
-        "chat_dispatch.abandoned",
-    }:
+    if event_type in INDEX_EVENT_TYPES:
         return True
-    return event_type.startswith(("github.", "credential.")) or event_type == (
-        "workflow.rate_limited"
-    )
+    return event_type.startswith(INDEX_EVENT_PREFIXES)
 
 
 def _is_finished_boundary(item: dict[str, Any]) -> bool:

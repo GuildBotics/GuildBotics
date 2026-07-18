@@ -60,6 +60,7 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.system_alerts import SystemAlertService
+from guildbotics.app_api.trace_presentations import normalize_trace_presentation
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
@@ -1881,6 +1882,7 @@ def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
         message=str(item.get("message") or ""),
         attributes=attributes if isinstance(attributes, dict) else {},
         payload=payload if isinstance(payload, dict) else {},
+        presentation=normalize_trace_presentation(item),
     )
 
 

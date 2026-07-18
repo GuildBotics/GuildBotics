@@ -34,7 +34,7 @@ export function makeRuntimeLog(overrides: Partial<RuntimeLog> = {}): RuntimeLog 
 }
 
 export function makeTraceRecord(overrides: Partial<TraceRecord> = {}): TraceRecord {
-  return {
+  const record: TraceRecord = {
     kind: "event",
     timestamp: "2026-06-04T01:00:00Z",
     trace_id: "trace-1",
@@ -51,6 +51,19 @@ export function makeTraceRecord(overrides: Partial<TraceRecord> = {}): TraceReco
     message: "",
     attributes: {},
     payload: {},
+    presentation: overrides.presentation ?? {
+      label_key: "",
+      label_fallback: overrides.level || overrides.type || "Event",
+      message_key: "",
+      message:
+        overrides.message ||
+        (typeof overrides.payload?.message === "string" ? overrides.payload.message : "") ||
+        overrides.type ||
+        "event",
+      message_params: {},
+      tone: "neutral",
+    },
     ...overrides,
   };
+  return record;
 }

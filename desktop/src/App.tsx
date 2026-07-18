@@ -91,6 +91,11 @@ import {
 } from "./api/client";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
+import {
+  tracePresentationLabel,
+  tracePresentationMessage,
+  tracePresentationTone,
+} from "./tracePresentation";
 import { isTerminalTraceStatus, traceStatusColor } from "./traceStatus";
 const EXECUTION_LIMIT = 200;
 const MEMORY_EVENT_LIMIT = 500;
@@ -1959,7 +1964,7 @@ function TraceExplorer() {
         onClose={() => setDrawerRecord(null)}
         position="right"
         size="lg"
-        title={drawerRecord ? recordBadgeLabel(t, drawerRecord) : ""}
+        title={drawerRecord ? tracePresentationLabel(t, drawerRecord.presentation) : ""}
       >
         {drawerRecord ? (
           <TraceRecordDetail
@@ -2040,10 +2045,12 @@ function ExecTimeline({
               onClick={() => onSelect(record)}
             >
               <span className="exec-timeline-time">{formatTime(record.timestamp)}</span>
-              <Badge color={recordBadgeColor(record)} variant="light">
-                {recordBadgeLabel(t, record)}
+              <Badge color={tracePresentationTone(record.presentation)} variant="light">
+                {tracePresentationLabel(t, record.presentation)}
               </Badge>
-              <span className="exec-timeline-message">{recordDisplayMessage(t, record)}</span>
+              <span className="exec-timeline-message">
+                {tracePresentationMessage(t, record.presentation)}
+              </span>
               <span className="exec-timeline-chevron" aria-hidden>
                 ›
               </span>
@@ -2063,7 +2070,7 @@ function TraceRecordDetail({
   onScopeFilter: (filter: RecordScopeFilter) => void;
 }) {
   const { t } = useTranslation();
-  const message = recordDisplayMessage(t, record);
+  const message = tracePresentationMessage(t, record.presentation);
   const payload = record.payload ?? {};
   const metaEntries = (
     [
@@ -2088,8 +2095,8 @@ function TraceRecordDetail({
       <div className="exec-record-head">
         <div className="exec-record-head-top">
           <Group gap="xs">
-            <Badge color={recordBadgeColor(record)} variant="light">
-              {recordBadgeLabel(t, record)}
+            <Badge color={tracePresentationTone(record.presentation)} variant="light">
+              {tracePresentationLabel(t, record.presentation)}
             </Badge>
             {record.source ? (
               <Badge variant="outline">{traceSourceLabel(t, record.source || "unknown")}</Badge>
@@ -2462,56 +2469,6 @@ async function openExternal(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-// Surface the most useful one-line summary per record: log message, I/O
-// payload excerpt, or — for events — the payload detail (e.g. a failure
-// reason) falling back to the translated event label.
-export function recordDisplayMessage(t: TFunction, record: TraceRecord): string {
-  if (record.kind === "log") {
-    return record.message;
-  }
-  const payload = record.payload ?? {};
-  if (record.kind === "io") {
-    return (
-      record.message || firstPayloadString(payload, ["message", "prompt", "stdout"]) || record.type
-    );
-  }
-  if (record.kind === "memory") {
-    return record.message || record.type;
-  }
-  if (record.type.startsWith("span.")) {
-    const model = typeof payload.model === "string" ? payload.model : "";
-    const duration =
-      typeof payload.duration_ms === "number" ? formatDuration(payload.duration_ms) : "";
-    const summary = [model, duration].filter(Boolean).join(" · ");
-    if (summary) {
-      return summary;
-    }
-  }
-  return (
-    firstPayloadString(payload, ["message", "error", "code", "error_type"]) ||
-    eventNameLabel(t, payload) ||
-    eventTypeLabel(t, record.type)
-  );
-}
-
-function firstPayloadString(payload: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = payload[key];
-    if (typeof value === "string" && value) {
-      return value;
-    }
-  }
-  return "";
-}
-
-// Message-less events (turn started, process initialized, ...) still carry a
-// provider-neutral phase name in payload.name; show its translation so the
-// row says "Started"/"Completed" instead of repeating the badge label.
-function eventNameLabel(t: TFunction, payload: Record<string, unknown>): string {
-  const name = typeof payload.name === "string" ? payload.name : "";
-  return name ? t(`diagnostics.executions.eventNames.${name}`, { defaultValue: name }) : "";
-}
-
 export function shortTraceId(id: string): string {
   return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;
 }
@@ -2531,50 +2488,6 @@ function formatDuration(ms: number): string {
 }
 
 export { traceStatusColor, isTerminalTraceStatus };
-
-export function recordBadgeColor(record: TraceRecord): string {
-  if (record.kind === "io") {
-    return "info";
-  }
-  if (record.kind === "memory") {
-    const action =
-      typeof record.attributes["memory.action"] === "string"
-        ? record.attributes["memory.action"]
-        : "";
-    return memoryActionColor(action);
-  }
-  if (record.kind === "log") {
-    return logBadgeColor(record.level);
-  }
-  return eventBadgeColor(record.type);
-}
-
-export function recordBadgeLabel(t: TFunction, record: TraceRecord): string {
-  if (record.kind === "io") {
-    return t(`diagnostics.executions.ioTypes.${record.type.replace(".", "_")}`, {
-      defaultValue: record.type || t("diagnostics.executions.kinds.io"),
-    });
-  }
-  if (record.kind === "memory") {
-    const action =
-      typeof record.attributes["memory.action"] === "string"
-        ? record.attributes["memory.action"]
-        : record.type.replace(/^memory\./, "");
-    return memoryActionLabel(t, action);
-  }
-  if (record.kind === "log") {
-    return record.level || "LOG";
-  }
-  if (record.type === "agent_runtime.assistant" && record.payload?.partial === true) {
-    return t("diagnostics.executions.agentRuntime.assistant_partial");
-  }
-  // Approval events announce either the session policy or a decision; the
-  // provider-neutral payload.name tells which, and the badge should too.
-  if (record.type === "agent_runtime.approval" && record.payload?.name === "policy") {
-    return t("diagnostics.executions.agentRuntime.approval_policy");
-  }
-  return eventTypeLabel(t, record.type);
-}
 
 function ChatReceiveResetControl({ disabled }: { disabled: boolean }) {
   const { t } = useTranslation();
@@ -3135,55 +3048,6 @@ function formatTime(value: string | null | undefined) {
     minute: "2-digit",
     second: "2-digit",
   }).format(date);
-}
-
-export function eventTypeLabel(t: TFunction, type: string) {
-  // member.command.* mirrors the command.* lifecycle and shares its labels.
-  if (type.startsWith("command.") || type.startsWith("member.command.")) {
-    const phase = type.slice(type.lastIndexOf(".") + 1);
-    return t(`overview.eventTypes.command_${phase}`, { defaultValue: phase });
-  }
-  if (type.startsWith("scheduler.")) {
-    return t("overview.eventTypes.scheduler");
-  }
-  if (type.startsWith("events.")) {
-    return t("overview.eventTypes.events");
-  }
-  if (type.startsWith("agent_runtime.")) {
-    return t(`diagnostics.executions.agentRuntime.${type.replace("agent_runtime.", "")}`, {
-      defaultValue: type,
-    });
-  }
-  if (type.startsWith("span.")) {
-    return t(`diagnostics.executions.spanEvents.${type.replace("span.", "")}`, {
-      defaultValue: type,
-    });
-  }
-  return type;
-}
-
-export function eventBadgeColor(type: string) {
-  if (type.endsWith(".failed")) {
-    return "danger";
-  }
-  if (type.includes("running") || type.includes("started") || type.includes("finished")) {
-    return "success";
-  }
-  if (type.includes("stopping")) {
-    return "warning";
-  }
-  return "neutral";
-}
-
-export function logBadgeColor(level: string) {
-  const upper = level.toUpperCase();
-  if (upper === "ERROR" || upper === "CRITICAL") {
-    return "danger";
-  }
-  if (upper === "WARNING") {
-    return "warning";
-  }
-  return "neutral";
 }
 
 function isTauriRuntime() {
