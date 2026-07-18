@@ -349,6 +349,30 @@ async def test_follower_arrival_wakes_backing_off_head_once(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_follower_does_not_wake_head_with_unknown_error_category(
+    monkeypatch, tmp_path
+):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event("EA", ts="100.2"))
+    store.upsert_pending_event("slack", "alice", "C1", _event("EB", ts="100.3"))
+    head = store.load_pending_events("slack", "alice", "C1")[0]
+    head.attempt_count = 1
+    head.next_attempt_at = "2999-01-01T00:00:00+00:00"
+    store.save_pending_event("slack", "alice", "C1", head)
+    ran: list[str] = []
+    _install_runner(monkeypatch, ran)
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    # A backing-off head without a recorded error category (e.g. persisted
+    # before the field existed) may be waiting out a provider rate limit, so
+    # a follower arrival must not wake it early.
+    assert ran == []
+    assert store.load_pending_events("slack", "alice", "C1")[0].next_attempt_at
+
+
+@pytest.mark.asyncio
 async def test_head_failure_blocks_thread_but_not_other_threads(monkeypatch, tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     store.upsert_pending_event(

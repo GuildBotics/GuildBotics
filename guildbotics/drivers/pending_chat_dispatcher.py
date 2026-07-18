@@ -101,11 +101,15 @@ class PendingChatDispatcher:
     ) -> bool:
         """Retry a backing-off thread head early when a newer message arrived.
 
-        A provider-imposed rate limit is always waited out, and each follower
-        cursor wakes the head at most once (persisted, so a restart cannot turn
-        the same follow-up message into an unlimited retry source).
+        Only a head whose backoff is known to come from a plain failure is
+        wakeable: a provider-imposed rate limit is always waited out, and an
+        unknown/empty category (e.g. a pending event persisted before the
+        category existed) is treated the same so a wake can never fire before
+        a provider reset. Each follower cursor wakes the head at most once
+        (persisted, so a restart cannot turn the same follow-up message into
+        an unlimited retry source).
         """
-        if head.last_error_category == "rate_limited":
+        if head.last_error_category != "failed":
             return False
         follower_cursor = max(
             (
