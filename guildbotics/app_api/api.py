@@ -35,6 +35,7 @@ from guildbotics.app_api.models import (
     ApiError,
     ChatReceiveResetResponse,
     CliAgentDetectionsResponse,
+    CliAgentUsagesResponse,
     CommandOptionsResponse,
     CommandRunRequest,
     CommandRunResponse,
@@ -514,6 +515,17 @@ def create_app(
         _: None = Depends(require_token),
     ) -> CliAgentDetectionsResponse:
         return app_runtime.detect_cli_agents()
+
+    @app.get(
+        "/intelligences/cli-agents/usage",
+        response_model=CliAgentUsagesResponse,
+        responses=error_responses,
+    )
+    async def cli_agent_usage(
+        refresh: bool = False,
+        _: None = Depends(require_token),
+    ) -> CliAgentUsagesResponse:
+        return await app_runtime.get_cli_agent_usage(refresh=refresh)
 
     @app.get(
         "/intelligences/model-providers",

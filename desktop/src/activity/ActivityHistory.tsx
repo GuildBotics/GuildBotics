@@ -40,10 +40,11 @@ import {
   type ActivityHistoryMember,
   type ActivityHistoryResponse,
   type ActivityHistorySession,
+  type CliAgentUsage,
   getActivityHistory,
   memberAvatarUrl,
 } from "../api/client";
-import { useMemberCliAgentLabel } from "../cliAgent";
+import { useMemberCliAgentLabel, useMemberCliAgentUsage } from "../cliAgent";
 import { traceStatusColor } from "../traceStatus";
 
 // Statuses from the workflow-completion / dispatch-lifecycle layers
@@ -346,7 +347,17 @@ function ActivityTimelineRow({
     : view === "week"
       ? weekRowMinHeight(weekSessionCount)
       : Math.max(86, eventTop + eventRows * EVENT_STACK_GAP_PX + 8);
-  const activeRateLimit = member ? activeRateLimitForSessions(sessions, now ?? new Date()) : null;
+  const usage = useMemberCliAgentUsage(
+    member?.person_id ?? "",
+    Boolean(member && member.person_type !== "human" && !team),
+  );
+  // Measured usage is the authority when available: the badge follows the
+  // provider's own limit state instead of historical rate-limit events.
+  const activeRateLimit = usage
+    ? rateLimitFromUsage(usage)
+    : member
+      ? activeRateLimitForSessions(sessions, now ?? new Date())
+      : null;
   const activeRateLimitReset = activeRateLimit ? formatRateLimitReset(activeRateLimit) : "";
   return (
     <div className={team ? "activity-row activity-row-events" : "activity-row"}>
@@ -369,6 +380,7 @@ function ActivityTimelineRow({
               {activeRateLimitReset ? <span>{activeRateLimitReset}</span> : null}
             </span>
           ) : null}
+          {usage ? <MemberUsageMeters usage={usage} /> : null}
         </div>
       </div>
       <div className="activity-timeline-cell" style={{ minHeight: rowMinHeight }}>
@@ -990,18 +1002,118 @@ function sessionModeColor(mode: ActivitySessionMode): string {
   return mode === "interactive" ? "teal" : "info";
 }
 
+function formatShortTimestamp(iso: string): string {
+  return new Date(iso).toLocaleString([], {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// The member cell is narrow, so the inline reset drops whichever half is
+// redundant: same-day resets show only the time, later resets only the date.
+// The full timestamp stays available in the row tooltip.
+function formatCompactReset(iso: string): string {
+  const date = new Date(iso);
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (sameDay) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "numeric", day: "numeric" });
+}
+
 function formatRateLimitReset(
   rateLimit: NonNullable<ActivityHistorySession["rate_limit"]>,
 ): string {
   if (rateLimit.retry_after_at) {
-    return new Date(rateLimit.retry_after_at).toLocaleString([], {
-      month: "numeric",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    return formatShortTimestamp(rateLimit.retry_after_at);
   }
   return rateLimit.retry_after_text;
+}
+
+// Translate a measured usage snapshot into the badge shape: active only while
+// the provider reports the limit as reached, resetting at the earliest reset
+// of an exhausted window.
+export function rateLimitFromUsage(
+  usage: CliAgentUsage,
+): NonNullable<ActivityHistorySession["rate_limit"]> | null {
+  if (!usage.limit_reached) {
+    return null;
+  }
+  const exhausted = usage.windows.filter(
+    (window) => window.used_percent >= 100 && window.resets_at,
+  );
+  const candidates = exhausted.length
+    ? exhausted
+    : usage.windows.filter((window) => window.resets_at);
+  const retryAfterAt = candidates.map((window) => window.resets_at).sort()[0] ?? "";
+  return { retry_after_at: retryAfterAt, retry_after_text: "" };
+}
+
+// The provider decides which budgets exist (e.g. a plan may have only a
+// weekly window, reported as "primary"), so the label comes solely from the
+// window duration — never guessed from the window name.
+export function usageWindowLabel(window: CliAgentUsage["windows"][number]): string {
+  const minutes = window.window_minutes ?? 0;
+  if (minutes >= 7 * 24 * 60) {
+    return `${Math.round(minutes / (7 * 24 * 60))}w`;
+  }
+  if (minutes >= 24 * 60) {
+    return `${Math.round(minutes / (24 * 60))}d`;
+  }
+  if (minutes > 0) {
+    return minutes >= 60 ? `${Math.round(minutes / 60)}h` : `${minutes}m`;
+  }
+  return "";
+}
+
+function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
+  if (usage.windows.length === 0) {
+    return null;
+  }
+  return (
+    <div className="activity-member-usage">
+      {usage.windows.map((window, index) => {
+        const percent = Math.max(0, Math.min(100, Math.round(window.used_percent)));
+        const label = usageWindowLabel(window);
+        const labelPrefix = label ? `${label} ` : "";
+        const reset = window.resets_at ? formatCompactReset(window.resets_at) : "";
+        const level =
+          window.used_percent >= 100 ? "danger" : window.used_percent >= 80 ? "warning" : "";
+        return (
+          <span
+            key={`${window.window}-${index}`}
+            className={`activity-member-usage-row${level ? ` activity-member-usage-${level}` : ""}`}
+            title={
+              window.resets_at
+                ? `${labelPrefix}${percent}% · ${formatShortTimestamp(window.resets_at)}`
+                : `${labelPrefix}${percent}%`
+            }
+          >
+            {label ? <span className="activity-member-usage-window">{label}</span> : null}
+            <span
+              className="activity-member-usage-bar"
+              role="meter"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+              aria-label={`${labelPrefix}${percent}%`}
+            >
+              <span className="activity-member-usage-fill" style={{ width: `${percent}%` }} />
+            </span>
+            <span className="activity-member-usage-value">
+              {percent}%{reset ? ` · ${reset}` : ""}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function activeRateLimitForSessions(
@@ -1009,6 +1121,19 @@ function activeRateLimitForSessions(
   now: Date,
 ): NonNullable<ActivityHistorySession["rate_limit"]> | null {
   const nowMs = now.getTime();
+  // A provider can lift a limit before its announced reset time, so a
+  // successful session that started after the rate-limited one ended is
+  // treated as proof that the limit is no longer active. The comparison uses
+  // the rate-limited session's ended_at because the rate-limit event is
+  // recorded at its end; a success that started earlier merely ran
+  // concurrently and proves nothing about recovery.
+  const latestSuccessStartMs = sessions.reduce((latest, session) => {
+    if (session.status !== "success") {
+      return latest;
+    }
+    const startedMs = new Date(session.started_at).getTime();
+    return Number.isFinite(startedMs) ? Math.max(latest, startedMs) : latest;
+  }, Number.NEGATIVE_INFINITY);
   return sessions.reduce<NonNullable<ActivityHistorySession["rate_limit"]> | null>(
     (current, session) => {
       const rateLimit = session.rate_limit;
@@ -1017,6 +1142,9 @@ function activeRateLimitForSessions(
       }
       const retryAfterMs = new Date(rateLimit.retry_after_at).getTime();
       if (!Number.isFinite(retryAfterMs) || retryAfterMs <= nowMs) {
+        return current;
+      }
+      if (latestSuccessStartMs > new Date(session.ended_at).getTime()) {
         return current;
       }
       if (!current) {

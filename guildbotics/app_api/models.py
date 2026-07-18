@@ -440,6 +440,24 @@ class CliAgentDetectionsResponse(BaseModel):
     agents: list[CliAgentDetection]
 
 
+class CliAgentUsageWindow(BaseModel):
+    window: str
+    used_percent: float
+    resets_at: str = ""
+    window_minutes: int | None = None
+
+
+class CliAgentUsage(BaseModel):
+    agent: str
+    windows: list[CliAgentUsageWindow] = Field(default_factory=list)
+    limit_reached: bool = False
+    checked_at: str = ""
+
+
+class CliAgentUsagesResponse(BaseModel):
+    usages: list[CliAgentUsage] = Field(default_factory=list)
+
+
 class ModelDefinition(BaseModel):
     path: str
     provider: str

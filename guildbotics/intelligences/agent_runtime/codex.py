@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from datetime import UTC, datetime
 from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
@@ -26,9 +25,9 @@ from guildbotics.intelligences.agent_runtime.models import (
     EventSink,
 )
 from guildbotics.intelligences.agent_runtime.policy import NativeAgentPolicy
+from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
 from guildbotics.runtime.person_lease import delegation_environment
 
-_LIMIT_REACHED_PERCENT = 100
 _METHOD_NOT_FOUND = -32601
 _MODERN_APPROVAL_METHODS = frozenset(
     {
@@ -364,43 +363,14 @@ class CodexAppServerAdapter:
         except _RpcError:
             # API-key and non-ChatGPT providers may not expose this capability.
             return
-        buckets = result.get(
-            "rateLimitsByLimitId", result.get("rate_limits_by_limit_id")
-        )
-        candidates = list(buckets.values()) if isinstance(buckets, dict) else []
-        rate_limits = result.get("rateLimits", result.get("rate_limits"))
-        if not candidates and isinstance(rate_limits, dict):
-            candidates = [rate_limits]
-        resets: list[int] = []
-        limited = False
-        for candidate in candidates:
-            bucket = _dict(candidate)
-            limited = limited or bool(
-                bucket.get(
-                    "rateLimitReachedType", bucket.get("rate_limit_reached_type")
-                )
-            )
-            for name in ("primary", "secondary"):
-                window = _dict(bucket.get(name))
-                try:
-                    limited = (
-                        limited
-                        or float(
-                            window.get("usedPercent", window.get("used_percent", 0))
-                        )
-                        >= _LIMIT_REACHED_PERCENT
-                    )
-                    reset = int(window.get("resetsAt", window.get("resets_at", 0)) or 0)
-                except (TypeError, ValueError):
-                    continue
-                if reset:
-                    resets.append(reset)
-        if limited:
+        snapshot = parse_codex_rate_limits(result)
+        if snapshot.limit_reached:
             details: dict[str, Any] = {}
+            resets = [
+                window.resets_at for window in snapshot.windows if window.resets_at
+            ]
             if resets:
-                details["retry_after_at"] = datetime.fromtimestamp(
-                    min(resets), UTC
-                ).isoformat()
+                details["retry_after_at"] = min(resets)
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.RATE_LIMITED,
                 "Codex account rate limit is active.",

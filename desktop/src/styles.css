@@ -899,6 +899,63 @@ pre {
   white-space: nowrap;
 }
 
+.activity-member-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+/* No flex-wrap here: wrapping is decided from pre-shrink sizes, so it would
+   kick in even when shrinking the bar could fit everything on one line. */
+.activity-member-usage-row {
+  align-items: center;
+  color: var(--color-text-subtle);
+  display: flex;
+  font-size: 10px;
+  gap: 4px;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.activity-member-usage-window {
+  flex-shrink: 0;
+  min-width: 16px;
+}
+
+/* The bar absorbs all shrinking so the percent and reset text stay fully
+   visible; in the worst case the text wraps to the next line instead of
+   being clipped. */
+.activity-member-usage-bar {
+  background: var(--color-border);
+  border-radius: 2px;
+  flex: 1 1 32px;
+  height: 4px;
+  max-width: 52px;
+  min-width: 10px;
+  overflow: hidden;
+}
+
+.activity-member-usage-fill {
+  background: var(--color-brand);
+  display: block;
+  height: 100%;
+}
+
+.activity-member-usage-warning .activity-member-usage-fill {
+  background: var(--color-warning);
+}
+
+.activity-member-usage-danger .activity-member-usage-fill {
+  background: var(--color-danger);
+}
+
+.activity-member-usage-value {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .activity-timeline-head {
   align-items: stretch;
   display: grid;
