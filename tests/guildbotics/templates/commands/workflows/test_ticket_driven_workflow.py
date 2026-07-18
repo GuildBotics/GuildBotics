@@ -8,7 +8,7 @@ from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
-from guildbotics.utils.i18n_tool import get_language, set_language
+from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 
 @pytest.fixture(autouse=True)
@@ -145,10 +145,9 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
         "work_identity": "https://github.com/GuildBotics/GuildBotics/issues/1",
         "resume_policy": "fresh",
         "attempt": 1,
-        "continuation_input": (
-            "Continue the existing workflow conversation from its current state. "
-            "Do not reprocess the triggering event or repeat completed actions. "
-            "Finish the missing work and run the required completion command."
+        "continuation_input": t(
+            "commands.workflows.common.agent_continuation",
+            run_id=kwargs["workflow_run_id"],
         ),
     }
     assert kwargs["person_id"] == "aiko"

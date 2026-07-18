@@ -135,3 +135,32 @@ def test_fresh_policy_never_reuses_a_persisted_provider_session(tmp_path) -> Non
     assert fresh.rotation_reason == "fresh"
     assert fresh.provider_session_id == ""
     assert fresh.context_cursor == ""
+
+
+def test_round_trips_last_run_and_event_identity(tmp_path) -> None:
+    store = ConversationStore(tmp_path)
+    record = store.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "thread-1"
+    record.last_run_id = "run-A"
+    record.last_event_id = "EA"
+    store.save(record)
+
+    loaded = store.load(_key())
+
+    assert loaded is not None
+    assert loaded.last_run_id == "run-A"
+    assert loaded.last_event_id == "EA"
+
+
+def test_rotation_clears_last_run_and_event_identity(tmp_path) -> None:
+    store = ConversationStore(tmp_path)
+    record = store.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "thread-1"
+    record.last_run_id = "run-A"
+    record.last_event_id = "EA"
+    store.save(record)
+
+    rotated = store.resolve(_key(), ResumePolicy.RESET)
+
+    assert rotated.last_run_id == ""
+    assert rotated.last_event_id == ""

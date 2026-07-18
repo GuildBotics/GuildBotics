@@ -834,3 +834,191 @@ async def test_native_registry_serializes_replacement_for_same_execution(
     assert len(created) == 2
     assert first.closed is True
     await registry.close_native_adapters()
+
+
+@pytest.fixture
+def native_aiko():
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["aiko"] = {
+        "default": cli_agent.ExecutableInfo(adapter="codex")
+    }
+    yield
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping.update(original)
+
+
+_CHAT_IDENTITY = "slack:bot:C1:100.1"
+
+
+def _seed_chat_record(
+    tmp_path, *, cursor: str, last_run_id: str = "", last_event_id: str = ""
+) -> ConversationKey:
+    key = ConversationKey("aiko", "codex", "chat", _CHAT_IDENTITY)
+    store = ConversationStore(tmp_path)
+    record = store.resolve(key, ResumePolicy.AUTO)
+    record.provider_session_id = "thread-0"
+    record.context_cursor = cursor
+    record.last_run_id = last_run_id
+    record.last_event_id = last_event_id
+    store.save(record)
+    return key
+
+
+async def _run_chat_turn(
+    brain, tmp_path, *, cursor: str, run_id: str = "run-A", event_id: str = "EA"
+):
+    return await brain.run_with_execution_details(
+        "retry-turn",
+        cwd=tmp_path,
+        session_state={
+            "agent_execution_context": {
+                "run_id": run_id,
+                "workspace_data_root": str(tmp_path),
+                "work_kind": "chat",
+                "work_identity": _CHAT_IDENTITY,
+                "resume_policy": "auto",
+                "context_cursor": cursor,
+                "event_id": event_id,
+                "rebuild_context": "[]",
+                "rebuild_context_complete": True,
+                "continuation_input": "continue-only",
+                "attempt": 1,
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
+    monkeypatch, tmp_path, native_aiko
+) -> None:
+    adapter = _Adapter()
+
+    async def get_adapter(*_args):
+        return adapter
+
+    recorded_events: list[AgentEvent] = []
+    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
+    monkeypatch.setattr(
+        diagnostics,
+        "record_agent_event",
+        lambda event, *_args: recorded_events.append(event),
+    )
+    key = _seed_chat_record(
+        tmp_path, cursor="200.1", last_run_id="run-B", last_event_id="EB"
+    )
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+
+    result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
+
+    # The overtaken event is re-fed with full context on a fresh session; the
+    # generic continuation prompt (which would let the agent mistake run-B's
+    # completion for run-A's) is never used.
+    assert result.returncode == 0
+    assert 'mode="full"' in adapter.prompts[0]
+    assert "continue-only" not in adapter.prompts[0]
+    rejections = [
+        event
+        for event in recorded_events
+        if event.kind is AgentEventKind.TURN and event.name == "continuation_rejected"
+    ]
+    assert len(rejections) == 1
+    assert rejections[0].details["reason"] == "cursor_regression"
+    assert rejections[0].details["current_cursor"] == "100.1"
+    assert rejections[0].details["persisted_cursor"] == "200.1"
+    assert rejections[0].details["run_id"] == "run-A"
+    assert rejections[0].details["last_run_id"] == "run-B"
+    persisted = ConversationStore(tmp_path).load(key)
+    assert persisted is not None
+    assert persisted.generation == 1
+    assert persisted.rotation_reason == "cursor_regression"
+    assert persisted.context_cursor == "100.1"
+    assert persisted.last_run_id == "run-A"
+    assert persisted.last_event_id == "EA"
+
+
+@pytest.mark.asyncio
+async def test_native_chat_same_cursor_same_run_event_uses_continuation(
+    monkeypatch, tmp_path, native_aiko
+) -> None:
+    adapter = _Adapter()
+
+    async def get_adapter(*_args):
+        return adapter
+
+    recorded_events: list[AgentEvent] = []
+    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
+    monkeypatch.setattr(
+        diagnostics,
+        "record_agent_event",
+        lambda event, *_args: recorded_events.append(event),
+    )
+    _seed_chat_record(
+        tmp_path, cursor="100.1", last_run_id="run-A", last_event_id="EA"
+    )
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+
+    result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
+
+    assert result.returncode == 0
+    assert 'mode="continuation"' in adapter.prompts[0]
+    assert "continue-only" in adapter.prompts[0]
+    assert not any(event.name == "continuation_rejected" for event in recorded_events)
+
+
+@pytest.mark.asyncio
+async def test_native_chat_same_cursor_different_run_is_not_continuation(
+    monkeypatch, tmp_path, native_aiko
+) -> None:
+    adapter = _Adapter()
+
+    async def get_adapter(*_args):
+        return adapter
+
+    recorded_events: list[AgentEvent] = []
+    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
+    monkeypatch.setattr(
+        diagnostics,
+        "record_agent_event",
+        lambda event, *_args: recorded_events.append(event),
+    )
+    _seed_chat_record(
+        tmp_path, cursor="100.1", last_run_id="run-B", last_event_id="EB"
+    )
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+
+    result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
+
+    assert result.returncode == 0
+    assert 'mode="full"' in adapter.prompts[0]
+    assert "continue-only" not in adapter.prompts[0]
+    rejections = [e for e in recorded_events if e.name == "continuation_rejected"]
+    assert len(rejections) == 1
+    assert rejections[0].details["reason"] == "identity_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_native_chat_legacy_record_without_identity_rotates_to_full_context(
+    monkeypatch, tmp_path, native_aiko
+) -> None:
+    adapter = _Adapter()
+
+    async def get_adapter(*_args):
+        return adapter
+
+    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
+    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    key = _seed_chat_record(tmp_path, cursor="100.1")
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+
+    result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
+
+    # A record predating run/event identity cannot prove the session targeted
+    # this run, so it is rotated instead of continued.
+    assert result.returncode == 0
+    assert 'mode="full"' in adapter.prompts[0]
+    assert "continue-only" not in adapter.prompts[0]
+    persisted = ConversationStore(tmp_path).load(key)
+    assert persisted is not None
+    assert persisted.generation == 1

@@ -146,6 +146,16 @@ Invariants:
   event listener together. The persistent file contains owner metadata for status and
   CLI stop handling, but file existence is not a liveness signal. Desktop-owned
   services must be stopped from Desktop rather than by signalling the sidecar PID.
+- Chat events are drained FIFO per Slack thread (`drivers/pending_chat_dispatcher.py`):
+  while a thread's oldest event is retrying or backing off, later events of the same
+  thread are not dispatched (a newer arrival instead wakes the waiting head early,
+  at most once per follower cursor and never before a provider rate-limit reset), and
+  a finally-abandoned event is terminalized so it can never block its thread. This
+  keeps the shared provider conversation's context cursor a monotonic watermark.
+  A resumed session is continued only for the same run/event it last worked on;
+  cursor regression, unorderable cursors, or a run/event identity mismatch rotate the
+  session, record a `continuation_rejected` diagnostics event, and re-feed full
+  context instead of sending the generic continuation prompt.
 - Rate limits from AI CLI tools are detected (`intelligences/brains/cli_agent.py`),
   handled by shared capability logic (`capabilities/workflow_rate_limits.py`,
   `capabilities/completion_retry.py`), surfaced as a `workflow.rate_limited`

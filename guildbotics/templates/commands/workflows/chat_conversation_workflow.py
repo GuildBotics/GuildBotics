@@ -280,12 +280,17 @@ async def _handle_event(
             ),
             "resume_policy": "auto",
             "context_cursor": event.message_ts,
+            "event_id": event.event_id,
             "attempt": logical_attempt,
             "rebuild_context": json.dumps(
                 prompt_payload["thread_context"], ensure_ascii=False, sort_keys=True
             ),
             "rebuild_context_complete": prompt_payload["thread_context_complete"],
-            "continuation_input": t("commands.workflows.common.agent_continuation"),
+            "continuation_input": t(
+                "commands.workflows.common.agent_chat_continuation",
+                run_id=run_id,
+                event_id=event.event_id,
+            ),
             "participant_labels": json.dumps(
                 prompt_payload["participant_labels"],
                 ensure_ascii=False,

@@ -29,6 +29,7 @@ from guildbotics.runtime.event_listener import (
     IncomingChatEvent,
 )
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
+from guildbotics.utils.i18n_tool import t
 
 
 @pytest.fixture(autouse=True)
@@ -259,7 +260,18 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert execution_context["work_kind"] == "chat"
     assert execution_context["work_identity"] == "slack:U_ALICE:C1:100.1"
     assert execution_context["context_cursor"] == "100.1"
+    assert execution_context["event_id"] == "E1"
     assert execution_context["resume_policy"] == "auto"
+    # The continuation prompt names the exact run/event and the missing
+    # completion record, so a resumed session cannot mistake another run's
+    # completion for this one.
+    assert execution_context["continuation_input"] == t(
+        "commands.workflows.common.agent_chat_continuation",
+        run_id=kwargs["workflow_run_id"],
+        event_id="E1",
+    )
+    assert kwargs["workflow_run_id"] in execution_context["continuation_input"]
+    assert "E1" in execution_context["continuation_input"]
     assert kwargs["cwd"].name == "alice"
     assert kwargs["handoff_candidates"] == "[]"
     assert kwargs["chat_participation"] == "strict"

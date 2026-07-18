@@ -16,7 +16,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
-from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
+from guildbotics.intelligences.agent_runtime.models import (
+    AgentExecutionContext,
+    ConversationRecord,
+)
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
@@ -372,6 +375,84 @@ def _continuation_input(input: str, context: dict[str, Any]) -> str:
     return _thread_context_input(continuation, context, mode="continuation")
 
 
+def _continuation_identity_matches(
+    context: AgentExecutionContext, conversation: ConversationRecord
+) -> bool:
+    """A continuation may only target the run/event the session last worked on."""
+    if not conversation.last_run_id or conversation.last_run_id != context.run_id:
+        return False
+    return conversation.last_event_id == context.event_id
+
+
+def _continuation_rejection(
+    context: AgentExecutionContext, conversation: ConversationRecord
+) -> dict[str, str] | None:
+    """Detect a resumed session that must not continue this turn.
+
+    Returns diagnostics details when the persisted session belongs to a newer
+    thread position (cursor regression), an unorderable cursor, or a different
+    run/event than the one being retried. The caller rotates the session and
+    re-feeds full context instead of sending the generic continuation prompt,
+    which would let the agent mistake another run's completion for this one.
+    """
+    if not conversation.provider_session_id:
+        return None
+    identity_ok = _continuation_identity_matches(context, conversation)
+    if context.conversation_key.work_kind != "chat":
+        if context.attempt > 1 and not identity_ok:
+            return _rejection_details("identity_mismatch", context, conversation)
+        return None
+    relation = _cursor_relation(context.context_cursor, conversation.context_cursor)
+    if relation == "older":
+        return _rejection_details("cursor_regression", context, conversation)
+    if relation == "unknown":
+        return _rejection_details("cursor_unordered", context, conversation)
+    if relation == "equal" and not identity_ok:
+        return _rejection_details("identity_mismatch", context, conversation)
+    return None
+
+
+def _rejection_details(
+    reason: str, context: AgentExecutionContext, conversation: ConversationRecord
+) -> dict[str, str]:
+    return {
+        "reason": reason,
+        "current_cursor": context.context_cursor,
+        "persisted_cursor": conversation.context_cursor,
+        "event_id": context.event_id,
+        "run_id": context.run_id,
+        "last_event_id": conversation.last_event_id,
+        "last_run_id": conversation.last_run_id,
+    }
+
+
+def _native_turn_input(
+    input: str,
+    configured: dict[str, Any],
+    context: AgentExecutionContext,
+    conversation: ConversationRecord,
+) -> str:
+    """Choose the provider input after continuation safety has been enforced.
+
+    ``_continuation_rejection`` has already rotated any session that must not
+    continue, so a surviving session with an ``equal`` cursor (chat) or a
+    retried attempt (non-chat) is a legitimate same-run/event continuation.
+    """
+    if conversation.provider_session_id:
+        if context.conversation_key.work_kind != "chat":
+            if context.attempt > 1:
+                return _continuation_input(input, configured)
+            return input
+        relation = _cursor_relation(context.context_cursor, conversation.context_cursor)
+        if relation == "equal":
+            return _continuation_input(input, configured)
+        return _thread_context_input(input, configured, mode="incremental")
+    if context.conversation_key.work_kind == "chat":
+        mode = "full" if context.rebuild_context_complete else "inspect_required"
+        return _thread_context_input(input, configured, mode=mode)
+    return input
+
+
 def _one_shot_input(
     input: str,
     context: dict[str, Any],
@@ -683,6 +764,7 @@ class CliAgentBrain(Brain):
                 conversation_key=key,
                 resume_policy=policy,
                 context_cursor=str(configured.get("context_cursor") or ""),
+                event_id=str(configured.get("event_id") or ""),
                 lease_id=lease_metadata.lease_id,
                 delegation_id=lease_metadata.delegation_id,
                 model=str(configured.get("model") or ""),
@@ -745,25 +827,22 @@ class CliAgentBrain(Brain):
             record_agent_event(event, context, conversation)
 
         try:
-            native_input = input
-            if conversation.provider_session_id:
-                same_or_older_cursor = _same_or_older_cursor(
-                    context.context_cursor, conversation.context_cursor
-                )
-                completion_retry = (
-                    context.conversation_key.work_kind != "chat" and context.attempt > 1
-                )
-                if completion_retry or same_or_older_cursor:
-                    native_input = _continuation_input(input, configured)
-                else:
-                    native_input = _thread_context_input(
-                        input, configured, mode="incremental"
+            rejection = _continuation_rejection(context, conversation)
+            if rejection is not None:
+                await emit(
+                    AgentEvent(
+                        AgentEventKind.TURN,
+                        "continuation_rejected",
+                        message=(
+                            "resumed session cannot safely continue this turn; "
+                            "rotating to a fresh session with full context"
+                        ),
+                        provider_session_id=conversation.provider_session_id,
+                        details=rejection,
                     )
-            elif context.conversation_key.work_kind == "chat":
-                mode = (
-                    "full" if context.rebuild_context_complete else "inspect_required"
                 )
-                native_input = _thread_context_input(input, configured, mode=mode)
+                conversation.rotate(str(rejection["reason"]))
+            native_input = _native_turn_input(input, configured, context, conversation)
             await emit(
                 AgentEvent(
                     AgentEventKind.TURN,
@@ -803,9 +882,15 @@ class CliAgentBrain(Brain):
         conversation.provider_session_id = terminal.provider_session_id
         conversation.provider_turn_id = terminal.provider_turn_id
         conversation.provider = adapter_name
-        conversation.context_cursor = (
-            context.context_cursor or conversation.context_cursor
-        )
+        # The cursor is a monotonic watermark of what was fed into the provider
+        # session; never let a re-dispatched older event rewind it.
+        if not conversation.context_cursor or (
+            _cursor_relation(context.context_cursor, conversation.context_cursor)
+            == "newer"
+        ):
+            conversation.context_cursor = context.context_cursor
+        conversation.last_event_id = context.event_id
+        conversation.last_run_id = context.run_id
         conversation.turn_count += 1
         conversation.input_tokens += terminal.usage.get("input_tokens", 0)
         conversation.output_tokens += terminal.usage.get("output_tokens", 0)
@@ -1047,15 +1132,25 @@ def _normalize_native_retry_after(details: dict[str, str]) -> None:
         ).isoformat(timespec="seconds")
 
 
-def _same_or_older_cursor(current: str, persisted: str) -> bool:
+def _cursor_relation(current: str, persisted: str) -> str:
+    """Relate a turn's context cursor to the persisted session watermark.
+
+    Returns ``newer`` / ``equal`` / ``older`` for orderable cursors. Cursors
+    that cannot be ordered safely (either side missing, or non-numeric and not
+    identical) are ``unknown`` and must never be treated as a continuation.
+    """
     if not current or not persisted:
-        return False
+        return "unknown"
     try:
         current_parts = tuple(int(part) for part in current.split("."))
         persisted_parts = tuple(int(part) for part in persisted.split("."))
     except ValueError:
-        return current == persisted
-    return current_parts <= persisted_parts
+        return "equal" if current == persisted else "unknown"
+    if current_parts > persisted_parts:
+        return "newer"
+    if current_parts == persisted_parts:
+        return "equal"
+    return "older"
 
 
 def _cursor_is_before(candidate: str, current: str) -> bool:

@@ -56,9 +56,13 @@ class PendingChatDispatcher:
     ) -> int:
         """Drain and process every queued chat event for one member.
 
-        Returns the number of events processed. A failing event is left queued
-        (and logged) so it is retried on a later pass instead of blocking the
-        rest of the queue.
+        Returns the number of events processed. Events are handled FIFO per
+        Slack thread: while a thread's oldest event is waiting for retry or
+        fails again, later events of the same thread are not dispatched, so a
+        follow-up message can never advance the shared provider conversation
+        past a still-pending earlier event. Other threads (and other members)
+        keep draining independently. A newer message arriving in a blocked
+        thread wakes the waiting head early instead of being run itself.
         """
         processed = 0
         for service, channel_id in self._state_store.list_pending_channels(
@@ -70,18 +74,56 @@ class PendingChatDispatcher:
                 self._state_store.load_pending_events(
                     service, person.person_id, channel_id
                 ),
-                key=lambda pending: pending.event.message_ts,
+                key=lambda pending: _message_order_key(pending.event.message_ts),
             )
-            for pending in pending_events:
-                if stop_event is not None and stop_event.is_set():
-                    break
-                if self._process_one(person, service, channel_id, pending) and _is_due(
-                    pending
-                ):
-                    processed += await self._dispatch(
-                        person, service, channel_id, pending
-                    )
+            for thread_events in _thread_groups(pending_events):
+                for pending in thread_events:
+                    if stop_event is not None and stop_event.is_set():
+                        return processed
+                    if not self._process_one(person, service, channel_id, pending):
+                        continue
+                    if not _is_due(pending) and not self._wake_for_follower(
+                        service, person.person_id, channel_id, pending, thread_events
+                    ):
+                        break
+                    if not await self._dispatch(person, service, channel_id, pending):
+                        break
+                    processed += 1
         return processed
+
+    def _wake_for_follower(
+        self,
+        service: str,
+        person_id: str,
+        channel_id: str,
+        head: PendingChatEvent,
+        thread_events: list[PendingChatEvent],
+    ) -> bool:
+        """Retry a backing-off thread head early when a newer message arrived.
+
+        A provider-imposed rate limit is always waited out, and each follower
+        cursor wakes the head at most once (persisted, so a restart cannot turn
+        the same follow-up message into an unlimited retry source).
+        """
+        if head.last_error_category == "rate_limited":
+            return False
+        follower_cursor = max(
+            (
+                pending.event.message_ts
+                for pending in thread_events
+                if pending is not head
+            ),
+            key=_message_order_key,
+            default="",
+        )
+        if not follower_cursor or _message_order_key(
+            follower_cursor
+        ) <= _message_order_key(head.wake_cursor):
+            return False
+        head.wake_cursor = follower_cursor
+        head.next_attempt_at = None
+        self._state_store.save_pending_event(service, person_id, channel_id, head)
+        return True
 
     def _process_one(
         self,
@@ -138,6 +180,30 @@ class PendingChatDispatcher:
                 return 0
             except Exception as exc:  # leave queued for retry; do not block the queue
                 rate_limit = workflow_rate_limit_from_exception(exc)
+                pending.last_error_category = (
+                    "rate_limited" if rate_limit is not None else "failed"
+                )
+                if pending.attempt_count >= pending.max_attempts:
+                    # The workflow normally terminalizes its own final attempt;
+                    # reaching here means it could not. Release the thread so
+                    # the abandoned event never blocks its followers.
+                    self._context.logger.error(
+                        "chat event abandoned after final attempt: "
+                        "person=%s channel=%s event=%s attempt=%s/%s error=%s",
+                        person.person_id,
+                        channel_id,
+                        event_id,
+                        pending.attempt_count,
+                        pending.max_attempts,
+                        exc,
+                    )
+                    self._state_store.mark_processed_event(
+                        service, person.person_id, channel_id, event_id
+                    )
+                    self._state_store.remove_pending_event(
+                        service, person.person_id, channel_id, event_id
+                    )
+                    return 0
                 pending.next_attempt_at = (
                     rate_limit.retry_after_at
                     if rate_limit is not None and rate_limit.retry_after_at
@@ -146,12 +212,7 @@ class PendingChatDispatcher:
                 self._state_store.save_pending_event(
                     service, person.person_id, channel_id, pending
                 )
-                log = (
-                    self._context.logger.error
-                    if pending.attempt_count >= pending.max_attempts
-                    else self._context.logger.warning
-                )
-                log(
+                self._context.logger.warning(
                     "chat event processing failed: person=%s channel=%s event=%s "
                     "attempt=%s/%s error=%s",
                     person.person_id,
@@ -203,6 +264,23 @@ class PendingChatDispatcher:
             self._context, service_run_id=self._service_run_id
         )
         await dispatcher.dispatch(invocation, person)
+
+
+def _thread_groups(events: list[PendingChatEvent]) -> list[list[PendingChatEvent]]:
+    """Group message-ts-ordered events by thread, oldest thread first."""
+    groups: dict[str, list[PendingChatEvent]] = {}
+    for pending in events:
+        key = pending.event.thread_ts or pending.event.message_ts
+        groups.setdefault(key, []).append(pending)
+    return list(groups.values())
+
+
+def _message_order_key(message_ts: str) -> tuple[int, ...]:
+    """Numeric ordering key for Slack-style timestamps; unparsable sorts first."""
+    try:
+        return tuple(int(part) for part in message_ts.split("."))
+    except ValueError:
+        return ()
 
 
 def _is_due(pending: PendingChatEvent) -> bool:

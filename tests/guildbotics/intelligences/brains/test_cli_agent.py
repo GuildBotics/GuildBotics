@@ -970,3 +970,23 @@ async def test_cli_agent_kills_subprocess_on_cancellation(monkeypatch, tmp_path)
     finally:
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)
+
+
+@pytest.mark.parametrize(
+    ("current", "persisted", "expected"),
+    [
+        ("101.2", "101.1", "newer"),
+        ("101.1", "101.1", "equal"),
+        ("100.9", "101.1", "older"),
+        ("2", "10", "older"),
+        ("same-text", "same-text", "equal"),
+        ("text-a", "text-b", "unknown"),
+        ("", "101.1", "unknown"),
+        ("101.1", "", "unknown"),
+        ("", "", "unknown"),
+    ],
+)
+def test_cursor_relation_orders_numeric_and_rejects_unorderable(
+    current, persisted, expected
+):
+    assert cli_agent._cursor_relation(current, persisted) == expected
