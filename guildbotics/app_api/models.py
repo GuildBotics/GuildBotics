@@ -146,6 +146,17 @@ class TraceSummary(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
+class TracePresentation(BaseModel):
+    """Provider-neutral display contract for one diagnostics record."""
+
+    label_key: str = ""
+    label_fallback: str = ""
+    message_key: str = ""
+    message: str = ""
+    message_params: dict[str, Any] = Field(default_factory=dict)
+    tone: str = "neutral"
+
+
 class TraceRecord(BaseModel):
     kind: str
     timestamp: str = ""
@@ -163,6 +174,7 @@ class TraceRecord(BaseModel):
     message: str = ""
     attributes: dict[str, Any] = Field(default_factory=dict)
     payload: dict[str, Any] = Field(default_factory=dict)
+    presentation: TracePresentation = Field(default_factory=TracePresentation)
 
 
 class TracesResponse(BaseModel):

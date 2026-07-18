@@ -276,6 +276,16 @@ export type TraceRecord = {
   message: string;
   attributes: Record<string, unknown>;
   payload: Record<string, unknown>;
+  presentation: TracePresentation;
+};
+
+export type TracePresentation = {
+  label_key: string;
+  label_fallback: string;
+  message_key: string;
+  message: string;
+  message_params: Record<string, unknown>;
+  tone: string;
 };
 
 export type TracesResponse = {

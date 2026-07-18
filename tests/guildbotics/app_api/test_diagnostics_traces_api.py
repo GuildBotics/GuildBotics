@@ -99,13 +99,24 @@ def test_trace_detail_returns_ordered_records(tmp_path: Path) -> None:
     assert body["summary"]["status"] == "success"
     kinds = [record["kind"] for record in body["records"]]
     assert kinds == ["event", "log", "event"]
+    assert body["records"][0]["presentation"] == {
+        "label_key": "diagnostics.executions.eventTypes.command_started",
+        "label_fallback": "command.started",
+        "message_key": "",
+        "message": "demo",
+        "message_params": {},
+        "tone": "success",
+    }
+    assert body["records"][1]["presentation"]["message"] == "working"
 
 
 def test_trace_detail_collapses_assistant_streams(tmp_path: Path) -> None:
     client, bus = _app(tmp_path)
     with trace_scope("manual", trace_id="t1"), span_scope("cli_agent"):
         bus.publish_event("agent_runtime.assistant", {"name": "started"})
-        bus.publish_event("agent_runtime.assistant", {"name": "delta", "message": "Hel"})
+        bus.publish_event(
+            "agent_runtime.assistant", {"name": "delta", "message": "Hel"}
+        )
         bus.publish_event("agent_runtime.assistant", {"name": "delta", "message": "lo"})
         bus.publish_event(
             "agent_runtime.assistant", {"name": "completed", "message": "Hello"}

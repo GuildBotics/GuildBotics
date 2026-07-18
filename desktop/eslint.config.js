@@ -32,6 +32,24 @@ export default tseslint.config(
     },
   },
   {
+    files: ["src/tracePresentation.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "./api/client",
+              importNames: ["TraceRecord"],
+              message:
+                "Diagnostics presentation must consume TracePresentation, not raw TraceRecord payloads.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // The Playwright E2E harness runs in Node (launcher script + specs that touch
     // the filesystem), so give those files Node globals instead of browser ones.
     files: ["e2e/**/*.{ts,mjs}", "playwright.config.ts"],

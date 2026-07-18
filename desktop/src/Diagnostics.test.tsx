@@ -455,6 +455,14 @@ describe("Diagnostics executions tab", () => {
           type: "command.started",
           message: "command started",
           timestamp: "2026-06-12T00:00:01Z",
+          presentation: {
+            label_key: "diagnostics.executions.eventTypes.command_started",
+            label_fallback: "command.started",
+            message_key: "",
+            message: "workflows/demo",
+            message_params: {},
+            tone: "success",
+          },
         }),
         makeTraceRecord({
           kind: "log",
@@ -484,7 +492,7 @@ describe("Diagnostics executions tab", () => {
     // The timeline is newest-first: the later log appears before the earlier
     // started event so live updates surface at the top without scrolling.
     const live = screen.getByText("working on it");
-    const started = screen.getAllByText(t("overview.eventTypes.command_started"))[0];
+    const started = screen.getAllByText(t("diagnostics.executions.eventTypes.command_started"))[0];
     expect(live.compareDocumentPosition(started) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
       screen.queryByRole("link", { name: t("diagnostics.tabs.memory") }),
@@ -870,6 +878,14 @@ describe("Diagnostics executions tab", () => {
           source: "scheduler",
           trace_id: null,
           timestamp: "2026-06-12T00:00:01Z",
+          presentation: {
+            label_key: "diagnostics.executions.eventTypes.scheduler",
+            label_fallback: "scheduler.running",
+            message_key: "diagnostics.executions.messages.scheduler_running",
+            message: "scheduler.running",
+            message_params: {},
+            tone: "success",
+          },
         }),
         makeTraceRecord({
           kind: "log",
@@ -887,8 +903,12 @@ describe("Diagnostics executions tab", () => {
     // user having to click the pinned Global entry.
 
     expect(await screen.findByText("application started")).toBeInTheDocument();
-    // The scheduler event row shows its translated label (badge and message).
-    expect(screen.getAllByText(t("overview.eventTypes.scheduler")).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(t("diagnostics.executions.eventTypes.scheduler")).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText(t("diagnostics.executions.messages.scheduler_running")),
+    ).toBeInTheDocument();
     expect(vi.mocked(getGlobalRecords)).toHaveBeenCalled();
 
     // Unscoped records are only events and logs, so the trace-only record
