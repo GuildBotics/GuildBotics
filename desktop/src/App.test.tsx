@@ -662,15 +662,17 @@ describe("traceStatusColor", () => {
   it("distinguishes workflow completion layers from provider success", () => {
     expect(traceStatusColor("retry_scheduled")).toBe("warning");
     expect(traceStatusColor("abandoned")).toBe("danger");
+    expect(traceStatusColor("incomplete")).toBe("danger");
   });
 });
 
 describe("isTerminalTraceStatus", () => {
-  it("treats retry_scheduled and abandoned as terminal for count display", () => {
+  it("treats retry_scheduled, abandoned, and incomplete as terminal for count display", () => {
     expect(isTerminalTraceStatus("success")).toBe(true);
     expect(isTerminalTraceStatus("failed")).toBe(true);
     expect(isTerminalTraceStatus("retry_scheduled")).toBe(true);
     expect(isTerminalTraceStatus("abandoned")).toBe(true);
+    expect(isTerminalTraceStatus("incomplete")).toBe(true);
     expect(isTerminalTraceStatus("running")).toBe(false);
     expect(isTerminalTraceStatus("info")).toBe(false);
   });

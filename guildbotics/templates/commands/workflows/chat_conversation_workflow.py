@@ -354,7 +354,11 @@ async def _handle_event(
             retry_context.run_id, workspace_data_root / "task-runs", member_workspace
         )
         if recovered is not None:
-            record_workflow_completed(run_id=retry_context.run_id, recovered=True)
+            record_workflow_completed(
+                run_id=retry_context.run_id,
+                attempt=retry_context.attempt_count,
+                recovered=True,
+            )
             _log(
                 context,
                 "info",

@@ -1272,4 +1272,4 @@ async def test_recovered_completion_records_workflow_completed_event(
         ctx, chat_service=service, state_store=state_store
     )
 
-    assert recorded == [{"run_id": run_id, "recovered": True}]
+    assert recorded == [{"run_id": run_id, "attempt": 2, "recovered": True}]

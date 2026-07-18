@@ -94,14 +94,20 @@ def record_chat_dispatch_abandoned(
     max_attempts: int,
     error: str,
 ) -> None:
-    """Record that the event was terminalized after its final attempt."""
+    """Record that the event was terminalized after its final attempt.
+
+    The dispatcher increments its attempt counter before running the workflow,
+    so ``attempt_count`` can arrive one higher than ``max_attempts`` for the
+    attempt that triggered abandonment. The diagnostics payload caps it at
+    ``max_attempts`` so it never reads as "attempt 6 of 5".
+    """
     record_correlated_event(
         event_type="chat_dispatch.abandoned",
         attributes={"chat_dispatch.state": "abandoned"},
         payload={
             "event_id": event_id,
             "run_id": run_id,
-            "attempt_count": attempt_count,
+            "attempt_count": min(attempt_count, max_attempts),
             "max_attempts": max_attempts,
             "error": error,
         },

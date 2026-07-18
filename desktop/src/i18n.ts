@@ -97,6 +97,11 @@ const resources = {
           label: "Rate limited",
           reset: "Reset: {{reset}}",
         },
+        status: {
+          retry_scheduled: "Retry scheduled",
+          abandoned: "Abandoned",
+          incomplete: "Incomplete",
+        },
         eventTypes: {
           pr_create: "PR created",
           pr_merge: "PR merged",
@@ -226,6 +231,7 @@ const resources = {
             interrupted: "Interrupted",
             retry_scheduled: "Retry scheduled",
             abandoned: "Abandoned",
+            incomplete: "Incomplete",
           },
           sources: {
             all: "All",
@@ -1292,6 +1298,11 @@ const resources = {
           label: "Rate limit 中",
           reset: "Reset: {{reset}}",
         },
+        status: {
+          retry_scheduled: "再試行待ち",
+          abandoned: "打ち切り",
+          incomplete: "未完了",
+        },
         eventTypes: {
           pr_create: "PR 作成",
           pr_merge: "PR マージ",
@@ -1896,6 +1907,7 @@ const resources = {
             interrupted: "中断",
             retry_scheduled: "再試行待ち",
             abandoned: "打ち切り",
+            incomplete: "未完了",
           },
           sources: {
             all: "すべて",

@@ -574,6 +574,56 @@ def _chat_event_record(
     return record
 
 
+def _ticket_event_record(
+    event_type: str, timestamp: str, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    record = dict(_ticket_records()[0])
+    record.update(
+        kind="event",
+        type=event_type,
+        timestamp=timestamp,
+        payload=payload or {},
+    )
+    return record
+
+
+def test_ticket_exhaustion_without_dispatch_event_shows_incomplete() -> None:
+    # The ticket workflow shares the completion-missing event with the chat
+    # dispatcher, but exhausts its attempt budget by posting an error comment
+    # instead of scheduling a ``chat_dispatch`` retry. Without a dispatch
+    # event, "missing" alone must not read as "retry_scheduled" (nothing is
+    # actually retrying it).
+    session = _session(
+        [
+            *_ticket_records(),
+            _ticket_event_record("span.finished", "2026-07-01T11:00:10+00:00"),
+            _ticket_event_record(
+                "workflow.completion_missing",
+                "2026-07-01T11:00:11+00:00",
+                {"run_id": "run-1", "attempt": 3, "max_attempts": 3},
+            ),
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+    assert session.status == "incomplete"
+
+
+def test_missing_completion_alone_shows_incomplete_not_retry_scheduled() -> None:
+    session = _session(
+        [
+            *_chat_records(),
+            _chat_event_record("span.finished", "2026-07-01T10:00:10+00:00"),
+            _chat_event_record(
+                "workflow.completion_missing",
+                "2026-07-01T10:00:11+00:00",
+                {"run_id": "run-1", "attempt": 1, "max_attempts": 2},
+            ),
+        ],
+        lambda _subject_id, _person_id: "",
+    )
+    assert session.status == "incomplete"
+
+
 def test_finished_provider_span_without_completion_shows_retry_scheduled() -> None:
     session = _session(
         [

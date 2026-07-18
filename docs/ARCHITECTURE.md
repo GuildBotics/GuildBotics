@@ -169,8 +169,12 @@ Invariants:
   `chat_dispatch.retry_scheduled` / `chat_dispatch.abandoned`, and status
   derivation (execution index summaries and activity history sessions) never
   reports workflow success from `span.finished` alone when completion-layer events
-  exist. Traces without completion gating (manual/interactive) keep the
-  span-derived status.
+  exist. `retry_scheduled` requires an actual `chat_dispatch.retry_scheduled` event;
+  completion evidence alone does not imply a retry is scheduled, since the ticket
+  workflow shares the same completion layer but exhausts its attempt budget by
+  posting an error comment instead of dispatching a retry, so missing completion
+  evidence without a dispatch event resolves to `incomplete`. Traces without
+  completion gating (manual/interactive) keep the span-derived status.
 
 ### Native agent runtime
 

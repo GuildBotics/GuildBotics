@@ -592,3 +592,6 @@ async def test_dispatcher_side_abandon_records_abandoned_event(monkeypatch, tmp_
     assert recorded[0]["event_id"] == "E1"
     assert recorded[0]["attempt_count"] == 6
     assert recorded[0]["max_attempts"] == 5
+    # record_chat_dispatch_abandoned itself caps the diagnostics payload's
+    # attempt_count at max_attempts (this monkeypatch captures the dispatcher's
+    # raw call args, which still legitimately go one over before capping).

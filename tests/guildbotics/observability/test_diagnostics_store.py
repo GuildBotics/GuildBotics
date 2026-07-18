@@ -431,6 +431,29 @@ def test_finished_span_with_missing_completion_is_not_success(tmp_path: Path) ->
     assert summary["status"] == "retry_scheduled"
 
 
+def test_missing_completion_without_dispatch_event_is_incomplete(
+    tmp_path: Path,
+) -> None:
+    # The ticket workflow records ``workflow.completion_missing`` on the same
+    # completion layer as chat, but exhausts attempts by posting an error
+    # comment instead of a ``chat_dispatch`` event. Without that dispatch
+    # event, "missing" alone must not read as "retry_scheduled".
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started"))
+    store.record(_event("t1", "span.finished", timestamp="2026-06-12T00:00:02+09:00"))
+    store.record(
+        _event(
+            "t1",
+            "workflow.completion_missing",
+            timestamp="2026-06-12T00:00:03+09:00",
+            payload={"run_id": "run-1", "attempt": 3, "max_attempts": 3},
+        )
+    )
+
+    summary = store.list_traces()[0]
+    assert summary["status"] == "incomplete"
+
+
 def test_abandoned_dispatch_overrides_provider_span_success(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     store.record(_event("t1", "span.finished"))

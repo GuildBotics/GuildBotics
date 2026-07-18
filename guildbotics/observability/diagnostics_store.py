@@ -569,10 +569,17 @@ def _finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     dispatch = summary.pop("_dispatch", "")
     # A finished provider span alone must not read as workflow success: the
     # recorded completion evidence and the dispatch decision take precedence.
+    # ``retry_scheduled`` requires an actual dispatch retry event — completion
+    # evidence alone says nothing about whether anything will retry (the
+    # ticket workflow shares this completion layer but exhausts attempts by
+    # posting an error comment instead of scheduling a dispatch retry), so a
+    # bare ``missing`` resolves to ``incomplete`` instead.
     if dispatch == "abandoned":
         summary["status"] = "abandoned"
-    elif completion == "missing" or dispatch == "retry_scheduled":
+    elif dispatch == "retry_scheduled":
         summary["status"] = "retry_scheduled"
+    elif completion == "missing":
+        summary["status"] = "incomplete"
     elif completion == "recorded":
         summary["status"] = "success"
     if not summary["started_at"]:

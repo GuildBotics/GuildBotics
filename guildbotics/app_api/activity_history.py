@@ -288,6 +288,13 @@ def _trace_status(records: list[dict[str, Any]]) -> str:
     take precedence, so a clean provider turn without completion evidence is
     never shown as success. Traces without completion-layer events (manual
     commands, interactive sessions) keep the provider-derived status.
+
+    ``retry_scheduled`` requires an actual ``chat_dispatch.retry_scheduled``
+    event: completion evidence alone does not say whether anything will
+    retry, since the ticket workflow shares the same completion layer but
+    exhausts its attempt budget by posting an error comment instead of
+    scheduling a dispatch retry. A trace with missing completion evidence and
+    no dispatch event is ``incomplete``.
     """
     provider = "info"
     completion = ""
@@ -321,8 +328,10 @@ def _trace_status(records: list[dict[str, Any]]) -> str:
         return "abandoned"
     if rate_limited:
         return "rate_limited"
-    if completion == "missing" or dispatch == "retry_scheduled":
+    if dispatch == "retry_scheduled":
         return "retry_scheduled"
+    if completion == "missing":
+        return "incomplete"
     if completion == "recorded":
         return "success"
     return provider
