@@ -712,56 +712,58 @@ class AppRuntime:
         return self.get_runtime_debug_status()
 
     def verify(self) -> VerifyResponse:
-        status = self.get_config_status()
-        team = None
-        team_error = None
-        try:
-            team = self._get_context().team
-        except Exception as exc:
-            team_error = exc
+        with trace_scope("diagnostics", command="verify"):
+            status = self.get_config_status()
+            team = None
+            team_error = None
+            try:
+                team = self._get_context().team
+            except Exception as exc:
+                team_error = exc
 
-        response = VerifyService().verify(
-            config=status, team=team, team_error=team_error
-        )
-        self._event_bus.publish_event(
-            "verify.completed",
-            {
-                "ok": response.ok,
-                "checks": [check.model_dump() for check in response.checks],
-            },
-            source="diagnostics",
-        )
-        return response
+            response = VerifyService().verify(
+                config=status, team=team, team_error=team_error
+            )
+            self._event_bus.publish_event(
+                "verify.completed",
+                {
+                    "ok": response.ok,
+                    "checks": [check.model_dump() for check in response.checks],
+                },
+            )
+            return response
 
     async def run_scenario_diagnostics(
         self, person_id: str | None = None
     ) -> ScenarioDiagnosticsResponse:
-        context = None
-        context_error = None
-        try:
-            context = self._get_context()
-        except Exception as exc:
-            context_error = exc
-        try:
-            response = await ScenarioDiagnosticsService().run(
-                context=context,
-                context_error=context_error,
-                person_id=person_id,
-            )
-            self._event_bus.publish_event(
-                "diagnostics.completed",
-                {
-                    "ok": response.ok,
-                    "active_members": response.active_members,
-                    "scope_person_id": person_id or "",
-                    "checks": [check.model_dump() for check in response.checks],
-                },
-                source="diagnostics",
-            )
-            return response
-        finally:
-            if context is not None:
-                await context.aclose()
+        with trace_scope(
+            "diagnostics", command="diagnostics", person_id=person_id or ""
+        ):
+            context = None
+            context_error = None
+            try:
+                context = self._get_context()
+            except Exception as exc:
+                context_error = exc
+            try:
+                response = await ScenarioDiagnosticsService().run(
+                    context=context,
+                    context_error=context_error,
+                    person_id=person_id,
+                )
+                self._event_bus.publish_event(
+                    "diagnostics.completed",
+                    {
+                        "ok": response.ok,
+                        "active_members": response.active_members,
+                        "scope_person_id": person_id or "",
+                        "checks": [check.model_dump() for check in response.checks],
+                    },
+                )
+                return response
+            finally:
+                if context is not None:
+                    await context.aclose()
 
     def list_traces(
         self,

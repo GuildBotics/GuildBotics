@@ -8,8 +8,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from guildbotics.app_api import runtime as runtime_module
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.models import (
+    ConfigStatus,
+    ScenarioDiagnosticsResponse,
+    VerifyResponse,
+)
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
@@ -27,6 +33,21 @@ def _app(tmp_path: Path) -> tuple[TestClient, EventBus]:
     bus = EventBus(store=store)
     app = create_app(session_token="secret", event_bus=bus, diagnostics_store=store)
     return TestClient(app), bus
+
+
+def _runtime_app(
+    tmp_path: Path,
+) -> tuple[TestClient, EventBus, AppRuntime, DiagnosticsStore]:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    bus = EventBus(store=store)
+    runtime = AppRuntime(bus, diagnostics_store=store)
+    app = create_app(
+        session_token="secret",
+        runtime=runtime,
+        event_bus=bus,
+        diagnostics_store=store,
+    )
+    return TestClient(app), bus, runtime, store
 
 
 def _without_timestamp(item: dict[str, object]) -> dict[str, object]:
@@ -64,6 +85,112 @@ def test_traces_endpoint_filters_by_source(tmp_path: Path) -> None:
 
     traces = response.json()["traces"]
     assert {trace["trace_id"] for trace in traces} == {"t2"}
+
+
+def test_verify_is_recorded_as_a_diagnostics_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, bus, runtime, store = _runtime_app(tmp_path)
+    config = ConfigStatus(
+        cwd=tmp_path,
+        env_file=tmp_path / ".env",
+        env_file_exists=False,
+        config_dir=tmp_path / "config",
+        project_file=tmp_path / "config/team/project.yml",
+        project_file_exists=False,
+        storage_dir=tmp_path,
+    )
+    monkeypatch.setattr(runtime, "get_config_status", lambda: config)
+    monkeypatch.setattr(
+        runtime,
+        "_get_context",
+        lambda: SimpleNamespace(team=Team(project=Project(name="demo"), members=[])),
+    )
+
+    def _verify(*_args: object, **_kwargs: object) -> VerifyResponse:
+        bus.publish_log("INFO", "verification log")
+        return VerifyResponse(
+            ok=True,
+            config=config,
+            active_members=[],
+            checks=[],
+            warnings=[],
+            errors=[],
+        )
+
+    monkeypatch.setattr(runtime_module.VerifyService, "verify", _verify)
+
+    with client:
+        assert client.post("/verify", headers=HEADERS).status_code == HTTP_OK
+        response = client.get(
+            "/diagnostics/traces",
+            params={"source": "diagnostics"},
+            headers=HEADERS,
+        )
+
+    traces = response.json()["traces"]
+    assert len(traces) == 1
+    assert traces[0]["source"] == "diagnostics"
+    assert traces[0]["command"] == "verify"
+    records = store.get_records(traces[0]["trace_id"])
+    assert [record.get("message") for record in records if record["kind"] == "log"] == [
+        "verification log"
+    ]
+    assert [record.get("type") for record in records if record["kind"] == "event"] == [
+        "verify.completed"
+    ]
+
+
+def test_scenario_diagnostics_is_recorded_as_a_diagnostics_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, bus, runtime, store = _runtime_app(tmp_path)
+
+    class _Context:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_get_context", _Context)
+
+    async def _run(*_args: object, **_kwargs: object) -> ScenarioDiagnosticsResponse:
+        bus.publish_log("WARNING", "scenario diagnostics log")
+        return ScenarioDiagnosticsResponse(
+            ok=True,
+            active_members=["alice"],
+            checks=[],
+            warnings=[],
+            errors=[],
+        )
+
+    monkeypatch.setattr(runtime_module.ScenarioDiagnosticsService, "run", _run)
+
+    with client:
+        assert (
+            client.post(
+                "/diagnostics/scenario",
+                params={"person_id": "alice"},
+                headers=HEADERS,
+            ).status_code
+            == HTTP_OK
+        )
+        response = client.get(
+            "/diagnostics/traces",
+            params={"source": "diagnostics"},
+            headers=HEADERS,
+        )
+
+    traces = response.json()["traces"]
+    assert len(traces) == 1
+    assert traces[0]["source"] == "diagnostics"
+    assert traces[0]["person_id"] == "alice"
+    assert traces[0]["command"] == "diagnostics"
+    records = store.get_records(traces[0]["trace_id"])
+    assert [record.get("message") for record in records if record["kind"] == "log"] == [
+        "scenario diagnostics log"
+    ]
+    assert [record.get("type") for record in records if record["kind"] == "event"] == [
+        "diagnostics.completed"
+    ]
 
 
 def test_traces_endpoint_filters_by_exact_attribute(tmp_path: Path) -> None:
