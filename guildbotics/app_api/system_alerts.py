@@ -52,7 +52,7 @@ _RELEVANT_EVENT_TYPES = frozenset(
         "diagnostics.completed",
         "scheduler.failed",
         "scheduler.running",
-        "scheduler.worker_failed",
+        "scheduler.worker.failed",
         "verify.completed",
         "workflow.rate_limited",
     }
@@ -179,7 +179,7 @@ class SystemAlertService:
             self._resolve_execution_alerts(alerts, record)
         elif event_type == "credential.failed":
             self._open_credential_alert(alerts, record)
-        elif event_type == "scheduler.worker_failed":
+        elif event_type == "scheduler.worker.failed":
             person_id = str(record.get("person_id") or "")
             self._open(
                 alerts,

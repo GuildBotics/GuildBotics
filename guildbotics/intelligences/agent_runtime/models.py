@@ -25,7 +25,7 @@ class AgentEventKind(StrEnum):
     TOOL = "tool"
     APPROVAL = "approval"
     USAGE = "usage"
-    ERROR = "error"
+    FAILED = "failed"
 
 
 class AgentRuntimeErrorCategory(StrEnum):

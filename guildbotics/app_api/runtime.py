@@ -17,6 +17,7 @@ from typing import Any, cast
 from dotenv import dotenv_values
 
 from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
+from guildbotics.app_api.agent_streams import collapse_assistant_streams
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
@@ -796,7 +797,9 @@ class AppRuntime:
             )
             records.extend(
                 _to_trace_record(item)
-                for item in self._diagnostics_store.get_records(trace_id)
+                for item in collapse_assistant_streams(
+                    self._diagnostics_store.get_records(trace_id)
+                )
             )
         records.extend(self._memory_trace_records(trace_id))
         records.sort(key=_trace_record_sort_key)

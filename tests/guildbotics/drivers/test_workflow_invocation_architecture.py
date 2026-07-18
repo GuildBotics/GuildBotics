@@ -378,7 +378,7 @@ def test_task_scheduler_ticket_selector_raises_error(monkeypatch):
         assert len(context.get_ticket_manager().comments) == 0
         assert worker_events == [
             {
-                "event_type": "scheduler.worker_failed",
+                "event_type": "scheduler.worker.failed",
                 "default_source": "scheduler",
                 "person_id": context.person.person_id,
                 "attributes": {"service_run_id": ""},

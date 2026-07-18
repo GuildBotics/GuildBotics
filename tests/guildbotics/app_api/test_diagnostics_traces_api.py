@@ -14,7 +14,7 @@ from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.observability import trace_scope
+from guildbotics.observability import span_scope, trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
@@ -99,6 +99,25 @@ def test_trace_detail_returns_ordered_records(tmp_path: Path) -> None:
     assert body["summary"]["status"] == "success"
     kinds = [record["kind"] for record in body["records"]]
     assert kinds == ["event", "log", "event"]
+
+
+def test_trace_detail_collapses_assistant_streams(tmp_path: Path) -> None:
+    client, bus = _app(tmp_path)
+    with trace_scope("manual", trace_id="t1"), span_scope("cli_agent"):
+        bus.publish_event("agent_runtime.assistant", {"name": "started"})
+        bus.publish_event("agent_runtime.assistant", {"name": "delta", "message": "Hel"})
+        bus.publish_event("agent_runtime.assistant", {"name": "delta", "message": "lo"})
+        bus.publish_event(
+            "agent_runtime.assistant", {"name": "completed", "message": "Hello"}
+        )
+
+    with client:
+        response = client.get("/diagnostics/traces/t1", headers=HEADERS)
+
+    records = response.json()["records"]
+    assert [record["payload"]["name"] for record in records] == ["completed"]
+    assert records[0]["payload"]["message"] == "Hello"
+    assert records[0]["span"] == "cli_agent"
 
 
 def test_global_endpoint_returns_unscoped_events_and_logs(tmp_path: Path) -> None:

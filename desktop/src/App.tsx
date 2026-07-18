@@ -1002,9 +1002,22 @@ function memoryFocusFromSearch(searchParams: URLSearchParams): MemoryEventFocus 
   };
 }
 
-const TRACE_SOURCES = ["all", "manual", "routine", "scheduled", "event_listener"] as const;
+const TRACE_SOURCES = [
+  "all",
+  "interactive",
+  "routine",
+  "scheduled",
+  "event_listener",
+  "manual",
+  "diagnostics",
+] as const;
 
-const RECORD_FILTERS = ["all", "error", "llm", "cli_agent", "event", "log", "memory"] as const;
+const RECORD_FILTERS = ["all", "error", "ai", "memory", "event", "log"] as const;
+
+// The Global/system view only holds unscoped events and logs: AI io records
+// always run inside a trace, and memory records are merged into per-trace
+// detail only, so those filters can never match there.
+const GLOBAL_RECORD_FILTERS = ["all", "error", "event", "log"] as const;
 
 export type RecordScopeFilter = {
   kind: "span" | "call" | "subtree";
@@ -1339,7 +1352,7 @@ function MemoryEventDetail({ event }: { event: MemoryEvent }) {
       ],
       [
         t("diagnostics.memory.fields.duration"),
-        event.duration_ms === null ? "" : memoryDuration(event.duration_ms),
+        event.duration_ms === null ? "" : formatDuration(event.duration_ms),
       ],
       [t("diagnostics.memory.fields.source"), sourceText],
     ] as [string, string][]
@@ -1732,6 +1745,7 @@ function TraceExplorer() {
               </div>
               <ExecTimeline
                 records={records}
+                filters={GLOBAL_RECORD_FILTERS}
                 filter={recordFilter}
                 scopeFilter={recordScopeFilter}
                 onFilter={setRecordFilter}
@@ -1952,6 +1966,7 @@ function TraceExplorer() {
 
 function ExecTimeline({
   records,
+  filters = RECORD_FILTERS,
   filter,
   scopeFilter,
   onFilter,
@@ -1959,6 +1974,7 @@ function ExecTimeline({
   onSelect,
 }: {
   records: TraceRecord[];
+  filters?: readonly string[];
   filter: string;
   scopeFilter: RecordScopeFilter | null;
   onFilter: (value: string) => void;
@@ -1974,7 +1990,7 @@ function ExecTimeline({
           size="xs"
           value={filter}
           onChange={onFilter}
-          data={RECORD_FILTERS.map((value) => ({
+          data={filters.map((value) => ({
             value,
             label: t(`diagnostics.executions.recordFilters.${value}`),
           }))}
@@ -2016,7 +2032,7 @@ function ExecTimeline({
               <Badge color={recordBadgeColor(record)} variant="light">
                 {recordBadgeLabel(t, record)}
               </Badge>
-              <span className="exec-timeline-message">{recordDisplayMessage(record)}</span>
+              <span className="exec-timeline-message">{recordDisplayMessage(t, record)}</span>
               <span className="exec-timeline-chevron" aria-hidden>
                 ›
               </span>
@@ -2036,7 +2052,7 @@ function TraceRecordDetail({
   onScopeFilter: (filter: RecordScopeFilter) => void;
 }) {
   const { t } = useTranslation();
-  const message = recordDisplayMessage(record);
+  const message = recordDisplayMessage(t, record);
   const payload = record.payload ?? {};
   const metaEntries = (
     [
@@ -2190,19 +2206,21 @@ export function matchesRecordFilter(record: TraceRecord, filter: string): boolea
       record.type.endsWith(".failed")
     );
   }
-  // LLM / AI CLI tool group both the transcript request/response records and
-  // the logs emitted during that tool's span (tagged via record.span).
-  if (filter === "llm") {
+  // "AI" groups everything produced during a brain call — the LLM / AI CLI
+  // request-response transcripts plus every record tagged with that call's
+  // span (agent activity events, streamed responses, logs).
+  const agentSpan = record.span === "llm" || record.span === "cli_agent";
+  if (filter === "ai") {
     return (
-      (record.kind === "io" && record.type.startsWith("llm")) ||
-      (record.kind === "log" && record.span === "llm")
+      agentSpan ||
+      (record.kind === "io" &&
+        (record.type.startsWith("llm") || record.type.startsWith("cli_agent")))
     );
   }
-  if (filter === "cli_agent") {
-    return (
-      (record.kind === "io" && record.type.startsWith("cli_agent")) ||
-      (record.kind === "log" && record.span === "cli_agent")
-    );
+  // Records grouped under "ai" are excluded from the kind filters so "event"
+  // and "log" stay the non-AI execution milestones and plain service logs.
+  if (filter === "event" || filter === "log") {
+    return record.kind === filter && !agentSpan;
   }
   return record.kind === filter;
 }
@@ -2433,27 +2451,54 @@ async function openExternal(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-// Surface the most useful one-line summary per record: log message, I/O type,
-// description, or — for events — the payload detail (e.g. a failure reason)
-// falling back to the raw event type.
-export function recordDisplayMessage(record: TraceRecord): string {
+// Surface the most useful one-line summary per record: log message, I/O
+// payload excerpt, or — for events — the payload detail (e.g. a failure
+// reason) falling back to the translated event label.
+export function recordDisplayMessage(t: TFunction, record: TraceRecord): string {
   if (record.kind === "log") {
     return record.message;
   }
+  const payload = record.payload ?? {};
   if (record.kind === "io") {
-    return record.message || record.type;
+    return (
+      record.message || firstPayloadString(payload, ["message", "prompt", "stdout"]) || record.type
+    );
   }
   if (record.kind === "memory") {
     return record.message || record.type;
   }
-  const payload = record.payload ?? {};
-  for (const key of ["message", "error", "code", "error_type"]) {
+  if (record.type.startsWith("span.")) {
+    const model = typeof payload.model === "string" ? payload.model : "";
+    const duration =
+      typeof payload.duration_ms === "number" ? formatDuration(payload.duration_ms) : "";
+    const summary = [model, duration].filter(Boolean).join(" · ");
+    if (summary) {
+      return summary;
+    }
+  }
+  return (
+    firstPayloadString(payload, ["message", "error", "code", "error_type"]) ||
+    eventNameLabel(t, payload) ||
+    eventTypeLabel(t, record.type)
+  );
+}
+
+function firstPayloadString(payload: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
     const value = payload[key];
     if (typeof value === "string" && value) {
       return value;
     }
   }
-  return record.type;
+  return "";
+}
+
+// Message-less events (turn started, process initialized, ...) still carry a
+// provider-neutral phase name in payload.name; show its translation so the
+// row says "Started"/"Completed" instead of repeating the badge label.
+function eventNameLabel(t: TFunction, payload: Record<string, unknown>): string {
+  const name = typeof payload.name === "string" ? payload.name : "";
+  return name ? t(`diagnostics.executions.eventNames.${name}`, { defaultValue: name }) : "";
 }
 
 export function shortTraceId(id: string): string {
@@ -2470,7 +2515,7 @@ export function traceDuration(summary: { started_at: string; updated_at: string 
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-function memoryDuration(ms: number): string {
+function formatDuration(ms: number): string {
   return ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
@@ -2506,7 +2551,9 @@ export function recordBadgeColor(record: TraceRecord): string {
 
 export function recordBadgeLabel(t: TFunction, record: TraceRecord): string {
   if (record.kind === "io") {
-    return record.type || t("diagnostics.executions.kinds.io");
+    return t(`diagnostics.executions.ioTypes.${record.type.replace(".", "_")}`, {
+      defaultValue: record.type || t("diagnostics.executions.kinds.io"),
+    });
   }
   if (record.kind === "memory") {
     const action =
@@ -2517,6 +2564,14 @@ export function recordBadgeLabel(t: TFunction, record: TraceRecord): string {
   }
   if (record.kind === "log") {
     return record.level || "LOG";
+  }
+  if (record.type === "agent_runtime.assistant" && record.payload?.partial === true) {
+    return t("diagnostics.executions.agentRuntime.assistant_partial");
+  }
+  // Approval events announce either the session policy or a decision; the
+  // provider-neutral payload.name tells which, and the badge should too.
+  if (record.type === "agent_runtime.approval" && record.payload?.name === "policy") {
+    return t("diagnostics.executions.agentRuntime.approval_policy");
   }
   return eventTypeLabel(t, record.type);
 }
@@ -3083,16 +3138,26 @@ function formatTime(value: string | null | undefined) {
 }
 
 export function eventTypeLabel(t: TFunction, type: string) {
-  if (type.startsWith("command.")) {
-    return t(`overview.eventTypes.${type.replace("command.", "command_")}`, {
-      defaultValue: type.replace("command.", ""),
-    });
+  // member.command.* mirrors the command.* lifecycle and shares its labels.
+  if (type.startsWith("command.") || type.startsWith("member.command.")) {
+    const phase = type.slice(type.lastIndexOf(".") + 1);
+    return t(`overview.eventTypes.command_${phase}`, { defaultValue: phase });
   }
   if (type.startsWith("scheduler.")) {
     return t("overview.eventTypes.scheduler");
   }
   if (type.startsWith("events.")) {
     return t("overview.eventTypes.events");
+  }
+  if (type.startsWith("agent_runtime.")) {
+    return t(`diagnostics.executions.agentRuntime.${type.replace("agent_runtime.", "")}`, {
+      defaultValue: type,
+    });
+  }
+  if (type.startsWith("span.")) {
+    return t(`diagnostics.executions.spanEvents.${type.replace("span.", "")}`, {
+      defaultValue: type,
+    });
   }
   return type;
 }

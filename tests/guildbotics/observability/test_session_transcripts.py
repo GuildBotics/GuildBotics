@@ -43,7 +43,7 @@ def test_trace_routes_full_records_to_session_and_summary_to_index(
         "payload": {"prompt": "full prompt"},
     }
     io_route = store.route(io_record)
-    error_route = store.route(_record("agent_runtime.error"))
+    error_route = store.route(_record("agent_runtime.failed"))
     finished = store.route(_record("command.finished"))
 
     assert [item["type"] for item in started.index_records] == [

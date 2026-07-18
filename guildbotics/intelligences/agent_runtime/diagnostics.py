@@ -13,7 +13,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.session_transcripts import should_record_agent_event
 
-_MAX_MESSAGE = 8_192
+MAX_MESSAGE = 8_192
 _SENSITIVE_PARTS = ("token", "secret", "password", "credential", "authorization")
 _INLINE_SECRET = re.compile(
     r"(?i)(?P<label>(?:--)?(?:access[-_]?token|api[-_]?key|token|password|secret|authorization))"
@@ -31,9 +31,9 @@ def record_agent_event(
         return
     payload: dict[str, Any] = {
         "name": event.name,
-        "message": _redact_text(event.message),
+        "message": _redact_text(event.message or _default_message(event)),
         "command": _redact_text(event.command),
-        "path": event.path[:_MAX_MESSAGE],
+        "path": event.path[:MAX_MESSAGE],
         "approval": event.approval,
         "usage": dict(event.usage),
         "details": _redact(event.details),
@@ -56,6 +56,25 @@ def record_agent_event(
     )
 
 
+def _default_message(event: AgentEvent) -> str:
+    """Build a human-readable message from the provider-neutral contract fields.
+
+    Every AgentEvent record should carry a message so consumers can render it
+    without provider-specific payload knowledge. Only uniform fields are used:
+    ``command``, ``approval``, and the cross-adapter usage token keys.
+    """
+    if event.command:
+        return event.command
+    if event.approval:
+        return event.approval
+    parts = [
+        f"{label} {event.usage[key]:,}"
+        for key, label in (("input_tokens", "input"), ("output_tokens", "output"))
+        if key in event.usage
+    ]
+    return f"{' · '.join(parts)} tokens" if parts else ""
+
+
 def _redact(value: Any, *, key: str = "") -> Any:
     if any(part in key.lower() for part in _SENSITIVE_PARTS):
         return "***"
@@ -71,7 +90,7 @@ def _redact(value: Any, *, key: str = "") -> Any:
 
 
 def _redact_text(value: str) -> str:
-    bounded = value[:_MAX_MESSAGE]
+    bounded = value[:MAX_MESSAGE]
     return _INLINE_SECRET.sub(
         lambda match: f"{match.group('label')}{match.group('separator')}***",
         bounded,

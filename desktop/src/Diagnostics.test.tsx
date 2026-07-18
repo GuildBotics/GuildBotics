@@ -484,7 +484,7 @@ describe("Diagnostics executions tab", () => {
     // The timeline is newest-first: the later log appears before the earlier
     // started event so live updates surface at the top without scrolling.
     const live = screen.getByText("working on it");
-    const started = screen.getByText("command.started");
+    const started = screen.getAllByText(t("overview.eventTypes.command_started"))[0];
     expect(live.compareDocumentPosition(started) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
       screen.queryByRole("link", { name: t("diagnostics.tabs.memory") }),
@@ -642,6 +642,15 @@ describe("Diagnostics executions tab", () => {
     // The failed event surfaces its payload reason on the timeline.
     expect(screen.getByText("ticket lookup failed")).toBeInTheDocument();
 
+    // A selected trace offers the full record filter set, including the
+    // trace-only filters hidden in the Global view.
+    expect(
+      screen.getByRole("radio", { name: t("diagnostics.executions.recordFilters.ai") }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: t("diagnostics.executions.recordFilters.memory") }),
+    ).toBeInTheDocument();
+
     await user.click(screen.getByText(t("diagnostics.executions.recordFilters.log")));
 
     expect(screen.getByText("boom happened")).toBeInTheDocument();
@@ -755,14 +764,30 @@ describe("Diagnostics executions tab", () => {
     await openTab(user, t("diagnostics.tabs.executions"));
 
     expect(screen.getByText(t("diagnostics.executions.sources.manual"))).toBeInTheDocument();
+    expect(screen.getByText(t("diagnostics.executions.sources.interactive"))).toBeInTheDocument();
     expect(screen.getByText(t("diagnostics.executions.sources.routine"))).toBeInTheDocument();
     expect(screen.getByText(t("diagnostics.executions.sources.scheduled"))).toBeInTheDocument();
     expect(
       screen.getByText(t("diagnostics.executions.sources.event_listener")),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("radio", { name: t("diagnostics.executions.sources.diagnostics") }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("radio", { name: t("diagnostics.executions.sources.diagnostics") }),
+    ).toBeInTheDocument();
+  });
+
+  it("filters the trace list by the interactive source", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({ traces: [] });
+
+    renderApp();
+    await openTab(user, t("diagnostics.tabs.executions"));
+    await user.click(screen.getByText(t("diagnostics.executions.sources.interactive")));
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(getTraces).mock.calls.some((call) => call[0]?.source === "interactive"),
+      ).toBe(true),
+    );
   });
 
   it("clears the unified search input and active filters", async () => {
@@ -862,8 +887,21 @@ describe("Diagnostics executions tab", () => {
     // user having to click the pinned Global entry.
 
     expect(await screen.findByText("application started")).toBeInTheDocument();
-    expect(screen.getByText("scheduler.running")).toBeInTheDocument();
+    // The scheduler event row shows its translated label (badge and message).
+    expect(screen.getAllByText(t("overview.eventTypes.scheduler")).length).toBeGreaterThan(0);
     expect(vi.mocked(getGlobalRecords)).toHaveBeenCalled();
+
+    // Unscoped records are only events and logs, so the trace-only record
+    // filters (AI / memory) are not offered in the Global view.
+    expect(
+      screen.getByRole("radio", { name: t("diagnostics.executions.recordFilters.log") }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("radio", { name: t("diagnostics.executions.recordFilters.ai") }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("radio", { name: t("diagnostics.executions.recordFilters.memory") }),
+    ).not.toBeInTheDocument();
 
     // The Global entry belongs only to the "all" source filter: narrowing to a
     // specific source hides it.
