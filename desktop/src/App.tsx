@@ -91,6 +91,7 @@ import {
 } from "./api/client";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
 import { SetupPage } from "./setup/SetupPage";
+import { isTerminalTraceStatus, traceStatusColor } from "./traceStatus";
 const EXECUTION_LIMIT = 200;
 const MEMORY_EVENT_LIMIT = 500;
 const MEMORY_FILTER_ALL = "__all__";
@@ -1088,11 +1089,21 @@ function compositeTraceSummary(
 }
 
 function compositeTraceStatus(summaries: TraceSummary[]): TraceSummary["status"] {
-  if (summaries.some((summary) => summary.status === "failed")) {
+  if (
+    summaries.some(
+      (summary) =>
+        summary.status === "failed" ||
+        summary.status === "abandoned" ||
+        summary.status === "incomplete",
+    )
+  ) {
     return "failed";
   }
   if (summaries.some((summary) => summary.status === "running")) {
     return "running";
+  }
+  if (summaries.some((summary) => summary.status === "retry_scheduled")) {
+    return "retry_scheduled";
   }
   if (summaries.length > 0 && summaries.every((summary) => summary.status === "success")) {
     return "success";
@@ -1714,7 +1725,7 @@ function TraceExplorer() {
                     <span className="exec-row-person">{trace.person_id || "—"}</span>
                   </Group>
                   <span className="exec-row-counts">
-                    {trace.status === "success" || trace.status === "failed"
+                    {isTerminalTraceStatus(trace.status)
                       ? t("diagnostics.executions.counts", {
                           events: trace.event_count,
                           logs: trace.log_count,
@@ -1898,7 +1909,7 @@ function TraceExplorer() {
                     <span>
                       {t("diagnostics.executions.meta.duration")}: {traceDuration(selectedSummary)}
                     </span>
-                    {selectedSummary.status === "success" || selectedSummary.status === "failed" ? (
+                    {isTerminalTraceStatus(selectedSummary.status) ? (
                       <span>
                         {t("diagnostics.executions.counts", {
                           events: selectedSummary.event_count,
@@ -2519,18 +2530,7 @@ function formatDuration(ms: number): string {
   return ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function traceStatusColor(status: string): string {
-  if (status === "success") {
-    return "success";
-  }
-  if (status === "failed") {
-    return "danger";
-  }
-  if (status === "running") {
-    return "info";
-  }
-  return "neutral";
-}
+export { traceStatusColor, isTerminalTraceStatus };
 
 export function recordBadgeColor(record: TraceRecord): string {
   if (record.kind === "io") {

@@ -5,6 +5,10 @@ import threading
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from guildbotics.capabilities.workflow_completion_events import (
+    record_chat_dispatch_abandoned,
+    record_chat_dispatch_retry_scheduled,
+)
 from guildbotics.capabilities.workflow_rate_limits import (
     workflow_rate_limit_from_exception,
 )
@@ -191,6 +195,13 @@ class PendingChatDispatcher:
                     # The workflow normally terminalizes its own final attempt;
                     # reaching here means it could not. Release the thread so
                     # the abandoned event never blocks its followers.
+                    record_chat_dispatch_abandoned(
+                        event_id=event_id,
+                        run_id=pending.run_id,
+                        attempt_count=pending.attempt_count,
+                        max_attempts=pending.max_attempts,
+                        error=str(exc),
+                    )
                     self._context.logger.error(
                         "chat event abandoned after final attempt: "
                         "person=%s channel=%s event=%s attempt=%s/%s error=%s",
@@ -215,6 +226,14 @@ class PendingChatDispatcher:
                 )
                 self._state_store.save_pending_event(
                     service, person.person_id, channel_id, pending
+                )
+                record_chat_dispatch_retry_scheduled(
+                    event_id=event_id,
+                    run_id=pending.run_id,
+                    attempt_count=pending.attempt_count,
+                    max_attempts=pending.max_attempts,
+                    next_attempt_at=pending.next_attempt_at or "",
+                    error_category=pending.last_error_category,
                 )
                 self._context.logger.warning(
                     "chat event processing failed: person=%s channel=%s event=%s "

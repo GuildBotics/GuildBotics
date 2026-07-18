@@ -540,3 +540,58 @@ async def test_dispatcher_skips_future_retry(monkeypatch, tmp_path):
 
     assert processed == 0
     assert store.load_pending_events("slack", "alice", "C1")[0].next_attempt_at
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_records_retry_scheduled_event(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    ran: list[str] = []
+    _install_runner(monkeypatch, ran, fail_events={"E1"})
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "guildbotics.drivers.pending_chat_dispatcher."
+        "record_chat_dispatch_retry_scheduled",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert len(recorded) == 1
+    event = recorded[0]
+    assert event["event_id"] == "E1"
+    assert event["run_id"]
+    assert event["attempt_count"] == 1
+    assert event["next_attempt_at"]
+    assert event["error_category"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_side_abandon_records_abandoned_event(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    pending.attempt_count = 5
+    pending.max_attempts = 5
+    store.save_pending_event("slack", "alice", "C1", pending)
+    ran: list[str] = []
+    _install_runner(monkeypatch, ran, fail_events={"E1"})
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "guildbotics.drivers.pending_chat_dispatcher.record_chat_dispatch_abandoned",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+    context = _FakeContext()
+    context.logger.error = lambda *a, **k: None
+    dispatcher = PendingChatDispatcher(context, state_store=store)  # type: ignore[arg-type]
+
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert len(recorded) == 1
+    assert recorded[0]["event_id"] == "E1"
+    assert recorded[0]["attempt_count"] == 6
+    assert recorded[0]["max_attempts"] == 5
+    # record_chat_dispatch_abandoned itself caps the diagnostics payload's
+    # attempt_count at max_attempts (this monkeypatch captures the dispatcher's
+    # raw call args, which still legitimately go one over before capping).

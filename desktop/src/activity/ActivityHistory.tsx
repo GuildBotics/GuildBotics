@@ -44,6 +44,29 @@ import {
   memberAvatarUrl,
 } from "../api/client";
 import { useMemberCliAgentLabel } from "../cliAgent";
+import { traceStatusColor } from "../traceStatus";
+
+// Statuses from the workflow-completion / dispatch-lifecycle layers
+// (issue #313): a session can look identical to a successful one (clean
+// provider span) while actually waiting on a retry, permanently abandoned, or
+// missing its completion evidence. These need their own visual state so
+// Activity History does not show them as ordinary completed sessions.
+const STATUS_ALERT_PRIORITY = ["abandoned", "incomplete", "retry_scheduled"] as const;
+type StatusAlert = (typeof STATUS_ALERT_PRIORITY)[number];
+
+function sessionStatusAlert(status: string): StatusAlert | null {
+  return (STATUS_ALERT_PRIORITY as readonly string[]).includes(status)
+    ? (status as StatusAlert)
+    : null;
+}
+
+function strongestStatusAlert(sessions: ActivityHistorySession[]): StatusAlert | null {
+  return (
+    STATUS_ALERT_PRIORITY.find((candidate) =>
+      sessions.some((session) => session.status === candidate),
+    ) ?? null
+  );
+}
 
 export type ActivityView = "day" | "week";
 export type ActivitySessionMode = ActivityHistorySession["mode"];
@@ -83,6 +106,7 @@ type ActivityBlock = {
   sessions: ActivityHistorySession[];
   links: ActivityHistoryLink[];
   rate_limit: ActivityHistorySession["rate_limit"];
+  status_alert: StatusAlert | null;
 };
 
 export function ActivityHistoryPage() {
@@ -494,27 +518,37 @@ function ActivityBlockBar({
   const width = Math.max(0, right - left);
   const stateClass = searchStateClass(searchActive, matched);
   const visibleTitle = activityBlockVisibleTitle(block.title);
-  const rateLimitClass = block.rate_limit ? "activity-session-rate-limited" : "";
+  // Rate limiting takes visual priority (it already has its own affordance);
+  // otherwise the strongest completion/dispatch status alert on the block
+  // gets its own tinted state so retry-scheduled/abandoned/incomplete
+  // sessions never look identical to an ordinary completed session.
+  const alertClass = block.rate_limit
+    ? "activity-session-rate-limited"
+    : block.status_alert
+      ? `activity-session-status-${block.status_alert}`
+      : "";
   const rateLimitReset = block.rate_limit ? formatRateLimitReset(block.rate_limit) : "";
   const ariaLabel = block.rate_limit
     ? `${t("activity.rateLimit.label")}: ${block.title}${
         rateLimitReset ? ` (${t("activity.rateLimit.reset", { reset: rateLimitReset })})` : ""
       }`
-    : block.title;
+    : block.status_alert
+      ? `${t(`activity.status.${block.status_alert}`)}: ${block.title}`
+      : block.title;
   return (
     <HoverCard openDelay={150} closeDelay={80} withinPortal position={blockHoverCardPosition(view)}>
       <HoverCard.Target>
         <button
           type="button"
           aria-label={ariaLabel}
-          className={`${stateClass} activity-session activity-session-${block.mode} ${rateLimitClass} ${
+          className={`${stateClass} activity-session activity-session-${block.mode} ${alertClass} ${
             view === "week" ? "activity-session-week" : ""
           }`}
           style={{
             ...(view === "day" ? { left: `${left}%`, top: "10px", width: `${width}%` } : {}),
           }}
         >
-          {block.rate_limit ? (
+          {block.rate_limit || block.status_alert ? (
             <CircleAlert className="activity-session-alert-icon" size={13} aria-hidden="true" />
           ) : null}
           <span>{visibleTitle}</span>
@@ -590,6 +624,17 @@ function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
           ) : null}
         </Group>
       ) : null}
+      {block.status_alert ? (
+        <Group gap="xs" wrap="nowrap">
+          <Badge
+            color={traceStatusColor(block.status_alert)}
+            variant="light"
+            style={{ flexShrink: 0 }}
+          >
+            {t(`activity.status.${block.status_alert}`)}
+          </Badge>
+        </Group>
+      ) : null}
       <Stack gap={6}>
         {blockModes(block.sessions).map((mode) => {
           const span = sessionsTimeSpan(block.sessions.filter((session) => session.mode === mode));
@@ -618,6 +663,16 @@ function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
                 <Text fw={600} lineClamp={1} size="xs">
                   {session.title}
                 </Text>
+                {sessionStatusAlert(session.status) ? (
+                  <Badge
+                    color={traceStatusColor(session.status)}
+                    variant="light"
+                    size="xs"
+                    style={{ flexShrink: 0 }}
+                  >
+                    {t(`activity.status.${session.status}`)}
+                  </Badge>
+                ) : null}
               </Group>
               <Text c="dimmed" size="xs">
                 {formatTimeRange(session.started_at, session.ended_at)}
@@ -885,6 +940,7 @@ function activityBlockFromSession(
     sessions: [session],
     links: session.links,
     rate_limit: session.rate_limit ?? null,
+    status_alert: sessionStatusAlert(session.status),
   };
 }
 
@@ -902,6 +958,7 @@ function mergeSessionIntoBlock(
   block.display_ended_at = maxIso(block.display_ended_at, displayEnd.toISOString());
   block.links = dedupeLinks(block.sessions.flatMap((item) => item.links));
   block.rate_limit = block.sessions.find((item) => item.rate_limit)?.rate_limit ?? null;
+  block.status_alert = strongestStatusAlert(block.sessions);
 }
 
 function blockTitle(sessions: ActivityHistorySession[]): string {

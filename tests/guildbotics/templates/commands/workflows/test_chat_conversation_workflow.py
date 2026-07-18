@@ -1190,3 +1190,86 @@ async def test_chat_conversation_workflow_reads_from_invocation(tmp_path):
 
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert "E_INVOCATION" in channel_state.processed_event_ids
+
+
+@pytest.mark.asyncio
+async def test_final_attempt_abandon_records_dispatch_abandoned_event(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "3")
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("missing")
+    _set_incoming_event(ctx)
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 3,
+        "max_attempts": 3,
+        "is_final_attempt": True,
+        "run_id": "run-1",
+    }
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        chat_conversation_workflow,
+        "record_chat_dispatch_abandoned",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert len(recorded) == 1
+    assert recorded[0]["event_id"] == "E1"
+    assert recorded[0]["run_id"] == "run-1"
+    assert recorded[0]["attempt_count"] == 3
+    assert recorded[0]["max_attempts"] == 3
+
+
+@pytest.mark.asyncio
+async def test_recovered_completion_records_workflow_completed_event(
+    tmp_path, monkeypatch
+):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("crash")
+    _set_incoming_event(ctx)
+    run_id = "run-recovered-event"
+    store = RunStore()
+    store.append_evidence(
+        run_id,
+        "chat_reply",
+        {
+            "service": "slack",
+            "channel_id": "C1",
+            "message_ts": "200.1",
+            "thread_ts": "100.1",
+            "text": "確認します。",
+            "posted": True,
+        },
+    )
+    store.complete_run(
+        run_id,
+        "done",
+        "Posted a reply.",
+        subject_type="chat",
+        subject_id="slack:C1:100.1:E1",
+        person_id="alice",
+    )
+    ctx.shared_state["retry_context"] = {
+        "attempt_count": 2,
+        "max_attempts": 5,
+        "is_final_attempt": False,
+        "run_id": run_id,
+    }
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        chat_conversation_workflow,
+        "record_workflow_completed",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert recorded == [{"run_id": run_id, "attempt": 2, "recovered": True}]

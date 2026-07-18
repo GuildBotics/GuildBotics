@@ -122,8 +122,6 @@ def _summarize_trace(
     ended_at = max(timestamps)
     links = links_from_records(records, attributes)
     rate_limit = _rate_limit_from_records(records)
-    if rate_limit is not None:
-        status = "rate_limited"
     mode: ActivitySessionMode = "interactive" if source == "interactive" else "workflow"
     if (
         mode == "workflow"
@@ -283,22 +281,60 @@ def _event_id(
 
 
 def _trace_status(records: list[dict[str, Any]]) -> str:
-    status = "info"
+    """Resolve a session status from three separate layers.
+
+    Provider span success (``.finished``) is only provisional: the workflow's
+    recorded completion evidence and the dispatch decision (retry/abandon)
+    take precedence, so a clean provider turn without completion evidence is
+    never shown as success. Traces without completion-layer events (manual
+    commands, interactive sessions) keep the provider-derived status.
+
+    ``retry_scheduled`` requires an actual ``chat_dispatch.retry_scheduled``
+    event: completion evidence alone does not say whether anything will
+    retry, since the ticket workflow shares the same completion layer but
+    exhausts its attempt budget by posting an error comment instead of
+    scheduling a dispatch retry. A trace with missing completion evidence and
+    no dispatch event is ``incomplete``.
+    """
+    provider = "info"
+    completion = ""
+    dispatch = ""
+    rate_limited = False
     for item in records:
         kind = item.get("kind")
         event_type = str(item.get("type") or "")
         level = str(item.get("level") or "").upper()
-        if kind == "event" and event_type == "workflow.rate_limited":
-            return "rate_limited"
-        if kind == "event" and event_type.endswith(".failed"):
-            return "failed"
         if kind == "log" and level in {"ERROR", "CRITICAL"}:
-            return "failed"
-        if kind == "event" and event_type.endswith(".started") and status == "info":
-            status = "running"
-        if kind == "event" and event_type.endswith(".finished"):
-            status = "success"
-    return status
+            provider = "failed"
+        if kind != "event":
+            continue
+        if event_type == "workflow.rate_limited":
+            rate_limited = True
+        elif event_type == "workflow.completed":
+            completion = "recorded"
+        elif event_type == "workflow.completion_missing":
+            completion = "missing"
+        elif event_type == "chat_dispatch.retry_scheduled":
+            dispatch = "retry_scheduled"
+        elif event_type == "chat_dispatch.abandoned":
+            dispatch = "abandoned"
+        elif event_type.endswith(".failed"):
+            provider = "failed"
+        elif event_type.endswith(".started") and provider == "info":
+            provider = "running"
+        elif event_type.endswith(".finished") and provider != "failed":
+            provider = "success"
+    if dispatch == "abandoned":
+        return "abandoned"
+    if rate_limited:
+        return "rate_limited"
+    if dispatch == "retry_scheduled":
+        return "retry_scheduled"
+    if completion == "missing":
+        return "incomplete"
+    if completion == "recorded":
+        return "success"
+    return provider
 
 
 def _rate_limit_from_records(

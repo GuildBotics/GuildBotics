@@ -298,6 +298,49 @@ describe("ActivityHistoryPage", () => {
     expect(await screen.findByText(/Reset:/)).toBeInTheDocument();
   });
 
+  it.each([
+    ["retry_scheduled", "Retry scheduled", "activity-session-status-retry_scheduled"],
+    ["abandoned", "Abandoned", "activity-session-status-abandoned"],
+    ["incomplete", "Incomplete", "activity-session-status-incomplete"],
+  ] as const)(
+    "shows a %s badge and tinted bar for a dispatch/completion status session",
+    async (status, label, cssClass) => {
+      vi.mocked(getActivityHistory).mockResolvedValue({
+        ...ACTIVITY_FIXTURE,
+        events: [],
+        sessions: [
+          {
+            ...ACTIVITY_FIXTURE.sessions[0],
+            trace_id: `session-${status}`,
+            title: "Slack thread",
+            mode: "workflow",
+            status,
+          },
+        ],
+      });
+      renderActivity();
+
+      const bar = await screen.findByRole("button", { name: new RegExp(`${label}: Slack thread`) });
+      expect(bar).toHaveClass(cssClass);
+      expect(bar.querySelector(".activity-session-alert-icon")).not.toBe(null);
+
+      const user = userEvent.setup({ delay: null });
+      await user.hover(bar);
+
+      expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
+    },
+  );
+
+  it("does not mark an ordinary successful session with a status alert", async () => {
+    renderActivity();
+
+    const bar = await screen.findByRole("button", { name: "workflows/ticket_driven_workflow" });
+    expect(bar).not.toHaveClass("activity-session-status-retry_scheduled");
+    expect(bar).not.toHaveClass("activity-session-status-abandoned");
+    expect(bar).not.toHaveClass("activity-session-status-incomplete");
+    expect(bar.querySelector(".activity-session-alert-icon")).toBe(null);
+  });
+
   it("drops the current-time line in week view but keeps it in day view", async () => {
     const user = userEvent.setup();
     const { container } = renderActivity();
@@ -576,6 +619,42 @@ describe("buildActivityBlocks", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].mode).toBe("mixed");
     expect(blockModes(blocks[0].sessions)).toEqual(["workflow", "interactive"]);
+  });
+
+  it("keeps the strongest status alert (abandoned) when merging sessions", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "retry",
+        status: "retry_scheduled",
+        started_at: "2026-07-01T12:05:00Z",
+        ended_at: "2026-07-01T12:20:00Z",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "abandoned",
+        status: "abandoned",
+        started_at: "2026-07-01T12:30:00Z",
+        ended_at: "2026-07-01T12:45:00Z",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].status_alert).toBe("abandoned");
+  });
+
+  it("has no status alert when no merged session carries one", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "ok-1",
+        status: "success",
+        started_at: "2026-07-01T12:05:00Z",
+        ended_at: "2026-07-01T12:20:00Z",
+      },
+    ]);
+
+    expect(blocks[0].status_alert).toBe(null);
   });
 
   it("keeps a single mode when merged sessions share it", () => {

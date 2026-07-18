@@ -155,3 +155,74 @@ async def test_rate_limit_error_is_reraised_without_retry_attempts():
         find_cli_agent_execution_error(excinfo.value, category="rate_limited")
         is excinfo.value
     )
+
+
+@pytest.mark.asyncio
+async def test_records_completion_missing_then_completed_events(monkeypatch):
+    from guildbotics.capabilities import workflow_completion_events
+
+    recorded: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        workflow_completion_events,
+        "record_workflow_completed",
+        lambda **kwargs: recorded.append(("completed", kwargs)),
+    )
+    monkeypatch.setattr(
+        workflow_completion_events,
+        "record_workflow_completion_missing",
+        lambda **kwargs: recorded.append(("missing", kwargs)),
+    )
+    checks: list[int] = []
+
+    async def _invoke(run_id, attempt):
+        pass
+
+    def _check(run_id):
+        checks.append(1)
+        if len(checks) < 2:
+            raise RuntimeError("Task run was not found.")
+        return "ok"
+
+    result, run_id = await run_with_completion_retry(
+        invoke=_invoke, check_completion=_check, max_attempts=3
+    )
+
+    assert result == "ok"
+    # The successful provider turn without completion evidence is an explicit
+    # diagnostics event, and the eventual completion is recorded as well.
+    assert [name for name, _ in recorded] == ["missing", "completed"]
+    missing = recorded[0][1]
+    assert missing["run_id"] == run_id
+    assert missing["attempt"] == 1
+    assert missing["max_attempts"] == 3
+    assert "not found" in missing["error"]
+    completed = recorded[1][1]
+    assert completed["run_id"] == run_id
+    assert completed["attempt"] == 2
+
+
+@pytest.mark.asyncio
+async def test_invoke_failure_does_not_record_completion_missing(monkeypatch):
+    from guildbotics.capabilities import workflow_completion_events
+
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        workflow_completion_events,
+        "record_workflow_completion_missing",
+        lambda **kwargs: recorded.append("missing"),
+    )
+
+    async def _invoke(run_id, attempt):
+        raise RuntimeError("provider turn failed")
+
+    def _check(run_id):
+        raise AssertionError("check must not run after invoke failure")
+
+    with pytest.raises(CompletionRetryExhausted):
+        await run_with_completion_retry(
+            invoke=_invoke, check_completion=_check, max_attempts=2
+        )
+
+    # A failed provider turn already records its own failure; the completion
+    # layer only reports turns that succeeded without evidence.
+    assert recorded == []
