@@ -736,7 +736,7 @@ def test_agent_diagnostics_redact_credentials_and_keep_correlation(
     )
     diagnostics.record_agent_event(
         AgentEvent(
-            AgentEventKind.ERROR,
+            AgentEventKind.FAILED,
             "failed",
             message="Authorization: Bearer top-secret",
             command="tool --token command-secret",
@@ -750,7 +750,7 @@ def test_agent_diagnostics_redact_credentials_and_keep_correlation(
         ConversationRecord(key=key, generation=2),
     )
 
-    assert recorded[0]["event_type"] == "agent_runtime.error"
+    assert recorded[0]["event_type"] == "agent_runtime.failed"
     assert recorded[0]["attributes"]["agent.run_id"] == "run-1"
     assert recorded[0]["attributes"]["agent.conversation_generation"] == 2
     assert recorded[0]["payload"]["details"] == {

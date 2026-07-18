@@ -31,7 +31,7 @@ def record_agent_event(
         return
     payload: dict[str, Any] = {
         "name": event.name,
-        "message": _redact_text(event.message),
+        "message": _redact_text(event.message or _default_message(event)),
         "command": _redact_text(event.command),
         "path": event.path[:_MAX_MESSAGE],
         "approval": event.approval,
@@ -54,6 +54,25 @@ def record_agent_event(
         },
         payload=payload,
     )
+
+
+def _default_message(event: AgentEvent) -> str:
+    """Build a human-readable message from the provider-neutral contract fields.
+
+    Every AgentEvent record should carry a message so consumers can render it
+    without provider-specific payload knowledge. Only uniform fields are used:
+    ``command``, ``approval``, and the cross-adapter usage token keys.
+    """
+    if event.command:
+        return event.command
+    if event.approval:
+        return event.approval
+    parts = [
+        f"{label} {event.usage[key]:,}"
+        for key, label in (("input_tokens", "input"), ("output_tokens", "output"))
+        if key in event.usage
+    ]
+    return f"{' · '.join(parts)} tokens" if parts else ""
 
 
 def _redact(value: Any, *, key: str = "") -> Any:

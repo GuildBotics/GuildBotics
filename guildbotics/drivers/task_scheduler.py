@@ -340,7 +340,7 @@ class TaskScheduler:
         self, person: Person, *, source: str, consecutive_errors: int
     ) -> None:
         record_correlated_event(
-            event_type="scheduler.worker_failed",
+            event_type="scheduler.worker.failed",
             default_source="scheduler",
             person_id=person.person_id,
             attributes={"service_run_id": self.service_run_id or ""},

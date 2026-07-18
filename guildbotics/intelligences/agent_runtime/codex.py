@@ -596,6 +596,13 @@ def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | No
         )
     if method in {"item/started", "item/completed"}:
         item_type = str(item.get("type", "") or "unknown")
+        # Reasoning items never carry text and user-message items (injected
+        # context) only carry content once completed; skip the empty shells so
+        # transcripts stay signal.
+        if item_type == "reasoning" or (
+            item_type == "userMessage" and method == "item/started"
+        ):
+            return None
         kind = {
             "agentMessage": AgentEventKind.ASSISTANT,
             "commandExecution": AgentEventKind.COMMAND,
@@ -659,7 +666,7 @@ def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | No
     if method == "error":
         error = _dict(params.get("error"))
         return AgentEvent(
-            AgentEventKind.ERROR,
+            AgentEventKind.FAILED,
             "provider",
             message=str(error.get("message", "") or ""),
             provider_session_id=session_id,

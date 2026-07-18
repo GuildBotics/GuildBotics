@@ -479,7 +479,7 @@ def test_worker_failure_persists_until_scheduler_restarts(tmp_path: Path) -> Non
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     store.record(
         _event(
-            "scheduler.worker_failed",
+            "scheduler.worker.failed",
             timestamp="2026-07-11T10:00:00+09:00",
             trace_id="",
         )

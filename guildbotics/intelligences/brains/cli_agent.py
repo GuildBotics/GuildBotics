@@ -779,7 +779,7 @@ class CliAgentBrain(Brain):
         except AgentRuntimeError as exc:
             await emit(
                 AgentEvent(
-                    AgentEventKind.ERROR,
+                    AgentEventKind.FAILED,
                     exc.category.value,
                     message=str(exc),
                     provider_session_id=conversation.provider_session_id,

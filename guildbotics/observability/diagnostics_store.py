@@ -516,7 +516,7 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
     if kind == "event":
         summary["event_count"] += 1
         event_type = str(item.get("type", ""))
-        if event_type.endswith((".failed", ".error")):
+        if event_type.endswith(".failed"):
             summary["status"] = "failed"
             summary["error_count"] += 1
         elif event_type.endswith(".finished") and summary["status"] != "failed":

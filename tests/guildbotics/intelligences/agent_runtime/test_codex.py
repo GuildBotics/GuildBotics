@@ -587,6 +587,28 @@ def test_codex_command_and_file_items_are_normalized() -> None:
     assert _decode_notification("future/event", {"value": 1}) is None
 
 
+def test_codex_empty_item_shells_are_skipped() -> None:
+    for method in ("item/started", "item/completed"):
+        assert (
+            _decode_notification(
+                method, {"item": {"id": "reason-1", "type": "reasoning"}}
+            )
+            is None
+        )
+    assert (
+        _decode_notification(
+            "item/started", {"item": {"id": "user-1", "type": "userMessage"}}
+        )
+        is None
+    )
+    completed = _decode_notification(
+        "item/completed",
+        {"item": {"id": "user-1", "type": "userMessage", "text": "injected context"}},
+    )
+    assert completed is not None
+    assert completed.message == "injected context"
+
+
 def test_codex_token_usage_notification_is_normalized() -> None:
     event = _decode_notification(
         "thread/tokenUsage/updated",

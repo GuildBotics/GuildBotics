@@ -38,7 +38,7 @@ class TranscriptCounts:
         kind = str(item.get("kind") or "")
         if kind == "event":
             self.event_count += 1
-            if str(item.get("type") or "").endswith((".failed", ".error")):
+            if str(item.get("type") or "").endswith(".failed"):
                 self.error_count += 1
         elif kind == "log":
             self.log_count += 1
@@ -374,7 +374,7 @@ def _belongs_in_index(item: dict[str, Any]) -> bool:
         "span.failed",
         "scheduler.failed",
         "scheduler.running",
-        "scheduler.worker_failed",
+        "scheduler.worker.failed",
     }:
         return True
     return event_type.startswith(("github.", "credential.")) or event_type == (
