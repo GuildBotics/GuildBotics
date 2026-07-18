@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
+from guildbotics.intelligences.agent_runtime.diagnostics import MAX_MESSAGE
 
 
 def _assistant(name: str, message: str = "", span_id: str = "span-1") -> dict[str, Any]:
@@ -59,6 +60,31 @@ def test_interrupted_stream_collapses_into_one_partial_record() -> None:
         "message": "partial output",
         "partial": True,
     }
+
+
+def test_lone_started_without_deltas_is_left_untouched() -> None:
+    records = [
+        _assistant("started"),
+        _event("span.failed"),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    assert collapsed == records
+
+
+def test_partial_message_is_capped() -> None:
+    records = [
+        _assistant("delta", "a" * 5000),
+        _assistant("delta", "b" * 5000),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    assert len(collapsed) == 1
+    message = collapsed[0]["payload"]["message"]
+    assert len(message) == MAX_MESSAGE
+    assert message.startswith("a")
 
 
 def test_streams_are_tracked_per_span() -> None:

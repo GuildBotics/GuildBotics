@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from guildbotics.intelligences.agent_runtime.diagnostics import MAX_MESSAGE
+
 
 def collapse_assistant_streams(
     records: list[dict[str, Any]],
@@ -15,7 +17,8 @@ def collapse_assistant_streams(
     ``started``/``delta`` records are redundant and dropped. A stream that
     never completed — the AI CLI call is still running or was interrupted
     mid-stream — is collapsed into a single partial-response record so the
-    partial output stays visible on the timeline.
+    partial output stays visible on the timeline. A stream with no deltas has
+    no partial output to show; its records are left untouched.
     """
     dropped: set[int] = set()
     replaced: dict[int, dict[str, Any]] = {}
@@ -30,13 +33,20 @@ def collapse_assistant_streams(
         elif name == "completed":
             dropped.update(pending.pop(stream, []))
     for indexes in pending.values():
-        last = indexes[-1]
-        dropped.update(indexes[:-1])
+        deltas = [
+            index
+            for index in indexes
+            if _payload(records[index]).get("name") == "delta"
+        ]
+        if not deltas:
+            continue
+        anchor = deltas[-1]
+        dropped.update(index for index in indexes if index != anchor)
         message = "".join(
-            str(_payload(records[index]).get("message") or "") for index in indexes
-        )
-        replaced[last] = {
-            **records[last],
+            str(_payload(records[index]).get("message") or "") for index in deltas
+        )[:MAX_MESSAGE]
+        replaced[anchor] = {
+            **records[anchor],
             "payload": {"name": "partial", "message": message, "partial": True},
         }
     return [
