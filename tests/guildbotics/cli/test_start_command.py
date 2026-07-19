@@ -25,7 +25,6 @@ class _FakeScheduler:
     def __init__(
         self,
         context,
-        routine_commands,
         consecutive_error_limit,
         routine_interval_minutes=10,
         scheduled_source_enabled=True,
@@ -33,7 +32,6 @@ class _FakeScheduler:
         event_queue_source_enabled=True,
     ):
         self.context = context
-        self.routine_commands = list(routine_commands)
         self.consecutive_error_limit = consecutive_error_limit
         self.routine_interval_minutes = routine_interval_minutes
         self.scheduled_source_enabled = scheduled_source_enabled
@@ -183,21 +181,22 @@ def test_start_only_scheduler(monkeypatch, tmp_path):
 def test_start_rejects_when_desktop_holds_service_lock(monkeypatch, tmp_path):
     created, _handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
     holder = ServiceLock(tmp_path / "service.lock")
-    metadata = holder.acquire(
-        owner="desktop", workspace=tmp_path / "desktop-workspace"
-    )
+    metadata = holder.acquire(owner="desktop", workspace=tmp_path / "desktop-workspace")
     try:
         result = CliRunner().invoke(cli_main, ["start"])
     finally:
         holder.release()
 
     assert result.exit_code == 1
-    assert t(
-        "runtime.service_lock.already_running_with_owner",
-        owner=metadata.owner,
-        pid=metadata.pid,
-        workspace=metadata.workspace,
-    ) in result.output
+    assert (
+        t(
+            "runtime.service_lock.already_running_with_owner",
+            owner=metadata.owner,
+            pid=metadata.pid,
+            workspace=metadata.workspace,
+        )
+        in result.output
+    )
     assert created == {}
 
 
@@ -210,7 +209,6 @@ def test_start_only_events(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert "events" in created
     assert "scheduler" in created
-    assert created["scheduler"].routine_commands == []
     assert created["scheduler"].scheduled_source_enabled is False
     assert created["scheduler"].routine_source_enabled is False
     assert created["scheduler"].event_queue_source_enabled is True
@@ -298,7 +296,6 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
     # Replace TaskScheduler factory again to inject the special start behavior.
     def _task_scheduler_factory(
         context,
-        routine_commands,
         consecutive_error_limit,
         routine_interval_minutes=10,
         scheduled_source_enabled=True,
@@ -308,7 +305,6 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
         nonlocal original_factory
         inst = _FakeScheduler(
             context,
-            routine_commands,
             consecutive_error_limit,
             routine_interval_minutes,
             scheduled_source_enabled,

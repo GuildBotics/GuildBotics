@@ -24,7 +24,6 @@ def test_get_chat_profile_and_collections_normalize():
     person = _Person(
         profile={
             "chat": {
-                "subscriptions": [{"channel_id": "C1"}, "bad"],
                 "scheduled_posts": [{"name": "a"}, 1],
                 "slack_base_url": " https://slack.local/api ",
             }
@@ -32,14 +31,12 @@ def test_get_chat_profile_and_collections_normalize():
     )
 
     assert get_chat_profile(person) == person.profile["chat"]
-    assert get_chat_subscriptions(person) == [{"channel_id": "C1"}]
     assert get_chat_scheduled_posts(person) == [{"name": "a"}]
     assert get_chat_slack_base_url(person) == "https://slack.local/api"
 
 
-def test_get_chat_subscriptions_prefers_message_channels():
+def test_get_chat_subscriptions_reads_message_channels():
     person = _Person(
-        profile={"chat": {"subscriptions": [{"channel_id": "OLD"}]}},
         message_channels=[
             {
                 "service": "slack",

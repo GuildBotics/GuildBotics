@@ -83,7 +83,7 @@ def _service(person_type="proxy_agent"):
         person_id="aiko",
         name="Aiko",
         person_type=person_type,
-        account_info={"github_username": "bot"},
+        account_info={"github_username": "bot", "github_account_type": person_type},
     )
     team = Team(
         project=Project(

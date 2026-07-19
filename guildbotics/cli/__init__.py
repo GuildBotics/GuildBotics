@@ -129,11 +129,9 @@ main.add_command(workspace)
     default=3,
     help="Stop a worker after this many consecutive workflow errors.",
 )
-@click.argument("default_routine_commands", nargs=-1)
 def start(
     only_target: str | None,
     max_consecutive_errors: int,
-    default_routine_commands: tuple[str, ...],
 ) -> None:
     """Start GuildBotics runtimes (scheduler and event listener runner)."""
     _load_env_from_cwd()
@@ -149,7 +147,6 @@ def start(
         _run_cli_background_service(
             only_target=only_target,
             max_consecutive_errors=max_consecutive_errors,
-            default_routine_commands=default_routine_commands,
         )
     finally:
         service_lock.release()
@@ -159,14 +156,12 @@ def _run_cli_background_service(
     *,
     only_target: str | None,
     max_consecutive_errors: int,
-    default_routine_commands: tuple[str, ...],
 ) -> None:
     start_system_session(new_id())
     try:
         _run_cli_background_service_session(
             only_target=only_target,
             max_consecutive_errors=max_consecutive_errors,
-            default_routine_commands=default_routine_commands,
         )
     finally:
         finish_system_session()
@@ -176,7 +171,6 @@ def _run_cli_background_service_session(
     *,
     only_target: str | None,
     max_consecutive_errors: int,
-    default_routine_commands: tuple[str, ...],
 ) -> None:
     edition = get_edition()
 
@@ -187,7 +181,6 @@ def _run_cli_background_service_session(
     scheduler = (
         TaskScheduler(
             edition.get_context(),
-            list(default_routine_commands) if scheduler_sources_enabled else [],
             consecutive_error_limit=max_consecutive_errors,
             scheduled_source_enabled=scheduler_sources_enabled,
             routine_source_enabled=scheduler_sources_enabled,

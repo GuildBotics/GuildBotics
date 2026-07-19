@@ -287,10 +287,11 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
 
 - **Backends** (`utils/secret_store.py`): `keyring` (OS keychain; the workspace keeps
   only a value-less index in `.guildbotics/config/secrets.yml`) and `env-file`
-  (workspace `.env`; the default for legacy workspaces and the headless path). New
-  workspace setup defaults to keyring; existing workspaces switch only via
-  `guildbotics secrets migrate`. Backend selection: `GUILDBOTICS_SECRETS_BACKEND` env
-  var > `secrets.yml` > legacy env-file.
+  (workspace `.env`; the default when no keychain is available, e.g. headless
+  machines). New workspace setup pins the backend: keyring when a keychain is
+  available, env-file otherwise. Backend selection: `GUILDBOTICS_SECRETS_BACKEND`
+  env var > `secrets.yml` > env-file. Machine moves use `guildbotics secrets
+  export` / `import`.
 - **Resolution priority** at process start: real environment variables > OS keychain >
   `.env`. Values are injected into `os.environ` once at startup; app_api removes its
   own injected keys on workspace switch but preserves variables inherited from the
@@ -298,8 +299,8 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
 - **Exception**: `*_GITHUB_PRIVATE_KEY` (GitHub App PEM content) is *never* injected
   into the environment — AI CLI tool subprocesses inherit `os.environ` wholesale, so an
   App private key in the environment would leak to every agent process. Consumers read
-  it on demand through the secret store, falling back to the legacy
-  `*_GITHUB_PRIVATE_KEY_PATH` file.
+  it on demand through the secret store; env-file workspaces configure a
+  `*_GITHUB_PRIVATE_KEY_PATH` file instead.
 - **Writes**: `.env` files written by GuildBotics are always `0600`, written atomically
   (`mkstemp` + `os.replace`); dotenv serialization round-trips multiline values (PEM).
   Workspace moves use `guildbotics secrets export` / `import`.

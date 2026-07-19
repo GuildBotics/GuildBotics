@@ -555,30 +555,6 @@ def test_routine_command_options_do_not_reload_duplicate_en_sidecar(
     assert loads == [sidecar_path]
 
 
-def test_routine_command_options_keep_legacy_python_routine_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    _write(
-        config_dir / "commands/legacy_routine.py",
-        "\n".join(
-            [
-                "ROUTINE = True",
-                "",
-                "async def main(context):",
-                '    """Legacy routine."""',
-                "    return None",
-            ]
-        ),
-    )
-    context = _make_context([_make_person()])
-    runtime = _runtime_with_context(monkeypatch, context)
-
-    routine = {item.command for item in runtime.get_routine_command_options().options}
-
-    assert "legacy_routine" in routine
-
-
 def test_routine_command_options_localize_builtin_sidecar_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1062,9 +1038,7 @@ async def test_run_command_rejects_person_lease_conflict_with_http_409(
     holder.acquire(source="routine", command="ticket", work_id="existing-work")
     try:
         with pytest.raises(AppApiError) as exc_info:
-            await runtime.run_command(
-                CommandRunRequest(command="demo", person="bot")
-            )
+            await runtime.run_command(CommandRunRequest(command="demo", person="bot"))
     finally:
         holder.release()
 
@@ -1179,98 +1153,6 @@ async def test_force_stop_scheduler_cancels_manual_command(
 # ---------------------------------------------------------------------------
 # start_scheduler
 # ---------------------------------------------------------------------------
-
-
-def test_start_scheduler_rejects_github_required_custom_routine(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(runtime, "is_github_integration_enabled", lambda: False)
-    monkeypatch.setattr(
-        runtime,
-        "requires_github_for_routine",
-        lambda command: command == "workflows/needs_github",
-    )
-
-    with pytest.raises(AppApiError) as exc_info:
-        runtime.start_scheduler(
-            SchedulerStartRequest(routine_commands=["workflows/needs_github"])
-        )
-
-    assert exc_info.value.code == "github_integration_required_for_routine"
-    assert exc_info.value.status_code == HTTP_BAD_REQUEST
-    assert exc_info.value.context == {"command": "workflows/needs_github"}
-
-
-def test_start_scheduler_allows_non_github_custom_routine(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = AppRuntime(EventBus())
-    started: dict[str, Any] = {}
-    monkeypatch.setattr(runtime, "is_github_integration_enabled", lambda: False)
-    monkeypatch.setattr(runtime, "requires_github_for_routine", lambda command: False)
-    monkeypatch.setattr(
-        runtime._lifecycle,
-        "start",
-        lambda request: started.update(routines=request.routine_commands) or "status",
-    )
-
-    result = runtime.start_scheduler(
-        SchedulerStartRequest(routine_commands=["workflows/local_only"])
-    )
-
-    assert result == "status"
-    assert started["routines"] == ["workflows/local_only"]
-
-
-def test_start_scheduler_does_not_consult_default_routines_when_none_requested(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = AppRuntime(EventBus())
-    checked: list[str] = []
-
-    class EditionStub:
-        def get_default_routines(self) -> list[str]:
-            return ["workflows/ticket_driven_workflow"]
-
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition", lambda: EditionStub()
-    )
-    monkeypatch.setattr(runtime, "is_github_integration_enabled", lambda: False)
-    monkeypatch.setattr(
-        runtime,
-        "requires_github_for_routine",
-        lambda command: checked.append(command) or False,
-    )
-    monkeypatch.setattr(runtime._lifecycle, "start", lambda request: "status")
-
-    runtime.start_scheduler(SchedulerStartRequest())
-
-    assert checked == []
-
-
-def test_start_scheduler_skips_routine_check_for_events_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = AppRuntime(EventBus())
-
-    def fail_default_routines() -> list[str]:  # pragma: no cover - must not run
-        raise AssertionError("default routines must not be consulted for events only")
-
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition",
-        lambda: type("E", (), {"get_default_routines": fail_default_routines})(),
-    )
-    monkeypatch.setattr(runtime, "is_github_integration_enabled", lambda: False)
-    monkeypatch.setattr(runtime._lifecycle, "start", lambda request: "events-status")
-
-    result = runtime.start_scheduler(
-        SchedulerStartRequest(
-            sources={"scheduled": False, "routine": False, "event_queue": True}
-        )
-    )
-
-    assert result == "events-status"
 
 
 def test_start_scheduler_maps_service_lock_conflict_to_http_conflict(

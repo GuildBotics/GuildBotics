@@ -288,29 +288,6 @@ def test_rotation_does_not_duplicate_the_record_on_disk(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8").count('"command.finished"') == 1
 
 
-def test_default_store_migrates_legacy_diagnostics_and_prompt_trace_once(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path))
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    diagnostics = run_dir / "diagnostics.jsonl"
-    prompt_trace = run_dir / "prompt_trace.jsonl"
-    diagnostics.write_text('{"kind":"log","message":"legacy"}\n')
-    prompt_trace.write_text('{"event":"llm.request"}\n')
-
-    store = DiagnosticsStore()
-
-    assert store.records_between(includes=lambda _timestamp: True) == []
-    assert diagnostics.read_text() == ""
-    assert prompt_trace.exists() is False
-    assert (run_dir / ".session-transcripts-v1").is_file()
-
-    diagnostics.write_text('{"kind":"event","type":"github.push"}\n')
-    DiagnosticsStore()
-    assert "github.push" in diagnostics.read_text()
-
-
 def test_default_store_construction_does_not_create_workspace_files(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -341,25 +318,6 @@ def test_importing_diagnostics_events_does_not_mutate_cwd(tmp_path: Path) -> Non
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / ".guildbotics").exists() is False
-
-
-def test_default_store_recovers_stale_migration_lock(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path))
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    lock = run_dir / ".session-transcripts-v1.lock"
-    lock.write_text("999999999\n", encoding="utf-8")
-    diagnostics = run_dir / "diagnostics.jsonl"
-    diagnostics.write_text('{"kind":"log","message":"legacy"}\n')
-
-    store = DiagnosticsStore()
-    records = store.records_between(includes=lambda _timestamp: True)
-
-    assert records == []
-    assert (run_dir / ".session-transcripts-v1").is_file()
-    assert lock.exists() is False
 
 
 def test_reads_pick_up_records_appended_by_another_process(tmp_path: Path) -> None:

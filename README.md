@@ -70,7 +70,6 @@ GuildBotics enables you to:
   - [7.2. Secret Storage](#72-secret-storage)
   - [7.3. Configuration Files](#73-configuration-files)
 - [8. Troubleshooting](#8-troubleshooting)
-- [9. Contributing](#9-contributing)
 
 ---
 
@@ -283,7 +282,7 @@ echo "Hello" | guildbotics run translate English Japanese
 **Automated execution with member workers**:
 
 ```bash
-guildbotics start [routine_commands...]
+guildbotics start
 ```
 
 By default, this starts:
@@ -291,7 +290,7 @@ By default, this starts:
 - Member workers (routine commands / scheduled tasks / queued events)
 - Event listener runner (event-driven receivers such as Slack Socket Mode)
 
-If no command is specified, the member workers run `workflows/ticket_driven_workflow` as the default routine command.
+Each member worker runs the routine commands configured in that member's `person.yml` (`routine_commands`).
 
 You can also limit startup to one side:
 
@@ -322,7 +321,7 @@ GuildBotics allows you to configure scheduled tasks for each team member via the
 **Features**:
 - Execute every minute when the scheduler is active
 - If multiple commands are specified, they execute one at a time in order
-- If not specified in `person.yml`, uses the default commands passed to `guildbotics start` (or `workflows/ticket_driven_workflow` if no arguments provided)
+- Initial setup seeds `workflows/ticket_driven_workflow` for new agent members; a member with no `routine_commands` runs no routine commands
 
 **Configuration example**:
 ```yaml
@@ -849,19 +848,18 @@ files whenever possible:
   macOS Keychain, Windows Credential Manager, or Linux Secret Service (GNOME Keyring etc.) —
   setup stores secret values there. The workspace keeps only a non-secret index file,
   `.guildbotics/config/secrets.yml`, that names the stored keys.
-- **`.env` fallback:** Workspaces without that index file — including all workspaces created
-  before this feature — keep using the workspace `.env`. This remains the supported mode for
+- **`.env` backend:** Workspaces without that index file — e.g. created on a machine without
+  a functional keychain — use the workspace `.env`. This is the supported mode for
   headless servers and CI. `.env` files written by GuildBotics get owner-only (`0600`)
   permissions.
 - **Precedence:** real environment variable > OS keychain > `.env`. Server deployments can
   always inject secrets as plain environment variables, regardless of the backend.
-- **GitHub App private keys:** `guildbotics secrets migrate` (and member setup on a
-  keychain-backed workspace) also copies the PEM content referenced by
-  `*_GITHUB_PRIVATE_KEY_PATH` into the keychain and removes the path entry from `.env` —
-  the stored content replaces the file, so all that remains is deleting the plaintext
-  `.pem` file yourself. Unlike other secrets, the key content is never published to
-  environment variables — it is read from the keychain only at the moment a GitHub App
-  token is issued, so AI CLI tool subprocesses never see it.
+- **GitHub App private keys:** Member setup on a keychain-backed workspace copies the PEM
+  content referenced by `*_GITHUB_PRIVATE_KEY_PATH` into the keychain and removes the path
+  entry from `.env` — the stored content replaces the file, so all that remains is deleting
+  the plaintext `.pem` file yourself. Unlike other secrets, the key content is never
+  published to environment variables — it is read from the keychain only at the moment a
+  GitHub App token is issued, so AI CLI tool subprocesses never see it.
 - **`GUILDBOTICS_SECRETS_BACKEND`:** set to `keyring` or `env-file` to force a backend for a
   single process (useful for CI and scripted environments).
 
@@ -869,8 +867,9 @@ Manage secrets with the `guildbotics secrets` CLI (see the
 [CLI Reference](docs/cli_reference.md#guildbotics-secrets) for all subcommands and options):
 
 ```bash
-guildbotics secrets status     # backend in use and keychain availability
-guildbotics secrets migrate    # move secrets from .env into the OS keychain
+guildbotics secrets status                        # backend in use and keychain availability
+guildbotics secrets export --file secrets.env     # dump secrets for moving machines
+guildbotics secrets import secrets.env            # load them on the target machine
 ```
 
 Secrets are stored per workspace (the keychain entries are namespaced by the `store_id` in
@@ -937,12 +936,3 @@ shows both execution history and the latest global/system session.
 - `GUILDBOTICS_TRANSCRIPT_DETAIL`: `standard` (default) or `full`; `standard` omits
   high-volume thinking/delta events and keeps only the final 8 KiB of AI CLI tool stderr
 - `GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS`: Days to retain session JSONL files (default: `30`)
-
-# 9. Contributing
-
-We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
-- Coding style and conventions
-- Local lint/typecheck/test commands aligned with CI
-- Testing guidelines
-- Documentation standards
-- Security best practices

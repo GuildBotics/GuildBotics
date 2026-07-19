@@ -1,6 +1,6 @@
 """Keychain-backed secret handling in the simple setup service.
 
-The legacy ``.env`` behaviours are covered by ``test_setup_service*.py``;
+The env-file backend behaviours are covered by ``test_setup_service*.py``;
 these tests pin the workspace to the keyring backend (via the ``fake_keyring``
 fixture) and assert that secrets go to the OS keychain while non-secret
 values and sample settings stay in plain configuration files.
@@ -115,11 +115,11 @@ class TestProjectSecrets:
         )
         assert "sk-ant-secret" not in env_file.read_text()
 
-    def test_update_project_keeps_legacy_env_file_workspace(
+    def test_update_project_keeps_env_file_workspace(
         self, fake_keyring, tmp_path
     ):
-        # A pre-existing workspace without a secrets index stays on .env even
-        # when a keychain is available; only setup/migrate switches backends.
+        # A workspace without a secrets index stays on .env even when a
+        # keychain is available; only initial setup pins the backend.
         config_dir, env_file = _paths(tmp_path)
         config_dir.mkdir(parents=True)
         env_file.write_text("OPENAI_API_KEY=sk-old\n")
@@ -229,7 +229,7 @@ class TestPersonSecrets:
             "ghp-secret"
         )
 
-    def test_update_person_migrates_legacy_env_secret(self, fake_keyring, tmp_path):
+    def test_update_person_moves_env_secret_to_keychain(self, fake_keyring, tmp_path):
         config_dir, env_file = self._pinned_workspace(tmp_path)
         service = SimplePersonSetupService()
         service.write_person(_person_input(config_dir, env_file))

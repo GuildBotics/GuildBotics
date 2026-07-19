@@ -24,9 +24,10 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
-from guildbotics.runtime.event_listener import (
-    INCOMING_CHAT_EVENT_KEY,
-    IncomingChatEvent,
+from guildbotics.runtime.event_listener import IncomingChatEvent
+from guildbotics.runtime.workflow_invocation import (
+    WORKFLOW_INVOCATION_KEY,
+    WorkflowInvocation,
 )
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
 from guildbotics.utils.i18n_tool import t
@@ -219,7 +220,7 @@ def _set_incoming_event(
     mentions: list[str] | None = None,
     chat_participation: str = "strict",
 ) -> None:
-    ctx.shared_state[INCOMING_CHAT_EVENT_KEY] = IncomingChatEvent(
+    incoming = IncomingChatEvent(
         service_name="slack",
         channel_id="C1",
         event=ChatEvent(
@@ -232,7 +233,14 @@ def _set_incoming_event(
             mentions=list(mentions if mentions is not None else ["U_ALICE"]),
         ),
         chat_participation=chat_participation,
-    ).to_shared_state()
+    )
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
+        command="workflows/chat_conversation_workflow",
+        person_id="alice",
+        source="event_queue",
+        trigger_type="chat",
+        payload=incoming.to_shared_state(),
+    )
 
 
 @pytest.mark.asyncio
@@ -322,7 +330,7 @@ async def test_redispatch_of_completed_run_skips_agent_and_reuses_evidence(tmp_p
         subject_id="slack:C1:100.1:E1",
         person_id="alice",
     )
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 2,
         "max_attempts": 5,
         "is_final_attempt": False,
@@ -805,7 +813,7 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("missing")
     _set_incoming_event(ctx)
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 3,
         "max_attempts": 3,
         "is_final_attempt": True,
@@ -864,7 +872,7 @@ async def test_agent_run_failure_escalates_and_stops(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")  # the agent run raises every attempt
     _set_incoming_event(ctx)
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 2,
         "max_attempts": 2,
         "is_final_attempt": True,
@@ -895,7 +903,7 @@ async def test_non_final_agent_run_failure_bubbles_for_pending_backoff(tmp_path)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")
     _set_incoming_event(ctx)
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 1,
         "max_attempts": 5,
         "is_final_attempt": False,
@@ -982,7 +990,7 @@ async def test_duplicate_system_notice_is_not_posted_again(tmp_path):
     state_store.save_thread_state("slack", "alice", "C1", "100.1", state)
     ctx = FakeInvokeContext("crash")
     _set_incoming_event(ctx)
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 5,
         "max_attempts": 5,
         "is_final_attempt": True,
@@ -1006,7 +1014,7 @@ async def test_final_notice_post_failure_marks_processed_without_notice_state(tm
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")
     _set_incoming_event(ctx)
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 5,
         "max_attempts": 5,
         "is_final_attempt": True,
@@ -1032,7 +1040,7 @@ async def test_final_prerun_identity_failure_marks_processed(tmp_path):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     _set_incoming_event(ctx)
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 5,
         "max_attempts": 5,
         "is_final_attempt": True,
@@ -1060,7 +1068,7 @@ async def test_non_final_prerun_identity_failure_bubbles(tmp_path):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     _set_incoming_event(ctx)
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 1,
         "max_attempts": 5,
         "is_final_attempt": False,
@@ -1120,18 +1128,24 @@ async def test_obvious_self_message_is_marked_processed_without_agent(tmp_path):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
-    ctx.shared_state[INCOMING_CHAT_EVENT_KEY] = IncomingChatEvent(
-        service_name="slack",
-        channel_id="C1",
-        event=ChatEvent(
-            event_id="E_SELF",
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
+        command="workflows/chat_conversation_workflow",
+        person_id="alice",
+        source="event_queue",
+        trigger_type="chat",
+        payload=IncomingChatEvent(
+            service_name="slack",
             channel_id="C1",
-            message_ts="100.1",
-            thread_ts="100.1",
-            author_id="U_ALICE",
-            text="bot message",
-        ),
-    ).to_shared_state()
+            event=ChatEvent(
+                event_id="E_SELF",
+                channel_id="C1",
+                message_ts="100.1",
+                thread_ts="100.1",
+                author_id="U_ALICE",
+                text="bot message",
+            ),
+        ).to_shared_state(),
+    )
 
     await chat_conversation_workflow.main(
         ctx, chat_service=service, state_store=state_store
@@ -1144,11 +1158,6 @@ async def test_obvious_self_message_is_marked_processed_without_agent(tmp_path):
 
 @pytest.mark.asyncio
 async def test_chat_conversation_workflow_reads_from_invocation(tmp_path):
-    from guildbotics.runtime.workflow_invocation import (
-        WORKFLOW_INVOCATION_KEY,
-        WorkflowInvocation,
-    )
-
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
@@ -1201,7 +1210,7 @@ async def test_final_attempt_abandon_records_dispatch_abandoned_event(
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("missing")
     _set_incoming_event(ctx)
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 3,
         "max_attempts": 3,
         "is_final_attempt": True,
@@ -1255,7 +1264,7 @@ async def test_recovered_completion_records_workflow_completed_event(
         subject_id="slack:C1:100.1:E1",
         person_id="alice",
     )
-    ctx.shared_state["retry_context"] = {
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 2,
         "max_attempts": 5,
         "is_final_attempt": False,

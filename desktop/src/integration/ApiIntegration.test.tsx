@@ -226,7 +226,6 @@ function runtimeUnit(target: "scheduler" | "events", overrides: Record<string, u
     started_at: null,
     stopped_at: null,
     error: null,
-    routine_commands: [],
     max_consecutive_errors: null,
     routine_interval_minutes: null,
     active_member_count: 1,

@@ -5,11 +5,9 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from base64 import b64decode, b64encode
 from collections import deque
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -29,7 +27,6 @@ def default_store_path() -> Path:
 
 
 _CURSOR_ANCHOR_BYTES = 256
-_MIGRATION_LOCK_STALE_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -71,7 +68,6 @@ class DiagnosticsStore:
     ) -> None:
         self._path_override = path
         self._path = path or default_store_path()
-        self._migrated_path: Path | None = path
         self._memory_limit = memory_limit
         self._max_file_bytes = max_file_bytes
         self._records: deque[dict[str, Any]] = deque(maxlen=memory_limit)
@@ -284,9 +280,7 @@ class DiagnosticsStore:
     # -- persistence ---------------------------------------------------------
 
     def _refresh_path_locked(self) -> None:
-        path_changed = self._select_path_locked()
-        migration_completed = self._ensure_migrated_locked()
-        if path_changed or migration_completed:
+        if self._select_path_locked():
             return
         # Same file, but another process (e.g. a ``guildbotics member`` CLI
         # subprocess) may have appended records to it since we last read. A
@@ -299,20 +293,10 @@ class DiagnosticsStore:
             path = default_store_path()
             if path != self._path:
                 self._path = path
-                self._migrated_path = None
                 self._transcripts = SessionTranscriptStore(self._path)
                 self._reload_from_path_locked()
                 return True
         return False
-
-    def _ensure_migrated_locked(self) -> bool:
-        if self._path_override is not None or self._migrated_path == self._path:
-            return False
-        if not _migrate_legacy_store(self._path):
-            return False
-        self._migrated_path = self._path
-        self._reload_from_path_locked()
-        return True
 
     def _records_after_locked(
         self,
@@ -670,74 +654,6 @@ def _system_summaries(
             continue
         result.append(_finalize_summary(summary))
     return result
-
-
-def _migrate_legacy_store(path: Path) -> bool:
-    """Discard the pre-transcript index once per workspace data root."""
-    marker = path.parent / ".session-transcripts-v1"
-    if marker.exists():
-        return True
-    lock_path = path.parent / ".session-transcripts-v1.lock"
-    descriptor: int | None = None
-    for _ in range(2):
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.write(descriptor, f"{os.getpid()}\n".encode())
-            break
-        except FileExistsError:
-            if not _migration_lock_is_stale(lock_path):
-                for _ in range(100):
-                    if marker.exists():
-                        return True
-                    if _migration_lock_is_stale(lock_path):
-                        break
-                    time.sleep(0.01)
-                if not _migration_lock_is_stale(lock_path):
-                    return False
-            with suppress(OSError):
-                lock_path.unlink()
-        except OSError:
-            return False
-    if descriptor is None:
-        return marker.exists()
-    try:
-        os.close(descriptor)
-        try:
-            path.with_name("prompt_trace.jsonl").unlink(missing_ok=True)
-            path.write_text("", encoding="utf-8")
-            marker.write_text("1\n", encoding="utf-8")
-        except OSError:
-            return False
-    finally:
-        with suppress(OSError):
-            lock_path.unlink(missing_ok=True)
-    return True
-
-
-def _migration_lock_is_stale(path: Path) -> bool:
-    try:
-        raw_pid = path.read_text(encoding="utf-8").strip()
-        modified_at = path.stat().st_mtime
-    except OSError:
-        return True
-    if time.time() - modified_at >= _MIGRATION_LOCK_STALE_SECONDS:
-        return True
-    try:
-        pid = int(raw_pid)
-    except ValueError:
-        pid = 0
-    if pid > 0:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return True
-        except PermissionError:
-            return False
-        except OSError:
-            return True
-        return False
-    return False
 
 
 def _file_size(path: Path) -> int:

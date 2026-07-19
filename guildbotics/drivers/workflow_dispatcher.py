@@ -6,7 +6,6 @@ from guildbotics.drivers.command_runner import CommandRunner
 from guildbotics.entities.team import Person
 from guildbotics.observability import current_trace, set_attributes, trace_scope
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.event_listener import INCOMING_CHAT_EVENT_KEY
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
@@ -48,10 +47,6 @@ class WorkflowDispatcher:
         async def _execute() -> None:
             context = self._context.clone_for(person)
             context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
-
-            # Maintain backward compatibility for chat workflow
-            if invocation.trigger_type == "chat":
-                context.shared_state[INCOMING_CHAT_EVENT_KEY] = invocation.payload
 
             try:
                 words = shlex.split(invocation.command)

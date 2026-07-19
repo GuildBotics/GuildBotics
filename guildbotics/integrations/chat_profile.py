@@ -4,7 +4,7 @@ from typing import Any
 
 
 def get_chat_profile(person: Any) -> dict[str, Any]:
-    """Return normalized legacy `person.profile.chat` mapping."""
+    """Return the normalized `person.profile.chat` mapping."""
     profile = getattr(person, "profile", {}) or {}
     if not isinstance(profile, dict):
         return {}
@@ -13,15 +13,7 @@ def get_chat_profile(person: Any) -> dict[str, Any]:
 
 
 def get_chat_subscriptions(person: Any) -> list[dict[str, Any]]:
-    subs = _subscriptions_from_message_channels(person)
-    if subs:
-        return subs
-    # Legacy fallback
-    chat = get_chat_profile(person)
-    raw = chat.get("subscriptions", [])
-    if not isinstance(raw, list):
-        return []
-    return [item for item in raw if isinstance(item, dict)]
+    return _subscriptions_from_message_channels(person)
 
 
 def get_chat_scheduled_posts(person: Any) -> list[dict[str, Any]]:

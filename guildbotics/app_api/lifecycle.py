@@ -87,9 +87,6 @@ class RuntimeLifecycleService:
                 or event_queue_source_enabled
             ):
                 self._scheduler.start(
-                    routine_commands=request.routine_commands
-                    if routine_source_enabled
-                    else [],
                     max_consecutive_errors=request.max_consecutive_errors,
                     routine_interval_minutes=request.routine_interval_minutes,
                     scheduled_source_enabled=scheduled_source_enabled,
@@ -250,7 +247,6 @@ class SchedulerLifecycle(_RuntimeLifecycle):
     def start(
         self,
         *,
-        routine_commands: list[str],
         max_consecutive_errors: int,
         routine_interval_minutes: int,
         scheduled_source_enabled: bool = True,
@@ -267,7 +263,6 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         try:
             scheduler = TaskScheduler(
                 self._context_factory(),
-                routine_commands,
                 consecutive_error_limit=max_consecutive_errors,
                 routine_interval_minutes=routine_interval_minutes,
                 service_run_id=self._service_run_id,
@@ -291,7 +286,6 @@ class SchedulerLifecycle(_RuntimeLifecycle):
             self._thread = thread
             self._update_metadata_locked(
                 {
-                    "routine_commands": list(routine_commands),
                     "max_consecutive_errors": max_consecutive_errors,
                     "routine_interval_minutes": routine_interval_minutes,
                     "scheduled_source_enabled": scheduled_source_enabled,

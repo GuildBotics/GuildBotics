@@ -11,7 +11,6 @@ from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
-from guildbotics.runtime.event_listener import INCOMING_CHAT_EVENT_KEY
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
@@ -127,7 +126,6 @@ async def test_workflow_dispatcher_dispatch(monkeypatch):
 
     # Check context shared state injections
     assert ctx_used.shared_state[WORKFLOW_INVOCATION_KEY] == inv
-    assert ctx_used.shared_state[INCOMING_CHAT_EVENT_KEY] == inv.payload
     assert getattr(ctx_used, "closed", False) is True
 
 
@@ -203,7 +201,6 @@ def test_task_scheduler_uses_ticket_selector(monkeypatch):
     context = _FakeContext()
     scheduler = TaskScheduler(
         context=context,  # type: ignore[arg-type]
-        default_routine_commands=["workflows/ticket_driven_workflow"],
         routine_interval_minutes=10,
     )
     loop = asyncio.new_event_loop()
@@ -264,7 +261,6 @@ def test_task_scheduler_ticket_selector_returns_none(monkeypatch):
     context = _FakeContext()
     scheduler = TaskScheduler(
         context=context,  # type: ignore[arg-type]
-        default_routine_commands=["workflows/ticket_driven_workflow"],
         routine_interval_minutes=10,
     )
     loop = asyncio.new_event_loop()
@@ -331,7 +327,6 @@ def test_task_scheduler_ticket_selector_raises_error(monkeypatch):
     context = _FakeContext()
     scheduler = TaskScheduler(
         context=context,  # type: ignore[arg-type]
-        default_routine_commands=["workflows/ticket_driven_workflow"],
         routine_interval_minutes=10,
         consecutive_error_limit=3,
     )
@@ -408,7 +403,6 @@ def test_task_scheduler_malformed_scheduled_command():
     context = _FakeContext()
     scheduler = TaskScheduler(
         context=context,  # type: ignore[arg-type]
-        default_routine_commands=[],
         routine_interval_minutes=10,
     )
     cmd = ScheduledCommand(command='echo "unterminated', schedule="* * * * *")
@@ -442,7 +436,6 @@ def test_task_scheduler_routine_with_args_falls_back_to_run_command(monkeypatch)
     context = _FakeContext()
     scheduler = TaskScheduler(
         context=context,  # type: ignore[arg-type]
-        default_routine_commands=[],
         routine_interval_minutes=10,
     )
     loop = asyncio.new_event_loop()

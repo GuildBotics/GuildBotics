@@ -462,7 +462,7 @@ class SimpleProjectSetupService:
 
         if config.env_file_option != "skip":
             # Initial setup decides the workspace's secret backend: the OS
-            # keychain when one is available, otherwise the legacy .env file.
+            # keychain when one is available, otherwise the .env file.
             store = resolve_secret_store(
                 config.config_dir, config.env_file_path, create_default=True
             )
@@ -490,8 +490,8 @@ class SimpleProjectSetupService:
     ) -> None:
         """Store non-empty provider API keys in the OS keychain.
 
-        With the legacy .env backend this is a no-op; the keys are written as
-        part of the .env content instead.
+        With the .env backend this is a no-op; the keys are written as part of
+        the .env content instead.
         """
         if store.backend != KEYRING_BACKEND:
             return
@@ -747,8 +747,7 @@ class SimplePersonSetupService:
         env_prefix = self._person_env_prefix(person_id)
 
         def secret_value(key: str) -> str:
-            # Fall back to .env for secrets that predate keychain migration.
-            return store.get(key) or env.get(key) or ""
+            return store.get(key) or ""
 
         avatar_timestamp = 0
         from guildbotics.utils.avatar import find_avatar_file
@@ -957,7 +956,7 @@ class SimplePersonSetupService:
                     if stored_value is not None:
                         pending_secrets[new_key] = stored_value
                         store.delete(old_key)
-                # Secrets headed for .env (legacy values or new input) go to
+                # Secrets headed for .env (existing values or new input) go to
                 # the keychain instead; newer values win over carried ones.
                 if new_key in env_values:
                     pending_secrets[new_key] = env_values.pop(new_key)

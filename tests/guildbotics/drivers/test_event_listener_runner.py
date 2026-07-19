@@ -442,17 +442,13 @@ async def test_run_once_queues_drained_events(monkeypatch, tmp_path):
         person_id="alice",
         name="Alice",
         is_active=True,
-        profile={
-            "chat": {
-                "subscriptions": [
-                    {
-                        "service": "slack",
-                        "channel_id": "C1",
-                        "participation": "social",
-                    }
-                ]
+        message_channels=[
+            {
+                "service": "slack",
+                "name": "dev-chat",
+                "chat": {"channel_id": "C1", "participation": "social"},
             }
-        },
+        ],
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice])
@@ -523,7 +519,9 @@ async def test_run_once_suppresses_workflow_status_metadata(monkeypatch, tmp_pat
         person_id="alice",
         name="Alice",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+        message_channels=[
+            {"service": "slack", "name": "dev-chat", "chat": {"channel_id": "C1"}}
+        ],
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice])
@@ -589,13 +587,17 @@ async def test_run_once_queues_event_for_multiple_people(monkeypatch, tmp_path):
         person_id="alice",
         name="Alice",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+        message_channels=[
+            {"service": "slack", "name": "dev-chat", "chat": {"channel_id": "C1"}}
+        ],
     )
     bob = Person(
         person_id="bob",
         name="Bob",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+        message_channels=[
+            {"service": "slack", "name": "dev-chat", "chat": {"channel_id": "C1"}}
+        ],
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice, bob])
@@ -663,13 +665,17 @@ async def test_run_once_does_not_queue_already_processed(monkeypatch, tmp_path):
         person_id="alice",
         name="Alice",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+        message_channels=[
+            {"service": "slack", "name": "dev-chat", "chat": {"channel_id": "C1"}}
+        ],
     )
     bob = Person(
         person_id="bob",
         name="Bob",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+        message_channels=[
+            {"service": "slack", "name": "dev-chat", "chat": {"channel_id": "C1"}}
+        ],
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice, bob])
@@ -738,7 +744,9 @@ async def test_run_once_backfills_channel_and_known_thread_events(
         person_id="alice",
         name="Alice",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+        message_channels=[
+            {"service": "slack", "name": "dev-chat", "chat": {"channel_id": "C1"}}
+        ],
     )
     chat_service = _BackfillChatService()
     ctx = _BackfillContext(chat_service)
@@ -908,7 +916,9 @@ async def test_run_once_uses_connection_service_for_backfill(monkeypatch):
         person_id="alice",
         name="Alice",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+        message_channels=[
+            {"service": "slack", "name": "dev-chat", "chat": {"channel_id": "C1"}}
+        ],
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice])
@@ -1000,17 +1010,13 @@ async def test_build_person_subscriptions_uses_cached_channel_resolution(monkeyp
         person_id="alice",
         name="Alice",
         is_active=True,
-        profile={
-            "chat": {
-                "subscriptions": [
-                    {
-                        "service": "slack",
-                        "channel_name": "dev-chat",
-                        "event_source": "socket_mode",
-                    }
-                ]
+        message_channels=[
+            {
+                "service": "slack",
+                "name": "dev-chat",
+                "chat": {"channel_name": "dev-chat", "event_source": "socket_mode"},
             }
-        },
+        ],
     )
     ctx = _FakeContext()
     ctx.team = types.SimpleNamespace(members=[alice])
@@ -1159,13 +1165,17 @@ async def test_build_person_subscriptions_skips_person_with_missing_app_token(
         person_id="alice",
         name="Alice",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C1"}]}},
+        message_channels=[
+            {"service": "slack", "name": "dev-chat", "chat": {"channel_id": "C1"}}
+        ],
     )
     bob = Person(
         person_id="bob",
         name="Bob",
         is_active=True,
-        profile={"chat": {"subscriptions": [{"service": "slack", "channel_id": "C2"}]}},
+        message_channels=[
+            {"service": "slack", "name": "bob-chat", "chat": {"channel_id": "C2"}}
+        ],
     )
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-alice")
 

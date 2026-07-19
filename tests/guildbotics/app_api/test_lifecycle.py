@@ -52,7 +52,6 @@ class FakeScheduler:
     def __init__(
         self,
         context: Any,
-        routine_commands: list[str],
         *,
         consecutive_error_limit: int,
         routine_interval_minutes: int,
@@ -63,7 +62,6 @@ class FakeScheduler:
         execution_coordinator: Any = None,
     ) -> None:
         self.context = context
-        self.routine_commands = routine_commands
         self.consecutive_error_limit = consecutive_error_limit
         self.routine_interval_minutes = routine_interval_minutes
         self.service_run_id = service_run_id
@@ -306,7 +304,6 @@ def test_only_events_starts_event_listener_and_event_queue_worker(
         )
         assert len(FakeScheduler.instances) == 1
         worker = FakeScheduler.instances[0]
-        assert worker.routine_commands == []
         assert worker.scheduled_source_enabled is False
         assert worker.routine_source_enabled is False
         assert worker.event_queue_source_enabled is True
@@ -474,13 +471,11 @@ def test_scheduler_metadata_reflects_request_and_summary(context_factory: Any) -
         service.start(
             SchedulerStartRequest(
                 sources={"scheduled": True, "routine": True, "event_queue": False},
-                routine_commands=["custom/routine"],
                 max_consecutive_errors=5,
                 routine_interval_minutes=7,
             )
         )
         status = service.get_status().scheduler
-        assert status.routine_commands == ["custom/routine"]
         assert status.max_consecutive_errors == EXPECTED_MAX_ERRORS
         assert status.routine_interval_minutes == EXPECTED_INTERVAL
         assert status.active_member_count == EXPECTED_MEMBER_COUNT
@@ -488,22 +483,6 @@ def test_scheduler_metadata_reflects_request_and_summary(context_factory: Any) -
         assert status.scheduled_source_enabled is True
         assert status.routine_source_enabled is True
         assert status.event_queue_source_enabled is False
-    finally:
-        _stop_quietly(service)
-
-
-def test_scheduler_does_not_inject_default_routines_when_unspecified(
-    context_factory: Any,
-) -> None:
-    service, _bus = _make_service(context_factory)
-    try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
-        )
-        assert FakeScheduler.instances[0].routine_commands == []
-        assert service.get_status().scheduler.routine_commands == []
     finally:
         _stop_quietly(service)
 
@@ -581,7 +560,9 @@ def test_stop_stops_events_before_scheduler(context_factory: Any) -> None:
     assert _events_for(bus, "events")[-2:] == ["events.stopping", "events.stopped"]
 
 
-def test_graceful_scheduler_shutdown_waits_without_timeout(context_factory: Any) -> None:
+def test_graceful_scheduler_shutdown_waits_without_timeout(
+    context_factory: Any,
+) -> None:
     service, _bus = _make_service(context_factory, stop_timeout_seconds=4.5)
     service.start(
         SchedulerStartRequest(
@@ -624,9 +605,7 @@ def test_force_stop_during_graceful_stop_publishes_single_stop_transition(
     graceful = threading.Thread(target=service.stop)
     graceful.start()
     try:
-        assert _wait_until(
-            lambda: service.get_status().scheduler.state == "stopping"
-        )
+        assert _wait_until(lambda: service.get_status().scheduler.state == "stopping")
 
         status = service.stop(force=True)
     finally:

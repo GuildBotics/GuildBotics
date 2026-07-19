@@ -283,7 +283,6 @@ class RuntimeSourceSelection(BaseModel):
 
 class SchedulerStartRequest(BaseModel):
     sources: RuntimeSourceSelection = Field(default_factory=RuntimeSourceSelection)
-    routine_commands: list[str] = Field(default_factory=list)
     max_consecutive_errors: int = Field(default=3, ge=1)
     routine_interval_minutes: int = Field(default=10, ge=1)
 
@@ -307,7 +306,6 @@ class RuntimeUnitStatus(BaseModel):
     started_at: str | None = None
     stopped_at: str | None = None
     error: str | None = None
-    routine_commands: list[str] = Field(default_factory=list)
     max_consecutive_errors: int | None = None
     routine_interval_minutes: int | None = None
     active_member_count: int | None = None

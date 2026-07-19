@@ -127,9 +127,10 @@ def _load_rsa_private_key(private_key_pem: bytes) -> RSAPrivateKey:
 def get_person_private_key_pem(person: Person) -> bytes:
     """Return the PEM for the member's GitHub App.
 
-    The workspace secret store holds the key content (it is deliberately kept
-    out of ``os.environ``, see ``secret_store.is_environment_secret``); the
-    configured ``*_GITHUB_PRIVATE_KEY_PATH`` file is the legacy fallback.
+    Keychain workspaces hold the key content in the secret store (it is
+    deliberately kept out of ``os.environ``, see
+    ``secret_store.is_environment_secret``); ``.env``-backend workspaces
+    configure a ``*_GITHUB_PRIVATE_KEY_PATH`` file instead.
     """
     content = workspace_secret_store().get(
         person.to_person_env_key("GITHUB_PRIVATE_KEY")
@@ -245,18 +246,8 @@ def get_github_username(person: Person, strict: bool = False) -> str:
 
 
 def get_github_account_type(person: Person) -> str:
-    """Return the member's GitHub account mode, with legacy person_type fallback."""
-    account_type = str(person.account_info.get("github_account_type", "")).strip()
-    if account_type:
-        return account_type
-    if person.person_type in {
-        GitHubAppAuth.HUMAN,
-        GitHubAppAuth.MACHINE_USER,
-        GitHubAppAuth.GITHUB_APPS,
-        GitHubAppAuth.PROXY_AGENT,
-    }:
-        return person.person_type
-    return ""
+    """Return the member's GitHub account mode."""
+    return str(person.account_info.get("github_account_type", "")).strip()
 
 
 def get_person_name(members: list[Person], username: str, comment_body: str) -> str:

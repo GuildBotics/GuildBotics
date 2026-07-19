@@ -82,11 +82,6 @@ def apply_workspace_data_root(
     return data_root
 
 
-def get_storage_path() -> Path:
-    """Backward-compatible alias for the current workspace data root."""
-    return get_workspace_data_root()
-
-
 def get_workspace_path(person_id: str, workspace_root: Path | None = None) -> Path:
     """
     Get the workspace path for a specific person.

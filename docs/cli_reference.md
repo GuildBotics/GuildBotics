@@ -73,7 +73,6 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (for moving machines). |
 | [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format file into the workspace store. |
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
-| [`guildbotics secrets migrate`](#guildbotics-secrets-migrate) | Move secrets from the .env file into the OS keychain. |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show the secret backend used by this workspace. |
 | [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
@@ -1038,7 +1037,6 @@ guildbotics secrets [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (for moving machines). |
 | [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format file into the workspace store. |
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
-| [`guildbotics secrets migrate`](#guildbotics-secrets-migrate) | Move secrets from the .env file into the OS keychain. |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show the secret backend used by this workspace. |
 
@@ -1091,19 +1089,6 @@ guildbotics secrets list [OPTIONS]
 | --- | --- |
 | `--help` | Show this message and exit. |
 
-## `guildbotics secrets migrate`
-
-Move secrets from the .env file into the OS keychain.
-
-```text
-guildbotics secrets migrate [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--key TEXT` | Additional .env key to migrate (repeatable). |
-| `--help` | Show this message and exit. |
-
 ## `guildbotics secrets set`
 
 Store a secret value (prompts when VALUE is omitted).
@@ -1133,7 +1118,7 @@ guildbotics secrets status [OPTIONS]
 Start GuildBotics runtimes (scheduler and event listener runner).
 
 ```text
-guildbotics start [OPTIONS] [DEFAULT_ROUTINE_COMMANDS]...
+guildbotics start [OPTIONS]
 ```
 
 | Option | Description |

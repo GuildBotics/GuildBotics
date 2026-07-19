@@ -3440,31 +3440,19 @@ export function loadServicePreferences(): ServicePreferences {
       return { ...DEFAULT_SERVICE_PREFERENCES };
     }
     const parsed = JSON.parse(raw) as Partial<ServicePreferences>;
-    const legacySchedulerEnabled =
-      "schedulerEnabled" in parsed
-        ? (parsed as { schedulerEnabled?: unknown }).schedulerEnabled
-        : undefined;
-    const legacyEventsEnabled =
-      "eventsEnabled" in parsed ? (parsed as { eventsEnabled?: unknown }).eventsEnabled : undefined;
     return {
       scheduledSourceEnabled:
         typeof parsed.scheduledSourceEnabled === "boolean"
           ? parsed.scheduledSourceEnabled
-          : typeof legacySchedulerEnabled === "boolean"
-            ? legacySchedulerEnabled
-            : DEFAULT_SERVICE_PREFERENCES.scheduledSourceEnabled,
+          : DEFAULT_SERVICE_PREFERENCES.scheduledSourceEnabled,
       routineSourceEnabled:
         typeof parsed.routineSourceEnabled === "boolean"
           ? parsed.routineSourceEnabled
-          : typeof legacySchedulerEnabled === "boolean"
-            ? legacySchedulerEnabled
-            : DEFAULT_SERVICE_PREFERENCES.routineSourceEnabled,
+          : DEFAULT_SERVICE_PREFERENCES.routineSourceEnabled,
       eventQueueSourceEnabled:
         typeof parsed.eventQueueSourceEnabled === "boolean"
           ? parsed.eventQueueSourceEnabled
-          : typeof legacyEventsEnabled === "boolean"
-            ? legacyEventsEnabled
-            : DEFAULT_SERVICE_PREFERENCES.eventQueueSourceEnabled,
+          : DEFAULT_SERVICE_PREFERENCES.eventQueueSourceEnabled,
       // Clamp to the same bounds the NumberInput controls enforce so a tampered
       // or outdated value cannot push the inputs out of range.
       routineIntervalMinutes: clampStoredInteger(

@@ -311,6 +311,7 @@ def test_verify_github_disabled_skips_credentials(
                 name="Alice",
                 is_active=True,
                 person_type=GitHubAppAuth.MACHINE_USER,
+                account_info={"github_account_type": GitHubAppAuth.MACHINE_USER},
             )
         ],
     )
@@ -354,6 +355,7 @@ def test_verify_github_credentials_present(
                 name="Alice",
                 is_active=True,
                 person_type=person_type,
+                account_info={"github_account_type": person_type},
             )
         ],
     )
@@ -393,6 +395,7 @@ def test_verify_accepts_private_key_content_from_keychain(
                 name="Alice",
                 is_active=True,
                 person_type=GitHubAppAuth.GITHUB_APPS,
+                account_info={"github_account_type": GitHubAppAuth.GITHUB_APPS},
             )
         ],
     )
@@ -403,9 +406,7 @@ def test_verify_accepts_private_key_content_from_keychain(
         check for check in response.checks if check.code == "github_credential"
     ]
     assert all(check.status == "ok" for check in github_checks)
-    assert "ALICE_GITHUB_PRIVATE_KEY_PATH" in {
-        check.target for check in github_checks
-    }
+    assert "ALICE_GITHUB_PRIVATE_KEY_PATH" in {check.target for check in github_checks}
 
 
 @pytest.mark.parametrize(
@@ -434,6 +435,7 @@ def test_verify_github_credentials_missing(
                 name="Alice",
                 is_active=True,
                 person_type=person_type,
+                account_info={"github_account_type": person_type},
             )
         ],
     )
@@ -462,6 +464,7 @@ def test_verify_human_member_has_no_github_keys(
                 name="Alice",
                 is_active=True,
                 person_type=GitHubAppAuth.HUMAN,
+                account_info={"github_account_type": GitHubAppAuth.HUMAN},
             )
         ],
     )
@@ -498,6 +501,7 @@ def test_verify_checks_env_keys_and_github_credentials(
                 name="Alice",
                 is_active=True,
                 person_type=GitHubAppAuth.MACHINE_USER,
+                account_info={"github_account_type": GitHubAppAuth.MACHINE_USER},
             )
         ],
     )
