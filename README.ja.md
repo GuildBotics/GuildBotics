@@ -2,16 +2,16 @@
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-マルチエージェント対応タスク自動化・コマンド実行フレームワーク
+GuildBotics は、AI エージェントを「チームメンバー」として開発チームに参加させるツールです。各メンバーは自分用に設定された GitHub / Slack の名義で活動し、GitHub Projects のチケットを拾って調査・実装・プルリクエスト作成まで進め、レビューコメントや Slack のメンションに応答します。実際の調査・実装・判断は Claude Code や Codex などの AI CLI ツールが行い、メンバーとしての外部操作（コミット、PR、コメント、Slack 投稿、記憶の保存）はすべて専用 CLI（`guildbotics member`）を通して実行・記録されます。
 
-GuildBotics でできること:
+メンバーとの働き方は 2 つあります。
 
-- 異なる役割と個性を持つ複数のAIエージェントを管理
-- コマンド（Markdownプロンプト、Python/Shellスクリプト、YAMLワークフロー）のスケジュール実行
-- プラガブルなアダプター経由での外部サービス統合
-- 複数のLLMプロバイダー対応（Google Gemini、OpenAI、Anthropic Claude）
+- **一緒に作業する** — Claude Code や Codex のセッションで guildbotics スキルを使ってメンバーを呼び出し、いま開いているリポジトリでペアプログラミングします。作業の進め方をその場で教えられます。
+- **任せる** — スケジューラがメンバーを定期起動し、チケットの取得から PR 作成までを自律的に進めます。フィードバックは PR レビューやチケットコメント、Slack の返信で返します（詳細は [6. GitHub統合](#6-github統合)）。
 
-**使用例**: デフォルトワークフローではGitHub Projectsと統合し、チケット駆動型のAIエージェント協働を実現します（詳細は[GitHub統合の使用例](#6-github統合の使用例)参照）。
+どちらのモードでも同じメンバー（同じ名義、同じ記憶）が働きます。一緒に作業しながら教えたことは記憶として残り、任せたときの作業にも引き継がれます。
+
+設定と監視は Desktop アプリ（GUI）で行い、実行は `guildbotics` CLI で行います（GUI のないサーバでも実行できます）。メンバーの振る舞いは、Markdown プロンプト / Python / Shell / YAML のカスタムコマンドとスケジュール定義でカスタマイズできます。
 
 ---
 
@@ -52,7 +52,7 @@ GuildBotics でできること:
       - [基本的な設定](#基本的な設定)
       - [複数のエージェントを追加する場合](#複数のエージェントを追加する場合)
     - [5.6.2. `person.yml` の設定例](#562-personyml-の設定例)
-- [6. GitHub統合の使用例](#6-github統合の使用例)
+- [6. GitHub統合](#6-github統合)
   - [6.1. 事前準備](#61-事前準備)
     - [6.1.1. Git環境](#611-git環境)
     - [6.1.2. GitHub プロジェクトの作成](#612-github-プロジェクトの作成)
@@ -86,11 +86,13 @@ GuildBotics でできること:
   - Shellスクリプト
   - YAMLワークフロー（コマンド合成）
 - **Brain抽象化**: LLMプロバイダーの切り替え、またはAI CLIツール（Codex、Claude Code、Antigravityなど、ローカルCLIから起動するAI実行ツール）への委譲
-- **拡張可能な統合**: 外部サービス向けプラガブルアダプター
 
 ## 組み込み機能
 
 - **GitHub統合**（デフォルト）: GitHub Projects/Issuesによるチケット管理、PR作成、コードホスティング
+- **Slack統合**: 設定したチャンネルをメンバーが監視し、本人として返信・リアクションするチャットワークフロー
+- **メンバー記憶**: メンバーがセッションを越えて参照・維持する個人/チームの記憶
+- **対話メンバーセッション**: guildbotics スキルにより、AI CLIツールが現在のリポジトリでメンバーとして作業
 - **国際化**: 多言語対応（英語/日本語）
 - **カスタムコマンド**: person/role毎に再利用可能なコマンドテンプレートを定義
 
@@ -121,7 +123,7 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 ~/.guildbotics/bin/guildbotics start
 ```
 
-詳細は[基本的な使い方](#5-基本的な使い方)を、またはチケット駆動ワークフローのセットアップは[GitHub統合の使用例](#6-github統合の使用例)を参照してください。
+詳細は[基本的な使い方](#5-基本的な使い方)を、またはチケット駆動ワークフローのセットアップは[GitHub統合](#6-github統合)を参照してください。
 
 # 3. 動作環境と事前準備
 
@@ -675,11 +677,11 @@ guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat 
 
 このコマンドは、前段で Google News RSS からニュース候補を取得し、LLM で Slack 向けの日本語ダイジェスト文面に整形します。
 
-# 6. GitHub統合の使用例
+# 6. GitHub統合
 
 このセクションでは、デフォルトの `ticket_driven_workflow` を使用して、GitHub Projects および Issues と統合し、チケットベースのAIエージェント協働を行う方法を説明します。
 
-**注**: これは一つの使用例です。GuildBoticsはGitHub統合なしでも、任意のスケジュール化された自動化タスクに使用できます。
+**注**: GitHub統合は任意です。GitHub統合なしでも、Slackチャットワークフローやスケジュール実行によるコマンド自動化は利用できます。
 
 ## 6.1. 事前準備
 

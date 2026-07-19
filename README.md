@@ -2,15 +2,29 @@
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-A multi-agent task scheduling and command execution framework.
+GuildBotics lets AI agents join your development team as team members. Each member acts
+under its own configured GitHub / Slack identity, picks up tickets from GitHub Projects, works through
+investigation, implementation, and pull request creation, and responds to review comments
+and Slack mentions. The actual investigation, coding, and judgment are delegated to an AI
+CLI tool such as Claude Code or Codex, while every external action the member takes
+(commits, PRs, comments, Slack posts, memory writes) goes through a single dedicated CLI
+(`guildbotics member`), where it is executed and recorded.
 
-GuildBotics enables you to:
-- Manage multiple AI agents with different roles and personalities
-- Schedule and execute commands (Markdown prompts, Python/Shell scripts, YAML workflows)
-- Integrate with external services via pluggable adapters
-- Support multiple LLM providers (Google Gemini, OpenAI, Anthropic Claude)
+There are two ways to work with a member:
 
-**Example use case**: The default workflow integrates with GitHub Projects to enable ticket-driven AI agent collaboration (see [GitHub Integration Example](#6-github-integration-example)).
+- **Work together** — invoke the member in your Claude Code or Codex session via the
+  guildbotics skill and pair-program in the repository you currently have open, teaching
+  them how you work as you go.
+- **Delegate** — the scheduler runs the member periodically; they pick up tickets and carry
+  the work through to a pull request on their own. You give feedback through PR reviews,
+  ticket comments, and Slack replies (see [6. GitHub Integration](#6-github-integration)).
+
+Both modes drive the same member — same identity, same memory. What you teach while working
+together is kept as memory and carries over to the work you delegate.
+
+You configure and monitor GuildBotics with the Desktop app (GUI) and run it with the
+`guildbotics` CLI (it also runs on servers without a GUI). Member behavior can be customized
+with Markdown prompt / Python / Shell / YAML custom commands and schedule definitions.
 
 ---
 
@@ -51,7 +65,7 @@ GuildBotics enables you to:
       - [Basic Setup](#basic-setup)
       - [Adding Multiple Agents](#adding-multiple-agents)
     - [5.6.2. `person.yml` Example](#562-personyml-example)
-- [6. GitHub Integration Example](#6-github-integration-example)
+- [6. GitHub Integration](#6-github-integration)
   - [6.1. Prerequisites](#61-prerequisites)
     - [6.1.1. Git Environment](#611-git-environment)
     - [6.1.2. Create a GitHub Project](#612-create-a-github-project)
@@ -84,10 +98,12 @@ GuildBotics enables you to:
   - Shell scripts
   - YAML workflows (command composition)
 - **Brain Abstraction**: Swap LLM providers or delegate to AI CLI tools (Antigravity, Codex, Claude Code, GitHub Copilot, etc., which are AI tools launched from a local CLI)
-- **Extensible Integrations**: Pluggable adapters for external services
 
 ## Built-in Capabilities
 - **GitHub Integration** (default): Ticket management via GitHub Projects/Issues, PR creation, code hosting
+- **Slack Integration**: Chat workflow where members watch configured channels and reply or react as themselves
+- **Member Memory**: Personal and team memory that members recall and maintain across sessions
+- **Interactive Member Sessions**: The guildbotics skill lets an AI CLI tool work as a member in your current repository
 - **Internationalization**: Multi-language support (English/Japanese)
 - **Custom Commands**: Define reusable command templates per person/role
 
@@ -119,7 +135,7 @@ echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
 ~/.guildbotics/bin/guildbotics start
 ```
 
-See [Basic Usage](#5-basic-usage) for details, or [GitHub Integration Example](#6-github-integration-example) for the ticket-driven workflow setup.
+See [Basic Usage](#5-basic-usage) for details, or [GitHub Integration](#6-github-integration) for the ticket-driven workflow setup.
 
 # 3. Environment
 ## 3.1. Supported Platforms
@@ -654,11 +670,11 @@ guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat 
 
 This command first fetches candidate articles from Google News RSS, then uses an LLM to format a Japanese digest suitable for Slack.
 
-# 6. GitHub Integration Example
+# 6. GitHub Integration
 
 This section describes how to use the default `ticket_driven_workflow` which integrates with GitHub Projects and Issues for ticket-based AI agent collaboration.
 
-**Note**: This is one example use case. GuildBotics can be used for any scheduled automation tasks without GitHub integration.
+**Note**: GitHub integration is optional. Without it, GuildBotics can still run the Slack chat workflow and scheduled automation commands.
 
 ## 6.1. Prerequisites
 
