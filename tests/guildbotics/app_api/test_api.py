@@ -77,19 +77,17 @@ def _chat_person(
         {
             "person_id": person_id,
             "is_active": active,
-            "message_channels": [],
-            "profile": {
-                "chat": {
-                    "subscriptions": [
-                        {
-                            "service": "slack",
-                            "channel_id": channel_id,
-                            "channel_name": channel_name,
-                            "enabled": True,
-                        }
-                    ]
+            "message_channels": [
+                {
+                    "service": "slack",
+                    "name": channel_name,
+                    "chat": {
+                        "channel_id": channel_id,
+                        "channel_name": channel_name,
+                        "enabled": True,
+                    },
                 }
-            },
+            ],
         },
     )()
 
@@ -294,9 +292,6 @@ class RuntimeStub:
             env_file_exists=True,
         )
 
-    def requires_github_for_routine(self, command: str) -> bool:
-        return command == "workflows/ticket_driven_workflow"
-
     def verify(self) -> VerifyResponse:
         return VerifyResponse(
             ok=False,
@@ -364,7 +359,9 @@ class RuntimeStub:
             ]
         )
 
-    async def get_cli_agent_usage(self, refresh: bool = False) -> CliAgentUsagesResponse:
+    async def get_cli_agent_usage(
+        self, refresh: bool = False
+    ) -> CliAgentUsagesResponse:
         return CliAgentUsagesResponse(
             usages=[
                 CliAgentUsage(
@@ -899,7 +896,9 @@ def test_cli_agent_usage_endpoint_uses_runtime(tmp_path: Path) -> None:
     payload = response.json()
     assert payload["usages"][0]["agent"] == "codex"
     assert payload["usages"][0]["windows"][0]["used_percent"] == 42.5
-    assert payload["usages"][0]["windows"][0]["resets_at"] == "2026-07-18T05:00:00+00:00"
+    assert (
+        payload["usages"][0]["windows"][0]["resets_at"] == "2026-07-18T05:00:00+00:00"
+    )
 
 
 @pytest.mark.asyncio
@@ -945,9 +944,7 @@ async def test_app_runtime_cli_agent_usage_probes_detected_codex(
             checked_at="2026-07-18T00:00:00+00:00",
         )
 
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.read_codex_usage", fake_read
-    )
+    monkeypatch.setattr("guildbotics.app_api.runtime.read_codex_usage", fake_read)
 
     first = await runtime.get_cli_agent_usage()
     second = await runtime.get_cli_agent_usage()
@@ -986,9 +983,7 @@ async def test_app_runtime_cli_agent_usage_degrades_on_probe_failure(
     async def failing_read(executable: str, timeout: float = 20.0):
         raise CliAgentUsageError("not logged in")
 
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.read_codex_usage", failing_read
-    )
+    monkeypatch.setattr("guildbotics.app_api.runtime.read_codex_usage", failing_read)
 
     response = await runtime.get_cli_agent_usage()
 
@@ -1613,7 +1608,6 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
         def __init__(
             self,
             context: object,
-            routine_commands: list[str],
             consecutive_error_limit: int,
             routine_interval_minutes: int,
             service_run_id: str | None = None,
@@ -1623,7 +1617,6 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             execution_coordinator: object | None = None,
         ) -> None:
             self.shutdown_calls = 0
-            self.routine_commands = routine_commands
             self.consecutive_error_limit = consecutive_error_limit
             self.routine_interval_minutes = routine_interval_minutes
             self.scheduled_source_enabled = scheduled_source_enabled
@@ -1657,7 +1650,6 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
         )
     )
     assert first.scheduler.state == "running"
-    assert first.scheduler.routine_commands == []
     assert first.scheduler.max_consecutive_errors == DEFAULT_MAX_CONSECUTIVE_ERRORS
     assert first.scheduler.routine_interval_minutes == DEFAULT_ROUTINE_INTERVAL_MINUTES
     assert (
@@ -1699,7 +1691,6 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
         def __init__(
             self,
             context: object,
-            routine_commands: list[str],
             consecutive_error_limit: int,
             routine_interval_minutes: int,
             service_run_id: str | None = None,
@@ -1786,7 +1777,6 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
         def __init__(
             self,
             context: object,
-            routine_commands: list[str],
             consecutive_error_limit: int,
             routine_interval_minutes: int,
             service_run_id: str | None = None,
@@ -1795,7 +1785,6 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
             event_queue_source_enabled: bool = True,
             execution_coordinator: object | None = None,
         ) -> None:
-            self.routine_commands = routine_commands
             self.scheduled_source_enabled = scheduled_source_enabled
             self.routine_source_enabled = routine_source_enabled
             self.event_queue_source_enabled = event_queue_source_enabled
@@ -1831,7 +1820,6 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
     )
     assert first.scheduler.state == "running"
     assert first.events.state == "running"
-    assert RunningScheduler.instances[0].routine_commands == []
     assert RunningScheduler.instances[0].scheduled_source_enabled is False
     assert RunningScheduler.instances[0].routine_source_enabled is False
     assert RunningScheduler.instances[0].event_queue_source_enabled is True
@@ -1926,7 +1914,6 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
         def __init__(
             self,
             context: object,
-            routine_commands: list[str],
             consecutive_error_limit: int,
             routine_interval_minutes: int,
             service_run_id: str | None = None,
@@ -1977,50 +1964,6 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
     assert refreshed.events.state == "stopped"
     assert refreshed.events.running is False
     assert refreshed.events.error is None
-
-
-def test_app_runtime_rejects_github_required_routine_without_integration() -> None:
-    runtime = AppRuntime(EventBus())
-    runtime.is_github_integration_enabled = lambda: False  # type: ignore[method-assign]
-    runtime.requires_github_for_routine = lambda command: True  # type: ignore[method-assign]
-
-    with pytest.raises(AppApiError) as exc_info:
-        runtime.start_scheduler(
-            SchedulerStartRequest(routine_commands=["workflows/ticket_driven_workflow"])
-        )
-
-    assert exc_info.value.code == "github_integration_required_for_routine"
-
-
-def test_app_runtime_derives_github_requirement_from_routine_option() -> None:
-    # The GitHub dependency is read from the routine command's own detected
-    # requirements, not a hardcoded command name.
-    runtime = AppRuntime(EventBus())
-    ticket = CommandOption(
-        command="workflows/ticket_driven_workflow",
-        label="Ticket Driven Workflow",
-        category="workflow",
-        source="template",
-        path=Path("templates/commands/workflows/ticket_driven_workflow.py"),
-        requirements=[CommandRequirement(kind="github", satisfied=False)],
-    )
-    plain = CommandOption(
-        command="workflows/local_only",
-        label="Local Only",
-        category="workflow",
-        source="workspace",
-        path=Path("commands/workflows/local_only.py"),
-    )
-    runtime.get_routine_command_options = (  # type: ignore[method-assign]
-        lambda person=None: RoutineCommandOptionsResponse(
-            options=[plain, ticket], default_command=ticket.command
-        )
-    )
-
-    assert (
-        runtime.requires_github_for_routine("workflows/ticket_driven_workflow") is True
-    )
-    assert runtime.requires_github_for_routine("workflows/local_only") is False
 
 
 @pytest.mark.asyncio
@@ -2584,31 +2527,6 @@ def test_scheduler_start_both_endpoint(tmp_path: Path) -> None:
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "running"
     assert response.json()["events"]["state"] == "running"
-
-
-def test_scheduler_start_rejects_github_required_routine(tmp_path: Path) -> None:
-    class RejectingStub(RuntimeStub):
-        def start_scheduler(self, request: Any) -> RuntimeStatus:
-            raise AppApiError(
-                "github_integration_required_for_routine",
-                "GitHub integration is required for this routine.",
-                context={"routine_commands": list(request.routine_commands)},
-            )
-
-    client = _client(RejectingStub(tmp_path))
-
-    response = client.post(
-        "/scheduler/start",
-        headers=AUTH_HEADERS,
-        json={"routine_commands": ["workflows/ticket_driven_workflow"]},
-    )
-
-    assert response.status_code == HTTP_BAD_REQUEST
-    payload = response.json()
-    assert payload["code"] == "github_integration_required_for_routine"
-    assert payload["context"]["routine_commands"] == [
-        "workflows/ticket_driven_workflow"
-    ]
 
 
 def test_scheduler_stop_endpoint(tmp_path: Path) -> None:

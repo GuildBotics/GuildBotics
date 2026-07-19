@@ -37,10 +37,7 @@ from guildbotics.integrations.chat_workflow_status import (
     workflow_status_metadata,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.runtime.event_listener import (
-    INCOMING_CHAT_EVENT_KEY,
-    IncomingChatEvent,
-)
+from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.i18n_tool import t
 
@@ -533,12 +530,9 @@ def _read_retry_context_payload(context: Any) -> object:
     )
 
     invocation = shared_state.get(WORKFLOW_INVOCATION_KEY)
-    if isinstance(invocation, dict):
-        payload = invocation.get("payload")
-        return payload.get("retry_context") if isinstance(payload, dict) else None
     if isinstance(invocation, WorkflowInvocation):
         return invocation.payload.get("retry_context")
-    return shared_state.get("retry_context")
+    return None
 
 
 def _positive_int(value: object, default: int) -> int:
@@ -1091,23 +1085,12 @@ def _read_incoming_event_from_context(context: Any) -> IncomingChatEvent | None:
     if not isinstance(shared_state, dict):
         return None
 
-    # Try reading from WORKFLOW_INVOCATION_KEY
     from guildbotics.runtime.workflow_invocation import (
         WORKFLOW_INVOCATION_KEY,
         WorkflowInvocation,
     )
 
     invocation = shared_state.get(WORKFLOW_INVOCATION_KEY)
-    if invocation is not None:
-        if isinstance(invocation, dict) and invocation.get("trigger_type") == "chat":
-            return IncomingChatEvent.from_shared_state(invocation.get("payload"))
-        elif (
-            isinstance(invocation, WorkflowInvocation)
-            and invocation.trigger_type == "chat"
-        ):
-            return IncomingChatEvent.from_shared_state(invocation.payload)
-
-    # Fallback to INCOMING_CHAT_EVENT_KEY
-    return IncomingChatEvent.from_shared_state(
-        shared_state.get(INCOMING_CHAT_EVENT_KEY)
-    )
+    if isinstance(invocation, WorkflowInvocation) and invocation.trigger_type == "chat":
+        return IncomingChatEvent.from_shared_state(invocation.payload)
+    return None

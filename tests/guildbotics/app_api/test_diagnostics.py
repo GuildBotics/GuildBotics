@@ -288,7 +288,9 @@ async def test_person_id_human_member_uses_static_checks_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_person_id_human_member_without_github_username_uses_stable_code() -> None:
+async def test_person_id_human_member_without_github_username_uses_stable_code() -> (
+    None
+):
     context = _StubContext(
         team=_team(
             [
@@ -763,7 +765,14 @@ async def test_github_proxy_agent_without_agent_field_option_is_error(
     ticket_manager.agent_field_options = []
     context = _StubContext(
         team=_team(
-            [_person("bot", is_active=True, person_type="proxy_agent")],
+            [
+                _person(
+                    "bot",
+                    is_active=True,
+                    person_type="proxy_agent",
+                    account_info={"github_account_type": "proxy_agent"},
+                )
+            ],
             services=_github_services(),
         ),
         brain=_StubBrain(_CliResult()),
@@ -789,7 +798,14 @@ async def test_github_proxy_agent_with_agent_field_option_is_ok(
     ticket_manager.agent_field_options = ["⚙bot"]
     context = _StubContext(
         team=_team(
-            [_person("bot", is_active=True, person_type="proxy_agent")],
+            [
+                _person(
+                    "bot",
+                    is_active=True,
+                    person_type="proxy_agent",
+                    account_info={"github_account_type": "proxy_agent"},
+                )
+            ],
             services=_github_services(),
         ),
         brain=_StubBrain(_CliResult()),

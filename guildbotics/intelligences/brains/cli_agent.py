@@ -282,15 +282,11 @@ def _parse_cli_agent_error_marker(
 
 
 def _extra_env(kwargs: dict[str, Any]) -> dict[str, str]:
-    """Build the compatibility environment for one-shot script adapters.
+    """Build the per-invocation environment for one-shot script adapters.
 
-    New workflows pass the provider-neutral execution context. The explicit
-    ``cli_agent_env`` branch remains for custom callers using legacy one-shot
-    definitions; neither path mutates process-global environment variables.
+    Workflows pass the provider-neutral execution context; nothing here
+    mutates process-global environment variables.
     """
-    overlay = (kwargs.get("session_state") or {}).get("cli_agent_env")
-    if isinstance(overlay, dict):
-        return {str(key): str(value) for key, value in overlay.items()}
     context = (kwargs.get("session_state") or {}).get("agent_execution_context")
     if not isinstance(context, dict):
         return {}

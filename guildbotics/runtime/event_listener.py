@@ -5,8 +5,6 @@ from dataclasses import asdict, dataclass
 
 from guildbotics.integrations.chat_service import ChatEvent
 
-INCOMING_CHAT_EVENT_KEY = "incoming_event"
-
 
 @dataclass(slots=True)
 class IncomingChatEvent:

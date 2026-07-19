@@ -176,20 +176,6 @@ def _activity_sync_state_path() -> Path:
     return get_workspace_data_path("run", ACTIVITY_SYNC_STATE_FILE)
 
 
-def _remove_legacy_prompt_trace_settings(env_path: Path) -> None:
-    if not env_path.exists():
-        return
-    values = read_env_values(env_path)
-    changed = False
-    for key in ("GUILDBOTICS_PROMPT_TRACE", "GUILDBOTICS_PROMPT_TRACE_PATH"):
-        if key in values:
-            values.pop(key)
-            changed = True
-        os.environ.pop(key, None)
-    if changed:
-        write_env_values(env_path, values)
-
-
 def _completed_activity_weeks() -> set[tuple[str, str]]:
     try:
         payload = json.loads(_activity_sync_state_path().read_text(encoding="utf-8"))
@@ -346,8 +332,7 @@ class AppRuntime:
 
         A command is a routine candidate when it self-declares ``routine: true``
         in its metadata (frontmatter for ``.md`` / ``.yml``; sidecar metadata
-        for ``.py`` with the legacy module-level ``ROUTINE = True`` flag kept as
-        a fallback). Discovery scans member, workspace and package-template
+        for ``.py``). Discovery scans member, workspace and package-template
         command roots through a single pass, so both built-in routine workflows
         (such as ``workflows/ticket_driven_workflow``) and workspace-defined
         ones surface without an edition-maintained file list.
@@ -559,19 +544,6 @@ class AppRuntime:
         return output
 
     def start_scheduler(self, request: SchedulerStartRequest) -> RuntimeStatus:
-        if (
-            request.sources.routine
-            and request.routine_commands
-            and not self.is_github_integration_enabled()
-        ):
-            for command in request.routine_commands:
-                if self.requires_github_for_routine(command):
-                    raise AppApiError(
-                        "github_integration_required_for_routine",
-                        "GitHub integration is required for the selected routine command.",
-                        context={"command": command},
-                        status_code=400,
-                    )
         try:
             return self._lifecycle.start(request)
         except ServiceLockUnavailableError as exc:
@@ -700,9 +672,6 @@ class AppRuntime:
         env_values = read_env_values(status.env_file)
         env_values[TRANSCRIPT_DETAIL_ENV] = request.detail
         env_values[TRANSCRIPT_RETENTION_DAYS_ENV] = str(request.retention_days)
-        for key in ("GUILDBOTICS_PROMPT_TRACE", "GUILDBOTICS_PROMPT_TRACE_PATH"):
-            env_values.pop(key, None)
-            os.environ.pop(key, None)
         os.environ[TRANSCRIPT_DETAIL_ENV] = request.detail
         os.environ[TRANSCRIPT_RETENTION_DAYS_ENV] = str(request.retention_days)
         write_env_values(status.env_file, env_values)
@@ -1214,24 +1183,6 @@ class AppRuntime:
         except Exception:
             return False
 
-    def requires_github_for_routine(self, command: str) -> bool:
-        # Derive the GitHub dependency from the command's own detected
-        # requirements. Routine workflows (e.g. the ticket workflow) live only in
-        # the templates, so consult the routine catalog first, then the general
-        # one for custom workspace routine commands.
-        for getter in (self.get_routine_command_options, self.get_command_options):
-            try:
-                options = getter().options
-            except Exception:
-                continue
-            for option in options:
-                if option.command == command:
-                    return any(
-                        requirement.kind == "github"
-                        for requirement in option.requirements
-                    )
-        return False
-
     def _get_context(self, message: str = "") -> Context:
         self._load_workspace_env(apply_data_root=False)
         try:
@@ -1248,7 +1199,6 @@ class AppRuntime:
             (Path.cwd() / ".guildbotics" / "config").resolve()
         )
         dotenv_path = Path.cwd() / ".env"
-        _remove_legacy_prompt_trace_settings(dotenv_path)
         new_values = {
             key: value
             for key, value in (
@@ -1452,10 +1402,7 @@ def _command_file_metadata(path: Path) -> dict[str, Any]:
             module = ast.parse(path.read_text(encoding="utf-8"))
             main = _find_main_function(module)
             description = ast.get_docstring(main) if main is not None else ""
-            return {
-                "description": _first_line(description or ""),
-                "routine": _module_bool_flag(module, "ROUTINE"),
-            }
+            return {"description": _first_line(description or "")}
     except Exception:
         return {}
     return {}
@@ -1516,19 +1463,6 @@ def _localized_metadata_value(value: Any, language_code: str) -> Any:
     if "en" in value:
         return value["en"]
     return next(iter(value.values()), None)
-
-
-def _module_bool_flag(module: ast.Module, name: str) -> bool:
-    """Return True if the module declares a top-level ``name = True`` assignment."""
-    for node in module.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if any(
-            isinstance(target, ast.Name) and target.id == name
-            for target in node.targets
-        ):
-            return isinstance(node.value, ast.Constant) and node.value.value is True
-    return False
 
 
 def _command_label(command: str) -> str:

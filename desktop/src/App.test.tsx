@@ -811,12 +811,11 @@ describe("service preferences persistence", () => {
   it("falls back to defaults for missing or wrongly typed fields", () => {
     window.localStorage.setItem(
       SERVICE_PREFERENCES_KEY,
-      JSON.stringify({ schedulerEnabled: false, selectedRoutine: 42 }),
+      JSON.stringify({ scheduledSourceEnabled: false, selectedRoutine: 42 }),
     );
     expect(loadServicePreferences()).toEqual({
       ...DEFAULT_SERVICE_PREFERENCES,
       scheduledSourceEnabled: false,
-      routineSourceEnabled: false,
     });
   });
 
@@ -863,7 +862,6 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     started_at: null,
     stopped_at: null,
     error: null,
-    routine_commands: [],
     max_consecutive_errors: null,
     routine_interval_minutes: null,
     active_member_count: 1,

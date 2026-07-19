@@ -151,8 +151,8 @@ async def test_cli_agent_run_inherits_environment_and_overlays_config(
 
 
 @pytest.mark.asyncio
-async def test_cli_agent_run_applies_session_state_env_overlay(monkeypatch, tmp_path):
-    # cli_agent_env in session_state is scoped to this single subprocess and
+async def test_cli_agent_run_applies_execution_context_env(monkeypatch, tmp_path):
+    # The agent execution context is scoped to this single subprocess and
     # survives credential isolation, without touching the process environment.
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -189,7 +189,7 @@ async def test_cli_agent_run_applies_session_state_env_overlay(monkeypatch, tmp_
         await brain.run(
             "hello",
             cwd=tmp_path,
-            session_state={"cli_agent_env": {"GUILDBOTICS_TASK_RUN_ID": "run-123"}},
+            session_state={"agent_execution_context": {"run_id": "run-123"}},
         )
         assert captured["env"]["GUILDBOTICS_TASK_RUN_ID"] == "run-123"
     finally:
@@ -358,7 +358,7 @@ async def test_one_shot_agent_inherits_verified_member_delegation(
         await brain.run(
             "hello",
             cwd=tmp_path,
-            session_state={"cli_agent_env": {"GUILDBOTICS_TASK_RUN_ID": "run-123"}},
+            session_state={"agent_execution_context": {"run_id": "run-123"}},
         )
     finally:
         lease.release()

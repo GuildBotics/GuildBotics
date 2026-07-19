@@ -5,8 +5,8 @@ keychain whenever a functional backend is available (macOS Keychain, Windows
 Credential Manager, Linux Secret Service). The workspace keeps only a
 non-secret index file (``.guildbotics/config/secrets.yml``) naming the stored
 keys, so the workspace stays portable while the secret values stay out of
-plaintext files. Workspaces without that index file keep the legacy ``.env``
-storage untouched.
+plaintext files. Workspaces without that index file (e.g. created on a
+keyring-less machine) use ``.env`` storage instead.
 
 Resolution precedence for a secret value is: real environment variable >
 OS keychain > ``.env`` file. Servers and CI therefore keep working with plain
@@ -133,7 +133,7 @@ class SecretStore(ABC):
 
 
 class EnvFileSecretStore(SecretStore):
-    """Legacy storage: secrets sit in the workspace ``.env`` file."""
+    """Plaintext storage: secrets sit in the workspace ``.env`` file."""
 
     backend = ENV_FILE_BACKEND
 
@@ -260,9 +260,9 @@ def resolve_secret_store(
 ) -> SecretStore:
     """Return the workspace's secret store.
 
-    Without ``create_default`` an unconfigured workspace keeps the legacy
-    ``.env`` behavior. With it (initial project setup), the OS keychain is
-    chosen when available.
+    Without ``create_default`` an unconfigured workspace uses the ``.env``
+    backend. With it (initial project setup), the OS keychain is chosen when
+    available.
     """
     backend = configured_secrets_backend(config_dir)
     if backend is None and create_default and keyring_available():

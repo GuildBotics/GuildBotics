@@ -8,6 +8,7 @@
 - `.gitignore` 対象のファイル・ディレクトリは参照しない
 - 挙動変更を行った場合は、関連ドキュメントも必要に応じて更新する
 - コードの修正に際しては「最小限の変更量」ではなく、「変更後のコード量が最小になること」を最優先事項とし、場当たり的対応ではなくあるべき姿の美しいコードとなることを心がける
+- 後方互換性を維持するためのコード（移行フラグ、フォールバック読み込み、旧形式の並行サポート、deprecation 期間の新旧併存パス）を追加しない。互換性のために冗長なコードを残すより、常にあるべき姿のコードを維持することを優先する。破壊的な非互換が起こりうることは README の「重要な注意（免責事項）」で宣言済みであり、利用者は実質的にメンテナ本人のみである。設定形式・実行パス・命名などを変更する際は、互換レイヤーではなく直接切り替えと旧実装の削除を選ぶ
 - 意味判定・分類・採用可否のような自然言語理解が必要な処理を、キーワード列挙や場当たり的な文字列マッチで実装しない。既存の LLM 判定基盤（例: `guildbotics/intelligences/functions.py` と `guildbotics/templates/commands/functions/*`）を優先し、必要なら汎用的な判定関数を追加する。
 - 責務境界を越えた実装をしない。GuildBotics における具体的な責務境界は「重要な実装ポイント」の「責務境界」を参照する。
 
@@ -206,7 +207,7 @@ help / docstring が正であり、member コマンドの一行説明は
 - desktop runtime は workspace 選択時に active workspace を保存し、workspace の `.guildbotics/config` と `.env` から `GUILDBOTICS_CONFIG_DIR` / `GUILDBOTICS_ENV_FILE` を設定する
 - ローカライズ対応ファイルは `.<lang>` → `.en` → 素のファイル名の順で探索
 - メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
-- シークレット（API キー / トークン）は `guildbotics/utils/secret_store.py` の SecretStore 経由で扱う。新規ワークスペースの既定は OS キーチェーン（`.guildbotics/config/secrets.yml` はキー名インデックスのみで値を持たない）、レガシーワークスペースは `.env`。解決優先順位は実環境変数 > キーチェーン > `.env`（詳細: `docs/ARCHITECTURE.md` の「Secret Storage (SecretStore)」）。テストでは autouse fixture が `GUILDBOTICS_SECRETS_BACKEND=env-file` を強制するため、keyring 経路の検証には `fake_keyring` fixture を使う
+- シークレット（API キー / トークン）は `guildbotics/utils/secret_store.py` の SecretStore 経由で扱う。新規ワークスペースの既定は OS キーチェーン（`.guildbotics/config/secrets.yml` はキー名インデックスのみで値を持たない）、キーチェーンが使えない環境で作成したワークスペースは `.env`。解決優先順位は実環境変数 > キーチェーン > `.env`（詳細: `docs/ARCHITECTURE.md` の「Secret Storage (SecretStore)」）。テストでは autouse fixture が `GUILDBOTICS_SECRETS_BACKEND=env-file` を強制するため、keyring 経路の検証には `fake_keyring` fixture を使う
 
 ### 5. スケジューラ
 
@@ -349,6 +350,7 @@ desktop TypeScript 開発時の品質確認:
 - ブラウザ E2E（Playwright, `desktop/e2e/`）は lean-but-real。実ブラウザ engine + 実 Local API backend でしか検証できない critical user journey（setup→実ファイル書き込み、scheduler start/stop、command 実行+`/events` ストリーム、diagnostics、backend down→retry）に絞り、振る舞いパターンの総当たりはしない（分岐網羅は unit / component に委譲）。push CI には含めず、ローカルの `npm run e2e` で実行する（現状、専用 CI ジョブは無い）
 - Tauri ネイティブ / packaging smoke は最小限に保ち、実 OS + Tauri runtime が要るもの（sidecar 起動 / `backend_info` / file picker など）は workflow_dispatch / release workflow に隔離する
 - LLM、GitHub、Slack、外部 CLI などへの実通信は通常 CI のテストに入れない。既存抽象化、stub、mock、fixture を使い、送信 payload、判定結果、エラー処理を検証する
+- テストは決定論的かつ hermetic に保つ。時間・乱数・環境変数・cwd・HOME・I/O は `monkeypatch` / `tmp_path` で制御し、実 home ディレクトリや外部サービスに触れない
 - snapshot のみで品質を担保しない。ユーザーが観測する文言・状態、生成 request、保存 file/env、publish event、return value を具体的に assert する
 - テストコードも本体コードと同じ品質対象とする。重複 fixture や場当たり的 mock が増えた場合は helper / factory へ整理する
 
@@ -369,6 +371,7 @@ desktop TypeScript 開発時の品質確認:
 
 ## 変更時の実務ルール
 
+- ソースコード内のコメントと docstring は英語で書く。docstring は Google スタイルを使う
 - 挙動変更時は、対応テストを `tests/guildbotics/...` に追加・更新する
 - コマンド仕様変更時は、`docs/custom_command_guide.en.md` / `docs/custom_command_guide.ja.md` の整合性も確認する
 - CLI のオプションやコマンド変更時は、新しいオプションに help を書き、`uv run --no-sync python scripts/generate-cli-reference.py` で `docs/cli_reference.md` を再生成して commit する（忘れると CI の `--check` ステップと `tests/guildbotics/cli/test_cli_reference.py` が fail する）。あわせて `README.md` / `README.ja.md` の使用例も確認する

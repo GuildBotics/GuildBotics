@@ -832,20 +832,16 @@ def test_transcript_settings_defaults_and_usage(
     assert status.memory_max_size_bytes == 8 * 1024 * 1024
 
 
-def test_update_transcript_settings_writes_env_and_removes_legacy_keys(
+def test_update_transcript_settings_writes_env(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_DETAIL", "standard")
     monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", "30")
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE", "1")
-    monkeypatch.setenv("GUILDBOTICS_PROMPT_TRACE_PATH", "/old/trace.jsonl")
     (isolated_home / ".env").write_text(
         "\n".join(
             [
                 "# leading comment",
                 "OPENAI_API_KEY=first",
-                "GUILDBOTICS_PROMPT_TRACE=0",
-                "GUILDBOTICS_PROMPT_TRACE_PATH=/old/trace.jsonl",
                 "EXTRA=keep",
             ]
         )
@@ -861,14 +857,11 @@ def test_update_transcript_settings_writes_env_and_removes_legacy_keys(
     assert status.retention_days == 14
     assert os.environ["GUILDBOTICS_TRANSCRIPT_DETAIL"] == "full"
     assert os.environ["GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS"] == "14"
-    assert "GUILDBOTICS_PROMPT_TRACE" not in os.environ
-    assert "GUILDBOTICS_PROMPT_TRACE_PATH" not in os.environ
     env_text = (isolated_home / ".env").read_text()
     assert "OPENAI_API_KEY=first" in env_text
     assert "EXTRA=keep" in env_text
     assert "GUILDBOTICS_TRANSCRIPT_DETAIL=full" in env_text
     assert "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS=14" in env_text
-    assert "GUILDBOTICS_PROMPT_TRACE" not in env_text
 
 
 # --- runtime debug ----------------------------------------------------------

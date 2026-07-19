@@ -10,7 +10,6 @@ from guildbotics.utils.fileio import (
     get_machine_state_path,
     get_machine_state_root,
     get_primary_config_path,
-    get_storage_path,
     get_workspace_data_root,
     load_markdown_with_frontmatter,
     load_yaml_file,
@@ -96,20 +95,22 @@ def test_get_primary_config_path_uses_absolute_workspace_path(tmp_path, monkeypa
     )
 
 
-def test_get_storage_path_prefers_data_dir_env_when_home_changes(tmp_path, monkeypatch):
+def test_workspace_data_root_prefers_data_dir_env_when_home_changes(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "stable-data"
     changed_home = tmp_path / "agent-home"
     monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(data_dir))
     monkeypatch.setenv("HOME", str(changed_home))
 
-    assert get_storage_path() == data_dir
+    assert get_workspace_data_root() == data_dir
 
 
-def test_get_storage_path_resolves_relative_data_dir(tmp_path, monkeypatch):
+def test_workspace_data_root_resolves_relative_data_dir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GUILDBOTICS_DATA_DIR", "stable-data")
 
-    assert get_storage_path() == tmp_path / "stable-data"
+    assert get_workspace_data_root() == tmp_path / "stable-data"
 
 
 def test_get_machine_state_root_ignores_data_dir_env(tmp_path, monkeypatch):

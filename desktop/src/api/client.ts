@@ -64,7 +64,6 @@ export type RuntimeUnitStatus = {
   started_at: string | null;
   stopped_at: string | null;
   error: string | null;
-  routine_commands: string[];
   max_consecutive_errors: number | null;
   routine_interval_minutes: number | null;
   active_member_count: number | null;
@@ -108,7 +107,6 @@ export type RuntimeSourceSelection = {
 
 export type SchedulerStartRequest = {
   sources?: RuntimeSourceSelection;
-  routine_commands?: string[];
   max_consecutive_errors?: number;
   routine_interval_minutes?: number;
 };

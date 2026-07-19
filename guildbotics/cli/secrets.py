@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import click
 
-from guildbotics.entities.team import Person
 from guildbotics.utils.env_loader import workspace_config_dir
 from guildbotics.utils.secret_store import (
-    ENV_FILE_BACKEND,
     KEYRING_BACKEND,
-    SECRETS_BACKEND_ENV,
-    KeyringSecretStore,
     SecretStore,
     configured_secrets_backend,
     format_env_line,
@@ -60,17 +55,10 @@ def secrets_status(env: _SecretsContext) -> None:
     configured = configured_secrets_backend(env.config_dir)
     store = env.store()
     click.echo(f"workspace: {env.root}")
-    click.echo(
-        f"backend: {store.backend}" + ("" if configured else " (legacy default)")
-    )
+    click.echo(f"backend: {store.backend}" + ("" if configured else " (default)"))
     click.echo(f"location: {store.location}")
     click.echo(f"keychain available: {'yes' if keyring_available() else 'no'}")
     click.echo(f"stored keys: {len(store.keys())}")
-    if store.backend == ENV_FILE_BACKEND and keyring_available():
-        click.echo(
-            "hint: run 'guildbotics secrets migrate' to move secrets "
-            "from .env into the OS keychain."
-        )
 
 
 @secrets.command(name="list")
@@ -103,54 +91,6 @@ def secrets_delete(env: _SecretsContext, key: str) -> None:
     """Delete a stored secret."""
     env.store().delete(key)
     click.echo(f"Deleted {key}.")
-
-
-@secrets.command(name="migrate")
-@click.option(
-    "--key",
-    "extra_keys",
-    multiple=True,
-    help="Additional .env key to migrate (repeatable).",
-)
-@click.pass_obj
-def secrets_migrate(env: _SecretsContext, extra_keys: tuple[str, ...]) -> None:
-    """Move secrets from the .env file into the OS keychain."""
-    if os.getenv(SECRETS_BACKEND_ENV, "").strip() == ENV_FILE_BACKEND:
-        raise click.ClickException(
-            f"{SECRETS_BACKEND_ENV}={ENV_FILE_BACKEND} forces the .env backend; "
-            "unset it before migrating."
-        )
-    if not keyring_available():
-        raise click.ClickException(
-            "No functional OS keychain is available on this machine."
-        )
-    store = KeyringSecretStore(env.config_dir)
-    env_values = read_env_values(env.env_file)
-    candidates = [
-        key
-        for key in [*_managed_secret_keys(env.config_dir), *extra_keys]
-        if key in env_values
-    ]
-    store.ensure_initialized()
-    for key in candidates:
-        store.set(key, env_values[key])
-    imported_pems = _import_private_key_files(store, env_values)
-    _strip_env_file_keys(
-        env.env_file,
-        candidates + [f"{key}_PATH" for key, _ in imported_pems],
-    )
-    click.echo(f"backend: {KEYRING_BACKEND}")
-    for key in candidates:
-        click.echo(f"moved: {key}")
-    for key, pem_path in imported_pems:
-        click.echo(f"moved: {key} (content of {pem_path})")
-    if imported_pems:
-        click.echo(
-            "The PEM files above were copied into the OS keychain; "
-            "delete them manually once you no longer need them."
-        )
-    if not candidates and not imported_pems:
-        click.echo("No matching secrets found in .env; backend switched only.")
 
 
 @secrets.command(name="export")
@@ -192,33 +132,6 @@ def secrets_import(env: _SecretsContext, file: Path) -> None:
         click.echo(f"Delete {file} once you no longer need it.")
 
 
-def _import_private_key_files(
-    store: SecretStore, env_values: dict[str, str]
-) -> list[tuple[str, Path]]:
-    """Copy GitHub App PEM files referenced from .env into the keychain.
-
-    The keychain content replaces the file: the caller drops the imported
-    ``*_GITHUB_PRIVATE_KEY_PATH`` entries from .env, and the PEM file itself
-    is left for the user to delete.
-    """
-    imported: list[tuple[str, Path]] = []
-    for key, value in env_values.items():
-        if not key.endswith("_GITHUB_PRIVATE_KEY_PATH") or not value:
-            continue
-        content_key = key.removesuffix("_PATH")
-        pem_path = Path(value).expanduser()
-        try:
-            pem = pem_path.read_text()
-        except OSError as exc:
-            click.echo(
-                f"warning: skipped {content_key}: cannot read {pem_path} ({exc})"
-            )
-            continue
-        store.set(content_key, pem)
-        imported.append((content_key, pem_path))
-    return imported
-
-
 def _strip_env_file_keys(env_file: Path, keys: list[str]) -> None:
     """Drop keys from .env so no plaintext copy shadows the keychain."""
     if not env_file.exists():
@@ -227,22 +140,3 @@ def _strip_env_file_keys(env_file: Path, keys: list[str]) -> None:
     remaining = {key: value for key, value in env_values.items() if key not in keys}
     if len(remaining) != len(env_values):
         write_env_values(env_file, remaining)
-
-
-def _managed_secret_keys(config_dir: Path) -> list[str]:
-    """Secret env keys this workspace is known to use.
-
-    Provider API keys come from the provider catalog; person tokens follow the
-    ``<PERSON_ID>_<SUFFIX>`` convention for each configured member.
-    """
-    from guildbotics.intelligences.llm_providers import provider_env_keys
-
-    keys = list(provider_env_keys(config_dir).values())
-    members_dir = config_dir / "team/members"
-    if members_dir.is_dir():
-        for member_dir in sorted(members_dir.iterdir()):
-            if not (member_dir / "person.yml").is_file():
-                continue
-            prefix = member_dir.name.replace("-", "_").upper()
-            keys.extend(f"{prefix}_{suffix}" for suffix in Person.SECRET_ENV_SUFFIXES)
-    return keys

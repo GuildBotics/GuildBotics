@@ -26,7 +26,6 @@ class TaskScheduler:
     def __init__(
         self,
         context: Context,
-        default_routine_commands: list[str],
         consecutive_error_limit: int = 3,
         routine_interval_minutes: int = DEFAULT_ROUTINE_INTERVAL_MINUTES,
         service_run_id: str | None = None,
@@ -39,9 +38,6 @@ class TaskScheduler:
         Initialize the TaskScheduler with a list of jobs.
         Args:
             context (Context): The context for the task scheduler.
-            default_routine_commands (list[str]): Legacy constructor input retained for
-                callers that still pass service-level routine commands. Worker execution
-                uses each member's ``routine_commands``.
             consecutive_error_limit (int): Maximum number of consecutive errors allowed
                 before stopping the worker loop.
             routine_interval_minutes (int): Minimum interval between routine command
@@ -51,7 +47,6 @@ class TaskScheduler:
             event_queue_source_enabled (bool): Whether to drain queued chat events.
         """
         self.context = context
-        self.default_routine_commands = default_routine_commands
         # Stop the scheduling loop for a worker when this many errors occur consecutively.
         # A non-positive value is treated as 1 to avoid infinite loops on error.
         self.consecutive_error_limit = max(1, int(consecutive_error_limit))

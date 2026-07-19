@@ -100,7 +100,6 @@ def test_scheduler_start_request_defaults() -> None:
     assert request.sources.scheduled is True
     assert request.sources.routine is True
     assert request.sources.event_queue is True
-    assert request.routine_commands == []
     assert request.max_consecutive_errors == DEFAULT_MAX_CONSECUTIVE_ERRORS
     assert request.routine_interval_minutes == DEFAULT_ROUTINE_INTERVAL_MINUTES
 

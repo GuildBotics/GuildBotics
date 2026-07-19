@@ -14,10 +14,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionResult,
 )
 from guildbotics.observability import current_trace
-from guildbotics.runtime.event_listener import (
-    INCOMING_CHAT_EVENT_KEY,
-    IncomingChatEvent,
-)
+from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
 
 
@@ -58,7 +55,7 @@ def _install_runner(monkeypatch, ran, *, fail_events=()):
     class _Runner:
         def __init__(self, context, command, args):
             incoming = IncomingChatEvent.from_shared_state(
-                context.shared_state[INCOMING_CHAT_EVENT_KEY]
+                context.shared_state[WORKFLOW_INVOCATION_KEY].payload
             )
             assert incoming is not None
             self.event_id = incoming.event.event_id
@@ -106,7 +103,7 @@ async def test_dispatcher_runs_workflow_and_clears_pending(monkeypatch, tmp_path
     ctx_used, command, _args = ran[0]
     assert command == "workflows/chat_conversation_workflow"
     incoming = IncomingChatEvent.from_shared_state(
-        ctx_used.shared_state[INCOMING_CHAT_EVENT_KEY]
+        ctx_used.shared_state[WORKFLOW_INVOCATION_KEY].payload
     )
     assert incoming is not None
     assert incoming.event.event_id == "E1"

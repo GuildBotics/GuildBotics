@@ -65,7 +65,6 @@ def test_task_scheduler_runs_routine_at_configured_minute_interval(monkeypatch) 
     person = _Person(["routine"])
     scheduler = TaskScheduler(
         _Context(person),
-        ["routine"],
         routine_interval_minutes=3,
     )
     calls: list[dt.datetime] = []
@@ -110,7 +109,6 @@ def test_task_scheduler_measures_routine_interval_after_routine_finishes(
     person = _Person(["routine"])
     scheduler = TaskScheduler(
         _Context(person),
-        ["routine"],
         routine_interval_minutes=3,
     )
     calls: list[dt.datetime] = []
@@ -145,7 +143,7 @@ def test_task_scheduler_measures_routine_interval_after_routine_finishes(
 
 @pytest.mark.asyncio
 async def test_process_pending_chat_delegates_to_dispatcher() -> None:
-    scheduler = TaskScheduler(_Context(_Person()), [])
+    scheduler = TaskScheduler(_Context(_Person()))
     calls: list[str] = []
 
     async def _fake_process(person, stop_event=None):
@@ -164,7 +162,7 @@ async def test_process_pending_chat_delegates_to_dispatcher() -> None:
 async def test_run_cancellable_allows_long_task_to_finish_on_graceful_stop() -> None:
     import asyncio
 
-    scheduler = TaskScheduler(_Context(_Person()), [])
+    scheduler = TaskScheduler(_Context(_Person()))
     cancelled = {"value": False}
     started = asyncio.Event()
     finish = asyncio.Event()
@@ -195,7 +193,7 @@ async def test_run_cancellable_allows_long_task_to_finish_on_graceful_stop() -> 
 async def test_run_cancellable_cancels_long_task_on_force_stop() -> None:
     import asyncio
 
-    scheduler = TaskScheduler(_Context(_Person()), [])
+    scheduler = TaskScheduler(_Context(_Person()))
     cancelled = {"value": False}
     started = asyncio.Event()
 
@@ -219,7 +217,7 @@ async def test_run_cancellable_cancels_long_task_on_force_stop() -> None:
 
 
 def test_update_consecutive_errors_ignores_failures_during_shutdown() -> None:
-    scheduler = TaskScheduler(_Context(_Person()), [])
+    scheduler = TaskScheduler(_Context(_Person()))
     scheduler._stop_event.set()
 
     count, should_stop = scheduler._update_consecutive_errors(
@@ -232,7 +230,7 @@ def test_update_consecutive_errors_ignores_failures_during_shutdown() -> None:
 def test_run_work_rejection_during_drain_mirrors_stop() -> None:
     import asyncio
 
-    scheduler = TaskScheduler(_Context(_Person()), [])
+    scheduler = TaskScheduler(_Context(_Person()))
     scheduler._execution.begin_drain()
     loop = asyncio.new_event_loop()
 
@@ -256,7 +254,7 @@ def test_run_work_lease_conflict_skips_without_stopping_scheduler(monkeypatch) -
 
     from guildbotics.drivers.execution import WorkRejectedError
 
-    scheduler = TaskScheduler(_Context(_Person()), [])
+    scheduler = TaskScheduler(_Context(_Person()))
     loop = asyncio.new_event_loop()
 
     @contextmanager
