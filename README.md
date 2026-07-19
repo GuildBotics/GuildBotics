@@ -2,8 +2,8 @@
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-GuildBotics lets AI agents join your development team as team members. Each member has its
-own GitHub / Slack account, picks up tickets from GitHub Projects, works through
+GuildBotics lets AI agents join your development team as team members. Each member acts
+under its own configured GitHub / Slack identity, picks up tickets from GitHub Projects, works through
 investigation, implementation, and pull request creation, and responds to review comments
 and Slack mentions. The actual investigation, coding, and judgment are delegated to an AI
 CLI tool such as Claude Code or Codex, while every external action the member takes
@@ -19,7 +19,7 @@ There are two ways to work with a member:
   the work through to a pull request on their own. You give feedback through PR reviews,
   ticket comments, and Slack replies (see [6. GitHub Integration](#6-github-integration)).
 
-Both modes drive the same member — same accounts, same memory. What you teach while working
+Both modes drive the same member — same identity, same memory. What you teach while working
 together is kept as memory and carries over to the work you delegate.
 
 You configure and monitor GuildBotics with the Desktop app (GUI) and run it with the

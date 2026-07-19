@@ -2,14 +2,14 @@
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-GuildBotics は、AI エージェントを「チームメンバー」として開発チームに参加させるツールです。各メンバーは自分の GitHub / Slack アカウントを持ち、GitHub Projects のチケットを拾って調査・実装・プルリクエスト作成まで進め、レビューコメントや Slack のメンションに応答します。実際の調査・実装・判断は Claude Code や Codex などの AI CLI ツールが行い、メンバーとしての外部操作（コミット、PR、コメント、Slack 投稿、記憶の保存）はすべて専用 CLI（`guildbotics member`）を通して実行・記録されます。
+GuildBotics は、AI エージェントを「チームメンバー」として開発チームに参加させるツールです。各メンバーは自分用に設定された GitHub / Slack の名義で活動し、GitHub Projects のチケットを拾って調査・実装・プルリクエスト作成まで進め、レビューコメントや Slack のメンションに応答します。実際の調査・実装・判断は Claude Code や Codex などの AI CLI ツールが行い、メンバーとしての外部操作（コミット、PR、コメント、Slack 投稿、記憶の保存）はすべて専用 CLI（`guildbotics member`）を通して実行・記録されます。
 
 メンバーとの働き方は 2 つあります。
 
 - **一緒に作業する** — Claude Code や Codex のセッションで guildbotics スキルを使ってメンバーを呼び出し、いま開いているリポジトリでペアプログラミングします。作業の進め方をその場で教えられます。
 - **任せる** — スケジューラがメンバーを定期起動し、チケットの取得から PR 作成までを自律的に進めます。フィードバックは PR レビューやチケットコメント、Slack の返信で返します（詳細は [6. GitHub統合](#6-github統合)）。
 
-どちらのモードでも同じメンバー（同じアカウント、同じ記憶）が働きます。一緒に作業しながら教えたことは記憶として残り、任せたときの作業にも引き継がれます。
+どちらのモードでも同じメンバー（同じ名義、同じ記憶）が働きます。一緒に作業しながら教えたことは記憶として残り、任せたときの作業にも引き継がれます。
 
 設定と監視は Desktop アプリ（GUI）で行い、実行は `guildbotics` CLI で行います（GUI のないサーバでも実行できます）。メンバーの振る舞いは、Markdown プロンプト / Python / Shell / YAML のカスタムコマンドとスケジュール定義でカスタマイズできます。
 
