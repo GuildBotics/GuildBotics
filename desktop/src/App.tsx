@@ -117,6 +117,159 @@ const MEMORY_FOCUS_SEARCH_PARAMS = [
   "person_id",
 ] as const;
 
+export type CommandRunRecord = {
+  traceId: string;
+  person: string;
+  command: string;
+  startedAt: string;
+  status: "running" | "success" | "failed";
+  output?: string;
+  error?: string;
+};
+
+export const CUSTOM_COMMAND_HISTORY_KEY = "guildbotics.commands.customHistory";
+const CUSTOM_COMMAND_HISTORY_LIMIT = 30;
+
+export type CustomCommandHistory = {
+  commands: string[];
+  lastRunWasCustom: boolean;
+};
+
+function normalizeCustomCommands(values: unknown, limit = CUSTOM_COMMAND_HISTORY_LIMIT): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of values) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    result.push(trimmed);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+export function pushCustomCommand(
+  commands: string[],
+  command: string,
+  limit = CUSTOM_COMMAND_HISTORY_LIMIT,
+): string[] {
+  return normalizeCustomCommands([command, ...commands], limit);
+}
+
+export function loadCustomCommandHistory(): CustomCommandHistory {
+  const empty: CustomCommandHistory = { commands: [], lastRunWasCustom: false };
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_COMMAND_HISTORY_KEY);
+    if (!raw) {
+      return empty;
+    }
+    const parsed = JSON.parse(raw) as Partial<CustomCommandHistory>;
+    return {
+      commands: normalizeCustomCommands(parsed.commands),
+      lastRunWasCustom: Boolean(parsed.lastRunWasCustom),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+export function saveCustomCommandHistory(value: CustomCommandHistory): void {
+  try {
+    window.localStorage.setItem(CUSTOM_COMMAND_HISTORY_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore persistence failures (e.g. storage disabled or full).
+  }
+}
+
+export class CommandsPageStore {
+  mode: string = "catalog";
+  selectedCommand: string = "";
+  customCommand: string = "";
+  customHistory: string[] = [];
+  lastRunWasCustom: boolean = false;
+  rawArgs: string = "";
+  argValues: Record<string, string> = {};
+  message: string = "";
+  person: string | null = null;
+  cwd: string = "";
+  showAdvanced: boolean = false;
+  runtimeEvents: RuntimeEvent[] = [];
+  runtimeLogs: RuntimeLog[] = [];
+  history: CommandRunRecord[] = [];
+  activeTraceId: string | null = null;
+  activeTab: string | null = "events";
+
+  listeners = new Set<() => void>();
+
+  constructor() {
+    this.reset();
+  }
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  notify() {
+    this.listeners.forEach((l) => l());
+  }
+
+  update(next: Partial<CommandsPageStore>) {
+    Object.assign(this, next);
+    if ("customHistory" in next || "lastRunWasCustom" in next) {
+      saveCustomCommandHistory({
+        commands: this.customHistory,
+        lastRunWasCustom: this.lastRunWasCustom,
+      });
+    }
+    this.notify();
+  }
+
+  reset() {
+    const initialHistory = loadCustomCommandHistory();
+    const restoreCustom = initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
+    this.mode = restoreCustom ? "custom" : "catalog";
+    this.selectedCommand = "";
+    this.customCommand = restoreCustom ? initialHistory.commands[0] : "";
+    this.customHistory = initialHistory.commands;
+    this.lastRunWasCustom = initialHistory.lastRunWasCustom;
+    this.rawArgs = "";
+    this.argValues = {};
+    this.message = "";
+    this.person = null;
+    this.cwd = "";
+    this.showAdvanced = false;
+    this.runtimeEvents = [];
+    this.runtimeLogs = [];
+    this.history = [];
+    this.activeTraceId = null;
+    this.activeTab = "events";
+    this.notify();
+  }
+}
+
+export const commandsStore = new CommandsPageStore();
+
+export function useCommandsStore() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    return commandsStore.subscribe(() => setTick((t) => t + 1));
+  }, []);
+  return commandsStore;
+}
+
 export function App() {
   const { t, i18n } = useTranslation();
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
@@ -131,6 +284,75 @@ export function App() {
   const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
   const closeGuard = useAppCloseGuard();
+
+  useEffect(() => {
+    commandsStore.reset();
+  }, []);
+
+  useEffect(() => {
+    if (!configured) return;
+    const stopEvents = subscribeEvents((event) => {
+      if (!event.type.startsWith("command.")) {
+        return;
+      }
+      const nextEvents = [event, ...commandsStore.runtimeEvents].slice(0, 80);
+      let nextActiveTraceId = commandsStore.activeTraceId;
+      let nextHistory = commandsStore.history;
+
+      if (!event.trace_id) {
+        commandsStore.update({ runtimeEvents: nextEvents });
+        return;
+      }
+
+      if (event.type === "command.started") {
+        nextActiveTraceId = event.trace_id;
+        nextHistory = upsertCommandRecord(commandsStore.history, {
+          traceId: event.trace_id ?? "",
+          person: stringPayload(event.payload.person),
+          command: stringPayload(event.payload.command),
+          startedAt: event.timestamp,
+          status: "running",
+        });
+      } else if (event.type === "command.failed") {
+        nextHistory = upsertCommandRecord(commandsStore.history, {
+          traceId: event.trace_id ?? "",
+          person: stringPayload(event.payload.person),
+          command: stringPayload(event.payload.command),
+          startedAt: event.timestamp,
+          status: "failed",
+          error: commandFailureDetail(event),
+        });
+      } else if (event.type === "command.finished") {
+        nextHistory = upsertCommandRecord(commandsStore.history, {
+          traceId: event.trace_id ?? "",
+          person: stringPayload(event.payload.person),
+          command: stringPayload(event.payload.command),
+          startedAt: event.timestamp,
+          status: "success",
+        });
+      }
+
+      commandsStore.update({
+        runtimeEvents: nextEvents,
+        activeTraceId: nextActiveTraceId,
+        history: nextHistory,
+      });
+    });
+
+    const stopLogs = subscribeLogs((log) => {
+      if (!log.trace_id) {
+        return;
+      }
+      const nextLogs = [log, ...commandsStore.runtimeLogs].slice(0, 200);
+      commandsStore.update({ runtimeLogs: nextLogs });
+    });
+
+    return () => {
+      stopEvents();
+      stopLogs();
+    };
+  }, [configured]);
+
   return (
     <main className="shell">
       <AppCloseBlockedModal
@@ -2927,26 +3149,26 @@ function CommandsPage() {
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
-  const [initialHistory] = useState(loadCustomCommandHistory);
-  const restoreCustom = initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
-  const [mode, setMode] = useState(restoreCustom ? "custom" : "catalog");
-  const [selectedCommand, setSelectedCommand] = useState("");
-  const [customCommand, setCustomCommand] = useState(
-    restoreCustom ? initialHistory.commands[0] : "",
-  );
-  const [customHistory, setCustomHistory] = useState<string[]>(initialHistory.commands);
-  const [lastRunWasCustom, setLastRunWasCustom] = useState(initialHistory.lastRunWasCustom);
-  const [rawArgs, setRawArgs] = useState("");
-  const [argValues, setArgValues] = useState<Record<string, string>>({});
-  const [message, setMessage] = useState("");
-  const [person, setPerson] = useState<string | null>(null);
-  const [cwd, setCwd] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([]);
-  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLog[]>([]);
-  const [history, setHistory] = useState<CommandRunRecord[]>([]);
-  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string | null>("events");
+
+  const store = useCommandsStore();
+  const {
+    mode,
+    selectedCommand,
+    customCommand,
+    customHistory,
+    rawArgs,
+    argValues,
+    message,
+    person,
+    cwd,
+    showAdvanced,
+    runtimeEvents,
+    runtimeLogs,
+    history,
+    activeTraceId,
+    activeTab,
+  } = store;
+
   const commandOptions = useQuery({
     queryKey: ["command-options", person],
     queryFn: () => getCommandOptions(person || undefined),
@@ -3007,19 +3229,23 @@ function CommandsPage() {
         cwd: cwd.trim() || undefined,
       }),
     onMutate: () => {
-      setActiveTraceId(null);
-      setActiveTab("events");
+      commandsStore.update({
+        activeTraceId: null,
+        activeTab: "events",
+      });
       const ranCustom = mode === "custom";
-      setLastRunWasCustom(ranCustom);
+      commandsStore.update({ lastRunWasCustom: ranCustom });
       if (ranCustom) {
-        setCustomHistory((current) => pushCustomCommand(current, command));
+        commandsStore.update({
+          customHistory: pushCustomCommand(customHistory, command),
+        });
       }
     },
     onSuccess: (response) => {
-      setActiveTraceId(response.trace_id);
-      setActiveTab("output");
-      setHistory((current) =>
-        upsertCommandRecord(current, {
+      commandsStore.update({
+        activeTraceId: response.trace_id,
+        activeTab: "output",
+        history: upsertCommandRecord(history, {
           traceId: response.trace_id,
           person: effectivePerson ?? "",
           command,
@@ -3027,14 +3253,14 @@ function CommandsPage() {
           status: "success",
           output: response.output,
         }),
-      );
+      });
     },
     onError: (error) => {
       const traceId = activeTraceId ?? `local-${Date.now()}`;
-      setActiveTraceId(traceId);
-      setActiveTab("output");
-      setHistory((current) =>
-        upsertCommandRecord(current, {
+      commandsStore.update({
+        activeTraceId: traceId,
+        activeTab: "output",
+        history: upsertCommandRecord(history, {
           traceId,
           person: effectivePerson || "",
           command,
@@ -3042,75 +3268,12 @@ function CommandsPage() {
           status: "failed",
           error: error instanceof Error ? error.message : String(error),
         }),
-      );
+      });
     },
   });
   const runBusy = runMutation.isPending;
   const commandBlocked = blockingRequirements.length > 0;
   const canRun = !runBusy && !runDisabled && !commandBlocked;
-
-  useEffect(() => {
-    saveCustomCommandHistory({ commands: customHistory, lastRunWasCustom });
-  }, [customHistory, lastRunWasCustom]);
-
-  useEffect(() => {
-    const stopEvents = subscribeEvents((event) => {
-      if (!event.type.startsWith("command.")) {
-        return;
-      }
-      setRuntimeEvents((current) => [event, ...current].slice(0, 80));
-      if (!event.trace_id) {
-        return;
-      }
-      if (event.type === "command.started") {
-        setActiveTraceId(event.trace_id);
-        setHistory((current) =>
-          upsertCommandRecord(current, {
-            traceId: event.trace_id ?? "",
-            person: stringPayload(event.payload.person),
-            command: stringPayload(event.payload.command),
-            startedAt: event.timestamp,
-            status: "running",
-          }),
-        );
-      }
-      if (event.type === "command.failed") {
-        setHistory((current) =>
-          upsertCommandRecord(current, {
-            traceId: event.trace_id ?? "",
-            person: stringPayload(event.payload.person),
-            command: stringPayload(event.payload.command),
-            startedAt: event.timestamp,
-            status: "failed",
-            error: commandFailureDetail(event),
-          }),
-        );
-      }
-      if (event.type === "command.finished") {
-        setHistory((current) =>
-          upsertCommandRecord(current, {
-            traceId: event.trace_id ?? "",
-            person: stringPayload(event.payload.person),
-            command: stringPayload(event.payload.command),
-            startedAt: event.timestamp,
-            status: "success",
-          }),
-        );
-      }
-    });
-    // Logs flow on a single path now (no command.log events); collect them so
-    // the events tab can show the run's logs inline, scoped by trace id.
-    const stopLogs = subscribeLogs((log) => {
-      if (!log.trace_id) {
-        return;
-      }
-      setRuntimeLogs((current) => [log, ...current].slice(0, 200));
-    });
-    return () => {
-      stopEvents();
-      stopLogs();
-    };
-  }, [t]);
 
   const selectedRecord = useMemo(
     () => history.find((record) => record.traceId === activeTraceId) ?? history[0] ?? null,
@@ -3180,7 +3343,7 @@ function CommandsPage() {
                     <SegmentedControl
                       size="xs"
                       value={mode}
-                      onChange={setMode}
+                      onChange={(value) => commandsStore.update({ mode: value })}
                       data={[
                         { value: "catalog", label: t("commands.modeCatalog") },
                         { value: "custom", label: t("commands.modeCustom") },
@@ -3195,9 +3358,11 @@ function CommandsPage() {
                       nothingFoundMessage={t("commands.noCommandOptions")}
                       value={effectiveSelectedCommand}
                       onChange={(value) => {
-                        setSelectedCommand(value ?? "");
-                        setArgValues({});
-                        setRawArgs("");
+                        commandsStore.update({
+                          selectedCommand: value ?? "",
+                          argValues: {},
+                          rawArgs: "",
+                        });
                       }}
                       data={commandCatalog.map((option) => ({
                         value: option.command,
@@ -3226,7 +3391,7 @@ function CommandsPage() {
                       }
                       data={customHistory}
                       value={customCommand}
-                      onChange={setCustomCommand}
+                      onChange={(value) => commandsStore.update({ customCommand: value })}
                       // Always show the full history (newest first) instead of
                       // narrowing it to entries matching the current input.
                       filter={({ options }) => options}
@@ -3295,7 +3460,7 @@ function CommandsPage() {
                   value={effectivePerson}
                   onChange={(value) => {
                     if (value) {
-                      setPerson(value);
+                      commandsStore.update({ person: value });
                     }
                   }}
                   data={activeMembers.map((member) => ({
@@ -3313,10 +3478,12 @@ function CommandsPage() {
                         placeholder={argument.default || argument.kind}
                         value={argValues[argument.name] ?? ""}
                         onChange={(event) =>
-                          setArgValues((current) => ({
-                            ...current,
-                            [argument.name]: event.currentTarget.value,
-                          }))
+                          commandsStore.update({
+                            argValues: {
+                              ...argValues,
+                              [argument.name]: event.currentTarget.value,
+                            },
+                          })
                         }
                       />
                     ))}
@@ -3328,7 +3495,9 @@ function CommandsPage() {
                     label={t("commands.rawArgs")}
                     placeholder={t("commands.rawArgsPlaceholder")}
                     value={rawArgs}
-                    onChange={(event) => setRawArgs(event.currentTarget.value)}
+                    onChange={(event) =>
+                      commandsStore.update({ rawArgs: event.currentTarget.value })
+                    }
                   />
                 ) : null}
 
@@ -3337,20 +3506,22 @@ function CommandsPage() {
                   description={t("commands.messageDescription")}
                   minRows={5}
                   value={message}
-                  onChange={(event) => setMessage(event.currentTarget.value)}
+                  onChange={(event) => commandsStore.update({ message: event.currentTarget.value })}
                 />
 
                 <Switch
                   checked={showAdvanced}
                   label={t("commands.advanced")}
-                  onChange={(event) => setShowAdvanced(event.currentTarget.checked)}
+                  onChange={(event) =>
+                    commandsStore.update({ showAdvanced: event.currentTarget.checked })
+                  }
                 />
                 {showAdvanced ? (
                   <TextInput
                     label={t("commands.cwd")}
                     description={t("commands.cwdDescription", { cwd: config.data?.cwd ?? "" })}
                     value={cwd}
-                    onChange={(event) => setCwd(event.currentTarget.value)}
+                    onChange={(event) => commandsStore.update({ cwd: event.currentTarget.value })}
                   />
                 ) : null}
               </Stack>
@@ -3372,7 +3543,7 @@ function CommandsPage() {
                       record={selectedRecord}
                       items={commandTimeline}
                       activeTab={activeTab}
-                      onTabChange={setActiveTab}
+                      onTabChange={(value) => commandsStore.update({ activeTab: value })}
                     />
                   ) : (
                     <div className="empty-row">{t("commands.noRunsYet")}</div>
@@ -3386,16 +3557,6 @@ function CommandsPage() {
     </Stack>
   );
 }
-
-export type CommandRunRecord = {
-  traceId: string;
-  person: string;
-  command: string;
-  startedAt: string;
-  status: "running" | "success" | "failed";
-  output?: string;
-  error?: string;
-};
 
 export function commandOutputText(record: CommandRunRecord): string {
   if (record.status === "failed") {
@@ -3476,76 +3637,6 @@ export function loadServicePreferences(): ServicePreferences {
 export function saveServicePreferences(value: ServicePreferences): void {
   try {
     window.localStorage.setItem(SERVICE_PREFERENCES_KEY, JSON.stringify(value));
-  } catch {
-    // Ignore persistence failures (e.g. storage disabled or full).
-  }
-}
-
-export const CUSTOM_COMMAND_HISTORY_KEY = "guildbotics.commands.customHistory";
-const CUSTOM_COMMAND_HISTORY_LIMIT = 30;
-
-export type CustomCommandHistory = {
-  commands: string[];
-  lastRunWasCustom: boolean;
-};
-
-// Keep a newest-first command list well-formed: drop non-strings/blanks, trim,
-// de-duplicate (first occurrence wins), and cap at the history limit. Shared by
-// both the in-memory push and the persisted load so stored values cannot grow
-// unbounded or contain blank entries.
-function normalizeCustomCommands(values: unknown, limit = CUSTOM_COMMAND_HISTORY_LIMIT): string[] {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const entry of values) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    result.push(trimmed);
-    if (result.length >= limit) {
-      break;
-    }
-  }
-  return result;
-}
-
-// Newest-first history of free-input commands: a re-run moves the existing entry
-// to the top instead of duplicating it.
-export function pushCustomCommand(
-  commands: string[],
-  command: string,
-  limit = CUSTOM_COMMAND_HISTORY_LIMIT,
-): string[] {
-  return normalizeCustomCommands([command, ...commands], limit);
-}
-
-export function loadCustomCommandHistory(): CustomCommandHistory {
-  const empty: CustomCommandHistory = { commands: [], lastRunWasCustom: false };
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_COMMAND_HISTORY_KEY);
-    if (!raw) {
-      return empty;
-    }
-    const parsed = JSON.parse(raw) as Partial<CustomCommandHistory>;
-    return {
-      commands: normalizeCustomCommands(parsed.commands),
-      lastRunWasCustom: Boolean(parsed.lastRunWasCustom),
-    };
-  } catch {
-    return empty;
-  }
-}
-
-export function saveCustomCommandHistory(value: CustomCommandHistory): void {
-  try {
-    window.localStorage.setItem(CUSTOM_COMMAND_HISTORY_KEY, JSON.stringify(value));
   } catch {
     // Ignore persistence failures (e.g. storage disabled or full).
   }
