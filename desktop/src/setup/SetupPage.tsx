@@ -262,12 +262,6 @@ interface SlotNameInputProps {
 
 function SlotNameInput({ label, value, readOnly, onRename, flex, size, fw }: SlotNameInputProps) {
   const [localValue, setLocalValue] = useState(value);
-  const [prevValue, setPrevValue] = useState(value);
-
-  if (value !== prevValue) {
-    setPrevValue(value);
-    setLocalValue(value);
-  }
 
   const commitRename = () => {
     const trimmed = localValue.trim();
@@ -2164,6 +2158,7 @@ function IntelligenceEditor({
                   return (
                     <Group key={slotKey} align="flex-end" gap="xs" wrap="nowrap">
                       <SlotNameInput
+                        key={slotKey}
                         label={t("setup.intelligence.slot")}
                         value={slotKey}
                         readOnly={slotKey === "default"}
@@ -2271,6 +2266,7 @@ function IntelligenceEditor({
                         <Stack gap="sm" pt="xs">
                           <Group gap="xs" grow>
                             <SlotNameInput
+                              key={slotKey}
                               label={t("setup.intelligence.slot")}
                               value={slotKey}
                               readOnly={slotKey === "default"}

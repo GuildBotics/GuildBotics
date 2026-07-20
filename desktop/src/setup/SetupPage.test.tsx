@@ -2939,22 +2939,46 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("autosaves an LLM slot rename after focus blur, without losing focus during typing", async () => {
+  it("autosaves an LLM slot rename after focus blur, without losing focus during typing, and holds autosave while focused", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      teamIntelligenceConfig({
+        model_mapping: {
+          default: "models/openai/default.yml",
+          custom_slot: "models/openai/custom.yml",
+        },
+        models: [
+          {
+            path: "models/openai/default.yml",
+            provider: "openai",
+            model_class: "OpenAIModel",
+            model_id: "gpt-5",
+          },
+          {
+            path: "models/openai/custom.yml",
+            provider: "openai",
+            model_class: "OpenAIModel",
+            model_id: "gpt-5",
+          },
+        ],
+      }),
+    );
+
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const addBtn = await screen.findByRole("button", { name: t("setup.intelligence.addLlmSlot") });
-    await user.click(addBtn);
-
     const inputs = await screen.findAllByLabelText(t("setup.intelligence.slot"));
-    const slotInput = inputs.find((input) => (input as HTMLInputElement).value === "new_llm_slot");
+    const slotInput = inputs.find((input) => (input as HTMLInputElement).value === "custom_slot");
     expect(slotInput).toBeInTheDocument();
 
     await user.click(slotInput!);
     await user.clear(slotInput!);
-    await user.type(slotInput!, "custom-slot");
+    await user.type(slotInput!, "renamed-slot");
 
     expect(slotInput).toHaveFocus();
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+
+    // Wait 1000ms (>800ms debounce) while focused and verify no save occurred
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
 
     // Trigger blur manually to commit rename
@@ -2964,8 +2988,51 @@ describe("IntelligenceEditor (team default)", () => {
       timeout: 3000,
     });
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
-    expect(body.model_mapping).toHaveProperty("custom-slot");
-    expect(body.model_mapping).not.toHaveProperty("new_llm_slot");
+    expect(body.model_mapping).toHaveProperty("renamed-slot");
+    expect(body.model_mapping).not.toHaveProperty("custom_slot");
+  });
+
+  it("autosaves a CLI slot rename after focus blur, without losing focus during typing, and holds autosave while focused", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      teamIntelligenceConfig({
+        cli_agent_mapping: {
+          default: "codex",
+          custom_cli: "codex",
+        },
+      }),
+    );
+
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    // Expand accordion for custom_cli to expose inputs
+    const customCliControl = await screen.findByRole("button", { name: /custom_cli/ });
+    await user.click(customCliControl);
+
+    const inputs = await screen.findAllByLabelText(t("setup.intelligence.slot"));
+    const slotInput = inputs.find((input) => (input as HTMLInputElement).value === "custom_cli");
+    expect(slotInput).toBeInTheDocument();
+
+    await user.click(slotInput!);
+    await user.clear(slotInput!);
+    await user.type(slotInput!, "renamed-cli");
+
+    expect(slotInput).toHaveFocus();
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+
+    // Wait 1000ms (>800ms debounce) while focused and verify no save occurred
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+
+    // Trigger blur manually to commit rename
+    fireEvent.blur(slotInput!);
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+    });
+    const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
+    expect(body.cli_agent_mapping).toHaveProperty("renamed-cli");
+    expect(body.cli_agent_mapping).not.toHaveProperty("custom_cli");
   });
 
   it("autosaves a model definition edit through updateIntelligenceConfig after debounce", async () => {
