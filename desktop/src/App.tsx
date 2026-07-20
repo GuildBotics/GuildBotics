@@ -3739,12 +3739,12 @@ function validateRuntimeLog(val: unknown): val is RuntimeLog {
 }
 
 export function loadLastCommandInputs(storageDir?: string): LastCommandInputs | null {
+  if (!storageDir) {
+    return null;
+  }
   try {
-    const key = storageDir ? `${LAST_COMMAND_INPUTS_KEY}:${storageDir}` : LAST_COMMAND_INPUTS_KEY;
-    let raw = window.localStorage.getItem(key);
-    if (!raw && storageDir) {
-      raw = window.localStorage.getItem(LAST_COMMAND_INPUTS_KEY);
-    }
+    const key = `${LAST_COMMAND_INPUTS_KEY}:${storageDir}`;
+    const raw = window.localStorage.getItem(key);
     if (!raw) {
       return null;
     }
@@ -3798,8 +3798,11 @@ export function loadLastCommandInputs(storageDir?: string): LastCommandInputs | 
 }
 
 export function saveLastCommandInputs(value: LastCommandInputs, storageDir?: string): void {
+  if (!storageDir) {
+    return;
+  }
   try {
-    const key = storageDir ? `${LAST_COMMAND_INPUTS_KEY}:${storageDir}` : LAST_COMMAND_INPUTS_KEY;
+    const key = `${LAST_COMMAND_INPUTS_KEY}:${storageDir}`;
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // Ignore persistence failures (e.g. storage disabled or full).

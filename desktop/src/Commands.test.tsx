@@ -497,25 +497,27 @@ describe("Commands screen", () => {
       runtimeEvents: [],
       runtimeLogs: [],
     };
-    saveLastCommandInputs(inputs);
+    saveLastCommandInputs(inputs, "/workspace/.guildbotics");
 
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
 
-    expect(screen.getByRole("radio", { name: t("commands.modeCustom") })).toBeChecked();
-    expect(screen.getByRole("textbox", { name: t("commands.command") })).toHaveValue(
-      "scripts/restore-test.sh",
-    );
-    expect(screen.getByRole("textbox", { name: t("commands.rawArgs") })).toHaveValue(
-      "arg-restored",
-    );
-    expect(screen.getByRole("textbox", { name: t("commands.cwd") })).toHaveValue(
-      "/workspace/restore",
-    );
-    expect(screen.getByRole("switch", { name: t("commands.advanced") })).toBeChecked();
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: t("commands.modeCustom") })).toBeChecked();
+      expect(screen.getByRole("textbox", { name: t("commands.command") })).toHaveValue(
+        "scripts/restore-test.sh",
+      );
+      expect(screen.getByRole("textbox", { name: t("commands.rawArgs") })).toHaveValue(
+        "arg-restored",
+      );
+      expect(screen.getByRole("textbox", { name: t("commands.cwd") })).toHaveValue(
+        "/workspace/restore",
+      );
+      expect(screen.getByRole("switch", { name: t("commands.advanced") })).toBeChecked();
 
-    // Verify output content is restored
-    expect(screen.getByText("restored output content")).toBeInTheDocument();
+      // Verify output content is restored
+      expect(screen.getByText("restored output content")).toBeInTheDocument();
+    });
   });
 });
 
@@ -654,8 +656,8 @@ describe("last command inputs persistence", () => {
         }),
       ],
     };
-    saveLastCommandInputs(inputs);
-    expect(loadLastCommandInputs()).toEqual(inputs);
+    saveLastCommandInputs(inputs, "/workspace/default");
+    expect(loadLastCommandInputs("/workspace/default")).toEqual(inputs);
   });
 
   it("returns null when nothing is stored", () => {
@@ -663,19 +665,19 @@ describe("last command inputs persistence", () => {
   });
 
   it("falls back to default/null values when stored value is corrupt", () => {
-    window.localStorage.setItem(LAST_COMMAND_INPUTS_KEY, "{not json");
-    expect(loadLastCommandInputs()).toBeNull();
+    window.localStorage.setItem(`${LAST_COMMAND_INPUTS_KEY}:/workspace/default`, "{not json");
+    expect(loadLastCommandInputs("/workspace/default")).toBeNull();
   });
 
   it("partially restores and sanitizes inputs from incomplete localStorage object", () => {
     window.localStorage.setItem(
-      LAST_COMMAND_INPUTS_KEY,
+      `${LAST_COMMAND_INPUTS_KEY}:/workspace/default`,
       JSON.stringify({
         mode: "custom",
         customCommand: "echo hi",
       }),
     );
-    expect(loadLastCommandInputs()).toEqual({
+    expect(loadLastCommandInputs("/workspace/default")).toEqual({
       mode: "custom",
       selectedCommand: "",
       customCommand: "echo hi",
@@ -736,7 +738,7 @@ describe("last command inputs persistence", () => {
 
   it("filters out corrupt/null objects from arrays during load", () => {
     window.localStorage.setItem(
-      LAST_COMMAND_INPUTS_KEY,
+      `${LAST_COMMAND_INPUTS_KEY}:/workspace/default`,
       JSON.stringify({
         mode: "custom",
         argValues: { valid: "text", invalid: 123 },
@@ -789,7 +791,7 @@ describe("last command inputs persistence", () => {
       }),
     );
 
-    const loaded = loadLastCommandInputs();
+    const loaded = loadLastCommandInputs("/workspace/default");
     expect(loaded?.showAdvanced).toBe(false);
     expect(loaded?.argValues).toEqual({ valid: "text" });
     expect(loaded?.history).toHaveLength(1);
@@ -798,6 +800,17 @@ describe("last command inputs persistence", () => {
     expect(loaded?.runtimeEvents[0].type).toBe("command.finished");
     expect(loaded?.runtimeLogs).toHaveLength(1);
     expect(loaded?.runtimeLogs[0].message).toBe("log msg");
+  });
+
+  it("returns null when only global key exists but workspace B key is missing", () => {
+    window.localStorage.setItem(
+      LAST_COMMAND_INPUTS_KEY,
+      JSON.stringify({
+        mode: "custom",
+        customCommand: "echo global",
+      }),
+    );
+    expect(loadLastCommandInputs("/workspace/B")).toBeNull();
   });
 });
 
