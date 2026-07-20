@@ -250,6 +250,59 @@ export type ScheduledCommandDraft = {
 };
 const WEEKDAY_OPTIONS = ["0", "1", "2", "3", "4", "5", "6"] as const;
 
+interface SlotNameInputProps {
+  label: string;
+  value: string;
+  readOnly?: boolean;
+  onRename: (oldKey: string, newKey: string) => void;
+  flex?: number;
+  size?: string;
+  fw?: number | string;
+}
+
+function SlotNameInput({
+  label,
+  value,
+  readOnly,
+  onRename,
+  flex,
+  size,
+  fw,
+}: SlotNameInputProps) {
+  const [localValue, setLocalValue] = useState(value);
+
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  const commitRename = () => {
+    const trimmed = localValue.trim();
+    if (trimmed && trimmed !== value) {
+      onRename(value, trimmed);
+    } else {
+      setLocalValue(value);
+    }
+  };
+
+  return (
+    <TextInput
+      label={label}
+      value={localValue}
+      readOnly={readOnly}
+      onChange={(e) => setLocalValue(e.currentTarget.value)}
+      onBlur={commitRename}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commitRename();
+        }
+      }}
+      flex={flex}
+      size={size}
+      fw={fw}
+    />
+  );
+}
+
 export function SetupPage() {
   const { t, i18n } = useTranslation();
   const [searchParams] = useSearchParams();
@@ -2116,11 +2169,11 @@ function IntelligenceEditor({
 
                   return (
                     <Group key={slotKey} align="flex-end" gap="xs" wrap="nowrap">
-                      <TextInput
+                      <SlotNameInput
                         label={t("setup.intelligence.slot")}
                         value={slotKey}
                         readOnly={slotKey === "default"}
-                        onChange={(e) => handleRenameLlmSlot(slotKey, e.currentTarget.value)}
+                        onRename={handleRenameLlmSlot}
                         flex={1.5}
                       />
                       <Select
@@ -2223,11 +2276,11 @@ function IntelligenceEditor({
                       <Accordion.Panel>
                         <Stack gap="sm" pt="xs">
                           <Group gap="xs" grow>
-                            <TextInput
+                            <SlotNameInput
                               label={t("setup.intelligence.slot")}
                               value={slotKey}
                               readOnly={slotKey === "default"}
-                              onChange={(e) => handleRenameCliSlot(slotKey, e.currentTarget.value)}
+                              onRename={handleRenameCliSlot}
                               size="xs"
                               fw={600}
                             />

@@ -2939,6 +2939,35 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
+  it("autosaves an LLM slot rename after focus blur, without losing focus during typing", async () => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    const addBtn = await screen.findByRole("button", { name: t("setup.intelligence.addLlmSlot") });
+    await user.click(addBtn);
+
+    const inputs = await screen.findAllByLabelText(t("setup.intelligence.slot"));
+    const slotInput = inputs.find((input) => (input as HTMLInputElement).value === "new_llm_slot");
+    expect(slotInput).toBeInTheDocument();
+
+    await user.click(slotInput!);
+    await user.clear(slotInput!);
+    await user.type(slotInput!, "custom-slot");
+
+    expect(slotInput).toHaveFocus();
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+
+    // Trigger blur manually to commit rename
+    fireEvent.blur(slotInput!);
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+    });
+    const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
+    expect(body.model_mapping).toHaveProperty("custom-slot");
+    expect(body.model_mapping).not.toHaveProperty("new_llm_slot");
+  });
+
   it("autosaves a model definition edit through updateIntelligenceConfig after debounce", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
