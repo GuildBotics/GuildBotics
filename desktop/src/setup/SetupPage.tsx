@@ -262,10 +262,12 @@ interface SlotNameInputProps {
 
 function SlotNameInput({ label, value, readOnly, onRename, flex, size, fw }: SlotNameInputProps) {
   const [localValue, setLocalValue] = useState(value);
+  const [prevValue, setPrevValue] = useState(value);
 
-  useEffect(() => {
+  if (value !== prevValue) {
+    setPrevValue(value);
     setLocalValue(value);
-  }, [value]);
+  }
 
   const commitRename = () => {
     const trimmed = localValue.trim();
