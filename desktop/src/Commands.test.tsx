@@ -8,11 +8,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   App,
   CUSTOM_COMMAND_HISTORY_KEY,
+  LAST_COMMAND_INPUTS_KEY,
   commandOutputText,
   loadCustomCommandHistory,
+  loadLastCommandInputs,
   pushCustomCommand,
   saveCustomCommandHistory,
+  saveLastCommandInputs,
   type CommandRunRecord,
+  type LastCommandInputs,
 } from "./App";
 import {
   getCommandOptions,
@@ -245,6 +249,41 @@ describe("Commands screen", () => {
     expect(await screen.findByText(t("commands.status.failed"))).toBeInTheDocument();
   });
 
+  it("ignores duplicate runtime events and logs", async () => {
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    await waitFor(() => expect(eventListener).not.toBeNull());
+    await waitFor(() => expect(logListener).not.toBeNull());
+
+    const testEvent = makeRuntimeEvent({
+      type: "command.finished",
+      trace_id: "evt-dup",
+      payload: { command: "workflows/sample", person: "alice" },
+      timestamp: "2026-06-04T01:00:00Z",
+    });
+
+    const testLog = makeRuntimeLog({
+      trace_id: "evt-dup",
+      timestamp: "2026-06-04T01:00:00Z",
+      level: "info",
+      message: "dup-log-message",
+    });
+
+    await act(() => {
+      eventListener?.(testEvent);
+      logListener?.(testLog);
+    });
+
+    await act(() => {
+      eventListener?.(testEvent);
+      logListener?.(testLog);
+    });
+
+    // Verify duplication is ignored
+    const logMessages = screen.getAllByText("dup-log-message");
+    expect(logMessages).toHaveLength(1);
+  });
+
   it("scopes the run's logs to the active trace id in the events tab", async () => {
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
@@ -431,6 +470,55 @@ describe("Commands screen", () => {
     await waitFor(() => expect(openMock).toHaveBeenCalledWith("/workspace/commands/sample.py"));
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
+
+  it("restores the last execution inputs and outputs from localStorage on initialization", async () => {
+    const inputs: LastCommandInputs = {
+      mode: "custom",
+      selectedCommand: "",
+      customCommand: "scripts/restore-test.sh",
+      rawArgs: "arg-restored",
+      argValues: {},
+      message: "restored-msg",
+      person: "alice",
+      cwd: "/workspace/restore",
+      showAdvanced: true,
+      history: [
+        {
+          traceId: "req-restore",
+          person: "alice",
+          command: "scripts/restore-test.sh",
+          startedAt: "2026-07-20T00:00:00Z",
+          status: "success",
+          output: "restored output content",
+        },
+      ],
+      activeTraceId: "req-restore",
+      activeTab: "output",
+      runtimeEvents: [],
+      runtimeLogs: [],
+    };
+    saveLastCommandInputs(inputs, "/workspace/.guildbotics");
+
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: t("commands.modeCustom") })).toBeChecked();
+      expect(screen.getByRole("textbox", { name: t("commands.command") })).toHaveValue(
+        "scripts/restore-test.sh",
+      );
+      expect(screen.getByRole("textbox", { name: t("commands.rawArgs") })).toHaveValue(
+        "arg-restored",
+      );
+      expect(screen.getByRole("textbox", { name: t("commands.cwd") })).toHaveValue(
+        "/workspace/restore",
+      );
+      expect(screen.getByRole("switch", { name: t("commands.advanced") })).toBeChecked();
+
+      // Verify output content is restored
+      expect(screen.getByText("restored output content")).toBeInTheDocument();
+    });
+  });
 });
 
 describe("commandOutputText", () => {
@@ -522,6 +610,207 @@ describe("custom command history persistence", () => {
     expect(loaded).toHaveLength(30);
     expect(loaded[0]).toBe("cmd-0");
     expect(loaded[29]).toBe("cmd-29");
+  });
+});
+
+describe("last command inputs persistence", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("round-trips the last inputs through localStorage", () => {
+    const inputs: LastCommandInputs = {
+      mode: "custom",
+      selectedCommand: "workflows/custom",
+      customCommand: "echo hello",
+      rawArgs: "--verbose",
+      argValues: { foo: "bar" },
+      message: "test commit",
+      person: "bob",
+      cwd: "/src",
+      showAdvanced: true,
+      history: [
+        {
+          traceId: "req-123",
+          person: "alice",
+          command: "workflows/sample",
+          startedAt: "2026-07-20T00:00:00Z",
+          status: "success",
+          output: "success output",
+        },
+      ],
+      activeTraceId: "req-123",
+      activeTab: "output",
+      runtimeEvents: [
+        makeRuntimeEvent({
+          type: "command.finished",
+          trace_id: "req-123",
+          timestamp: "2026-07-20T00:00:00Z",
+          payload: { command: "workflows/sample" },
+        }),
+      ],
+      runtimeLogs: [
+        makeRuntimeLog({
+          trace_id: "req-123",
+          timestamp: "2026-07-20T00:00:00Z",
+          level: "info",
+          message: "hello log",
+        }),
+      ],
+    };
+    saveLastCommandInputs(inputs, "/workspace/default");
+    expect(loadLastCommandInputs("/workspace/default")).toEqual(inputs);
+  });
+
+  it("returns null when nothing is stored", () => {
+    expect(loadLastCommandInputs()).toBeNull();
+  });
+
+  it("falls back to default/null values when stored value is corrupt", () => {
+    window.localStorage.setItem(`${LAST_COMMAND_INPUTS_KEY}:/workspace/default`, "{not json");
+    expect(loadLastCommandInputs("/workspace/default")).toBeNull();
+  });
+
+  it("partially restores and sanitizes inputs from incomplete localStorage object", () => {
+    window.localStorage.setItem(
+      `${LAST_COMMAND_INPUTS_KEY}:/workspace/default`,
+      JSON.stringify({
+        mode: "custom",
+        customCommand: "echo hi",
+      }),
+    );
+    expect(loadLastCommandInputs("/workspace/default")).toEqual({
+      mode: "custom",
+      selectedCommand: "",
+      customCommand: "echo hi",
+      rawArgs: "",
+      argValues: {},
+      message: "",
+      person: null,
+      cwd: "",
+      showAdvanced: false,
+      history: [],
+      activeTraceId: null,
+      activeTab: "events",
+      runtimeEvents: [],
+      runtimeLogs: [],
+    });
+  });
+
+  it("isolates inputs between different workspaces", () => {
+    const inputs1 = {
+      mode: "custom" as const,
+      selectedCommand: "",
+      customCommand: "echo workspace 1",
+      rawArgs: "",
+      argValues: {},
+      message: "",
+      person: null,
+      cwd: "",
+      showAdvanced: false,
+      history: [],
+      activeTraceId: null,
+      activeTab: "events",
+      runtimeEvents: [],
+      runtimeLogs: [],
+    };
+    const inputs2 = {
+      mode: "catalog" as const,
+      selectedCommand: "test",
+      customCommand: "",
+      rawArgs: "arg",
+      argValues: { key: "val" },
+      message: "hello",
+      person: "bob",
+      cwd: "/ws2",
+      showAdvanced: true,
+      history: [],
+      activeTraceId: "trace-2",
+      activeTab: "output",
+      runtimeEvents: [],
+      runtimeLogs: [],
+    };
+
+    saveLastCommandInputs(inputs1, "/workspace/1");
+    saveLastCommandInputs(inputs2, "/workspace/2");
+
+    expect(loadLastCommandInputs("/workspace/1")).toEqual(inputs1);
+    expect(loadLastCommandInputs("/workspace/2")).toEqual(inputs2);
+  });
+
+  it("filters out corrupt/null objects from arrays during load", () => {
+    window.localStorage.setItem(
+      `${LAST_COMMAND_INPUTS_KEY}:/workspace/default`,
+      JSON.stringify({
+        mode: "custom",
+        argValues: { valid: "text", invalid: 123 },
+        showAdvanced: "truthy string",
+        history: [
+          null,
+          { invalidRecord: true },
+          {
+            traceId: "req-1",
+            person: "alice",
+            command: "test",
+            startedAt: "2026-07-20T00:00:00Z",
+            status: "success",
+          },
+        ],
+        runtimeEvents: [
+          null,
+          {
+            kind: "event",
+            type: "command.finished",
+            payload: {},
+            timestamp: "2026-07-20",
+            trace_id: "req-1",
+            span_id: null,
+            parent_id: null,
+            source: null,
+            person_id: "alice",
+            command: "test",
+            workflow: "test",
+            attributes: {},
+          },
+        ],
+        runtimeLogs: [
+          null,
+          {
+            kind: "log",
+            level: "info",
+            message: "log msg",
+            timestamp: "2026-07-20",
+            trace_id: "req-1",
+            span_id: null,
+            parent_id: null,
+            source: null,
+            person_id: "alice",
+            command: "test",
+            workflow: "test",
+            attributes: {},
+          },
+        ],
+      }),
+    );
+
+    const loaded = loadLastCommandInputs("/workspace/default");
+    expect(loaded?.showAdvanced).toBe(false);
+    expect(loaded?.argValues).toEqual({ valid: "text" });
+    expect(loaded?.history).toHaveLength(1);
+    expect(loaded?.history[0].traceId).toBe("req-1");
+    expect(loaded?.runtimeEvents).toHaveLength(1);
+    expect(loaded?.runtimeEvents[0].type).toBe("command.finished");
+    expect(loaded?.runtimeLogs).toHaveLength(1);
+    expect(loaded?.runtimeLogs[0].message).toBe("log msg");
+  });
+
+  it("returns null when only global key exists but workspace B key is missing", () => {
+    window.localStorage.setItem(
+      LAST_COMMAND_INPUTS_KEY,
+      JSON.stringify({
+        mode: "custom",
+        customCommand: "echo global",
+      }),
+    );
+    expect(loadLastCommandInputs("/workspace/B")).toBeNull();
   });
 });
 
