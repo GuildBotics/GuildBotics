@@ -260,15 +260,7 @@ interface SlotNameInputProps {
   fw?: number | string;
 }
 
-function SlotNameInput({
-  label,
-  value,
-  readOnly,
-  onRename,
-  flex,
-  size,
-  fw,
-}: SlotNameInputProps) {
+function SlotNameInput({ label, value, readOnly, onRename, flex, size, fw }: SlotNameInputProps) {
   const [localValue, setLocalValue] = useState(value);
 
   useEffect(() => {
