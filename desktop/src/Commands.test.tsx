@@ -692,6 +692,113 @@ describe("last command inputs persistence", () => {
       runtimeLogs: [],
     });
   });
+
+  it("isolates inputs between different workspaces", () => {
+    const inputs1 = {
+      mode: "custom" as const,
+      selectedCommand: "",
+      customCommand: "echo workspace 1",
+      rawArgs: "",
+      argValues: {},
+      message: "",
+      person: null,
+      cwd: "",
+      showAdvanced: false,
+      history: [],
+      activeTraceId: null,
+      activeTab: "events",
+      runtimeEvents: [],
+      runtimeLogs: [],
+    };
+    const inputs2 = {
+      mode: "catalog" as const,
+      selectedCommand: "test",
+      customCommand: "",
+      rawArgs: "arg",
+      argValues: { key: "val" },
+      message: "hello",
+      person: "bob",
+      cwd: "/ws2",
+      showAdvanced: true,
+      history: [],
+      activeTraceId: "trace-2",
+      activeTab: "output",
+      runtimeEvents: [],
+      runtimeLogs: [],
+    };
+
+    saveLastCommandInputs(inputs1, "/workspace/1");
+    saveLastCommandInputs(inputs2, "/workspace/2");
+
+    expect(loadLastCommandInputs("/workspace/1")).toEqual(inputs1);
+    expect(loadLastCommandInputs("/workspace/2")).toEqual(inputs2);
+  });
+
+  it("filters out corrupt/null objects from arrays during load", () => {
+    window.localStorage.setItem(
+      LAST_COMMAND_INPUTS_KEY,
+      JSON.stringify({
+        mode: "custom",
+        argValues: { valid: "text", invalid: 123 },
+        showAdvanced: "truthy string",
+        history: [
+          null,
+          { invalidRecord: true },
+          {
+            traceId: "req-1",
+            person: "alice",
+            command: "test",
+            startedAt: "2026-07-20T00:00:00Z",
+            status: "success",
+          },
+        ],
+        runtimeEvents: [
+          null,
+          {
+            kind: "event",
+            type: "command.finished",
+            payload: {},
+            timestamp: "2026-07-20",
+            trace_id: "req-1",
+            span_id: null,
+            parent_id: null,
+            source: null,
+            person_id: "alice",
+            command: "test",
+            workflow: "test",
+            attributes: {},
+          },
+        ],
+        runtimeLogs: [
+          null,
+          {
+            kind: "log",
+            level: "info",
+            message: "log msg",
+            timestamp: "2026-07-20",
+            trace_id: "req-1",
+            span_id: null,
+            parent_id: null,
+            source: null,
+            person_id: "alice",
+            command: "test",
+            workflow: "test",
+            attributes: {},
+          },
+        ],
+      }),
+    );
+
+    const loaded = loadLastCommandInputs();
+    expect(loaded?.showAdvanced).toBe(false);
+    expect(loaded?.argValues).toEqual({ valid: "text" });
+    expect(loaded?.history).toHaveLength(1);
+    expect(loaded?.history[0].traceId).toBe("req-1");
+    expect(loaded?.runtimeEvents).toHaveLength(1);
+    expect(loaded?.runtimeEvents[0].type).toBe("command.finished");
+    expect(loaded?.runtimeLogs).toHaveLength(1);
+    expect(loaded?.runtimeLogs[0].message).toBe("log msg");
+  });
 });
 
 function act(callback: () => void): Promise<void> {

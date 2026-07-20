@@ -2928,7 +2928,7 @@ function CommandsPage() {
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
   const [initialHistory] = useState(loadCustomCommandHistory);
-  const [lastInputs] = useState(loadLastCommandInputs);
+  const [lastInputs] = useState(() => loadLastCommandInputs(config.data?.storage_dir));
   const restoreCustom = lastInputs
     ? lastInputs.mode === "custom"
     : initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
@@ -2954,6 +2954,90 @@ function CommandsPage() {
     lastInputs?.activeTraceId ?? null,
   );
   const [activeTab, setActiveTab] = useState<string | null>(lastInputs?.activeTab ?? "events");
+
+  const [loadedStorageDir, setLoadedStorageDir] = useState<string | undefined>(undefined);
+
+  const stateRef = useRef({
+    mode,
+    selectedCommand,
+    customCommand,
+    rawArgs,
+    argValues,
+    message,
+    person,
+    cwd,
+    showAdvanced,
+    history,
+    activeTraceId,
+    activeTab,
+    runtimeEvents,
+    runtimeLogs,
+  });
+
+  // Keep stateRef updated on every render safely outside the render phase.
+  useEffect(() => {
+    stateRef.current = {
+      mode,
+      selectedCommand,
+      customCommand,
+      rawArgs,
+      argValues,
+      message,
+      person,
+      cwd,
+      showAdvanced,
+      history,
+      activeTraceId,
+      activeTab,
+      runtimeEvents,
+      runtimeLogs,
+    };
+  });
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const currentStorageDir = config.data?.storage_dir;
+    if (currentStorageDir && currentStorageDir !== loadedStorageDir) {
+      if (loadedStorageDir) {
+        saveLastCommandInputs(stateRef.current, loadedStorageDir);
+      }
+      const inputs = loadLastCommandInputs(currentStorageDir);
+      if (inputs) {
+        setMode(inputs.mode);
+        setSelectedCommand(inputs.selectedCommand);
+        setCustomCommand(inputs.customCommand);
+        setRawArgs(inputs.rawArgs);
+        setArgValues(inputs.argValues);
+        setMessage(inputs.message);
+        setPerson(inputs.person);
+        setCwd(inputs.cwd);
+        setShowAdvanced(inputs.showAdvanced);
+        setRuntimeEvents(inputs.runtimeEvents);
+        setRuntimeLogs(inputs.runtimeLogs);
+        setHistory(inputs.history);
+        setActiveTraceId(inputs.activeTraceId);
+        setActiveTab(inputs.activeTab);
+      } else {
+        setMode("catalog");
+        setSelectedCommand("");
+        setCustomCommand("");
+        setRawArgs("");
+        setArgValues({});
+        setMessage("");
+        setPerson(null);
+        setCwd("");
+        setShowAdvanced(false);
+        setRuntimeEvents([]);
+        setRuntimeLogs([]);
+        setHistory([]);
+        setActiveTraceId(null);
+        setActiveTab("events");
+      }
+      setLoadedStorageDir(currentStorageDir);
+    }
+  }, [config.data?.storage_dir, loadedStorageDir]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   const commandOptions = useQuery({
     queryKey: ["command-options", person],
     queryFn: () => getCommandOptions(person || undefined),
@@ -3060,8 +3144,25 @@ function CommandsPage() {
     saveCustomCommandHistory({ commands: customHistory, lastRunWasCustom });
   }, [customHistory, lastRunWasCustom]);
 
+  const lastInputsRef = useRef({
+    mode,
+    selectedCommand,
+    customCommand,
+    rawArgs,
+    argValues,
+    message,
+    person,
+    cwd,
+    showAdvanced,
+    history,
+    activeTraceId,
+    activeTab,
+    runtimeEvents,
+    runtimeLogs,
+  });
+
   useEffect(() => {
-    saveLastCommandInputs({
+    lastInputsRef.current = {
       mode,
       selectedCommand,
       customCommand,
@@ -3076,7 +3177,12 @@ function CommandsPage() {
       activeTab,
       runtimeEvents,
       runtimeLogs,
-    });
+    };
+    const storageDir = config.data?.storage_dir;
+    const handle = window.setTimeout(() => {
+      saveLastCommandInputs(lastInputsRef.current, storageDir);
+    }, 400);
+    return () => window.clearTimeout(handle);
   }, [
     mode,
     selectedCommand,
@@ -3092,7 +3198,14 @@ function CommandsPage() {
     activeTab,
     runtimeEvents,
     runtimeLogs,
+    config.data?.storage_dir,
   ]);
+
+  useEffect(() => {
+    return () => {
+      saveLastCommandInputs(lastInputsRef.current, config.data?.storage_dir);
+    };
+  }, [config.data?.storage_dir]);
 
   useEffect(() => {
     const stopEvents = subscribeEvents((event) => {
@@ -3161,7 +3274,8 @@ function CommandsPage() {
           (l) =>
             l.timestamp === log.timestamp &&
             l.message === log.message &&
-            l.trace_id === log.trace_id,
+            l.trace_id === log.trace_id &&
+            l.level === log.level,
         );
         if (exists) {
           return current;
@@ -3571,9 +3685,66 @@ export type LastCommandInputs = {
   runtimeLogs: RuntimeLog[];
 };
 
-export function loadLastCommandInputs(): LastCommandInputs | null {
+function isRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === "object" && val !== null && !Array.isArray(val);
+}
+
+function validateCommandRunRecord(val: unknown): val is CommandRunRecord {
+  if (!isRecord(val)) return false;
+  return (
+    typeof val.traceId === "string" &&
+    typeof val.person === "string" &&
+    typeof val.command === "string" &&
+    typeof val.startedAt === "string" &&
+    (val.status === "running" || val.status === "success" || val.status === "failed") &&
+    (val.output === undefined || typeof val.output === "string") &&
+    (val.error === undefined || typeof val.error === "string")
+  );
+}
+
+function validateRuntimeEvent(val: unknown): val is RuntimeEvent {
+  if (!isRecord(val)) return false;
+  return (
+    val.kind === "event" &&
+    typeof val.type === "string" &&
+    isRecord(val.payload) &&
+    typeof val.timestamp === "string" &&
+    (val.trace_id === null || typeof val.trace_id === "string") &&
+    (val.span_id === null || typeof val.span_id === "string") &&
+    (val.parent_id === null || typeof val.parent_id === "string") &&
+    (val.source === null || typeof val.source === "string") &&
+    typeof val.person_id === "string" &&
+    typeof val.command === "string" &&
+    typeof val.workflow === "string" &&
+    isRecord(val.attributes)
+  );
+}
+
+function validateRuntimeLog(val: unknown): val is RuntimeLog {
+  if (!isRecord(val)) return false;
+  return (
+    val.kind === "log" &&
+    typeof val.level === "string" &&
+    typeof val.message === "string" &&
+    typeof val.timestamp === "string" &&
+    (val.trace_id === null || typeof val.trace_id === "string") &&
+    (val.span_id === null || typeof val.span_id === "string") &&
+    (val.parent_id === null || typeof val.parent_id === "string") &&
+    (val.source === null || typeof val.source === "string") &&
+    typeof val.person_id === "string" &&
+    typeof val.command === "string" &&
+    typeof val.workflow === "string" &&
+    isRecord(val.attributes)
+  );
+}
+
+export function loadLastCommandInputs(storageDir?: string): LastCommandInputs | null {
   try {
-    const raw = window.localStorage.getItem(LAST_COMMAND_INPUTS_KEY);
+    const key = storageDir ? `${LAST_COMMAND_INPUTS_KEY}:${storageDir}` : LAST_COMMAND_INPUTS_KEY;
+    let raw = window.localStorage.getItem(key);
+    if (!raw && storageDir) {
+      raw = window.localStorage.getItem(LAST_COMMAND_INPUTS_KEY);
+    }
     if (!raw) {
       return null;
     }
@@ -3583,15 +3754,29 @@ export function loadLastCommandInputs(): LastCommandInputs | null {
       selectedCommand: typeof parsed.selectedCommand === "string" ? parsed.selectedCommand : "",
       customCommand: typeof parsed.customCommand === "string" ? parsed.customCommand : "",
       rawArgs: typeof parsed.rawArgs === "string" ? parsed.rawArgs : "",
-      argValues:
-        parsed.argValues && typeof parsed.argValues === "object"
-          ? (parsed.argValues as Record<string, string>)
-          : {},
+      argValues: (() => {
+        if (
+          !parsed.argValues ||
+          typeof parsed.argValues !== "object" ||
+          Array.isArray(parsed.argValues)
+        ) {
+          return {};
+        }
+        const result: Record<string, string> = {};
+        for (const [k, v] of Object.entries(parsed.argValues)) {
+          if (typeof v === "string") {
+            result[k] = v;
+          }
+        }
+        return result;
+      })(),
       message: typeof parsed.message === "string" ? parsed.message : "",
       person: typeof parsed.person === "string" || parsed.person === null ? parsed.person : null,
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
-      showAdvanced: Boolean(parsed.showAdvanced),
-      history: Array.isArray(parsed.history) ? (parsed.history as CommandRunRecord[]) : [],
+      showAdvanced: parsed.showAdvanced === true,
+      history: Array.isArray(parsed.history)
+        ? (parsed.history.filter(validateCommandRunRecord) as CommandRunRecord[]).slice(0, 50)
+        : [],
       activeTraceId:
         typeof parsed.activeTraceId === "string" || parsed.activeTraceId === null
           ? parsed.activeTraceId
@@ -3601,18 +3786,21 @@ export function loadLastCommandInputs(): LastCommandInputs | null {
           ? parsed.activeTab
           : "events",
       runtimeEvents: Array.isArray(parsed.runtimeEvents)
-        ? (parsed.runtimeEvents as RuntimeEvent[])
+        ? (parsed.runtimeEvents.filter(validateRuntimeEvent) as RuntimeEvent[]).slice(0, 80)
         : [],
-      runtimeLogs: Array.isArray(parsed.runtimeLogs) ? (parsed.runtimeLogs as RuntimeLog[]) : [],
+      runtimeLogs: Array.isArray(parsed.runtimeLogs)
+        ? (parsed.runtimeLogs.filter(validateRuntimeLog) as RuntimeLog[]).slice(0, 200)
+        : [],
     };
   } catch {
     return null;
   }
 }
 
-export function saveLastCommandInputs(value: LastCommandInputs): void {
+export function saveLastCommandInputs(value: LastCommandInputs, storageDir?: string): void {
   try {
-    window.localStorage.setItem(LAST_COMMAND_INPUTS_KEY, JSON.stringify(value));
+    const key = storageDir ? `${LAST_COMMAND_INPUTS_KEY}:${storageDir}` : LAST_COMMAND_INPUTS_KEY;
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // Ignore persistence failures (e.g. storage disabled or full).
   }
