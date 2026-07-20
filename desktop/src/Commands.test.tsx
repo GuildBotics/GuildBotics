@@ -8,11 +8,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   App,
   CUSTOM_COMMAND_HISTORY_KEY,
+  LAST_COMMAND_INPUTS_KEY,
   commandOutputText,
   loadCustomCommandHistory,
+  loadLastCommandInputs,
   pushCustomCommand,
   saveCustomCommandHistory,
+  saveLastCommandInputs,
   type CommandRunRecord,
+  type LastCommandInputs,
 } from "./App";
 import {
   getCommandOptions,
@@ -245,6 +249,41 @@ describe("Commands screen", () => {
     expect(await screen.findByText(t("commands.status.failed"))).toBeInTheDocument();
   });
 
+  it("ignores duplicate runtime events and logs", async () => {
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    await waitFor(() => expect(eventListener).not.toBeNull());
+    await waitFor(() => expect(logListener).not.toBeNull());
+
+    const testEvent = makeRuntimeEvent({
+      type: "command.finished",
+      trace_id: "evt-dup",
+      payload: { command: "workflows/sample", person: "alice" },
+      timestamp: "2026-06-04T01:00:00Z",
+    });
+
+    const testLog = makeRuntimeLog({
+      trace_id: "evt-dup",
+      timestamp: "2026-06-04T01:00:00Z",
+      level: "info",
+      message: "dup-log-message",
+    });
+
+    await act(() => {
+      eventListener?.(testEvent);
+      logListener?.(testLog);
+    });
+
+    await act(() => {
+      eventListener?.(testEvent);
+      logListener?.(testLog);
+    });
+
+    // Verify duplication is ignored
+    const logMessages = screen.getAllByText("dup-log-message");
+    expect(logMessages).toHaveLength(1);
+  });
+
   it("scopes the run's logs to the active trace id in the events tab", async () => {
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
@@ -431,6 +470,53 @@ describe("Commands screen", () => {
     await waitFor(() => expect(openMock).toHaveBeenCalledWith("/workspace/commands/sample.py"));
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
+
+  it("restores the last execution inputs and outputs from localStorage on initialization", async () => {
+    const inputs: LastCommandInputs = {
+      mode: "custom",
+      selectedCommand: "",
+      customCommand: "scripts/restore-test.sh",
+      rawArgs: "arg-restored",
+      argValues: {},
+      message: "restored-msg",
+      person: "alice",
+      cwd: "/workspace/restore",
+      showAdvanced: true,
+      history: [
+        {
+          traceId: "req-restore",
+          person: "alice",
+          command: "scripts/restore-test.sh",
+          startedAt: "2026-07-20T00:00:00Z",
+          status: "success",
+          output: "restored output content",
+        },
+      ],
+      activeTraceId: "req-restore",
+      activeTab: "output",
+      runtimeEvents: [],
+      runtimeLogs: [],
+    };
+    saveLastCommandInputs(inputs);
+
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+
+    expect(screen.getByRole("radio", { name: t("commands.modeCustom") })).toBeChecked();
+    expect(screen.getByRole("textbox", { name: t("commands.command") })).toHaveValue(
+      "scripts/restore-test.sh",
+    );
+    expect(screen.getByRole("textbox", { name: t("commands.rawArgs") })).toHaveValue(
+      "arg-restored",
+    );
+    expect(screen.getByRole("textbox", { name: t("commands.cwd") })).toHaveValue(
+      "/workspace/restore",
+    );
+    expect(screen.getByRole("switch", { name: t("commands.advanced") })).toBeChecked();
+
+    // Verify output content is restored
+    expect(screen.getByText("restored output content")).toBeInTheDocument();
+  });
 });
 
 describe("commandOutputText", () => {
@@ -522,6 +608,89 @@ describe("custom command history persistence", () => {
     expect(loaded).toHaveLength(30);
     expect(loaded[0]).toBe("cmd-0");
     expect(loaded[29]).toBe("cmd-29");
+  });
+});
+
+describe("last command inputs persistence", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("round-trips the last inputs through localStorage", () => {
+    const inputs: LastCommandInputs = {
+      mode: "custom",
+      selectedCommand: "workflows/custom",
+      customCommand: "echo hello",
+      rawArgs: "--verbose",
+      argValues: { foo: "bar" },
+      message: "test commit",
+      person: "bob",
+      cwd: "/src",
+      showAdvanced: true,
+      history: [
+        {
+          traceId: "req-123",
+          person: "alice",
+          command: "workflows/sample",
+          startedAt: "2026-07-20T00:00:00Z",
+          status: "success",
+          output: "success output",
+        },
+      ],
+      activeTraceId: "req-123",
+      activeTab: "output",
+      runtimeEvents: [
+        makeRuntimeEvent({
+          type: "command.finished",
+          trace_id: "req-123",
+          timestamp: "2026-07-20T00:00:00Z",
+          payload: { command: "workflows/sample" },
+        }),
+      ],
+      runtimeLogs: [
+        makeRuntimeLog({
+          trace_id: "req-123",
+          timestamp: "2026-07-20T00:00:00Z",
+          level: "info",
+          message: "hello log",
+        }),
+      ],
+    };
+    saveLastCommandInputs(inputs);
+    expect(loadLastCommandInputs()).toEqual(inputs);
+  });
+
+  it("returns null when nothing is stored", () => {
+    expect(loadLastCommandInputs()).toBeNull();
+  });
+
+  it("falls back to default/null values when stored value is corrupt", () => {
+    window.localStorage.setItem(LAST_COMMAND_INPUTS_KEY, "{not json");
+    expect(loadLastCommandInputs()).toBeNull();
+  });
+
+  it("partially restores and sanitizes inputs from incomplete localStorage object", () => {
+    window.localStorage.setItem(
+      LAST_COMMAND_INPUTS_KEY,
+      JSON.stringify({
+        mode: "custom",
+        customCommand: "echo hi",
+      }),
+    );
+    expect(loadLastCommandInputs()).toEqual({
+      mode: "custom",
+      selectedCommand: "",
+      customCommand: "echo hi",
+      rawArgs: "",
+      argValues: {},
+      message: "",
+      person: null,
+      cwd: "",
+      showAdvanced: false,
+      history: [],
+      activeTraceId: null,
+      activeTab: "events",
+      runtimeEvents: [],
+      runtimeLogs: [],
+    });
   });
 });
 

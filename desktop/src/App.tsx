@@ -2928,25 +2928,32 @@ function CommandsPage() {
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
   const [initialHistory] = useState(loadCustomCommandHistory);
-  const restoreCustom = initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
-  const [mode, setMode] = useState(restoreCustom ? "custom" : "catalog");
-  const [selectedCommand, setSelectedCommand] = useState("");
+  const [lastInputs] = useState(loadLastCommandInputs);
+  const restoreCustom = lastInputs
+    ? lastInputs.mode === "custom"
+    : initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
+  const [mode, setMode] = useState(lastInputs?.mode ?? (restoreCustom ? "custom" : "catalog"));
+  const [selectedCommand, setSelectedCommand] = useState(lastInputs?.selectedCommand ?? "");
   const [customCommand, setCustomCommand] = useState(
-    restoreCustom ? initialHistory.commands[0] : "",
+    lastInputs?.customCommand ?? (restoreCustom ? initialHistory.commands[0] : ""),
   );
   const [customHistory, setCustomHistory] = useState<string[]>(initialHistory.commands);
   const [lastRunWasCustom, setLastRunWasCustom] = useState(initialHistory.lastRunWasCustom);
-  const [rawArgs, setRawArgs] = useState("");
-  const [argValues, setArgValues] = useState<Record<string, string>>({});
-  const [message, setMessage] = useState("");
-  const [person, setPerson] = useState<string | null>(null);
-  const [cwd, setCwd] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([]);
-  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLog[]>([]);
-  const [history, setHistory] = useState<CommandRunRecord[]>([]);
-  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string | null>("events");
+  const [rawArgs, setRawArgs] = useState(lastInputs?.rawArgs ?? "");
+  const [argValues, setArgValues] = useState<Record<string, string>>(lastInputs?.argValues ?? {});
+  const [message, setMessage] = useState(lastInputs?.message ?? "");
+  const [person, setPerson] = useState<string | null>(lastInputs?.person ?? null);
+  const [cwd, setCwd] = useState(lastInputs?.cwd ?? "");
+  const [showAdvanced, setShowAdvanced] = useState(lastInputs?.showAdvanced ?? false);
+  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>(
+    lastInputs?.runtimeEvents ?? [],
+  );
+  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLog[]>(lastInputs?.runtimeLogs ?? []);
+  const [history, setHistory] = useState<CommandRunRecord[]>(lastInputs?.history ?? []);
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(
+    lastInputs?.activeTraceId ?? null,
+  );
+  const [activeTab, setActiveTab] = useState<string | null>(lastInputs?.activeTab ?? "events");
   const commandOptions = useQuery({
     queryKey: ["command-options", person],
     queryFn: () => getCommandOptions(person || undefined),
@@ -3054,11 +3061,56 @@ function CommandsPage() {
   }, [customHistory, lastRunWasCustom]);
 
   useEffect(() => {
+    saveLastCommandInputs({
+      mode,
+      selectedCommand,
+      customCommand,
+      rawArgs,
+      argValues,
+      message,
+      person,
+      cwd,
+      showAdvanced,
+      history,
+      activeTraceId,
+      activeTab,
+      runtimeEvents,
+      runtimeLogs,
+    });
+  }, [
+    mode,
+    selectedCommand,
+    customCommand,
+    rawArgs,
+    argValues,
+    message,
+    person,
+    cwd,
+    showAdvanced,
+    history,
+    activeTraceId,
+    activeTab,
+    runtimeEvents,
+    runtimeLogs,
+  ]);
+
+  useEffect(() => {
     const stopEvents = subscribeEvents((event) => {
       if (!event.type.startsWith("command.")) {
         return;
       }
-      setRuntimeEvents((current) => [event, ...current].slice(0, 80));
+      setRuntimeEvents((current) => {
+        const exists = current.some(
+          (e) =>
+            e.timestamp === event.timestamp &&
+            e.type === event.type &&
+            e.trace_id === event.trace_id,
+        );
+        if (exists) {
+          return current;
+        }
+        return [event, ...current].slice(0, 80);
+      });
       if (!event.trace_id) {
         return;
       }
@@ -3104,7 +3156,18 @@ function CommandsPage() {
       if (!log.trace_id) {
         return;
       }
-      setRuntimeLogs((current) => [log, ...current].slice(0, 200));
+      setRuntimeLogs((current) => {
+        const exists = current.some(
+          (l) =>
+            l.timestamp === log.timestamp &&
+            l.message === log.message &&
+            l.trace_id === log.trace_id,
+        );
+        if (exists) {
+          return current;
+        }
+        return [log, ...current].slice(0, 200);
+      });
     });
     return () => {
       stopEvents();
@@ -3180,7 +3243,7 @@ function CommandsPage() {
                     <SegmentedControl
                       size="xs"
                       value={mode}
-                      onChange={setMode}
+                      onChange={(value) => setMode(value as "catalog" | "custom")}
                       data={[
                         { value: "catalog", label: t("commands.modeCatalog") },
                         { value: "custom", label: t("commands.modeCustom") },
@@ -3488,6 +3551,72 @@ export type CustomCommandHistory = {
   commands: string[];
   lastRunWasCustom: boolean;
 };
+
+export const LAST_COMMAND_INPUTS_KEY = "guildbotics.commands.lastInputs";
+
+export type LastCommandInputs = {
+  mode: "catalog" | "custom";
+  selectedCommand: string;
+  customCommand: string;
+  rawArgs: string;
+  argValues: Record<string, string>;
+  message: string;
+  person: string | null;
+  cwd: string;
+  showAdvanced: boolean;
+  history: CommandRunRecord[];
+  activeTraceId: string | null;
+  activeTab: string | null;
+  runtimeEvents: RuntimeEvent[];
+  runtimeLogs: RuntimeLog[];
+};
+
+export function loadLastCommandInputs(): LastCommandInputs | null {
+  try {
+    const raw = window.localStorage.getItem(LAST_COMMAND_INPUTS_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<LastCommandInputs>;
+    return {
+      mode: parsed.mode === "custom" ? "custom" : "catalog",
+      selectedCommand: typeof parsed.selectedCommand === "string" ? parsed.selectedCommand : "",
+      customCommand: typeof parsed.customCommand === "string" ? parsed.customCommand : "",
+      rawArgs: typeof parsed.rawArgs === "string" ? parsed.rawArgs : "",
+      argValues:
+        parsed.argValues && typeof parsed.argValues === "object"
+          ? (parsed.argValues as Record<string, string>)
+          : {},
+      message: typeof parsed.message === "string" ? parsed.message : "",
+      person: typeof parsed.person === "string" || parsed.person === null ? parsed.person : null,
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+      showAdvanced: Boolean(parsed.showAdvanced),
+      history: Array.isArray(parsed.history) ? (parsed.history as CommandRunRecord[]) : [],
+      activeTraceId:
+        typeof parsed.activeTraceId === "string" || parsed.activeTraceId === null
+          ? parsed.activeTraceId
+          : null,
+      activeTab:
+        typeof parsed.activeTab === "string" || parsed.activeTab === null
+          ? parsed.activeTab
+          : "events",
+      runtimeEvents: Array.isArray(parsed.runtimeEvents)
+        ? (parsed.runtimeEvents as RuntimeEvent[])
+        : [],
+      runtimeLogs: Array.isArray(parsed.runtimeLogs) ? (parsed.runtimeLogs as RuntimeLog[]) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveLastCommandInputs(value: LastCommandInputs): void {
+  try {
+    window.localStorage.setItem(LAST_COMMAND_INPUTS_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore persistence failures (e.g. storage disabled or full).
+  }
+}
 
 // Keep a newest-first command list well-formed: drop non-strings/blanks, trim,
 // de-duplicate (first occurrence wins), and cap at the history limit. Shared by
