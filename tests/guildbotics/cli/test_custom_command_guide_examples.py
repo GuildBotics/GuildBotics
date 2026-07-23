@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import textwrap
 from pathlib import Path
 
@@ -20,10 +21,14 @@ def _write(path: Path, content: str) -> None:
     path.write_text(textwrap.dedent(content).strip() + "\n", encoding="utf-8")
 
 
-def _make_context(message: str = "", members: list[Person] | None = None) -> Context:
+def _make_context(
+    message: str = "",
+    members: list[Person] | None = None,
+    language: str = "en",
+) -> Context:
     if members is None:
         members = [Person(person_id="alice", name="Alice", is_active=True)]
-    team = Team(project=Project(name="demo"), members=members)
+    team = Team(project=Project(name="demo", language=language), members=members)
     loader_factory = DummyLoaderFactory(team)
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
@@ -37,25 +42,46 @@ def _make_context(message: str = "", members: list[Person] | None = None) -> Con
     return base.clone_for(members[0])
 
 
+@pytest.mark.parametrize(
+    ("system_language", "project_language", "expected"),
+    [
+        ("en", "ja", "日本語"),
+        ("fr", "en", "français"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_quickstart_positional_args_with_pipe(tmp_path, monkeypatch):
+async def test_quickstart_os_ui_language_without_args(
+    tmp_path,
+    monkeypatch,
+    system_language: str,
+    project_language: str,
+    expected: str,
+):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("LANGUAGE", system_language)
     _write(
         tmp_path / "commands/translate.md",
         """
         ---
         brain: none
         template_engine: jinja2
+        commands:
+          - name: os_ui_language
+            command: functions/get_os_ui_language
         ---
-        以下のテキストが{{ arg1 }}であれば{{ arg2 }}に翻訳してください:
+        {% if os_ui_language.language_code == "en" %}
+        `input`フィールドのテキストが日本語であれば英語に、英語であれば日本語に翻訳してください。
+        {% else %}
+        `input`フィールドのテキストが{{ os_ui_language.language_name }}であれば英語に、英語であれば{{ os_ui_language.language_name }}に翻訳してください。
+        {% endif %}
 
-        {{ context.pipe }}
+        {{ os_ui_language.input }}
         """,
     )
-
-    ctx = _make_context("こんにちは")
-    out = await run_command(ctx, "translate", ["英語", "日本語"])
-    assert "以下のテキストが英語であれば日本語に翻訳してください:" in out
+    ctx = _make_context("こんにちは", language=project_language)
+    out = await run_command(ctx, "translate", [])
+    assert f"テキストが{expected}であれば英語に" in out
     assert "こんにちは" in out
 
 
@@ -159,15 +185,18 @@ async def test_agent_brain_passes_cwd_and_params(tmp_path, monkeypatch):
         """
         ---
         brain: agent
+        args:
+          file:
+            required: true
+          language:
+            default: 日本語
         ---
         ${file}の最初のセクションを読み、その内容を${language}を用いて要約してください
         """,
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(
-        ctx, "summarize", ["file=README.md", "language=日本語"], cwd=Path(".")
-    )
+    ex = CommandRunner(ctx, "summarize", ["file=README.md"], cwd=Path("."))
     await ex.run()
     result = ex._context.shared_state.get("summarize")
     # DummyBrain returns kwargs; ensure cwd and session_state are provided

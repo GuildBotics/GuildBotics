@@ -241,7 +241,7 @@ export type ScheduledCommandDraft = {
   command: string;
   customCommand: string;
   argValues: Record<string, string>;
-  rawArgs: string;
+  extraArgs: string;
   scheduleMode: CronPreset;
   minute: number;
   hour: number;
@@ -4358,7 +4358,7 @@ function PatrolSettingsEditor({
                           ...current,
                           command: value ?? "",
                           argValues: {},
-                          rawArgs: "",
+                          extraArgs: "",
                         }))
                       }
                       renderOption={({ option: selectOption }) => (
@@ -4387,7 +4387,8 @@ function PatrolSettingsEditor({
                       {option.arguments.map((argument) => (
                         <TextInput
                           key={`${draft.id}-${argument.kind}-${argument.name}`}
-                          label={`${argument.name}${argument.required ? " *" : ""}`}
+                          label={argument.name}
+                          required={argument.required}
                           placeholder={argument.default || argument.kind}
                           value={draft.argValues[argument.name] ?? ""}
                           onChange={(event) =>
@@ -4405,13 +4406,13 @@ function PatrolSettingsEditor({
                   ) : null}
                   {draft.commandMode === "custom" || !option?.arguments.length ? (
                     <TextInput
-                      label={t("commands.rawArgs")}
-                      placeholder={t("commands.rawArgsPlaceholder")}
-                      value={draft.rawArgs}
+                      label={t("commands.extraArgs")}
+                      placeholder={t("commands.extraArgsPlaceholder")}
+                      value={draft.extraArgs}
                       onChange={(event) =>
                         updateScheduled(draft.id, (current) => ({
                           ...current,
-                          rawArgs: event.currentTarget.value,
+                          extraArgs: event.currentTarget.value,
                         }))
                       }
                     />
@@ -6241,7 +6242,7 @@ function scheduledCommandToDraft(
     command: parsedCommand.option?.command ?? commandCatalog[0]?.command ?? "",
     customCommand: parsedCommand.option ? "" : parsedCommand.command,
     argValues: {},
-    rawArgs: parsedCommand.args,
+    extraArgs: parsedCommand.args,
     scheduleMode: parsedCron.mode,
     minute: parsedCron.minute,
     hour: parsedCron.hour,
@@ -6257,7 +6258,7 @@ export function createScheduledCommandDraft(command = ""): ScheduledCommandDraft
     command,
     customCommand: "",
     argValues: {},
-    rawArgs: "",
+    extraArgs: "",
     scheduleMode: "daily",
     minute: 0,
     hour: 9,
@@ -6295,14 +6296,14 @@ export function buildScheduledCommandExpression(
   if (!command) {
     return "";
   }
-  const args = buildSetupCommandArgs(option, draft.argValues, draft.rawArgs);
+  const args = buildSetupCommandArgs(option, draft.argValues, draft.extraArgs);
   return [command, ...args.map(quoteCommandArg)].join(" ");
 }
 
 function buildSetupCommandArgs(
   option: CommandOption | null,
   values: Record<string, string>,
-  rawArgs: string,
+  extraArgs: string,
 ): string[] {
   const args: string[] = [];
   if (option) {
@@ -6314,7 +6315,7 @@ function buildSetupCommandArgs(
       args.push(argument.kind === "positional" ? value : `${argument.name}=${value}`);
     }
   }
-  return [...args, ...splitCommandLine(rawArgs)];
+  return [...args, ...splitCommandLine(extraArgs)];
 }
 
 export function parseCommandExpression(expression: string, commandCatalog: CommandOption[]) {

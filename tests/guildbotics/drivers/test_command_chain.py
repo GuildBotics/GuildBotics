@@ -232,6 +232,41 @@ async def test_markdown_brain_disabled_renders_placeholders(config_dir: Path):
 
 
 @pytest.mark.asyncio
+async def test_markdown_declared_arguments_apply_defaults(config_dir: Path):
+    commands = config_dir / "commands"
+    (commands / "summarize.md").write_text(
+        "---\n"
+        "brain: none\n"
+        "args:\n"
+        "  file:\n"
+        "    required: true\n"
+        "  language:\n"
+        "    default: English\n"
+        "---\n"
+        "Summarize ${file} using ${language}.\n",
+        encoding="utf-8",
+    )
+
+    ctx = await _run_main(config_dir, "summarize", ["file=README.md"])
+
+    assert ctx.pipe == "Summarize README.md using English."
+
+
+@pytest.mark.asyncio
+async def test_markdown_declared_arguments_reject_missing_required_value(
+    config_dir: Path,
+):
+    commands = config_dir / "commands"
+    (commands / "summarize.md").write_text(
+        "---\nargs:\n  file:\n    required: true\n---\nRead ${file}.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CommandError, match="Missing required command arguments: file"):
+        await _run_main(config_dir, "summarize")
+
+
+@pytest.mark.asyncio
 async def test_markdown_empty_body_returns_none(config_dir: Path):
     """A markdown command with no body produces no outcome and no pipe change."""
     commands = config_dir / "commands"

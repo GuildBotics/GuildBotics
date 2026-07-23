@@ -2,6 +2,8 @@
 brain: none
 template_engine: jinja2
 description: 実行中のメンバーとチーム情報を表示します。
+inputs:
+  message: hidden
 ---
 言語コード: {{ context.language_code }}
 言語名: {{ context.language_name }}

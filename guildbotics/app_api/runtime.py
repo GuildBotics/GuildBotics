@@ -34,6 +34,7 @@ from guildbotics.app_api.models import (
     CliAgentUsagesResponse,
     CliAgentUsageWindow,
     CommandArgumentOption,
+    CommandInputs,
     CommandOption,
     CommandOptionsResponse,
     CommandRequirement,
@@ -74,6 +75,7 @@ from guildbotics.capabilities.member_memory_audit import (
     parse_memory_audit_timestamp,
 )
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.commands.arguments import parse_command_argument_definitions
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.registry import get_command_extensions
 from guildbotics.drivers import (
@@ -365,8 +367,10 @@ class AppRuntime:
             )
             options[command] = option.model_copy(
                 update={
-                    "routine_eligible": not any(
-                        argument.required for argument in option.arguments
+                    "routine_eligible": option.inputs.message != "required"
+                    and (
+                        option.inputs.defined_args == "hidden"
+                        or not any(argument.required for argument in option.arguments)
                     )
                 }
             )
@@ -1380,7 +1384,7 @@ def _command_option(
         source=cast(Any, source),
         path=path,
         arguments=_command_arguments(path, metadata),
-        recommended_input=_recommended_input(path, metadata),
+        inputs=_command_inputs(metadata),
         requirements=requirements,
     )
 
@@ -1419,7 +1423,7 @@ def _command_sidecar_metadata(path: Path, language_code: str) -> dict[str, Any]:
                 metadata.update(loaded)
         except Exception:
             continue
-    for key in ("name", "description", "recommended_input"):
+    for key in ("name", "description"):
         metadata[key] = _localized_metadata_value(metadata.get(key), language_code)
     return {key: value for key, value in metadata.items() if value is not None}
 
@@ -1487,6 +1491,13 @@ def _command_arguments(
     return _metadata_arguments(metadata)
 
 
+def _command_inputs(metadata: dict[str, Any]) -> CommandInputs:
+    value = metadata.get("inputs")
+    if value is None:
+        return CommandInputs()
+    return CommandInputs.model_validate(value)
+
+
 def _python_command_arguments(path: Path) -> list[CommandArgumentOption]:
     try:
         module = ast.parse(path.read_text(encoding="utf-8"))
@@ -1552,17 +1563,33 @@ def _literal_default(node: ast.expr | None) -> str:
 
 def _metadata_arguments(metadata: dict[str, Any]) -> list[CommandArgumentOption]:
     placeholders = _metadata_placeholders(metadata)
+    definitions = parse_command_argument_definitions(metadata)
+    declared_names = {definition.name for definition in definitions}
     positional = sorted(
-        int(name) for name in placeholders if name.isdigit() and int(name) > 0
+        int(name)
+        for name in placeholders - declared_names
+        if name.isdigit() and int(name) > 0
     )
-    keywords = sorted(name for name in placeholders if not name.isdigit())
-    return [
+    keywords = sorted(
+        name for name in placeholders - declared_names if not name.isdigit()
+    )
+    declared = [
+        CommandArgumentOption(
+            name=definition.name,
+            kind="positional" if definition.name.isdigit() else "keyword",
+            required=definition.required,
+            default=definition.default or "",
+        )
+        for definition in definitions
+    ]
+    discovered = [
         CommandArgumentOption(name=str(index), kind="positional", required=True)
         for index in positional
     ] + [
         CommandArgumentOption(name=name, kind="keyword", required=True)
         for name in keywords
     ]
+    return declared + discovered
 
 
 def _metadata_placeholders(metadata: dict[str, Any]) -> set[str]:
@@ -1579,14 +1606,6 @@ def _metadata_placeholders(metadata: dict[str, Any]) -> set[str]:
     for match in re.finditer(r"(?<![\{$])\{([A-Za-z_]\w*)\}(?!\})", text):
         names.add(match.group(1))
     return names - {"context", "now"}
-
-
-def _recommended_input(path: Path, metadata: dict[str, Any]) -> str:
-    if path.suffix == ".md":
-        return "message" if _metadata_placeholders(metadata) else "optional_message"
-    if path.suffix == ".py":
-        return "args"
-    return "optional_message"
 
 
 def _command_requirements(

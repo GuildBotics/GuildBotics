@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from guildbotics.app_api import runtime as runtime_module
 from guildbotics.app_api.errors import AppApiError
@@ -233,7 +234,11 @@ def test_command_options_extract_python_signature_arguments(
     )
 
     assert option.description == "Run a job."
-    assert option.recommended_input == "args"
+    assert option.inputs.model_dump() == {
+        "defined_args": "auto",
+        "extra_args": "hidden",
+        "message": "optional",
+    }
     assert [
         (arg.name, arg.kind, arg.required, arg.default) for arg in option.arguments
     ] == [
@@ -270,6 +275,125 @@ def test_command_options_extract_yaml_frontmatter_arguments(
         ("1", "positional"),
         ("format", "keyword"),
     ]
+
+
+def test_command_options_apply_declared_argument_requiredness_and_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/summarize.md",
+        "\n".join(
+            [
+                "---",
+                "args:",
+                "  file:",
+                "    required: true",
+                "  language:",
+                "    default: English",
+                "---",
+                "Summarize ${file} using ${language} and ${style}.",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    option = next(
+        item
+        for item in runtime.get_command_options().options
+        if item.command == "summarize"
+    )
+
+    assert [
+        (arg.name, arg.kind, arg.required, arg.default) for arg in option.arguments
+    ] == [
+        ("file", "keyword", True, ""),
+        ("language", "keyword", False, "English"),
+        ("style", "keyword", True, ""),
+    ]
+
+
+def test_command_options_reject_required_argument_with_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/invalid.md",
+        "\n".join(
+            [
+                "---",
+                "args:",
+                "  language:",
+                "    required: true",
+                "    default: English",
+                "---",
+                "Use ${language}.",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    with pytest.raises(CommandError, match="cannot be required and have a default"):
+        runtime.get_command_options()
+
+
+def test_command_options_read_manual_input_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/manual.md",
+        "\n".join(
+            [
+                "---",
+                "inputs:",
+                "  defined_args: hidden",
+                "  extra_args: optional",
+                "  message: required",
+                "---",
+                "Run ${internal_value}.",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    option = next(
+        item
+        for item in runtime.get_command_options().options
+        if item.command == "manual"
+    )
+
+    assert option.inputs.model_dump() == {
+        "defined_args": "hidden",
+        "extra_args": "optional",
+        "message": "required",
+    }
+
+
+def test_command_options_reject_invalid_manual_input_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/invalid.md",
+        "\n".join(
+            [
+                "---",
+                "inputs:",
+                "  message: sometimes",
+                "---",
+                "Body.",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    with pytest.raises(ValidationError):
+        runtime.get_command_options()
 
 
 def test_command_options_detect_github_and_slack_requirements(
@@ -655,6 +779,97 @@ def test_routine_command_options_flag_ineligible_when_input_required(
     )
 
     assert option.routine_eligible is False
+
+
+def test_routine_command_options_accept_declared_argument_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/defaulted_input.md",
+        "\n".join(
+            [
+                "---",
+                "name: Defaulted Input",
+                "routine: true",
+                "args:",
+                "  language:",
+                "    default: English",
+                "---",
+                "Use ${language}.",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    option = next(
+        item
+        for item in runtime.get_routine_command_options().options
+        if item.command == "defaulted_input"
+    )
+
+    assert option.routine_eligible is True
+
+
+def test_routine_command_options_flag_ineligible_when_message_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/needs_message.md",
+        "\n".join(
+            [
+                "---",
+                "name: Needs Message",
+                "routine: true",
+                "inputs:",
+                "  message: required",
+                "---",
+                "Summarize the caller message.",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    option = next(
+        item
+        for item in runtime.get_routine_command_options().options
+        if item.command == "needs_message"
+    )
+
+    assert option.routine_eligible is False
+
+
+def test_routine_command_options_ignore_hidden_defined_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/internal_input.md",
+        "\n".join(
+            [
+                "---",
+                "name: Internal Input",
+                "routine: true",
+                "inputs:",
+                "  defined_args: hidden",
+                "---",
+                "Render ${internal_value} supplied by the workflow.",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    option = next(
+        item
+        for item in runtime.get_routine_command_options().options
+        if item.command == "internal_input"
+    )
+
+    assert option.routine_eligible is True
 
 
 def test_routine_command_options_prefer_workspace_definition(

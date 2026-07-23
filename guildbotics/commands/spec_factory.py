@@ -5,6 +5,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from guildbotics.commands.arguments import (
+    parse_command_argument_definitions,
+    resolve_command_argument_params,
+)
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandSpec
@@ -182,6 +186,8 @@ class CommandSpecFactory:
         if spec.path is None:
             return
 
+        definitions = parse_command_argument_definitions(config)
+        spec.params = resolve_command_argument_params(spec.params, definitions)
         spec.class_resolver = ClassResolver(config.get("schema", ""), class_resolver)
         spec.children = []
 

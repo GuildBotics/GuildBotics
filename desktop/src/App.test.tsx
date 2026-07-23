@@ -8,13 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   App,
   buildCommandArgs,
-  buildCommandTimeline,
   commandFailureDetail,
   DEFAULT_SERVICE_PREFERENCES,
   loadServicePreferences,
   saveServicePreferences,
   SERVICE_PREFERENCES_KEY,
-  formatCommandEvent,
   isStopTimeoutPending,
   localFileHref,
   matchesRecordFilter,
@@ -43,7 +41,7 @@ import {
 import type { CommandOption, RuntimeEvent, RuntimeUnitStatus } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
-import { makeRuntimeEvent, makeRuntimeLog, makeTraceRecord } from "./test/factories";
+import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
 
 const openShell = vi.fn();
 
@@ -257,8 +255,7 @@ describe("buildCommandArgs", () => {
       source: "workspace",
       path: "/cmd.py",
       arguments: [],
-      supports_raw_args: true,
-      recommended_input: "",
+      inputs: { defined_args: "auto", extra_args: "hidden", message: "optional" },
       requirements: [],
       ...overrides,
     };
@@ -290,9 +287,10 @@ describe("buildCommandArgs", () => {
     expect(args).toEqual([]);
   });
 
-  it("appends parsed raw args after structured args", () => {
+  it("appends parsed extra args when enabled", () => {
     const opt = option({
       arguments: [{ name: "first", kind: "positional", required: true, default: "" }],
+      inputs: { defined_args: "auto", extra_args: "optional", message: "optional" },
     });
 
     const args = buildCommandArgs(opt, { first: "x" }, 'a "b c" key=value');
@@ -300,7 +298,16 @@ describe("buildCommandArgs", () => {
     expect(args).toEqual(["x", "a", "b c", "key=value"]);
   });
 
-  it("returns only raw args when no option is selected", () => {
+  it("ignores hidden defined and extra args", () => {
+    const opt = option({
+      arguments: [{ name: "first", kind: "positional", required: true, default: "" }],
+      inputs: { defined_args: "hidden", extra_args: "hidden", message: "optional" },
+    });
+
+    expect(buildCommandArgs(opt, { first: "x" }, "--verbose")).toEqual([]);
+  });
+
+  it("returns only extra args when no option is selected", () => {
     expect(buildCommandArgs(null, { ignored: "x" }, "raw")).toEqual(["raw"]);
   });
 });
@@ -385,25 +392,6 @@ describe("commandFailureDetail", () => {
       payload: { code: "boom", message: "oops" },
     });
     expect(detail).toContain("\n");
-  });
-});
-
-describe("formatCommandEvent", () => {
-  it("prefers payload.message", () => {
-    expect(formatCommandEvent(runtimeEvent({ payload: { message: "hi", command: "demo" } }))).toBe(
-      "hi",
-    );
-  });
-
-  it("falls back to payload.command", () => {
-    expect(formatCommandEvent(runtimeEvent({ payload: { command: "demo" } }))).toBe("demo");
-  });
-
-  it("falls back to request id then type", () => {
-    expect(formatCommandEvent(runtimeEvent({ trace_id: "req-7", payload: {} }))).toBe("req-7");
-    expect(
-      formatCommandEvent(runtimeEvent({ type: "command.failed", trace_id: null, payload: {} })),
-    ).toBe("command.failed");
   });
 });
 
@@ -503,50 +491,6 @@ describe("matchesRecordScopeFilter", () => {
     expect(matchesRecordScopeFilter(makeTraceRecord({ span_id: "parent" }), filter)).toBe(true);
     expect(matchesRecordScopeFilter(makeTraceRecord({ parent_id: "parent" }), filter)).toBe(true);
     expect(matchesRecordScopeFilter(makeTraceRecord({ span_id: "other" }), filter)).toBe(false);
-  });
-});
-
-describe("buildCommandTimeline", () => {
-  it("merges command events and logs scoped to the trace, newest-first", () => {
-    const events = [
-      makeRuntimeEvent({
-        type: "command.started",
-        trace_id: "t1",
-        payload: { command: "demo" },
-        timestamp: "2026-06-04T01:00:00Z",
-      }),
-      makeRuntimeEvent({
-        type: "command.finished",
-        trace_id: "t1",
-        payload: { command: "demo" },
-        timestamp: "2026-06-04T01:00:03Z",
-      }),
-      // Different trace and non-command events are excluded.
-      makeRuntimeEvent({ type: "command.started", trace_id: "other" }),
-      makeRuntimeEvent({ type: "scheduler.running", trace_id: "t1" }),
-    ];
-    const logs = [
-      makeRuntimeLog({
-        trace_id: "t1",
-        level: "INFO",
-        message: "working",
-        timestamp: "2026-06-04T01:00:01Z",
-      }),
-      makeRuntimeLog({ trace_id: "other", level: "INFO", message: "elsewhere" }),
-    ];
-
-    const timeline = buildCommandTimeline(events, logs, "t1");
-
-    // Newest-first, merged across events + logs, scoped to t1.
-    expect(timeline.map((item) => item.label)).toEqual(["finished", "INFO", "started"]);
-    expect(timeline.some((item) => item.message === "working")).toBe(true);
-    expect(timeline.some((item) => item.message === "elsewhere")).toBe(false);
-  });
-
-  it("returns nothing without an active trace", () => {
-    expect(buildCommandTimeline([makeRuntimeEvent({ type: "command.started" })], [], null)).toEqual(
-      [],
-    );
   });
 });
 

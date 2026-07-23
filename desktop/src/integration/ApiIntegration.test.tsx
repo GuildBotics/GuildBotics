@@ -288,8 +288,7 @@ function catalogCommand(overrides: Record<string, unknown> = {}) {
       { name: "topic", kind: "positional", required: true, default: "" },
       { name: "mode", kind: "keyword", required: false, default: "" },
     ],
-    supports_raw_args: true,
-    recommended_input: "",
+    inputs: { defined_args: "auto", extra_args: "hidden", message: "optional" },
     requirements: [],
     ...overrides,
   };
@@ -592,6 +591,38 @@ describe("Commands integration (real client + mock server)", () => {
       .json("GET", "/runtime/debug", runtimeDebug())
       .json("PUT", "/runtime/debug", runtimeDebug({ enabled: true }))
       .json("POST", "/commands/run", { trace_id: "req-1", output: "hello output" })
+      .json("GET", "/diagnostics/traces/evt-1", {
+        trace_id: "evt-1",
+        summary: null,
+        records: [
+          {
+            kind: "io",
+            timestamp: "2026-06-04T01:00:00Z",
+            trace_id: "evt-1",
+            span_id: "llm-1",
+            parent_id: null,
+            call_id: "call-1",
+            span: "llm",
+            source: "manual",
+            person_id: "alice",
+            command: "workflows/sample",
+            workflow: "",
+            type: "llm.request",
+            level: "",
+            message: "integration prompt",
+            attributes: {},
+            payload: {},
+            presentation: {
+              label_key: "diagnostics.executions.ioTypes.llm_request",
+              label_fallback: "LLM request",
+              message_key: "",
+              message: "integration prompt",
+              message_params: {},
+              tone: "ai",
+            },
+          },
+        ],
+      })
       .on("GET", "/commands/options", () => ({ body: { options: [catalogCommand()] } }));
     const user = userEvent.setup();
     renderApp(server, "/commands");
@@ -608,7 +639,7 @@ describe("Commands integration (real client + mock server)", () => {
     expect(optionsCall.query.has("person")).toBe(false);
     expect(optionsCall.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
 
-    await user.type(await screen.findByRole("textbox", { name: "topic *" }), " release ");
+    await user.type(await screen.findByRole("textbox", { name: "topic" }), " release ");
     await user.type(screen.getByRole("textbox", { name: "mode" }), "fast");
     await user.click(screen.getByRole("button", { name: t("commands.run") }));
 
@@ -634,6 +665,8 @@ describe("Commands integration (real client + mock server)", () => {
       timestamp: "2026-06-04T01:00:00Z",
     });
     expect(await screen.findByText(t("commands.status.running"))).toBeInTheDocument();
+    expect(await screen.findByText("integration prompt")).toBeInTheDocument();
+    expect(server.requestsFor("GET", "/diagnostics/traces/evt-1").length).toBeGreaterThan(0);
 
     socket.emit({
       type: "command.finished",

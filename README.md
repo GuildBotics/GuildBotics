@@ -129,7 +129,7 @@ machine, including headless servers, by copying those files over and transferrin
 ~/.guildbotics/bin/guildbotics workspace status
 
 # Run a custom command
-echo "Hello" | ~/.guildbotics/bin/guildbotics run translate English Japanese
+echo "Hello" | ~/.guildbotics/bin/guildbotics run translate
 
 # Or start the member workers and event listener
 ~/.guildbotics/bin/guildbotics start
@@ -277,8 +277,22 @@ overridden with the `GUILDBOTICS_CONFIG_DIR` environment variable.
 
 **Simple example** (`.guildbotics/config/commands/translate.md`):
 ```markdown
-If the following text is in ${1}, translate it to ${2}; if it is in ${2}, translate it to ${1}:
+---
+template_engine: jinja2
+commands:
+  - name: os_ui_language
+    command: functions/get_os_ui_language
+---
+The input message is structured data.
+{% if os_ui_language.language_code == "en" %}
+If the text in the `input` field is in Japanese, translate it to English; if it is in English, translate it to Japanese.
+{% else %}
+If the text in the `input` field is in {{ os_ui_language.language_name }}, translate it to English; if it is in English, translate it to {{ os_ui_language.language_name }}.
+{% endif %}
+Return only the translated text.
 ```
+
+`functions/get_os_ui_language` is a built-in command, so no companion file is required in the workspace.
 
 For detailed creation methods, see [Custom Command Development Guide](docs/custom_command_guide.en.md).
 
@@ -292,7 +306,7 @@ guildbotics run <command_name> [args...]
 
 Example:
 ```bash
-echo "Hello" | guildbotics run translate English Japanese
+echo "Hello" | guildbotics run translate
 ```
 
 **Automated execution with member workers**:

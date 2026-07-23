@@ -2,6 +2,8 @@
 brain: none
 template_engine: jinja2
 description: Display the current member and team context.
+inputs:
+  message: hidden
 ---
 Language code: {{ context.language_code }}
 Language name: {{ context.language_name }}
