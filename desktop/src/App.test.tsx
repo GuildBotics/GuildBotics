@@ -9,6 +9,7 @@ import {
   App,
   buildCommandArgs,
   commandFailureDetail,
+  commandTraceRefetchInterval,
   DEFAULT_SERVICE_PREFERENCES,
   loadServicePreferences,
   saveServicePreferences,
@@ -309,6 +310,15 @@ describe("buildCommandArgs", () => {
 
   it("returns only extra args when no option is selected", () => {
     expect(buildCommandArgs(null, { ignored: "x" }, "raw")).toEqual(["raw"]);
+  });
+});
+
+describe("commandTraceRefetchInterval", () => {
+  it("polls only while the selected command is running", () => {
+    expect(commandTraceRefetchInterval("running")).toBe(1000);
+    expect(commandTraceRefetchInterval("success")).toBe(false);
+    expect(commandTraceRefetchInterval("failed")).toBe(false);
+    expect(commandTraceRefetchInterval(undefined)).toBe(false);
   });
 });
 

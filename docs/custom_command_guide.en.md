@@ -661,4 +661,4 @@ description:
 routine: true
 ```
 
-Because the scheduler runs a routine with no caller-supplied input, a routine candidate must be runnable without arguments or a message. A command that declares `routine: true` but still has required arguments, a required `${...}` placeholder, or `inputs.message: required` stays listed in the patrol settings but is shown as ineligible with the reason, instead of silently disappearing.
+Because the scheduler runs a routine with no caller-supplied input, a routine candidate must not require caller-supplied arguments or a message. A command that declares `routine: true` stays listed but is marked ineligible when required arguments remain visible through `inputs.defined_args: auto` or when `inputs.message: required`. With `inputs.defined_args: hidden`, placeholders are supplied internally by the workflow and do not affect routine eligibility.

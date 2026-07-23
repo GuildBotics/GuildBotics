@@ -3273,7 +3273,7 @@ function CommandsPage() {
     queryKey: ["diagnostics-trace", visibleTraceId],
     queryFn: () => getTraceDetail(visibleTraceId as string),
     enabled: Boolean(visibleTraceId) && !visibleTraceId?.startsWith("local-"),
-    refetchInterval: selectedRecord?.status === "running" ? 1000 : 5000,
+    refetchInterval: commandTraceRefetchInterval(selectedRecord?.status),
   });
   const traceRecords = useMemo(
     () => [...(traceDetail.data?.records ?? [])].reverse(),
@@ -3953,6 +3953,12 @@ export function upsertCommandRecord(
   return [merged, ...records.filter((record) => record.traceId !== next.traceId)]
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     .slice(0, 20);
+}
+
+export function commandTraceRefetchInterval(
+  status: CommandRunRecord["status"] | undefined,
+): number | false {
+  return status === "running" ? 1000 : false;
 }
 
 function statusColor(status: CommandRunRecord["status"]): string {

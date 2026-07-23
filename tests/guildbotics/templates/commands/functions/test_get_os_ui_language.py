@@ -9,7 +9,11 @@ import pytest
 
 from guildbotics.commands.errors import CommandError
 
-COMMAND_PATH = Path("guildbotics/templates/commands/functions/get_os_ui_language.py")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
+COMMAND_PATH = (
+    REPOSITORY_ROOT
+    / "guildbotics/templates/commands/functions/get_os_ui_language.py"
+)
 
 
 @pytest.fixture
