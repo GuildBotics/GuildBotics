@@ -414,6 +414,12 @@ export type CommandRequirement = {
   message: string;
 };
 
+export type CommandInputs = {
+  defined_args: "auto" | "hidden";
+  extra_args: "hidden" | "optional";
+  message: "hidden" | "optional" | "required";
+};
+
 export type CommandOption = {
   command: string;
   label: string;
@@ -422,8 +428,7 @@ export type CommandOption = {
   source: "workspace" | "home" | "template";
   path: string;
   arguments: CommandArgumentOption[];
-  supports_raw_args: boolean;
-  recommended_input: string;
+  inputs: CommandInputs;
   requirements: CommandRequirement[];
   // False when a routine candidate still needs caller-supplied input and so
   // cannot run on a schedule. Absent on the general /commands/options listing.

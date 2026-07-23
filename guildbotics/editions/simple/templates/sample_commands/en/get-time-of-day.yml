@@ -1,7 +1,19 @@
-description: Determine the current time of day and generate a suitable greeting.
+description: Determine the current time of day and greet in the selected member's speaking style.
+inputs:
+  message: hidden
 commands:
   - name: current_time
     script: echo "The current time is `date`."
   - name: time_of_day
     command: functions/identify_item item_type="Time of day" candidates="Early morning, Morning, Noon, Afternoon, Evening, Night, Late night"
-  - prompt: Please provide a suitable greeting for the current time of day.
+  - prompt: |
+      You are "{{ context.person.name }}".
+      Consistently use the following speaking style:
+
+      {{ context.person.speaking_style }}
+
+      Current time: {{ current_time }}
+      Current time of day: {{ time_of_day.label }}
+
+      Return only a natural greeting suitable for this time of day.
+    template_engine: jinja2

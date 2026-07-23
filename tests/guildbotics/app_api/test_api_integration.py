@@ -138,7 +138,16 @@ def test_temp_workspace_command_options_return_localized_sample_command(
     # English fallback, for the sample command.
     translate = options["translate"]
     assert translate["label"] == "Translate"
-    assert translate["description"] == "入力文を指定した2言語間で翻訳します。"
+    assert translate["description"] == (
+        "入力文をOSのUI言語と英語の間で相互翻訳します。"
+        "OSのUI言語が英語の場合は日本語を使用します。"
+    )
+    assert translate["arguments"] == []
+    assert translate["inputs"] == {
+        "defined_args": "auto",
+        "extra_args": "hidden",
+        "message": "required",
+    }
 
 
 def test_temp_workspace_intelligence_update_writes_files(

@@ -16,6 +16,11 @@ hiddenimports = []
 
 hiddenimports += collect_submodules("guildbotics")
 datas += collect_data_files("guildbotics")
+datas += collect_data_files(
+    "guildbotics",
+    include_py_files=True,
+    includes=["templates/commands/**/*.py"],
+)
 
 for pkg in (
     "uvicorn",

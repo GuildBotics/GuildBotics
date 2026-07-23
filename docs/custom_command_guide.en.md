@@ -11,6 +11,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
     - [2.1. Named arguments](#21-named-arguments)
     - [2.2. Jinja2 examples](#22-jinja2-examples)
     - [2.3. Using the `context` variable](#23-using-the-context-variable)
+    - [2.4. Configuring Desktop inputs](#24-configuring-desktop-inputs)
   - [3. Using the AI CLI tool](#3-using-the-ai-cli-tool)
   - [4. Using built-in commands](#4-using-built-in-commands)
   - [5. Using subcommands](#5-using-subcommands)
@@ -34,17 +35,33 @@ Let’s start with a simple command that asks an LLM to translate text.
 Create a prompt file named `translate.md` under your prompt configuration folder (default: `.guildbotics/config/commands` in the workspace; the configuration directory can be overridden with `GUILDBOTICS_CONFIG_DIR`) with the following content:
 
 ```markdown
-If the following text is in ${1}, translate it to ${2}; if it is in ${2}, translate it to ${1}:
+---
+template_engine: jinja2
+inputs:
+  message: required
+commands:
+  - name: os_ui_language
+    command: functions/get_os_ui_language
+---
+The input message is structured data.
+{% if os_ui_language.language_code == "en" %}
+If the text in the `input` field is in Japanese, translate it to English; if it is in English, translate it to Japanese.
+{% else %}
+If the text in the `input` field is in {{ os_ui_language.language_name }}, translate it to English; if it is in English, translate it to {{ os_ui_language.language_name }}.
+{% endif %}
+Return only the translated text.
 ```
 
 Notes:
 
-- `${1}` and `${2}` are positional arguments. Values are provided at invocation time.
+- The built-in Python command `functions/get_os_ui_language` supplies the OS UI language and preserves the input text as structured data.
+- When the OS UI language is English, the command uses Japanese as the other language.
+- You do not need to provide languages as invocation arguments.
 
 
 ### 1.2. Invoke the command
 
-Run `echo "Hello" | guildbotics run translate English Japanese` and you’ll get output like:
+With English configured as the OS UI language, run `echo "Hello" | guildbotics run translate` and you’ll get output like:
 
 ```
 こんにちは
@@ -54,9 +71,13 @@ Note:
 Before the LLM call, the prompt file is expanded as follows:
 
 ```
-If the following text is in English, translate it to Japanese; if it is in Japanese, translate it to English:
+The input message is structured data.
+If the text in the `input` field is in Japanese, translate it to English; if it is in English, translate it to Japanese.
+Return only the translated text.
 
-Hello
+input: Hello
+language_code: en
+language_name: English
 ```
 
 This leads the LLM to respond with "こんにちは".
@@ -65,11 +86,11 @@ This leads the LLM to respond with "こんにちは".
 
 If you have multiple members registered (via the GuildBotics Desktop app), you must specify a member when running a command using the `<command>@<person_id>` form.
 
-Example: `guildbotics run translate@yuki English Japanese`
+Example: `guildbotics run translate@yuki`
 
 
 ## 2. Variations of variable expansion
-In addition to positional arguments, you can use named arguments and the Jinja2 template engine. These enable more flexible prompt definitions.
+Prompt files support positional arguments, named arguments, and the Jinja2 template engine. These enable more flexible prompt definitions.
 
 ### 2.1. Named arguments
 Use the `${arg_name}` form to reference keyword arguments provided via `params`.
@@ -83,6 +104,18 @@ Invocation example:
 ```shell
 $ echo "Hello" | guildbotics run translate source=English target=Japanese
 ```
+
+For Markdown and YAML commands, use a root-level `args` mapping to declare whether each named argument is required and to provide runtime defaults:
+
+```yaml
+args:
+  file:
+    required: true
+  language:
+    default: English
+```
+
+An argument is required when it has neither `default` nor `required: false`. A declared default makes the argument optional and is applied by both CLI and Desktop execution. `required: true` and `default` cannot be combined. Placeholders that are not listed under `args` continue to be discovered as required arguments.
 
 ### 2.2. Jinja2 examples
 You can leverage Jinja2 for more complex expansion. For example, reference variables with `{{ variable_name }}`.
@@ -121,6 +154,8 @@ When using Jinja2, you can access the execution context via the `context` variab
 ---
 brain: none
 template_engine: jinja2
+inputs:
+  message: hidden
 ---
 
 Language code: {{ context.language_code }}
@@ -138,6 +173,25 @@ Team members:
 
 - With `brain: none`, the LLM is not called; only subcommand outputs are used as the final result.
 
+### 2.4. Configuring Desktop inputs
+
+Use `inputs` in Markdown front matter or YAML command metadata to control fields on the Desktop manual-run screen. For Python commands, place the same mapping in `<command>.metadata.yml`.
+
+| Field | Values | Default |
+| --- | --- | --- |
+| `defined_args` | `auto`, `hidden` | `auto` |
+| `extra_args` | `hidden`, `optional` | `hidden` |
+| `message` | `hidden`, `optional`, `required` | `optional` |
+
+`defined_args: auto` displays arguments declared under `args`, arguments discovered from `${...}` placeholders, or parameters from a Python `main` signature. The Desktop marks declared or discovered required arguments with `*` and shows declared defaults as field placeholders. `extra_args: optional` enables the free-form additional-arguments field. A required message prevents execution while the input text is empty.
+
+Omit default values. For example, a command that does not use caller text needs only:
+
+```yaml
+inputs:
+  message: hidden
+```
+
 ## 3. Using the AI CLI tool
 
 Specify `brain: agent` in YAML front matter to invoke an AI CLI tool such as OpenAI Codex or Google Antigravity. With an AI CLI tool, you can instruct the assigned GuildBotics member to read files, run system commands, and perform more advanced operations.
@@ -147,6 +201,13 @@ For example, create a file `summarize.md` with the following content:
 ```markdown
 ---
 brain: agent
+args:
+  file:
+    required: true
+  language:
+    default: English
+inputs:
+  message: hidden
 ---
 Read the first section of ${file} and summarize it in one line using ${language}.
 ```
@@ -154,7 +215,7 @@ Read the first section of ${file} and summarize it in one line using ${language}
 Invocation example:
 
 ```shell
-$ guildbotics run summarize file=README.md language=English cwd=.
+$ guildbotics run summarize file=README.md cwd=.
 GuildBotics is an alpha tool for collaborating with AI agents and a task board; users should test in isolated environments due to potential breaking changes and risks.
 ```
 
@@ -194,6 +255,8 @@ For example, create `get-time-of-day.md` as follows:
 
 ```markdown
 ---
+inputs:
+  message: hidden
 commands:
   - script: echo "The current time is `date`."
   - command: functions/identify_item item_type="Time of day" candidates="Early morning, Morning, Noon, Afternoon, Evening, Night, Late night"
@@ -598,4 +661,4 @@ description:
 routine: true
 ```
 
-Because the scheduler runs a routine with no caller-supplied input, a routine candidate must be runnable without arguments. A command that declares `routine: true` but still has required arguments (or a required `${...}` placeholder) stays listed in the patrol settings but is shown as ineligible with the reason, instead of silently disappearing.
+Because the scheduler runs a routine with no caller-supplied input, a routine candidate must not require caller-supplied arguments or a message. A command that declares `routine: true` stays listed but is marked ineligible when required arguments remain visible through `inputs.defined_args: auto` or when `inputs.message: required`. With `inputs.defined_args: hidden`, placeholders are supplied internally by the workflow and do not affect routine eligibility.

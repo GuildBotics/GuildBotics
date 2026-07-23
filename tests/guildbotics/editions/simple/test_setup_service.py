@@ -70,7 +70,10 @@ def test_write_project_without_github_creates_loadable_core_config(
     assert team.project.description == "Local automation workspace"
     assert team.project.services == {}
     assert "GOOGLE_API_KEY=test-google-key" in env_file_path.read_text()
-    assert "指定した2言語間で翻訳" in (config_dir / "commands/translate.md").read_text()
+    assert (
+        "OSのUI言語と英語の間で相互翻訳"
+        in (config_dir / "commands/translate.md").read_text()
+    )
 
 
 def test_write_project_does_not_copy_samples_when_commands_exist(
@@ -343,7 +346,10 @@ def test_update_project_is_non_destructive_for_env_and_cli_agents(
 
     assert custom_cli_file.read_text() == "script: echo custom"
     assert (config_dir / "commands/translate.md").exists()
-    assert "指定した2言語間で翻訳" in (config_dir / "commands/translate.md").read_text()
+    assert (
+        "OSのUI言語と英語の間で相互翻訳"
+        in (config_dir / "commands/translate.md").read_text()
+    )
     env_text = env_file.read_text()
     assert "OPENAI_API_KEY=existing-openai" in env_text
     assert "EXTRA=value" in env_text

@@ -1069,8 +1069,7 @@ function commandOption(overrides: Partial<CommandOption> = {}): CommandOption {
     source: "template",
     path: "workflows/ticket_driven_workflow.md",
     arguments: [],
-    supports_raw_args: true,
-    recommended_input: "",
+    inputs: { defined_args: "auto", extra_args: "hidden", message: "optional" },
     requirements: [],
     ...overrides,
   };
@@ -1850,7 +1849,7 @@ describe("patrol / schedule helpers", () => {
     const draft: ScheduledCommandDraft = {
       ...createScheduledCommandDraft("report"),
       argValues: { target: "weekly report", "--format": "pdf" },
-      rawArgs: "--verbose",
+      extraArgs: "--verbose",
     };
     const expression = buildScheduledCommandExpression(draft, new Map([[option.command, option]]));
     expect(expression).toBe('report "weekly report" --format=pdf --verbose');
@@ -1900,7 +1899,7 @@ describe("patrol / schedule helpers", () => {
     const option = commandOption({ command: "report" });
     const draft: ScheduledCommandDraft = {
       ...createScheduledCommandDraft("report"),
-      rawArgs: "alpha beta",
+      extraArgs: "alpha beta",
     };
     const expression = buildScheduledCommandExpression(draft, new Map([[option.command, option]]));
     const parsed = parseCommandExpression(expression, [option]);
@@ -2764,7 +2763,7 @@ describe("PatrolSettingsEditor", () => {
     await user.click(await screen.findByRole("radio", { name: t("commands.modeCustom") }));
 
     await user.type(await screen.findByLabelText(t("commands.command")), "my/custom_command");
-    await user.type(screen.getByLabelText(t("commands.rawArgs")), "--verbose");
+    await user.type(screen.getByLabelText(t("commands.extraArgs")), "--verbose");
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
     await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));

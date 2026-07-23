@@ -8,11 +8,11 @@ import { expect, test } from "@playwright/test";
 //
 // The "configured" harness pre-seeds the temp workspace, which also installs the
 // sample commands (translate / summarize / get-time-of-day / context-info). This
-// journey selects the `context-info` sample command — a deterministic, no-LLM,
-// no-GitHub command (`brain: none`, jinja2 template) — runs it through the REAL
-// `/commands/run` endpoint, and asserts that the run output and the
-// command.started / command.finished `/events` websocket frames surface in the
-// run history.
+// journey first verifies the declared summarize arguments, then selects the
+// deterministic `context-info` sample command — a no-LLM, no-GitHub command
+// (`brain: none`, jinja2 template) — runs it through the REAL `/commands/run`
+// endpoint, and asserts that the run output and normalized trace records surface
+// in the run history.
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -40,6 +40,18 @@ test("runs the seeded context-info command and shows real output + events", asyn
   // so match the label substring rather than an exact string.
   const commandSelect = page.getByRole("textbox", { name: "Command", exact: true });
   await commandSelect.click();
+  await commandSelect.fill("summarize");
+  await page.getByRole("option", { name: /Summarize \(summarize\)/ }).click();
+  await expect(page.getByRole("link", { name: /summarize\.md$/ })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByRole("textbox", { name: "file" })).toHaveAttribute("required", "");
+  const language = page.getByRole("textbox", { name: "language", exact: true });
+  await expect(language).not.toHaveAttribute("required");
+  await expect(language).toHaveAttribute("placeholder", "English");
+  await expect(page.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
+
+  await commandSelect.click();
   await commandSelect.fill("context-info");
   await page.getByRole("option", { name: /Context Info \(context-info\)/ }).click();
   // The selected command surfaces its on-disk script path; assert on that rather
@@ -47,6 +59,8 @@ test("runs the seeded context-info command and shows real output + events", asyn
   await expect(page.getByRole("link", { name: /context-info\.md$/ })).toBeVisible({
     timeout: 30_000,
   });
+  await expect(page.getByRole("textbox", { name: "Additional args" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Input text" })).toHaveCount(0);
 
   // Run it against the REAL backend.
   const run = page.getByRole("button", { name: "Run", exact: true });
@@ -68,8 +82,13 @@ test("runs the seeded context-info command and shows real output + events", asyn
   await expect(output).toContainText(`ID: ${ctx.memberId}`);
   await expect(output).toContainText("Name: Local Agent");
 
-  // The Events tab lists the real command.* websocket frames for this request.
+  // The Events tab reuses the diagnostics trace timeline backed by the real
+  // trace-detail endpoint.
   await page.getByRole("tab", { name: "Events" }).click();
-  await expect(page.getByText("started")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("finished")).toBeVisible({ timeout: 30_000 });
+  const timeline = page.locator(".exec-timeline");
+  await expect(timeline.getByText("Started", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(timeline.getByText("Finished", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.locator(".exec-timeline-toolbar").getByText("AI", { exact: true }),
+  ).toBeVisible();
 });

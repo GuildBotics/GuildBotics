@@ -68,7 +68,6 @@ import {
   startScheduler,
   stopScheduler,
   subscribeEvents,
-  subscribeLogs,
   updateRuntimeDebug,
   updateTranscriptSettings,
   verify as verifyConfiguration,
@@ -77,7 +76,6 @@ import {
   type MemoryEvent,
   type RuntimeActiveWork,
   type RuntimeEvent,
-  type RuntimeLog,
   type RuntimeStatus,
   type RuntimeUnitStatus,
   type SchedulerStartRequest,
@@ -1928,23 +1926,14 @@ function TraceExplorer({
           )}
         </div>
       </div>
-      <Drawer
-        opened={Boolean(drawerRecord)}
+      <TraceRecordDrawer
+        record={drawerRecord}
         onClose={() => setDrawerRecord(null)}
-        position="right"
-        size="lg"
-        title={drawerRecord ? tracePresentationLabel(t, drawerRecord.presentation) : ""}
-      >
-        {drawerRecord ? (
-          <TraceRecordDetail
-            record={drawerRecord}
-            onScopeFilter={(filter) => {
-              setRecordScopeFilter(filter);
-              setDrawerRecord(null);
-            }}
-          />
-        ) : null}
-      </Drawer>
+        onScopeFilter={(filter) => {
+          setRecordScopeFilter(filter);
+          setDrawerRecord(null);
+        }}
+      />
     </Card>
   );
 }
@@ -2028,6 +2017,29 @@ function ExecTimeline({
         )}
       </div>
     </>
+  );
+}
+
+function TraceRecordDrawer({
+  record,
+  onClose,
+  onScopeFilter,
+}: {
+  record: TraceRecord | null;
+  onClose: () => void;
+  onScopeFilter: (filter: RecordScopeFilter) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Drawer
+      opened={Boolean(record)}
+      onClose={onClose}
+      position="right"
+      size="lg"
+      title={record ? tracePresentationLabel(t, record.presentation) : ""}
+    >
+      {record ? <TraceRecordDetail record={record} onScopeFilter={onScopeFilter} /> : null}
+    </Drawer>
   );
 }
 
@@ -2939,16 +2951,12 @@ function CommandsPage() {
   );
   const [customHistory, setCustomHistory] = useState<string[]>(initialHistory.commands);
   const [lastRunWasCustom, setLastRunWasCustom] = useState(initialHistory.lastRunWasCustom);
-  const [rawArgs, setRawArgs] = useState(lastInputs?.rawArgs ?? "");
+  const [extraArgs, setExtraArgs] = useState(lastInputs?.extraArgs ?? "");
   const [argValues, setArgValues] = useState<Record<string, string>>(lastInputs?.argValues ?? {});
   const [message, setMessage] = useState(lastInputs?.message ?? "");
   const [person, setPerson] = useState<string | null>(lastInputs?.person ?? null);
   const [cwd, setCwd] = useState(lastInputs?.cwd ?? "");
   const [showAdvanced, setShowAdvanced] = useState(lastInputs?.showAdvanced ?? false);
-  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>(
-    lastInputs?.runtimeEvents ?? [],
-  );
-  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLog[]>(lastInputs?.runtimeLogs ?? []);
   const [history, setHistory] = useState<CommandRunRecord[]>(lastInputs?.history ?? []);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(
     lastInputs?.activeTraceId ?? null,
@@ -2961,7 +2969,7 @@ function CommandsPage() {
     mode,
     selectedCommand,
     customCommand,
-    rawArgs,
+    extraArgs,
     argValues,
     message,
     person,
@@ -2970,8 +2978,6 @@ function CommandsPage() {
     history,
     activeTraceId,
     activeTab,
-    runtimeEvents,
-    runtimeLogs,
   });
 
   // Keep stateRef updated on every render safely outside the render phase.
@@ -2980,7 +2986,7 @@ function CommandsPage() {
       mode,
       selectedCommand,
       customCommand,
-      rawArgs,
+      extraArgs,
       argValues,
       message,
       person,
@@ -2989,8 +2995,6 @@ function CommandsPage() {
       history,
       activeTraceId,
       activeTab,
-      runtimeEvents,
-      runtimeLogs,
     };
   });
 
@@ -3006,14 +3010,12 @@ function CommandsPage() {
         setMode(inputs.mode);
         setSelectedCommand(inputs.selectedCommand);
         setCustomCommand(inputs.customCommand);
-        setRawArgs(inputs.rawArgs);
+        setExtraArgs(inputs.extraArgs);
         setArgValues(inputs.argValues);
         setMessage(inputs.message);
         setPerson(inputs.person);
         setCwd(inputs.cwd);
         setShowAdvanced(inputs.showAdvanced);
-        setRuntimeEvents(inputs.runtimeEvents);
-        setRuntimeLogs(inputs.runtimeLogs);
         setHistory(inputs.history);
         setActiveTraceId(inputs.activeTraceId);
         setActiveTab(inputs.activeTab);
@@ -3021,14 +3023,12 @@ function CommandsPage() {
         setMode("catalog");
         setSelectedCommand("");
         setCustomCommand("");
-        setRawArgs("");
+        setExtraArgs("");
         setArgValues({});
         setMessage("");
         setPerson(null);
         setCwd("");
         setShowAdvanced(false);
-        setRuntimeEvents([]);
-        setRuntimeLogs([]);
         setHistory([]);
         setActiveTraceId(null);
         setActiveTab("events");
@@ -3065,9 +3065,23 @@ function CommandsPage() {
     [commandCatalog],
   );
   const command = mode === "catalog" ? effectiveSelectedCommand : customCommand.trim();
+  const catalogInputs = selectedOption?.inputs;
+  const showDefinedArgs =
+    mode === "catalog" &&
+    catalogInputs?.defined_args === "auto" &&
+    Boolean(selectedOption?.arguments.length);
+  const showExtraArgs = mode === "custom" || catalogInputs?.extra_args === "optional";
+  const showMessage = mode === "custom" || catalogInputs?.message !== "hidden";
+  const messageRequired = mode === "catalog" && catalogInputs?.message === "required";
+  const missingRequiredArgument = Boolean(
+    showDefinedArgs &&
+    selectedOption?.arguments.some(
+      (argument) => argument.required && !argValues[argument.name]?.trim(),
+    ),
+  );
   const commandArgs = useMemo(
-    () => buildCommandArgs(mode === "catalog" ? selectedOption : null, argValues, rawArgs),
-    [argValues, mode, rawArgs, selectedOption],
+    () => buildCommandArgs(mode === "catalog" ? selectedOption : null, argValues, extraArgs),
+    [argValues, extraArgs, mode, selectedOption],
   );
   const blockingRequirements =
     mode === "catalog"
@@ -3086,6 +3100,8 @@ function CommandsPage() {
     !command ||
     !effectivePerson ||
     activeMembers.length === 0 ||
+    missingRequiredArgument ||
+    (messageRequired && !message.trim()) ||
     blockingRequirements.length > 0;
 
   const runMutation = useMutation({
@@ -3093,7 +3109,7 @@ function CommandsPage() {
       runCommand({
         command,
         args: commandArgs,
-        message,
+        message: showMessage ? message : "",
         person: effectivePerson ?? undefined,
         cwd: cwd.trim() || undefined,
       }),
@@ -3148,7 +3164,7 @@ function CommandsPage() {
     mode,
     selectedCommand,
     customCommand,
-    rawArgs,
+    extraArgs,
     argValues,
     message,
     person,
@@ -3157,8 +3173,6 @@ function CommandsPage() {
     history,
     activeTraceId,
     activeTab,
-    runtimeEvents,
-    runtimeLogs,
   });
 
   useEffect(() => {
@@ -3166,7 +3180,7 @@ function CommandsPage() {
       mode,
       selectedCommand,
       customCommand,
-      rawArgs,
+      extraArgs,
       argValues,
       message,
       person,
@@ -3175,8 +3189,6 @@ function CommandsPage() {
       history,
       activeTraceId,
       activeTab,
-      runtimeEvents,
-      runtimeLogs,
     };
     const storageDir = config.data?.storage_dir;
     const handle = window.setTimeout(() => {
@@ -3187,7 +3199,7 @@ function CommandsPage() {
     mode,
     selectedCommand,
     customCommand,
-    rawArgs,
+    extraArgs,
     argValues,
     message,
     person,
@@ -3196,8 +3208,6 @@ function CommandsPage() {
     history,
     activeTraceId,
     activeTab,
-    runtimeEvents,
-    runtimeLogs,
     config.data?.storage_dir,
   ]);
 
@@ -3212,18 +3222,6 @@ function CommandsPage() {
       if (!event.type.startsWith("command.")) {
         return;
       }
-      setRuntimeEvents((current) => {
-        const exists = current.some(
-          (e) =>
-            e.timestamp === event.timestamp &&
-            e.type === event.type &&
-            e.trace_id === event.trace_id,
-        );
-        if (exists) {
-          return current;
-        }
-        return [event, ...current].slice(0, 80);
-      });
       if (!event.trace_id) {
         return;
       }
@@ -3263,40 +3261,23 @@ function CommandsPage() {
         );
       }
     });
-    // Logs flow on a single path now (no command.log events); collect them so
-    // the events tab can show the run's logs inline, scoped by trace id.
-    const stopLogs = subscribeLogs((log) => {
-      if (!log.trace_id) {
-        return;
-      }
-      setRuntimeLogs((current) => {
-        const exists = current.some(
-          (l) =>
-            l.timestamp === log.timestamp &&
-            l.message === log.message &&
-            l.trace_id === log.trace_id &&
-            l.level === log.level,
-        );
-        if (exists) {
-          return current;
-        }
-        return [log, ...current].slice(0, 200);
-      });
-    });
-    return () => {
-      stopEvents();
-      stopLogs();
-    };
-  }, [t]);
+    return stopEvents;
+  }, []);
 
   const selectedRecord = useMemo(
     () => history.find((record) => record.traceId === activeTraceId) ?? history[0] ?? null,
     [activeTraceId, history],
   );
   const visibleTraceId = selectedRecord?.traceId ?? activeTraceId;
-  const commandTimeline = useMemo(
-    () => buildCommandTimeline(runtimeEvents, runtimeLogs, visibleTraceId),
-    [runtimeEvents, runtimeLogs, visibleTraceId],
+  const traceDetail = useQuery({
+    queryKey: ["diagnostics-trace", visibleTraceId],
+    queryFn: () => getTraceDetail(visibleTraceId as string),
+    enabled: Boolean(visibleTraceId) && !visibleTraceId?.startsWith("local-"),
+    refetchInterval: commandTraceRefetchInterval(selectedRecord?.status),
+  });
+  const traceRecords = useMemo(
+    () => [...(traceDetail.data?.records ?? [])].reverse(),
+    [traceDetail.data?.records],
   );
 
   return (
@@ -3374,7 +3355,7 @@ function CommandsPage() {
                       onChange={(value) => {
                         setSelectedCommand(value ?? "");
                         setArgValues({});
-                        setRawArgs("");
+                        setExtraArgs("");
                       }}
                       data={commandCatalog.map((option) => ({
                         value: option.command,
@@ -3481,12 +3462,13 @@ function CommandsPage() {
                   }))}
                 />
 
-                {mode === "catalog" && selectedOption?.arguments.length ? (
+                {showDefinedArgs ? (
                   <div className="command-args-grid">
                     {selectedOption.arguments.map((argument) => (
                       <TextInput
                         key={`${argument.kind}-${argument.name}`}
-                        label={`${argument.name}${argument.required ? " *" : ""}`}
+                        label={argument.name}
+                        required={argument.required}
                         placeholder={argument.default || argument.kind}
                         value={argValues[argument.name] ?? ""}
                         onChange={(event) =>
@@ -3500,22 +3482,25 @@ function CommandsPage() {
                   </div>
                 ) : null}
 
-                {mode === "custom" || !selectedOption?.arguments.length ? (
+                {showExtraArgs ? (
                   <TextInput
-                    label={t("commands.rawArgs")}
-                    placeholder={t("commands.rawArgsPlaceholder")}
-                    value={rawArgs}
-                    onChange={(event) => setRawArgs(event.currentTarget.value)}
+                    label={t("commands.extraArgs")}
+                    placeholder={t("commands.extraArgsPlaceholder")}
+                    value={extraArgs}
+                    onChange={(event) => setExtraArgs(event.currentTarget.value)}
                   />
                 ) : null}
 
-                <Textarea
-                  label={t("commands.message")}
-                  description={t("commands.messageDescription")}
-                  minRows={5}
-                  value={message}
-                  onChange={(event) => setMessage(event.currentTarget.value)}
-                />
+                {showMessage ? (
+                  <Textarea
+                    required={messageRequired}
+                    label={t("commands.message")}
+                    description={t("commands.messageDescription")}
+                    minRows={5}
+                    value={message}
+                    onChange={(event) => setMessage(event.currentTarget.value)}
+                  />
+                ) : null}
 
                 <Switch
                   checked={showAdvanced}
@@ -3546,8 +3531,11 @@ function CommandsPage() {
                   </div>
                   {selectedRecord ? (
                     <CommandRunDetails
+                      key={selectedRecord.traceId}
                       record={selectedRecord}
-                      items={commandTimeline}
+                      records={traceRecords}
+                      loading={traceDetail.isFetching && !traceDetail.data}
+                      transcriptAvailable={traceDetail.data?.transcript_available}
                       activeTab={activeTab}
                       onTabChange={setActiveTab}
                     />
@@ -3672,7 +3660,7 @@ export type LastCommandInputs = {
   mode: "catalog" | "custom";
   selectedCommand: string;
   customCommand: string;
-  rawArgs: string;
+  extraArgs: string;
   argValues: Record<string, string>;
   message: string;
   person: string | null;
@@ -3681,8 +3669,6 @@ export type LastCommandInputs = {
   history: CommandRunRecord[];
   activeTraceId: string | null;
   activeTab: string | null;
-  runtimeEvents: RuntimeEvent[];
-  runtimeLogs: RuntimeLog[];
 };
 
 function isRecord(val: unknown): val is Record<string, unknown> {
@@ -3702,42 +3688,6 @@ function validateCommandRunRecord(val: unknown): val is CommandRunRecord {
   );
 }
 
-function validateRuntimeEvent(val: unknown): val is RuntimeEvent {
-  if (!isRecord(val)) return false;
-  return (
-    val.kind === "event" &&
-    typeof val.type === "string" &&
-    isRecord(val.payload) &&
-    typeof val.timestamp === "string" &&
-    (val.trace_id === null || typeof val.trace_id === "string") &&
-    (val.span_id === null || typeof val.span_id === "string") &&
-    (val.parent_id === null || typeof val.parent_id === "string") &&
-    (val.source === null || typeof val.source === "string") &&
-    typeof val.person_id === "string" &&
-    typeof val.command === "string" &&
-    typeof val.workflow === "string" &&
-    isRecord(val.attributes)
-  );
-}
-
-function validateRuntimeLog(val: unknown): val is RuntimeLog {
-  if (!isRecord(val)) return false;
-  return (
-    val.kind === "log" &&
-    typeof val.level === "string" &&
-    typeof val.message === "string" &&
-    typeof val.timestamp === "string" &&
-    (val.trace_id === null || typeof val.trace_id === "string") &&
-    (val.span_id === null || typeof val.span_id === "string") &&
-    (val.parent_id === null || typeof val.parent_id === "string") &&
-    (val.source === null || typeof val.source === "string") &&
-    typeof val.person_id === "string" &&
-    typeof val.command === "string" &&
-    typeof val.workflow === "string" &&
-    isRecord(val.attributes)
-  );
-}
-
 export function loadLastCommandInputs(storageDir?: string): LastCommandInputs | null {
   if (!storageDir) {
     return null;
@@ -3753,7 +3703,7 @@ export function loadLastCommandInputs(storageDir?: string): LastCommandInputs | 
       mode: parsed.mode === "custom" ? "custom" : "catalog",
       selectedCommand: typeof parsed.selectedCommand === "string" ? parsed.selectedCommand : "",
       customCommand: typeof parsed.customCommand === "string" ? parsed.customCommand : "",
-      rawArgs: typeof parsed.rawArgs === "string" ? parsed.rawArgs : "",
+      extraArgs: typeof parsed.extraArgs === "string" ? parsed.extraArgs : "",
       argValues: (() => {
         if (
           !parsed.argValues ||
@@ -3785,12 +3735,6 @@ export function loadLastCommandInputs(storageDir?: string): LastCommandInputs | 
         typeof parsed.activeTab === "string" || parsed.activeTab === null
           ? parsed.activeTab
           : "events",
-      runtimeEvents: Array.isArray(parsed.runtimeEvents)
-        ? (parsed.runtimeEvents.filter(validateRuntimeEvent) as RuntimeEvent[]).slice(0, 80)
-        : [],
-      runtimeLogs: Array.isArray(parsed.runtimeLogs)
-        ? (parsed.runtimeLogs.filter(validateRuntimeLog) as RuntimeLog[]).slice(0, 200)
-        : [],
     };
   } catch {
     return null;
@@ -3873,100 +3817,90 @@ export function saveCustomCommandHistory(value: CustomCommandHistory): void {
 
 function CommandRunDetails({
   record,
-  items,
+  records,
+  loading,
+  transcriptAvailable,
   activeTab,
   onTabChange,
 }: {
   record: CommandRunRecord;
-  items: CommandTimelineItem[];
+  records: TraceRecord[];
+  loading: boolean;
+  transcriptAvailable?: boolean;
   activeTab: string | null;
   onTabChange: (value: string | null) => void;
 }) {
   const { t } = useTranslation();
+  const [recordFilter, setRecordFilter] = useState("all");
+  const [recordScopeFilter, setRecordScopeFilter] = useState<RecordScopeFilter | null>(null);
+  const [drawerRecord, setDrawerRecord] = useState<TraceRecord | null>(null);
+  const filteredRecords = records
+    .filter((item) => matchesRecordFilter(item, recordFilter))
+    .filter((item) => matchesRecordScopeFilter(item, recordScopeFilter));
   return (
-    <Stack>
-      <div className="command-run-meta">
-        <Badge color={statusColor(record.status)} variant="light">
-          {t(`commands.status.${record.status}`)}
-        </Badge>
-        <span>{record.command}</span>
-        <span>{record.person || t("commands.defaultPerson")}</span>
-      </div>
-      <Tabs value={activeTab} onChange={onTabChange}>
-        <Tabs.List>
-          <Tabs.Tab value="events">{t("commands.events")}</Tabs.Tab>
-          <Tabs.Tab value="output">{t("commands.output")}</Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel value="events" pt="md">
-          <CommandEventList items={items} />
-        </Tabs.Panel>
-        <Tabs.Panel value="output" pt="md">
-          <pre className="command-output">
-            {commandOutputText(record) || t("commands.noOutput")}
-          </pre>
-        </Tabs.Panel>
-      </Tabs>
-    </Stack>
-  );
-}
-
-function CommandEventList({ items }: { items: CommandTimelineItem[] }) {
-  const { t } = useTranslation();
-  if (!items.length) {
-    return <div className="empty-row">{t("commands.noRelatedEvents")}</div>;
-  }
-  return (
-    <div className="event-list">
-      {items.map((item, index) => (
-        <div className="event-row" key={`${item.timestamp}-${item.label}-${index}`}>
-          <span>{item.label}</span>
-          <p>{item.message}</p>
+    <>
+      <Stack>
+        <div className="command-run-meta">
+          <Badge color={statusColor(record.status)} variant="light">
+            {t(`commands.status.${record.status}`)}
+          </Badge>
+          <span>{record.command}</span>
+          <span>{record.person || t("commands.defaultPerson")}</span>
         </div>
-      ))}
-    </div>
+        <Tabs value={activeTab} onChange={onTabChange}>
+          <Tabs.List>
+            <Tabs.Tab value="events">{t("commands.events")}</Tabs.Tab>
+            <Tabs.Tab value="output">{t("commands.output")}</Tabs.Tab>
+          </Tabs.List>
+          <Tabs.Panel value="events" pt="md">
+            {transcriptAvailable === false ? (
+              <Alert
+                color="neutral"
+                mb="sm"
+                title={t("diagnostics.executions.transcriptDeleted")}
+              />
+            ) : null}
+            {loading ? (
+              <div className="empty-row">
+                <Loader size="sm" />
+              </div>
+            ) : (
+              <ExecTimeline
+                records={filteredRecords}
+                filter={recordFilter}
+                scopeFilter={recordScopeFilter}
+                onFilter={setRecordFilter}
+                onClearScopeFilter={() => setRecordScopeFilter(null)}
+                onSelect={setDrawerRecord}
+              />
+            )}
+          </Tabs.Panel>
+          <Tabs.Panel value="output" pt="md">
+            <pre className="command-output">
+              {commandOutputText(record) || t("commands.noOutput")}
+            </pre>
+          </Tabs.Panel>
+        </Tabs>
+      </Stack>
+      <TraceRecordDrawer
+        record={drawerRecord}
+        onClose={() => setDrawerRecord(null)}
+        onScopeFilter={(filter) => {
+          setRecordScopeFilter(filter);
+          setDrawerRecord(null);
+        }}
+      />
+    </>
   );
-}
-
-export type CommandTimelineItem = {
-  timestamp: string;
-  label: string;
-  message: string;
-};
-
-// Merge a run's command.* state-change events with its logs (both scoped by
-// trace id) into one newest-first timeline for the Commands "events" tab.
-export function buildCommandTimeline(
-  events: RuntimeEvent[],
-  logs: RuntimeLog[],
-  traceId: string | null,
-): CommandTimelineItem[] {
-  if (!traceId) {
-    return [];
-  }
-  const eventItems: CommandTimelineItem[] = events
-    .filter((event) => event.type.startsWith("command.") && event.trace_id === traceId)
-    .map((event) => ({
-      timestamp: event.timestamp,
-      label: event.type.replace("command.", ""),
-      message: formatCommandEvent(event),
-    }));
-  const logItems: CommandTimelineItem[] = logs
-    .filter((log) => log.trace_id === traceId)
-    .map((log) => ({
-      timestamp: log.timestamp,
-      label: log.level,
-      message: log.message,
-    }));
-  return [...eventItems, ...logItems].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 }
 
 export function buildCommandArgs(
   option: CommandOption | null,
   values: Record<string, string>,
-  rawArgs: string,
+  extraArgs: string,
 ): string[] {
   const args: string[] = [];
-  if (option) {
+  if (option && option.inputs.defined_args !== "hidden") {
     for (const argument of option.arguments) {
       const value = values[argument.name]?.trim();
       if (!value) {
@@ -3979,7 +3913,10 @@ export function buildCommandArgs(
       }
     }
   }
-  return [...args, ...splitCommandLine(rawArgs)];
+  if (!option || option.inputs.extra_args === "optional") {
+    args.push(...splitCommandLine(extraArgs));
+  }
+  return args;
 }
 
 export function splitCommandLine(value: string): string[] {
@@ -4018,6 +3955,12 @@ export function upsertCommandRecord(
     .slice(0, 20);
 }
 
+export function commandTraceRefetchInterval(
+  status: CommandRunRecord["status"] | undefined,
+): number | false {
+  return status === "running" ? 1000 : false;
+}
+
 function statusColor(status: CommandRunRecord["status"]): string {
   if (status === "success") {
     return "success";
@@ -4042,15 +3985,4 @@ export function commandFailureDetail(event: RuntimeEvent): string {
     null,
     2,
   );
-}
-
-export function formatCommandEvent(event: RuntimeEvent): string {
-  const { payload } = event;
-  if (typeof payload.message === "string") {
-    return payload.message;
-  }
-  if (typeof payload.command === "string") {
-    return payload.command;
-  }
-  return event.trace_id ?? event.type;
 }

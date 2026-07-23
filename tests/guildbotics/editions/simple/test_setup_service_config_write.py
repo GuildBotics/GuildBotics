@@ -18,6 +18,7 @@ touched.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,7 @@ from guildbotics.utils.fileio import (
     load_markdown_with_frontmatter,
     load_yaml_file,
 )
+from guildbotics.utils.text_utils import replace_placeholders
 
 # Relative config-dir layout produced by ``write_project`` independent of the
 # absolute config location (workspace / home / custom).
@@ -164,6 +166,54 @@ def test_sample_command_brains_exist_in_template_mapping(language: str) -> None:
     enabled = {brain for brain in referenced if brain not in {"none", "-", "null"}}
 
     assert enabled <= set(brain_mapping)
+
+
+@pytest.mark.parametrize(
+    ("template_language", "language_code", "language_name", "expected"),
+    [
+        ("ja", "ja", "日本語", "`input`フィールドのテキストが日本語であれば英語に"),
+        ("ja", "en", "English", "`input`フィールドのテキストが日本語であれば英語に"),
+        ("ja", "fr", "français", "`input`フィールドのテキストがfrançaisであれば英語に"),
+        ("en", "ja", "日本語", "text in the `input` field is in 日本語"),
+        ("en", "en", "English", "text in the `input` field is in Japanese"),
+        ("en", "fr", "français", "text in the `input` field is in français"),
+    ],
+)
+def test_translate_sample_uses_os_ui_language_without_arguments(
+    template_language: str,
+    language_code: str,
+    language_name: str,
+    expected: str,
+) -> None:
+    path = (
+        Path("guildbotics/editions/simple/templates/sample_commands")
+        / template_language
+        / "translate.md"
+    )
+    command = load_markdown_with_frontmatter(path)
+    os_ui_language = SimpleNamespace(
+        language_code=language_code,
+        language_name=language_name,
+    )
+
+    rendered = replace_placeholders(
+        command["body"],
+        {"os_ui_language": os_ui_language},
+        command["template_engine"],
+    )
+
+    assert expected in rendered
+    assert command["commands"] == [
+        {
+            "name": "os_ui_language",
+            "command": "functions/get_os_ui_language",
+        }
+    ]
+    source = path.read_text(encoding="utf-8")
+    assert "${1}" not in source
+    assert "${2}" not in source
+    assert "context.language_code" not in source
+    assert "context.language_name" not in source
 
 
 # --------------------------------------------------------------------------- #

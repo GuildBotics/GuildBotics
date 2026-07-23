@@ -81,6 +81,14 @@ class CommandRequirement(BaseModel):
     message: str = ""
 
 
+class CommandInputs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    defined_args: Literal["auto", "hidden"] = "auto"
+    extra_args: Literal["hidden", "optional"] = "hidden"
+    message: Literal["hidden", "optional", "required"] = "optional"
+
+
 class CommandOption(BaseModel):
     command: str
     label: str
@@ -89,8 +97,7 @@ class CommandOption(BaseModel):
     source: Literal["workspace", "template"]
     path: Path
     arguments: list[CommandArgumentOption] = Field(default_factory=list)
-    supports_raw_args: bool = True
-    recommended_input: str = ""
+    inputs: CommandInputs = Field(default_factory=CommandInputs)
     requirements: list[CommandRequirement] = Field(default_factory=list)
     # Routine candidates that still require caller-supplied input cannot run on a
     # schedule; they stay listed but are flagged ineligible so the UI can explain.

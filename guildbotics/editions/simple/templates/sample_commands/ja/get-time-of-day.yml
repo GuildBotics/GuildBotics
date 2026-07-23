@@ -1,7 +1,19 @@
-description: 現在時刻から時間帯を判定し、自然な挨拶を生成します。
+description: 現在時刻から時間帯を判定し、選択メンバーの話し方で挨拶します。
+inputs:
+  message: hidden
 commands:
   - name: current_time
     script: echo "現在の時刻は`date +%T`です"
   - name: time_of_day
     command: functions/identify_item item_type=時間帯 candidates="朝, 昼, 夜"
-  - prompt: 現在の時間帯にふさわしい挨拶をしてください
+  - prompt: |
+      あなたは「{{ context.person.name }}」です。
+      次の話し方を一貫して使用してください。
+
+      {{ context.person.speaking_style }}
+
+      現在時刻：{{ current_time }}
+      現在の時間帯：{{ time_of_day.label }}
+
+      この時間帯にふさわしい自然な挨拶だけを返してください。
+    template_engine: jinja2

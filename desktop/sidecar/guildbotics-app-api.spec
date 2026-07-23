@@ -32,6 +32,11 @@ hiddenimports = []
 # Collect the whole guildbotics package (code + templates/locales/assets).
 hiddenimports += collect_submodules("guildbotics")
 datas += collect_data_files("guildbotics")
+datas += collect_data_files(
+    "guildbotics",
+    include_py_files=True,
+    includes=["templates/commands/**/*.py"],
+)
 
 # Third-party packages that rely on dynamic imports / bundled data files.
 for pkg in (

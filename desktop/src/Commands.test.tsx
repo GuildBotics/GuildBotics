@@ -22,17 +22,16 @@ import {
   getCommandOptions,
   getConfigStatus,
   getTeam,
+  getTraceDetail,
   runCommand,
   subscribeEvents,
-  subscribeLogs,
   type CommandOption,
   type ConfigStatus,
   type RuntimeEvent,
-  type RuntimeLog,
 } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
-import { makeRuntimeEvent, makeRuntimeLog } from "./test/factories";
+import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
 
 const t = i18n.getFixedT("en");
 
@@ -45,7 +44,6 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("./setup/SetupPage", () => ({ SetupPage: () => <div>Setup Mock</div> }));
 
 let eventListener: ((event: RuntimeEvent) => void) | null = null;
-let logListener: ((log: RuntimeLog) => void) | null = null;
 
 vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
@@ -54,18 +52,18 @@ vi.mock("./api/client", async (importOriginal) => {
     getConfigStatus: vi.fn(),
     getTeam: vi.fn(),
     getCommandOptions: vi.fn(),
+    getTraceDetail: vi.fn(),
     runCommand: vi.fn(),
     subscribeEvents: vi.fn(),
-    subscribeLogs: vi.fn(),
   };
 });
 
 const getConfigStatusMock = vi.mocked(getConfigStatus);
 const getTeamMock = vi.mocked(getTeam);
 const getCommandOptionsMock = vi.mocked(getCommandOptions);
+const getTraceDetailMock = vi.mocked(getTraceDetail);
 const runCommandMock = vi.mocked(runCommand);
 const subscribeEventsMock = vi.mocked(subscribeEvents);
-const subscribeLogsMock = vi.mocked(subscribeLogs);
 
 beforeEach(() => {
   eventListener = null;
@@ -73,18 +71,12 @@ beforeEach(() => {
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getTeamMock.mockReset().mockResolvedValue(team());
   getCommandOptionsMock.mockReset().mockResolvedValue({ options: [catalogCommand()] });
+  getTraceDetailMock.mockReset().mockResolvedValue({ trace_id: "", summary: null, records: [] });
   runCommandMock.mockReset().mockResolvedValue({ trace_id: "req-1", output: "hello output" });
   subscribeEventsMock.mockReset().mockImplementation((listener) => {
     eventListener = listener;
     return () => {
       eventListener = null;
-    };
-  });
-  logListener = null;
-  subscribeLogsMock.mockReset().mockImplementation((listener) => {
-    logListener = listener;
-    return () => {
-      logListener = null;
     };
   });
 });
@@ -112,8 +104,43 @@ describe("Commands screen", () => {
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
 
-    expect(await screen.findByRole("textbox", { name: "topic *" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "topic" })).toBeRequired();
     expect(screen.getByRole("textbox", { name: "mode" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: t("commands.extraArgs") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders an optional declared argument with its default", async () => {
+    getCommandOptionsMock.mockResolvedValue({
+      options: [
+        catalogCommand({
+          arguments: [
+            { name: "file", kind: "keyword", required: true, default: "" },
+            { name: "language", kind: "keyword", required: false, default: "English" },
+          ],
+        }),
+      ],
+    });
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+
+    expect(await screen.findByRole("textbox", { name: "file" })).toBeRequired();
+    const language = screen.getByRole("textbox", { name: "language" });
+    expect(language).not.toBeRequired();
+    expect(language).toHaveAttribute("placeholder", "English");
+  });
+
+  it("requires declared arguments before running", async () => {
+    const user = userEvent.setup();
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+
+    const run = screen.getByRole("button", { name: t("commands.run") });
+    expect(run).toBeDisabled();
+
+    await user.type(await screen.findByRole("textbox", { name: "topic" }), "release");
+    expect(run).toBeEnabled();
   });
 
   it("builds the runCommand payload from positional and keyword inputs", async () => {
@@ -121,7 +148,7 @@ describe("Commands screen", () => {
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
 
-    await user.type(await screen.findByRole("textbox", { name: "topic *" }), " release ");
+    await user.type(await screen.findByRole("textbox", { name: "topic" }), " release ");
     await user.type(screen.getByRole("textbox", { name: "mode" }), "fast");
     await user.click(screen.getByRole("button", { name: t("commands.run") }));
 
@@ -145,17 +172,18 @@ describe("Commands screen", () => {
 
     await user.click(await screen.findByRole("textbox", { name: t("commands.member") }));
     await user.click(await screen.findByText("Bob (bob)"));
+    await user.type(screen.getByRole("textbox", { name: "topic" }), "release");
     await user.click(screen.getByRole("button", { name: t("commands.run") }));
 
     await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
     expect(runCommandMock.mock.calls[0][0]).toMatchObject({ person: "bob" });
   });
 
-  it("sends raw args in custom-command mode", async () => {
+  it("sends extra args in custom-command mode", async () => {
     const user = userEvent.setup();
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
-    await screen.findByRole("textbox", { name: "topic *" });
+    await screen.findByRole("textbox", { name: "topic" });
 
     await user.click(screen.getByRole("radio", { name: t("commands.modeCustom") }));
     await user.type(
@@ -163,7 +191,7 @@ describe("Commands screen", () => {
       "scripts/custom.sh",
     );
     await user.type(
-      screen.getByRole("textbox", { name: t("commands.rawArgs") }),
+      screen.getByRole("textbox", { name: t("commands.extraArgs") }),
       'a "b c" key=value',
     );
     await user.click(screen.getByRole("button", { name: t("commands.run") }));
@@ -173,6 +201,103 @@ describe("Commands screen", () => {
       command: "scripts/custom.sh",
       args: ["a", "b c", "key=value"],
     });
+  });
+
+  it("hides catalog inputs and omits their stale values", async () => {
+    const user = userEvent.setup();
+    getCommandOptionsMock.mockResolvedValue({
+      options: [
+        catalogCommand({
+          inputs: { defined_args: "hidden", extra_args: "hidden", message: "hidden" },
+        }),
+      ],
+    });
+    saveLastCommandInputs(
+      {
+        mode: "catalog",
+        selectedCommand: "workflows/sample",
+        customCommand: "",
+        extraArgs: "--stale",
+        argValues: { topic: "stale" },
+        message: "stale message",
+        person: "alice",
+        cwd: "",
+        showAdvanced: false,
+        history: [],
+        activeTraceId: null,
+        activeTab: "events",
+      },
+      "/workspace/.guildbotics",
+    );
+
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    await screen.findByRole("link", { name: "/workspace/commands/sample.py" });
+
+    expect(screen.queryByRole("textbox", { name: "topic" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: t("commands.extraArgs") }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: t("commands.message") })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
+    expect(runCommandMock).toHaveBeenCalledWith(expect.objectContaining({ args: [], message: "" }));
+  });
+
+  it("shows and sends optional extra args", async () => {
+    const user = userEvent.setup();
+    getCommandOptionsMock.mockResolvedValue({
+      options: [
+        catalogCommand({
+          arguments: [],
+          inputs: { defined_args: "auto", extra_args: "optional", message: "hidden" },
+        }),
+      ],
+    });
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    await screen.findByRole("link", { name: "/workspace/commands/sample.py" });
+
+    await user.type(
+      screen.getByRole("textbox", { name: t("commands.extraArgs") }),
+      '--verbose "two words"',
+    );
+    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
+    expect(runCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["--verbose", "two words"], message: "" }),
+    );
+  });
+
+  it("requires a message when declared by the command", async () => {
+    const user = userEvent.setup();
+    getCommandOptionsMock.mockResolvedValue({
+      options: [
+        catalogCommand({
+          arguments: [],
+          inputs: { defined_args: "auto", extra_args: "hidden", message: "required" },
+        }),
+      ],
+    });
+    renderCommands();
+    await screen.findByRole("heading", { name: t("commands.title") });
+    await screen.findByRole("link", { name: "/workspace/commands/sample.py" });
+
+    const message = screen.getByRole("textbox", { name: t("commands.message") });
+    expect(message).toBeRequired();
+    const run = screen.getByRole("button", { name: t("commands.run") });
+    expect(run).toBeDisabled();
+
+    await user.type(message, "translate me");
+    expect(run).toBeEnabled();
+    await user.click(run);
+
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
+    expect(runCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "translate me" }),
+    );
   });
 
   it("includes the cwd advanced input in the payload", async () => {
@@ -249,46 +374,47 @@ describe("Commands screen", () => {
     expect(await screen.findByText(t("commands.status.failed"))).toBeInTheDocument();
   });
 
-  it("ignores duplicate runtime events and logs", async () => {
+  it("shows the diagnostics trace timeline and record details for the active run", async () => {
+    const user = userEvent.setup();
+    getTraceDetailMock.mockResolvedValue({
+      trace_id: "evt-9",
+      summary: null,
+      records: [
+        makeTraceRecord({
+          trace_id: "evt-9",
+          type: "command.started",
+          message: "workflows/sample",
+          presentation: {
+            label_key: "diagnostics.executions.eventTypes.command_started",
+            label_fallback: "command.started",
+            message_key: "",
+            message: "workflows/sample",
+            message_params: {},
+            tone: "success",
+          },
+        }),
+        makeTraceRecord({
+          trace_id: "evt-9",
+          kind: "io",
+          span: "llm",
+          type: "llm.request",
+          message: "confidence: 0.98 label: night",
+          timestamp: "2026-06-04T01:00:01Z",
+          payload: { model: "gpt-5" },
+          presentation: {
+            label_key: "diagnostics.executions.ioTypes.llm_request",
+            label_fallback: "LLM request",
+            message_key: "",
+            message: "confidence: 0.98 label: night",
+            message_params: {},
+            tone: "ai",
+          },
+        }),
+      ],
+    });
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
     await waitFor(() => expect(eventListener).not.toBeNull());
-    await waitFor(() => expect(logListener).not.toBeNull());
-
-    const testEvent = makeRuntimeEvent({
-      type: "command.finished",
-      trace_id: "evt-dup",
-      payload: { command: "workflows/sample", person: "alice" },
-      timestamp: "2026-06-04T01:00:00Z",
-    });
-
-    const testLog = makeRuntimeLog({
-      trace_id: "evt-dup",
-      timestamp: "2026-06-04T01:00:00Z",
-      level: "info",
-      message: "dup-log-message",
-    });
-
-    await act(() => {
-      eventListener?.(testEvent);
-      logListener?.(testLog);
-    });
-
-    await act(() => {
-      eventListener?.(testEvent);
-      logListener?.(testLog);
-    });
-
-    // Verify duplication is ignored
-    const logMessages = screen.getAllByText("dup-log-message");
-    expect(logMessages).toHaveLength(1);
-  });
-
-  it("scopes the run's logs to the active trace id in the events tab", async () => {
-    renderCommands();
-    await screen.findByRole("heading", { name: t("commands.title") });
-    await waitFor(() => expect(eventListener).not.toBeNull());
-    await waitFor(() => expect(logListener).not.toBeNull());
 
     await act(() =>
       eventListener?.(
@@ -300,37 +426,23 @@ describe("Commands screen", () => {
         }),
       ),
     );
-    // Logs now arrive on the single /logs path, carrying their trace id.
-    await act(() =>
-      logListener?.(
-        makeRuntimeLog({
-          trace_id: "evt-9",
-          level: "INFO",
-          message: "log for this request",
-          timestamp: "2026-06-04T01:00:01Z",
-        }),
-      ),
-    );
-    await act(() =>
-      logListener?.(
-        makeRuntimeLog({
-          trace_id: "other",
-          level: "INFO",
-          message: "log for another request",
-          timestamp: "2026-06-04T01:00:02Z",
-        }),
-      ),
-    );
 
-    // The events tab is selected by default, so the scoped log shows without a click.
-    expect(await screen.findByText("log for this request")).toBeInTheDocument();
-    expect(screen.queryByText("log for another request")).not.toBeInTheDocument();
+    expect(await screen.findByText("confidence: 0.98 label: night")).toBeInTheDocument();
+    expect(getTraceDetailMock).toHaveBeenCalledWith("evt-9");
+    expect(
+      screen.getByText(t("diagnostics.executions.eventTypes.command_started")),
+    ).toBeInTheDocument();
+    expect(screen.getByText(t("diagnostics.executions.ioTypes.llm_request"))).toBeInTheDocument();
+
+    await user.click(screen.getByText("confidence: 0.98 label: night"));
+    expect(await screen.findByText(/gpt-5/)).toBeInTheDocument();
   });
 
   it("switches to the output tab and shows the output after a successful run", async () => {
     const user = userEvent.setup();
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
+    await user.type(await screen.findByRole("textbox", { name: "topic" }), "release");
 
     await user.click(screen.getByRole("button", { name: t("commands.run") }));
 
@@ -347,6 +459,7 @@ describe("Commands screen", () => {
     const user = userEvent.setup();
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
+    await user.type(await screen.findByRole("textbox", { name: "topic" }), "release");
 
     await user.click(screen.getByRole("button", { name: t("commands.run") }));
 
@@ -362,7 +475,7 @@ describe("Commands screen", () => {
     const user = userEvent.setup();
     renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
-    await screen.findByRole("textbox", { name: "topic *" });
+    await screen.findByRole("textbox", { name: "topic" });
 
     await user.click(screen.getByRole("radio", { name: t("commands.modeCustom") }));
     const field = screen.getByRole("textbox", { name: t("commands.command") });
@@ -390,7 +503,7 @@ describe("Commands screen", () => {
     const user = userEvent.setup();
     const first = renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
-    await screen.findByRole("textbox", { name: "topic *" });
+    await screen.findByRole("textbox", { name: "topic" });
 
     await user.click(screen.getByRole("radio", { name: t("commands.modeCustom") }));
     await user.type(
@@ -414,7 +527,7 @@ describe("Commands screen", () => {
     const user = userEvent.setup();
     const first = renderCommands();
     await screen.findByRole("heading", { name: t("commands.title") });
-    await screen.findByRole("textbox", { name: "topic *" });
+    await screen.findByRole("textbox", { name: "topic" });
 
     // Record a free-input command first, then run a catalog command last.
     await user.click(screen.getByRole("radio", { name: t("commands.modeCustom") }));
@@ -426,6 +539,7 @@ describe("Commands screen", () => {
     await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole("radio", { name: t("commands.modeCatalog") }));
+    await user.type(screen.getByRole("textbox", { name: "topic" }), "release");
     await user.click(screen.getByRole("button", { name: t("commands.run") }));
     await waitFor(() => expect(runCommandMock).toHaveBeenCalledTimes(2));
 
@@ -476,7 +590,7 @@ describe("Commands screen", () => {
       mode: "custom",
       selectedCommand: "",
       customCommand: "scripts/restore-test.sh",
-      rawArgs: "arg-restored",
+      extraArgs: "arg-restored",
       argValues: {},
       message: "restored-msg",
       person: "alice",
@@ -494,8 +608,6 @@ describe("Commands screen", () => {
       ],
       activeTraceId: "req-restore",
       activeTab: "output",
-      runtimeEvents: [],
-      runtimeLogs: [],
     };
     saveLastCommandInputs(inputs, "/workspace/.guildbotics");
 
@@ -507,7 +619,7 @@ describe("Commands screen", () => {
       expect(screen.getByRole("textbox", { name: t("commands.command") })).toHaveValue(
         "scripts/restore-test.sh",
       );
-      expect(screen.getByRole("textbox", { name: t("commands.rawArgs") })).toHaveValue(
+      expect(screen.getByRole("textbox", { name: t("commands.extraArgs") })).toHaveValue(
         "arg-restored",
       );
       expect(screen.getByRole("textbox", { name: t("commands.cwd") })).toHaveValue(
@@ -621,7 +733,7 @@ describe("last command inputs persistence", () => {
       mode: "custom",
       selectedCommand: "workflows/custom",
       customCommand: "echo hello",
-      rawArgs: "--verbose",
+      extraArgs: "--verbose",
       argValues: { foo: "bar" },
       message: "test commit",
       person: "bob",
@@ -639,22 +751,6 @@ describe("last command inputs persistence", () => {
       ],
       activeTraceId: "req-123",
       activeTab: "output",
-      runtimeEvents: [
-        makeRuntimeEvent({
-          type: "command.finished",
-          trace_id: "req-123",
-          timestamp: "2026-07-20T00:00:00Z",
-          payload: { command: "workflows/sample" },
-        }),
-      ],
-      runtimeLogs: [
-        makeRuntimeLog({
-          trace_id: "req-123",
-          timestamp: "2026-07-20T00:00:00Z",
-          level: "info",
-          message: "hello log",
-        }),
-      ],
     };
     saveLastCommandInputs(inputs, "/workspace/default");
     expect(loadLastCommandInputs("/workspace/default")).toEqual(inputs);
@@ -681,7 +777,7 @@ describe("last command inputs persistence", () => {
       mode: "custom",
       selectedCommand: "",
       customCommand: "echo hi",
-      rawArgs: "",
+      extraArgs: "",
       argValues: {},
       message: "",
       person: null,
@@ -690,8 +786,6 @@ describe("last command inputs persistence", () => {
       history: [],
       activeTraceId: null,
       activeTab: "events",
-      runtimeEvents: [],
-      runtimeLogs: [],
     });
   });
 
@@ -700,7 +794,7 @@ describe("last command inputs persistence", () => {
       mode: "custom" as const,
       selectedCommand: "",
       customCommand: "echo workspace 1",
-      rawArgs: "",
+      extraArgs: "",
       argValues: {},
       message: "",
       person: null,
@@ -709,14 +803,12 @@ describe("last command inputs persistence", () => {
       history: [],
       activeTraceId: null,
       activeTab: "events",
-      runtimeEvents: [],
-      runtimeLogs: [],
     };
     const inputs2 = {
       mode: "catalog" as const,
       selectedCommand: "test",
       customCommand: "",
-      rawArgs: "arg",
+      extraArgs: "arg",
       argValues: { key: "val" },
       message: "hello",
       person: "bob",
@@ -725,8 +817,6 @@ describe("last command inputs persistence", () => {
       history: [],
       activeTraceId: "trace-2",
       activeTab: "output",
-      runtimeEvents: [],
-      runtimeLogs: [],
     };
 
     saveLastCommandInputs(inputs1, "/workspace/1");
@@ -754,40 +844,6 @@ describe("last command inputs persistence", () => {
             status: "success",
           },
         ],
-        runtimeEvents: [
-          null,
-          {
-            kind: "event",
-            type: "command.finished",
-            payload: {},
-            timestamp: "2026-07-20",
-            trace_id: "req-1",
-            span_id: null,
-            parent_id: null,
-            source: null,
-            person_id: "alice",
-            command: "test",
-            workflow: "test",
-            attributes: {},
-          },
-        ],
-        runtimeLogs: [
-          null,
-          {
-            kind: "log",
-            level: "info",
-            message: "log msg",
-            timestamp: "2026-07-20",
-            trace_id: "req-1",
-            span_id: null,
-            parent_id: null,
-            source: null,
-            person_id: "alice",
-            command: "test",
-            workflow: "test",
-            attributes: {},
-          },
-        ],
       }),
     );
 
@@ -796,10 +852,6 @@ describe("last command inputs persistence", () => {
     expect(loaded?.argValues).toEqual({ valid: "text" });
     expect(loaded?.history).toHaveLength(1);
     expect(loaded?.history[0].traceId).toBe("req-1");
-    expect(loaded?.runtimeEvents).toHaveLength(1);
-    expect(loaded?.runtimeEvents[0].type).toBe("command.finished");
-    expect(loaded?.runtimeLogs).toHaveLength(1);
-    expect(loaded?.runtimeLogs[0].message).toBe("log msg");
   });
 
   it("returns null when only global key exists but workspace B key is missing", () => {
@@ -880,8 +932,7 @@ function catalogCommand(overrides: Partial<CommandOption> = {}): CommandOption {
       { name: "topic", kind: "positional", required: true, default: "" },
       { name: "mode", kind: "keyword", required: false, default: "" },
     ],
-    supports_raw_args: true,
-    recommended_input: "",
+    inputs: { defined_args: "auto", extra_args: "hidden", message: "optional" },
     requirements: [],
     ...overrides,
   };
