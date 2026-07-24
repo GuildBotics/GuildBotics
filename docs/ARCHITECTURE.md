@@ -215,6 +215,26 @@ The generic execution substrate used by workflows and custom commands:
   (`GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`) → package templates.
   Localized files resolve `.<lang>` → `.en` → bare name; person-specific commands
   (`team/members/<person_id>/...`) take precedence over shared ones.
+- `commands/discovery.py` is the single definition of resolution precedence
+  (extension-outer in registry order, then locale, then location). Every consumer
+  — the runtime, the App API `/commands/options` catalog, and the editor's shared
+  command list — resolves through it, so they never disagree on the effective
+  file. `commands/metadata.py` owns `inputs` / argument / Python-signature /
+  placeholder parsing (domain models, not wire models); `commands/validation.py`
+  validates source per format. The App API only converts these to wire models.
+- Editing shared commands from the Desktop app goes through the Local API, never
+  the filesystem plugin. `app_api/command_files.py` owns the editable shared root,
+  opaque file IDs (URL-safe relative path; re-validated for root containment /
+  extension / symlink on every call), SHA-256 revisions with optimistic
+  concurrency, atomic same-directory writes, and a prospective-resolution shadow
+  check on create. Errors share one code namespace (`command_file_*`).
+- Run target guarantee: "save and run" sends the expected file ID + revision.
+  Before running, the App API confirms the on-disk revision matches and that the
+  selected member's normal `resolve_named_command()` resolves to that exact file;
+  a member / template / higher-priority-extension shadow or a revision mismatch is
+  rejected (409 `command_file_shadowed` / `command_file_changed`), never silently
+  running a different file. The execution-status endpoint surfaces the same codes
+  so the UI can disable the action ahead of time.
 
 See `docs/custom_command_guide.en.md` / `.ja.md` for the user-facing guide.
 

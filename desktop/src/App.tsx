@@ -2,7 +2,6 @@ import {
   ActionIcon,
   Alert,
   Anchor,
-  Autocomplete,
   Avatar,
   Badge,
   Button,
@@ -20,7 +19,6 @@ import {
   Switch,
   Tabs,
   Text,
-  Textarea,
   TextInput,
   Title,
   Tooltip,
@@ -45,11 +43,12 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate, NavLink, Route, Routes, useSearchParams } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ActivityHistoryPage } from "./activity/ActivityHistory";
+import { CommandsPage } from "./commands/CommandsPage";
+import { requestNavigation } from "./navigationGuard";
 import {
-  getCommandOptions,
   getConfigStatus,
   getGlobalRecords,
   getMemoryEvents,
@@ -63,11 +62,9 @@ import {
   dismissSystemAlert,
   memberAvatarUrl,
   resetChatReceiveState,
-  runCommand,
   runScenarioDiagnostics,
   startScheduler,
   stopScheduler,
-  subscribeEvents,
   updateRuntimeDebug,
   updateTranscriptSettings,
   verify as verifyConfiguration,
@@ -154,32 +151,32 @@ export function App() {
 
         <nav className="nav">
           {configured ? (
-            <NavLink className="nav-item" to="/activity">
+            <GuardedNavLink className="nav-item" to="/activity">
               <History size={18} /> {t("app.nav.activity")}
-            </NavLink>
+            </GuardedNavLink>
           ) : null}
-          <NavLink className="nav-item" to="/service">
+          <GuardedNavLink className="nav-item" to="/service">
             <Activity size={18} />
             <span className="nav-item-label">{t("app.nav.service")}</span>
             <NavStatusIndicator
               label={t(`app.navStatus.service.${serviceNavState}`)}
               state={serviceNavState}
             />
-          </NavLink>
-          <NavLink className="nav-item" to="/commands">
+          </GuardedNavLink>
+          <GuardedNavLink className="nav-item" to="/commands">
             <Terminal size={18} />
             <span className="nav-item-label">{t("app.nav.commands")}</span>
             <NavStatusIndicator
               label={t(`app.navStatus.commands.${commandNavState}`)}
               state={commandNavState}
             />
-          </NavLink>
-          <NavLink className="nav-item" to="/diagnostics">
+          </GuardedNavLink>
+          <GuardedNavLink className="nav-item" to="/diagnostics">
             <TriangleAlert size={18} /> {t("app.nav.diagnostics")}
-          </NavLink>
-          <NavLink className="nav-item" to="/setup">
+          </GuardedNavLink>
+          <GuardedNavLink className="nav-item" to="/setup">
             <Settings size={18} /> {t("app.nav.setup")}
-          </NavLink>
+          </GuardedNavLink>
         </nav>
         <Select
           className="sidebar-language"
@@ -360,6 +357,33 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
     tab: "github",
   });
   return `/setup?${search.toString()}`;
+}
+
+// A NavLink that routes through the app-wide navigation guard so a page with
+// unsaved changes (e.g. the command editor) can confirm before the sidebar
+// discards its buffer.
+function GuardedNavLink({
+  to,
+  className,
+  children,
+}: {
+  to: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const navigate = useNavigate();
+  return (
+    <NavLink
+      to={to}
+      className={className}
+      onClick={(event) => {
+        event.preventDefault();
+        requestNavigation(() => navigate(to));
+      }}
+    >
+      {children}
+    </NavLink>
+  );
 }
 
 function NavStatusIndicator({ state, label }: { state: NavRuntimeState; label: string }) {
@@ -2934,624 +2958,6 @@ export function localFileHref(path: string) {
   return encodeURI(`${prefix}${normalizedPath}`);
 }
 
-function CommandsPage() {
-  const { t } = useTranslation();
-  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
-  const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
-  const hasProjectConfig = Boolean(config.data?.project_file_exists);
-  const [initialHistory] = useState(loadCustomCommandHistory);
-  const [lastInputs] = useState(() => loadLastCommandInputs(config.data?.storage_dir));
-  const restoreCustom = lastInputs
-    ? lastInputs.mode === "custom"
-    : initialHistory.lastRunWasCustom && initialHistory.commands.length > 0;
-  const [mode, setMode] = useState(lastInputs?.mode ?? (restoreCustom ? "custom" : "catalog"));
-  const [selectedCommand, setSelectedCommand] = useState(lastInputs?.selectedCommand ?? "");
-  const [customCommand, setCustomCommand] = useState(
-    lastInputs?.customCommand ?? (restoreCustom ? initialHistory.commands[0] : ""),
-  );
-  const [customHistory, setCustomHistory] = useState<string[]>(initialHistory.commands);
-  const [lastRunWasCustom, setLastRunWasCustom] = useState(initialHistory.lastRunWasCustom);
-  const [extraArgs, setExtraArgs] = useState(lastInputs?.extraArgs ?? "");
-  const [argValues, setArgValues] = useState<Record<string, string>>(lastInputs?.argValues ?? {});
-  const [message, setMessage] = useState(lastInputs?.message ?? "");
-  const [person, setPerson] = useState<string | null>(lastInputs?.person ?? null);
-  const [cwd, setCwd] = useState(lastInputs?.cwd ?? "");
-  const [showAdvanced, setShowAdvanced] = useState(lastInputs?.showAdvanced ?? false);
-  const [history, setHistory] = useState<CommandRunRecord[]>(lastInputs?.history ?? []);
-  const [activeTraceId, setActiveTraceId] = useState<string | null>(
-    lastInputs?.activeTraceId ?? null,
-  );
-  const [activeTab, setActiveTab] = useState<string | null>(lastInputs?.activeTab ?? "events");
-
-  const [loadedStorageDir, setLoadedStorageDir] = useState<string | undefined>(undefined);
-
-  const stateRef = useRef({
-    mode,
-    selectedCommand,
-    customCommand,
-    extraArgs,
-    argValues,
-    message,
-    person,
-    cwd,
-    showAdvanced,
-    history,
-    activeTraceId,
-    activeTab,
-  });
-
-  // Keep stateRef updated on every render safely outside the render phase.
-  useEffect(() => {
-    stateRef.current = {
-      mode,
-      selectedCommand,
-      customCommand,
-      extraArgs,
-      argValues,
-      message,
-      person,
-      cwd,
-      showAdvanced,
-      history,
-      activeTraceId,
-      activeTab,
-    };
-  });
-
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    const currentStorageDir = config.data?.storage_dir;
-    if (currentStorageDir && currentStorageDir !== loadedStorageDir) {
-      if (loadedStorageDir) {
-        saveLastCommandInputs(stateRef.current, loadedStorageDir);
-      }
-      const inputs = loadLastCommandInputs(currentStorageDir);
-      if (inputs) {
-        setMode(inputs.mode);
-        setSelectedCommand(inputs.selectedCommand);
-        setCustomCommand(inputs.customCommand);
-        setExtraArgs(inputs.extraArgs);
-        setArgValues(inputs.argValues);
-        setMessage(inputs.message);
-        setPerson(inputs.person);
-        setCwd(inputs.cwd);
-        setShowAdvanced(inputs.showAdvanced);
-        setHistory(inputs.history);
-        setActiveTraceId(inputs.activeTraceId);
-        setActiveTab(inputs.activeTab);
-      } else {
-        setMode("catalog");
-        setSelectedCommand("");
-        setCustomCommand("");
-        setExtraArgs("");
-        setArgValues({});
-        setMessage("");
-        setPerson(null);
-        setCwd("");
-        setShowAdvanced(false);
-        setHistory([]);
-        setActiveTraceId(null);
-        setActiveTab("events");
-      }
-      setLoadedStorageDir(currentStorageDir);
-    }
-  }, [config.data?.storage_dir, loadedStorageDir]);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  const commandOptions = useQuery({
-    queryKey: ["command-options", person],
-    queryFn: () => getCommandOptions(person || undefined),
-    enabled: hasProjectConfig,
-    retry: false,
-  });
-  const commandCatalog = useMemo(
-    () => commandOptions.data?.options ?? [],
-    [commandOptions.data?.options],
-  );
-
-  const selectedOption = useMemo(
-    () =>
-      commandCatalog.find((option) => option.command === selectedCommand) ??
-      commandCatalog.find((option) =>
-        option.requirements.every((requirement) => requirement.satisfied),
-      ) ??
-      commandCatalog[0] ??
-      null,
-    [commandCatalog, selectedCommand],
-  );
-  const effectiveSelectedCommand = selectedOption?.command ?? "";
-  const commandOptionByValue = useMemo(
-    () => new Map(commandCatalog.map((option) => [option.command, option])),
-    [commandCatalog],
-  );
-  const command = mode === "catalog" ? effectiveSelectedCommand : customCommand.trim();
-  const catalogInputs = selectedOption?.inputs;
-  const showDefinedArgs =
-    mode === "catalog" &&
-    catalogInputs?.defined_args === "auto" &&
-    Boolean(selectedOption?.arguments.length);
-  const showExtraArgs = mode === "custom" || catalogInputs?.extra_args === "optional";
-  const showMessage = mode === "custom" || catalogInputs?.message !== "hidden";
-  const messageRequired = mode === "catalog" && catalogInputs?.message === "required";
-  const missingRequiredArgument = Boolean(
-    showDefinedArgs &&
-    selectedOption?.arguments.some(
-      (argument) => argument.required && !argValues[argument.name]?.trim(),
-    ),
-  );
-  const commandArgs = useMemo(
-    () => buildCommandArgs(mode === "catalog" ? selectedOption : null, argValues, extraArgs),
-    [argValues, extraArgs, mode, selectedOption],
-  );
-  const blockingRequirements =
-    mode === "catalog"
-      ? (selectedOption?.requirements.filter((requirement) => !requirement.satisfied) ?? [])
-      : [];
-  const activeMembers = useMemo(
-    () => (team.data?.members ?? []).filter((member) => member.is_active),
-    [team.data?.members],
-  );
-  const effectivePerson =
-    activeMembers.find((member) => member.person_id === person)?.person_id ??
-    activeMembers[0]?.person_id ??
-    null;
-  const runDisabled =
-    !hasProjectConfig ||
-    !command ||
-    !effectivePerson ||
-    activeMembers.length === 0 ||
-    missingRequiredArgument ||
-    (messageRequired && !message.trim()) ||
-    blockingRequirements.length > 0;
-
-  const runMutation = useMutation({
-    mutationFn: () =>
-      runCommand({
-        command,
-        args: commandArgs,
-        message: showMessage ? message : "",
-        person: effectivePerson ?? undefined,
-        cwd: cwd.trim() || undefined,
-      }),
-    onMutate: () => {
-      setActiveTraceId(null);
-      setActiveTab("events");
-      const ranCustom = mode === "custom";
-      setLastRunWasCustom(ranCustom);
-      if (ranCustom) {
-        setCustomHistory((current) => pushCustomCommand(current, command));
-      }
-    },
-    onSuccess: (response) => {
-      setActiveTraceId(response.trace_id);
-      setActiveTab("output");
-      setHistory((current) =>
-        upsertCommandRecord(current, {
-          traceId: response.trace_id,
-          person: effectivePerson ?? "",
-          command,
-          startedAt: new Date().toISOString(),
-          status: "success",
-          output: response.output,
-        }),
-      );
-    },
-    onError: (error) => {
-      const traceId = activeTraceId ?? `local-${Date.now()}`;
-      setActiveTraceId(traceId);
-      setActiveTab("output");
-      setHistory((current) =>
-        upsertCommandRecord(current, {
-          traceId,
-          person: effectivePerson || "",
-          command,
-          startedAt: new Date().toISOString(),
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-    },
-  });
-  const runBusy = runMutation.isPending;
-  const commandBlocked = blockingRequirements.length > 0;
-  const canRun = !runBusy && !runDisabled && !commandBlocked;
-
-  useEffect(() => {
-    saveCustomCommandHistory({ commands: customHistory, lastRunWasCustom });
-  }, [customHistory, lastRunWasCustom]);
-
-  const lastInputsRef = useRef({
-    mode,
-    selectedCommand,
-    customCommand,
-    extraArgs,
-    argValues,
-    message,
-    person,
-    cwd,
-    showAdvanced,
-    history,
-    activeTraceId,
-    activeTab,
-  });
-
-  useEffect(() => {
-    lastInputsRef.current = {
-      mode,
-      selectedCommand,
-      customCommand,
-      extraArgs,
-      argValues,
-      message,
-      person,
-      cwd,
-      showAdvanced,
-      history,
-      activeTraceId,
-      activeTab,
-    };
-    const storageDir = config.data?.storage_dir;
-    const handle = window.setTimeout(() => {
-      saveLastCommandInputs(lastInputsRef.current, storageDir);
-    }, 400);
-    return () => window.clearTimeout(handle);
-  }, [
-    mode,
-    selectedCommand,
-    customCommand,
-    extraArgs,
-    argValues,
-    message,
-    person,
-    cwd,
-    showAdvanced,
-    history,
-    activeTraceId,
-    activeTab,
-    config.data?.storage_dir,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      saveLastCommandInputs(lastInputsRef.current, config.data?.storage_dir);
-    };
-  }, [config.data?.storage_dir]);
-
-  useEffect(() => {
-    const stopEvents = subscribeEvents((event) => {
-      if (!event.type.startsWith("command.")) {
-        return;
-      }
-      if (!event.trace_id) {
-        return;
-      }
-      if (event.type === "command.started") {
-        setActiveTraceId(event.trace_id);
-        setHistory((current) =>
-          upsertCommandRecord(current, {
-            traceId: event.trace_id ?? "",
-            person: stringPayload(event.payload.person),
-            command: stringPayload(event.payload.command),
-            startedAt: event.timestamp,
-            status: "running",
-          }),
-        );
-      }
-      if (event.type === "command.failed") {
-        setHistory((current) =>
-          upsertCommandRecord(current, {
-            traceId: event.trace_id ?? "",
-            person: stringPayload(event.payload.person),
-            command: stringPayload(event.payload.command),
-            startedAt: event.timestamp,
-            status: "failed",
-            error: commandFailureDetail(event),
-          }),
-        );
-      }
-      if (event.type === "command.finished") {
-        setHistory((current) =>
-          upsertCommandRecord(current, {
-            traceId: event.trace_id ?? "",
-            person: stringPayload(event.payload.person),
-            command: stringPayload(event.payload.command),
-            startedAt: event.timestamp,
-            status: "success",
-          }),
-        );
-      }
-    });
-    return stopEvents;
-  }, []);
-
-  const selectedRecord = useMemo(
-    () => history.find((record) => record.traceId === activeTraceId) ?? history[0] ?? null,
-    [activeTraceId, history],
-  );
-  const visibleTraceId = selectedRecord?.traceId ?? activeTraceId;
-  const traceDetail = useQuery({
-    queryKey: ["diagnostics-trace", visibleTraceId],
-    queryFn: () => getTraceDetail(visibleTraceId as string),
-    enabled: Boolean(visibleTraceId) && !visibleTraceId?.startsWith("local-"),
-    refetchInterval: commandTraceRefetchInterval(selectedRecord?.status),
-  });
-  const traceRecords = useMemo(
-    () => [...(traceDetail.data?.records ?? [])].reverse(),
-    [traceDetail.data?.records],
-  );
-
-  return (
-    <Stack gap="lg">
-      <Group justify="space-between">
-        <div>
-          <Title order={2}>{t("commands.title")}</Title>
-        </div>
-        <Button
-          leftSection={<Play size={16} />}
-          loading={runBusy}
-          disabled={!canRun}
-          onClick={() => runMutation.mutate()}
-        >
-          {t("commands.run")}
-        </Button>
-      </Group>
-
-      {!hasProjectConfig ? (
-        <Alert color="warning" title={t("overview.setupRequiredTitle")}>
-          <Group justify="space-between" align="center">
-            <Text size="sm">{t("overview.setupRequiredBody")}</Text>
-            <Button component={NavLink} to="/setup" variant="light">
-              {t("overview.openSetup")}
-            </Button>
-          </Group>
-        </Alert>
-      ) : null}
-
-      {activeMembers.length === 0 && hasProjectConfig ? (
-        <Alert color="warning" title={t("commands.noMembersTitle")}>
-          {t("commands.noMembersBody")}
-        </Alert>
-      ) : null}
-
-      {commandBlocked ? (
-        <Alert color="warning" title={t("commands.requirementsBlockedTitle")}>
-          {blockingRequirements
-            .map((requirement) => requirementLabel(t, requirement.kind))
-            .join(", ")}
-        </Alert>
-      ) : null}
-
-      <Card withBorder radius="md" p="lg">
-        <Stack>
-          <div className="commands-layout">
-            <div className="command-panel">
-              <Stack className="command-form-stack">
-                <div>
-                  <Text fw={700}>{t("commands.formTitle")}</Text>
-                  <Text c="dimmed" size="sm">
-                    {t("commands.formBody")}
-                  </Text>
-                </div>
-                <Stack className="command-field-stack" gap="xs">
-                  <Group justify="space-between" align="center">
-                    <Text className="field-label">{t("commands.command")}</Text>
-                    <SegmentedControl
-                      size="xs"
-                      value={mode}
-                      onChange={(value) => setMode(value as "catalog" | "custom")}
-                      data={[
-                        { value: "catalog", label: t("commands.modeCatalog") },
-                        { value: "custom", label: t("commands.modeCustom") },
-                      ]}
-                    />
-                  </Group>
-
-                  {mode === "catalog" ? (
-                    <Select
-                      aria-label={t("commands.command")}
-                      searchable
-                      nothingFoundMessage={t("commands.noCommandOptions")}
-                      value={effectiveSelectedCommand}
-                      onChange={(value) => {
-                        setSelectedCommand(value ?? "");
-                        setArgValues({});
-                        setExtraArgs("");
-                      }}
-                      data={commandCatalog.map((option) => ({
-                        value: option.command,
-                        label: `${option.label} (${option.command})`,
-                      }))}
-                      renderOption={({ option }) => {
-                        const commandOption = commandOptionByValue.get(option.value);
-                        return (
-                          <Stack gap={2}>
-                            <Text size="sm">{option.label}</Text>
-                            {commandOption?.description ? (
-                              <Text size="xs" c="dimmed">
-                                {commandOption.description}
-                              </Text>
-                            ) : null}
-                          </Stack>
-                        );
-                      }}
-                    />
-                  ) : (
-                    <Autocomplete
-                      aria-label={t("commands.command")}
-                      placeholder={t("commands.customCommandPlaceholder")}
-                      description={
-                        customHistory.length ? t("commands.customCommandHistoryHint") : undefined
-                      }
-                      data={customHistory}
-                      value={customCommand}
-                      onChange={setCustomCommand}
-                      // Always show the full history (newest first) instead of
-                      // narrowing it to entries matching the current input.
-                      filter={({ options }) => options}
-                    />
-                  )}
-                  {selectedOption && mode === "catalog" ? (
-                    <div className="command-option-summary">
-                      <Group gap="xs">
-                        <Badge variant="outline">
-                          {t(`commands.sources.${selectedOption.source}`)}
-                        </Badge>
-                        {selectedOption.requirements.map((requirement) => (
-                          <Badge
-                            key={requirement.kind}
-                            color={requirement.satisfied ? "success" : "warning"}
-                            variant="light"
-                          >
-                            {requirementLabel(t, requirement.kind)}
-                          </Badge>
-                        ))}
-                      </Group>
-                      {selectedOption.description ? (
-                        <Text c="dimmed" size="sm">
-                          {selectedOption.description}
-                        </Text>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {selectedOption && mode === "catalog" ? (
-                    <div className="command-script-path">
-                      <Anchor
-                        href={localFileHref(selectedOption.path)}
-                        size="sm"
-                        title={selectedOption.path}
-                        onClick={(event) => {
-                          if (!isTauriRuntime()) {
-                            return;
-                          }
-                          event.preventDefault();
-                          void openLocalFile(selectedOption.path).catch(console.error);
-                        }}
-                      >
-                        {selectedOption.path}
-                      </Anchor>
-                      <Tooltip label={t("commands.copyScriptPath")}>
-                        <ActionIcon
-                          aria-label={t("commands.copyScriptPath")}
-                          size="sm"
-                          variant="subtle"
-                          onClick={() =>
-                            void navigator.clipboard
-                              ?.writeText(selectedOption.path)
-                              .catch(console.error)
-                          }
-                        >
-                          <Copy size={14} />
-                        </ActionIcon>
-                      </Tooltip>
-                    </div>
-                  ) : null}
-                </Stack>
-
-                <Select
-                  label={t("commands.member")}
-                  placeholder={t("commands.memberPlaceholder")}
-                  value={effectivePerson}
-                  onChange={(value) => {
-                    if (value) {
-                      setPerson(value);
-                    }
-                  }}
-                  data={activeMembers.map((member) => ({
-                    value: member.person_id,
-                    label: `${member.name} (${member.person_id})`,
-                  }))}
-                />
-
-                {showDefinedArgs ? (
-                  <div className="command-args-grid">
-                    {selectedOption.arguments.map((argument) => (
-                      <TextInput
-                        key={`${argument.kind}-${argument.name}`}
-                        label={argument.name}
-                        required={argument.required}
-                        placeholder={argument.default || argument.kind}
-                        value={argValues[argument.name] ?? ""}
-                        onChange={(event) =>
-                          setArgValues((current) => ({
-                            ...current,
-                            [argument.name]: event.currentTarget.value,
-                          }))
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : null}
-
-                {showExtraArgs ? (
-                  <TextInput
-                    label={t("commands.extraArgs")}
-                    placeholder={t("commands.extraArgsPlaceholder")}
-                    value={extraArgs}
-                    onChange={(event) => setExtraArgs(event.currentTarget.value)}
-                  />
-                ) : null}
-
-                {showMessage ? (
-                  <Textarea
-                    required={messageRequired}
-                    label={t("commands.message")}
-                    description={t("commands.messageDescription")}
-                    minRows={5}
-                    value={message}
-                    onChange={(event) => setMessage(event.currentTarget.value)}
-                  />
-                ) : null}
-
-                <Switch
-                  checked={showAdvanced}
-                  label={t("commands.advanced")}
-                  onChange={(event) => setShowAdvanced(event.currentTarget.checked)}
-                />
-                {showAdvanced ? (
-                  <TextInput
-                    label={t("commands.cwd")}
-                    description={t("commands.cwdDescription", { cwd: config.data?.cwd ?? "" })}
-                    value={cwd}
-                    onChange={(event) => setCwd(event.currentTarget.value)}
-                  />
-                ) : null}
-              </Stack>
-            </div>
-
-            <Stack>
-              <div className="command-panel">
-                <Stack>
-                  <div>
-                    <Text fw={700}>{t("commands.currentRun")}</Text>
-                    <Text c="dimmed" size="sm">
-                      {selectedRecord
-                        ? t("commands.currentRunBody", { traceId: selectedRecord.traceId })
-                        : t("commands.noRunSelected")}
-                    </Text>
-                  </div>
-                  {selectedRecord ? (
-                    <CommandRunDetails
-                      key={selectedRecord.traceId}
-                      record={selectedRecord}
-                      records={traceRecords}
-                      loading={traceDetail.isFetching && !traceDetail.data}
-                      transcriptAvailable={traceDetail.data?.transcript_available}
-                      activeTab={activeTab}
-                      onTabChange={setActiveTab}
-                    />
-                  ) : (
-                    <div className="empty-row">{t("commands.noRunsYet")}</div>
-                  )}
-                </Stack>
-              </div>
-            </Stack>
-          </div>
-        </Stack>
-      </Card>
-    </Stack>
-  );
-}
-
 export type CommandRunRecord = {
   traceId: string;
   person: string;
@@ -3646,176 +3052,7 @@ export function saveServicePreferences(value: ServicePreferences): void {
   }
 }
 
-export const CUSTOM_COMMAND_HISTORY_KEY = "guildbotics.commands.customHistory";
-const CUSTOM_COMMAND_HISTORY_LIMIT = 30;
-
-export type CustomCommandHistory = {
-  commands: string[];
-  lastRunWasCustom: boolean;
-};
-
-export const LAST_COMMAND_INPUTS_KEY = "guildbotics.commands.lastInputs";
-
-export type LastCommandInputs = {
-  mode: "catalog" | "custom";
-  selectedCommand: string;
-  customCommand: string;
-  extraArgs: string;
-  argValues: Record<string, string>;
-  message: string;
-  person: string | null;
-  cwd: string;
-  showAdvanced: boolean;
-  history: CommandRunRecord[];
-  activeTraceId: string | null;
-  activeTab: string | null;
-};
-
-function isRecord(val: unknown): val is Record<string, unknown> {
-  return typeof val === "object" && val !== null && !Array.isArray(val);
-}
-
-function validateCommandRunRecord(val: unknown): val is CommandRunRecord {
-  if (!isRecord(val)) return false;
-  return (
-    typeof val.traceId === "string" &&
-    typeof val.person === "string" &&
-    typeof val.command === "string" &&
-    typeof val.startedAt === "string" &&
-    (val.status === "running" || val.status === "success" || val.status === "failed") &&
-    (val.output === undefined || typeof val.output === "string") &&
-    (val.error === undefined || typeof val.error === "string")
-  );
-}
-
-export function loadLastCommandInputs(storageDir?: string): LastCommandInputs | null {
-  if (!storageDir) {
-    return null;
-  }
-  try {
-    const key = `${LAST_COMMAND_INPUTS_KEY}:${storageDir}`;
-    const raw = window.localStorage.getItem(key);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as Partial<LastCommandInputs>;
-    return {
-      mode: parsed.mode === "custom" ? "custom" : "catalog",
-      selectedCommand: typeof parsed.selectedCommand === "string" ? parsed.selectedCommand : "",
-      customCommand: typeof parsed.customCommand === "string" ? parsed.customCommand : "",
-      extraArgs: typeof parsed.extraArgs === "string" ? parsed.extraArgs : "",
-      argValues: (() => {
-        if (
-          !parsed.argValues ||
-          typeof parsed.argValues !== "object" ||
-          Array.isArray(parsed.argValues)
-        ) {
-          return {};
-        }
-        const result: Record<string, string> = {};
-        for (const [k, v] of Object.entries(parsed.argValues)) {
-          if (typeof v === "string") {
-            result[k] = v;
-          }
-        }
-        return result;
-      })(),
-      message: typeof parsed.message === "string" ? parsed.message : "",
-      person: typeof parsed.person === "string" || parsed.person === null ? parsed.person : null,
-      cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
-      showAdvanced: parsed.showAdvanced === true,
-      history: Array.isArray(parsed.history)
-        ? (parsed.history.filter(validateCommandRunRecord) as CommandRunRecord[]).slice(0, 50)
-        : [],
-      activeTraceId:
-        typeof parsed.activeTraceId === "string" || parsed.activeTraceId === null
-          ? parsed.activeTraceId
-          : null,
-      activeTab:
-        typeof parsed.activeTab === "string" || parsed.activeTab === null
-          ? parsed.activeTab
-          : "events",
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function saveLastCommandInputs(value: LastCommandInputs, storageDir?: string): void {
-  if (!storageDir) {
-    return;
-  }
-  try {
-    const key = `${LAST_COMMAND_INPUTS_KEY}:${storageDir}`;
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Ignore persistence failures (e.g. storage disabled or full).
-  }
-}
-
-// Keep a newest-first command list well-formed: drop non-strings/blanks, trim,
-// de-duplicate (first occurrence wins), and cap at the history limit. Shared by
-// both the in-memory push and the persisted load so stored values cannot grow
-// unbounded or contain blank entries.
-function normalizeCustomCommands(values: unknown, limit = CUSTOM_COMMAND_HISTORY_LIMIT): string[] {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const entry of values) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    result.push(trimmed);
-    if (result.length >= limit) {
-      break;
-    }
-  }
-  return result;
-}
-
-// Newest-first history of free-input commands: a re-run moves the existing entry
-// to the top instead of duplicating it.
-export function pushCustomCommand(
-  commands: string[],
-  command: string,
-  limit = CUSTOM_COMMAND_HISTORY_LIMIT,
-): string[] {
-  return normalizeCustomCommands([command, ...commands], limit);
-}
-
-export function loadCustomCommandHistory(): CustomCommandHistory {
-  const empty: CustomCommandHistory = { commands: [], lastRunWasCustom: false };
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_COMMAND_HISTORY_KEY);
-    if (!raw) {
-      return empty;
-    }
-    const parsed = JSON.parse(raw) as Partial<CustomCommandHistory>;
-    return {
-      commands: normalizeCustomCommands(parsed.commands),
-      lastRunWasCustom: Boolean(parsed.lastRunWasCustom),
-    };
-  } catch {
-    return empty;
-  }
-}
-
-export function saveCustomCommandHistory(value: CustomCommandHistory): void {
-  try {
-    window.localStorage.setItem(CUSTOM_COMMAND_HISTORY_KEY, JSON.stringify(value));
-  } catch {
-    // Ignore persistence failures (e.g. storage disabled or full).
-  }
-}
-
-function CommandRunDetails({
+export function CommandRunDetails({
   record,
   records,
   loading,
@@ -3928,13 +3165,6 @@ export function splitCommandLine(value: string): string[] {
   return args.filter(Boolean);
 }
 
-function requirementLabel(
-  t: TFunction,
-  kind: CommandOption["requirements"][number]["kind"],
-): string {
-  return t(`commands.requirements.${kind}`);
-}
-
 export function upsertCommandRecord(
   records: CommandRunRecord[],
   next: CommandRunRecord,
@@ -3969,10 +3199,6 @@ function statusColor(status: CommandRunRecord["status"]): string {
     return "danger";
   }
   return "info";
-}
-
-function stringPayload(value: unknown): string {
-  return typeof value === "string" ? value : "";
 }
 
 export function commandFailureDetail(event: RuntimeEvent): string {

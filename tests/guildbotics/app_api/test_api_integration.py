@@ -150,6 +150,174 @@ def test_temp_workspace_command_options_return_localized_sample_command(
     }
 
 
+def test_temp_workspace_command_files_crud_flow(
+    client: TestClient, workspace: Path
+) -> None:
+    config_dir = workspace / ".guildbotics/config"
+    env_file = workspace / ".env"
+
+    with client:
+        _init_project(client, config_dir, env_file, language="en")
+
+        listing = client.get("/commands/files", headers=AUTH_HEADERS)
+        assert listing.status_code == HTTP_OK
+        commands = {item["command"] for item in listing.json()["files"]}
+        assert {"translate", "summarize"} <= commands
+
+        summary = next(
+            item for item in listing.json()["files"] if item["command"] == "translate"
+        )
+        detail = client.get(f"/commands/files/{summary['id']}", headers=AUTH_HEADERS)
+        assert detail.status_code == HTTP_OK
+        assert detail.json()["revision"]
+
+        created = client.post(
+            "/commands/files",
+            headers=AUTH_HEADERS,
+            json={"command": "reports/weekly", "format": "markdown"},
+        )
+        assert created.status_code == HTTP_OK
+        created_payload = created.json()
+        assert created_payload["command"] == "reports/weekly"
+        assert (config_dir / "commands/reports/weekly.md").is_file()
+
+        # Duplicate create is rejected without overwriting.
+        duplicate = client.post(
+            "/commands/files",
+            headers=AUTH_HEADERS,
+            json={"command": "reports/weekly", "format": "markdown"},
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["code"] == "command_file_exists"
+
+        updated = client.put(
+            f"/commands/files/{created_payload['id']}",
+            headers=AUTH_HEADERS,
+            json={
+                "content": "---\nname: Weekly\nbrain: none\n---\nUpdated body.\n",
+                "expected_revision": created_payload["revision"],
+            },
+        )
+        assert updated.status_code == HTTP_OK
+        assert updated.json()["revision"] != created_payload["revision"]
+        assert "Updated body." in (config_dir / "commands/reports/weekly.md").read_text(
+            encoding="utf-8"
+        )
+
+        # Stale revision now conflicts.
+        stale = client.put(
+            f"/commands/files/{created_payload['id']}",
+            headers=AUTH_HEADERS,
+            json={
+                "content": "---\nname: Weekly\n---\nAgain.\n",
+                "expected_revision": created_payload["revision"],
+            },
+        )
+        assert stale.status_code == 409
+        assert stale.json()["code"] == "command_file_changed"
+
+        missing = client.get("/commands/files/bm9wZQ", headers=AUTH_HEADERS)
+        assert missing.status_code == 404
+
+
+def test_command_file_execution_status_and_run_guard(
+    client: TestClient, workspace: Path
+) -> None:
+    config_dir = workspace / ".guildbotics/config"
+    env_file = workspace / ".env"
+
+    with client:
+        _init_project(client, config_dir, env_file, language="en")
+        client.post(
+            "/config/members",
+            headers=AUTH_HEADERS,
+            json={
+                "config_dir": str(config_dir),
+                "env_file_path": str(env_file),
+                "person_type": "",
+                "person_id": "local-agent",
+                "person_name": "Local Agent",
+                "is_active": True,
+                "github_username": "",
+                "git_email": "",
+                "roles": ["architect"],
+                "speaking_style": "concise",
+            },
+        )
+        created = client.post(
+            "/commands/files",
+            headers=AUTH_HEADERS,
+            json={"command": "notes", "format": "markdown"},
+        ).json()
+
+        status = client.get(
+            f"/commands/files/{created['id']}/execution-status",
+            headers=AUTH_HEADERS,
+            params={"person": "local-agent", "expected_revision": created["revision"]},
+        )
+        assert status.status_code == HTTP_OK
+        assert status.json()["matches_selected_file"] is True
+
+        # A stale revision blocks with the shared error code, matching the run
+        # guard below.
+        stale_status = client.get(
+            f"/commands/files/{created['id']}/execution-status",
+            headers=AUTH_HEADERS,
+            params={"person": "local-agent", "expected_revision": "stale"},
+        )
+        assert stale_status.json()["blocking_code"] == "command_file_changed"
+
+        run = client.post(
+            "/commands/run",
+            headers=AUTH_HEADERS,
+            json={
+                "command": "notes",
+                "person": "local-agent",
+                "expected_command_file_id": created["id"],
+                "expected_command_file_revision": "stale",
+            },
+        )
+        assert run.status_code == 409
+        assert run.json()["code"] == "command_file_changed"
+
+
+def test_run_request_expected_pair_must_be_complete(
+    client: TestClient, workspace: Path
+) -> None:
+    with client:
+        response = client.post(
+            "/commands/run",
+            headers=AUTH_HEADERS,
+            json={
+                "command": "notes",
+                "expected_command_file_id": "abc",
+            },
+        )
+        assert response.status_code == 422
+
+
+def test_command_files_endpoints_require_session_token(
+    client: TestClient, workspace: Path
+) -> None:
+    with client:
+        assert client.get("/commands/files").status_code == 401
+        assert client.get("/commands/files/anything").status_code == 401
+        assert (
+            client.post(
+                "/commands/files",
+                json={"command": "x", "format": "markdown"},
+            ).status_code
+            == 401
+        )
+        assert (
+            client.put(
+                "/commands/files/anything",
+                json={"content": "", "expected_revision": ""},
+            ).status_code
+            == 401
+        )
+
+
 def test_temp_workspace_intelligence_update_writes_files(
     client: TestClient, workspace: Path
 ) -> None:

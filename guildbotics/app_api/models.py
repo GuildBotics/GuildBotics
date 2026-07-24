@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from guildbotics.app_api.activity_events import ActivityEventType
+from guildbotics.commands.metadata import (
+    CommandArgumentMetadata,
+    CommandInputPolicy,
+)
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 
@@ -130,11 +134,96 @@ class CommandRunRequest(BaseModel):
     person: str | None = None
     message: str = ""
     cwd: Path | None = None
+    expected_command_file_id: str | None = None
+    expected_command_file_revision: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_expected_pair(self) -> CommandRunRequest:
+        has_id = self.expected_command_file_id is not None
+        has_revision = self.expected_command_file_revision is not None
+        if has_id != has_revision:
+            raise ValueError(
+                "expected_command_file_id and expected_command_file_revision "
+                "must be provided together."
+            )
+        return self
 
 
 class CommandRunResponse(BaseModel):
     trace_id: str
     output: str
+
+
+CommandFileFormat = Literal["markdown", "python", "shell", "yaml"]
+
+
+class CommandFileSummary(BaseModel):
+    id: str
+    command: str
+    label: str
+    description: str = ""
+    relative_path: str
+    format: CommandFileFormat
+
+
+class CommandFileDetail(CommandFileSummary):
+    content: str
+    revision: str
+    arguments: list[CommandArgumentOption] = Field(default_factory=list)
+    inputs: CommandInputs = Field(default_factory=CommandInputs)
+
+
+class CommandFilesResponse(BaseModel):
+    files: list[CommandFileSummary]
+
+
+class CommandFileExecutionStatus(BaseModel):
+    matches_selected_file: bool
+    requirements: list[CommandRequirement] = Field(default_factory=list)
+    blocking_code: (
+        Literal[
+            "command_file_changed",
+            "command_file_shadowed",
+            "command_requirement_missing",
+            "person_not_found",
+        ]
+        | None
+    ) = None
+    blocking_context: dict[str, str] = Field(default_factory=dict)
+
+
+class CommandFileCreateRequest(BaseModel):
+    command: str
+    format: CommandFileFormat
+
+
+class CommandFileUpdateRequest(BaseModel):
+    content: str
+    expected_revision: str
+
+
+def to_command_inputs(policy: CommandInputPolicy) -> CommandInputs:
+    """Convert the core input policy into the App API wire model."""
+    return CommandInputs(
+        defined_args=cast(Any, policy.defined_args),
+        extra_args=cast(Any, policy.extra_args),
+        message=cast(Any, policy.message),
+    )
+
+
+def to_command_arguments(
+    arguments: list[CommandArgumentMetadata],
+) -> list[CommandArgumentOption]:
+    """Convert core argument metadata into App API wire models."""
+    return [
+        CommandArgumentOption(
+            name=argument.name,
+            kind=cast(Any, argument.kind),
+            required=argument.required,
+            default=argument.default,
+        )
+        for argument in arguments
+    ]
 
 
 class TraceSummary(BaseModel):
