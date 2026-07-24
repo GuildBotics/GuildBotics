@@ -88,6 +88,13 @@ def test_create_each_format(env: SimpleNamespace) -> None:
         assert detail.format == file_format
 
 
+def test_create_python_template_accepts_context(env: SimpleNamespace) -> None:
+    # The default Python template must accept `context` like the built-in
+    # command templates, so the runtime passes the Context to it.
+    _service().create_file("job", "python")
+    assert "def main(context)" in (env.commands / "job.py").read_text(encoding="utf-8")
+
+
 def test_create_nested_command(env: SimpleNamespace) -> None:
     detail = _service().create_file("workflows/review", "yaml")
     assert (env.commands / "workflows/review.yaml").is_file()

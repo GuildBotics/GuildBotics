@@ -70,7 +70,7 @@ _EXTENSION_BY_FORMAT: dict[CommandFileFormat, str] = {
 
 _INITIAL_SOURCE: dict[CommandFileFormat, str] = {
     "markdown": "---\nname: New command\nbrain: none\ninputs:\n  message: hidden\n---\nTODO\n",
-    "python": 'def main() -> str:\n    return ""\n',
+    "python": 'def main(context) -> str:\n    return ""\n',
     "shell": "#!/usr/bin/env bash\nset -euo pipefail\n",
     "yaml": "commands: []\n",
 }

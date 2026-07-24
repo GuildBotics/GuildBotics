@@ -281,7 +281,12 @@ def load_command_sidecar_metadata(path: Path, language_code: str) -> dict[str, A
 
 
 def command_metadata_sidecar_paths(path: Path, language_code: str) -> list[Path]:
-    """Return candidate sidecar paths for a command file, most specific first."""
+    """Return candidate sidecar paths for a command file, least specific first.
+
+    The order is unsuffixed → ``.en`` → ``.<language>`` so that
+    :func:`load_command_sidecar_metadata` (which merges with ``dict.update``)
+    lets a more specific, later entry override an earlier one.
+    """
     base = _command_metadata_sidecar_base(path, language_code)
     paths = [base.with_suffix(".metadata.yml"), base.with_suffix(".metadata.yaml")]
     if language_code:
