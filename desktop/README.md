@@ -105,7 +105,7 @@ npm run e2e
 |---|---|
 | `e2e/setup.spec.ts` | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み |
 | `e2e/service.spec.ts` | ③ scheduler / events を start → running → stop |
-| `e2e/commands.spec.ts` | ④ command 実行 → `/commands/run` + `/events` ストリーム → history 反映 |
+| `e2e/commands.spec.ts` | ④ コマンド編集: 新規作成 → source 編集 → 保存して実行（`/commands/files` + `/commands/run`）→ 実 file 反映 + `/events` ストリーム |
 | `e2e/members.spec.ts` | ② member 追加 → `person.yml` 実永続 |
 | `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画 |
 | `e2e/failure.spec.ts` | ⑥ backend down → Bootstrap error → 復帰 → retry |

@@ -425,7 +425,7 @@ export type CommandOption = {
   label: string;
   description: string;
   category: "workflow" | "function" | "example" | "custom";
-  source: "workspace" | "home" | "template";
+  source: "workspace" | "template";
   path: string;
   arguments: CommandArgumentOption[];
   inputs: CommandInputs;
@@ -437,6 +437,41 @@ export type CommandOption = {
 
 export type CommandOptionsResponse = {
   options: CommandOption[];
+};
+
+export type CommandFileFormat = "markdown" | "python" | "shell" | "yaml";
+
+export type CommandFileSummary = {
+  id: string;
+  command: string;
+  label: string;
+  description: string;
+  relative_path: string;
+  format: CommandFileFormat;
+};
+
+export type CommandFileDetail = CommandFileSummary & {
+  content: string;
+  revision: string;
+  arguments: CommandArgumentOption[];
+  inputs: CommandInputs;
+};
+
+export type CommandFilesResponse = {
+  files: CommandFileSummary[];
+};
+
+export type CommandFileBlockingCode =
+  | "command_file_changed"
+  | "command_file_shadowed"
+  | "command_requirement_missing"
+  | "person_not_found";
+
+export type CommandFileExecutionStatus = {
+  matches_selected_file: boolean;
+  requirements: CommandRequirement[];
+  blocking_code: CommandFileBlockingCode | null;
+  blocking_context: Record<string, string>;
 };
 
 export type LaneMap = {
@@ -931,6 +966,8 @@ export async function runCommand(body: {
   person?: string;
   message?: string;
   cwd?: string;
+  expected_command_file_id?: string;
+  expected_command_file_revision?: string;
 }): Promise<CommandRunResponse> {
   return request("/commands/run", { method: "POST", body });
 }
@@ -938,6 +975,39 @@ export async function runCommand(body: {
 export async function getCommandOptions(person?: string): Promise<CommandOptionsResponse> {
   const query = person ? `?person=${encodeURIComponent(person)}` : "";
   return request(`/commands/options${query}`);
+}
+
+export async function listCommandFiles(): Promise<CommandFilesResponse> {
+  return request("/commands/files");
+}
+
+export async function getCommandFile(fileId: string): Promise<CommandFileDetail> {
+  return request(`/commands/files/${encodeURIComponent(fileId)}`);
+}
+
+export async function createCommandFile(body: {
+  command: string;
+  format: CommandFileFormat;
+}): Promise<CommandFileDetail> {
+  return request("/commands/files", { method: "POST", body });
+}
+
+export async function updateCommandFile(
+  fileId: string,
+  body: { content: string; expected_revision: string },
+): Promise<CommandFileDetail> {
+  return request(`/commands/files/${encodeURIComponent(fileId)}`, { method: "PUT", body });
+}
+
+export async function getCommandFileExecutionStatus(
+  fileId: string,
+  params: { person?: string; expected_revision: string },
+): Promise<CommandFileExecutionStatus> {
+  const query = new URLSearchParams({ expected_revision: params.expected_revision });
+  if (params.person) {
+    query.set("person", params.person);
+  }
+  return request(`/commands/files/${encodeURIComponent(fileId)}/execution-status?${query}`);
 }
 
 export async function getRoutineCommandOptions(

@@ -276,24 +276,6 @@ function runtimeDebug(overrides: { enabled?: boolean } = {}) {
   };
 }
 
-function catalogCommand(overrides: Record<string, unknown> = {}) {
-  return {
-    command: "workflows/sample",
-    label: "Sample workflow",
-    description: "A sample command",
-    category: "workflow",
-    source: "workspace",
-    path: "/workspace/commands/sample.py",
-    arguments: [
-      { name: "topic", kind: "positional", required: true, default: "" },
-      { name: "mode", kind: "keyword", required: false, default: "" },
-    ],
-    inputs: { defined_args: "auto", extra_args: "hidden", message: "optional" },
-    requirements: [],
-    ...overrides,
-  };
-}
-
 function configWriteResponse() {
   return { project: null, member: null, intelligence: null };
 }
@@ -582,96 +564,93 @@ describe("Setup integration (real client + mock server)", () => {
   });
 });
 
+function commandFileSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "greet-id",
+    command: "greet",
+    label: "Greet",
+    description: "",
+    relative_path: "greet.md",
+    format: "markdown",
+    ...overrides,
+  };
+}
+
+function commandFileDetail(overrides: Record<string, unknown> = {}) {
+  return {
+    ...commandFileSummary(),
+    content: "---\nname: Greet\nbrain: none\n---\nHi\n",
+    revision: "rev-1",
+    arguments: [],
+    inputs: { defined_args: "auto", extra_args: "hidden", message: "optional" },
+    ...overrides,
+  };
+}
+
 describe("Commands integration (real client + mock server)", () => {
-  it("sends real GET /commands/options + POST /commands/run and updates history from websocket events", async () => {
+  it("lists command files and runs the selected file via save-and-run", async () => {
     const server = new MockServer()
       .json("GET", "/config/status", configStatus())
       .json("GET", "/team", team())
-      .json("GET", "/transcripts/settings", transcriptSettings())
-      .json("GET", "/runtime/debug", runtimeDebug())
-      .json("PUT", "/runtime/debug", runtimeDebug({ enabled: true }))
-      .json("POST", "/commands/run", { trace_id: "req-1", output: "hello output" })
+      .json("GET", "/commands/files", { files: [commandFileSummary()] })
+      .json("GET", "/commands/files/greet-id", commandFileDetail())
+      .json("GET", "/commands/files/greet-id/execution-status", {
+        matches_selected_file: true,
+        requirements: [],
+        blocking_code: null,
+        blocking_context: {},
+      })
+      .json("POST", "/commands/run", { trace_id: "evt-1", output: "hello output" })
       .json("GET", "/diagnostics/traces/evt-1", {
         trace_id: "evt-1",
         summary: null,
-        records: [
-          {
-            kind: "io",
-            timestamp: "2026-06-04T01:00:00Z",
-            trace_id: "evt-1",
-            span_id: "llm-1",
-            parent_id: null,
-            call_id: "call-1",
-            span: "llm",
-            source: "manual",
-            person_id: "alice",
-            command: "workflows/sample",
-            workflow: "",
-            type: "llm.request",
-            level: "",
-            message: "integration prompt",
-            attributes: {},
-            payload: {},
-            presentation: {
-              label_key: "diagnostics.executions.ioTypes.llm_request",
-              label_fallback: "LLM request",
-              message_key: "",
-              message: "integration prompt",
-              message_params: {},
-              tone: "ai",
-            },
-          },
-        ],
-      })
-      .on("GET", "/commands/options", () => ({ body: { options: [catalogCommand()] } }));
+        records: [],
+      });
     const user = userEvent.setup();
     renderApp(server, "/commands");
     await screen.findByRole("heading", { name: t("commands.title") });
 
-    // The real GET /commands/options request is built and sent by the client.
-    // The catalog loads before a person is explicitly chosen, so no `person`
-    // query param is present, but the session token header is.
+    // The real client builds the list request with the session token header.
     await waitFor(() =>
-      expect(server.requestsFor("GET", "/commands/options").length).toBeGreaterThan(0),
+      expect(server.requestsFor("GET", "/commands/files").length).toBeGreaterThan(0),
     );
-    const optionsCall = server.requestsFor("GET", "/commands/options")[0];
-    expect(optionsCall.url).toBe(`${BASE}/commands/options`);
-    expect(optionsCall.query.has("person")).toBe(false);
-    expect(optionsCall.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
+    const listCall = server.requestsFor("GET", "/commands/files")[0];
+    expect(listCall.url).toBe(`${BASE}/commands/files`);
+    expect(listCall.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
 
-    await user.type(await screen.findByRole("textbox", { name: "topic" }), " release ");
-    await user.type(screen.getByRole("textbox", { name: "mode" }), "fast");
-    await user.click(screen.getByRole("button", { name: t("commands.run") }));
+    // The detail request URL-encodes the opaque file id.
+    await waitFor(() =>
+      expect(server.requestsFor("GET", "/commands/files/greet-id").length).toBeGreaterThan(0),
+    );
+
+    await user.click(await screen.findByRole("button", { name: t("commands.saveAndRun") }));
 
     await waitFor(() => expect(server.requestsFor("POST", "/commands/run")).toHaveLength(1));
     const runCall = server.requestsFor("POST", "/commands/run")[0];
-    expect(runCall.url).toBe(`${BASE}/commands/run`);
-    expect(runCall.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
     expect(runCall.body).toMatchObject({
-      command: "workflows/sample",
-      args: ["release", "mode=fast"],
+      command: "greet",
       person: "alice",
+      expected_command_file_id: "greet-id",
+      expected_command_file_revision: "rev-1",
     });
 
     // A pushed command lifecycle event over the (real-client) websocket drives
-    // the history UI. The client opens /events with the encoded token.
+    // the history UI.
     const socket = FakeWebSocket.find(`/events?token=${TOKEN}`);
     await waitFor(() => expect(socket.onmessage).not.toBeNull());
 
     socket.emit({
       type: "command.started",
       trace_id: "evt-1",
-      payload: { command: "workflows/sample", person: "alice" },
+      payload: { command: "greet", person: "alice" },
       timestamp: "2026-06-04T01:00:00Z",
     });
     expect(await screen.findByText(t("commands.status.running"))).toBeInTheDocument();
-    expect(await screen.findByText("integration prompt")).toBeInTheDocument();
-    expect(server.requestsFor("GET", "/diagnostics/traces/evt-1").length).toBeGreaterThan(0);
 
     socket.emit({
       type: "command.finished",
       trace_id: "evt-1",
-      payload: { command: "workflows/sample", person: "alice" },
+      payload: { command: "greet", person: "alice" },
       timestamp: "2026-06-04T01:00:01Z",
     });
     expect(await screen.findByText(t("commands.status.success"))).toBeInTheDocument();

@@ -41,11 +41,22 @@ _CODEX_PROTOCOL = (
     "protocol; compat with an installed external tool, not with our own past."
 )
 
+_CODEMIRROR_LEGACY_MODES = (
+    "CodeMirror ships stream-based (non-Lezer) language modes, including the shell "
+    "highlighter, in its '@codemirror/legacy-modes' package; this is the official "
+    "third-party package name, not compat with our own past."
+)
+
 ALLOWED: tuple[Allowance, ...] = (
     Allowance(
         "guildbotics/intelligences/agent_runtime/codex.py",
         "_LEGACY_APPROVAL_METHODS",
         _CODEX_PROTOCOL,
+    ),
+    Allowance(
+        "desktop/src/commands/CommandEditor.tsx",
+        "@codemirror/legacy-modes/mode/shell",
+        _CODEMIRROR_LEGACY_MODES,
     ),
 )
 

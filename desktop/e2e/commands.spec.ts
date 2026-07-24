@@ -4,15 +4,16 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-// Journey ④: Commands against the REAL backend.
+// Journey ④: Command editor against the REAL backend.
 //
-// The "configured" harness pre-seeds the temp workspace, which also installs the
-// sample commands (translate / summarize / get-time-of-day / context-info). This
-// journey first verifies the declared summarize arguments, then selects the
-// deterministic `context-info` sample command — a no-LLM, no-GitHub command
-// (`brain: none`, jinja2 template) — runs it through the REAL `/commands/run`
-// endpoint, and asserts that the run output and normalized trace records surface
-// in the run history.
+// The "configured" harness pre-seeds a temp workspace (project + one active
+// member). This journey opens the command editor, creates a new Markdown
+// command, edits its source, saves-and-runs it through the REAL
+// `/commands/files` + `/commands/run` endpoints, then asserts the edited source
+// reached disk and the run output + trace records surface in the result area.
+//
+// A `brain: none` Markdown command is deterministic (no LLM / GitHub), so the
+// rendered body is echoed back as the run output.
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -26,69 +27,53 @@ function readConfiguredContext(): StackContext {
   return JSON.parse(raw) as StackContext;
 }
 
-test("runs the seeded context-info command and shows real output + events", async ({ page }) => {
+const SOURCE = [
+  "---",
+  "name: E2E note",
+  "brain: none",
+  "inputs:",
+  "  message: hidden",
+  "---",
+  "E2E marker body",
+].join("\n");
+
+test("creates, edits, saves and runs a shared command", async ({ page }) => {
   const ctx = readConfiguredContext();
 
   await page.goto("/#/commands");
-  await expect(page.getByRole("heading", { name: "Run Command" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Edit Command" })).toBeVisible();
 
-  // The seeded active member is preselected; no blocked alert should be shown.
-  await expect(page.getByText("No active members")).toHaveCount(0);
+  // Create a new Markdown command through the dialog.
+  await page.getByRole("button", { name: "New command" }).first().click();
+  await page.getByRole("textbox", { name: "Command name" }).fill("e2e-note");
+  await page.getByRole("button", { name: "Create" }).click();
 
-  // Select the deterministic sample command from the searchable catalog. The
-  // option's accessible name also carries the description (custom renderOption),
-  // so match the label substring rather than an exact string.
-  const commandSelect = page.getByRole("textbox", { name: "Command", exact: true });
-  await commandSelect.click();
-  await commandSelect.fill("summarize");
-  await page.getByRole("option", { name: /Summarize \(summarize\)/ }).click();
-  await expect(page.getByRole("link", { name: /summarize\.md$/ })).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(page.getByRole("textbox", { name: "file" })).toHaveAttribute("required", "");
-  const language = page.getByRole("textbox", { name: "language", exact: true });
-  await expect(language).not.toHaveAttribute("required");
-  await expect(language).toHaveAttribute("placeholder", "English");
-  await expect(page.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
+  // The editor loads the new file (its path row shows the shared location).
+  await expect(page.getByText(/commands\/e2e-note\.md$/)).toBeVisible({ timeout: 30_000 });
 
-  await commandSelect.click();
-  await commandSelect.fill("context-info");
-  await page.getByRole("option", { name: /Context Info \(context-info\)/ }).click();
-  // The selected command surfaces its on-disk script path; assert on that rather
-  // than the search input's internal value (Mantine keeps the typed query there).
-  await expect(page.getByRole("link", { name: /context-info\.md$/ })).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(page.getByRole("textbox", { name: "Additional args" })).toHaveCount(0);
-  await expect(page.getByRole("textbox", { name: "Input text" })).toHaveCount(0);
+  // Replace the source with a deterministic brain:none command.
+  const editor = page.locator(".cm-content");
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type(SOURCE);
 
-  // Run it against the REAL backend.
-  const run = page.getByRole("button", { name: "Run", exact: true });
-  await expect(run).toBeEnabled();
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // Save-and-run against the REAL backend.
+  const run = page.getByRole("button", { name: "Save and run" });
+  await expect(run).toBeEnabled({ timeout: 30_000 });
   await run.click();
 
-  // The run history surfaces the request and reaches a terminal success state,
-  // driven by the real command.started / command.finished websocket frames and
-  // the /commands/run response.
-  await expect(page.locator(".command-panel").getByText(/^Trace /)).toBeVisible({
-    timeout: 30_000,
-  });
+  // The result area reaches a terminal success state driven by the real
+  // command.started / command.finished websocket frames.
   await expect(page.getByText("Success")).toBeVisible({ timeout: 30_000 });
 
-  // The Output tab shows the deterministic template output rendered by the
-  // backend for the seeded member + team (jinja2, no LLM).
+  // The output tab echoes the rendered body (no LLM).
   const output = page.locator("pre.command-output").first();
-  await expect(output).toContainText("Language code: en", { timeout: 30_000 });
-  await expect(output).toContainText(`ID: ${ctx.memberId}`);
-  await expect(output).toContainText("Name: Local Agent");
+  await expect(output).toContainText("E2E marker body", { timeout: 30_000 });
 
-  // The Events tab reuses the diagnostics trace timeline backed by the real
-  // trace-detail endpoint.
-  await page.getByRole("tab", { name: "Events" }).click();
-  const timeline = page.locator(".exec-timeline");
-  await expect(timeline.getByText("Started", { exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(timeline.getByText("Finished", { exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(
-    page.locator(".exec-timeline-toolbar").getByText("AI", { exact: true }),
-  ).toBeVisible();
+  // The edited source actually reached disk.
+  const onDisk = readFileSync(join(ctx.configDir, "commands", "e2e-note.md"), "utf-8");
+  expect(onDisk).toContain("E2E marker body");
+  expect(onDisk).toContain("brain: none");
 });

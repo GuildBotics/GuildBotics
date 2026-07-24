@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
 from guildbotics.app_api import runtime as runtime_module
+from guildbotics.app_api.command_files import encode_file_id, file_revision
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.models import (
@@ -31,6 +31,7 @@ from guildbotics.app_api.models import (
     SchedulerStartRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.commands import metadata as metadata_module
 from guildbotics.commands.errors import (
     CommandError,
     PersonNotFoundError,
@@ -392,7 +393,7 @@ def test_command_options_reject_invalid_manual_input_contract(
     context = _make_context([_make_person()])
     runtime = _runtime_with_context(monkeypatch, context)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(CommandError):
         runtime.get_command_options()
 
 
@@ -631,7 +632,7 @@ def test_routine_command_options_reuse_loaded_metadata(
     )
     context = _make_context([_make_person()])
     runtime = _runtime_with_context(monkeypatch, context)
-    original = runtime_module._command_metadata
+    original = runtime_module.load_command_metadata
     loads: list[Path] = []
 
     def counting_metadata(path: Path, language_code: str = "") -> dict[str, Any]:
@@ -639,7 +640,7 @@ def test_routine_command_options_reuse_loaded_metadata(
             loads.append(path)
         return original(path, language_code)
 
-    monkeypatch.setattr(runtime_module, "_command_metadata", counting_metadata)
+    monkeypatch.setattr(runtime_module, "load_command_metadata", counting_metadata)
 
     assert any(
         item.command == "my_routine"
@@ -662,7 +663,7 @@ def test_routine_command_options_do_not_reload_duplicate_en_sidecar(
     )
     context = _make_context([_make_person()], language_code="en")
     runtime = _runtime_with_context(monkeypatch, context)
-    original = runtime_module.load_yaml_file
+    original = metadata_module.load_yaml_file
     loads: list[Path] = []
 
     def counting_load_yaml_file(path: Path) -> Any:
@@ -670,7 +671,7 @@ def test_routine_command_options_do_not_reload_duplicate_en_sidecar(
             loads.append(path)
         return original(path)
 
-    monkeypatch.setattr(runtime_module, "load_yaml_file", counting_load_yaml_file)
+    monkeypatch.setattr(metadata_module, "load_yaml_file", counting_load_yaml_file)
 
     assert any(
         item.command == "my_routine"
@@ -1397,3 +1398,232 @@ def test_start_scheduler_maps_service_lock_conflict_to_http_conflict(
         "workspace": "/tmp/other-workspace",
         "started_at": "2026-07-12T10:00:00+09:00",
     }
+
+
+# ---------------------------------------------------------------------------
+# Command file execution status / run target guarantee
+# ---------------------------------------------------------------------------
+
+
+def _file_reference(config_dir: Path, relative: str) -> tuple[str, str]:
+    """Return the ``(file_id, revision)`` for a shared command file."""
+    path = config_dir / "commands" / relative
+    return encode_file_id(relative), file_revision(path.read_bytes())
+
+
+def test_execution_status_matches_effective_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Greet", "brain: none", "---", "Body."]),
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "greet.md")
+
+    status = runtime.get_command_file_execution_status(file_id, "bot", revision)
+
+    assert status.matches_selected_file is True
+    assert status.blocking_code is None
+
+
+def test_execution_status_reports_revision_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Greet", "brain: none", "---", "Body."]),
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, _ = _file_reference(config_dir, "greet.md")
+
+    status = runtime.get_command_file_execution_status(file_id, "bot", "stale")
+
+    assert status.matches_selected_file is False
+    assert status.blocking_code == "command_file_changed"
+
+
+def test_execution_status_member_override_is_shadowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Shared", "brain: none", "---", "Shared."]),
+    )
+    _write(
+        config_dir / "team/members/bot/commands/greet.md",
+        "\n".join(["---", "name: Member", "brain: none", "---", "Member."]),
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "greet.md")
+
+    status = runtime.get_command_file_execution_status(file_id, "bot", revision)
+
+    assert status.blocking_code == "command_file_shadowed"
+    assert status.blocking_context["shadow_source"] == "member"
+
+
+def test_execution_status_rejects_shadowed_file_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Md", "brain: none", "---", "Body."]),
+    )
+    _write(config_dir / "commands/greet.yaml", "commands: []\n")
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    # The lower-priority .yaml file is not the effective shared file, so it is
+    # not editable / inspectable through a crafted id.
+    file_id, revision = _file_reference(config_dir, "greet.yaml")
+
+    with pytest.raises(AppApiError) as caught:
+        runtime.get_command_file_execution_status(file_id, "bot", revision)
+
+    assert caught.value.code == "command_file_not_found"
+
+
+def test_run_command_rejects_command_id_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A valid file id/revision for command A must not be usable to run a
+    # different command B.
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Greet", "brain: none", "---", "Body."]),
+    )
+    _write(
+        config_dir / "commands/other.md",
+        "\n".join(["---", "name: Other", "brain: none", "---", "Body."]),
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "greet.md")
+
+    with pytest.raises(AppApiError) as caught:
+        asyncio.run(
+            runtime.run_command(
+                CommandRunRequest(
+                    command="other",
+                    person="bot",
+                    expected_command_file_id=file_id,
+                    expected_command_file_revision=revision,
+                )
+            )
+        )
+
+    assert caught.value.code == "command_file_shadowed"
+
+
+def test_run_command_rejects_missing_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An expected-file run must also be blocked when a requirement is missing,
+    # even though the frontend may briefly enable the button.
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/needs_github.py",
+        "\n".join(
+            [
+                "from guildbotics.integrations.ticket_manager import TicketManager",
+                "",
+                "async def main(context):",
+                "    return ''",
+            ]
+        ),
+    )
+    runtime = _runtime_with_context(
+        monkeypatch, _make_context([_make_person()], github_enabled=False)
+    )
+    file_id, revision = _file_reference(config_dir, "needs_github.py")
+
+    with pytest.raises(AppApiError) as caught:
+        asyncio.run(
+            runtime.run_command(
+                CommandRunRequest(
+                    command="needs_github",
+                    person="bot",
+                    expected_command_file_id=file_id,
+                    expected_command_file_revision=revision,
+                )
+            )
+        )
+
+    assert caught.value.code == "command_requirement_missing"
+
+
+def test_execution_status_person_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Greet", "brain: none", "---", "Body."]),
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "greet.md")
+
+    status = runtime.get_command_file_execution_status(file_id, "ghost", revision)
+
+    assert status.blocking_code == "person_not_found"
+
+
+def test_run_command_rejects_revision_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Greet", "brain: none", "---", "Body."]),
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, _ = _file_reference(config_dir, "greet.md")
+
+    with pytest.raises(AppApiError) as caught:
+        asyncio.run(
+            runtime.run_command(
+                CommandRunRequest(
+                    command="greet",
+                    person="bot",
+                    expected_command_file_id=file_id,
+                    expected_command_file_revision="stale",
+                )
+            )
+        )
+
+    assert caught.value.code == "command_file_changed"
+    assert caught.value.status_code == HTTP_CONFLICT
+
+
+def test_run_command_rejects_member_shadow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Shared", "brain: none", "---", "Shared."]),
+    )
+    _write(
+        config_dir / "team/members/bot/commands/greet.md",
+        "\n".join(["---", "name: Member", "brain: none", "---", "Member."]),
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "greet.md")
+
+    with pytest.raises(AppApiError) as caught:
+        asyncio.run(
+            runtime.run_command(
+                CommandRunRequest(
+                    command="greet",
+                    person="bot",
+                    expected_command_file_id=file_id,
+                    expected_command_file_revision=revision,
+                )
+            )
+        )
+
+    assert caught.value.code == "command_file_shadowed"
+    assert caught.value.context["shadow_source"] == "member"

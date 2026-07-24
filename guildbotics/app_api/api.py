@@ -36,6 +36,11 @@ from guildbotics.app_api.models import (
     ChatReceiveResetResponse,
     CliAgentDetectionsResponse,
     CliAgentUsagesResponse,
+    CommandFileCreateRequest,
+    CommandFileDetail,
+    CommandFileExecutionStatus,
+    CommandFilesResponse,
+    CommandFileUpdateRequest,
     CommandOptionsResponse,
     CommandRunRequest,
     CommandRunResponse,
@@ -269,6 +274,65 @@ def create_app(
         _: None = Depends(require_token),
     ) -> CommandRunResponse:
         return await app_runtime.run_command(request)
+
+    @app.get(
+        "/commands/files",
+        response_model=CommandFilesResponse,
+        responses=error_responses,
+    )
+    def list_command_files(
+        _: None = Depends(require_token),
+    ) -> CommandFilesResponse:
+        return app_runtime.list_command_files()
+
+    @app.get(
+        "/commands/files/{file_id}",
+        response_model=CommandFileDetail,
+        responses=error_responses,
+    )
+    def get_command_file(
+        file_id: str,
+        _: None = Depends(require_token),
+    ) -> CommandFileDetail:
+        return app_runtime.get_command_file(file_id)
+
+    @app.post(
+        "/commands/files",
+        response_model=CommandFileDetail,
+        responses=error_responses,
+    )
+    def create_command_file(
+        request: CommandFileCreateRequest,
+        _: None = Depends(require_token),
+    ) -> CommandFileDetail:
+        return app_runtime.create_command_file(request)
+
+    @app.put(
+        "/commands/files/{file_id}",
+        response_model=CommandFileDetail,
+        responses=error_responses,
+    )
+    def update_command_file(
+        file_id: str,
+        request: CommandFileUpdateRequest,
+        _: None = Depends(require_token),
+    ) -> CommandFileDetail:
+        return app_runtime.update_command_file(file_id, request)
+
+    @app.get(
+        "/commands/files/{file_id}/execution-status",
+        response_model=CommandFileExecutionStatus,
+        responses=error_responses,
+    )
+    def command_file_execution_status(
+        file_id: str,
+        expected_revision: str,
+        person: str | None = None,
+        _: None = Depends(require_token),
+    ) -> CommandFileExecutionStatus:
+        return app_runtime.get_command_file_execution_status(
+            file_id, person, expected_revision
+        )
 
     @app.get(
         "/config/roles",

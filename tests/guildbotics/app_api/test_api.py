@@ -513,9 +513,12 @@ def test_app_runtime_command_options_exclude_template_commands(
     assert response.options == []
 
 
-def test_app_runtime_command_options_seed_empty_workspace_commands(
+def test_app_runtime_command_options_do_not_seed_empty_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Listing command options must have no side effects: an empty commands
+    # directory is a valid empty state, and sample seeding only happens at
+    # project setup, not on every options request.
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
@@ -541,20 +544,8 @@ def test_app_runtime_command_options_seed_empty_workspace_commands(
 
     response = runtime.get_command_options()
 
-    assert (commands_dir / "translate.md").exists()
-    assert {option.command for option in response.options} >= {
-        "translate",
-        "summarize",
-        "get-time-of-day",
-        "context-info",
-    }
-    requirements = {
-        option.command: {requirement.kind for requirement in option.requirements}
-        for option in response.options
-    }
-    assert requirements["get-time-of-day"] == {"llm"}
-    assert requirements["summarize"] == {"cli_agent"}
-    assert requirements["context-info"] == set()
+    assert response.options == []
+    assert list(commands_dir.iterdir()) == []
 
 
 def test_app_runtime_command_options_propagate_nested_requirements(

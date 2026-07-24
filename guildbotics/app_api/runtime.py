@@ -5,11 +5,10 @@ import asyncio
 import json
 import logging
 import os
-import re
 import shlex
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -18,6 +17,7 @@ from dotenv import dotenv_values
 
 from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
+from guildbotics.app_api.command_files import CommandFileService, file_revision
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
@@ -33,8 +33,11 @@ from guildbotics.app_api.models import (
     CliAgentUsage,
     CliAgentUsagesResponse,
     CliAgentUsageWindow,
-    CommandArgumentOption,
-    CommandInputs,
+    CommandFileCreateRequest,
+    CommandFileDetail,
+    CommandFileExecutionStatus,
+    CommandFilesResponse,
+    CommandFileUpdateRequest,
     CommandOption,
     CommandOptionsResponse,
     CommandRequirement,
@@ -62,6 +65,8 @@ from guildbotics.app_api.models import (
     TranscriptSettingsStatus,
     TranscriptSettingsUpdateRequest,
     VerifyResponse,
+    to_command_arguments,
+    to_command_inputs,
 )
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.trace_presentations import normalize_trace_presentation
@@ -75,9 +80,21 @@ from guildbotics.capabilities.member_memory_audit import (
     parse_memory_audit_timestamp,
 )
 from guildbotics.capabilities.task_runs import RunStore
-from guildbotics.commands.arguments import parse_command_argument_definitions
-from guildbotics.commands.discovery import resolve_command_reference
-from guildbotics.commands.registry import get_command_extensions
+from guildbotics.commands.discovery import (
+    command_source,
+    get_shared_commands_root,
+    is_within,
+    iter_effective_commands,
+    logical_command_name,
+    resolve_command_path,
+    resolve_command_reference,
+)
+from guildbotics.commands.metadata import (
+    default_command_label,
+    load_command_metadata,
+    parse_command_arguments,
+    parse_command_input_policy,
+)
 from guildbotics.drivers import (
     CommandError,
     PersonNotFoundError,
@@ -86,7 +103,6 @@ from guildbotics.drivers import (
 )
 from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
 from guildbotics.editions import get_edition
-from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities import Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -128,7 +144,6 @@ from guildbotics.utils.fileio import (
     get_template_path,
     get_workspace_data_path,
     get_workspace_data_root,
-    load_markdown_with_frontmatter,
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
@@ -327,6 +342,99 @@ class AppRuntime:
             options=sorted(options.values(), key=lambda option: option.command)
         )
 
+    def _command_file_service(self) -> CommandFileService:
+        language_code = self._get_context().team.project.get_language_code()
+        return CommandFileService(language_code)
+
+    def list_command_files(self) -> CommandFilesResponse:
+        return self._command_file_service().list_files()
+
+    def get_command_file(self, file_id: str) -> CommandFileDetail:
+        return self._command_file_service().read_file(file_id)
+
+    def create_command_file(
+        self, request: CommandFileCreateRequest
+    ) -> CommandFileDetail:
+        return self._command_file_service().create_file(request.command, request.format)
+
+    def update_command_file(
+        self, file_id: str, request: CommandFileUpdateRequest
+    ) -> CommandFileDetail:
+        return self._command_file_service().update_file(
+            file_id, request.content, request.expected_revision
+        )
+
+    def get_command_file_execution_status(
+        self, file_id: str, person: str | None, expected_revision: str
+    ) -> CommandFileExecutionStatus:
+        try:
+            context = self._command_options_context(person)
+        except AppApiError as exc:
+            if exc.code == "person_not_found":
+                return CommandFileExecutionStatus(
+                    matches_selected_file=False,
+                    blocking_code="person_not_found",
+                    blocking_context={"identifier": person or ""},
+                )
+            raise
+        path = self._command_file_service().resolve_existing(file_id)
+        language_code = context.team.project.get_language_code()
+        command = logical_command_name(get_shared_commands_root(), path, language_code)
+        code, blocking_context, requirements = self._evaluate_run_target(
+            context, file_id, expected_revision, command
+        )
+        return CommandFileExecutionStatus(
+            matches_selected_file=code is None,
+            requirements=requirements,
+            blocking_code=cast(Any, code),
+            blocking_context=blocking_context,
+        )
+
+    def _evaluate_run_target(
+        self,
+        context: Context,
+        file_id: str,
+        expected_revision: str,
+        command: str,
+    ) -> tuple[str | None, dict[str, str], list[CommandRequirement]]:
+        """Evaluate whether running ``command`` executes the selected file.
+
+        ``command`` is the logical command the caller intends to run (the run
+        request's command, or the file's own logical name for status). The check
+        confirms that resolving ``command`` for this member lands on exactly the
+        selected file, so a mismatched command name cannot ride a valid file
+        id/revision. Returns ``(blocking_code, blocking_context, requirements)``;
+        a ``None`` code means the file is the target and every requirement is
+        satisfied.
+        """
+        path = self._command_file_service().resolve_existing(file_id)
+        language_code = context.team.project.get_language_code()
+
+        current = file_revision(path.read_bytes())
+        if current != expected_revision:
+            return "command_file_changed", {"current_revision": current}, []
+
+        resolved = (
+            resolve_command_path(command, language_code, context.person.person_id)
+            if command
+            else None
+        )
+        if resolved is None or resolved.resolve(strict=False) != path.resolve(
+            strict=False
+        ):
+            context_data = {"shadow_source": _shadow_source(resolved)}
+            if resolved is not None:
+                context_data["resolved_relative_path"] = _resolved_display(resolved)
+            return "command_file_shadowed", context_data, []
+
+        metadata = load_command_metadata(path, language_code)
+        requirements = _command_requirements(
+            path, metadata, self.is_github_integration_enabled(), context
+        )
+        if any(not requirement.satisfied for requirement in requirements):
+            return "command_requirement_missing", {}, requirements
+        return None, {}, requirements
+
     def get_routine_command_options(
         self, person: str | None = None
     ) -> RoutineCommandOptionsResponse:
@@ -346,21 +454,20 @@ class AppRuntime:
         """
         context = self._command_options_context(person)
         github_enabled = self.is_github_integration_enabled()
-        effective: dict[str, tuple[Path, str]] = {}
-        for command, path, source in _iter_command_files(
-            context, roots=_routine_command_roots(context.person.person_id)
-        ):
-            effective.setdefault(command, (path, source))
+        language_code = context.team.project.get_language_code()
 
         options: dict[str, CommandOption] = {}
-        for command, (path, source) in effective.items():
-            metadata = _command_metadata(path, context.team.project.get_language_code())
+        for command, path in iter_effective_commands(
+            _routine_command_roots(context.person.person_id),
+            language_code,
+            person_id=context.person.person_id,
+        ):
+            metadata = load_command_metadata(path, language_code)
             if not _is_routine_command(metadata):
                 continue
             option = _command_option(
                 command=command,
                 path=path,
-                source=source,
                 github_enabled=github_enabled,
                 context=context,
                 metadata=metadata,
@@ -382,12 +489,6 @@ class AppRuntime:
 
     def _command_options_context(self, person: str | None) -> Context:
         context = self._get_context()
-        status = self.get_config_status()
-        if status.project_file_exists:
-            SimpleProjectSetupService().ensure_sample_commands(
-                status.config_dir,
-                context.team.project.get_language_code(),
-            )
         if not person:
             return context
         member = next(
@@ -414,19 +515,49 @@ class AppRuntime:
     def _collect_command_options(self, context: Context) -> dict[str, CommandOption]:
         github_enabled = self.is_github_integration_enabled()
         options: dict[str, CommandOption] = {}
-        for command, path, source in _iter_command_files(context):
+        for command, path in iter_effective_commands(
+            _command_roots(context.person.person_id),
+            context.team.project.get_language_code(),
+            person_id=context.person.person_id,
+        ):
             if command in options:
                 continue
             options[command] = _command_option(
                 command=command,
                 path=path,
-                source=source,
                 github_enabled=github_enabled,
                 context=context,
             )
         return options
 
+    def _guard_run_target(self, request: CommandRunRequest) -> None:
+        """Reject a manual run unless the request runs exactly the selected file.
+
+        Resolves ``request.command`` against the expected file id/revision, so a
+        file-changed, shadowing, command-mismatch or missing-requirement
+        condition all block the run. The frontend execution-status is only an
+        ahead-of-time hint; the backend is the authority.
+        """
+        context = self._command_options_context(request.person)
+        assert request.expected_command_file_id is not None
+        assert request.expected_command_file_revision is not None
+        code, blocking_context, _ = self._evaluate_run_target(
+            context,
+            request.expected_command_file_id,
+            request.expected_command_file_revision,
+            request.command,
+        )
+        if code is not None:
+            raise AppApiError(
+                code,
+                "The selected command file is not the runtime execution target.",
+                status_code=409,
+                context=blocking_context,
+            )
+
     async def run_command(self, request: CommandRunRequest) -> CommandRunResponse:
+        if request.expected_command_file_id is not None:
+            self._guard_run_target(request)
         trace_id = new_id()
         self._reserve_command(trace_id)
         try:
@@ -1254,50 +1385,26 @@ class AppRuntime:
                 self._running_command_id = None
 
 
-def _iter_command_files(
-    context: Context, roots: list[tuple[Path, str]] | None = None
-) -> Iterator[tuple[str, Path, str]]:
-    language_code = context.team.project.get_language_code()
-    if roots is None:
-        roots = _command_roots(context.person.person_id)
-    extensions = set(get_command_extensions())
-    candidates: list[tuple[int, str, Path, str]] = []
-    for order, (root, source) in enumerate(roots):
-        if not root.exists():
-            continue
-        for path in root.rglob("*"):
-            if path.suffix.lower() not in extensions or not path.is_file():
-                continue
-            if _is_command_metadata_sidecar(path):
-                continue
-            command = _command_name(root, path, language_code)
-            if not command:
-                continue
-            locale_rank = _locale_rank(path, language_code)
-            candidates.append((order * 10 + locale_rank, command, path, source))
-
-    for _, command, path, source in sorted(candidates, key=lambda item: item[:3]):
-        yield command, path, source
-
-
-def _command_roots(person_id: str) -> list[tuple[Path, str]]:
+def _command_roots(person_id: str) -> list[Path]:
+    """Physical roots whose logical command names seed the general catalog."""
     primary = get_primary_config_path(Path())
     return [
-        (primary / "team" / "members" / person_id / "commands", "workspace"),
-        (primary / "commands", "workspace"),
+        primary / "team" / "members" / person_id / "commands",
+        get_shared_commands_root(),
     ]
 
 
-def _routine_command_roots(person_id: str) -> list[tuple[Path, str]]:
+def _routine_command_roots(person_id: str) -> list[Path]:
     """Roots scanned for routine candidates.
 
     Unlike :func:`_command_roots`, this includes the package templates so that
     built-in routine workflows are discovered through the same single pass as
-    workspace-defined ones. Workspace entries keep priority over the template.
+    workspace-defined ones. The shared runtime resolver still decides which
+    file each logical command resolves to.
     """
     return [
         *_command_roots(person_id),
-        (get_template_path() / "commands", "template"),
+        get_template_path() / "commands",
     ]
 
 
@@ -1337,140 +1444,29 @@ def _manual_trace_person_id(context: Context, person_identifier: str | None) -> 
         return person_identifier or ""
 
 
-def _command_name(root: Path, path: Path, language_code: str) -> str:
-    relative = path.relative_to(root).with_suffix("")
-    parts = list(relative.parts)
-    if not parts:
-        return ""
-    stem = parts[-1]
-    if "." in stem:
-        base, locale = stem.rsplit(".", 1)
-        if locale not in {language_code, "en"}:
-            return ""
-        parts[-1] = base
-    return "/".join(parts)
-
-
-def _locale_rank(path: Path, language_code: str) -> int:
-    stem = path.with_suffix("").name
-    if "." not in stem:
-        return 2
-    locale = stem.rsplit(".", 1)[1]
-    if locale == language_code:
-        return 0
-    if locale == "en":
-        return 1
-    return 3
-
-
 def _command_option(
     *,
     command: str,
     path: Path,
-    source: str,
     github_enabled: bool,
     context: Context,
     metadata: dict[str, Any] | None = None,
 ) -> CommandOption:
     if metadata is None:
-        metadata = _command_metadata(path, context.team.project.get_language_code())
+        metadata = load_command_metadata(path, context.team.project.get_language_code())
     requirements = _command_requirements(path, metadata, github_enabled, context)
     description = str(metadata.get("description", ""))
     return CommandOption(
         command=command,
-        label=str(metadata.get("name") or _command_label(command)),
+        label=str(metadata.get("name") or default_command_label(command)),
         description=description,
         category=cast(Any, _command_category(command)),
-        source=cast(Any, source),
+        source=cast(Any, command_source(path)),
         path=path,
-        arguments=_command_arguments(path, metadata),
-        inputs=_command_inputs(metadata),
+        arguments=to_command_arguments(parse_command_arguments(path, metadata)),
+        inputs=to_command_inputs(parse_command_input_policy(metadata.get("inputs"))),
         requirements=requirements,
     )
-
-
-def _command_metadata(path: Path, language_code: str = "") -> dict[str, Any]:
-    metadata = _command_file_metadata(path)
-    metadata.update(_command_sidecar_metadata(path, language_code))
-    return metadata
-
-
-def _command_file_metadata(path: Path) -> dict[str, Any]:
-    try:
-        if path.suffix == ".md":
-            return cast(dict[str, Any], load_markdown_with_frontmatter(path))
-        if path.suffix in {".yml", ".yaml"}:
-            loaded = load_yaml_file(path)
-            return loaded if isinstance(loaded, dict) else {}
-        if path.suffix == ".py":
-            module = ast.parse(path.read_text(encoding="utf-8"))
-            main = _find_main_function(module)
-            description = ast.get_docstring(main) if main is not None else ""
-            return {"description": _first_line(description or "")}
-    except Exception:
-        return {}
-    return {}
-
-
-def _command_sidecar_metadata(path: Path, language_code: str) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    for sidecar in _command_metadata_sidecar_paths(path, language_code):
-        if not sidecar.exists():
-            continue
-        try:
-            loaded = load_yaml_file(sidecar)
-            if isinstance(loaded, dict):
-                metadata.update(loaded)
-        except Exception:
-            continue
-    for key in ("name", "description"):
-        metadata[key] = _localized_metadata_value(metadata.get(key), language_code)
-    return {key: value for key, value in metadata.items() if value is not None}
-
-
-def _command_metadata_sidecar_paths(path: Path, language_code: str) -> list[Path]:
-    base = _command_metadata_sidecar_base(path, language_code)
-    paths = [base.with_suffix(".metadata.yml"), base.with_suffix(".metadata.yaml")]
-    if language_code:
-        paths.extend(
-            [
-                base.with_suffix(".metadata.en.yml"),
-                base.with_suffix(".metadata.en.yaml"),
-                base.with_suffix(f".metadata.{language_code}.yml"),
-                base.with_suffix(f".metadata.{language_code}.yaml"),
-            ]
-        )
-    return list(dict.fromkeys(paths))
-
-
-def _command_metadata_sidecar_base(path: Path, language_code: str) -> Path:
-    base = path.with_suffix("")
-    if language_code:
-        suffixes = {language_code, "en"}
-        if "." in base.name:
-            name, suffix = base.name.rsplit(".", 1)
-            if suffix in suffixes:
-                return base.with_name(name)
-    return base
-
-
-def _is_command_metadata_sidecar(path: Path) -> bool:
-    stem = path.with_suffix("").name
-    return ".metadata" in stem
-
-
-def _localized_metadata_value(value: Any, language_code: str) -> Any:
-    if not isinstance(value, dict):
-        return value
-    if language_code and language_code in value:
-        return value[language_code]
-    if "en" in value:
-        return value["en"]
-    return next(iter(value.values()), None)
-
-
-def _command_label(command: str) -> str:
-    return command.rsplit("/", 1)[-1].replace("_", " ").replace("-", " ").title()
 
 
 def _command_category(command: str) -> str:
@@ -1483,129 +1479,26 @@ def _command_category(command: str) -> str:
     return "custom"
 
 
-def _command_arguments(
-    path: Path, metadata: dict[str, Any]
-) -> list[CommandArgumentOption]:
-    if path.suffix == ".py":
-        return _python_command_arguments(path)
-    return _metadata_arguments(metadata)
+def _shadow_source(resolved: Path | None) -> str:
+    """Classify why a resolved command differs from the selected shared file."""
+    if resolved is None:
+        return "workspace"
+    if is_within(resolved, get_template_path()):
+        return "template"
+    if is_within(resolved, get_shared_commands_root()):
+        return "workspace"
+    return "member"
 
 
-def _command_inputs(metadata: dict[str, Any]) -> CommandInputs:
-    value = metadata.get("inputs")
-    if value is None:
-        return CommandInputs()
-    return CommandInputs.model_validate(value)
-
-
-def _python_command_arguments(path: Path) -> list[CommandArgumentOption]:
-    try:
-        module = ast.parse(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    main = _find_main_function(module)
-    if main is None:
-        return []
-
-    args: list[CommandArgumentOption] = []
-    positional = list(main.args.posonlyargs) + list(main.args.args)
-    defaults = [None] * (len(positional) - len(main.args.defaults)) + list(
-        main.args.defaults
-    )
-    for index, arg in enumerate(positional):
-        if index == 0 and arg.arg in {"context", "ctx", "c"}:
-            continue
-        default = defaults[index]
-        args.append(
-            CommandArgumentOption(
-                name=arg.arg,
-                kind="positional",
-                required=default is None,
-                default=_literal_default(default),
+def _resolved_display(resolved: Path) -> str:
+    for root in (get_shared_commands_root(), get_template_path()):
+        if is_within(resolved, root):
+            return (
+                resolved.resolve(strict=False)
+                .relative_to(root.resolve(strict=False))
+                .as_posix()
             )
-        )
-
-    keyword_defaults = dict(
-        zip(main.args.kwonlyargs, main.args.kw_defaults, strict=True)
-    )
-    for arg, default in keyword_defaults.items():
-        args.append(
-            CommandArgumentOption(
-                name=arg.arg,
-                kind="keyword",
-                required=default is None,
-                default=_literal_default(default),
-            )
-        )
-    return args
-
-
-def _find_main_function(
-    module: ast.Module,
-) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    for node in module.body:
-        if (
-            isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-            and node.name == "main"
-        ):
-            return node
-    return None
-
-
-def _literal_default(node: ast.expr | None) -> str:
-    if node is None:
-        return ""
-    value = ast.literal_eval(node) if isinstance(node, ast.Constant) else None
-    if value is None:
-        return ""
-    return str(value)
-
-
-def _metadata_arguments(metadata: dict[str, Any]) -> list[CommandArgumentOption]:
-    placeholders = _metadata_placeholders(metadata)
-    definitions = parse_command_argument_definitions(metadata)
-    declared_names = {definition.name for definition in definitions}
-    positional = sorted(
-        int(name)
-        for name in placeholders - declared_names
-        if name.isdigit() and int(name) > 0
-    )
-    keywords = sorted(
-        name for name in placeholders - declared_names if not name.isdigit()
-    )
-    declared = [
-        CommandArgumentOption(
-            name=definition.name,
-            kind="positional" if definition.name.isdigit() else "keyword",
-            required=definition.required,
-            default=definition.default or "",
-        )
-        for definition in definitions
-    ]
-    discovered = [
-        CommandArgumentOption(name=str(index), kind="positional", required=True)
-        for index in positional
-    ] + [
-        CommandArgumentOption(name=name, kind="keyword", required=True)
-        for name in keywords
-    ]
-    return declared + discovered
-
-
-def _metadata_placeholders(metadata: dict[str, Any]) -> set[str]:
-    text = "\n".join(
-        str(value)
-        for key, value in metadata.items()
-        if key in {"body", "description"} and value
-    )
-    names = set()
-    for match in re.finditer(r"\$\{\s*([A-Za-z_]\w*|\d+)\s*\}", text):
-        names.add(match.group(1))
-    for match in re.finditer(r"\{\{\s*([A-Za-z_]\w*)\s*\}\}", text):
-        names.add(match.group(1))
-    for match in re.finditer(r"(?<![\{$])\{([A-Za-z_]\w*)\}(?!\})", text):
-        names.add(match.group(1))
-    return names - {"context", "now"}
+    return resolved.name
 
 
 def _command_requirements(
@@ -1760,7 +1653,7 @@ def _referenced_command_requirement_kinds(
         resolved = resolve_command_reference(base_dir, command_name, context)
     except Exception:
         return set()
-    metadata = _command_metadata(resolved, context.team.project.get_language_code())
+    metadata = load_command_metadata(resolved, context.team.project.get_language_code())
     return _command_requirement_kinds(resolved, metadata, context, seen)
 
 
@@ -1852,10 +1745,6 @@ def _requirement_message(kind: str) -> str:
         "llm": "An LLM API key is required.",
         "cli_agent": "A configured AI CLI tool executable is required.",
     }.get(kind, "")
-
-
-def _first_line(text: str) -> str:
-    return next((line.strip() for line in text.splitlines() if line.strip()), "")
 
 
 def _env_truthy(value: str) -> bool:

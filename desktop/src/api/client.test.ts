@@ -3,13 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
   configureApi,
+  createCommandFile,
   ensureAgentField,
   dismissSystemAlert,
   getAgentFieldState,
   getApiBase,
   getActivityHistory,
+  getCommandFile,
+  getCommandFileExecutionStatus,
   getCommandOptions,
   getRoutineCommandOptions,
+  listCommandFiles,
+  updateCommandFile,
   getConfigStatus,
   getIntelligenceConfig,
   getMemoryEvents,
@@ -326,6 +331,55 @@ describe("GET query parameter encoding", () => {
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/team%2Falice");
     expect(calls[0].init.method).toBe("GET");
+  });
+
+  it("lists command files", async () => {
+    const { calls } = captureFetch(jsonResponse({ files: [] }));
+    await listCommandFiles();
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/files");
+    expect(calls[0].init.method).toBe("GET");
+  });
+
+  it("URL-encodes the opaque file id for getCommandFile", async () => {
+    const { calls } = captureFetch(jsonResponse({}));
+    await getCommandFile("a/b+c");
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/files/a%2Fb%2Bc");
+  });
+
+  it("posts a create command file request", async () => {
+    const { calls } = captureFetch(jsonResponse({}));
+    await createCommandFile({ command: "reports/weekly", format: "markdown" });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/files");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(
+      JSON.stringify({ command: "reports/weekly", format: "markdown" }),
+    );
+  });
+
+  it("puts an update command file request", async () => {
+    const { calls } = captureFetch(jsonResponse({}));
+    await updateCommandFile("greet-id", { content: "body", expected_revision: "rev-1" });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/files/greet-id");
+    expect(calls[0].init.method).toBe("PUT");
+    expect(calls[0].init.body).toBe(
+      JSON.stringify({ content: "body", expected_revision: "rev-1" }),
+    );
+  });
+
+  it("builds the execution-status query with person and revision", async () => {
+    const { calls } = captureFetch(jsonResponse({}));
+    await getCommandFileExecutionStatus("greet-id", {
+      person: "a&b",
+      expected_revision: "rev-1",
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8765/commands/files/greet-id/execution-status?expected_revision=rev-1&person=a%26b",
+    );
   });
 });
 
