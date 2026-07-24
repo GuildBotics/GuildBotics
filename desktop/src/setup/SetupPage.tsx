@@ -276,7 +276,9 @@ function SlotNameInput({ label, value, readOnly, onRename, flex, size, fw }: Slo
     <TextInput
       label={label}
       value={localValue}
-      readOnly={readOnly}
+      // Locked names (built-in default/agent or team-owned inherited slots) are
+      // disabled, not just read-only, so they read as clearly non-editable.
+      disabled={readOnly}
       onChange={(e) => setLocalValue(e.currentTarget.value)}
       onBlur={commitRename}
       onKeyDown={(e) => {
@@ -976,113 +978,55 @@ function IntelligenceSection({
             <Text size="sm" c="dimmed">
               {t("setup.intelligence.providerDescription")}
             </Text>
-            <div className="option-card-grid">
-              {providers.map((option) => {
-                const available =
-                  (form.values.providerApiKeys[option.provider] ?? "").trim().length > 0 ||
-                  Boolean(projectConfig?.provider_api_keys?.[option.provider]);
-                const active = form.values.llmApiType === option.provider;
-
-                const cardElement = (
-                  <div
-                    style={{
-                      position: "relative",
-                      display: "block",
-                      width: "100%",
-                    }}
-                  >
-                    <button
-                      type="button"
-                      aria-label={option.label}
-                      disabled={!available}
-                      className={`option-card ${active ? "active" : ""}`}
-                      style={{
-                        paddingRight: "40px",
-                        width: "100%",
-                        textAlign: "left",
-                      }}
-                      onClick={() => {
-                        if (available) {
-                          form.setFieldValue("llmApiType", option.provider);
-                        }
-                      }}
+            <DefaultProviderCards
+              providers={providers}
+              isActive={(provider) => form.values.llmApiType === provider}
+              isAvailable={(provider) =>
+                (form.values.providerApiKeys[provider] ?? "").trim().length > 0 ||
+                Boolean(projectConfig?.provider_api_keys?.[provider])
+              }
+              onSelect={(provider) => form.setFieldValue("llmApiType", provider)}
+              renderExtra={(option) => (
+                <Popover position="bottom" withArrow shadow="md" trapFocus>
+                  <Popover.Target>
+                    <ActionIcon
+                      variant="subtle"
+                      color="neutral"
+                      size="sm"
+                      aria-label={t("setup.intelligence.apiKeyButtonLabel", {
+                        provider: option.label,
+                      })}
+                      style={{ fontSize: "12px" }}
                     >
-                      <span className="title" style={{ userSelect: "none" }}>
-                        {option.label}
-                      </span>
-                      <span
-                        className={`detection ${available ? "ok" : "ng"}`}
-                        style={{ userSelect: "none" }}
-                      >
-                        <i />
-                        {available
-                          ? t("setup.intelligence.apiKeyConfigured")
-                          : t("setup.intelligence.apiKeyMissing")}
-                      </span>
-                    </button>
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: "10px",
-                        right: "10px",
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Popover position="bottom" withArrow shadow="md" trapFocus>
-                        <Popover.Target>
-                          <ActionIcon
-                            variant="subtle"
-                            color="neutral"
-                            size="sm"
-                            aria-label={t("setup.intelligence.apiKeyButtonLabel", {
-                              provider: option.label,
-                            })}
-                            style={{ fontSize: "12px" }}
-                          >
-                            🔑
-                          </ActionIcon>
-                        </Popover.Target>
-                        <Popover.Dropdown p="md" w={340}>
-                          <PasswordInput
-                            size="sm"
-                            label={t("setup.intelligence.apiKeyLabel", { provider: option.label })}
-                            description={
-                              projectConfig?.provider_api_keys?.[option.provider]
-                                ? t("setup.intelligence.keyConfiguredDescription")
-                                : undefined
-                            }
-                            placeholder={
-                              projectConfig?.provider_api_keys?.[option.provider]
-                                ? MASKED_SECRET_PLACEHOLDER
-                                : t("setup.intelligence.keyPlaceholder")
-                            }
-                            value={form.values.providerApiKeys[option.provider] ?? ""}
-                            onChange={(event) =>
-                              form.setFieldValue("providerApiKeys", {
-                                ...form.values.providerApiKeys,
-                                [option.provider]: event.currentTarget.value,
-                              })
-                            }
-                          />
-                        </Popover.Dropdown>
-                      </Popover>
-                    </div>
-                  </div>
-                );
-
-                return (
-                  <Tooltip
-                    key={option.provider}
-                    label={t("setup.intelligence.apiKeyMissingTooltip")}
-                    position="top"
-                    withArrow
-                    disabled={available}
-                  >
-                    {cardElement}
-                  </Tooltip>
-                );
-              })}
-            </div>
+                      🔑
+                    </ActionIcon>
+                  </Popover.Target>
+                  <Popover.Dropdown p="md" w={340}>
+                    <PasswordInput
+                      size="sm"
+                      label={t("setup.intelligence.apiKeyLabel", { provider: option.label })}
+                      description={
+                        projectConfig?.provider_api_keys?.[option.provider]
+                          ? t("setup.intelligence.keyConfiguredDescription")
+                          : undefined
+                      }
+                      placeholder={
+                        projectConfig?.provider_api_keys?.[option.provider]
+                          ? MASKED_SECRET_PLACEHOLDER
+                          : t("setup.intelligence.keyPlaceholder")
+                      }
+                      value={form.values.providerApiKeys[option.provider] ?? ""}
+                      onChange={(event) =>
+                        form.setFieldValue("providerApiKeys", {
+                          ...form.values.providerApiKeys,
+                          [option.provider]: event.currentTarget.value,
+                        })
+                      }
+                    />
+                  </Popover.Dropdown>
+                </Popover>
+              )}
+            />
           </Stack>
         </Card>
 
@@ -1095,161 +1039,97 @@ function IntelligenceSection({
             <Text size="sm" c="dimmed">
               {t("setup.intelligence.cliHint")}
             </Text>
-            <div className="option-card-grid">
-              {detections.map((agent) => {
+            <DefaultCliAgentCards
+              detections={detections}
+              isActive={(agent) => form.values.cliAgent === agent.name}
+              isDetected={(agent) =>
+                detectionLoading ? form.values.cliAgent === agent.name : agent.detected
+              }
+              onSelect={(agent) => form.setFieldValue("cliAgent", agent.name)}
+              renderExtra={(agent) => {
                 const detected = detectionLoading
                   ? form.values.cliAgent === agent.name
                   : agent.detected;
-                const active = form.values.cliAgent === agent.name;
-
+                if (!detected) {
+                  return null;
+                }
                 const status = (skillStatuses.data?.agents ?? []).find(
                   (s) => s.agent === agent.name,
                 );
                 const statusKey = status?.status ?? "agent_home_missing";
                 const canForceUpdate = Boolean(status?.can_force_update);
-
-                const cardElement = (
-                  <div
-                    style={{
-                      position: "relative",
-                      display: "block",
-                      width: "100%",
-                    }}
-                  >
-                    <button
-                      type="button"
-                      aria-label={agent.label}
-                      disabled={!detected}
-                      className={`option-card ${active ? "active" : ""}`}
-                      style={{
-                        paddingRight: "40px",
-                        width: "100%",
-                        textAlign: "left",
-                      }}
-                      onClick={() => {
-                        if (detected) {
-                          form.setFieldValue("cliAgent", agent.name);
-                        }
-                      }}
-                    >
-                      <span className="title" style={{ userSelect: "none" }}>
-                        {agent.label}
-                      </span>
-                      <span
-                        className={`detection ${detected ? "ok" : "ng"}`}
-                        style={{ userSelect: "none" }}
-                      >
-                        <i />
-                        {detected
-                          ? t("setup.intelligence.detected")
-                          : t("setup.intelligence.notDetected")}
-                      </span>
-                    </button>
-                    {detected ? (
-                      <div
-                        style={{
-                          position: "absolute",
-                          top: "10px",
-                          right: "10px",
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <HoverCard
-                          width={340}
-                          shadow="md"
-                          withArrow
-                          openDelay={200}
-                          closeDelay={400}
-                        >
-                          <HoverCard.Target>
-                            <Indicator
-                              disabled={!canForceUpdate}
-                              color="info"
-                              size={6}
-                              offset={3}
-                              processing
-                            >
-                              <ActionIcon
-                                variant="subtle"
-                                color="neutral"
-                                size="sm"
-                                aria-label={t("setup.intelligence.skillStatusButtonLabel", {
-                                  agent: agent.label,
-                                })}
-                                style={{ fontSize: "12px" }}
-                              >
-                                🪄
-                              </ActionIcon>
-                            </Indicator>
-                          </HoverCard.Target>
-                          <HoverCard.Dropdown p="md">
-                            <Stack gap="xs">
-                              <Group justify="space-between">
-                                <Text fw={700} size="sm">
-                                  {t("setup.intelligence.skillStatusTitle")}
-                                </Text>
-                                <Badge
-                                  color={skillStatusColor(statusKey)}
-                                  variant="light"
-                                  size="sm"
-                                >
-                                  {t(`setup.intelligence.skillStatusLabels.${statusKey}`)}
-                                </Badge>
-                              </Group>
-                              <Text size="sm">
-                                {t(`setup.intelligence.skillStatusMessages.${statusKey}`)}
-                              </Text>
-                              {status?.skill_path ? (
-                                <Text
-                                  size="xs"
-                                  c="dimmed"
-                                  className="mono-text"
-                                  style={{ wordBreak: "break-all" }}
-                                >
-                                  {status.skill_path}
-                                </Text>
-                              ) : null}
-                              {status?.error ? (
-                                <Text size="xs" c="danger" style={{ wordBreak: "break-all" }}>
-                                  {status.error}
-                                </Text>
-                              ) : null}
-                              {canForceUpdate ? (
-                                <Button
-                                  size="xs"
-                                  variant="light"
-                                  leftSection={<WandSparkles size={14} />}
-                                  loading={
-                                    forceSkillUpdate.isPending &&
-                                    forceSkillUpdate.variables === agent.name
-                                  }
-                                  onClick={() => forceSkillUpdate.mutate(agent.name)}
-                                  mt="xs"
-                                >
-                                  {t("setup.intelligence.skillOverwrite")}
-                                </Button>
-                              ) : null}
-                            </Stack>
-                          </HoverCard.Dropdown>
-                        </HoverCard>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-
                 return (
-                  <Tooltip
-                    key={agent.name}
-                    label="このエージェントは PATH 上に検出されていません"
-                    position="top"
-                    withArrow
-                    disabled={detected}
-                  >
-                    {cardElement}
-                  </Tooltip>
+                  <HoverCard width={340} shadow="md" withArrow openDelay={200} closeDelay={400}>
+                    <HoverCard.Target>
+                      <Indicator
+                        disabled={!canForceUpdate}
+                        color="info"
+                        size={6}
+                        offset={3}
+                        processing
+                      >
+                        <ActionIcon
+                          variant="subtle"
+                          color="neutral"
+                          size="sm"
+                          aria-label={t("setup.intelligence.skillStatusButtonLabel", {
+                            agent: agent.label,
+                          })}
+                          style={{ fontSize: "12px" }}
+                        >
+                          🪄
+                        </ActionIcon>
+                      </Indicator>
+                    </HoverCard.Target>
+                    <HoverCard.Dropdown p="md">
+                      <Stack gap="xs">
+                        <Group justify="space-between">
+                          <Text fw={700} size="sm">
+                            {t("setup.intelligence.skillStatusTitle")}
+                          </Text>
+                          <Badge color={skillStatusColor(statusKey)} variant="light" size="sm">
+                            {t(`setup.intelligence.skillStatusLabels.${statusKey}`)}
+                          </Badge>
+                        </Group>
+                        <Text size="sm">
+                          {t(`setup.intelligence.skillStatusMessages.${statusKey}`)}
+                        </Text>
+                        {status?.skill_path ? (
+                          <Text
+                            size="xs"
+                            c="dimmed"
+                            className="mono-text"
+                            style={{ wordBreak: "break-all" }}
+                          >
+                            {status.skill_path}
+                          </Text>
+                        ) : null}
+                        {status?.error ? (
+                          <Text size="xs" c="danger" style={{ wordBreak: "break-all" }}>
+                            {status.error}
+                          </Text>
+                        ) : null}
+                        {canForceUpdate ? (
+                          <Button
+                            size="xs"
+                            variant="light"
+                            leftSection={<WandSparkles size={14} />}
+                            loading={
+                              forceSkillUpdate.isPending &&
+                              forceSkillUpdate.variables === agent.name
+                            }
+                            onClick={() => forceSkillUpdate.mutate(agent.name)}
+                            mt="xs"
+                          >
+                            {t("setup.intelligence.skillOverwrite")}
+                          </Button>
+                        ) : null}
+                      </Stack>
+                    </HoverCard.Dropdown>
+                  </HoverCard>
                 );
-              })}
-            </div>
+              }}
+            />
           </Stack>
         </Card>
 
@@ -1357,6 +1237,147 @@ function withSlotModel(
     model,
   ];
   return { ...current, model_mapping, models };
+}
+
+// A single selectable option card. `extra` is an optional top-right control
+// (e.g. the team's API-key popover or CLI skill-status button) that only the
+// team scope supplies; the member scope renders the same card without it.
+function OptionCard({
+  label,
+  active,
+  enabled,
+  statusOk,
+  statusText,
+  disabledTooltip,
+  onSelect,
+  extra,
+}: {
+  label: string;
+  active: boolean;
+  enabled: boolean;
+  statusOk: boolean;
+  statusText: string;
+  disabledTooltip: string;
+  onSelect: () => void;
+  extra?: ReactNode;
+}) {
+  const card = (
+    <div style={{ position: "relative", display: "block", width: "100%" }}>
+      <button
+        type="button"
+        aria-label={label}
+        disabled={!enabled}
+        className={`option-card ${active ? "active" : ""}`}
+        style={{ paddingRight: extra ? "40px" : undefined, width: "100%", textAlign: "left" }}
+        onClick={() => {
+          if (enabled) onSelect();
+        }}
+      >
+        <span className="title" style={{ userSelect: "none" }}>
+          {label}
+        </span>
+        <span className={`detection ${statusOk ? "ok" : "ng"}`} style={{ userSelect: "none" }}>
+          <i />
+          {statusText}
+        </span>
+      </button>
+      {extra ? (
+        <div
+          style={{ position: "absolute", top: "10px", right: "10px" }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {extra}
+        </div>
+      ) : null}
+    </div>
+  );
+  return (
+    <Tooltip label={disabledTooltip} position="top" withArrow disabled={enabled}>
+      {card}
+    </Tooltip>
+  );
+}
+
+// The "default LLM provider" card grid, shared by the team and member scopes.
+// Selection/availability bindings differ per scope (team writes the project
+// config, a member writes their default model slot), so they are passed in.
+function DefaultProviderCards({
+  providers,
+  isActive,
+  isAvailable,
+  onSelect,
+  renderExtra,
+}: {
+  providers: LlmProviderInfo[];
+  isActive: (provider: string) => boolean;
+  isAvailable: (provider: string) => boolean;
+  onSelect: (provider: string) => void;
+  renderExtra?: (option: LlmProviderInfo) => ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="option-card-grid">
+      {providers.map((option) => {
+        const available = isAvailable(option.provider);
+        return (
+          <OptionCard
+            key={option.provider}
+            label={option.label}
+            active={isActive(option.provider)}
+            enabled={available}
+            statusOk={available}
+            statusText={
+              available
+                ? t("setup.intelligence.apiKeyConfigured")
+                : t("setup.intelligence.apiKeyMissing")
+            }
+            disabledTooltip={t("setup.intelligence.apiKeyMissingTooltip")}
+            onSelect={() => onSelect(option.provider)}
+            extra={renderExtra?.(option)}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// The "default AI CLI tool" card grid, shared by the team and member scopes.
+function DefaultCliAgentCards({
+  detections,
+  isActive,
+  isDetected,
+  onSelect,
+  renderExtra,
+}: {
+  detections: CliAgentDetection[];
+  isActive: (agent: CliAgentDetection) => boolean;
+  isDetected: (agent: CliAgentDetection) => boolean;
+  onSelect: (agent: CliAgentDetection) => void;
+  renderExtra?: (agent: CliAgentDetection) => ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="option-card-grid">
+      {detections.map((agent) => {
+        const detected = isDetected(agent);
+        return (
+          <OptionCard
+            key={agent.name}
+            label={agent.label}
+            active={isActive(agent)}
+            enabled={detected}
+            statusOk={detected}
+            statusText={
+              detected ? t("setup.intelligence.detected") : t("setup.intelligence.notDetected")
+            }
+            disabledTooltip={t("setup.intelligence.notDetectedOnPath")}
+            onSelect={() => onSelect(agent)}
+            extra={renderExtra?.(agent)}
+          />
+        );
+      })}
+    </div>
+  );
 }
 
 function NativeAgentPolicyEditor({
@@ -1638,6 +1659,19 @@ function IntelligenceEditor({
 
   const modelSlots = Object.keys(draft.model_mapping);
   const cliSlots = Object.keys(draft.cli_agent_mapping);
+  // A member may override a team-owned slot's value but not delete or rename it
+  // (the runtime merge would only revive it). Lock those names, alongside the
+  // always-fixed "default"/"agent". For the team scope the inherited sets are
+  // empty, so only the built-ins are locked.
+  const inheritedModelSlots = new Set(draft.inherited_model_slots ?? []);
+  const inheritedCliSlots = new Set(draft.inherited_cli_slots ?? []);
+  const inheritedBrainFeatures = new Set(draft.inherited_brain_features ?? []);
+  const isModelSlotLocked = (slotKey: string) =>
+    slotKey === "default" || inheritedModelSlots.has(slotKey);
+  const isCliSlotLocked = (slotKey: string) =>
+    slotKey === "default" || inheritedCliSlots.has(slotKey);
+  const isBrainFeatureLocked = (name: string) =>
+    name === "default" || name === "agent" || inheritedBrainFeatures.has(name);
   // Offer every known AI CLI tool as a choice, not just the ones still mapped to a
   // slot. Deriving the options from `draft.cli_agents` (which the backend builds
   // only from currently-mapped paths) would otherwise leave a single option once
@@ -1673,7 +1707,7 @@ function IntelligenceEditor({
   };
 
   const handleDeleteLlmSlot = (slotKey: string) => {
-    if (slotKey === "default") return;
+    if (isModelSlotLocked(slotKey)) return;
     updateDraft((current) => {
       const nextMapping = { ...current.model_mapping };
       delete nextMapping[slotKey];
@@ -1694,7 +1728,7 @@ function IntelligenceEditor({
   };
 
   const handleRenameLlmSlot = (oldKey: string, newKey: string) => {
-    if (oldKey === "default" || !newKey.trim() || oldKey === newKey) return;
+    if (isModelSlotLocked(oldKey) || !newKey.trim() || oldKey === newKey) return;
     updateDraft((current) => {
       if (current.model_mapping[newKey]) return current;
 
@@ -1759,7 +1793,7 @@ function IntelligenceEditor({
   };
 
   const handleDeleteCliSlot = (slotKey: string) => {
-    if (slotKey === "default") return;
+    if (isCliSlotLocked(slotKey)) return;
     updateDraft((current) => {
       const nextMapping = { ...current.cli_agent_mapping };
       delete nextMapping[slotKey];
@@ -1780,7 +1814,7 @@ function IntelligenceEditor({
   };
 
   const handleRenameCliSlot = (oldKey: string, newKey: string) => {
-    if (oldKey === "default" || !newKey.trim() || oldKey === newKey) return;
+    if (isCliSlotLocked(oldKey) || !newKey.trim() || oldKey === newKey) return;
     updateDraft((current) => {
       if (current.cli_agent_mapping[newKey]) return current;
 
@@ -1872,7 +1906,7 @@ function IntelligenceEditor({
 
   const handleDeleteBrain = (index: number) => {
     const target = draft.brain_mapping[index];
-    if (!target || target.name === "default" || target.name === "agent") return;
+    if (!target || isBrainFeatureLocked(target.name)) return;
     updateDraft((current) => {
       return {
         ...current,
@@ -1914,7 +1948,7 @@ function IntelligenceEditor({
 
   const handleRenameBrain = (index: number, newName: string) => {
     const target = draft.brain_mapping[index];
-    if (!target || target.name === "default" || target.name === "agent" || !newName.trim()) return;
+    if (!target || isBrainFeatureLocked(target.name) || !newName.trim()) return;
     updateDraft((current) => {
       const exists = current.brain_mapping.some((b, i) => i !== index && b.name === newName);
       if (exists) return current;
@@ -1925,15 +1959,22 @@ function IntelligenceEditor({
     });
   };
 
-  if (personId) {
-    return (
-      <Stack gap="md">
-        <Group justify="space-between">
-          <Text size="sm" c="dimmed">
-            {t("setup.intelligence.memberOverrideDescription")}
-          </Text>
-          {saveMode === "auto" ? <AutosaveIndicator state={saveState} /> : null}
-        </Group>
+  // Team and member scopes share one advanced editor. A member only adds the
+  // "inherit team defaults" toggle on top; when inheriting is off they get the
+  // exact same full editor (feature assignments, model slots, CLI slots, native
+  // policy) as the team, so member-scoped slots like a translation model are
+  // always visible and editable rather than silently missing.
+  return (
+    <Stack gap="md">
+      <Group justify="space-between">
+        <Text size="sm" c="dimmed">
+          {personId
+            ? t("setup.intelligence.memberOverrideDescription")
+            : t("setup.intelligence.teamAdvancedDescription")}
+        </Text>
+        {saveMode === "auto" ? <AutosaveIndicator state={saveState} /> : null}
+      </Group>
+      {personId ? (
         <Switch
           label={t("setup.intelligence.inheritTeamDefaults")}
           checked={draft.inherited}
@@ -1944,250 +1985,79 @@ function IntelligenceEditor({
             }))
           }
         />
-        {draft.inherited ? (
-          <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
-            {t("setup.intelligence.inheritingBody")}
-          </InfoCallout>
-        ) : (
-          <Stack gap="md">
-            <Stack gap="xs">
-              <Text size="sm" fw={700}>
-                {t("setup.intelligence.memberDefaultProvider")}
-              </Text>
-              <Text size="sm" c="dimmed">
-                {t("setup.intelligence.memberDefaultProviderDescription")}
-              </Text>
-              <div className="option-card-grid">
-                {providers.map((option) => {
-                  const available = Boolean(llmProviderAvailability?.[option.provider]);
-                  const active =
-                    providerFromModelPath(draft.model_mapping.default) === option.provider;
-                  return (
-                    <button
-                      key={option.provider}
-                      type="button"
-                      className={`option-card ${active ? "active" : ""}`}
-                      disabled={!available}
-                      onClick={() =>
-                        updateDraft((current) =>
-                          withSlotModel(
-                            current,
-                            "default",
-                            providerDefaultModel(option.provider, "default", providerDefaults),
-                          ),
-                        )
-                      }
-                    >
-                      <span className="title">{option.label}</span>
-                      <span className={`detection ${available ? "ok" : "ng"}`}>
-                        <i />
-                        {available
-                          ? t("setup.intelligence.apiKeyConfigured")
-                          : t("setup.intelligence.apiKeyMissing")}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </Stack>
-
-            <Stack gap="xs">
-              <Text size="sm" fw={700}>
-                {t("setup.intelligence.memberDefaultCliAgent")}
-              </Text>
-              <Text size="sm" c="dimmed">
-                {t("setup.intelligence.memberDefaultCliAgentDescription")}
-              </Text>
-              <div className="option-card-grid">
-                {detections.map((agent) => {
-                  const agentPath = agent.config_reference;
-                  const available = agent.detected;
-                  const active = draft.cli_agent_mapping.default === agentPath;
-                  return (
-                    <button
-                      key={agent.name}
-                      type="button"
-                      className={`option-card ${active ? "active" : ""}`}
-                      disabled={!available}
-                      onClick={() =>
-                        updateDraft((current) => ({
-                          ...current,
-                          cli_agent_mapping: {
-                            ...current.cli_agent_mapping,
-                            default: agentPath,
-                          },
-                        }))
-                      }
-                    >
-                      <span className="title">{agent.label}</span>
-                      <span className={`detection ${available ? "ok" : "ng"}`}>
-                        <i />
-                        {available
-                          ? t("setup.intelligence.detected")
-                          : t("setup.intelligence.notDetected")}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </Stack>
-
-            <NativeAgentPolicyEditor
-              policy={draft.native_agent_policy}
-              onChange={(policy) =>
-                updateDraft((current) => ({ ...current, native_agent_policy: policy }))
-              }
-            />
-          </Stack>
-        )}
-        {mutation.error ? (
-          <Alert color="danger" title={t("setup.intelligence.saveAdvancedError")}>
-            {mutation.error.message}
-          </Alert>
-        ) : null}
-      </Stack>
-    );
-  }
-
-  return (
-    <Stack gap="md">
-      <Group justify="space-between">
-        <Text size="sm" c="dimmed">
-          {t("setup.intelligence.teamAdvancedDescription")}
-        </Text>
-        {saveMode === "auto" ? <AutosaveIndicator state={saveState} /> : null}
-      </Group>
-      {draft.inherited ? (
-        <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
-          {t("setup.intelligence.inheritingBody")}
-        </InfoCallout>
-      ) : (
-        <Stack gap="lg">
-          {/* Section 1: Brain Assignment */}
-          <Card withBorder radius="sm" p="md">
-            <Stack gap="sm">
-              <Group justify="space-between">
-                <Text fw={700} size="sm">
-                  {t("setup.intelligence.brainMapping")}
-                </Text>
-                <Button
-                  size="xs"
-                  variant="light"
-                  leftSection={<Plus size={14} />}
-                  onClick={handleAddBrain}
-                >
-                  {t("setup.intelligence.addBrain")}
-                </Button>
-              </Group>
-
-              {draft.brain_mapping.map((assignment, index) => {
-                const targetOptions =
-                  assignment.engine === "cli"
-                    ? cliSlots.map((s) => ({ value: s, label: s }))
-                    : modelSlots.map((s) => ({ value: s, label: s }));
-
-                return (
-                  <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
-                    <TextInput
-                      label={t("setup.intelligence.feature")}
-                      value={assignment.name}
-                      readOnly={assignment.name === "default" || assignment.name === "agent"}
-                      onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
-                      flex={2}
-                    />
-                    <Select
-                      label={t("setup.intelligence.engine")}
-                      data={[
-                        { value: "llm", label: "LLM" },
-                        { value: "cli", label: "CLI" },
-                      ]}
-                      value={assignment.engine}
-                      onChange={(value) =>
-                        handleUpdateBrain(index, { engine: (value as "llm" | "cli") ?? "llm" })
-                      }
-                      flex={1}
-                    />
-                    <Select
-                      label={t("setup.intelligence.target")}
-                      data={targetOptions}
-                      value={assignment.target}
-                      onChange={(value) => handleUpdateBrain(index, { target: value ?? "default" })}
-                      flex={1.5}
-                    />
-                    {assignment.name !== "default" && assignment.name !== "agent" ? (
-                      <ActionIcon
-                        color="danger"
-                        variant="subtle"
-                        onClick={() => handleDeleteBrain(index)}
-                        mb="xs"
-                      >
-                        <Trash2 size={16} />
-                      </ActionIcon>
-                    ) : (
-                      <Box w={28} />
-                    )}
-                  </Group>
-                );
-              })}
-            </Stack>
-          </Card>
-
-          {/* Section 2: LLM Slots Definitions */}
-          <Card withBorder radius="sm" p="md">
-            <Stack gap="md">
-              <Group justify="space-between">
-                <Text fw={700} size="sm">
-                  {t("setup.intelligence.tabs.models")}
-                </Text>
-                <Button
-                  size="xs"
-                  variant="light"
-                  leftSection={<Plus size={14} />}
-                  onClick={handleAddLlmSlot}
-                >
-                  {t("setup.intelligence.addLlmSlot")}
-                </Button>
-              </Group>
-
+      ) : null}
+      {(() => {
+        if (draft.inherited) {
+          return (
+            <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
+              {t("setup.intelligence.inheritingBody")}
+            </InfoCallout>
+          );
+        }
+        // The full editor (feature assignments, model/CLI slots, native policy)
+        // is identical for both scopes. The team renders it directly; a member
+        // gets the same friendly default-provider/CLI cards as the team on top,
+        // with this editor tucked into a "詳細設定" accordion below.
+        const advancedBody = (
+          <Stack gap="lg">
+            {/* Section 1: Brain Assignment */}
+            <Card withBorder radius="sm" p="md">
               <Stack gap="sm">
-                {modelSlots.map((slotKey) => {
-                  const path = draft.model_mapping[slotKey];
-                  const modelDef = draft.models.find((m) => m.path === path);
-                  if (!modelDef) return null;
+                <Group justify="space-between">
+                  <Text fw={700} size="sm">
+                    {t("setup.intelligence.brainMapping")}
+                  </Text>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    leftSection={<Plus size={14} />}
+                    onClick={handleAddBrain}
+                  >
+                    {t("setup.intelligence.addBrain")}
+                  </Button>
+                </Group>
+
+                {draft.brain_mapping.map((assignment, index) => {
+                  const targetOptions =
+                    assignment.engine === "cli"
+                      ? cliSlots.map((s) => ({ value: s, label: s }))
+                      : modelSlots.map((s) => ({ value: s, label: s }));
 
                   return (
-                    <Group key={slotKey} align="flex-end" gap="xs" wrap="nowrap">
-                      <SlotNameInput
-                        key={slotKey}
-                        label={t("setup.intelligence.slot")}
-                        value={slotKey}
-                        readOnly={slotKey === "default"}
-                        onRename={handleRenameLlmSlot}
-                        flex={1.5}
+                    <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
+                      <TextInput
+                        label={t("setup.intelligence.feature")}
+                        value={assignment.name}
+                        disabled={isBrainFeatureLocked(assignment.name)}
+                        onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
+                        flex={2}
                       />
                       <Select
-                        label={t("setup.intelligence.provider")}
-                        data={providers.map((provider) => ({
-                          value: provider.provider,
-                          label: provider.label,
-                        }))}
-                        value={modelDef.provider}
-                        onChange={(val) =>
-                          handleUpdateLlmSlotProvider(slotKey, val ?? DEFAULT_LLM_PROVIDER)
+                        label={t("setup.intelligence.engine")}
+                        data={[
+                          { value: "llm", label: "LLM" },
+                          { value: "cli", label: "CLI" },
+                        ]}
+                        value={assignment.engine}
+                        onChange={(value) =>
+                          handleUpdateBrain(index, { engine: (value as "llm" | "cli") ?? "llm" })
+                        }
+                        flex={1}
+                      />
+                      <Select
+                        label={t("setup.intelligence.target")}
+                        data={targetOptions}
+                        value={assignment.target}
+                        onChange={(value) =>
+                          handleUpdateBrain(index, { target: value ?? "default" })
                         }
                         flex={1.5}
                       />
-                      <TextInput
-                        label={t("setup.intelligence.modelId")}
-                        value={modelDef.model_id}
-                        onChange={(e) => handleUpdateLlmSlotModelId(slotKey, e.currentTarget.value)}
-                        flex={2}
-                      />
-                      {slotKey !== "default" ? (
+                      {!isBrainFeatureLocked(assignment.name) ? (
                         <ActionIcon
                           color="danger"
                           variant="subtle"
-                          onClick={() => handleDeleteLlmSlot(slotKey)}
+                          onClick={() => handleDeleteBrain(index)}
                           mb="xs"
                         >
                           <Trash2 size={16} />
@@ -2199,144 +2069,278 @@ function IntelligenceEditor({
                   );
                 })}
               </Stack>
-            </Stack>
-          </Card>
+            </Card>
 
-          {/* Section 3: CLI Slots Definitions */}
-          <Card withBorder radius="sm" p="md">
-            <Stack gap="md">
-              <Group justify="space-between">
-                <Text fw={700} size="sm">
-                  {t("setup.intelligence.tabs.cli")}
-                </Text>
-                <Button
-                  size="xs"
-                  variant="light"
-                  leftSection={<Plus size={14} />}
-                  onClick={handleAddCliSlot}
-                >
-                  {t("setup.intelligence.addCliSlot")}
-                </Button>
-              </Group>
+            {/* Section 2: LLM Slots Definitions */}
+            <Card withBorder radius="sm" p="md">
+              <Stack gap="md">
+                <Group justify="space-between">
+                  <Text fw={700} size="sm">
+                    {t("setup.intelligence.tabs.models")}
+                  </Text>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    leftSection={<Plus size={14} />}
+                    onClick={handleAddLlmSlot}
+                  >
+                    {t("setup.intelligence.addLlmSlot")}
+                  </Button>
+                </Group>
 
-              <Accordion variant="separated">
-                {cliSlots.map((slotKey) => {
-                  const path = draft.cli_agent_mapping[slotKey];
-                  const agentDef = draft.cli_agents.find((a) => a.path === path);
-                  if (!agentDef) return null;
+                <Stack gap="sm">
+                  {modelSlots.map((slotKey) => {
+                    const path = draft.model_mapping[slotKey];
+                    const modelDef = draft.models.find((m) => m.path === path);
+                    if (!modelDef) return null;
 
-                  const detection = detectedByPath[agentDef.path];
-                  const isDetected = detection?.detected || agentDef.detected;
+                    return (
+                      <Group key={slotKey} align="flex-end" gap="xs" wrap="nowrap">
+                        <SlotNameInput
+                          key={slotKey}
+                          label={t("setup.intelligence.slot")}
+                          value={slotKey}
+                          readOnly={isModelSlotLocked(slotKey)}
+                          onRename={handleRenameLlmSlot}
+                          flex={1.5}
+                        />
+                        <Select
+                          label={t("setup.intelligence.provider")}
+                          data={providers.map((provider) => ({
+                            value: provider.provider,
+                            label: provider.label,
+                          }))}
+                          value={modelDef.provider}
+                          onChange={(val) =>
+                            handleUpdateLlmSlotProvider(slotKey, val ?? DEFAULT_LLM_PROVIDER)
+                          }
+                          flex={1.5}
+                        />
+                        <TextInput
+                          label={t("setup.intelligence.modelId")}
+                          value={modelDef.model_id}
+                          onChange={(e) =>
+                            handleUpdateLlmSlotModelId(slotKey, e.currentTarget.value)
+                          }
+                          flex={2}
+                        />
+                        {!isModelSlotLocked(slotKey) ? (
+                          <ActionIcon
+                            color="danger"
+                            variant="subtle"
+                            onClick={() => handleDeleteLlmSlot(slotKey)}
+                            mb="xs"
+                          >
+                            <Trash2 size={16} />
+                          </ActionIcon>
+                        ) : (
+                          <Box w={28} />
+                        )}
+                      </Group>
+                    );
+                  })}
+                </Stack>
+              </Stack>
+            </Card>
 
-                  return (
-                    <Accordion.Item key={slotKey} value={slotKey}>
-                      <Accordion.Control>
-                        <Group justify="space-between" pr="md" align="center" wrap="nowrap">
-                          <Group gap="xs" align="center">
-                            <Text fw={600} size="sm">
-                              {slotKey}
-                            </Text>
-                            <Text size="xs" c="dimmed">
-                              ➔ {agentDef.name}
-                            </Text>
+            {/* Section 3: CLI Slots Definitions */}
+            <Card withBorder radius="sm" p="md">
+              <Stack gap="md">
+                <Group justify="space-between">
+                  <Text fw={700} size="sm">
+                    {t("setup.intelligence.tabs.cli")}
+                  </Text>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    leftSection={<Plus size={14} />}
+                    onClick={handleAddCliSlot}
+                  >
+                    {t("setup.intelligence.addCliSlot")}
+                  </Button>
+                </Group>
+
+                <Accordion variant="separated">
+                  {cliSlots.map((slotKey) => {
+                    const path = draft.cli_agent_mapping[slotKey];
+                    const agentDef = draft.cli_agents.find((a) => a.path === path);
+                    if (!agentDef) return null;
+
+                    const detection = detectedByPath[agentDef.path];
+                    const isDetected = detection?.detected || agentDef.detected;
+
+                    return (
+                      <Accordion.Item key={slotKey} value={slotKey}>
+                        <Accordion.Control>
+                          <Group justify="space-between" pr="md" align="center" wrap="nowrap">
+                            <Group gap="xs" align="center">
+                              <Text fw={600} size="sm">
+                                {slotKey}
+                              </Text>
+                              <Text size="xs" c="dimmed">
+                                ➔ {agentDef.name}
+                              </Text>
+                            </Group>
+                            <Group gap="xs" wrap="nowrap">
+                              <Badge color={isDetected ? "success" : "danger"} variant="light">
+                                {isDetected
+                                  ? t("setup.intelligence.detected")
+                                  : t("setup.intelligence.notDetected")}
+                              </Badge>
+                              {!isCliSlotLocked(slotKey) ? (
+                                <ActionIcon
+                                  color="danger"
+                                  variant="subtle"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteCliSlot(slotKey);
+                                  }}
+                                  size="sm"
+                                >
+                                  <Trash2 size={14} />
+                                </ActionIcon>
+                              ) : null}
+                            </Group>
                           </Group>
-                          <Group gap="xs" wrap="nowrap">
-                            <Badge color={isDetected ? "success" : "danger"} variant="light">
-                              {isDetected
-                                ? t("setup.intelligence.detected")
-                                : t("setup.intelligence.notDetected")}
-                            </Badge>
-                            {slotKey !== "default" ? (
-                              <ActionIcon
-                                color="danger"
-                                variant="subtle"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteCliSlot(slotKey);
-                                }}
-                                size="sm"
-                              >
-                                <Trash2 size={14} />
-                              </ActionIcon>
-                            ) : null}
-                          </Group>
-                        </Group>
-                      </Accordion.Control>
-                      <Accordion.Panel>
-                        <Stack gap="sm" pt="xs">
-                          <Group gap="xs" grow>
-                            <SlotNameInput
-                              key={slotKey}
-                              label={t("setup.intelligence.slot")}
-                              value={slotKey}
-                              readOnly={slotKey === "default"}
-                              onRename={handleRenameCliSlot}
-                              size="xs"
-                              fw={600}
-                            />
-                            <Select
-                              label={t("setup.intelligence.cliAgent")}
-                              data={cliFileOptions}
-                              value={path}
-                              onChange={(val) => handleUpdateCliSlotAgentPath(slotKey, val ?? path)}
-                              size="xs"
-                            />
-                          </Group>
-                          <Textarea
-                            label={t("setup.intelligence.envJson")}
-                            autosize
-                            minRows={2}
-                            value={JSON.stringify(agentDef.env ?? {}, null, 2)}
-                            error={envErrors[agentDef.path]}
-                            onChange={(event) => {
-                              const nextText = event.currentTarget.value;
-                              try {
-                                const parsed = JSON.parse(nextText || "{}") as unknown;
-                                if (!isRecord(parsed)) {
-                                  throw new Error("env must be an object");
+                        </Accordion.Control>
+                        <Accordion.Panel>
+                          <Stack gap="sm" pt="xs">
+                            <Group gap="xs" grow>
+                              <SlotNameInput
+                                key={slotKey}
+                                label={t("setup.intelligence.slot")}
+                                value={slotKey}
+                                readOnly={isCliSlotLocked(slotKey)}
+                                onRename={handleRenameCliSlot}
+                                size="xs"
+                                fw={600}
+                              />
+                              <Select
+                                label={t("setup.intelligence.cliAgent")}
+                                data={cliFileOptions}
+                                value={path}
+                                onChange={(val) =>
+                                  handleUpdateCliSlotAgentPath(slotKey, val ?? path)
                                 }
-                                setEnvErrors((current) => {
-                                  const next = { ...current };
-                                  delete next[agentDef.path];
-                                  return next;
-                                });
-                                handleUpdateCliAgentDef(agentDef.path, { env: parsed });
-                              } catch {
-                                setEnvErrors((current) => ({
-                                  ...current,
-                                  [agentDef.path]: t("setup.intelligence.envJsonError"),
-                                }));
+                                size="xs"
+                              />
+                            </Group>
+                            <Textarea
+                              label={t("setup.intelligence.envJson")}
+                              autosize
+                              minRows={2}
+                              value={JSON.stringify(agentDef.env ?? {}, null, 2)}
+                              error={envErrors[agentDef.path]}
+                              onChange={(event) => {
+                                const nextText = event.currentTarget.value;
+                                try {
+                                  const parsed = JSON.parse(nextText || "{}") as unknown;
+                                  if (!isRecord(parsed)) {
+                                    throw new Error("env must be an object");
+                                  }
+                                  setEnvErrors((current) => {
+                                    const next = { ...current };
+                                    delete next[agentDef.path];
+                                    return next;
+                                  });
+                                  handleUpdateCliAgentDef(agentDef.path, { env: parsed });
+                                } catch {
+                                  setEnvErrors((current) => ({
+                                    ...current,
+                                    [agentDef.path]: t("setup.intelligence.envJsonError"),
+                                  }));
+                                }
+                              }}
+                            />
+                            <Textarea
+                              label={t("setup.intelligence.script")}
+                              autosize
+                              minRows={5}
+                              value={agentDef.script}
+                              onChange={(event) =>
+                                handleUpdateCliAgentDef(agentDef.path, {
+                                  script: event.currentTarget.value,
+                                })
                               }
-                            }}
-                          />
-                          <Textarea
-                            label={t("setup.intelligence.script")}
-                            autosize
-                            minRows={5}
-                            value={agentDef.script}
-                            onChange={(event) =>
-                              handleUpdateCliAgentDef(agentDef.path, {
-                                script: event.currentTarget.value,
-                              })
-                            }
-                          />
-                        </Stack>
-                      </Accordion.Panel>
-                    </Accordion.Item>
-                  );
-                })}
-              </Accordion>
-            </Stack>
-          </Card>
+                            />
+                          </Stack>
+                        </Accordion.Panel>
+                      </Accordion.Item>
+                    );
+                  })}
+                </Accordion>
+              </Stack>
+            </Card>
 
-          <NativeAgentPolicyEditor
-            policy={draft.native_agent_policy}
-            onChange={(policy) =>
-              updateDraft((current) => ({ ...current, native_agent_policy: policy }))
-            }
-          />
-        </Stack>
-      )}
+            <NativeAgentPolicyEditor
+              policy={draft.native_agent_policy}
+              onChange={(policy) =>
+                updateDraft((current) => ({ ...current, native_agent_policy: policy }))
+              }
+            />
+          </Stack>
+        );
+        if (!personId) {
+          return advancedBody;
+        }
+        return (
+          <Stack gap="md">
+            <Card withBorder radius="sm" p="md">
+              <Stack gap="xs">
+                <Text size="sm" fw={700}>
+                  {t("setup.intelligence.defaultProvider")}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {t("setup.intelligence.providerDescription")}
+                </Text>
+                <DefaultProviderCards
+                  providers={providers}
+                  isActive={(provider) =>
+                    providerFromModelPath(draft.model_mapping.default) === provider
+                  }
+                  isAvailable={(provider) => Boolean(llmProviderAvailability?.[provider])}
+                  onSelect={(provider) =>
+                    updateDraft((current) =>
+                      withSlotModel(
+                        current,
+                        "default",
+                        providerDefaultModel(provider, "default", providerDefaults),
+                      ),
+                    )
+                  }
+                />
+              </Stack>
+            </Card>
+            <Card withBorder radius="sm" p="md">
+              <Stack gap="xs">
+                <Text size="sm" fw={700}>
+                  {t("setup.intelligence.defaultCliAgent")}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {t("setup.intelligence.cliHint")}
+                </Text>
+                <DefaultCliAgentCards
+                  detections={detections}
+                  isActive={(agent) => draft.cli_agent_mapping.default === agent.config_reference}
+                  isDetected={(agent) => agent.detected}
+                  // Reuse the advanced-slot handler so the picked tool is also
+                  // registered in draft.cli_agents; otherwise the default slot
+                  // would vanish when the 詳細設定 accordion is opened.
+                  onSelect={(agent) =>
+                    handleUpdateCliSlotAgentPath("default", agent.config_reference)
+                  }
+                />
+              </Stack>
+            </Card>
+            <Accordion variant="contained">
+              <Accordion.Item value="advanced-intelligence">
+                <Accordion.Control>{t("setup.intelligence.advanced")}</Accordion.Control>
+                <Accordion.Panel>{advancedBody}</Accordion.Panel>
+              </Accordion.Item>
+            </Accordion>
+          </Stack>
+        );
+      })()}
       {mutation.error ? (
         <Alert color="danger" title={t("setup.intelligence.saveAdvancedError")}>
           {mutation.error.message}
@@ -4104,7 +4108,6 @@ function MembersSection({
                 </Tabs.Panel>
               ) : null}
             </Tabs>
-            <Divider />
             <Group justify="space-between" className="form-footer">
               <Box>
                 {formMode === "edit" ? (
@@ -6134,16 +6137,10 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
       inherit_team_defaults: true,
     };
   }
-  if (config.person_id) {
-    return {
-      config_dir: config.config_dir,
-      person_id: personId,
-      inherit_team_defaults: false,
-      model_mapping: config.model_mapping,
-      cli_agent_mapping: config.cli_agent_mapping,
-      native_agent_policy: config.native_agent_policy,
-    };
-  }
+  // Team and member scopes send the same full payload. The backend keeps the
+  // team file complete and reduces a member's payload to only what differs from
+  // the team defaults, so members must send the full editor state (including
+  // models, CLI agents, and feature assignments) for that diff to be computed.
   return {
     config_dir: config.config_dir,
     person_id: personId,

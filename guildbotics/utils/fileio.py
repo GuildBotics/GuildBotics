@@ -202,6 +202,37 @@ def get_person_config_path(
     return get_config_path(path_str, language_code)
 
 
+def load_person_slot_mapping(person_id: str, path_str: str) -> dict:
+    """Load a slot mapping for a person, merged over the team-level defaults.
+
+    Slot mappings (for example ``intelligences/model_mapping.yml``) map a slot
+    name to a definition reference. A member may define their own mapping file
+    to override individual slots; any slot the member does not define is
+    inherited from the team-level mapping. This per-key merge means a partial
+    member override never drops team-provided slots.
+
+    Args:
+        person_id (str): The ID of the person.
+        path_str (str): The relative path to the mapping file
+            (for example ``"intelligences/model_mapping.yml"``).
+
+    Returns:
+        dict: The merged slot mapping, member entries taking precedence.
+    """
+    mapping: dict = {}
+    team_path = get_config_path(path_str)
+    if team_path.exists():
+        team_mapping = load_yaml_file(team_path)
+        if isinstance(team_mapping, dict):
+            mapping.update(team_mapping)
+    member_path = get_config_path(f"team/members/{person_id}/{path_str}")
+    if member_path.exists() and member_path != team_path:
+        member_mapping = load_yaml_file(member_path)
+        if isinstance(member_mapping, dict):
+            mapping.update(member_mapping)
+    return mapping
+
+
 def load_markdown_with_frontmatter(file: Path) -> dict:
     """
     Load a Markdown file with YAML front matter and return as dict.

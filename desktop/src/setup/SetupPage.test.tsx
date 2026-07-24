@@ -1741,17 +1741,19 @@ describe("toIntelligenceUpdatePayload", () => {
     });
   });
 
-  it("emits a member override update without full definitions", () => {
+  it("emits a full member override update so the backend can diff definitions", () => {
     const payload = toIntelligenceUpdatePayload({ ...team, person_id: "alice", inherited: false });
     expect(payload).toEqual({
       config_dir: team.config_dir,
       person_id: "alice",
       inherit_team_defaults: false,
       model_mapping: team.model_mapping,
+      models: team.models,
       cli_agent_mapping: team.cli_agent_mapping,
+      cli_agents: team.cli_agents,
+      brain_mapping: team.brain_mapping,
       native_agent_policy: team.native_agent_policy,
     });
-    expect("models" in payload).toBe(false);
   });
 
   it("emits an inherit-team-defaults update", () => {
@@ -2921,6 +2923,15 @@ async function openMemberIntelligenceTab(user: ReturnType<typeof userEvent.setup
   await user.click(await screen.findByRole("tab", { name: t("setup.members.tabs.intelligence") }));
 }
 
+// The member intelligence tab mirrors the team layout: the friendly default
+// provider/CLI cards on top, with the full editor behind a "詳細設定" accordion.
+// Tests that drive the full editor must expand it first.
+async function openMemberIntelligenceAdvanced(user: ReturnType<typeof userEvent.setup>) {
+  await openMemberIntelligenceTab(user);
+  await user.click(await screen.findByRole("button", { name: t("setup.intelligence.advanced") }));
+  await screen.findByText(t("setup.intelligence.tabs.models"));
+}
+
 describe("IntelligenceEditor (team default)", () => {
   beforeEach(() => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
@@ -3146,8 +3157,8 @@ describe("IntelligenceEditor (team default)", () => {
 
 describe("IntelligenceEditor (member override)", () => {
   beforeEach(() => {
-    // Two providers and two AI CLI tools are available so the override buttons are
-    // enabled and selecting a non-default option is possible.
+    // Two providers and two AI CLI tools are available so the full editor offers
+    // a non-default option to select for the member override.
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({
         description: "Demo project",
@@ -3178,50 +3189,115 @@ describe("IntelligenceEditor (member override)", () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(memberIntelligenceConfig());
   });
 
-  it("registers an external save callback and persists the override on member save", async () => {
+  it("registers an external save callback and persists a member override on save", async () => {
     const user = userEvent.setup();
-    await openMemberIntelligenceTab(user);
+    await openMemberIntelligenceAdvanced(user);
 
-    // Switch the member's default LLM provider to Gemini.
-    await user.click(await screen.findByText(t("setup.intelligence.memberDefaultProvider")));
-    const geminiButton = screen.getByText("Google Gemini").closest("button");
-    if (!geminiButton) {
-      throw new Error("Gemini override button not found");
-    }
-    await user.click(geminiButton);
+    // The member editor is the same full advanced editor as the team scope:
+    // edit the default model slot's model id.
+    const modelIds = await screen.findAllByLabelText(t("setup.intelligence.modelId"));
+    await user.clear(modelIds[0]);
+    await user.type(modelIds[0], "gpt-6");
+
+    // External save mode: nothing persists until the member Save button is used.
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body).toMatchObject({ person_id: "alice", inherit_team_defaults: false });
-    expect(body.model_mapping?.default).toBe("models/gemini/default.yml");
-    // Member overrides do not resend full model/cli/brain definitions.
-    expect("models" in body).toBe(false);
-    expect("brain_mapping" in body).toBe(false);
+    // The full editor state (definitions and assignments) is sent so the
+    // backend can reduce it to a member diff.
+    expect(body.models?.some((model) => model.model_id === "gpt-6")).toBe(true);
+    expect("brain_mapping" in body).toBe(true);
   });
 
-  it("edits the member default AI CLI tool override", async () => {
+  it("switches a member model slot provider override", async () => {
     const user = userEvent.setup();
-    await openMemberIntelligenceTab(user);
+    await openMemberIntelligenceAdvanced(user);
 
-    await screen.findByText(t("setup.intelligence.memberDefaultCliAgent"));
-    const claudeButton = screen.getByRole("button", { name: /Claude Code/ });
-    if (!claudeButton) {
-      throw new Error("Claude override button not found");
-    }
-    await user.click(claudeButton);
+    // Switch the default model slot's provider to Gemini via the full editor.
+    const providerSelects = await screen.findAllByLabelText(t("setup.intelligence.provider"));
+    await user.click(providerSelects[0]);
+    await user.click(await screen.findByRole("option", { name: "Google Gemini" }));
 
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
-    expect(body.cli_agent_mapping?.default).toBe("claude");
+    expect(body.model_mapping?.default).toBe("models/gemini/default.yml");
+  });
+
+  it("switches the member default provider via the simple card (no accordion)", async () => {
+    const user = userEvent.setup();
+    // The friendly default-provider cards are shared with the team scope and
+    // restored on the member tab, above the "詳細設定" accordion.
+    await openMemberIntelligenceTab(user);
+
+    await user.click(await screen.findByRole("button", { name: "Google Gemini" }));
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].model_mapping?.default).toBe(
+      "models/gemini/default.yml",
+    );
+  });
+
+  it("keeps the default CLI slot renderable after a simple-card switch", async () => {
+    // Load a member config whose cli_agents does NOT yet include the tool we
+    // pick, so the simple card must register its definition itself.
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      memberIntelligenceConfig({
+        cli_agent_mapping: { default: "codex" },
+        cli_agents: [
+          {
+            path: "codex",
+            name: "codex",
+            env: {},
+            script: "codex",
+            detected: true,
+            detected_path: "/usr/local/bin/codex",
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    await openMemberIntelligenceTab(user);
+
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+    await user.click(await screen.findByRole("button", { name: t("setup.intelligence.advanced") }));
+
+    // The default CLI slot still renders, showing the newly picked tool (a
+    // missing agent def would drop the slot entirely -> zero matches).
+    expect((await screen.findAllByText("➔ claude")).length).toBeGreaterThan(0);
+  });
+
+  it("locks rename of team-owned slots but keeps member-added ones editable", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      memberIntelligenceConfig({
+        model_mapping: {
+          default: "models/openai.yml",
+          translation: "models/gemini.yml",
+          custom: "models/openai.yml",
+        },
+        // "custom" is member-added; "default"/"translation" are team-owned.
+        inherited_model_slots: ["default", "translation"],
+      }),
+    );
+    const user = userEvent.setup();
+    await openMemberIntelligenceAdvanced(user);
+
+    const slotInputs = await screen.findAllByLabelText(t("setup.intelligence.slot"));
+    const byValue = (value: string) =>
+      slotInputs.find((input) => (input as HTMLInputElement).value === value);
+    expect(byValue("translation")).toBeDisabled();
+    expect(byValue("custom")).not.toBeDisabled();
   });
 
   it("persists a member-specific Codex filesystem boundary", async () => {
     const user = userEvent.setup();
-    await openMemberIntelligenceTab(user);
+    await openMemberIntelligenceAdvanced(user);
 
     await user.click(
       await screen.findByRole("textbox", { name: t("setup.intelligence.filesystemAccess") }),

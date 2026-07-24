@@ -149,6 +149,30 @@ def test_read_config_member_without_override_is_inherited(tmp_path: Path) -> Non
     assert response.models[0].model_id == "team-model-id"
 
 
+def test_read_config_member_marks_team_owned_slots(tmp_path: Path) -> None:
+    """A member response flags the team-owned slot/feature names as locked."""
+    _write_team_config(tmp_path)
+
+    response = IntelligenceConfigService().read_config(
+        config_dir=tmp_path, person_id="alice"
+    )
+
+    assert set(response.inherited_model_slots) == {"default", "openai"}
+    assert set(response.inherited_cli_slots) == {"default"}
+    assert set(response.inherited_brain_features) == {"default", "agent"}
+
+
+def test_read_config_team_has_no_inherited_slots(tmp_path: Path) -> None:
+    """The team scope owns everything, so nothing is reported as inherited."""
+    _write_team_config(tmp_path)
+
+    response = IntelligenceConfigService().read_config(config_dir=tmp_path)
+
+    assert response.inherited_model_slots == []
+    assert response.inherited_cli_slots == []
+    assert response.inherited_brain_features == []
+
+
 def test_read_config_member_with_override_not_inherited(tmp_path: Path) -> None:
     _write_team_config(tmp_path)
     member_base = _member_intelligences(tmp_path, "alice")
@@ -167,8 +191,11 @@ def test_read_config_member_with_override_not_inherited(tmp_path: Path) -> None:
 
     assert response.inherited is False
     assert response.model_mapping["default"] == "models/anthropic/claude.yml"
-    assert response.models[0].provider == "anthropic"
-    assert response.models[0].model_id == "member-model-id"
+    # A partial member override must not drop the team-provided slots: the
+    # "openai" slot the member never redefined is still inherited from the team.
+    assert response.model_mapping["openai"] == "models/openai/gpt.yml"
+    member_model = next(m for m in response.models if m.provider == "anthropic")
+    assert member_model.model_id == "member-model-id"
 
 
 def test_read_config_deduplicates_model_file_reads(
@@ -431,31 +458,113 @@ def test_team_update_clears_all_runtime_caches(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_member_override_update_writes_only_member_mapping_files(
-    tmp_path: Path,
-) -> None:
+def _team_brain_assignments() -> list[BrainAssignment]:
+    """The BrainAssignment list equivalent to the team config's brain_mapping."""
+    return [
+        BrainAssignment(
+            name="default",
+            brain_class=AGNO_BRAIN_CLASS,
+            engine="llm",
+            target="default",
+        ),
+        BrainAssignment(
+            name="agent",
+            brain_class=CLI_BRAIN_CLASS,
+            engine="cli",
+            target="default",
+        ),
+    ]
+
+
+def test_member_override_writes_only_changed_slots(tmp_path: Path) -> None:
+    """A member override persists only what differs from the team defaults.
+
+    Slots, definitions, brain assignments, and the policy that match the team
+    are left inherited (not re-written), so the runtime merge keeps serving the
+    team value and later team changes still propagate.
+    """
+    _write_team_config(tmp_path)
+
     request = IntelligenceConfigUpdateRequest(
         config_dir=tmp_path,
         person_id="alice",
-        model_mapping={"default": "models/openai/gpt.yml"},
+        # "default" changes to anthropic; "openai" matches the team default.
+        model_mapping={
+            "default": "models/anthropic/claude.yml",
+            "openai": "models/openai/gpt.yml",
+        },
+        models=[
+            ModelDefinition(
+                path="models/anthropic/claude.yml",
+                provider="anthropic",
+                model_class="member.ModelClass",
+                model_id="member-model-id",
+            ),
+            ModelDefinition(
+                path="models/openai/gpt.yml",
+                provider="openai",
+                model_class="team.ModelClass",
+                model_id="team-model-id",
+            ),
+        ],
         cli_agent_mapping={"default": "codex-cli.yml"},
+        cli_agents=[
+            CliAgentDefinition(
+                path="codex-cli.yml",
+                name="codex",
+                env={"FOO": "bar"},
+                script="codex exec",
+            )
+        ],
+        brain_mapping=_team_brain_assignments(),
     )
 
     result = IntelligenceConfigService().update_config(request)
 
     base = _member_intelligences(tmp_path, "alice")
     written = {f.path for f in result.files}
+    # Only the changed "default" model slot and its new model definition persist.
     assert written == {
         base / "model_mapping.yml",
-        base / "cli_agent_mapping.yml",
+        base / "models/anthropic/claude.yml",
     }
-    # Member override does NOT write model files, cli_agents, or brain mapping.
-    assert not (base / "brain_mapping.yml").exists()
-    assert not (base / "cli_agents").exists()
-    assert not (base / "models").exists()
     assert load_yaml_file(base / "model_mapping.yml") == {
-        "default": "models/openai/gpt.yml"
+        "default": "models/anthropic/claude.yml"
     }
+    # Slots/definitions/assignments identical to the team are left inherited.
+    assert not (base / "models/openai").exists()
+    assert not (base / "cli_agent_mapping.yml").exists()
+    assert not (base / "cli_agents").exists()
+    assert not (base / "brain_mapping.yml").exists()
+
+
+def test_member_override_writes_changed_brain_assignment_only(tmp_path: Path) -> None:
+    _write_team_config(tmp_path)
+    assignments = _team_brain_assignments()
+    # Add a member-only feature assignment; the inherited ones are unchanged.
+    assignments.append(
+        BrainAssignment(
+            name="translate",
+            brain_class=AGNO_BRAIN_CLASS,
+            engine="llm",
+            target="openai",
+        )
+    )
+
+    request = IntelligenceConfigUpdateRequest(
+        config_dir=tmp_path,
+        person_id="alice",
+        model_mapping={"default": "models/openai/gpt.yml", "openai": "models/openai/gpt.yml"},
+        cli_agent_mapping={"default": "codex-cli.yml"},
+        brain_mapping=assignments,
+    )
+    IntelligenceConfigService().update_config(request)
+
+    base = _member_intelligences(tmp_path, "alice")
+    stored = load_yaml_file(base / "brain_mapping.yml")
+    # Only the added assignment is persisted; the team ones stay inherited.
+    assert set(stored) == {"translate"}
+    assert stored["translate"]["args"] == {"model": "openai"}
 
 
 def test_member_override_update_writes_native_agent_policy(tmp_path: Path) -> None:
@@ -478,21 +587,71 @@ def test_member_override_update_writes_native_agent_policy(tmp_path: Path) -> No
     assert stored == {"codex": {"filesystem_access": "host"}}
 
 
-def test_member_override_update_replaces_existing_dir(tmp_path: Path) -> None:
+def test_member_override_prunes_reverted_slot(tmp_path: Path) -> None:
+    """Reverting a slot back to the team value removes the stale override file."""
+    _write_team_config(tmp_path)
     base = _member_intelligences(tmp_path, "alice")
-    stale = base / "stale.yml"
-    _write_yaml(stale, {"old": "data"})
+    _write_yaml(base / "model_mapping.yml", {"default": "models/anthropic/claude.yml"})
 
     request = IntelligenceConfigUpdateRequest(
         config_dir=tmp_path,
         person_id="alice",
-        model_mapping={"default": "models/openai/gpt.yml"},
-        cli_agent_mapping={},
+        model_mapping={
+            "default": "models/openai/gpt.yml",
+            "openai": "models/openai/gpt.yml",
+        },
+        cli_agent_mapping={"default": "codex-cli.yml"},
+        brain_mapping=_team_brain_assignments(),
     )
     IntelligenceConfigService().update_config(request)
 
-    assert not stale.exists()
-    assert (base / "model_mapping.yml").exists()
+    # The override now matches the team, so the file is pruned and the runtime
+    # inherits the team slot again.
+    assert not (base / "model_mapping.yml").exists()
+
+
+def test_member_override_preserves_unsurfaced_def_fields(tmp_path: Path) -> None:
+    """Saving a member override keeps definition fields the editor never shows.
+
+    Regression: a blind rmtree + re-seed from the team dropped member-specific
+    values (rate_limit, conversation_scope, ...) on every save.
+    """
+    _write_team_config(tmp_path)
+    base = _member_intelligences(tmp_path, "alice")
+    # Same surfaced class/id as the team, plus a hand-tuned rate_limit.
+    _write_yaml(
+        base / "models/openai/gpt.yml",
+        {
+            "model_class": "team.ModelClass",
+            "parameters": {"id": "team-model-id"},
+            "rate_limit": {"max_requests_per_minute": 3},
+        },
+    )
+    _write_yaml(base / "model_mapping.yml", {"default": "models/openai/gpt.yml"})
+
+    # The editor re-saves without touching the surfaced fields.
+    request = IntelligenceConfigUpdateRequest(
+        config_dir=tmp_path,
+        person_id="alice",
+        model_mapping={
+            "default": "models/openai/gpt.yml",
+            "openai": "models/openai/gpt.yml",
+        },
+        models=[
+            ModelDefinition(
+                path="models/openai/gpt.yml",
+                provider="openai",
+                model_class="team.ModelClass",
+                model_id="team-model-id",
+            ),
+        ],
+        cli_agent_mapping={"default": "codex-cli.yml"},
+        brain_mapping=_team_brain_assignments(),
+    )
+    IntelligenceConfigService().update_config(request)
+
+    stored = load_yaml_file(base / "models/openai/gpt.yml")
+    assert stored["rate_limit"] == {"max_requests_per_minute": 3}
 
 
 def test_member_override_update_preserves_policy_when_request_omits_it(
