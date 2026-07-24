@@ -1272,19 +1272,17 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
         )
         assert member_update.status_code == HTTP_OK
         member_intelligences_dir = config_dir / "team/members/alice/intelligences"
-        assert (
-            safe_load((member_intelligences_dir / "model_mapping.yml").read_text())
-            == member_payload["model_mapping"]
+        # Only the changed feature assignment is persisted as an override; the
+        # model/cli mappings the member left equal to the team stay inherited.
+        stored_brain = safe_load(
+            (member_intelligences_dir / "brain_mapping.yml").read_text()
         )
-        assert (
-            safe_load((member_intelligences_dir / "cli_agent_mapping.yml").read_text())
-            == member_payload["cli_agent_mapping"]
-        )
+        assert stored_brain["default"]["args"] == {"model": "anthropic"}
         assert sorted(
             path.relative_to(member_intelligences_dir).as_posix()
             for path in member_intelligences_dir.rglob("*")
             if path.is_file()
-        ) == ["cli_agent_mapping.yml", "model_mapping.yml"]
+        ) == ["brain_mapping.yml"]
 
         inherit_reset = client.put(
             "/config/intelligences",

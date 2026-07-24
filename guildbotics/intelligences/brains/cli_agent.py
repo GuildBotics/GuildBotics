@@ -34,7 +34,11 @@ from guildbotics.observability.session_transcripts import (
     transcript_detail,
 )
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
+from guildbotics.utils.fileio import (
+    get_person_config_path,
+    load_person_slot_mapping,
+    load_yaml_file,
+)
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.text_utils import replace_placeholders
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
@@ -489,10 +493,7 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
     if person_id in person_cli_agent_mapping:
         return person_cli_agent_mapping[person_id]
 
-    config_file = get_person_config_path(
-        person_id, "intelligences/cli_agent_mapping.yml"
-    )
-    mapping = cast(dict, load_yaml_file(config_file))
+    mapping = load_person_slot_mapping(person_id, "intelligences/cli_agent_mapping.yml")
     from guildbotics.intelligences.cli_agents import native_cli_agent_name
 
     cli_agent_mapping = {}

@@ -47,9 +47,26 @@ class IntelligenceConfigService:
         cli_agent_mapping = self._read_scoped_mapping(
             config_dir, person_id, "cli_agent_mapping.yml"
         )
-        brain_mapping = self._read_scoped_yaml(
+        brain_mapping = self._read_merged_mapping(
             config_dir, person_id, "brain_mapping.yml"
         )
+
+        # For a member, the team owns every slot/feature name it defines: those
+        # can be value-overridden but not deleted/renamed (the merge would revive
+        # them). Expose the team-owned names so the editor can lock them.
+        inherited_model_slots: list[str] = []
+        inherited_cli_slots: list[str] = []
+        inherited_brain_features: list[str] = []
+        if person_id:
+            inherited_model_slots = list(
+                self._read_merged_mapping(config_dir, None, "model_mapping.yml")
+            )
+            inherited_cli_slots = list(
+                self._read_merged_mapping(config_dir, None, "cli_agent_mapping.yml")
+            )
+            inherited_brain_features = list(
+                self._read_merged_mapping(config_dir, None, "brain_mapping.yml")
+            )
 
         return IntelligenceConfigResponse(
             config_dir=config_dir,
@@ -61,6 +78,9 @@ class IntelligenceConfigService:
             cli_agents=self._read_cli_agents(config_dir, person_id, cli_agent_mapping),
             brain_mapping=self._read_brain_assignments(brain_mapping),
             native_agent_policy=self._read_native_agent_policy(config_dir, person_id),
+            inherited_model_slots=inherited_model_slots,
+            inherited_cli_slots=inherited_cli_slots,
+            inherited_brain_features=inherited_brain_features,
         )
 
     def update_config(
@@ -86,53 +106,18 @@ class IntelligenceConfigService:
         files.append(CreatedFile(path=model_mapping_file, action="update"))
 
         for model in request.models:
-            model_file = target_dir / model.path
-            model_file.parent.mkdir(parents=True, exist_ok=True)
-            model_data = self._read_optional_yaml(model_file)
-            if not model_data:
-                model_data = self._read_optional_yaml(
-                    get_template_path() / "intelligences" / model.path
-                )
-            model_data["model_class"] = model.model_class
-            parameters = model_data.get("parameters", {})
-            if not isinstance(parameters, dict):
-                parameters = {}
-            parameters["id"] = model.model_id
-            model_data["parameters"] = parameters
-            save_yaml_file(model_file, model_data)
-            files.append(CreatedFile(path=model_file, action="update"))
+            self._write_model_def(request.config_dir, None, target_dir, model, files)
 
         cli_mapping_file = target_dir / "cli_agent_mapping.yml"
         save_yaml_file(
-            cli_mapping_file,
-            {
-                key: native_cli_agent_name(value) or value
-                for key, value in request.cli_agent_mapping.items()
-            },
+            cli_mapping_file, self._normalize_cli_mapping(request.cli_agent_mapping)
         )
         files.append(CreatedFile(path=cli_mapping_file, action="update"))
 
-        cli_agents_dir = target_dir / "cli_agents"
-        cli_agents_dir.mkdir(parents=True, exist_ok=True)
         for agent in request.cli_agents:
-            if native_cli_agent_name(agent.path):
-                continue
-            agent_file = cli_agents_dir / agent.path
-            # Preserve the existing/template script when the request does not
-            # carry one. The editor only loads the mapped agent's script, so a
-            # newly selected agent would otherwise overwrite a real script with
-            # an empty one. Mirrors how model files are merged above.
-            agent_data = self._read_optional_yaml(agent_file)
-            if not agent_data:
-                agent_data = self._read_optional_yaml(
-                    get_template_path() / "intelligences/cli_agents" / agent.path
-                )
-            agent_data["env"] = agent.env
-            if agent.script:
-                agent_data["script"] = agent.script
-            agent_data.setdefault("script", "")
-            save_yaml_file(agent_file, agent_data)
-            files.append(CreatedFile(path=agent_file, action="update"))
+            self._write_cli_agent_def(
+                request.config_dir, None, target_dir, agent, files
+            )
 
         brain_mapping_file = target_dir / "brain_mapping.yml"
         save_yaml_file(
@@ -152,38 +137,234 @@ class IntelligenceConfigService:
     def _update_member_overrides(
         self, request: IntelligenceConfigUpdateRequest, target_dir: Path
     ) -> IntelligenceConfigResult:
-        preserved_policy = (
-            self._read_optional_yaml(target_dir / "native_agent_policy.yml")
-            if request.native_agent_policy is None
-            else {}
-        )
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
+        # A member override stores only what differs from the team defaults, so
+        # the runtime's per-key merge (load_person_slot_mapping) keeps inheriting
+        # every slot the member does not customize. Files are reconciled in place
+        # (never a blind rmtree): a definition is rewritten from the member's own
+        # file when present, so fields the editor never surfaces -- a hand-tuned
+        # rate_limit or conversation_scope -- survive a save, and definitions that
+        # no longer differ from the team are pruned.
+        team = self.read_config(config_dir=request.config_dir, person_id=None)
+        requested_cli = self._normalize_cli_mapping(request.cli_agent_mapping)
+
+        model_override = {
+            slot: path
+            for slot, path in request.model_mapping.items()
+            if team.model_mapping.get(slot) != path
+        }
+        cli_override = {
+            slot: path
+            for slot, path in requested_cli.items()
+            if team.cli_agent_mapping.get(slot) != path
+        }
+        team_brain = {assignment.name: assignment for assignment in team.brain_mapping}
+        brain_override = {
+            assignment.name: self._to_brain_config(assignment)
+            for assignment in request.brain_mapping
+            if team_brain.get(assignment.name) != assignment
+        }
 
         files: list[CreatedFile] = []
-        model_mapping_file = target_dir / "model_mapping.yml"
-        save_yaml_file(model_mapping_file, request.model_mapping)
-        files.append(CreatedFile(path=model_mapping_file, action="update"))
 
-        cli_mapping_file = target_dir / "cli_agent_mapping.yml"
-        save_yaml_file(
-            cli_mapping_file,
-            {
-                key: native_cli_agent_name(value) or value
-                for key, value in request.cli_agent_mapping.items()
-            },
+        self._reconcile_mapping_file(
+            target_dir / "model_mapping.yml", model_override, files
         )
-        files.append(CreatedFile(path=cli_mapping_file, action="update"))
+        self._reconcile_mapping_file(
+            target_dir / "cli_agent_mapping.yml", cli_override, files
+        )
+        self._reconcile_mapping_file(
+            target_dir / "brain_mapping.yml", brain_override, files
+        )
+        self._reconcile_member_defs(
+            request.config_dir,
+            target_dir,
+            "models",
+            [
+                model.path
+                for model in request.models
+                if model.path.startswith("models/")
+            ],
+            {model.path: model for model in request.models},
+            self._model_def_yaml,
+            files,
+        )
+        self._reconcile_member_defs(
+            request.config_dir,
+            target_dir,
+            "cli_agents",
+            [
+                f"cli_agents/{agent.path}"
+                for agent in request.cli_agents
+                if not native_cli_agent_name(agent.path)
+            ],
+            {f"cli_agents/{agent.path}": agent for agent in request.cli_agents},
+            self._cli_def_yaml,
+            files,
+        )
+        self._reconcile_member_policy(request, team, target_dir, files)
 
-        self._write_native_agent_policy(target_dir, request.native_agent_policy, files)
-        if preserved_policy:
-            policy_file = target_dir / "native_agent_policy.yml"
-            save_yaml_file(policy_file, preserved_policy)
-            files.append(CreatedFile(path=policy_file, action="update"))
+        if target_dir.exists() and not any(target_dir.iterdir()):
+            target_dir.rmdir()
 
         self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
+
+    def _reconcile_mapping_file(
+        self, path: Path, data: dict[str, Any], files: list[CreatedFile]
+    ) -> None:
+        if data:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            save_yaml_file(path, data)
+            files.append(CreatedFile(path=path, action="update"))
+        elif path.exists():
+            path.unlink()
+            files.append(CreatedFile(path=path, action="delete"))
+
+    def _reconcile_member_defs(
+        self,
+        config_dir: Path,
+        target_dir: Path,
+        subdir: str,
+        paths: list[str],
+        definitions: dict[str, Any],
+        build: Any,
+        files: list[CreatedFile],
+    ) -> None:
+        """Write member definition files that differ from the inherited ones.
+
+        A member copy is kept only when its resolved content differs from the
+        team/template definition; identical copies (and definitions for paths the
+        member no longer references) are pruned so the runtime keeps inheriting.
+        """
+        kept: set[Path] = set()
+        for rel_path in paths:
+            member_file = target_dir / rel_path
+            inherited = self._read_scoped_yaml(config_dir, None, rel_path)
+            present = self._read_optional_yaml(member_file)
+            desired = build(present if present else inherited, definitions[rel_path])
+            if self._comparable_def(desired) == self._comparable_def(inherited):
+                continue
+            member_file.parent.mkdir(parents=True, exist_ok=True)
+            save_yaml_file(member_file, desired)
+            kept.add(member_file)
+            files.append(CreatedFile(path=member_file, action="update"))
+        self._prune_member_dir(target_dir / subdir, kept, files)
+
+    def _comparable_def(self, data: Any) -> Any:
+        """Normalize a definition for override comparison.
+
+        Drops empty values (mirroring ``save_yaml_file`` cleaning) plus empty
+        containers, so a definition whose only field is an empty ``parameters``
+        map is treated as equal to a missing definition and is not written.
+        """
+        if isinstance(data, dict):
+            result = {}
+            for key, value in data.items():
+                normalized = self._comparable_def(value)
+                if normalized not in (None, "", {}, []):
+                    result[key] = normalized
+            return result
+        if isinstance(data, list):
+            return [self._comparable_def(item) for item in data]
+        return data
+
+    def _prune_member_dir(
+        self, directory: Path, kept: set[Path], files: list[CreatedFile]
+    ) -> None:
+        if not directory.exists():
+            return
+        for path in sorted(directory.rglob("*.yml")):
+            if path not in kept:
+                path.unlink()
+                files.append(CreatedFile(path=path, action="delete"))
+        for sub in sorted(directory.rglob("*"), reverse=True):
+            if sub.is_dir() and not any(sub.iterdir()):
+                sub.rmdir()
+        if not any(directory.iterdir()):
+            directory.rmdir()
+
+    def _reconcile_member_policy(
+        self,
+        request: IntelligenceConfigUpdateRequest,
+        team: IntelligenceConfigResponse,
+        target_dir: Path,
+        files: list[CreatedFile],
+    ) -> None:
+        policy_file = target_dir / "native_agent_policy.yml"
+        # Omitted policy: keep whatever the member already had (nothing to do).
+        if request.native_agent_policy is None:
+            return
+        if request.native_agent_policy != team.native_agent_policy:
+            self._write_native_agent_policy(
+                target_dir, request.native_agent_policy, files
+            )
+        elif policy_file.exists():
+            policy_file.unlink()
+            files.append(CreatedFile(path=policy_file, action="delete"))
+
+    def _normalize_cli_mapping(self, mapping: dict[str, str]) -> dict[str, str]:
+        return {
+            key: native_cli_agent_name(value) or value for key, value in mapping.items()
+        }
+
+    def _write_model_def(
+        self,
+        config_dir: Path,
+        person_id: str | None,
+        target_dir: Path,
+        model: ModelDefinition,
+        files: list[CreatedFile],
+    ) -> None:
+        if not model.path.startswith("models/"):
+            return
+        model_file = target_dir / model.path
+        model_file.parent.mkdir(parents=True, exist_ok=True)
+        # Seed from the inherited definition (member -> team -> template) so
+        # fields the editor does not surface are preserved on save.
+        base = self._read_scoped_yaml(config_dir, person_id, model.path)
+        save_yaml_file(model_file, self._model_def_yaml(base, model))
+        files.append(CreatedFile(path=model_file, action="update"))
+
+    def _write_cli_agent_def(
+        self,
+        config_dir: Path,
+        person_id: str | None,
+        target_dir: Path,
+        agent: CliAgentDefinition,
+        files: list[CreatedFile],
+    ) -> None:
+        if native_cli_agent_name(agent.path):
+            return
+        cli_agents_dir = target_dir / "cli_agents"
+        cli_agents_dir.mkdir(parents=True, exist_ok=True)
+        agent_file = cli_agents_dir / agent.path
+        base = self._read_scoped_yaml(config_dir, person_id, f"cli_agents/{agent.path}")
+        save_yaml_file(agent_file, self._cli_def_yaml(base, agent))
+        files.append(CreatedFile(path=agent_file, action="update"))
+
+    def _model_def_yaml(
+        self, base: dict[str, Any], model: ModelDefinition
+    ) -> dict[str, Any]:
+        data = dict(base)
+        data["model_class"] = model.model_class
+        parameters = data.get("parameters", {})
+        if not isinstance(parameters, dict):
+            parameters = {}
+        data["parameters"] = {**parameters, "id": model.model_id}
+        return data
+
+    def _cli_def_yaml(
+        self, base: dict[str, Any], agent: CliAgentDefinition
+    ) -> dict[str, Any]:
+        # Preserve the inherited script when the request does not carry one. The
+        # editor only loads the mapped agent's script, so a newly selected agent
+        # would otherwise overwrite a real script with an empty one.
+        data = dict(base)
+        data["env"] = agent.env
+        if agent.script:
+            data["script"] = agent.script
+        data.setdefault("script", "")
+        return data
 
     def _scope_dir(self, config_dir: Path, person_id: str | None) -> Path:
         if person_id:
@@ -193,7 +374,7 @@ class IntelligenceConfigService:
     def _read_scoped_mapping(
         self, config_dir: Path, person_id: str | None, file_name: str
     ) -> dict[str, str]:
-        data = self._read_scoped_yaml(config_dir, person_id, file_name)
+        data = self._read_merged_mapping(config_dir, person_id, file_name)
         mapping = {str(key): str(value) for key, value in data.items()}
         if file_name == "cli_agent_mapping.yml":
             return {
@@ -201,6 +382,30 @@ class IntelligenceConfigService:
                 for key, value in mapping.items()
             }
         return mapping
+
+    def _read_merged_mapping(
+        self, config_dir: Path, person_id: str | None, file_name: str
+    ) -> dict[str, Any]:
+        """Read a slot mapping merged over the team-level defaults.
+
+        Slot mappings map a slot name to a definition reference. A member's own
+        mapping file overrides matching slots while inheriting every slot it does
+        not define, mirroring the runtime resolution in
+        ``load_person_slot_mapping``. This keeps a partial member override from
+        dropping team-provided slots.
+        """
+        team = self._read_optional_yaml(config_dir / "intelligences" / file_name)
+        if not team:
+            team = self._read_optional_yaml(
+                get_template_path() / "intelligences" / file_name
+            )
+        merged: dict[str, Any] = dict(team)
+        if person_id:
+            member = self._read_optional_yaml(
+                config_dir / "team/members" / person_id / "intelligences" / file_name
+            )
+            merged.update(member)
+        return merged
 
     def _read_scoped_yaml(
         self, config_dir: Path, person_id: str | None, relative_path: str
@@ -233,19 +438,22 @@ class IntelligenceConfigService:
             if not model_path.startswith("models/") or model_path in seen:
                 continue
             seen.add(model_path)
-            data = self._read_scoped_yaml(config_dir, person_id, model_path)
-            parameters = data.get("parameters", {}) if isinstance(data, dict) else {}
-            if not isinstance(parameters, dict):
-                parameters = {}
-            models.append(
-                ModelDefinition(
-                    path=model_path,
-                    provider=self._provider_from_model_path(model_path),
-                    model_class=str(data.get("model_class", "")) if data else "",
-                    model_id=str(parameters.get("id", "")),
-                )
-            )
+            models.append(self._model_def_from_path(config_dir, person_id, model_path))
         return models
+
+    def _model_def_from_path(
+        self, config_dir: Path, person_id: str | None, model_path: str
+    ) -> ModelDefinition:
+        data = self._read_scoped_yaml(config_dir, person_id, model_path)
+        parameters = data.get("parameters", {}) if isinstance(data, dict) else {}
+        if not isinstance(parameters, dict):
+            parameters = {}
+        return ModelDefinition(
+            path=model_path,
+            provider=self._provider_from_model_path(model_path),
+            model_class=str(data.get("model_class", "")) if data else "",
+            model_id=str(parameters.get("id", "")),
+        )
 
     def _read_cli_agents(
         self,
@@ -348,6 +556,7 @@ class IntelligenceConfigService:
     ) -> None:
         if policy is None:
             return
+        target_dir.mkdir(parents=True, exist_ok=True)
         policy_file = target_dir / "native_agent_policy.yml"
         save_yaml_file(policy_file, policy.model_dump(mode="json"))
         files.append(CreatedFile(path=policy_file, action="update"))

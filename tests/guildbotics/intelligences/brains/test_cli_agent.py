@@ -29,10 +29,12 @@ class StubProcess:
 def test_cli_agent_mapping_selects_native_adapter_without_script_file(
     monkeypatch, tmp_path, mapping_value, adapter
 ) -> None:
-    mapping = tmp_path / "cli_agent_mapping.yml"
-    mapping.write_text(f"default: {mapping_value}\n", encoding="utf-8")
     cli_agent.person_cli_agent_mapping.clear()
-    monkeypatch.setattr(cli_agent, "get_person_config_path", lambda *_args: mapping)
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"default": mapping_value},
+    )
 
     resolved = cli_agent.get_cli_agent_mapping("aiko")
 

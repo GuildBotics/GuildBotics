@@ -14,7 +14,11 @@ from guildbotics.observability.diagnostics_events import (
     record_correlated_io,
     record_span_summary,
 )
-from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
+from guildbotics.utils.fileio import (
+    get_person_config_path,
+    load_person_slot_mapping,
+    load_yaml_file,
+)
 from guildbotics.utils.import_utils import instantiate_class
 from guildbotics.utils.rate_limiter import acquire
 from guildbotics.utils.text_utils import replace_placeholders
@@ -49,8 +53,7 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
     if person_id in person_model_mapping:
         return person_model_mapping[person_id]
 
-    config_file = get_person_config_path(person_id, "intelligences/model_mapping.yml")
-    mapping = cast(dict, load_yaml_file(config_file))
+    mapping = load_person_slot_mapping(person_id, "intelligences/model_mapping.yml")
     model_mapping = {}
     for name, model_file in mapping.items():
         model_file_path = get_person_config_path(

@@ -605,6 +605,12 @@ class IntelligenceConfigResponse(BaseModel):
     native_agent_policy: NativeAgentPolicySettings = Field(
         default_factory=NativeAgentPolicySettings
     )
+    # Slot/feature names the team owns. A member may override their value but
+    # cannot delete or rename them (the runtime merge would only revive them),
+    # so the editor locks these names. Empty for the team scope.
+    inherited_model_slots: list[str] = Field(default_factory=list)
+    inherited_cli_slots: list[str] = Field(default_factory=list)
+    inherited_brain_features: list[str] = Field(default_factory=list)
 
 
 class IntelligenceConfigUpdateRequest(BaseModel):

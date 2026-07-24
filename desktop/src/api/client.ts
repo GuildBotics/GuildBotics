@@ -714,6 +714,11 @@ export type IntelligenceConfig = {
   cli_agents: CliAgentDefinition[];
   brain_mapping: BrainAssignment[];
   native_agent_policy: NativeAgentPolicySettings;
+  // Team-owned slot/feature names. A member may override their value but cannot
+  // delete or rename them. Empty for the team scope.
+  inherited_model_slots?: string[];
+  inherited_cli_slots?: string[];
+  inherited_brain_features?: string[];
 };
 
 export type IntelligenceConfigUpdateRequest = {

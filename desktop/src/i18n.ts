@@ -476,6 +476,7 @@ const resources = {
           apiKeyMissing: "API key missing",
           detected: "Detected",
           notDetected: "Not detected",
+          notDetectedOnPath: "This agent was not detected on your PATH.",
           cliHint: "AI CLI tools are not bundled. You can only select tools detected on PATH.",
           skillStatusTitle: "GuildBotics skill",
           skillStatusDescription:
@@ -514,14 +515,10 @@ const resources = {
           teamAdvancedDescription:
             "Configure team-wide model, AI CLI tool, and feature assignment defaults.",
           memberOverrideDescription:
-            "Set the default LLM provider and AI CLI tool for this member.",
+            "Override the team model, AI CLI tool, and feature assignment defaults for this member. Slots left unchanged stay inherited from the team.",
           inheritTeamDefaults: "Use team defaults",
           inheritingTitle: "Using team defaults",
           inheritingBody: "Uses team settings directly instead of individual configurations.",
-          memberDefaultProvider: "Default LLM provider",
-          memberDefaultProviderDescription: "Set the default LLM provider used by this member.",
-          memberDefaultCliAgent: "Default AI CLI tool",
-          memberDefaultCliAgentDescription: "Set the default AI CLI tool used by this member.",
           modelMapping: "Model slots",
           modelDefinitions: "Model definitions",
           cliMapping: "AI CLI tool slots",
@@ -1481,6 +1478,7 @@ const resources = {
           apiKeyMissing: "API key 未設定",
           detected: "検出済み",
           notDetected: "未検出",
+          notDetectedOnPath: "このエージェントは PATH 上に検出されていません。",
           cliHint: "AI CLIツールは同梱しません。PATHで検出できたものだけ選択できます。",
           skillStatusTitle: "GuildBoticsスキル",
           skillStatusDescription:
@@ -1520,16 +1518,10 @@ const resources = {
           teamAdvancedDescription:
             "チーム全体で使うモデル、AI CLIツール、機能ごとの割り当てを設定します。",
           memberOverrideDescription:
-            "このメンバー専用のデフォルト LLM プロバイダと AI CLIツールを設定できます。",
+            "このメンバー専用に、チームのモデル・AI CLIツール・機能ごとの割り当てを上書きします。変更しなかったスロットはチーム既定を継承します。",
           inheritTeamDefaults: "チーム既定を使う",
           inheritingTitle: "チーム既定を使用中",
           inheritingBody: "メンバー専用設定は行わず、チーム設定をそのまま使います。",
-          memberDefaultProvider: "デフォルトの LLM プロバイダ",
-          memberDefaultProviderDescription:
-            "このメンバーが使うデフォルトの LLM プロバイダを設定します。",
-          memberDefaultCliAgent: "デフォルトの AI CLIツール",
-          memberDefaultCliAgentDescription:
-            "このメンバーが使うデフォルトの AI CLIツールを設定します。",
           modelMapping: "モデルスロット",
           modelDefinitions: "モデル定義",
           cliMapping: "AI CLIツールスロット",
