@@ -361,7 +361,9 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   audit, and converts provider payloads into provider-neutral activity
   events/links/titles for the desktop Activity History (`activity_events.py`,
   `activity_links.py`). Display normalization lives *only* there — not in
-  observability, not in the frontend.
+  observability, not in the frontend. Manual desktop command runs (`source: manual`)
+  are excluded from the session timeline because they fire constantly; anything they
+  changed still appears as an activity event. Diagnostics keeps every source.
 - **System health alerts**: successful and failed verify/scenario-diagnostics runs are
   recorded as structured diagnostics events. `app_api/system_alerts.py` folds those
   events together with command outcomes, rate-limit events, and current runtime state

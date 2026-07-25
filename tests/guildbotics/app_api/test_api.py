@@ -2016,7 +2016,7 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_command_activity_history_uses_resolved_default_person(
+async def test_manual_command_traces_resolved_default_person_without_activity_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
@@ -2041,16 +2041,17 @@ async def test_manual_command_activity_history_uses_resolved_default_person(
 
     await runtime.run_command(CommandRunRequest(command="functions/talk_as"))
 
+    traces = runtime.list_traces()
     history = runtime.get_activity_history(
         start="2000-01-01T00:00:00Z",
         end="2999-01-01T00:00:00Z",
     )
 
+    assert [
+        (trace.source, trace.person_id, trace.command) for trace in traces.traces
+    ] == [("manual", "alice", "functions/talk_as")]
     assert [member.person_id for member in history.members] == ["alice"]
-    assert len(history.sessions) == 1
-    assert history.sessions[0].person_id == "alice"
-    assert history.sessions[0].mode == "workflow"
-    assert history.sessions[0].title == "functions/talk_as"
+    assert history.sessions == []
 
 
 # --- auth coverage -------------------------------------------------------
