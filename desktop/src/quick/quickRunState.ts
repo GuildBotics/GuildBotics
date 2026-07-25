@@ -130,17 +130,23 @@ export type PendingRun = {
   person: string | null;
 };
 
+/** Trace source of runs the desktop asks for, as opposed to the ones the service schedules. */
+const MANUAL_TRACE_SOURCE = "manual";
+
 /**
  * Trace id of a run announcement that belongs to this window's own run.
  *
  * The service names a run's trace only when it starts — the run request itself
  * does not answer until the command is over, which is the whole period the
- * status line exists for. The scheduler can be starting runs of its own at the
- * same time, so an announcement counts only when it matches what this window
- * just asked for.
+ * status line exists for. The scheduler can be running the same command for the
+ * same member at the same time, so an announcement counts only when it is a
+ * manual run and matches what this window just asked for.
  */
 export function pendingRunTraceId(event: RuntimeEvent, pending: PendingRun | null): string | null {
   if (!pending || event.type !== "command.started" || !event.trace_id) {
+    return null;
+  }
+  if (event.source !== MANUAL_TRACE_SOURCE) {
     return null;
   }
   if (event.payload.command !== pending.command) {

@@ -82,14 +82,19 @@ function traceResponse(records: TraceRecord[]): TraceDetailResponse {
   return { trace_id: "trace-9", summary: null, records, transcript_available: true };
 }
 
-function commandStarted(traceId: string, command: string, person: string): RuntimeEvent {
+function commandStarted(
+  traceId: string,
+  command: string,
+  person: string,
+  source = "manual",
+): RuntimeEvent {
   return {
     kind: "event",
     type: "command.started",
     trace_id: traceId,
     span_id: null,
     parent_id: null,
-    source: "app",
+    source,
     person_id: person,
     command,
     workflow: "",
@@ -918,11 +923,16 @@ describe("QuickRun", () => {
   });
 
   it("keeps the status line out of runs the window did not start", async () => {
+    vi.mocked(runCommand).mockReturnValue(new Promise<CommandRunResponse>(() => {}));
     renderWindow();
-    await fire({ command: null, text: "" });
+
+    await fire({ command: "review", text: "hello" });
+    await waitFor(() => expect(runCommand).toHaveBeenCalled());
     await waitFor(() => expect(publish).toBeDefined());
 
-    publish!(commandStarted("scheduler-1", "digest", "bot"));
+    // The scheduler running the very same command for the same member, while
+    // this window is still waiting on its own run.
+    publish!(commandStarted("scheduler-1", "review", "bot", "scheduled"));
 
     await waitFor(() => expect(screen.getByRole("status")).toBeEmptyDOMElement());
     expect(getTraceDetail).not.toHaveBeenCalled();

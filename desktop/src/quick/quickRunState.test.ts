@@ -146,7 +146,7 @@ function startedEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
     trace_id: "trace-1",
     span_id: null,
     parent_id: null,
-    source: "app",
+    source: "manual",
     person_id: "bot",
     command: "greet",
     workflow: "",
@@ -170,6 +170,11 @@ describe("pendingRunTraceId", () => {
 
     expect(pendingRunTraceId(otherCommand, pending)).toBeNull();
     expect(pendingRunTraceId(otherMember, pending)).toBeNull();
+  });
+
+  it("ignores the scheduler running the very same command for the same member", () => {
+    expect(pendingRunTraceId(startedEvent({ source: "scheduled" }), pending)).toBeNull();
+    expect(pendingRunTraceId(startedEvent({ source: "routine" }), pending)).toBeNull();
   });
 
   it("accepts any member when the window could not name one", () => {
