@@ -72,24 +72,6 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
       </Text>
       <div className="command-run-columns">
         <Stack className="command-run-settings" gap="sm">
-          <Select
-            label={t("commands.member")}
-            placeholder={
-              props.defaultPerson
-                ? t("commands.memberDefaultPlaceholder", {
-                    member: memberLabel(props.defaultPerson),
-                  })
-                : t("commands.memberPlaceholder")
-            }
-            clearable
-            value={props.person}
-            onChange={(value) => props.onPersonChange(value)}
-            data={members.map((member) => ({
-              value: member.person_id,
-              label: memberLabel(member),
-            }))}
-          />
-
           {showDefinedArgs ? (
             <div className="command-args-grid">
               {file?.arguments.map((argument) => (
@@ -121,7 +103,7 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
               required={messageRequired}
               label={t("commands.message")}
               description={t("commands.messageDescription")}
-              minRows={5}
+              rows={3}
               resize="vertical"
               value={props.message}
               onChange={(event) => props.onMessageChange(event.currentTarget.value)}
@@ -134,12 +116,31 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
             onChange={(event) => props.onToggleAdvanced(event.currentTarget.checked)}
           />
           {props.showAdvanced ? (
-            <TextInput
-              label={t("commands.cwd")}
-              description={t("commands.cwdDescription", { cwd: props.workspaceCwd })}
-              value={props.cwd}
-              onChange={(event) => props.onCwdChange(event.currentTarget.value)}
-            />
+            <>
+              <Select
+                label={t("commands.member")}
+                placeholder={
+                  props.defaultPerson
+                    ? t("commands.memberDefaultPlaceholder", {
+                        member: memberLabel(props.defaultPerson),
+                      })
+                    : t("commands.memberPlaceholder")
+                }
+                clearable
+                value={props.person}
+                onChange={(value) => props.onPersonChange(value)}
+                data={members.map((member) => ({
+                  value: member.person_id,
+                  label: memberLabel(member),
+                }))}
+              />
+              <TextInput
+                label={t("commands.cwd")}
+                description={t("commands.cwdDescription", { cwd: props.workspaceCwd })}
+                value={props.cwd}
+                onChange={(event) => props.onCwdChange(event.currentTarget.value)}
+              />
+            </>
           ) : null}
 
           {noMembers ? (

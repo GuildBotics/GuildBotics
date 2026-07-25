@@ -196,6 +196,19 @@ class CommandFileExecutionStatus(BaseModel):
     blocking_context: dict[str, str] = Field(default_factory=dict)
 
 
+class HotkeySettings(BaseModel):
+    """Global hotkey assignments for the desktop quick-run window.
+
+    ``commands`` maps a logical command name to its accelerator; an empty
+    ``quick_run`` means the generic window has no hotkey.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    quick_run: str = ""
+    commands: dict[str, str] = Field(default_factory=dict)
+
+
 class CommandFileCreateRequest(BaseModel):
     command: str
     format: CommandFileFormat

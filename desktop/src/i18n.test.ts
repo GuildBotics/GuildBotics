@@ -1,6 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import i18n, { getInitialAppLanguage, normalizeLanguage, setAppLanguage } from "./i18n";
+import i18n, {
+  followAppLanguage,
+  getInitialAppLanguage,
+  normalizeLanguage,
+  setAppLanguage,
+} from "./i18n";
+
+const emit = vi.fn(async () => undefined);
+let listener: ((event: { payload: string }) => void) | undefined;
+const unlisten = vi.fn();
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: (...args: unknown[]) => emit(...(args as [])),
+  listen: async (_event: string, handler: (event: { payload: string }) => void) => {
+    listener = handler;
+    return unlisten;
+  },
+}));
 
 describe("normalizeLanguage", () => {
   it("accepts exact supported language codes", () => {
@@ -112,5 +128,47 @@ describe("i18n resources", () => {
 
     expect(missingInJa).toEqual([]);
     expect(missingInEn).toEqual([]);
+  });
+});
+
+describe("language changes across windows", () => {
+  // The quick run window keeps its own webview and never reloads, so a change
+  // made in the main window has to reach it as an event.
+  beforeEach(() => {
+    emit.mockClear();
+    unlisten.mockClear();
+    listener = undefined;
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+  });
+
+  afterEach(async () => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    await i18n.changeLanguage("en");
+  });
+
+  it("announces the new language to the other windows", async () => {
+    await setAppLanguage("ja");
+
+    expect(emit).toHaveBeenCalledWith("app://language-changed", "ja");
+  });
+
+  it("adopts a language announced by another window", async () => {
+    const stop = followAppLanguage();
+    await vi.waitFor(() => expect(listener).toBeDefined());
+
+    listener!({ payload: "ja" });
+
+    await vi.waitFor(() => expect(i18n.language).toBe("ja"));
+    stop();
+    expect(unlisten).toHaveBeenCalled();
+  });
+
+  it("stays quiet outside the desktop shell", async () => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+
+    await setAppLanguage("ja");
+
+    expect(emit).not.toHaveBeenCalled();
+    expect(followAppLanguage()).toBeTypeOf("function");
   });
 });

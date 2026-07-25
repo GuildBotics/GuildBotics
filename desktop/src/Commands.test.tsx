@@ -414,6 +414,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
+    await user.click(screen.getByText(t("commands.advanced")));
     expect(
       await screen.findByPlaceholderText(
         t("commands.memberDefaultPlaceholder", { member: "Aiko (aiko)" }),
@@ -440,6 +441,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
+    await user.click(screen.getByText(t("commands.advanced")));
     await user.click(
       await screen.findByPlaceholderText(
         t("commands.memberDefaultPlaceholder", { member: "Aiko (aiko)" }),
@@ -468,13 +470,15 @@ describe("Command editor screen", () => {
     expect(screen.getByRole("button", { name: t("commands.saveAndRun") })).toBeDisabled();
   });
 
-  it("keeps the cwd input inside the collapsed advanced section", async () => {
+  it("keeps the member and cwd inputs inside the collapsed advanced section", async () => {
     const user = userEvent.setup();
     await renderPage();
     await screen.findByLabelText("editor");
 
+    expect(screen.queryByRole("textbox", { name: t("commands.member") })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: t("commands.cwd") })).not.toBeInTheDocument();
     await user.click(screen.getByText(t("commands.advanced")));
+    expect(screen.getByRole("textbox", { name: t("commands.member") })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: t("commands.cwd") })).toBeInTheDocument();
   });
 

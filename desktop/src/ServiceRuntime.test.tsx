@@ -5,7 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import { App } from "./App";
 import {
@@ -31,7 +32,8 @@ if (!Element.prototype.scrollIntoView) {
 
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("./setup/SetupPage", () => ({ SetupPage: () => <div>Setup Mock</div> }));
 
 vi.mock("./api/client", async (importOriginal) => {
@@ -42,6 +44,7 @@ vi.mock("./api/client", async (importOriginal) => {
     getTeam: vi.fn(),
     getSchedulerStatus: vi.fn(),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
+    getHotkeys: vi.fn(async () => ({ quick_run: "", commands: {} })),
     getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
     startScheduler: vi.fn(),
     stopScheduler: vi.fn(),
@@ -531,53 +534,50 @@ describe("App routing and layout", () => {
   });
 });
 
-describe("App close guard", () => {
-  type CloseHandler = (event: { preventDefault: () => void }) => Promise<void>;
-  let closeHandler: CloseHandler | undefined;
-  const destroyMock = vi.fn();
+describe("App quit guard", () => {
+  // Closing the window no longer quits: the host hides it so global hotkeys
+  // keep working, and the guard hangs off the tray's Quit item instead.
+  type QuitHandler = () => Promise<void>;
+  let quitHandler: QuitHandler | undefined;
 
   beforeEach(() => {
-    closeHandler = undefined;
-    destroyMock.mockReset();
+    quitHandler = undefined;
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    vi.mocked(getCurrentWindow).mockReturnValue({
-      onCloseRequested: vi.fn(async (handler: CloseHandler) => {
-        closeHandler = handler;
-        return () => {};
-      }),
-      destroy: destroyMock,
-    } as unknown as ReturnType<typeof getCurrentWindow>);
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "app://quit-requested") {
+        quitHandler = handler as unknown as QuitHandler;
+      }
+      return () => {};
+    });
+    vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
 
-  async function requestClose() {
-    await waitFor(() => expect(closeHandler).toBeDefined());
-    const preventDefault = vi.fn();
+  async function requestQuit() {
+    await waitFor(() => expect(quitHandler).toBeDefined());
     await act(async () => {
-      await closeHandler!({ preventDefault });
+      await quitHandler!();
     });
-    return preventDefault;
   }
 
-  it("allows the window to close while nothing is running", async () => {
+  it("quits straight away while nothing is running", async () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    const preventDefault = await requestClose();
+    await requestQuit();
 
-    expect(preventDefault).not.toHaveBeenCalled();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("quit_app"));
     expect(screen.queryByText(t("app.closeBlocked.body"))).not.toBeInTheDocument();
   });
 
-  it("skips the guard without crashing when the window API is unavailable", async () => {
-    // Mirrors a harness that only stubs __TAURI_INTERNALS__ (e.g. Commands
-    // shell test): getCurrentWindow throws, and the guard must swallow it
-    // instead of leaking an unhandled rejection.
-    vi.mocked(getCurrentWindow).mockImplementation(() => {
-      throw new TypeError("Cannot read properties of undefined (reading 'currentWindow')");
+  it("skips the guard without crashing when the event API is unavailable", async () => {
+    // Mirrors a harness that only stubs __TAURI_INTERNALS__: listen throws, and
+    // the guard must swallow it instead of leaking an unhandled rejection.
+    vi.mocked(listen).mockImplementation(() => {
+      throw new TypeError("Cannot read properties of undefined (reading 'listen')");
     });
 
     renderApp("/service");
@@ -586,7 +586,7 @@ describe("App close guard", () => {
     expect(screen.queryByText(t("app.closeBlocked.body"))).not.toBeInTheDocument();
   });
 
-  it("blocks the close with a modal while work is active and force stops on request", async () => {
+  it("blocks the quit with a modal while work is active and force stops on request", async () => {
     const user = userEvent.setup();
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
@@ -596,20 +596,25 @@ describe("App close guard", () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    const preventDefault = await requestClose();
+    await requestQuit();
 
-    expect(preventDefault).toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("quit_app");
     expect(await screen.findByText(t("app.closeBlocked.body"))).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: t("app.closeBlocked.force") }));
 
     await waitFor(() => expect(stopSchedulerMock).toHaveBeenCalledWith({ force: true }));
-    await waitFor(() => expect(destroyMock).toHaveBeenCalled());
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("quit_app"));
   });
 
-  it("shows the destroy error instead of spinning forever when quitting fails", async () => {
+  it("shows the quit error instead of spinning forever when quitting fails", async () => {
     const user = userEvent.setup();
-    destroyMock.mockRejectedValue(new Error("window.destroy not allowed"));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "quit_app") {
+        throw new Error("quit_app not allowed");
+      }
+      return undefined;
+    });
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
         scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
@@ -618,16 +623,16 @@ describe("App close guard", () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    await requestClose();
+    await requestQuit();
     await user.click(await screen.findByRole("button", { name: t("app.closeBlocked.force") }));
 
     expect(await screen.findByText(t("app.closeBlocked.error"))).toBeInTheDocument();
-    expect(screen.getByText("window.destroy not allowed")).toBeInTheDocument();
+    expect(screen.getByText("quit_app not allowed")).toBeInTheDocument();
     // The modal stays open and the force button is usable again.
     expect(screen.getByRole("button", { name: t("app.closeBlocked.force") })).toBeEnabled();
   });
 
-  it("keeps the window open when the blocked close is cancelled", async () => {
+  it("stays running when the blocked quit is cancelled", async () => {
     const user = userEvent.setup();
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
@@ -637,7 +642,7 @@ describe("App close guard", () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    await requestClose();
+    await requestQuit();
     expect(await screen.findByText(t("app.closeBlocked.body"))).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: t("app.closeBlocked.cancel") }));
@@ -645,7 +650,7 @@ describe("App close guard", () => {
     await waitFor(() =>
       expect(screen.queryByText(t("app.closeBlocked.body"))).not.toBeInTheDocument(),
     );
-    expect(destroyMock).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("quit_app");
     expect(stopSchedulerMock).not.toHaveBeenCalled();
   });
 });

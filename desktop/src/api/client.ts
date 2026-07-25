@@ -258,6 +258,12 @@ export type RuntimeEvent = Correlation & {
   timestamp: string;
 };
 
+export type HotkeySettings = {
+  quick_run: string;
+  /** Logical command name to accelerator. */
+  commands: Record<string, string>;
+};
+
 export type CommandRunResponse = {
   trace_id: string;
   output: string;
@@ -767,6 +773,14 @@ export async function getConfigStatus(): Promise<ConfigStatus> {
 
 export async function setWorkspace(body: WorkspaceChangeRequest): Promise<ConfigStatus> {
   return request("/workspace", { method: "POST", body });
+}
+
+export async function getHotkeys(): Promise<HotkeySettings> {
+  return request("/hotkeys");
+}
+
+export async function updateHotkeys(body: HotkeySettings): Promise<HotkeySettings> {
+  return request("/hotkeys", { method: "PUT", body });
 }
 
 export async function getTeam(): Promise<TeamSummary> {

@@ -50,6 +50,7 @@ import {
 } from "../App";
 import { setNavigationGuard } from "../navigationGuard";
 import { CommandEditor } from "./CommandEditor";
+import { CommandHotkeyField } from "./CommandHotkeyField";
 import {
   buildFileRunArgs,
   clampEditorRatio,
@@ -570,6 +571,8 @@ export function CommandsPage() {
               label: `${file.label} (${file.command})`,
             }))}
           />
+
+          <CommandHotkeyField command={detail?.command ?? null} />
 
           <Group gap="xs">
             <Badge variant="light" color={saveStatus === "clean" ? "success" : "warning"}>

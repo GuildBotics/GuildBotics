@@ -290,7 +290,7 @@ Path resolution separates four roots (implementation: `utils/fileio.py`).
 | Machine state root | `$HOME/.guildbotics/data` (fixed) | `active-workspace.json`, `run/service.lock` — state needed *before* a workspace is chosen |
 | Runtime workspace root | selected workspace (App API `chdir`s to it; member CLI resolves `--workspace` → explicit config → cwd → active workspace) | `.env`, `.guildbotics/config` |
 | Workspace data root | `<workspace>/.guildbotics/data`, overridable via `GUILDBOTICS_DATA_DIR` | member workspaces (`workspaces/<person_id>`), task-run evidence (`task-runs/*.jsonl`), diagnostics index (`run/diagnostics.jsonl`), execution transcripts (`run/sessions/*.jsonl`), chat state, documents |
-| Config root | `GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`; package templates as fallback | project / member configuration |
+| Config root | `GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`; package templates as fallback | project / member configuration, desktop hotkey assignments (`hotkeys.yml`) |
 
 Invariants:
 
@@ -398,6 +398,16 @@ a monorepo on purpose.
   app also installs a managed `guildbotics` CLI shim and the GuildBotics skill for
   interactive agents. External AI CLI tools are *not* bundled — the GUI detects,
   verifies, and configures them only.
+- **Global hotkeys and the quick-run window**: assignments live in the workspace config
+  (`.guildbotics/config/hotkeys.yml`, served by `GET`/`PUT /hotkeys`), so they travel
+  with the workspace rather than being pinned to one machine. `guildbotics/app_api/hotkeys.py`
+  owns the accelerator grammar and the conflict rules; the Tauri host only registers
+  what the frontend hands it. Pressing a combination reads the clipboard and opens a
+  frameless window (`quick.html`): the generic hotkey offers a command picker, a
+  per-command hotkey runs straight away unless a required input is missing, in which
+  case the window waits. Because hotkeys only fire while the process lives, closing a
+  window hides it and the app stays resident in the menu bar; quitting goes through the
+  tray, which is where the "work still running" guard now lives.
 - **Support targets**: macOS Apple Silicon (DMG) and Linux x86_64 (`.deb` / AppImage).
   The CLI remains the fallback everywhere else.
 

@@ -47,6 +47,7 @@ import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from "
 
 import { ActivityHistoryPage } from "./activity/ActivityHistory";
 import { CommandsPage } from "./commands/CommandsPage";
+import { useHotkeyRegistration } from "./hotkeys/useHotkeyRegistration";
 import { requestNavigation } from "./navigationGuard";
 import {
   getConfigStatus,
@@ -126,6 +127,7 @@ export function App() {
   const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
   const closeGuard = useAppCloseGuard();
+  useHotkeyRegistration();
   return (
     <main className="shell">
       <AppCloseBlockedModal
@@ -441,11 +443,13 @@ function runtimeHasActiveWork(status: RuntimeStatus | undefined): boolean {
 }
 
 /**
- * Block the Tauri window close while service or command work is running, so a
- * quit never orphans a running agent (the Rust host SIGKILLs the backend
- * sidecar on exit, skipping its graceful shutdown). Registering an
- * onCloseRequested listener defers the close decision to this handler; the
- * user can force stop the runtime and quit from the modal.
+ * Block quitting while service or command work is running, so it never orphans
+ * a running agent (the Rust host SIGKILLs the backend sidecar on exit, skipping
+ * its graceful shutdown).
+ *
+ * Closing the window no longer quits — the host hides it so global hotkeys keep
+ * working — so the guard hangs off the tray's Quit item instead. The user can
+ * force stop the runtime and quit from the modal.
  */
 function useAppCloseGuard() {
   const [blocked, setBlocked] = useState(false);
@@ -460,8 +464,9 @@ function useAppCloseGuard() {
     let unlisten: (() => void) | undefined;
     void (async () => {
       try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        const stop = await getCurrentWindow().onCloseRequested(async (event) => {
+        const { listen } = await import("@tauri-apps/api/event");
+        const { invoke } = await import("@tauri-apps/api/core");
+        const stop = await listen("app://quit-requested", async () => {
           let busy = false;
           try {
             busy = runtimeHasActiveWork(await getSchedulerStatus());
@@ -469,8 +474,9 @@ function useAppCloseGuard() {
             // The backend is unreachable, so there is no work to protect.
           }
           if (busy) {
-            event.preventDefault();
             setBlocked(true);
+          } else {
+            await invoke("quit_app");
           }
         });
         if (cancelled) {
@@ -479,7 +485,7 @@ function useAppCloseGuard() {
           unlisten = stop;
         }
       } catch {
-        // The window API is unavailable (e.g. a harness that only stubs
+        // The event API is unavailable (e.g. a harness that only stubs
         // __TAURI_INTERNALS__ without the full metadata): skip the guard
         // rather than leaking an unhandled rejection.
       }
@@ -503,11 +509,11 @@ function useAppCloseGuard() {
       } catch {
         // Quit regardless; the force stop is best-effort cleanup.
       }
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().destroy();
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("quit_app");
     } catch (error) {
-      // destroy() failed (e.g. a missing window capability), so the window is
-      // staying open: surface the error instead of leaving the button spinning.
+      // The quit failed (e.g. a missing command), so the app is staying up:
+      // surface the error instead of leaving the button spinning.
       setForceQuitError(error instanceof Error ? error.message : String(error));
       setForceQuitting(false);
     }
