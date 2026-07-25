@@ -2,6 +2,7 @@ import {
   ActionIcon,
   Alert,
   Avatar,
+  Badge,
   Button,
   Checkbox,
   Group,
@@ -22,29 +23,43 @@ import { useTranslation } from "react-i18next";
 import {
   getCommandOptions,
   getTeam,
+  getTraceDetail,
   memberAvatarUrl,
   runCommand,
+  subscribeEvents,
   type CommandOption,
 } from "../api/client";
 import { buildFileRunArgs } from "../commands/commandEditorState";
 import { clipboardWatchSupported, hideQuickWindow, pollClipboard } from "../hotkeys/hotkeyRuntime";
 import {
+  tracePresentationLabel,
+  tracePresentationMessage,
+  tracePresentationTone,
+} from "../tracePresentation";
+import {
   canRunUnattended,
   CLIPBOARD_POLL_MS,
   IDLE_RUN_MS,
   initialCommand,
+  latestPresentation,
   loadLastCommand,
   loadLastPerson,
   loadWatchClipboard,
+  pendingRunTraceId,
   saveLastCommand,
   saveLastPerson,
   resolveRunner,
   saveWatchClipboard,
   unmetRequirements,
+  type PendingRun,
   type QuickRunTrigger,
 } from "./quickRunState";
 
 const TEAM_QUERY = { queryKey: ["quick-run-team"], queryFn: getTeam };
+
+const TRACE_QUERY_KEY = "quick-run-trace";
+/** How often the status line re-reads the trace of a command that is still running. */
+const TRACE_POLL_MS = 1000;
 
 /**
  * Command catalogue for one member.
@@ -107,6 +122,12 @@ export function QuickRun(props: QuickRunProps) {
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const selected = options.find((option) => option.command === command);
 
+  // Trace of the run the status line follows.
+  const [traceId, setTraceId] = useState<string | null>(null);
+  // What the in-flight run asked for, so the service's start announcement can
+  // be told apart from runs the scheduler starts alongside it.
+  const pendingRun = useRef<PendingRun | null>(null);
+
   // Input text of the most recent run. Auto-run fires on input changes, so this
   // is what keeps a settled field from running the same request again.
   const lastRunText = useRef<string | null>(null);
@@ -128,6 +149,8 @@ export function QuickRun(props: QuickRunProps) {
   const execute = useCallback(
     async (option: CommandOption, text: string, values: Record<string, string>) => {
       lastRunText.current = text;
+      pendingRun.current = { command: option.command, person: runnerIdRef.current };
+      setTraceId(null);
       setRun({ status: "running" });
       try {
         const response = await runCommand({
@@ -136,13 +159,43 @@ export function QuickRun(props: QuickRunProps) {
           args: buildFileRunArgs(option, values, ""),
           message: option.inputs.message === "hidden" ? "" : text,
         });
+        setTraceId(response.trace_id);
         setRun({ status: "done", output: response.output });
       } catch (cause) {
         setRun({ status: "failed", message: String(cause) });
+      } finally {
+        pendingRun.current = null;
       }
     },
     [],
   );
+
+  // The trace id arrives from the service rather than from the run request,
+  // which only answers once the command is over.
+  useEffect(() => {
+    return subscribeEvents((event) => {
+      const started = pendingRunTraceId(event, pendingRun.current);
+      if (started) {
+        setTraceId(started);
+      }
+    });
+  }, []);
+
+  const traceDetail = useQuery({
+    queryKey: [TRACE_QUERY_KEY, traceId],
+    queryFn: () => getTraceDetail(traceId as string),
+    enabled: Boolean(traceId),
+    refetchInterval: run.status === "running" ? TRACE_POLL_MS : false,
+  });
+  // One last read once the run settles: its closing records are written around
+  // the moment the request answers, and polling has stopped by then.
+  useEffect(() => {
+    if (run.status === "running" || !traceId) {
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: [TRACE_QUERY_KEY, traceId] });
+  }, [queryClient, run.status, traceId]);
+  const presentation = latestPresentation(traceDetail.data?.records ?? []);
 
   /**
    * Mark the window as going away.
@@ -547,6 +600,25 @@ export function QuickRun(props: QuickRunProps) {
           <Alert color="danger" title={t("quickRun.failed")}>
             {run.message}
           </Alert>
+        ) : null}
+      </div>
+
+      {/* Status line: the newest record of the run, replaced as the run moves
+          on. The last one stays put afterwards, so the window still says what
+          it ended on. */}
+      <div className="quick-run-status" role="status" aria-label={t("quickRun.status")}>
+        {presentation ? (
+          <>
+            <Badge size="xs" variant="light" color={tracePresentationTone(presentation)}>
+              {tracePresentationLabel(t, presentation)}
+            </Badge>
+            <span
+              className="quick-run-status-message"
+              title={tracePresentationMessage(t, presentation)}
+            >
+              {tracePresentationMessage(t, presentation)}
+            </span>
+          </>
         ) : null}
       </div>
     </div>

@@ -82,6 +82,29 @@ body {
   padding-right: 28px;
 }
 
+/* Status line: one record at a time, pinned below the result area. The height
+   is reserved even when empty, so the first event does not shift the layout. */
+.quick-run-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-height: 22px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.quick-run-status-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
 .quick-run-close {
   position: absolute;
   top: 6px;
