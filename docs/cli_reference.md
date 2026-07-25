@@ -1014,7 +1014,7 @@ guildbotics run [OPTIONS] CUSTOM_COMMAND [COMMAND_ARGS]...
 
 | Option | Description |
 | --- | --- |
-| `--person TEXT` | Person ID or name to run the custom command as. |
+| `--person TEXT` | Person ID or name to run the custom command as. Defaults to the team's default_person_id, or its first active member. |
 | `--cwd TEXT` | Specify the working directory for the custom command. |
 | `--help` | Show this message and exit. |
 

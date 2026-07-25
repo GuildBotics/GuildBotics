@@ -65,6 +65,9 @@ class MemberSummary(BaseModel):
 class TeamSummary(BaseModel):
     project: ProjectSummary
     members: list[MemberSummary]
+    # Effective default command executor: the configured member, or the sole
+    # active member when nothing is configured, or "" when it is ambiguous.
+    default_person_id: str = ""
 
 
 class MemberDeleteRequest(BaseModel):
@@ -696,6 +699,11 @@ class ProjectConfigUpdateRequest(GitHubProjectInput):
     github_enabled: bool
     # provider id -> new API key value to write to the .env (empty/absent = leave as is)
     provider_api_keys: dict[str, str] = Field(default_factory=dict)
+
+
+class DefaultPersonUpdateRequest(BaseModel):
+    # Empty clears the setting and falls back to the sole active member, if any.
+    person_id: str = ""
 
 
 class MemberResolveRequest(BaseModel):

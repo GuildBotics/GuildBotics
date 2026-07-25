@@ -504,14 +504,14 @@ async def test_falls_back_to_common_command_when_no_person_specific(config_dir: 
 
 
 @pytest.mark.asyncio
-async def test_run_command_requires_person_when_ambiguous(config_dir: Path):
-    """With multiple active members and no identifier, selection is required."""
+async def test_run_command_requires_person_without_candidates(config_dir: Path):
+    """Without a member that can execute commands, selection is required."""
     commands = config_dir / "commands"
     (commands / "noop.py").write_text("def main():\n    return 'x'\n", encoding="utf-8")
     team = _make_team(
         [
-            Person(person_id="alice", name="Alice Anderson", is_active=True),
-            Person(person_id="bob", name="bob", is_active=True),
+            Person(person_id="alice", name="Alice Anderson", is_active=False),
+            Person(person_id="bob", name="bob", is_active=False),
         ]
     )
     ctx = _make_context(team=team)

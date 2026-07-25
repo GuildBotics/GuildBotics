@@ -114,6 +114,7 @@ beforeEach(() => {
           roles: ["product"],
         },
       ],
+      default_person_id: "alice",
     });
   vi.mocked(getProjectConfig).mockReset().mockResolvedValue(projectConfig());
   vi.mocked(getTranscriptSettings).mockReset().mockResolvedValue(transcriptSettings());

@@ -206,6 +206,15 @@ The generic execution substrate used by workflows and custom commands:
 - `drivers/command_runner.py` resolves the target member, builds a `CommandSpec`
   (`commands/models.py`, via `commands/spec_factory.py`), runs child commands
   (`commands:`) first, then the main command.
+- Member resolution lives in `runtime/member_context.py`. A run without an
+  explicit member falls back to `Team.get_default_person_id()`: the configured
+  `default_person_id` (`team/project.yml`), else the first active non-human
+  member in person ID order, so only a team without any command-capable member
+  raises `PersonSelectionRequiredError`. The default is treated exactly like an
+  explicitly named member, so a stale one fails the same way. The App API
+  reports the resolved value as `TeamSummary.default_person_id` — the Desktop
+  app never picks a fallback member itself, and its default-executor select is
+  therefore never empty while the team has a candidate.
 - Command types (`commands/registry.py`): `.md` (LLM prompt), `.py`, `.sh`,
   `.yml`/`.yaml` (definition), plus inline commands `print`, `to_html`, `to_pdf`.
 - `Context.pipe` carries stdin/stdout-like text between commands;
@@ -227,10 +236,14 @@ The generic execution substrate used by workflows and custom commands:
   opaque file IDs (URL-safe relative path; re-validated for root containment /
   extension / symlink on every call), SHA-256 revisions with optimistic
   concurrency, atomic same-directory writes, and a prospective-resolution shadow
-  check on create. Errors share one code namespace (`command_file_*`).
+  check on create. Delete takes the same expected revision as update and sweeps
+  the command's metadata sidecars in every locale once no localized source file
+  is left. Errors share one code namespace (`command_file_*`).
 - Run target guarantee: "save and run" sends the expected file ID + revision.
-  Before running, the App API confirms the on-disk revision matches and that the
-  selected member's normal `resolve_named_command()` resolves to that exact file;
+  Before running, the App API resolves the member once (request person, else the
+  team default) and both the guard and the run use it, so the file that is
+  checked is the file that runs. It confirms the on-disk revision matches and
+  that this member's normal `resolve_named_command()` resolves to that exact file;
   a member / template / higher-priority-extension shadow or a revision mismatch is
   rejected (409 `command_file_shadowed` / `command_file_changed`), never silently
   running a different file. The execution-status endpoint surfaces the same codes

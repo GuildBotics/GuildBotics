@@ -647,6 +647,168 @@ def test_member_crud_adds_updates_and_removes_env_keys(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# default command executor stored in team/project.yml
+# --------------------------------------------------------------------------- #
+
+
+def _default_person_id(config_dir: Path) -> str:
+    project_data = load_yaml_file(config_dir / "team/project.yml")
+    return str(project_data.get("default_person_id", ""))
+
+
+def test_set_default_person_writes_and_clears_project_setting(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file = tmp_path / ".env"
+    _seed_project(config_dir, env_file)
+    SimplePersonSetupService().write_person(_person_input(config_dir, env_file))
+    service = SimpleProjectSetupService()
+
+    result = service.set_default_person(config_dir=config_dir, person_id="alice")
+
+    assert [str(file.path) for file in result.files] == [
+        str(config_dir / "team/project.yml")
+    ]
+    assert _default_person_id(config_dir) == "alice"
+    # Unrelated project settings survive the targeted update.
+    assert load_yaml_file(config_dir / "team/project.yml")["language"] == "en"
+
+    service.set_default_person(config_dir=config_dir, person_id="")
+
+    assert _default_person_id(config_dir) == ""
+
+
+def test_set_default_person_reports_no_change_when_already_set(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file = tmp_path / ".env"
+    _seed_project(config_dir, env_file)
+    SimplePersonSetupService().write_person(_person_input(config_dir, env_file))
+    service = SimpleProjectSetupService()
+    service.set_default_person(config_dir=config_dir, person_id="alice")
+
+    assert service.set_default_person(config_dir=config_dir, person_id="alice").files == []
+
+
+def test_set_default_person_rejects_unknown_member(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file = tmp_path / ".env"
+    _seed_project(config_dir, env_file)
+
+    with pytest.raises(Exception) as exc_info:
+        SimpleProjectSetupService().set_default_person(
+            config_dir=config_dir, person_id="ghost"
+        )
+
+    assert getattr(exc_info.value, "code", "") == "person_not_found"
+    assert _default_person_id(config_dir) == ""
+
+
+@pytest.mark.parametrize(
+    "person_id",
+    ["../members/alice", "alice/../alice", "Alice", "alice bob", "alice.md"],
+)
+def test_set_default_person_rejects_malformed_ids(
+    tmp_path: Path, person_id: str
+) -> None:
+    # A person ID is also a directory name, so traversal and separators are
+    # rejected before the file lookup can resolve them to a real member.
+    config_dir = tmp_path / "config"
+    env_file = tmp_path / ".env"
+    _seed_project(config_dir, env_file)
+    SimplePersonSetupService().write_person(_person_input(config_dir, env_file))
+
+    with pytest.raises(Exception) as exc_info:
+        SimpleProjectSetupService().set_default_person(
+            config_dir=config_dir, person_id=person_id
+        )
+
+    assert getattr(exc_info.value, "code", "") == "invalid_person_id"
+    assert _default_person_id(config_dir) == ""
+
+
+def test_set_default_person_rejects_human_member(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file = tmp_path / ".env"
+    _seed_project(config_dir, env_file)
+    SimplePersonSetupService().write_person(
+        _person_input(
+            config_dir,
+            env_file,
+            person_id="hana",
+            person_type="human",
+            person_name="Hana",
+            github_username="hana",
+            git_email="3+hana@users.noreply.github.com",
+        )
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        SimpleProjectSetupService().set_default_person(
+            config_dir=config_dir, person_id="hana"
+        )
+
+    # A human member cannot execute commands, so it must not become the member
+    # an omitted person resolves to.
+    assert getattr(exc_info.value, "code", "") == "person_not_executable"
+    assert _default_person_id(config_dir) == ""
+
+
+def test_default_person_follows_member_rename(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file = tmp_path / ".env"
+    _seed_project(config_dir, env_file)
+    service = SimplePersonSetupService()
+    service.write_person(_person_input(config_dir, env_file, person_id="old-id"))
+    SimpleProjectSetupService().set_default_person(
+        config_dir=config_dir, person_id="old-id"
+    )
+
+    service.update_person(
+        PersonUpdateInput(
+            config_dir=config_dir,
+            env_file_path=env_file,
+            original_person_id="old-id",
+            append_env_file=False,
+            person_type="machine_user",
+            person_id="new-id",
+            person_name="Alice",
+            is_active=True,
+            github_username="new-id",
+            git_email="1+new-id@users.noreply.github.com",
+            roles=["architect"],
+            speaking_style="style-a",
+        )
+    )
+
+    assert _default_person_id(config_dir) == "new-id"
+
+
+def test_default_person_is_cleared_when_the_member_is_deleted(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    env_file = tmp_path / ".env"
+    _seed_project(config_dir, env_file)
+    service = SimplePersonSetupService()
+    service.write_person(_person_input(config_dir, env_file))
+    service.write_person(
+        _person_input(
+            config_dir,
+            env_file,
+            person_id="bob",
+            github_username="bob",
+            git_email="2+bob@users.noreply.github.com",
+        )
+    )
+    SimpleProjectSetupService().set_default_person(
+        config_dir=config_dir, person_id="bob"
+    )
+
+    service.delete_person(config_dir=config_dir, person_id="alice", env_file_path=env_file)
+    assert _default_person_id(config_dir) == "bob"
+
+    service.delete_person(config_dir=config_dir, person_id="bob", env_file_path=env_file)
+    assert _default_person_id(config_dir) == ""
+
+
+# --------------------------------------------------------------------------- #
 # member id rename: directory / env key / slack mapping are moved
 # --------------------------------------------------------------------------- #
 

@@ -32,6 +32,7 @@ class Project(BaseModel):
         name (str): The name of the project.
         description (str): A brief description of the project.
         language (str): The default language for the project, represented as a language tag.
+        default_person_id (str): The member used when a command names no person.
         services (dict[str, dict[str, str]]): A dictionary of services used in the project.
     """
 
@@ -42,6 +43,10 @@ class Project(BaseModel):
     language: str = Field(
         default="en",
         description="The default language for the project, represented as a language tag.",
+    )
+    default_person_id: str = Field(
+        default="",
+        description="The member used when a command names no person.",
     )
     # A dictionary of services used in the project, where keys are service names and values are
     services: dict[str, dict[str, str | dict[str, str]]] = Field(
@@ -384,6 +389,28 @@ class Team(BaseModel):
 
     project: Project = Field(..., description="The project associated with the team.")
     members: list[Person] = Field(..., description="A list of members in the team.")
+
+    def get_default_person_id(self) -> str:
+        """
+        Get the member used when a command execution names no person.
+
+        The configured default wins. Without one, the first candidate in
+        person ID order keeps the team usable without configuration, so a
+        default is missing only when the team has no member that can execute
+        commands at all.
+
+        Returns:
+            str: The person ID of the default member, or an empty string when
+            the team has no candidate.
+        """
+        if self.project.default_person_id:
+            return self.project.default_person_id
+        candidates = sorted(
+            member.person_id
+            for member in self.members
+            if member.is_active and member.person_type != "human"
+        )
+        return candidates[0] if candidates else ""
 
     def get_role_members(self) -> dict[str, list[Person]]:
         """

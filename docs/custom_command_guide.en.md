@@ -84,9 +84,11 @@ This leads the LLM to respond with "こんにちは".
 
 ### 1.3. Select a member
 
-If you have multiple members registered (via the GuildBotics Desktop app), you must specify a member when running a command using the `<command>@<person_id>` form.
+Specify the member that runs a command with the `<command>@<person_id>` form (or `--person`).
 
 Example: `guildbotics run translate@yuki`
+
+When no member is named, the command runs as the team default: the member stored in `default_person_id` of `team/project.yml` (set it from the Members screen of the GuildBotics Desktop app). Without that setting, the first active agent member in person ID order is used, so a command runs even before anything is configured. Only a team with no member that can execute commands asks you to select one.
 
 
 ## 2. Variations of variable expansion

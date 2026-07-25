@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,7 +10,8 @@ import { expect, test } from "@playwright/test";
 // member). This journey opens the command editor, creates a new Markdown
 // command, edits its source, saves-and-runs it through the REAL
 // `/commands/files` + `/commands/run` endpoints, then asserts the edited source
-// reached disk and the run output + trace records surface in the result area.
+// reached disk and the run output + trace records surface in the result area,
+// and finally deletes the command so the file leaves the workspace again.
 //
 // A `brain: none` Markdown command is deterministic (no LLM / GitHub), so the
 // rendered body is echoed back as the run output.
@@ -73,7 +74,15 @@ test("creates, edits, saves and runs a shared command", async ({ page }) => {
   await expect(output).toContainText("E2E marker body", { timeout: 30_000 });
 
   // The edited source actually reached disk.
-  const onDisk = readFileSync(join(ctx.configDir, "commands", "e2e-note.md"), "utf-8");
+  const commandFile = join(ctx.configDir, "commands", "e2e-note.md");
+  const onDisk = readFileSync(commandFile, "utf-8");
   expect(onDisk).toContain("E2E marker body");
   expect(onDisk).toContain("brain: none");
+
+  // Deleting through the confirm dialog removes the real file from the
+  // workspace, not just the entry in the list.
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("dialog")).toBeHidden({ timeout: 30_000 });
+  await expect.poll(() => existsSync(commandFile), { timeout: 30_000 }).toBe(false);
 });
