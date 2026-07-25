@@ -1973,48 +1973,53 @@ function ExecTimeline({
 }: {
   records: TraceRecord[];
   filters?: readonly string[];
-  filter: string;
+  /** Kind filter; omit both this and `onFilter` to hide the filter control. */
+  filter?: string;
   scopeFilter: RecordScopeFilter | null;
-  onFilter: (value: string) => void;
+  onFilter?: (value: string) => void;
   onClearScopeFilter: () => void;
   onSelect: (record: TraceRecord) => void;
 }) {
   const { t } = useTranslation();
   return (
     <>
-      <div className="exec-timeline-toolbar">
-        <SegmentedControl
-          className="exec-filter"
-          size="xs"
-          value={filter}
-          onChange={onFilter}
-          data={filters.map((value) => ({
-            value,
-            label: t(`diagnostics.executions.recordFilters.${value}`),
-          }))}
-        />
-        {scopeFilter ? (
-          <Badge
-            className="exec-filter-pill exec-record-scope-pill"
-            size="lg"
-            variant="light"
-            color="info"
-            rightSection={
-              <ActionIcon
-                size="xs"
-                variant="transparent"
-                color="info"
-                aria-label={t("diagnostics.executions.recordScope.clear")}
-                onClick={onClearScopeFilter}
-              >
-                <XCircle size={14} />
-              </ActionIcon>
-            }
-          >
-            {scopeFilter.label}
-          </Badge>
-        ) : null}
-      </div>
+      {onFilter || scopeFilter ? (
+        <div className="exec-timeline-toolbar">
+          {onFilter ? (
+            <SegmentedControl
+              className="exec-filter"
+              size="xs"
+              value={filter}
+              onChange={onFilter}
+              data={filters.map((value) => ({
+                value,
+                label: t(`diagnostics.executions.recordFilters.${value}`),
+              }))}
+            />
+          ) : null}
+          {scopeFilter ? (
+            <Badge
+              className="exec-filter-pill exec-record-scope-pill"
+              size="lg"
+              variant="light"
+              color="info"
+              rightSection={
+                <ActionIcon
+                  size="xs"
+                  variant="transparent"
+                  color="info"
+                  aria-label={t("diagnostics.executions.recordScope.clear")}
+                  onClick={onClearScopeFilter}
+                >
+                  <XCircle size={14} />
+                </ActionIcon>
+              }
+            >
+              {scopeFilter.label}
+            </Badge>
+          ) : null}
+        </div>
+      ) : null}
       <div className="exec-timeline">
         {records.length === 0 ? (
           <div className="empty-row">{t("diagnostics.executions.noRecords")}</div>
@@ -3068,12 +3073,13 @@ export function CommandRunDetails({
   onTabChange: (value: string | null) => void;
 }) {
   const { t } = useTranslation();
-  const [recordFilter, setRecordFilter] = useState("all");
+  // A single command run is already scoped to one command, so the kind filter
+  // that the diagnostics timeline needs is redundant here.
   const [recordScopeFilter, setRecordScopeFilter] = useState<RecordScopeFilter | null>(null);
   const [drawerRecord, setDrawerRecord] = useState<TraceRecord | null>(null);
-  const filteredRecords = records
-    .filter((item) => matchesRecordFilter(item, recordFilter))
-    .filter((item) => matchesRecordScopeFilter(item, recordScopeFilter));
+  const filteredRecords = records.filter((item) =>
+    matchesRecordScopeFilter(item, recordScopeFilter),
+  );
   return (
     <>
       <Stack>
@@ -3104,9 +3110,7 @@ export function CommandRunDetails({
             ) : (
               <ExecTimeline
                 records={filteredRecords}
-                filter={recordFilter}
                 scopeFilter={recordScopeFilter}
-                onFilter={setRecordFilter}
                 onClearScopeFilter={() => setRecordScopeFilter(null)}
                 onSelect={setDrawerRecord}
               />

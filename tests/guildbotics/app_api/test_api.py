@@ -1466,6 +1466,37 @@ def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
     assert not (wrong_config_dir / "team/members/new_member/person.yml").exists()
 
 
+def test_default_person_endpoint_writes_runtime_config_dir(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    app = create_app(session_token="secret", runtime=runtime)
+    config_dir = tmp_path / ".guildbotics/config"
+    (config_dir / "team/members/alice").mkdir(parents=True, exist_ok=True)
+    (config_dir / "team/project.yml").write_text("language: en")
+    (config_dir / "team/members/alice/person.yml").write_text("person_id: alice")
+    runtime.config_status.project_file_exists = True
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/config/project/default-person",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+            json={"person_id": "alice"},
+        )
+        assert response.status_code == HTTP_OK
+        assert safe_load((config_dir / "team/project.yml").read_text()) == {
+            "language": "en",
+            "default_person_id": "alice",
+        }
+
+        unknown = client.put(
+            "/config/project/default-person",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+            json={"person_id": "ghost"},
+        )
+
+    assert unknown.status_code == HTTP_BAD_REQUEST
+    assert unknown.json()["code"] == "person_not_found"
+
+
 def test_member_config_accepts_member_without_github_link(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
     app = create_app(session_token="secret", runtime=runtime)
@@ -1520,24 +1551,8 @@ def test_app_runtime_reports_missing_config(monkeypatch) -> None:
 
 
 def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) -> None:
-    class ProjectStub:
-        name = "Project"
-
-        def get_language_code(self) -> str:
-            return "ja"
-
-        def get_language_name(self) -> str:
-            return "日本語"
-
     class ContextStub:
-        team = type(
-            "TeamStub",
-            (),
-            {
-                "project": ProjectStub(),
-                "members": [],
-            },
-        )()
+        team = Team(project=Project(name="Project", language="ja"), members=[])
 
     class EditionStub:
         def get_context(self, message: str = "") -> object:
@@ -1967,7 +1982,15 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
         await release.wait()
         return "done"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    team = Team(
+        project=Project(name="demo"),
+        members=[Person(person_id="bot", name="Bot", is_active=True)],
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_get_context",
+        lambda message="": type("ContextStub", (), {"team": team})(),
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     running = asyncio.create_task(
@@ -2060,6 +2083,7 @@ PROTECTED_ENDPOINTS = [
     ("POST", "/config/init"),
     ("GET", "/config/project"),
     ("PUT", "/config/project"),
+    ("PUT", "/config/project/default-person"),
     ("POST", "/config/members"),
     ("GET", "/config/members/alice"),
     ("PUT", "/config/members/alice"),

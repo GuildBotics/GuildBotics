@@ -219,6 +219,38 @@ def test_temp_workspace_command_files_crud_flow(
         missing = client.get("/commands/files/bm9wZQ", headers=AUTH_HEADERS)
         assert missing.status_code == 404
 
+        # A stale revision refuses the delete instead of discarding the file.
+        current_revision = updated.json()["revision"]
+        stale_delete = client.delete(
+            f"/commands/files/{created_payload['id']}"
+            f"?expected_revision={created_payload['revision']}",
+            headers=AUTH_HEADERS,
+        )
+        assert stale_delete.status_code == 409
+        assert stale_delete.json()["code"] == "command_file_changed"
+        assert (config_dir / "commands/reports/weekly.md").is_file()
+
+        deleted = client.delete(
+            f"/commands/files/{created_payload['id']}"
+            f"?expected_revision={current_revision}",
+            headers=AUTH_HEADERS,
+        )
+        assert deleted.status_code == HTTP_OK
+        assert "reports/weekly" not in {
+            item["command"] for item in deleted.json()["files"]
+        }
+        assert not (config_dir / "commands/reports/weekly.md").exists()
+
+        # The removed file is gone for good.
+        assert (
+            client.delete(
+                f"/commands/files/{created_payload['id']}"
+                f"?expected_revision={current_revision}",
+                headers=AUTH_HEADERS,
+            ).status_code
+            == 404
+        )
+
 
 def test_command_file_execution_status_and_run_guard(
     client: TestClient, workspace: Path
@@ -314,6 +346,10 @@ def test_command_files_endpoints_require_session_token(
                 "/commands/files/anything",
                 json={"content": "", "expected_revision": ""},
             ).status_code
+            == 401
+        )
+        assert (
+            client.delete("/commands/files/anything?expected_revision=x").status_code
             == 401
         )
 

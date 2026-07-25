@@ -103,6 +103,7 @@ import {
   resolveMemberIdentity,
   runScenarioDiagnostics,
   stopScheduler,
+  updateDefaultPerson,
   updateMemberConfig,
   updateIntelligenceConfig,
   updateProjectConfig,
@@ -639,6 +640,7 @@ export function SetupPage() {
             <MembersSection
               activeMemberCount={effectiveActiveMemberCount}
               members={persistedTeam?.members ?? []}
+              defaultPersonId={persistedTeam?.default_person_id ?? ""}
               config={config.data}
               workspaceDir={form.values.workspaceDir}
               projectGithubEnabled={form.values.githubDecision === "enabled"}
@@ -2353,6 +2355,7 @@ function IntelligenceEditor({
 function MembersSection({
   activeMemberCount,
   members,
+  defaultPersonId,
   config,
   workspaceDir,
   projectGithubEnabled,
@@ -2371,6 +2374,7 @@ function MembersSection({
     is_active: boolean;
     roles: string[];
   }>;
+  defaultPersonId: string;
   config: ConfigStatus | undefined;
   workspaceDir: string;
   projectGithubEnabled: boolean;
@@ -2607,6 +2611,24 @@ function MembersSection({
         })),
     ].sort((a, b) => a.name.localeCompare(b.name));
   }, [draftMembers, members]);
+  // Only saved agent members can execute commands, so drafts, humans and
+  // inactive members are never default-executor candidates. A member that was
+  // deactivated while configured stays listed, otherwise the stored setting
+  // would be unreachable from this screen.
+  const defaultPersonOptions = useMemo(
+    () =>
+      members
+        .filter(
+          (member) =>
+            member.person_type !== "human" &&
+            (member.is_active || member.person_id === defaultPersonId),
+        )
+        .map((member) => ({
+          value: member.person_id,
+          label: `${member.name} (${member.person_id})`,
+        })),
+    [defaultPersonId, members],
+  );
   const formVisible = mode !== "idle" || displayedMembers.length === 0;
   const formMode = mode === "edit" ? "edit" : "add";
 
@@ -2783,6 +2805,12 @@ function MembersSection({
   }, [initialMemberId, requestMemberConfig]);
   const resolveMutation = useMutation({
     mutationFn: resolveMemberIdentity,
+  });
+  const defaultPersonMutation = useMutation({
+    mutationFn: (personId: string) => updateDefaultPerson(personId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["team"] });
+    },
   });
   const memberDiagnosticsMutation = useMutation({
     mutationFn: (targetPersonId: string) => runScenarioDiagnostics(targetPersonId),
@@ -3287,6 +3315,13 @@ function MembersSection({
                   </Text>
                 </Group>
                 <Group gap="xs" wrap="nowrap">
+                  <Group w={72} justify="flex-end" gap="xs" wrap="nowrap">
+                    {member.person_id === defaultPersonId ? (
+                      <Badge color="success" variant="light" style={{ flexShrink: 0 }}>
+                        {t("setup.members.defaultPersonBadge")}
+                      </Badge>
+                    ) : null}
+                  </Group>
                   <Group w={160} justify="flex-end" gap="xs" wrap="nowrap">
                     {member.person_type === "human" ? (
                       <Badge color="neutral" variant="light" style={{ flexShrink: 0 }}>
@@ -3323,6 +3358,18 @@ function MembersSection({
               </Group>
             ))}
           </Stack>
+        ) : null}
+        {defaultPersonOptions.length > 1 ? (
+          <Select
+            label={t("setup.members.defaultPersonLabel")}
+            description={t("setup.members.defaultPersonDescription")}
+            placeholder={t("setup.members.defaultPersonPlaceholder")}
+            data={defaultPersonOptions}
+            value={defaultPersonId || null}
+            disabled={defaultPersonMutation.isPending}
+            onChange={(value) => value && defaultPersonMutation.mutate(value)}
+            maw={360}
+          />
         ) : null}
         {displayedMembers.length > 0 ? (
           <Group justify="space-between">
@@ -4156,6 +4203,11 @@ function MembersSection({
         {deleteMemberMutation.error ? (
           <Alert color="danger" title={t("setup.members.deleteError")}>
             {deleteMemberMutation.error.message}
+          </Alert>
+        ) : null}
+        {defaultPersonMutation.error ? (
+          <Alert color="danger" title={t("setup.members.defaultPersonError")}>
+            {defaultPersonMutation.error.message}
           </Alert>
         ) : null}
       </Stack>

@@ -35,8 +35,12 @@ test("adds a second member through the UI and persists it to the backend", async
   await page.goto("/#/setup?section=members");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 
-  // The seeded member is already listed.
-  await expect(page.getByText("Local Agent (local-agent)")).toBeVisible({ timeout: 30_000 });
+  // The seeded member is already listed. Rows are matched by their own text
+  // element: the default-executor select repeats the same labels in its
+  // options, so an unscoped text match would resolve to several nodes.
+  const memberRow = (label: string) => page.locator("p").filter({ hasText: label });
+
+  await expect(memberRow("Local Agent (local-agent)")).toBeVisible({ timeout: 30_000 });
 
   // With a member already configured the add form is collapsed behind the
   // "Add new member" toggle; reveal it, then fill the required Basic fields.
@@ -48,8 +52,8 @@ test("adds a second member through the UI and persists it to the backend", async
   await page.getByRole("button", { name: "Add member" }).click();
 
   // The reloaded list (driven by the real /team response) now shows BOTH members.
-  await expect(page.getByText("Second Agent (local-agent-2)")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("Local Agent (local-agent)")).toBeVisible();
+  await expect(memberRow("Second Agent (local-agent-2)")).toBeVisible({ timeout: 30_000 });
+  await expect(memberRow("Local Agent (local-agent)")).toBeVisible();
 
   // The REAL backend wrote the new member's person.yml under the temp workspace.
   const personFile = join(ctx.configDir, "team", "members", "local-agent-2", "person.yml");

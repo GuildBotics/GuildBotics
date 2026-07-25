@@ -66,6 +66,7 @@ beforeEach(() => {
   getTeamMock.mockReset().mockResolvedValue({
     project: { name: "Demo", language_code: "en", language_name: "English" },
     members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["developer"] }],
+    default_person_id: "alice",
   });
   getSchedulerStatusMock.mockReset().mockResolvedValue(runtimeStatus());
   startSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());

@@ -27,7 +27,7 @@ from guildbotics.app_api.models import (
     TranscriptSettingsUpdateRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.entities import Person, Project, Team
+from guildbotics.entities import Person, Project, Role, Team
 from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
@@ -734,28 +734,28 @@ def test_set_workspace_clears_dotenv_keys_when_new_env_missing(
 # --- get_team_summary() -----------------------------------------------------
 
 
-class _ProjectStub:
-    name = "GuildBotics"
-
-    def get_language_code(self) -> str:
-        return "ja"
-
-    def get_language_name(self) -> str:
-        return "日本語"
-
-
-class _MemberStub:
-    def __init__(
-        self, person_id: str, name: str, is_active: bool, roles: dict[str, object]
-    ) -> None:
-        self.person_id = person_id
-        self.name = name
-        self.is_active = is_active
-        self.roles = roles
+def _member(
+    person_id: str, name: str, is_active: bool, roles: list[str] | None = None
+) -> Person:
+    return Person(
+        person_id=person_id,
+        name=name,
+        is_active=is_active,
+        roles={
+            role: Role(id=role, summary="", description="") for role in roles or []
+        },
+    )
 
 
-def _context_with_members(members: list[_MemberStub]) -> object:
-    team = type("TeamStub", (), {"project": _ProjectStub(), "members": members})()
+def _context_with_members(
+    members: list[Person], default_person_id: str = ""
+) -> object:
+    team = Team(
+        project=Project(
+            name="GuildBotics", language="ja", default_person_id=default_person_id
+        ),
+        members=members,
+    )
     return type("ContextStub", (), {"team": team})()
 
 
@@ -776,12 +776,7 @@ def test_team_summary_reports_project_language_and_name(
 
 def test_team_summary_sorts_member_roles(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = AppRuntime(EventBus())
-    member = _MemberStub(
-        "alice",
-        "Alice",
-        True,
-        {"reviewer": {}, "architect": {}, "developer": {}},
-    )
+    member = _member("alice", "Alice", True, ["reviewer", "architect", "developer"])
     context = _context_with_members([member])
     monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
 
@@ -797,8 +792,8 @@ def test_team_summary_includes_inactive_members(
 ) -> None:
     runtime = AppRuntime(EventBus())
     members = [
-        _MemberStub("active", "Active", True, {"architect": {}}),
-        _MemberStub("inactive", "Inactive", False, {}),
+        _member("active", "Active", True, ["architect"]),
+        _member("inactive", "Inactive", False),
     ]
     context = _context_with_members(members)
     monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
@@ -809,6 +804,53 @@ def test_team_summary_includes_inactive_members(
     assert by_id["active"].is_active is True
     assert by_id["inactive"].is_active is False
     assert by_id["inactive"].roles == []
+
+
+def test_team_summary_reports_configured_default_person(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    context = _context_with_members(
+        [_member("aiko", "Aiko", True), _member("kenji", "Kenji", True)],
+        default_person_id="kenji",
+    )
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    assert runtime.get_team_summary().default_person_id == "kenji"
+
+
+def test_team_summary_falls_back_to_sole_active_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    context = _context_with_members(
+        [_member("aiko", "Aiko", True), _member("kenji", "Kenji", False)]
+    )
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    assert runtime.get_team_summary().default_person_id == "aiko"
+
+
+def test_team_summary_falls_back_to_first_candidate_without_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    context = _context_with_members(
+        [_member("kenji", "Kenji", True), _member("aiko", "Aiko", True)]
+    )
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    assert runtime.get_team_summary().default_person_id == "aiko"
+
+
+def test_team_summary_leaves_default_person_empty_without_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = AppRuntime(EventBus())
+    context = _context_with_members([_member("kenji", "Kenji", False)])
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
+
+    assert runtime.get_team_summary().default_person_id == ""
 
 
 # --- transcript settings ---------------------------------------------------

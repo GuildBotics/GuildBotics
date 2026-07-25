@@ -8,11 +8,18 @@ import { blockingMessageKey, hasMissingRequiredArgument } from "./commandEditorS
 
 type ActiveMember = { person_id: string; name: string };
 
+function memberLabel(member: ActiveMember): string {
+  return `${member.name} (${member.person_id})`;
+}
+
 export type CommandRunPanelProps = {
   file: CommandFileDetail | null;
   members: ActiveMember[];
+  /** Explicitly selected member; null runs as the team default. */
   person: string | null;
-  onPersonChange: (person: string) => void;
+  /** Member the backend runs as when none is selected. */
+  defaultPerson: ActiveMember | null;
+  onPersonChange: (person: string | null) => void;
   argValues: Record<string, string>;
   onArgValueChange: (name: string, value: string) => void;
   extraArgs: string;
@@ -53,7 +60,7 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
   const runDisabled =
     !file ||
     noMembers ||
-    !props.person ||
+    !(props.person || props.defaultPerson) ||
     missingRequiredArgument ||
     (messageRequired && !props.message.trim()) ||
     blockingCode != null;
@@ -67,12 +74,19 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
         <Stack className="command-run-settings" gap="sm">
           <Select
             label={t("commands.member")}
-            placeholder={t("commands.memberPlaceholder")}
+            placeholder={
+              props.defaultPerson
+                ? t("commands.memberDefaultPlaceholder", {
+                    member: memberLabel(props.defaultPerson),
+                  })
+                : t("commands.memberPlaceholder")
+            }
+            clearable
             value={props.person}
-            onChange={(value) => value && props.onPersonChange(value)}
+            onChange={(value) => props.onPersonChange(value)}
             data={members.map((member) => ({
               value: member.person_id,
-              label: `${member.name} (${member.person_id})`,
+              label: memberLabel(member),
             }))}
           />
 
@@ -108,6 +122,7 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
               label={t("commands.message")}
               description={t("commands.messageDescription")}
               minRows={5}
+              resize="vertical"
               value={props.message}
               onChange={(event) => props.onMessageChange(event.currentTarget.value)}
             />

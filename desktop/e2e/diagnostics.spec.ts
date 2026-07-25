@@ -12,8 +12,9 @@ import { expect, test } from "@playwright/test";
 // deterministic — no dependency on api.openai.com latency or availability —
 // while still exercising the real backend-frontend wiring end-to-end. This
 // journey:
-//   * asserts the readiness tab renders backend-derived status badges (config
-//     Configured, env Detected, GitHub Disabled) for the seeded workspace;
+//   * asserts the Settings screen's Verification section renders backend-derived
+//     status badges (config Configured, env Detected, GitHub Disabled) for the
+//     seeded workspace;
 //   * runs the real scenario diagnostics (`POST /diagnostics/scenario`) and
 //     asserts the missing-key check renders the i18n-mapped "LLM API key is
 //     missing" alert, plus a context line naming the env var (OPENAI_API_KEY);
@@ -40,8 +41,10 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
   expect(ctx.seeded).toBe(true);
   expect(ctx.seededWithoutLlmKey).toBe(true);
 
-  await page.goto("/#/diagnostics");
-  await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible();
+  // Readiness badges and the scenario check live in the Verification section of
+  // the Settings screen; the Diagnostics screen owns executions and transcripts.
+  await page.goto("/#/setup?section=verification");
+  await expect(page.getByRole("heading", { name: "Verification" }).first()).toBeVisible();
 
   // Readiness badges are derived from the real /config/status, /team and
   // /config/project responses for the seeded workspace: config "Configured",
@@ -66,11 +69,12 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
   // The all-ok summary must NOT appear when a check failed.
   await expect(page.getByText("Settings validated")).toHaveCount(0);
 
-  await page.getByRole("tab", { name: "Diagnostics settings" }).click();
+  await page.goto("/#/diagnostics");
+  await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Settings" }).click();
   await expect(page.getByText("Session transcripts", { exact: true })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "Detail" })).toHaveValue(
-    "Standard (recommended)",
-  );
+  await expect(page.getByRole("textbox", { name: "Detail" })).toHaveValue("Standard (recommended)");
   await expect(page.getByText("rebuild threshold: 8.0 MiB", { exact: false })).toBeVisible();
   await expect(page.getByText("0 B / 8.0 MiB", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Retention days" })).toHaveValue("30");

@@ -45,6 +45,7 @@ from guildbotics.app_api.models import (
     CommandRunRequest,
     CommandRunResponse,
     ConfigStatus,
+    DefaultPersonUpdateRequest,
     HealthResponse,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
@@ -318,6 +319,18 @@ def create_app(
         _: None = Depends(require_token),
     ) -> CommandFileDetail:
         return app_runtime.update_command_file(file_id, request)
+
+    @app.delete(
+        "/commands/files/{file_id}",
+        response_model=CommandFilesResponse,
+        responses=error_responses,
+    )
+    def delete_command_file(
+        file_id: str,
+        expected_revision: str,
+        _: None = Depends(require_token),
+    ) -> CommandFilesResponse:
+        return app_runtime.delete_command_file(file_id, expected_revision)
 
     @app.get(
         "/commands/files/{file_id}/execution-status",
@@ -723,6 +736,24 @@ def create_app(
         try:
             result = SimpleProjectSetupService().update_project(
                 ProjectUpdateInput.model_validate(request.model_dump())
+            )
+        except SetupServiceError as exc:
+            raise AppApiError(exc.code, exc.message) from exc
+        return ConfigWriteResponse(project=result)
+
+    @app.put(
+        "/config/project/default-person",
+        response_model=ConfigWriteResponse,
+        responses=error_responses,
+    )
+    def config_default_person_update(
+        request: DefaultPersonUpdateRequest,
+        _: None = Depends(require_token),
+    ) -> ConfigWriteResponse:
+        try:
+            result = SimpleProjectSetupService().set_default_person(
+                config_dir=_resolve_existing_config_dir(app_runtime),
+                person_id=request.person_id,
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc

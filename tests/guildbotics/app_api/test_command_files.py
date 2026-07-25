@@ -13,6 +13,7 @@ from guildbotics.app_api.command_files import (
     CommandFileService,
     decode_file_id,
     encode_file_id,
+    file_revision,
 )
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.commands import discovery
@@ -214,6 +215,79 @@ def test_update_preserves_mode(env: SimpleNamespace) -> None:
     )
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o755
+
+
+def _revision_of(path: Path) -> str:
+    return file_revision(path.read_bytes())
+
+
+def test_delete_removes_file_and_sidecars_of_every_locale(
+    env: SimpleNamespace,
+) -> None:
+    greet = _write(env.commands / "greet.md", "---\nname: Greet\n---\nHi\n")
+    _write(env.commands / "greet.metadata.yml", "description: Greeting\n")
+    # A sidecar for another language must go too: a recreated command would
+    # otherwise inherit stale metadata.
+    _write(env.commands / "greet.metadata.ja.yml", "description: あいさつ\n")
+    _write(env.commands / "keep.md", "---\nname: Keep\n---\nHi\n")
+    _write(env.commands / "keep.metadata.yml", "description: Keep\n")
+    service = _service("en")
+    file_id = next(
+        file.id for file in service.list_files().files if file.command == "greet"
+    )
+
+    remaining = service.delete_file(file_id, _revision_of(greet))
+
+    assert [file.command for file in remaining.files] == ["keep"]
+    assert not (env.commands / "greet.md").exists()
+    assert not (env.commands / "greet.metadata.yml").exists()
+    assert not (env.commands / "greet.metadata.ja.yml").exists()
+    # Another command's files are untouched.
+    assert (env.commands / "keep.md").exists()
+    assert (env.commands / "keep.metadata.yml").exists()
+
+
+def test_delete_keeps_sidecar_used_by_a_localized_sibling(env: SimpleNamespace) -> None:
+    greet = _write(env.commands / "greet.md", "---\nname: Greet\n---\nHi\n")
+    _write(env.commands / "greet.ja.md", "---\nname: 挨拶\n---\nこんにちは\n")
+    _write(env.commands / "greet.metadata.yml", "description: Greeting\n")
+
+    _service("en").delete_file(encode_file_id("greet.md"), _revision_of(greet))
+
+    assert not (env.commands / "greet.md").exists()
+    # The Japanese sibling now resolves the command and still needs the sidecar.
+    assert (env.commands / "greet.metadata.yml").exists()
+
+
+def test_delete_revision_conflict_keeps_the_file(env: SimpleNamespace) -> None:
+    path = _write(env.commands / "greet.md", "---\nname: Greet\n---\nHi\n")
+    service = _service()
+    stale = _revision_of(path)
+    # Another process rewrites the file after the editor loaded it.
+    _write(env.commands / "greet.md", "---\nname: Greet\n---\nEdited elsewhere\n")
+
+    with pytest.raises(AppApiError) as exc:
+        service.delete_file(encode_file_id("greet.md"), stale)
+
+    assert exc.value.code == "command_file_changed"
+    assert exc.value.context["current_revision"] == _revision_of(path)
+    assert path.exists()
+
+
+def test_delete_unknown_id_is_not_found(env: SimpleNamespace) -> None:
+    with pytest.raises(AppApiError) as exc:
+        _service().delete_file(encode_file_id("missing.md"), "any")
+    assert exc.value.code == "command_file_not_found"
+
+
+def test_delete_shadowed_file_rejected(env: SimpleNamespace) -> None:
+    _write(env.commands / "greet.md", "---\nname: Md\n---\nBody\n")
+    shadowed = _write(env.commands / "greet.yaml", "commands: []\n")
+
+    with pytest.raises(AppApiError) as exc:
+        _service().delete_file(encode_file_id("greet.yaml"), _revision_of(shadowed))
+    assert exc.value.code == "command_file_not_found"
+    assert (env.commands / "greet.yaml").exists()
 
 
 def test_read_unknown_id_is_not_found(env: SimpleNamespace) -> None:

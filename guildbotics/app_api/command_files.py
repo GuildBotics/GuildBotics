@@ -168,7 +168,56 @@ class CommandFileService:
         self._atomic_write(path, content)
         return self._detail(path)
 
+    def delete_file(self, file_id: str, expected_revision: str) -> CommandFilesResponse:
+        """Remove a shared command file and return the remaining list.
+
+        Args:
+            file_id: Opaque ID of the command file to remove.
+            expected_revision: Revision the caller last loaded. A file changed
+                since then is kept, so an edit made elsewhere is never
+                discarded unseen.
+
+        Returns:
+            CommandFilesResponse: The command list after the deletion.
+
+        Raises:
+            AppApiError: If the file is unknown or changed since it was loaded.
+        """
+        path = self.resolve_existing(file_id)
+        current = file_revision(path.read_bytes())
+        if current != expected_revision:
+            raise _error(
+                "command_file_changed",
+                "The command file changed since it was loaded.",
+                {"current_revision": current},
+            )
+        path.unlink()
+        self._delete_orphan_metadata(path)
+        return self.list_files()
+
     # -- internals -------------------------------------------------------
+
+    def _delete_orphan_metadata(self, path: Path) -> None:
+        """Drop metadata sidecars once no command file shares their base name.
+
+        A localized sibling (``greet.ja.md`` next to ``greet.md``) keeps using
+        the same sidecar, so the sidecar only goes away with the last of them.
+        Every locale is swept, not just the active one, so a recreated command
+        cannot inherit metadata left behind in another language.
+        """
+        extensions = set(get_command_extensions())
+        # Command names carry no dots, so the leading segment is the base name
+        # shared by localized variants and their sidecars.
+        base_name = path.with_suffix("").name.split(".", 1)[0]
+        siblings = list(path.parent.glob(f"{base_name}.*"))
+        for sibling in siblings:
+            if sibling.suffix.lower() in extensions and not is_command_metadata_sidecar(
+                sibling
+            ):
+                return
+        for sibling in siblings:
+            if is_command_metadata_sidecar(sibling):
+                sibling.unlink(missing_ok=True)
 
     def _reject_shadowed_creation(self, command: str, target: Path) -> None:
         resolved = resolve_prospective_shared_command(target, command, self._language)

@@ -74,6 +74,7 @@ vi.mock("./api/client", async (importOriginal) => {
     getTeam: vi.fn(async () => ({
       project: { name: "Demo", language_code: "en", language_name: "English" },
       members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["developer"] }],
+      default_person_id: "alice",
     })),
     getSchedulerRoutines: vi.fn(async () => ({
       routines: [

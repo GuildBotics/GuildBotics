@@ -214,6 +214,7 @@ function team(overrides: Record<string, unknown> = {}) {
   return {
     project: { name: "Demo", language_code: "en", language_name: "English" },
     members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
+    default_person_id: "alice",
     ...overrides,
   };
 }
@@ -629,10 +630,12 @@ describe("Commands integration (real client + mock server)", () => {
     const runCall = server.requestsFor("POST", "/commands/run")[0];
     expect(runCall.body).toMatchObject({
       command: "greet",
-      person: "alice",
       expected_command_file_id: "greet-id",
       expected_command_file_revision: "rev-1",
     });
+    // No member was picked, so the request omits the person and the backend
+    // resolves the team default.
+    expect(runCall.body).not.toHaveProperty("person");
 
     // A pushed command lifecycle event over the (real-client) websocket drives
     // the history UI.

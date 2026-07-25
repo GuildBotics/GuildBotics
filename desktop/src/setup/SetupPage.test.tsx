@@ -26,6 +26,7 @@ import {
   resolveMemberIdentity,
   runScenarioDiagnostics,
   stopScheduler,
+  updateDefaultPerson,
   updateIntelligenceConfig,
   updateMemberConfig,
   updateProjectConfig,
@@ -210,6 +211,7 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getTeam: vi.fn(async () => ({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
     })),
     initConfig: vi.fn(async () => configWriteResponse()),
@@ -275,6 +277,7 @@ vi.mock("../api/client", async (importOriginal) => {
       },
       active_works: [],
     })),
+    updateDefaultPerson: vi.fn(async () => configWriteResponse()),
     updateIntelligenceConfig: vi.fn(async () => configWriteResponse()),
     updateMemberConfig: vi.fn(async () => configWriteResponse()),
     updateProjectConfig: vi.fn(async () => configWriteResponse()),
@@ -290,6 +293,7 @@ beforeEach(() => {
   vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
   vi.mocked(getTeam).mockResolvedValue({
     project: { name: "Demo", language_code: "en", language_name: "English" },
+    default_person_id: "",
     members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
   });
   vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ description: "Demo project" }));
@@ -411,6 +415,7 @@ describe("SetupPage", () => {
     );
     vi.mocked(getTeam).mockResolvedValueOnce({
       project: { name: "Configured", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [{ person_id: "bob", name: "Bob", is_active: true, roles: ["product"] }],
     });
 
@@ -1973,6 +1978,7 @@ describe("MembersSection", () => {
   it("shows the add form when there are no members", async () => {
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -1995,6 +2001,7 @@ describe("MembersSection", () => {
   it("sorts members by name and shows the AI CLI tool badge only for agents", async () => {
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [
         { person_id: "charlie", name: "Charlie", person_type: "agent", is_active: true, roles: [] },
         { person_id: "bob", name: "Bob", person_type: "human", is_active: false, roles: [] },
@@ -2004,7 +2011,11 @@ describe("MembersSection", () => {
     renderSetupPage("/setup?section=members");
 
     // Members are rendered in ascending name order (Alice, Bob, Charlie).
-    const labels = (await screen.findAllByText(/\([a-z]+\)$/)).map((el) => el.textContent);
+    // Scoped to the row text so the default-executor select options, which
+    // repeat the same labels, do not join the comparison.
+    const labels = (await screen.findAllByText(/\([a-z]+\)$/, { selector: "p" })).map(
+      (el) => el.textContent,
+    );
     expect(labels).toEqual(["Alice (alice)", "Bob (bob)", "Charlie (charlie)"]);
 
     // Both agents show the effective AI CLI tool badge; the human member does not.
@@ -2013,10 +2024,66 @@ describe("MembersSection", () => {
     expect(screen.getByText("Human")).toBeInTheDocument();
   });
 
+  it("saves the picked default executor and marks that member in the list", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "alice",
+      members: [
+        { person_id: "alice", name: "Alice", person_type: "agent", is_active: true, roles: [] },
+        { person_id: "charlie", name: "Charlie", person_type: "agent", is_active: true, roles: [] },
+      ],
+    });
+    renderSetupPage("/setup?section=members");
+
+    expect(await screen.findByText(t("setup.members.defaultPersonBadge"))).toBeInTheDocument();
+
+    await user.click(screen.getByDisplayValue("Alice (alice)"));
+    await user.click(await screen.findByRole("option", { name: "Charlie (charlie)" }));
+
+    await waitFor(() => expect(updateDefaultPerson).toHaveBeenCalledWith("charlie"));
+  });
+
+  it("hides the default executor select when only one member can run commands", async () => {
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "alice",
+      members: [
+        { person_id: "alice", name: "Alice", person_type: "agent", is_active: true, roles: [] },
+        { person_id: "bob", name: "Bob", person_type: "human", is_active: false, roles: [] },
+        { person_id: "carol", name: "Carol", person_type: "agent", is_active: false, roles: [] },
+      ],
+    });
+    renderSetupPage("/setup?section=members");
+
+    // The sole active agent is the default without any configuration.
+    expect(await screen.findByText(t("setup.members.defaultPersonBadge"))).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Alice (alice)")).not.toBeInTheDocument();
+  });
+
+  it("keeps a deactivated default executor selectable so it can be changed", async () => {
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "carol",
+      members: [
+        { person_id: "alice", name: "Alice", person_type: "agent", is_active: true, roles: [] },
+        { person_id: "carol", name: "Carol", person_type: "agent", is_active: false, roles: [] },
+      ],
+    });
+    const user = userEvent.setup();
+    renderSetupPage("/setup?section=members");
+
+    await user.click(await screen.findByDisplayValue("Carol (carol)"));
+    await user.click(await screen.findByRole("option", { name: "Alice (alice)" }));
+
+    await waitFor(() => expect(updateDefaultPerson).toHaveBeenCalledWith("alice"));
+  });
+
   it("adds a member through addMemberConfig with the built payload", async () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -2047,6 +2114,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -2074,6 +2142,7 @@ describe("MembersSection", () => {
     );
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     vi.mocked(getRoutineCommandOptions).mockResolvedValue({
@@ -2221,6 +2290,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     vi.mocked(resolveMemberIdentity).mockResolvedValue({
@@ -2253,6 +2323,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     vi.mocked(resolveMemberIdentity).mockRejectedValue(
@@ -2275,6 +2346,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -2305,6 +2377,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -2368,6 +2441,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -2402,6 +2476,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -2431,6 +2506,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -2461,6 +2537,7 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");
@@ -2482,6 +2559,7 @@ describe("MembersSection", () => {
     vi.mocked(getRoleOptions).mockRejectedValue(new Error("roles down"));
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
       members: [],
     });
     renderSetupPage("/setup?section=members");

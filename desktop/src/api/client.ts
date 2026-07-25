@@ -55,6 +55,10 @@ export type TeamSummary = {
     is_active: boolean;
     roles: string[];
   }>;
+  // Member a command runs as when none is selected: the configured default,
+  // else the first active non-human member in person id order. Empty only when
+  // no member can execute commands.
+  default_person_id: string;
 };
 
 export type RuntimeUnitStatus = {
@@ -1004,6 +1008,16 @@ export async function updateCommandFile(
   return request(`/commands/files/${encodeURIComponent(fileId)}`, { method: "PUT", body });
 }
 
+export async function deleteCommandFile(
+  fileId: string,
+  expectedRevision: string,
+): Promise<CommandFilesResponse> {
+  const query = `?expected_revision=${encodeURIComponent(expectedRevision)}`;
+  return request(`/commands/files/${encodeURIComponent(fileId)}${query}`, {
+    method: "DELETE",
+  });
+}
+
 export async function getCommandFileExecutionStatus(
   fileId: string,
   params: { person?: string; expected_revision: string },
@@ -1052,6 +1066,13 @@ export async function updateProjectConfig(
   body: ProjectConfigUpdateRequest,
 ): Promise<ConfigWriteResponse> {
   return request("/config/project", { method: "PUT", body });
+}
+
+export async function updateDefaultPerson(personId: string): Promise<ConfigWriteResponse> {
+  return request("/config/project/default-person", {
+    method: "PUT",
+    body: { person_id: personId },
+  });
 }
 
 export async function addMemberConfig(body: MemberSetupRequest): Promise<ConfigWriteResponse> {

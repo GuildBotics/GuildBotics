@@ -65,6 +65,10 @@ class MemberSummary(BaseModel):
 class TeamSummary(BaseModel):
     project: ProjectSummary
     members: list[MemberSummary]
+    # Effective default command executor: the configured member, else the first
+    # active non-human member in person ID order. It is "" only when the team
+    # has no member that can execute commands.
+    default_person_id: str = ""
 
 
 class MemberDeleteRequest(BaseModel):
@@ -696,6 +700,12 @@ class ProjectConfigUpdateRequest(GitHubProjectInput):
     github_enabled: bool
     # provider id -> new API key value to write to the .env (empty/absent = leave as is)
     provider_api_keys: dict[str, str] = Field(default_factory=dict)
+
+
+class DefaultPersonUpdateRequest(BaseModel):
+    # Empty clears the setting; resolution then falls back to the first active
+    # non-human member in person ID order.
+    person_id: str = ""
 
 
 class MemberResolveRequest(BaseModel):

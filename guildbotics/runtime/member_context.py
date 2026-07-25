@@ -7,34 +7,38 @@ from guildbotics.commands.errors import (
     PersonSelectionRequiredError,
 )
 from guildbotics.editions import get_edition
-from guildbotics.entities.team import Person
+from guildbotics.entities.team import Person, Team
 from guildbotics.runtime.context import Context
 
 
 def resolve_member_context(person_identifier: str) -> tuple[Context, Person]:
     """Resolve a GuildBotics context and explicit member by id or name."""
     base_context = get_edition().get_context()
-    person = resolve_person(base_context.team.members, person_identifier)
+    person = resolve_person(base_context.team, person_identifier)
     return base_context.clone_for(person), person
 
 
 def resolve_person(
-    members: Sequence[Person],
+    team: Team,
     identifier: str | None,
     *,
-    default_to_single_active: bool = False,
+    allow_default: bool = False,
 ) -> Person:
-    if identifier is None:
-        if default_to_single_active:
-            active_members = [member for member in members if member.is_active]
-            if len(active_members) == 1:
-                return active_members[0]
-        available = list_person_labels(members)
-        raise PersonSelectionRequiredError(available)
+    """Resolve the member a command runs as.
 
-    person = find_person(members, identifier)
+    An omitted identifier falls back to the team default (see
+    :meth:`Team.get_default_person_id`) when ``allow_default`` is set. The
+    default is then treated exactly as if the caller had named that member, so
+    a stale or unusable default surfaces the same error an explicit one would.
+    """
+    if identifier is None:
+        identifier = team.get_default_person_id() if allow_default else ""
+        if not identifier:
+            raise PersonSelectionRequiredError(list_person_labels(team.members))
+
+    person = find_person(team.members, identifier)
     if person is None:
-        available = list_person_labels(members)
+        available = list_person_labels(team.members)
         raise PersonNotFoundError(identifier, available)
     return person
 

@@ -12,7 +12,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FilePlus, Save } from "lucide-react";
+import { FilePlus, Save, Trash2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -27,6 +27,7 @@ import { NavLink } from "react-router-dom";
 import {
   ApiRequestError,
   createCommandFile,
+  deleteCommandFile,
   getCommandFile,
   getCommandFileExecutionStatus,
   getConfigStatus,
@@ -119,6 +120,7 @@ export function CommandsPage() {
   const loadedKeyRef = useRef<string>("");
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
   // Draggable editor / verify split. The ratio is the fraction of height given
@@ -259,14 +261,38 @@ export function CommandsPage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    // The loaded revision goes with the request so a file edited elsewhere
+    // since it was opened is refused instead of silently discarded.
+    mutationFn: (target: { fileId: string; revision: string }) =>
+      deleteCommandFile(target.fileId, target.revision),
+    onSuccess: (remaining, { fileId }) => {
+      queryClient.removeQueries({ queryKey: ["command-file", fileId] });
+      queryClient.setQueryData<CommandFilesResponse>(["command-files"], remaining);
+      void queryClient.invalidateQueries({ queryKey: ["command-files"] });
+      void queryClient.invalidateQueries({ queryKey: ["command-options"] });
+      void queryClient.invalidateQueries({ queryKey: ["routine-command-options"] });
+      // Dropping the buffer first keeps the unsaved-changes guard from asking
+      // about a file that no longer exists.
+      setDraftContent("");
+      setSavedContent("");
+      loadedKeyRef.current = "";
+      setSelectedFileId(remaining.files[0]?.id ?? null);
+      setDeleteOpen(false);
+    },
+  });
+
   const activeMembers = useMemo(
     () => (team.data?.members ?? []).filter((member) => member.is_active),
     [team.data?.members],
   );
-  const effectivePerson =
-    activeMembers.find((member) => member.person_id === person)?.person_id ??
-    activeMembers[0]?.person_id ??
-    null;
+  const selectedPerson =
+    activeMembers.find((member) => member.person_id === person)?.person_id ?? null;
+  // The backend owns the fallback rule; the team summary reports the member an
+  // omitted person resolves to, so no default is picked here.
+  const defaultPerson =
+    activeMembers.find((member) => member.person_id === team.data?.default_person_id) ?? null;
+  const effectivePerson = selectedPerson ?? defaultPerson?.person_id ?? null;
 
   const executionStatusQuery = useQuery({
     queryKey: ["command-file-execution", selectedFileId, effectivePerson, revision],
@@ -295,7 +321,7 @@ export function CommandsPage() {
       const response = await runCommand({
         command: runFile.command,
         args,
-        person: effectivePerson,
+        person: selectedPerson ?? undefined,
         message: runFile.inputs.message !== "hidden" ? message : "",
         cwd: cwd.trim() || undefined,
         expected_command_file_id: runFile.id,
@@ -340,6 +366,7 @@ export function CommandsPage() {
     message,
     saveMutation,
     selectedFileId,
+    selectedPerson,
   ]);
 
   // Command lifecycle events keep the run history in sync with the service.
@@ -498,6 +525,18 @@ export function CommandsPage() {
             {t("commands.newFile")}
           </Button>
           <Button
+            variant="default"
+            color="danger"
+            leftSection={<Trash2 size={16} />}
+            disabled={!selectedFileId}
+            onClick={() => {
+              deleteMutation.reset();
+              setDeleteOpen(true);
+            }}
+          >
+            {t("commands.deleteFile")}
+          </Button>
+          <Button
             leftSection={<Save size={16} />}
             loading={saveMutation.isPending}
             disabled={!selectedFileId || !dirty}
@@ -613,7 +652,8 @@ export function CommandsPage() {
                   <CommandRunPanel
                     file={detail}
                     members={activeMembers}
-                    person={effectivePerson}
+                    person={selectedPerson}
+                    defaultPerson={defaultPerson}
                     onPersonChange={setPerson}
                     argValues={argValues}
                     onArgValueChange={(name, value) =>
@@ -656,6 +696,40 @@ export function CommandsPage() {
         }}
         onCreate={(command, format) => createMutation.mutate({ command, format })}
       />
+
+      <Modal
+        opened={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title={t("commands.deleteConfirmTitle")}
+        centered
+      >
+        <Stack>
+          <Text size="sm">
+            {t("commands.deleteConfirmBody", { command: detail?.command ?? "" })}
+          </Text>
+          {deleteMutation.error ? (
+            <Alert color="danger" title={t("commands.deleteErrorTitle")}>
+              {deleteMutation.error instanceof ApiRequestError &&
+              deleteMutation.error.code === "command_file_changed"
+                ? t("commands.deleteConflictBody")
+                : deleteMutation.error.message}
+            </Alert>
+          ) : null}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setDeleteOpen(false)}>
+              {t("commands.deleteCancel")}
+            </Button>
+            <Button
+              color="danger"
+              loading={deleteMutation.isPending}
+              disabled={!selectedFileId || !revision}
+              onClick={() => deleteMutation.mutate({ fileId: selectedFileId as string, revision })}
+            >
+              {t("commands.deleteFile")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={pendingAction != null}

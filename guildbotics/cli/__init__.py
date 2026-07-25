@@ -250,7 +250,10 @@ def _wait_for_event_runner(event_runner: EventListenerRunner) -> None:
 @click.option(
     "--person",
     "person_option",
-    help="Person ID or name to run the custom command as.",
+    help=(
+        "Person ID or name to run the custom command as. Defaults to the team's "
+        "default_person_id, else its first active non-human member in ID order."
+    ),
 )
 @click.option(
     "--cwd",

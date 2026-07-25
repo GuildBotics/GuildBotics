@@ -37,6 +37,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.entities import Person, Project, Team
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.service_lock import (
     ServiceLockMetadata,
@@ -47,26 +48,32 @@ HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
 
 
-def _make_person(person_id: str = "bot", name: str = "Bot") -> object:
-    return type("PersonStub", (), {"person_id": person_id, "name": name})()
+def _make_person(person_id: str = "bot", name: str = "Bot") -> Person:
+    return Person(person_id=person_id, name=name, is_active=True)
 
 
 def _make_context(
-    members: list[object],
+    members: list[Person],
     *,
     language_code: str = "en",
     github_enabled: bool = False,
+    person: Person | None = None,
 ) -> object:
-    person = members[0]
-    project = type(
-        "ProjectStub",
-        (),
+    # ``Context.get_default`` starts on a placeholder person until a member is
+    # resolved; pass ``person`` to reproduce that pre-resolution state.
+    person = person if person is not None else members[0]
+    # A real team so member resolution (including the default executor) behaves
+    # exactly as it does in production; only the context wrapper is a stub.
+    services: dict = (
         {
-            "get_language_code": lambda self: language_code,
-            "is_available_service": lambda self, service: github_enabled,
-        },
-    )()
-    team = type("TeamStub", (), {"project": project, "members": members})()
+            "ticket_manager": {"name": "GitHub", "owner": "acme"},
+            "code_hosting_service": {"name": "GitHub", "owner": "acme"},
+        }
+        if github_enabled
+        else {}
+    )
+    project = Project(name="demo", language=language_code, services=services)
+    team = Team(project=project, members=members)
 
     def clone_for(self: object, selected: object) -> object:
         return _make_context(
@@ -957,7 +964,7 @@ async def test_run_command_publishes_started_and_finished_events(
     async def fake_run_command(*_: Any, **__: Any) -> str:
         return "output-value"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     response = await runtime.run_command(
@@ -985,7 +992,7 @@ async def test_run_command_passes_cwd_and_args_into_execution(
 ) -> None:
     runtime = AppRuntime(EventBus())
     captured: dict[str, Any] = {}
-    sentinel_context = object()
+    sentinel_context = _make_context([_make_person()])
 
     async def fake_run_command(context: object, **kwargs: Any) -> str:
         captured["context"] = context
@@ -1031,7 +1038,7 @@ async def test_logs_during_run_command_carry_the_trace_id(
         guildbotics_logger.info("progress message")
         return "done"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     try:
@@ -1057,18 +1064,25 @@ async def test_run_command_publishes_failed_event_for_person_selection(
 ) -> None:
     event_bus = EventBus()
     runtime = AppRuntime(event_bus)
+    # No member can execute commands, so an omitted person has no default.
+    context = _make_context(
+        [
+            Person(person_id="alice", name="alice", is_active=False),
+            Person(person_id="bot", name="bot", is_active=False),
+        ]
+    )
 
     async def fake_run_command(*_: Any, **__: Any) -> str:
-        raise PersonSelectionRequiredError(["bot", "alice"])
+        raise AssertionError("The run must not start without a member.")
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(AppApiError) as exc_info:
         await runtime.run_command(CommandRunRequest(command="demo"))
 
     assert exc_info.value.code == "person_selection_required"
-    assert exc_info.value.context["available"] == ["bot", "alice"]
+    assert exc_info.value.context["available"] == ["alice", "bot"]
     failed = [
         event
         for event in event_bus.snapshot_events()
@@ -1078,7 +1092,7 @@ async def test_run_command_publishes_failed_event_for_person_selection(
     assert failed[0]["payload"] == {
         "command": "demo",
         "code": "person_selection_required",
-        "available": ["bot", "alice"],
+        "available": ["alice", "bot"],
     }
 
 
@@ -1090,9 +1104,11 @@ async def test_run_command_publishes_failed_event_for_person_not_found(
     runtime = AppRuntime(event_bus)
 
     async def fake_run_command(*_: Any, **__: Any) -> str:
-        raise PersonNotFoundError("ghost", ["bot"])
+        raise AssertionError("The run must not start for an unknown member.")
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(AppApiError) as exc_info:
@@ -1123,7 +1139,7 @@ async def test_run_command_publishes_failed_event_for_command_error(
     async def fake_run_command(*_: Any, **__: Any) -> str:
         raise CommandError("boom")
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(AppApiError) as exc_info:
@@ -1153,7 +1169,7 @@ async def test_run_command_publishes_failed_event_for_unexpected_error(
     async def fake_run_command(*_: Any, **__: Any) -> str:
         raise ValueError("unexpected")
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(ValueError, match="unexpected"):
@@ -1180,7 +1196,7 @@ async def test_run_command_releases_reservation_after_failure(
             raise CommandError("first failure")
         return "second ok"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(AppApiError):
@@ -1206,7 +1222,7 @@ async def test_run_command_releases_reservation_after_unexpected_error(
             raise RuntimeError("crash")
         return "recovered"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(RuntimeError, match="crash"):
@@ -1225,7 +1241,7 @@ async def test_run_command_rejects_concurrent_run_with_conflict(
     # Simulate an in-flight command by holding the reservation.
     runtime._reserve_command("inflight-id")
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
 
     with pytest.raises(AppApiError) as exc_info:
         await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1281,7 +1297,7 @@ async def test_run_command_appears_in_runtime_active_work(
         await finish.wait()
         return "ok"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     task = asyncio.create_task(
@@ -1313,7 +1329,7 @@ async def test_stop_scheduler_waits_for_manual_command_to_finish(
         await finish.wait()
         return "ok"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     command_task = asyncio.create_task(
@@ -1349,7 +1365,7 @@ async def test_force_stop_scheduler_cancels_manual_command(
             raise
         return "unreachable"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": object())
+    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     command_task = asyncio.create_task(
@@ -1619,6 +1635,71 @@ def test_run_command_rejects_member_shadow(
                 CommandRunRequest(
                     command="greet",
                     person="bot",
+                    expected_command_file_id=file_id,
+                    expected_command_file_revision=revision,
+                )
+            )
+        )
+
+    assert caught.value.code == "command_file_shadowed"
+    assert caught.value.context["shadow_source"] == "member"
+
+
+def test_execution_status_uses_the_default_person(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a person the status must describe the default member's run."""
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Shared", "brain: none", "---", "Shared."]),
+    )
+    _write(
+        config_dir / "team/members/bot/commands/greet.md",
+        "\n".join(["---", "name: Member", "brain: none", "---", "Member."]),
+    )
+    context = _make_context(
+        [_make_person()],
+        person=Person(person_id="default_person", name="Default Person"),
+    )
+    runtime = _runtime_with_context(monkeypatch, context)
+    file_id, revision = _file_reference(config_dir, "greet.md")
+
+    status = runtime.get_command_file_execution_status(file_id, None, revision)
+
+    assert status.blocking_code == "command_file_shadowed"
+    assert status.blocking_context["shadow_source"] == "member"
+
+
+def test_run_command_guards_the_file_of_the_default_person(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An omitted person must guard the file the default member actually runs.
+
+    Otherwise the guard checks the shared file while the run executes the
+    default member's same-named command file.
+    """
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/greet.md",
+        "\n".join(["---", "name: Shared", "brain: none", "---", "Shared."]),
+    )
+    _write(
+        config_dir / "team/members/bot/commands/greet.md",
+        "\n".join(["---", "name: Member", "brain: none", "---", "Member."]),
+    )
+    context = _make_context(
+        [_make_person()],
+        person=Person(person_id="default_person", name="Default Person"),
+    )
+    runtime = _runtime_with_context(monkeypatch, context)
+    file_id, revision = _file_reference(config_dir, "greet.md")
+
+    with pytest.raises(AppApiError) as caught:
+        asyncio.run(
+            runtime.run_command(
+                CommandRunRequest(
+                    command="greet",
                     expected_command_file_id=file_id,
                     expected_command_file_revision=revision,
                 )

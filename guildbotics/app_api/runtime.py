@@ -103,7 +103,7 @@ from guildbotics.drivers import (
 )
 from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
 from guildbotics.editions import get_edition
-from guildbotics.entities import Project, Service, Team
+from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
@@ -333,6 +333,7 @@ class AppRuntime:
                 )
                 for member in context.team.members
             ],
+            default_person_id=context.team.get_default_person_id(),
         )
 
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
@@ -364,11 +365,20 @@ class AppRuntime:
             file_id, request.content, request.expected_revision
         )
 
+    def delete_command_file(
+        self, file_id: str, expected_revision: str
+    ) -> CommandFilesResponse:
+        return self._command_file_service().delete_file(file_id, expected_revision)
+
     def get_command_file_execution_status(
         self, file_id: str, person: str | None, expected_revision: str
     ) -> CommandFileExecutionStatus:
         try:
-            context = self._command_options_context(person)
+            # An omitted person runs as the team default, so the status must be
+            # evaluated for that member rather than for no member at all.
+            context = self._command_options_context(
+                person or self._get_context().team.get_default_person_id() or None
+            )
         except AppApiError as exc:
             if exc.code == "person_not_found":
                 return CommandFileExecutionStatus(
@@ -530,15 +540,20 @@ class AppRuntime:
             )
         return options
 
-    def _guard_run_target(self, request: CommandRunRequest) -> None:
+    def _guard_run_target(self, request: CommandRunRequest, context: Context) -> None:
         """Reject a manual run unless the request runs exactly the selected file.
 
         Resolves ``request.command`` against the expected file id/revision, so a
         file-changed, shadowing, command-mismatch or missing-requirement
         condition all block the run. The frontend execution-status is only an
         ahead-of-time hint; the backend is the authority.
+
+        Args:
+            request: The manual run request being guarded.
+            context: Context of the member the run executes as. It must be the
+                member the run itself resolves, or the guard would check a
+                different file than the one that ends up running.
         """
-        context = self._command_options_context(request.person)
         assert request.expected_command_file_id is not None
         assert request.expected_command_file_revision is not None
         code, blocking_context, _ = self._evaluate_run_target(
@@ -556,13 +571,17 @@ class AppRuntime:
             )
 
     async def run_command(self, request: CommandRunRequest) -> CommandRunResponse:
+        context = self._get_context(request.message)
+        # Resolve the member up front: the guard must check the file that this
+        # very member runs, and an omitted person would otherwise resolve twice
+        # (placeholder context for the guard, team default for the run).
+        person = self._resolve_run_person(context, request)
+        person_id = person.person_id
         if request.expected_command_file_id is not None:
-            self._guard_run_target(request)
+            self._guard_run_target(request, context.clone_for(person))
         trace_id = new_id()
         self._reserve_command(trace_id)
         try:
-            context = self._get_context(request.message)
-            person_id = _manual_trace_person_id(context, request.person)
             loop = asyncio.get_running_loop()
             task = asyncio.current_task()
 
@@ -586,7 +605,7 @@ class AppRuntime:
                         trace_id=trace_id,
                     ),
                 ):
-                    output = await self._run_command_traced(request, context)
+                    output = await self._run_command_traced(request, context, person_id)
             except WorkRejectedError as exc:
                 raise AppApiError(
                     "work_rejected",
@@ -597,32 +616,24 @@ class AppRuntime:
             self._release_command(trace_id)
         return CommandRunResponse(trace_id=trace_id, output=output)
 
-    async def _run_command_traced(
-        self, request: CommandRunRequest, context: Context
-    ) -> str:
-        self._event_bus.publish_event(
-            "command.started",
-            {"command": request.command, "person": request.person},
-        )
+    def _resolve_run_person(
+        self, context: Context, request: CommandRunRequest
+    ) -> Person:
+        """Resolve the member a manual run executes as.
+
+        Args:
+            context: Base context holding the team.
+            request: The manual run request.
+
+        Returns:
+            Person: The requested member, or the team default when the request
+            names none.
+
+        Raises:
+            AppApiError: If no member could be resolved.
+        """
         try:
-            output = await run_command(
-                context,
-                command_name=request.command,
-                command_args=request.args,
-                person_identifier=request.person,
-                cwd=request.cwd,
-            )
-        except asyncio.CancelledError:
-            self._event_bus.publish_event(
-                "command.failed",
-                {
-                    "command": request.command,
-                    "person": request.person,
-                    "code": "cancelled",
-                    "message": "Command was cancelled.",
-                },
-            )
-            raise
+            return resolve_person(context.team, request.person, allow_default=True)
         except PersonSelectionRequiredError as exc:
             available = list(exc.available)
             self._event_bus.publish_event(
@@ -656,6 +667,35 @@ class AppRuntime:
                 f" Available: {', '.join(available) if available else 'none'}",
                 context={"identifier": exc.identifier, "available": available},
             ) from exc
+
+    async def _run_command_traced(
+        self, request: CommandRunRequest, context: Context, person_id: str
+    ) -> str:
+        # Events carry the resolved person so an omitted request person still
+        # shows the member the run actually belongs to.
+        self._event_bus.publish_event(
+            "command.started",
+            {"command": request.command, "person": person_id},
+        )
+        try:
+            output = await run_command(
+                context,
+                command_name=request.command,
+                command_args=request.args,
+                person_identifier=person_id,
+                cwd=request.cwd,
+            )
+        except asyncio.CancelledError:
+            self._event_bus.publish_event(
+                "command.failed",
+                {
+                    "command": request.command,
+                    "person": person_id,
+                    "code": "cancelled",
+                    "message": "Command was cancelled.",
+                },
+            )
+            raise
         except CommandError as exc:
             self._event_bus.publish_event(
                 "command.failed",
@@ -1431,17 +1471,6 @@ def _default_routine_command(options: list[CommandOption]) -> str:
 def _timestamp_in_range(value: str, start: datetime, end: datetime) -> bool:
     parsed = parse_timestamp(value)
     return parsed is not None and start <= parsed < end
-
-
-def _manual_trace_person_id(context: Context, person_identifier: str | None) -> str:
-    try:
-        return resolve_person(
-            context.team.members,
-            person_identifier,
-            default_to_single_active=True,
-        ).person_id
-    except (AttributeError, PersonNotFoundError, PersonSelectionRequiredError):
-        return person_identifier or ""
 
 
 def _command_option(

@@ -35,11 +35,20 @@ HTTP_OK = 200
 GITHUB_USER_LOOKUP_TIMEOUT_SECONDS = 10.0
 SLACK_CHANNEL_ID_PATTERN = re.compile(r"^[CGD][A-Z0-9]{8,}$")
 CHAT_PARTICIPATION_VALUES = {"strict", "social", "muted"}
+# A person ID is also a directory name under ``team/members``, so it must not
+# carry separators or traversal segments.
+PERSON_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+PERSON_ID_REQUIREMENT = "person_id must contain only lowercase letters, digits, _ or -"
 
 # Default GitHub Projects status names used when no custom lane mapping is set.
 DEFAULT_LANE_READY = "Todo"
 DEFAULT_LANE_WORKING = "In Progress"
 DEFAULT_LANE_DONE = "Done"
+
+
+def is_valid_person_id(value: str) -> bool:
+    """Return whether a person ID is usable as a member directory name."""
+    return bool(PERSON_ID_PATTERN.match(value))
 
 
 def _to_int_or_none(value: object) -> int | None:
@@ -282,12 +291,8 @@ class PersonSetupInput(BaseModel):
     @field_validator("person_id")
     @classmethod
     def validate_person_id(cls, value: str) -> str:
-        import re
-
-        if not re.match(r"^[a-z0-9_-]+$", value):
-            raise ValueError(
-                "person_id must contain only lowercase letters, digits, _ or -"
-            )
+        if not is_valid_person_id(value):
+            raise ValueError(PERSON_ID_REQUIREMENT)
         return value
 
     @field_validator("person_name")
@@ -343,11 +348,77 @@ class PersonUpdateInput(PersonSetupInput):
     original_person_id: str
 
 
+def _project_config_file(config_dir: Path) -> Path:
+    return config_dir / "team/project.yml"
+
+
+def _person_config_dir(config_dir: Path, person_id: str) -> Path:
+    return config_dir / f"team/members/{person_id}"
+
+
+def _person_config_file(config_dir: Path, person_id: str) -> Path:
+    return _person_config_dir(config_dir, person_id) / "person.yml"
+
+
+def _stored_default_person_id(config_dir: Path) -> str:
+    project_file = _project_config_file(config_dir)
+    if not project_file.exists():
+        return ""
+    project_data = cast(dict, load_yaml_file(project_file))
+    return str(project_data.get("default_person_id", ""))
+
+
+def _retarget_default_person_id(
+    config_dir: Path, person_id: str, new_person_id: str
+) -> list[CreatedFile]:
+    """Follow a member rename or deletion in the default executor setting.
+
+    Args:
+        config_dir: Workspace config directory holding ``team/project.yml``.
+        person_id: Member the setting may currently point at.
+        new_person_id: Member to point at instead; empty clears the setting.
+
+    Returns:
+        list[CreatedFile]: The updated project file, or an empty list when the
+        setting pointed at another member.
+    """
+    if _stored_default_person_id(config_dir) != person_id:
+        return []
+    updated = _write_default_person_id(config_dir, new_person_id)
+    return [updated] if updated else []
+
+
+def _write_default_person_id(config_dir: Path, person_id: str) -> CreatedFile | None:
+    """Point the team's default command executor at a member.
+
+    Args:
+        config_dir: Workspace config directory holding ``team/project.yml``.
+        person_id: Member to make the default; an empty value clears the setting.
+
+    Returns:
+        CreatedFile | None: The updated project file, or ``None`` when the
+        stored value already matched and nothing was written.
+    """
+    project_file = _project_config_file(config_dir)
+    project_data = (
+        cast(dict, load_yaml_file(project_file)) if project_file.exists() else {}
+    )
+    if str(project_data.get("default_person_id", "")) == person_id:
+        return None
+    if person_id:
+        project_data["default_person_id"] = person_id
+    else:
+        project_data.pop("default_person_id", None)
+    project_file.parent.mkdir(parents=True, exist_ok=True)
+    save_yaml_file(project_file, project_data)
+    return CreatedFile(path=project_file, action="update")
+
+
 class SimpleProjectSetupService:
     def read_project_config(
         self, *, config_dir: Path, env_file_path: Path
     ) -> ProjectConfigSnapshot:
-        project_file = config_dir / "team/project.yml"
+        project_file = _project_config_file(config_dir)
         if not project_file.exists():
             raise SetupServiceError(
                 "project_not_found", "Project config was not found."
@@ -392,6 +463,39 @@ class SimpleProjectSetupService:
             provider_api_keys=provider_api_keys,
         )
 
+    def set_default_person(
+        self, *, config_dir: Path, person_id: str
+    ) -> ProjectSetupResult:
+        """Store the member used when a command execution names no person.
+
+        Args:
+            config_dir: Workspace config directory holding ``team/project.yml``.
+            person_id: Member to make the default; an empty value clears it.
+
+        Returns:
+            ProjectSetupResult: The files touched by the update.
+
+        Raises:
+            SetupServiceError: If the ID is malformed, has no configuration, or
+                names a member that cannot execute commands.
+        """
+        if person_id:
+            if not is_valid_person_id(person_id):
+                raise SetupServiceError("invalid_person_id", PERSON_ID_REQUIREMENT)
+            person_file = _person_config_file(config_dir, person_id)
+            if not person_file.exists():
+                raise SetupServiceError(
+                    "person_not_found", "Member config was not found."
+                )
+            person_data = cast(dict, load_yaml_file(person_file))
+            if str(person_data.get("person_type", "")) == "human":
+                raise SetupServiceError(
+                    "person_not_executable",
+                    "A human member cannot be the default command executor.",
+                )
+        updated = _write_default_person_id(config_dir, person_id)
+        return ProjectSetupResult(files=[updated] if updated else [])
+
     def parse_github_project_url(self, url: str) -> GitHubProjectReference:
         url_parts = url.split("/")
         if (
@@ -418,7 +522,7 @@ class SimpleProjectSetupService:
     def write_project(self, config: ProjectSetupInput) -> ProjectSetupResult:
         files: list[CreatedFile] = []
 
-        project_config_file = config.config_dir / "team/project.yml"
+        project_config_file = _project_config_file(config.config_dir)
         project_config_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(project_config_file, self.build_project_config(config))
         files.append(CreatedFile(path=project_config_file, action="create"))
@@ -531,7 +635,7 @@ class SimpleProjectSetupService:
 
     def update_project(self, config: ProjectUpdateInput) -> ProjectSetupResult:
         files: list[CreatedFile] = []
-        project_config_file = config.config_dir / "team/project.yml"
+        project_config_file = _project_config_file(config.config_dir)
         if project_config_file.exists():
             project_data = cast(dict, load_yaml_file(project_config_file))
         else:
@@ -698,7 +802,7 @@ class SimplePersonSetupService:
     def read_person_config(
         self, *, config_dir: Path, person_id: str, env_file_path: Path
     ) -> PersonConfigSnapshot:
-        person_file = config_dir / f"team/members/{person_id}/person.yml"
+        person_file = _person_config_file(config_dir, person_id)
         if not person_file.exists():
             raise SetupServiceError("person_not_found", "Member config was not found.")
         person_data = cast(dict, load_yaml_file(person_file))
@@ -863,9 +967,7 @@ class SimplePersonSetupService:
     def write_person(self, config: PersonSetupInput) -> PersonSetupResult:
         files: list[CreatedFile] = []
         env_vars = self.build_environment_variables(config)
-        person_config_file = (
-            config.config_dir / f"team/members/{config.person_id}/person.yml"
-        )
+        person_config_file = _person_config_file(config.config_dir, config.person_id)
         person_config_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(
             person_config_file,
@@ -909,19 +1011,24 @@ class SimplePersonSetupService:
 
     def update_person(self, config: PersonUpdateInput) -> PersonSetupResult:
         files: list[CreatedFile] = []
-        original_person_file = (
-            config.config_dir / f"team/members/{config.original_person_id}/person.yml"
+        original_person_file = _person_config_file(
+            config.config_dir, config.original_person_id
         )
         if not original_person_file.exists():
             raise SetupServiceError("person_not_found", "Member config was not found.")
 
         old_person_dir = original_person_file.parent
-        new_person_dir = config.config_dir / f"team/members/{config.person_id}"
+        new_person_dir = _person_config_dir(config.config_dir, config.person_id)
         if old_person_dir != new_person_dir and new_person_dir.exists():
             raise SetupServiceError("person_id_conflict", "Member ID already exists.")
         if old_person_dir != new_person_dir:
             new_person_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old_person_dir), str(new_person_dir))
+            files.extend(
+                _retarget_default_person_id(
+                    config.config_dir, config.original_person_id, config.person_id
+                )
+            )
 
         person_file = new_person_dir / "person.yml"
         person_file.parent.mkdir(parents=True, exist_ok=True)
@@ -992,13 +1099,14 @@ class SimplePersonSetupService:
         self, *, config_dir: Path, person_id: str, env_file_path: Path
     ) -> PersonSetupResult:
         files: list[CreatedFile] = []
-        person_dir = config_dir / f"team/members/{person_id}"
+        person_dir = _person_config_dir(config_dir, person_id)
         person_file = person_dir / "person.yml"
         if not person_file.exists():
             raise SetupServiceError("person_not_found", "Member config was not found.")
 
         shutil.rmtree(person_dir)
         files.append(CreatedFile(path=person_file, action="delete"))
+        files.extend(_retarget_default_person_id(config_dir, person_id, ""))
 
         env_values = read_env_values(env_file_path)
         removed = False

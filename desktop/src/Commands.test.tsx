@@ -1,6 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
   createCommandFile,
+  deleteCommandFile,
   getCommandFile,
   getCommandFileExecutionStatus,
   getConfigStatus,
@@ -70,6 +71,7 @@ vi.mock("./api/client", async (importOriginal) => {
     listCommandFiles: vi.fn(),
     getCommandFile: vi.fn(),
     createCommandFile: vi.fn(),
+    deleteCommandFile: vi.fn(),
     updateCommandFile: vi.fn(),
     getCommandFileExecutionStatus: vi.fn(),
     runCommand: vi.fn(),
@@ -83,6 +85,7 @@ const getTraceDetailMock = vi.mocked(getTraceDetail);
 const listCommandFilesMock = vi.mocked(listCommandFiles);
 const getCommandFileMock = vi.mocked(getCommandFile);
 const createCommandFileMock = vi.mocked(createCommandFile);
+const deleteCommandFileMock = vi.mocked(deleteCommandFile);
 const updateCommandFileMock = vi.mocked(updateCommandFile);
 const executionStatusMock = vi.mocked(getCommandFileExecutionStatus);
 const runCommandMock = vi.mocked(runCommand);
@@ -105,6 +108,7 @@ function team(overrides: Partial<TeamSummary> = {}): TeamSummary {
   return {
     project: { name: "Demo", language_code: "en", language_name: "English" },
     members: [{ person_id: "bot", name: "Bot", is_active: true, roles: [] }],
+    default_person_id: "bot",
     ...overrides,
   };
 }
@@ -153,6 +157,7 @@ beforeEach(() => {
   createCommandFileMock
     .mockReset()
     .mockResolvedValue(detail({ id: "new-id", command: "reports/weekly" }));
+  deleteCommandFileMock.mockReset().mockResolvedValue({ files: [] });
   updateCommandFileMock
     .mockReset()
     .mockImplementation((_id, body) =>
@@ -395,6 +400,74 @@ describe("Command editor screen", () => {
     );
   });
 
+  it("runs without a person when no member is picked and shows the default in the field", async () => {
+    getTeamMock.mockResolvedValue(
+      team({
+        members: [
+          { person_id: "bot", name: "Bot", is_active: true, roles: [] },
+          { person_id: "aiko", name: "Aiko", is_active: true, roles: [] },
+        ],
+        default_person_id: "aiko",
+      }),
+    );
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    expect(
+      await screen.findByPlaceholderText(
+        t("commands.memberDefaultPlaceholder", { member: "Aiko (aiko)" }),
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
+
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalled());
+    expect(runCommandMock.mock.calls[0][0].person).toBeUndefined();
+  });
+
+  it("sends the picked member and keeps it out of the request once cleared", async () => {
+    getTeamMock.mockResolvedValue(
+      team({
+        members: [
+          { person_id: "bot", name: "Bot", is_active: true, roles: [] },
+          { person_id: "aiko", name: "Aiko", is_active: true, roles: [] },
+        ],
+        default_person_id: "aiko",
+      }),
+    );
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.click(
+      await screen.findByPlaceholderText(
+        t("commands.memberDefaultPlaceholder", { member: "Aiko (aiko)" }),
+      ),
+    );
+    await user.click(await screen.findByRole("option", { name: "Bot (bot)" }));
+    await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
+
+    await waitFor(() => expect(runCommandMock).toHaveBeenCalled());
+    expect(runCommandMock.mock.calls[0][0].person).toBe("bot");
+  });
+
+  it("disables save-and-run when no member can execute commands", async () => {
+    // A human member cannot run commands, so the backend reports no default.
+    getTeamMock.mockResolvedValue(
+      team({
+        members: [
+          { person_id: "hana", name: "Hana", person_type: "human", is_active: true, roles: [] },
+        ],
+        default_person_id: "",
+      }),
+    );
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    expect(screen.getByRole("button", { name: t("commands.saveAndRun") })).toBeDisabled();
+  });
+
   it("keeps the cwd input inside the collapsed advanced section", async () => {
     const user = userEvent.setup();
     await renderPage();
@@ -419,6 +492,89 @@ describe("Command editor screen", () => {
 
     const running = await screen.findAllByText(t("commands.status.running"));
     expect(running.length).toBeGreaterThan(0);
+  });
+
+  it("shows the run timeline without the diagnostics record filter", async () => {
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    eventListener?.(
+      makeRuntimeEvent({
+        type: "command.started",
+        trace_id: "evt-1",
+        payload: { command: "greet", person: "bot" },
+      }),
+    );
+
+    await screen.findAllByText(t("commands.status.running"));
+    // A single run is already scoped to one command, so the kind filter that
+    // the diagnostics timeline offers is not rendered here.
+    expect(
+      screen.queryByText(t("diagnostics.executions.recordFilters.ai")),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(t("diagnostics.executions.recordFilters.memory")),
+    ).not.toBeInTheDocument();
+  });
+
+  it("deletes the selected command after confirmation and selects what remains", async () => {
+    listCommandFilesMock.mockResolvedValue({
+      files: [summary(), summary({ id: "other-id", command: "other", label: "Other" })],
+    });
+    deleteCommandFileMock.mockResolvedValue({
+      files: [summary({ id: "other-id", command: "other", label: "Other" })],
+    });
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.click(screen.getByRole("button", { name: t("commands.deleteFile") }));
+    const dialog = await screen.findByRole("dialog");
+    // The confirm dialog names the command that is about to be removed.
+    expect(within(dialog).getByText(/greet/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: t("commands.deleteFile") }));
+
+    // The loaded revision travels with the request so a file changed elsewhere
+    // is refused by the backend instead of being discarded.
+    await waitFor(() => expect(deleteCommandFileMock).toHaveBeenCalledWith("greet-id", "rev-1"));
+    await waitFor(() => expect(getCommandFileMock).toHaveBeenCalledWith("other-id"));
+  });
+
+  it("explains a delete refused because the file changed elsewhere", async () => {
+    deleteCommandFileMock.mockRejectedValue(
+      new ApiRequestError({
+        code: "command_file_changed",
+        message: "The command file changed since it was loaded.",
+        context: {},
+      }),
+    );
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.click(screen.getByRole("button", { name: t("commands.deleteFile") }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: t("commands.deleteFile") }));
+
+    expect(await within(dialog).findByText(t("commands.deleteConflictBody"))).toBeInTheDocument();
+    // The command stays selected so the latest version can be reviewed.
+    expect(screen.getByLabelText("editor")).toBeInTheDocument();
+  });
+
+  it("keeps the delete button disabled while no command is selected", async () => {
+    listCommandFilesMock.mockResolvedValue({ files: [] });
+    await renderPage();
+
+    await screen.findByText(t("commands.emptyTitle"));
+    expect(screen.getByRole("button", { name: t("commands.deleteFile") })).toBeDisabled();
+  });
+
+  it("lets the input text box be resized vertically", async () => {
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    const messageBox = screen.getByRole("textbox", { name: t("commands.message") });
+    expect(messageBox.style.getPropertyValue("--input-resize")).toBe("vertical");
   });
 
   it("defines both English and Japanese labels for the editor", () => {
