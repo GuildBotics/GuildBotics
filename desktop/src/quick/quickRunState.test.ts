@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { CommandOption } from "../api/client";
+import type { CommandOption, RuntimeEvent, TraceRecord } from "../api/client";
 import {
   canRunUnattended,
   initialCommand,
+  latestPresentation,
   loadLastCommand,
+  pendingRunTraceId,
   resolveRunner,
   saveLastCommand,
   unmetRequirements,
@@ -134,5 +136,79 @@ describe("resolveRunner", () => {
 
   it("returns null when the team is not loaded", () => {
     expect(resolveRunner(undefined, "aiko")).toBeNull();
+  });
+});
+
+function startedEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
+  return {
+    kind: "event",
+    type: "command.started",
+    trace_id: "trace-1",
+    span_id: null,
+    parent_id: null,
+    source: "manual",
+    person_id: "bot",
+    command: "greet",
+    workflow: "",
+    attributes: {},
+    payload: { command: "greet", person: "bot" },
+    timestamp: "2026-07-26T00:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("pendingRunTraceId", () => {
+  const pending = { command: "greet", person: "bot" };
+
+  it("takes the trace of the run this window asked for", () => {
+    expect(pendingRunTraceId(startedEvent(), pending)).toBe("trace-1");
+  });
+
+  it("ignores runs started for another command or member", () => {
+    const otherCommand = startedEvent({ payload: { command: "review", person: "bot" } });
+    const otherMember = startedEvent({ payload: { command: "greet", person: "aiko" } });
+
+    expect(pendingRunTraceId(otherCommand, pending)).toBeNull();
+    expect(pendingRunTraceId(otherMember, pending)).toBeNull();
+  });
+
+  it("ignores the scheduler running the very same command for the same member", () => {
+    expect(pendingRunTraceId(startedEvent({ source: "scheduled" }), pending)).toBeNull();
+    expect(pendingRunTraceId(startedEvent({ source: "routine" }), pending)).toBeNull();
+  });
+
+  it("accepts any member when the window could not name one", () => {
+    const event = startedEvent({ payload: { command: "greet", person: "aiko" } });
+
+    expect(pendingRunTraceId(event, { command: "greet", person: null })).toBe("trace-1");
+  });
+
+  it("ignores anything that is not a start with a trace", () => {
+    expect(pendingRunTraceId(startedEvent({ type: "command.finished" }), pending)).toBeNull();
+    expect(pendingRunTraceId(startedEvent({ trace_id: null }), pending)).toBeNull();
+    expect(pendingRunTraceId(startedEvent(), null)).toBeNull();
+  });
+});
+
+describe("latestPresentation", () => {
+  function record(message: string): TraceRecord {
+    return {
+      presentation: {
+        label_key: "",
+        label_fallback: "Event",
+        message_key: "",
+        message,
+        message_params: {},
+        tone: "info",
+      },
+    } as TraceRecord;
+  }
+
+  it("takes the newest record", () => {
+    expect(latestPresentation([record("first"), record("last")])?.message).toBe("last");
+  });
+
+  it("has nothing to show for a trace without records", () => {
+    expect(latestPresentation([])).toBeNull();
   });
 });

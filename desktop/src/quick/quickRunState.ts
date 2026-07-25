@@ -4,7 +4,13 @@
 // — the one thing that separates a dedicated hotkey from the generic window —
 // is directly testable.
 
-import type { CommandOption, TeamSummary } from "../api/client";
+import type {
+  CommandOption,
+  RuntimeEvent,
+  TeamSummary,
+  TracePresentation,
+  TraceRecord,
+} from "../api/client";
 import { hasMissingRequiredArgument } from "../commands/commandEditorState";
 
 type TeamMember = TeamSummary["members"][number];
@@ -115,6 +121,46 @@ export function saveLastPerson(personId: string): void {
   } catch {
     // Ignore persistence failures (e.g. storage disabled or full).
   }
+}
+
+/** The run this window is waiting on: what it asked for, and for whom. */
+export type PendingRun = {
+  command: string;
+  /** Resolved member, or null when the window could not name one. */
+  person: string | null;
+};
+
+/** Trace source of runs the desktop asks for, as opposed to the ones the service schedules. */
+const MANUAL_TRACE_SOURCE = "manual";
+
+/**
+ * Trace id of a run announcement that belongs to this window's own run.
+ *
+ * The service names a run's trace only when it starts — the run request itself
+ * does not answer until the command is over, which is the whole period the
+ * status line exists for. The scheduler can be running the same command for the
+ * same member at the same time, so an announcement counts only when it is a
+ * manual run and matches what this window just asked for.
+ */
+export function pendingRunTraceId(event: RuntimeEvent, pending: PendingRun | null): string | null {
+  if (!pending || event.type !== "command.started" || !event.trace_id) {
+    return null;
+  }
+  if (event.source !== MANUAL_TRACE_SOURCE) {
+    return null;
+  }
+  if (event.payload.command !== pending.command) {
+    return null;
+  }
+  if (pending.person !== null && event.payload.person !== pending.person) {
+    return null;
+  }
+  return event.trace_id;
+}
+
+/** Newest record of a trace — what a one-line status shows. Records arrive oldest first. */
+export function latestPresentation(records: TraceRecord[]): TracePresentation | null {
+  return records.length > 0 ? records[records.length - 1].presentation : null;
 }
 
 /**

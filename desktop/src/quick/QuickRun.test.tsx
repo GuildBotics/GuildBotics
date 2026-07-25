@@ -4,7 +4,18 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getCommandOptions, getTeam, runCommand, type CommandOption } from "../api/client";
+import {
+  getCommandOptions,
+  getTeam,
+  getTraceDetail,
+  runCommand,
+  subscribeEvents,
+  type CommandOption,
+  type CommandRunResponse,
+  type RuntimeEvent,
+  type TraceDetailResponse,
+  type TraceRecord,
+} from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { QuickRun } from "./QuickRun";
@@ -12,7 +23,14 @@ import { IDLE_RUN_MS, type QuickRunTrigger } from "./quickRunState";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
-  return { ...actual, getCommandOptions: vi.fn(), runCommand: vi.fn(), getTeam: vi.fn() };
+  return {
+    ...actual,
+    getCommandOptions: vi.fn(),
+    runCommand: vi.fn(),
+    getTeam: vi.fn(),
+    getTraceDetail: vi.fn(),
+    subscribeEvents: vi.fn(),
+  };
 });
 const hideQuickWindowMock = vi.fn();
 const pollClipboardMock = vi.fn();
@@ -46,7 +64,48 @@ function option(overrides: Partial<CommandOption> = {}): CommandOption {
   } as CommandOption;
 }
 
+/** One trace record, reduced to what the status line reads. */
+function traceRecord(label: string, message: string): TraceRecord {
+  return {
+    presentation: {
+      label_key: "",
+      label_fallback: label,
+      message_key: "",
+      message,
+      message_params: {},
+      tone: "info",
+    },
+  } as TraceRecord;
+}
+
+function traceResponse(records: TraceRecord[]): TraceDetailResponse {
+  return { trace_id: "trace-9", summary: null, records, transcript_available: true };
+}
+
+function commandStarted(
+  traceId: string,
+  command: string,
+  person: string,
+  source = "manual",
+): RuntimeEvent {
+  return {
+    kind: "event",
+    type: "command.started",
+    trace_id: traceId,
+    span_id: null,
+    parent_id: null,
+    source,
+    person_id: person,
+    command,
+    workflow: "",
+    attributes: {},
+    payload: { command, person },
+    timestamp: "2026-07-26T00:00:00Z",
+  };
+}
+
 let activate: ((trigger: QuickRunTrigger) => void) | undefined;
+let publish: ((event: RuntimeEvent) => void) | undefined;
 
 function renderWindow() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -68,7 +127,17 @@ function renderWindow() {
 
 beforeEach(() => {
   activate = undefined;
+  publish = undefined;
   window.localStorage.clear();
+  vi.mocked(subscribeEvents)
+    .mockReset()
+    .mockImplementation((onEvent) => {
+      publish = onEvent;
+      return () => {
+        publish = undefined;
+      };
+    });
+  vi.mocked(getTraceDetail).mockReset().mockResolvedValue(traceResponse([]));
   hideQuickWindowMock.mockReset();
   watchSupportedMock.mockReset().mockResolvedValue(true);
   pollClipboardMock.mockReset();
@@ -816,5 +885,56 @@ describe("QuickRun", () => {
     ).toBeInTheDocument();
     expect(runCommand).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: t("quickRun.run") })).toBeDisabled();
+  });
+  it("follows the run with the newest trace record in the status line", async () => {
+    let finish: ((response: CommandRunResponse) => void) | undefined;
+    vi.mocked(runCommand).mockReturnValue(
+      new Promise<CommandRunResponse>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    vi.mocked(getTraceDetail).mockResolvedValue(
+      traceResponse([traceRecord("Prompt", "asking the model")]),
+    );
+    renderWindow();
+
+    await fire({ command: "review", text: "hello" });
+    await waitFor(() => expect(runCommand).toHaveBeenCalled());
+
+    // The trace is named by the service, not by the still-pending request.
+    await waitFor(() => expect(publish).toBeDefined());
+    publish!(commandStarted("trace-9", "review", "bot"));
+
+    await waitFor(() => expect(getTraceDetail).toHaveBeenCalledWith("trace-9"));
+    const status = await screen.findByRole("status", { name: t("quickRun.status") });
+    await waitFor(() => expect(status).toHaveTextContent("asking the model"));
+    expect(status).toHaveTextContent("Prompt");
+
+    // The closing record is written as the run answers, so it is read once more.
+    vi.mocked(getTraceDetail).mockResolvedValue(
+      traceResponse([
+        traceRecord("Prompt", "asking the model"),
+        traceRecord("Done", "wrote 3 files"),
+      ]),
+    );
+    finish!({ trace_id: "trace-9", output: "done" });
+
+    await waitFor(() => expect(status).toHaveTextContent("wrote 3 files"));
+  });
+
+  it("keeps the status line out of runs the window did not start", async () => {
+    vi.mocked(runCommand).mockReturnValue(new Promise<CommandRunResponse>(() => {}));
+    renderWindow();
+
+    await fire({ command: "review", text: "hello" });
+    await waitFor(() => expect(runCommand).toHaveBeenCalled());
+    await waitFor(() => expect(publish).toBeDefined());
+
+    // The scheduler running the very same command for the same member, while
+    // this window is still waiting on its own run.
+    publish!(commandStarted("scheduler-1", "review", "bot", "scheduled"));
+
+    await waitFor(() => expect(screen.getByRole("status")).toBeEmptyDOMElement());
+    expect(getTraceDetail).not.toHaveBeenCalled();
   });
 });

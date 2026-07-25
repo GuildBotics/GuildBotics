@@ -1340,6 +1340,7 @@ const resources = {
         copied: "Copied",
         failed: "Run failed",
         close: "Close",
+        status: "Latest event",
       },
       tray: {
         show: "Open GuildBotics",
@@ -2692,6 +2693,7 @@ const resources = {
         copied: "コピーしました",
         failed: "実行に失敗しました",
         close: "閉じる",
+        status: "最新のイベント",
       },
       tray: {
         show: "GuildBotics を開く",
