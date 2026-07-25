@@ -2319,3 +2319,22 @@ pre {
 .mantine-Switch-track {
   border-radius: 6px !important;
 }
+
+.command-hotkey-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px;
+  background: var(--color-bg-panel-subtle);
+  border-radius: 8px;
+}
+
+.command-hotkey-field > *:first-child {
+  width: 220px;
+  flex: none;
+}
+
+.command-hotkey-help {
+  padding-top: 26px;
+  line-height: 1.6;
+}

@@ -1,0 +1,90 @@
+/* Quick run window: a frameless panel, so it draws its own surface. */
+body {
+  margin: 0;
+  background: transparent;
+}
+
+.quick-run {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  height: 100vh;
+  box-sizing: border-box;
+  background: var(--mantine-color-body);
+  border: 1px solid var(--color-border-subtle, rgb(128 128 128 / 0.35));
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.quick-run-title {
+  padding: 2px 0;
+}
+
+.quick-run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quick-run-result {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.quick-run-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quick-run-output {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.quick-run-toggles {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.quick-run-header {
+  flex: none;
+  /* Room for the corner control so a long command name never runs under it. */
+  padding-right: 26px;
+}
+
+.quick-run-command {
+  flex: 1;
+  min-width: 0;
+}
+
+.quick-run-output-block {
+  position: relative;
+}
+
+.quick-run-copy {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.quick-run-output {
+  padding-right: 28px;
+}
+
+.quick-run-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+}

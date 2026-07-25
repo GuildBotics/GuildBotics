@@ -8,6 +8,9 @@ use tauri::{LogicalPosition, LogicalSize, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+mod hotkeys;
+mod tray;
+
 /// Holds the Local API sidecar process and the connection details the frontend
 /// needs to talk to it.
 ///
@@ -654,13 +657,29 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(hotkeys::plugin())
         .invoke_handler(tauri::generate_handler![
             backend_info,
             bootstrap_log,
             cli_agent_skill_statuses,
             force_update_cli_agent_skill,
+            hotkeys::sync_hotkeys,
+            hotkeys::suspend_hotkeys,
+            hotkeys::resume_hotkeys,
+            hotkeys::hide_quick_window,
+            hotkeys::clipboard_watch_supported,
+            hotkeys::poll_clipboard,
+            hotkeys::show_main_window,
+            tray::set_tray_labels,
+            tray::quit_app,
         ])
         .setup(move |app| {
+            app.manage(hotkeys::HotkeyState::default());
+            hotkeys::init(app.handle());
+            app.manage(tray::TrayState::default());
+            tray::build(app.handle())?;
+
             if let Err(error) = install_cli_agent_assets() {
                 eprintln!("failed to install GuildBotics AI CLI tool assets: {error}");
             }
@@ -740,9 +759,16 @@ pub fn run() {
             });
             Ok(())
         })
+        .on_window_event(tray::on_window_event)
         .build(tauri::generate_context!())
         .expect("error while building GuildBotics desktop application")
         .run(|app_handle, event| {
+            // Closing the window only hides it, so the dock icon stays; clicking
+            // it must bring the window back rather than do nothing.
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = event {
+                hotkeys::show_main_window(app_handle.clone());
+            }
             if let RunEvent::Exit = event {
                 if let Some(state) = app_handle.try_state::<BackendState>() {
                     // Tolerate a poisoned mutex so the app can still exit cleanly;

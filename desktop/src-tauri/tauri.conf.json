@@ -19,6 +19,20 @@
         "minHeight": 680,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
+      },
+      {
+        "label": "quick",
+        "url": "quick.html",
+        "title": "GuildBotics",
+        "width": 520,
+        "height": 460,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "center": true
       }
     ],
     "security": {

@@ -425,6 +425,7 @@ const resources = {
           intelligence: "LLM / AI CLI tools",
           members: "Members",
           github: "GitHub",
+          shortcuts: "Shortcuts",
           verification: "Verification",
         },
         verification: {
@@ -1298,6 +1299,52 @@ const resources = {
           failed: "Failed",
         },
       },
+      hotkey: {
+        label: "Hotkey",
+        unset: "Not set",
+        recording: "Press the keys you want to use",
+        needsModifier: "Add a modifier key such as ⌘, ⌃, ⌥ or ⇧.",
+        clear: "Clear the hotkey",
+        settingsTitle: "Quick run window",
+        settingsDescription: "Copy the selected text, then press this key to open the run window.",
+        commandLabel: "Hotkey",
+        commandDescription:
+          "Runs this command directly. The run window opens instead when an input is missing.",
+        commandSaved: "Hotkey saved",
+        saveErrorTitle: "Could not save the hotkey",
+        rejectedTitle: "Some hotkeys could not be registered",
+        rejectedBody:
+          "Another application already uses {{accelerators}}. Pick a different combination.",
+        errors: {
+          hotkey_invalid: "That key combination cannot be used.",
+          hotkey_needs_modifier: "That key combination needs a modifier key.",
+          hotkey_conflict: "That key combination is already assigned to another command.",
+        },
+      },
+      quickRun: {
+        command: "Command",
+        commandPlaceholder: "Select a command",
+        runner: "Run as {{member}} — click to change",
+        message: "Input",
+        messagePlaceholder: "Text passed to the command",
+        autoRun: "Run automatically",
+        watchClipboard: "Watch the clipboard",
+        unknownCommandTitle: "This command is not available",
+        unknownCommandBody:
+          "'{{command}}' cannot be run right now. It may have been renamed or deleted, or its requirements are unmet.",
+        run: "Run",
+        running: "Running",
+        noOutput: "No output.",
+        requirementsMissing: "Needs configuration: {{requirements}}",
+        copy: "Copy the output",
+        copied: "Copied",
+        failed: "Run failed",
+        close: "Close",
+      },
+      tray: {
+        show: "Open GuildBotics",
+        quit: "Quit",
+      },
     },
   },
   ja: {
@@ -1442,6 +1489,7 @@ const resources = {
           intelligence: "LLM・AI CLIツール",
           members: "メンバー",
           github: "GitHub",
+          shortcuts: "ショートカット",
           verification: "検証",
         },
         verification: {
@@ -2603,6 +2651,52 @@ const resources = {
           failed: "失敗",
         },
       },
+      hotkey: {
+        label: "ホットキー",
+        unset: "未設定",
+        recording: "使いたいキーを押してください",
+        needsModifier: "⌘ / ⌃ / ⌥ / ⇧ のいずれかと組み合わせてください。",
+        clear: "ホットキーを解除",
+        settingsTitle: "コマンド実行ウィンドウ",
+        settingsDescription:
+          "選択中の文字列をコピーしてからこのキーを押すと、実行ウィンドウが開きます。",
+        commandLabel: "ホットキー",
+        commandDescription:
+          "押すとこのコマンドを直接実行します。入力が足りないときは実行ウィンドウが開きます。",
+        commandSaved: "ホットキーを保存しました",
+        saveErrorTitle: "ホットキーを保存できませんでした",
+        rejectedTitle: "登録できなかったホットキーがあります",
+        rejectedBody: "{{accelerators}} は他のアプリが使用中です。別の組み合わせを選んでください。",
+        errors: {
+          hotkey_invalid: "そのキーの組み合わせは使用できません。",
+          hotkey_needs_modifier: "そのキーの組み合わせには修飾キーが必要です。",
+          hotkey_conflict: "そのキーの組み合わせは別のコマンドに割り当て済みです。",
+        },
+      },
+      quickRun: {
+        command: "コマンド",
+        commandPlaceholder: "コマンドを選択",
+        runner: "{{member}} として実行 — クリックで変更",
+        message: "入力文",
+        messagePlaceholder: "コマンドへ渡す入力文",
+        autoRun: "自動実行する",
+        watchClipboard: "クリップボード監視",
+        unknownCommandTitle: "このコマンドは実行できません",
+        unknownCommandBody:
+          "'{{command}}' は現在実行できません。名前の変更や削除、または必要な設定の不足が考えられます。",
+        run: "実行",
+        running: "実行中",
+        noOutput: "出力はありません。",
+        requirementsMissing: "設定が不足しています: {{requirements}}",
+        copy: "出力をコピー",
+        copied: "コピーしました",
+        failed: "実行に失敗しました",
+        close: "閉じる",
+      },
+      tray: {
+        show: "GuildBotics を開く",
+        quit: "終了",
+      },
     },
   },
 };
@@ -2615,9 +2709,59 @@ export function getInitialAppLanguage(): AppLanguage {
   return normalizeLanguage(navigator.language) ?? "en";
 }
 
-export function setAppLanguage(language: AppLanguage) {
+/** Tauri event carrying a language change to the app's other windows. */
+const LANGUAGE_EVENT = "app://language-changed";
+
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+export async function setAppLanguage(language: AppLanguage) {
   localStorage.setItem(STORAGE_KEY, language);
-  return i18n.changeLanguage(language);
+  await i18n.changeLanguage(language);
+  if (!isTauriRuntime()) {
+    return;
+  }
+  // Every window keeps its own webview and reads the stored language only when
+  // it loads. The quick run window is never reloaded, so it has to be told.
+  try {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit(LANGUAGE_EVENT, language);
+  } catch {
+    // The event API is unavailable (browser preview or a stubbed harness).
+  }
+}
+
+/**
+ * Follow language changes made in another window.
+ *
+ * Returns a function that stops following.
+ */
+export function followAppLanguage(): () => void {
+  if (!isTauriRuntime()) {
+    return () => {};
+  }
+  let stop: (() => void) | undefined;
+  let cancelled = false;
+  void (async () => {
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlisten = await listen<AppLanguage>(LANGUAGE_EVENT, (event) => {
+        void i18n.changeLanguage(event.payload);
+      });
+      if (cancelled) {
+        unlisten();
+      } else {
+        stop = unlisten;
+      }
+    } catch {
+      // The event API is unavailable; the window keeps its loaded language.
+    }
+  })();
+  return () => {
+    cancelled = true;
+    stop?.();
+  };
 }
 
 export function normalizeLanguage(value: string | null | undefined): AppLanguage | null {

@@ -119,7 +119,9 @@ import {
   getCliAgentSkillStatuses,
   restartBackend,
 } from "../api/backend";
+import { announceWorkspaceChange } from "../appEvents";
 import { cliAgentLabelFromConfig, useMemberCliAgentLabel } from "../cliAgent";
+import { ShortcutsSection } from "./ShortcutsSection";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -196,6 +198,9 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   "intelligence",
   "members",
   "github",
+  // Hotkeys are an everyday convenience rather than part of getting running,
+  // so they are offered only once the workspace is configured.
+  "shortcuts",
   "verification",
 ] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
@@ -508,12 +513,17 @@ export function SetupPage() {
     queryClient.invalidateQueries({ queryKey: ["project-config"] });
     queryClient.invalidateQueries({ queryKey: ["intelligence-config"] });
     queryClient.invalidateQueries({ queryKey: ["command-options"] });
+    // Hotkey assignments live in the workspace config, so the previous
+    // workspace's combinations must not stay registered with the OS.
+    queryClient.invalidateQueries({ queryKey: ["hotkeys"] });
     queryClient.invalidateQueries({ queryKey: ["scheduler"] });
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ["config"] }),
       queryClient.refetchQueries({ queryKey: ["team"] }),
     ]);
     await queryClient.refetchQueries({ queryKey: ["project-config"] });
+    // The quick run window has its own cache and never reloads.
+    await announceWorkspaceChange();
     setSaveState("saved");
   };
   const startWorkspaceSwitch = (workspace: string) => {
@@ -629,6 +639,7 @@ export function SetupPage() {
             />
           ) : null}
           {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
+          {activeSection === "shortcuts" ? <ShortcutsSection /> : null}
           {activeSection === "verification" ? (
             <VerificationSection
               config={config.data}
@@ -798,6 +809,7 @@ function SetupSectionNav({
     ["intelligence", t("setup.nav.intelligence"), status.intelligenceReady],
     ["members", t("setup.nav.members"), status.membersReady],
     ["github", t("setup.nav.github"), status.githubReady],
+    ["shortcuts", t("setup.nav.shortcuts"), true],
     ["verification", t("setup.nav.verification"), status.verificationReady],
   ];
   return (

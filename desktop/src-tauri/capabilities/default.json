@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default permissions for the GuildBotics desktop window.",
-  "windows": ["main"],
+  "windows": [
+    "main",
+    "quick"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-destroy",

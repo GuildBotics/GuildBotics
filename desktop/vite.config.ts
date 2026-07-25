@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
@@ -6,6 +8,11 @@ export default defineConfig({
   clearScreen: false,
   build: {
     rollupOptions: {
+      // `quick.html` is the hotkey-triggered quick run window.
+      input: {
+        main: resolve(__dirname, "index.html"),
+        quick: resolve(__dirname, "quick.html"),
+      },
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) {

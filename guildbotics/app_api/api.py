@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
+from guildbotics.app_api.hotkeys import load_hotkeys, save_hotkeys
 from guildbotics.app_api.intelligences import IntelligenceConfigService
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
@@ -47,6 +48,7 @@ from guildbotics.app_api.models import (
     ConfigStatus,
     DefaultPersonUpdateRequest,
     HealthResponse,
+    HotkeySettings,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     LlmProvidersResponse,
@@ -346,6 +348,17 @@ def create_app(
         return app_runtime.get_command_file_execution_status(
             file_id, person, expected_revision
         )
+
+    @app.get("/hotkeys", response_model=HotkeySettings, responses=error_responses)
+    def get_hotkeys(_: None = Depends(require_token)) -> HotkeySettings:
+        return load_hotkeys()
+
+    @app.put("/hotkeys", response_model=HotkeySettings, responses=error_responses)
+    def put_hotkeys(
+        request: HotkeySettings,
+        _: None = Depends(require_token),
+    ) -> HotkeySettings:
+        return save_hotkeys(request)
 
     @app.get(
         "/config/roles",
