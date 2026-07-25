@@ -52,6 +52,16 @@ def test_save_drops_blank_assignments(config_dir: Path) -> None:
     assert saved.commands == {"other": "Command+1"}
 
 
+def test_load_drops_blank_assignments_from_a_hand_edited_file(config_dir: Path) -> None:
+    # Otherwise the desktop is handed whitespace to register and reports it as
+    # rejected, instead of simply treating the assignment as unset.
+    (config_dir / "hotkeys.yml").write_text(
+        "quick_run: '  '\ncommands:\n  greet: '  '\n  review: ' Control+Alt+1 '\n"
+    )
+
+    assert load_hotkeys() == HotkeySettings(commands={"review": "Control+Alt+1"})
+
+
 def test_load_tolerates_a_malformed_file(config_dir: Path) -> None:
     (config_dir / "hotkeys.yml").write_text("commands: not-a-mapping\n")
 
@@ -77,6 +87,12 @@ def test_accepts_registrable_combinations(accelerator: str) -> None:
     [
         ("G", "hotkey_needs_modifier"),
         ("1", "hotkey_needs_modifier"),
+        # Only function keys are usable bare; anything else would be taken away
+        # from every other application.
+        ("Space", "hotkey_needs_modifier"),
+        ("Enter", "hotkey_needs_modifier"),
+        ("Escape", "hotkey_needs_modifier"),
+        ("Up", "hotkey_needs_modifier"),
         ("Meta+G", "hotkey_invalid"),
         ("Control+Control+G", "hotkey_invalid"),
         ("Control+CapsLock", "hotkey_invalid"),

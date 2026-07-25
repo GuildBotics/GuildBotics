@@ -30,8 +30,10 @@ _BASE_KEY = re.compile(
     r"|Home|End|PageUp|PageDown|Up|Down|Left|Right|Minus|Equal|BracketLeft"
     r"|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash|Backquote)$"
 )
-# A bare letter or digit would be taken away from every other application.
-_NEEDS_MODIFIER = re.compile(r"^[A-Z0-9]$")
+# Function keys are the only combinations usable on their own; any other bare
+# key would be taken away from every other application. Mirrors the recorder's
+# rule in the desktop frontend.
+_FUNCTION_KEY = re.compile(r"^F(?:[1-9]|1\d|2[0-4])$")
 
 
 def hotkeys_file() -> Path:
@@ -64,7 +66,7 @@ def validate_accelerator(accelerator: str, *, label: str) -> None:
             f"'{accelerator}' is not a usable key combination.",
             context={"assignment": label, "accelerator": accelerator},
         )
-    if not modifiers and _NEEDS_MODIFIER.match(base):
+    if not modifiers and not _FUNCTION_KEY.match(base):
         raise AppApiError(
             "hotkey_needs_modifier",
             f"'{accelerator}' needs a modifier key.",
@@ -95,6 +97,22 @@ def validate_settings(settings: HotkeySettings) -> None:
         seen[accelerator] = label
 
 
+def _normalized(settings: HotkeySettings) -> HotkeySettings:
+    """Trim the assignments and drop the ones that hold nothing.
+
+    Applied on both read and write so a hand-edited file cannot hand the desktop
+    a blank accelerator to register.
+    """
+    return HotkeySettings(
+        quick_run=settings.quick_run.strip(),
+        commands={
+            command: accelerator.strip()
+            for command, accelerator in settings.commands.items()
+            if accelerator.strip()
+        },
+    )
+
+
 def load_hotkeys() -> HotkeySettings:
     """Read the workspace hotkey assignments, defaulting to none."""
     path = hotkeys_file()
@@ -107,26 +125,21 @@ def load_hotkeys() -> HotkeySettings:
     commands = data.get("commands") or {}
     if not isinstance(commands, dict):
         commands = {}
-    return HotkeySettings(
-        quick_run=str(data.get("quick_run") or ""),
-        commands={
-            str(command): str(accelerator)
-            for command, accelerator in commands.items()
-            if accelerator
-        },
+    return _normalized(
+        HotkeySettings(
+            quick_run=str(data.get("quick_run") or ""),
+            commands={
+                str(command): str(accelerator)
+                for command, accelerator in commands.items()
+                if accelerator
+            },
+        )
     )
 
 
 def save_hotkeys(settings: HotkeySettings) -> HotkeySettings:
     """Validate and persist hotkey assignments, dropping empty entries."""
-    normalized = HotkeySettings(
-        quick_run=settings.quick_run.strip(),
-        commands={
-            command: accelerator.strip()
-            for command, accelerator in settings.commands.items()
-            if accelerator.strip()
-        },
-    )
+    normalized = _normalized(settings)
     validate_settings(normalized)
     save_yaml_file(
         hotkeys_file(),
