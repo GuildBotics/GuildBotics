@@ -452,6 +452,57 @@ def test_interactive_session_still_uses_prompt() -> None:
     assert title == "会議の議事録をまとめて"
 
 
+def test_manual_command_session_is_hidden_but_its_events_remain() -> None:
+    pr_url = "https://github.com/o/r/pull/51"
+    records = [
+        {
+            "trace_id": "t-manual",
+            "person_id": "alice",
+            "timestamp": "2026-07-01T12:00:00+00:00",
+            "source": "manual",
+            "command": "workflows/ticket_driven_workflow",
+            "kind": "io",
+            "attributes": {},
+            "payload": {"fields": {"prompt": "リリースノートを作って"}},
+        },
+        {
+            "trace_id": "t-manual",
+            "person_id": "alice",
+            "timestamp": "2026-07-01T12:01:00+00:00",
+            "source": "manual",
+            "kind": "event",
+            "type": "github.pull_request",
+            "attributes": {
+                "github.action": "opened",
+                "github.kind": "pull_request",
+                "github.number": 51,
+                "github.repo": "o/r",
+                "github.url": pr_url,
+            },
+            "payload": {
+                "action": "opened",
+                "pull_request": {
+                    "number": 51,
+                    "title": "Add release notes",
+                    "html_url": pr_url,
+                },
+            },
+        },
+    ]
+
+    history = build_activity_history(
+        start=START,
+        end=END,
+        members=_members(),
+        records=records,
+    )
+
+    assert history.sessions == []
+    assert [(event.type, event.title, event.url) for event in history.events] == [
+        ("pr_create", "PR #51 Created", pr_url)
+    ]
+
+
 def test_issue_create_event_and_comments_share_one_session_issue_link() -> None:
     issue_url = "https://github.com/o/r/issues/43"
     records = [

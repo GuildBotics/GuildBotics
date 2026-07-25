@@ -31,6 +31,10 @@ from guildbotics.utils.timestamps import parse_iso_datetime
 
 type ActivitySessionMode = Literal["interactive", "workflow"]
 AUTOMATED_WORKFLOW_SOURCES = {"routine", "scheduled", "event_listener"}
+# Desktop command runs (commands page and hotkey quick run) fire far too often
+# to belong on the activity timeline, so they never become sessions. Whatever
+# such a run actually changed still surfaces through activity events.
+MANUAL_SESSION_SOURCE = "manual"
 # Internal grouping key: the trace that owns a run-scoped record. Kept separate
 # from the record's own ``trace_id`` so adopted records still generate links
 # (e.g. memory diagnostics urls) against their original identity.
@@ -112,9 +116,11 @@ def _summarize_trace(
     ]
     if not timestamps:
         return None
+    source = _first_text(records, "source")
+    if source == MANUAL_SESSION_SOURCE:
+        return None
     first = records[0]
     attributes = _merged_attributes(records)
-    source = _first_text(records, "source")
     command = _first_text(records, "command")
     workflow = _first_text(records, "workflow")
     status = _trace_status(records)
@@ -286,8 +292,8 @@ def _trace_status(records: list[dict[str, Any]]) -> str:
     Provider span success (``.finished``) is only provisional: the workflow's
     recorded completion evidence and the dispatch decision (retry/abandon)
     take precedence, so a clean provider turn without completion evidence is
-    never shown as success. Traces without completion-layer events (manual
-    commands, interactive sessions) keep the provider-derived status.
+    never shown as success. Traces without completion-layer events (interactive
+    sessions, diagnostics runs) keep the provider-derived status.
 
     ``retry_scheduled`` requires an actual ``chat_dispatch.retry_scheduled``
     event: completion evidence alone does not say whether anything will

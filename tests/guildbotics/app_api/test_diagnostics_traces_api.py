@@ -299,7 +299,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         diagnostics_store=store,
     )
     with trace_scope(
-        "manual",
+        "routine",
         trace_id="agent-trace",
         person_id="alice",
         command="demo",
@@ -348,7 +348,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
             },
         )
     with trace_scope(
-        "manual", trace_id="human-trace", person_id="bob", command="human"
+        "interactive", trace_id="human-trace", person_id="bob", command="human"
     ):
         bus.publish_event("command.started", {"command": "human"})
     with trace_scope(
@@ -502,7 +502,7 @@ def test_activity_history_sorts_mixed_timestamp_offsets_by_time(
             "type": "command.finished",
             "timestamp": "2026-07-01T00:30:00Z",
             "trace_id": "mixed-trace",
-            "source": "manual",
+            "source": "interactive",
             "person_id": "alice",
             "command": "demo",
         }
@@ -513,7 +513,7 @@ def test_activity_history_sorts_mixed_timestamp_offsets_by_time(
             "type": "command.started",
             "timestamp": "2026-07-01T09:00:00+09:00",
             "trace_id": "mixed-trace",
-            "source": "manual",
+            "source": "interactive",
             "person_id": "alice",
             "command": "demo",
         }
