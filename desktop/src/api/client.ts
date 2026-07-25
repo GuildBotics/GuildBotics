@@ -55,7 +55,9 @@ export type TeamSummary = {
     is_active: boolean;
     roles: string[];
   }>;
-  // Member a command runs as when none is selected; "" when it is ambiguous.
+  // Member a command runs as when none is selected: the configured default,
+  // else the first active non-human member in person id order. Empty only when
+  // no member can execute commands.
   default_person_id: string;
 };
 

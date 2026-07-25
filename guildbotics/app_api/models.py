@@ -65,8 +65,9 @@ class MemberSummary(BaseModel):
 class TeamSummary(BaseModel):
     project: ProjectSummary
     members: list[MemberSummary]
-    # Effective default command executor: the configured member, or the sole
-    # active member when nothing is configured, or "" when it is ambiguous.
+    # Effective default command executor: the configured member, else the first
+    # active non-human member in person ID order. It is "" only when the team
+    # has no member that can execute commands.
     default_person_id: str = ""
 
 
@@ -702,7 +703,8 @@ class ProjectConfigUpdateRequest(GitHubProjectInput):
 
 
 class DefaultPersonUpdateRequest(BaseModel):
-    # Empty clears the setting and falls back to the sole active member, if any.
+    # Empty clears the setting; resolution then falls back to the first active
+    # non-human member in person ID order.
     person_id: str = ""
 
 
