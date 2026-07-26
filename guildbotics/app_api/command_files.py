@@ -4,8 +4,9 @@ Desktop frontend never touches arbitrary local paths directly. This service
 owns the editable root (the shared ``commands`` directory), the opaque file ID
 scheme, revision hashing, atomic writes, path/symlink containment, and the
 prospective-resolution shadow check used when creating a file. It converts
-raised :class:`~guildbotics.commands.validation.CommandValidationError` and its
-own containment failures into :class:`AppApiError` with the shared error codes.
+containment and persistence failures into :class:`AppApiError` with the shared
+error codes. Command syntax is deliberately not a persistence concern: invalid
+drafts remain saveable and are blocked by the execution-readiness guard.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from typing import Any
 
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import (
+    CommandArgumentOption,
     CommandFileDetail,
     CommandFileFormat,
     CommandFilesResponse,
@@ -32,6 +34,7 @@ from guildbotics.app_api.models import (
 from guildbotics.commands.discovery import (
     command_source,
     get_shared_commands_root,
+    is_command_source_path,
     is_within,
     iter_effective_shared_commands,
     logical_command_name,
@@ -39,38 +42,23 @@ from guildbotics.commands.discovery import (
     resolve_prospective_shared_command,
 )
 from guildbotics.commands.errors import CommandError
+from guildbotics.commands.formats import EXTENSION_BY_FORMAT, FORMAT_BY_EXTENSION
 from guildbotics.commands.metadata import (
     default_command_label,
-    is_command_metadata_sidecar,
     load_command_metadata,
     parse_command_arguments,
     parse_command_input_policy,
 )
 from guildbotics.commands.registry import get_command_extensions
-from guildbotics.commands.validation import (
-    CommandValidationError,
-    validate_command_source,
-)
 
 MAX_COMMAND_FILE_BYTES = 1024 * 1024
 
-_FORMAT_BY_EXTENSION: dict[str, CommandFileFormat] = {
-    ".md": "markdown",
-    ".py": "python",
-    ".sh": "shell",
-    ".yaml": "yaml",
-    ".yml": "yaml",
-}
-_EXTENSION_BY_FORMAT: dict[CommandFileFormat, str] = {
-    "markdown": ".md",
-    "python": ".py",
-    "shell": ".sh",
-    "yaml": ".yaml",
-}
-
 _INITIAL_SOURCE: dict[CommandFileFormat, str] = {
     "markdown": "---\nname: New command\nbrain: none\ninputs:\n  message: hidden\n---\nTODO\n",
-    "python": 'def main(context) -> str:\n    return ""\n',
+    "python": (
+        'COMMAND_METADATA = {"inputs": {"message": "hidden"}}\n\n\n'
+        'def main(context) -> str:\n    return ""\n'
+    ),
     "shell": "#!/usr/bin/env bash\nset -euo pipefail\n",
     "yaml": "commands: []\n",
 }
@@ -123,9 +111,12 @@ class CommandFileService:
         return self._detail(self.resolve_existing(file_id))
 
     def create_file(
-        self, command: str, file_format: CommandFileFormat
+        self,
+        command: str,
+        file_format: CommandFileFormat,
+        content: str | None = None,
     ) -> CommandFileDetail:
-        extension = _EXTENSION_BY_FORMAT[file_format]
+        extension = EXTENSION_BY_FORMAT[file_format]
         relative = self._validate_command_name(command, extension)
         target = self._safe_target(relative)
         # Reject a duplicate logical command in any extension, not just the exact
@@ -140,11 +131,11 @@ class CommandFileService:
                     {"relative_path": _relative_to(self._root, sibling)},
                 )
         self._reject_shadowed_creation(command, target)
-        content = _INITIAL_SOURCE[file_format]
-        validate_command_source(extension, content)
+        source = _INITIAL_SOURCE[file_format] if content is None else content
+        self._check_content(source)
         self._atomic_write(
             target,
-            content,
+            source,
             mode=0o755 if file_format == "shell" else 0o644,
         )
         return self._detail(target)
@@ -161,10 +152,6 @@ class CommandFileService:
                 "The command file changed since it was loaded.",
                 {"current_revision": current},
             )
-        try:
-            validate_command_source(path.suffix, content)
-        except CommandValidationError as exc:
-            raise _validation_error(exc) from exc
         self._atomic_write(path, content)
         return self._detail(path)
 
@@ -192,32 +179,9 @@ class CommandFileService:
                 {"current_revision": current},
             )
         path.unlink()
-        self._delete_orphan_metadata(path)
         return self.list_files()
 
     # -- internals -------------------------------------------------------
-
-    def _delete_orphan_metadata(self, path: Path) -> None:
-        """Drop metadata sidecars once no command file shares their base name.
-
-        A localized sibling (``greet.ja.md`` next to ``greet.md``) keeps using
-        the same sidecar, so the sidecar only goes away with the last of them.
-        Every locale is swept, not just the active one, so a recreated command
-        cannot inherit metadata left behind in another language.
-        """
-        extensions = set(get_command_extensions())
-        # Command names carry no dots, so the leading segment is the base name
-        # shared by localized variants and their sidecars.
-        base_name = path.with_suffix("").name.split(".", 1)[0]
-        siblings = list(path.parent.glob(f"{base_name}.*"))
-        for sibling in siblings:
-            if sibling.suffix.lower() in extensions and not is_command_metadata_sidecar(
-                sibling
-            ):
-                return
-        for sibling in siblings:
-            if is_command_metadata_sidecar(sibling):
-                sibling.unlink(missing_ok=True)
 
     def _reject_shadowed_creation(self, command: str, target: Path) -> None:
         resolved = resolve_prospective_shared_command(target, command, self._language)
@@ -269,11 +233,7 @@ class CommandFileService:
             raise _error(
                 "command_file_not_found", f"Unknown command file: {file_id!r}."
             )
-        if relative_path.suffix.lower() not in _FORMAT_BY_EXTENSION:
-            raise _error(
-                "command_file_not_found", f"Unknown command file: {file_id!r}."
-            )
-        if is_command_metadata_sidecar(relative_path):
+        if not is_command_source_path(relative_path):
             raise _error(
                 "command_file_not_found", f"Unknown command file: {file_id!r}."
             )
@@ -343,7 +303,7 @@ class CommandFileService:
             label=str(metadata.get("name") or default_command_label(command)),
             description=str(metadata.get("description", "")),
             relative_path=relative,
-            format=_FORMAT_BY_EXTENSION[path.suffix.lower()],
+            format=FORMAT_BY_EXTENSION[path.suffix.lower()],
         )
 
     def _detail(self, path: Path) -> CommandFileDetail:
@@ -357,12 +317,21 @@ class CommandFileService:
             label=str(metadata.get("name") or default_command_label(command)),
             description=str(metadata.get("description", "")),
             relative_path=relative,
-            format=_FORMAT_BY_EXTENSION[path.suffix.lower()],
+            format=FORMAT_BY_EXTENSION[path.suffix.lower()],
             content=data.decode("utf-8", errors="replace"),
             revision=file_revision(data),
-            arguments=to_command_arguments(parse_command_arguments(path, metadata)),
+            arguments=_safe_arguments(path, metadata),
             inputs=_safe_inputs(metadata),
         )
+
+
+def _safe_arguments(
+    path: Path, metadata: dict[str, Any]
+) -> list[CommandArgumentOption]:
+    try:
+        return to_command_arguments(parse_command_arguments(path, metadata))
+    except CommandError:
+        return []
 
 
 def _safe_inputs(metadata: dict[str, Any]) -> CommandInputs:
@@ -396,15 +365,6 @@ def _error(
         message,
         status_code=_STATUS_BY_CODE.get(code, 400),
         context=context or {},
-    )
-
-
-def _validation_error(exc: CommandValidationError) -> AppApiError:
-    return AppApiError(
-        exc.code,
-        str(exc),
-        status_code=_STATUS_BY_CODE.get(exc.code, 400),
-        context=exc.context,
     )
 
 

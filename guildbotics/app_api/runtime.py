@@ -33,6 +33,8 @@ from guildbotics.app_api.models import (
     CliAgentUsage,
     CliAgentUsagesResponse,
     CliAgentUsageWindow,
+    CommandAuthoringRequest,
+    CommandAuthoringResponse,
     CommandFileCreateRequest,
     CommandFileDetail,
     CommandFileExecutionStatus,
@@ -80,6 +82,8 @@ from guildbotics.capabilities.member_memory_audit import (
     parse_memory_audit_timestamp,
 )
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.commands.authoring import author_command_turn
+from guildbotics.commands.brains import is_brain_disabled
 from guildbotics.commands.discovery import (
     command_source,
     get_shared_commands_root,
@@ -89,11 +93,16 @@ from guildbotics.commands.discovery import (
     resolve_command_path,
     resolve_command_reference,
 )
+from guildbotics.commands.formats import EXTENSION_BY_FORMAT
 from guildbotics.commands.metadata import (
     default_command_label,
     load_command_metadata,
     parse_command_arguments,
     parse_command_input_policy,
+)
+from guildbotics.commands.validation import (
+    CommandValidationError,
+    validate_command_source,
 )
 from guildbotics.drivers import (
     CommandError,
@@ -356,7 +365,9 @@ class AppRuntime:
     def create_command_file(
         self, request: CommandFileCreateRequest
     ) -> CommandFileDetail:
-        return self._command_file_service().create_file(request.command, request.format)
+        return self._command_file_service().create_file(
+            request.command, request.format, request.content
+        )
 
     def update_command_file(
         self, file_id: str, request: CommandFileUpdateRequest
@@ -369,6 +380,69 @@ class AppRuntime:
         self, file_id: str, expected_revision: str
     ) -> CommandFilesResponse:
         return self._command_file_service().delete_file(file_id, expected_revision)
+
+    async def author_command(
+        self, request: CommandAuthoringRequest
+    ) -> CommandAuthoringResponse:
+        """Apply one AI authoring turn to a frontend-owned command draft."""
+        base_context = self._get_context(request.message)
+        command_label = request.command or "new-command"
+        person = self._resolve_execution_person(
+            base_context, request.person, f"author:{command_label}"
+        )
+        context = base_context.clone_for(person)
+        trace_id = new_id()
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+
+        def _cancel_authoring() -> None:
+            if task is not None:
+                loop.call_soon_threadsafe(task.cancel)
+
+        try:
+            with (
+                self._execution.track_work(
+                    source="manual",
+                    person_id=person.person_id,
+                    command=f"author:{command_label}",
+                    work_id=trace_id,
+                    cancel=_cancel_authoring,
+                ),
+                trace_scope(
+                    "command_authoring",
+                    command=command_label,
+                    person_id=person.person_id,
+                    trace_id=trace_id,
+                    attributes={"authoring.id": request.authoring_id},
+                ),
+            ):
+                result = await author_command_turn(
+                    context,
+                    mode=request.mode,
+                    authoring_id=request.authoring_id,
+                    trace_id=trace_id,
+                    command=request.command,
+                    command_format=request.format,
+                    content=request.content,
+                    instruction=request.message,
+                    workspace_data_root=get_workspace_data_root(),
+                )
+        except WorkRejectedError as exc:
+            raise AppApiError("work_rejected", str(exc), status_code=409) from exc
+        except CommandError as exc:
+            raise AppApiError(
+                "command_authoring_failed", str(exc), status_code=502
+            ) from exc
+        finally:
+            await context.aclose()
+        return CommandAuthoringResponse(
+            trace_id=trace_id,
+            message=result.message,
+            command=result.command,
+            format=result.format,
+            relative_path=f"{result.command}{EXTENSION_BY_FORMAT[result.format]}",
+            content=result.content,
+        )
 
     def get_command_file_execution_status(
         self, file_id: str, person: str | None, expected_revision: str
@@ -420,7 +494,8 @@ class AppRuntime:
         path = self._command_file_service().resolve_existing(file_id)
         language_code = context.team.project.get_language_code()
 
-        current = file_revision(path.read_bytes())
+        data = path.read_bytes()
+        current = file_revision(data)
         if current != expected_revision:
             return "command_file_changed", {"current_revision": current}, []
 
@@ -437,6 +512,22 @@ class AppRuntime:
                 context_data["resolved_relative_path"] = _resolved_display(resolved)
             return "command_file_shadowed", context_data, []
 
+        try:
+            source = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return (
+                "command_file_invalid_source",
+                {
+                    "message": "Command source must be valid UTF-8.",
+                    "reason": "invalid_utf8",
+                },
+                [],
+            )
+        try:
+            validate_command_source(path.suffix, source)
+        except CommandValidationError as exc:
+            return exc.code, {"message": str(exc), **exc.context}, []
+
         metadata = load_command_metadata(path, language_code)
         requirements = _command_requirements(
             path, metadata, self.is_github_integration_enabled(), context
@@ -451,11 +542,11 @@ class AppRuntime:
         """Return the catalog of commands selectable as member routine commands.
 
         A command is a routine candidate when it self-declares ``routine: true``
-        in its metadata (frontmatter for ``.md`` / ``.yml``; sidecar metadata
-        for ``.py``). Discovery scans member, workspace and package-template
-        command roots through a single pass, so both built-in routine workflows
-        (such as ``workflows/ticket_driven_workflow``) and workspace-defined
-        ones surface without an edition-maintained file list.
+        in its metadata (frontmatter for ``.md`` / ``.yml``;
+        ``COMMAND_METADATA`` for ``.py``). Discovery scans member, workspace and
+        package-template command roots through a single pass, so both built-in
+        routine workflows (such as ``workflows/ticket_driven_workflow``) and
+        workspace-defined ones surface without an edition-maintained file list.
 
         The "runs with no caller-supplied input" rule is not used to hide
         candidates: a declared routine that still has required arguments is
@@ -575,7 +666,9 @@ class AppRuntime:
         # Resolve the member up front: the guard must check the file that this
         # very member runs, and an omitted person would otherwise resolve twice
         # (placeholder context for the guard, team default for the run).
-        person = self._resolve_run_person(context, request)
+        person = self._resolve_execution_person(
+            context, request.person, request.command
+        )
         person_id = person.person_id
         if request.expected_command_file_id is not None:
             self._guard_run_target(request, context.clone_for(person))
@@ -616,14 +709,16 @@ class AppRuntime:
             self._release_command(trace_id)
         return CommandRunResponse(trace_id=trace_id, output=output)
 
-    def _resolve_run_person(
-        self, context: Context, request: CommandRunRequest
+    def _resolve_execution_person(
+        self, context: Context, person_identifier: str | None, command: str
     ) -> Person:
         """Resolve the member a manual run executes as.
 
         Args:
             context: Base context holding the team.
-            request: The manual run request.
+            person_identifier: Requested member identifier, or ``None`` for the
+                team default.
+            command: Command label used in a selection-failure event.
 
         Returns:
             Person: The requested member, or the team default when the request
@@ -633,13 +728,13 @@ class AppRuntime:
             AppApiError: If no member could be resolved.
         """
         try:
-            return resolve_person(context.team, request.person, allow_default=True)
+            return resolve_person(context.team, person_identifier, allow_default=True)
         except PersonSelectionRequiredError as exc:
             available = list(exc.available)
             self._event_bus.publish_event(
                 "command.failed",
                 {
-                    "command": request.command,
+                    "command": command,
                     "code": "person_selection_required",
                     "available": available,
                 },
@@ -655,7 +750,7 @@ class AppRuntime:
             self._event_bus.publish_event(
                 "command.failed",
                 {
-                    "command": request.command,
+                    "command": command,
                     "code": "person_not_found",
                     "identifier": exc.identifier,
                     "available": available,
@@ -1485,6 +1580,14 @@ def _command_option(
         metadata = load_command_metadata(path, context.team.project.get_language_code())
     requirements = _command_requirements(path, metadata, github_enabled, context)
     description = str(metadata.get("description", ""))
+    try:
+        arguments = to_command_arguments(parse_command_arguments(path, metadata))
+    except CommandError:
+        arguments = []
+    try:
+        inputs = to_command_inputs(parse_command_input_policy(metadata.get("inputs")))
+    except CommandError:
+        inputs = to_command_inputs(parse_command_input_policy(None))
     return CommandOption(
         command=command,
         label=str(metadata.get("name") or default_command_label(command)),
@@ -1492,8 +1595,8 @@ def _command_option(
         category=cast(Any, _command_category(command)),
         source=cast(Any, command_source(path)),
         path=path,
-        arguments=to_command_arguments(parse_command_arguments(path, metadata)),
-        inputs=to_command_inputs(parse_command_input_policy(metadata.get("inputs"))),
+        arguments=arguments,
+        inputs=inputs,
         requirements=requirements,
     )
 
@@ -1584,7 +1687,7 @@ def _markdown_brain_requirement_kind(
 
 def _brain_requirement_kind(brain_value: object, context: Context) -> str | None:
     brain = str(brain_value).strip()
-    if brain.lower() in {"none", "-", "null", "disabled"}:
+    if is_brain_disabled(brain):
         return None
 
     try:

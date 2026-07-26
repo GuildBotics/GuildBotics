@@ -31,6 +31,19 @@ def test_markdown_sample_command_inputs(
 
 
 @pytest.mark.parametrize("language", ["en", "ja"])
+def test_translate_explicitly_uses_default_brain(language: str) -> None:
+    path = (
+        Path("guildbotics/editions/simple/templates/sample_commands")
+        / language
+        / "translate.md"
+    )
+
+    metadata = load_markdown_with_frontmatter(path)
+
+    assert metadata["brain"] == "default"
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
 def test_yaml_sample_command_inputs(language: str) -> None:
     path = (
         Path("guildbotics/editions/simple/templates/sample_commands")

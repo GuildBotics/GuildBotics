@@ -5,10 +5,12 @@ import {
   Group,
   Loader,
   Modal,
+  SegmentedControl,
   Select,
   Stack,
   Text,
   TextInput,
+  Textarea,
   Title,
 } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,6 +28,7 @@ import { NavLink } from "react-router-dom";
 
 import {
   ApiRequestError,
+  authorCommand,
   createCommandFile,
   deleteCommandFile,
   getCommandFile,
@@ -40,6 +43,7 @@ import {
   type CommandFileFormat,
   type CommandFilesResponse,
   type CommandFileSummary,
+  type CommandAuthoringRequest,
 } from "../api/client";
 import {
   commandFailureDetail,
@@ -49,6 +53,7 @@ import {
   type CommandRunRecord,
 } from "../App";
 import { setNavigationGuard } from "../navigationGuard";
+import { CommandAuthoringPanel, type CommandAuthoringMessage } from "./CommandAuthoringPanel";
 import { CommandEditor } from "./CommandEditor";
 import { CommandHotkeyField } from "./CommandHotkeyField";
 import {
@@ -64,9 +69,24 @@ import {
 import { CommandRunPanel } from "./CommandRunPanel";
 
 const CREATE_FORMATS: CommandFileFormat[] = ["markdown", "python", "shell", "yaml"];
+const NEW_DRAFT_FILE_ID = "__new-command-draft__";
+
+type AuthoringTurnRequest = CommandAuthoringRequest & {
+  commandFileId: string | null;
+};
+
+type NewCommandDraft = {
+  command: string;
+  format: CommandFileFormat;
+  relativePath: string;
+};
 
 function stringPayload(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function newAuthoringId(): string {
+  return globalThis.crypto.randomUUID();
 }
 
 export function CommandsPage() {
@@ -119,6 +139,16 @@ export function CommandsPage() {
   const [conflict, setConflict] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const loadedKeyRef = useRef<string>("");
+  const selectedFileIdRef = useRef<string | null>(selectedFileId);
+  selectedFileIdRef.current = selectedFileId;
+  const [authoringId, setAuthoringId] = useState(newAuthoringId);
+  const authoringIdRef = useRef(authoringId);
+  authoringIdRef.current = authoringId;
+  const [authoringMessages, setAuthoringMessages] = useState<CommandAuthoringMessage[]>([]);
+  const [newCommandDraft, setNewCommandDraft] = useState<NewCommandDraft | null>(null);
+  const newCommandDraftRef = useRef(newCommandDraft);
+  newCommandDraftRef.current = newCommandDraft;
+  const authoringTargetKeyRef = useRef("");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -167,13 +197,13 @@ export function CommandsPage() {
 
   // Keep the selection valid as the file list loads / changes.
   useEffect(() => {
-    if (!files.length) {
+    if (!files.length || newCommandDraft) {
       return;
     }
     if (!selectedFileId || !files.some((file) => file.id === selectedFileId)) {
       setSelectedFileId(files[0].id);
     }
-  }, [files, selectedFileId]);
+  }, [files, newCommandDraft, selectedFileId]);
 
   const detailQuery = useQuery({
     queryKey: ["command-file", selectedFileId],
@@ -200,44 +230,11 @@ export function CommandsPage() {
     setSaveError(null);
   }, [detail]);
 
-  const dirty = draftContent !== savedContent;
+  const dirty = Boolean(newCommandDraft) || draftContent !== savedContent;
 
-  const saveMutation = useMutation({
-    mutationFn: () =>
-      updateCommandFile(selectedFileId as string, {
-        content: draftContent,
-        expected_revision: revision,
-      }),
-    onMutate: () => {
-      setSaveError(null);
-      setConflict(false);
-    },
-    onSuccess: (updated) => {
-      loadedKeyRef.current = `${updated.id}:${updated.revision}`;
-      setSavedContent(updated.content);
-      setRevision(updated.revision);
-      queryClient.setQueryData(["command-file", updated.id], updated);
-      void queryClient.invalidateQueries({ queryKey: ["command-files"] });
-      void queryClient.invalidateQueries({ queryKey: ["command-options"] });
-      void queryClient.invalidateQueries({ queryKey: ["routine-command-options"] });
-    },
-    onError: (error) => {
-      if (error instanceof ApiRequestError && error.code === "command_file_changed") {
-        setConflict(true);
-      } else {
-        setSaveError(error instanceof Error ? error.message : String(error));
-      }
-    },
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (body: { command: string; format: CommandFileFormat }) => createCommandFile(body),
-    onSuccess: (created) => {
+  const cacheCreatedCommand = useCallback(
+    (created: Awaited<ReturnType<typeof createCommandFile>>) => {
       queryClient.setQueryData(["command-file", created.id], created);
-      // Add the new file to the list cache synchronously so the selection stays
-      // valid: otherwise the selection-sync effect sees a stale list without the
-      // new id and snaps the selection back to the first file before the refetch
-      // lands.
       queryClient.setQueryData<CommandFilesResponse>(["command-files"], (previous) => {
         const files = previous?.files ?? [];
         if (files.some((file) => file.id === created.id)) {
@@ -257,6 +254,61 @@ export function CommandsPage() {
       });
       void queryClient.invalidateQueries({ queryKey: ["command-files"] });
       void queryClient.invalidateQueries({ queryKey: ["command-options"] });
+      void queryClient.invalidateQueries({ queryKey: ["routine-command-options"] });
+    },
+    [queryClient],
+  );
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      newCommandDraft
+        ? createCommandFile({
+            command: newCommandDraft.command,
+            format: newCommandDraft.format,
+            content: draftContent,
+          })
+        : updateCommandFile(selectedFileId as string, {
+            content: draftContent,
+            expected_revision: revision,
+          }),
+    onMutate: () => {
+      setSaveError(null);
+      setConflict(false);
+    },
+    onSuccess: (updated) => {
+      if (newCommandDraft) {
+        authoringTargetKeyRef.current = `${effectivePerson ?? ""}:${updated.id}`;
+        cacheCreatedCommand(updated);
+        setNewCommandDraft(null);
+        setSelectedFileId(updated.id);
+      }
+      loadedKeyRef.current = `${updated.id}:${updated.revision}`;
+      setSavedContent(updated.content);
+      setRevision(updated.revision);
+      queryClient.setQueryData(["command-file", updated.id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["command-files"] });
+      void queryClient.invalidateQueries({ queryKey: ["command-options"] });
+      void queryClient.invalidateQueries({ queryKey: ["routine-command-options"] });
+    },
+    onError: (error) => {
+      if (error instanceof ApiRequestError && error.code === "command_file_changed") {
+        setConflict(true);
+      } else if (
+        newCommandDraft &&
+        error instanceof ApiRequestError &&
+        error.code === "command_file_exists"
+      ) {
+        setSaveError(`${error.message} ${t("commands.aiNameCollisionHelp")}`);
+      } else {
+        setSaveError(error instanceof Error ? error.message : String(error));
+      }
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (body: { command: string; format: CommandFileFormat }) => createCommandFile(body),
+    onSuccess: (created) => {
+      cacheCreatedCommand(created);
       setSelectedFileId(created.id);
       setCreateOpen(false);
     },
@@ -294,6 +346,106 @@ export function CommandsPage() {
   const defaultPerson =
     activeMembers.find((member) => member.person_id === team.data?.default_person_id) ?? null;
   const effectivePerson = selectedPerson ?? defaultPerson?.person_id ?? null;
+
+  const aiCreateMutation = useMutation({
+    mutationFn: (request: { authoringId: string; message: string }) =>
+      authorCommand({
+        mode: "create",
+        authoring_id: request.authoringId,
+        message: request.message,
+        person: effectivePerson ?? undefined,
+      }),
+    onSuccess: (response, request) => {
+      authoringIdRef.current = request.authoringId;
+      authoringTargetKeyRef.current = `${effectivePerson ?? ""}:${NEW_DRAFT_FILE_ID}`;
+      setAuthoringId(request.authoringId);
+      setAuthoringMessages([
+        { role: "user", content: request.message },
+        {
+          role: "assistant",
+          content: response.message,
+          traceId: response.trace_id,
+        },
+      ]);
+      setNewCommandDraft({
+        command: response.command,
+        format: response.format,
+        relativePath: response.relative_path,
+      });
+      setSelectedFileId(null);
+      loadedKeyRef.current = "";
+      setDraftContent(response.content);
+      setSavedContent("");
+      setRevision("");
+      setConflict(false);
+      setSaveError(null);
+      setCreateOpen(false);
+    },
+  });
+
+  const authoringMutation = useMutation({
+    mutationFn: (request: AuthoringTurnRequest) =>
+      authorCommand({
+        mode: request.mode,
+        authoring_id: request.authoring_id,
+        command: request.command,
+        format: request.format,
+        content: request.content,
+        message: request.message,
+        person: request.person,
+      }),
+    onMutate: (request) => {
+      const targetMatches = request.commandFileId
+        ? selectedFileIdRef.current === request.commandFileId
+        : newCommandDraftRef.current !== null;
+      if (targetMatches && authoringIdRef.current === request.authoring_id) {
+        setAuthoringMessages((current) => [...current, { role: "user", content: request.message }]);
+      }
+    },
+    onSuccess: (response, request) => {
+      const targetMatches = request.commandFileId
+        ? selectedFileIdRef.current === request.commandFileId
+        : newCommandDraftRef.current !== null;
+      if (!targetMatches || authoringIdRef.current !== request.authoring_id) {
+        return;
+      }
+      if (request.mode === "create") {
+        setNewCommandDraft({
+          command: response.command,
+          format: response.format,
+          relativePath: response.relative_path,
+        });
+      }
+      setDraftContent(response.content);
+      setAuthoringMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: response.message,
+          traceId: response.trace_id,
+        },
+      ]);
+    },
+  });
+
+  useEffect(() => {
+    const targetId = newCommandDraft ? NEW_DRAFT_FILE_ID : selectedFileId;
+    if (!targetId) {
+      return;
+    }
+    const targetKey = `${effectivePerson ?? ""}:${targetId}`;
+    if (authoringTargetKeyRef.current === targetKey) {
+      return;
+    }
+    authoringTargetKeyRef.current = targetKey;
+    const nextAuthoringId = newAuthoringId();
+    authoringIdRef.current = nextAuthoringId;
+    setAuthoringId(nextAuthoringId);
+    setAuthoringMessages([]);
+    authoringMutation.reset();
+    // A selected file starts one simple frontend-owned authoring conversation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectivePerson, newCommandDraft, selectedFileId]);
 
   const executionStatusQuery = useQuery({
     queryKey: ["command-file-execution", selectedFileId, effectivePerson, revision],
@@ -490,13 +642,36 @@ export function CommandsPage() {
   );
 
   const selectFile = (fileId: string | null) => {
-    guard(() => setSelectedFileId(fileId));
+    if (fileId === NEW_DRAFT_FILE_ID) {
+      return;
+    }
+    guard(() => {
+      if (newCommandDraft) {
+        setNewCommandDraft(null);
+        loadedKeyRef.current = "";
+      }
+      setSelectedFileId(fileId);
+    });
   };
   const openCreate = () => {
-    guard(() => setCreateOpen(true));
+    guard(() => {
+      if (newCommandDraft) {
+        setNewCommandDraft(null);
+        loadedKeyRef.current = "";
+        setSelectedFileId(files[0]?.id ?? null);
+      }
+      createMutation.reset();
+      aiCreateMutation.reset();
+      setCreateOpen(true);
+    });
   };
 
-  const displayPath = detail ? `${configDir}/commands/${detail.relative_path}` : "";
+  const activeDraft = newCommandDraft ?? detail;
+  const displayPath = newCommandDraft
+    ? `${configDir}/commands/${newCommandDraft.relativePath}`
+    : detail
+      ? `${configDir}/commands/${detail.relative_path}`
+      : "";
   const saveStatus = deriveSaveStatus(draftContent, savedContent, saveMutation.isPending, conflict);
 
   if (!hasProjectConfig) {
@@ -515,21 +690,26 @@ export function CommandsPage() {
     );
   }
 
-  const isEmpty = !filesQuery.isLoading && files.length === 0;
+  const isEmpty = !newCommandDraft && !filesQuery.isLoading && files.length === 0;
 
   return (
     <Stack gap="lg" className="command-editor-page">
       <Group justify="space-between" wrap="wrap">
         <Title order={2}>{t("commands.title")}</Title>
         <Group gap="sm">
-          <Button variant="default" leftSection={<FilePlus size={16} />} onClick={openCreate}>
+          <Button
+            variant="default"
+            leftSection={<FilePlus size={16} />}
+            disabled={authoringMutation.isPending}
+            onClick={openCreate}
+          >
             {t("commands.newFile")}
           </Button>
           <Button
             variant="default"
             color="danger"
             leftSection={<Trash2 size={16} />}
-            disabled={!selectedFileId}
+            disabled={!selectedFileId || Boolean(newCommandDraft) || authoringMutation.isPending}
             onClick={() => {
               deleteMutation.reset();
               setDeleteOpen(true);
@@ -540,7 +720,7 @@ export function CommandsPage() {
           <Button
             leftSection={<Save size={16} />}
             loading={saveMutation.isPending}
-            disabled={!selectedFileId || !dirty}
+            disabled={!activeDraft || !dirty || authoringMutation.isPending}
             onClick={() => saveMutation.mutate()}
           >
             {t("commands.save")}
@@ -552,7 +732,7 @@ export function CommandsPage() {
         <Alert color="neutral" title={t("commands.emptyTitle")}>
           <Group justify="space-between" align="center">
             <Text size="sm">{t("commands.emptyBody")}</Text>
-            <Button leftSection={<FilePlus size={16} />} onClick={() => setCreateOpen(true)}>
+            <Button leftSection={<FilePlus size={16} />} onClick={openCreate}>
               {t("commands.newFile")}
             </Button>
           </Group>
@@ -564,15 +744,38 @@ export function CommandsPage() {
             label={t("commands.editSelectLabel")}
             searchable
             nothingFoundMessage={t("commands.noCommandOptions")}
-            value={selectedFileId}
+            value={newCommandDraft ? NEW_DRAFT_FILE_ID : selectedFileId}
+            disabled={authoringMutation.isPending}
             onChange={(value) => selectFile(value)}
-            data={files.map((file) => ({
-              value: file.id,
-              label: `${file.label} (${file.command})`,
-            }))}
+            data={[
+              ...(newCommandDraft
+                ? [
+                    {
+                      value: NEW_DRAFT_FILE_ID,
+                      label: t("commands.authoring.newDraftOption", {
+                        command: newCommandDraft.command,
+                        format: t(`commands.formats.${newCommandDraft.format}`),
+                      }),
+                    },
+                  ]
+                : []),
+              ...files.map((file) => ({
+                value: file.id,
+                label: `${file.label} (${file.command})`,
+              })),
+            ]}
           />
 
-          <CommandHotkeyField command={detail?.command ?? null} />
+          {newCommandDraft ? (
+            <Group gap="xs">
+              <Badge variant="light">{t(`commands.formats.${newCommandDraft.format}`)}</Badge>
+              <Text c="dimmed" size="sm">
+                {t("commands.authoring.proposedByAi")}
+              </Text>
+            </Group>
+          ) : (
+            <CommandHotkeyField command={detail?.command ?? null} />
+          )}
 
           <Group gap="xs">
             <Badge variant="light" color={saveStatus === "clean" ? "success" : "warning"}>
@@ -612,19 +815,51 @@ export function CommandsPage() {
 
           <div className="command-split" ref={splitRef}>
             <div className="command-split-editor" style={{ flexGrow: editorRatio }}>
-              {detail ? (
-                <CommandEditor
-                  value={draftContent}
-                  format={detail.format}
-                  path={displayPath}
-                  onChange={setDraftContent}
-                  onSave={() => {
-                    if (selectedFileId && dirty) {
-                      saveMutation.mutate();
+              {activeDraft ? (
+                <div className="command-authoring-layout">
+                  <CommandEditor
+                    value={draftContent}
+                    format={activeDraft.format}
+                    path={displayPath}
+                    disabled={authoringMutation.isPending}
+                    onChange={setDraftContent}
+                    onSave={() => {
+                      if (activeDraft && dirty && !authoringMutation.isPending) {
+                        saveMutation.mutate();
+                      }
+                    }}
+                    onOpenExternal={
+                      newCommandDraft
+                        ? undefined
+                        : () => void openLocalFile(displayPath).catch(() => {})
                     }
-                  }}
-                  onOpenExternal={() => void openLocalFile(displayPath).catch(() => {})}
-                />
+                  />
+                  <CommandAuthoringPanel
+                    key={authoringId}
+                    messages={authoringMessages}
+                    pending={authoringMutation.isPending}
+                    disabled={!effectivePerson}
+                    error={
+                      authoringMutation.error instanceof Error
+                        ? authoringMutation.error.message
+                        : authoringMutation.error
+                          ? String(authoringMutation.error)
+                          : null
+                    }
+                    onSubmit={(authoringMessage) =>
+                      authoringMutation.mutate({
+                        mode: newCommandDraft ? "create" : "edit",
+                        authoring_id: authoringId,
+                        command: activeDraft.command,
+                        format: activeDraft.format,
+                        content: draftContent,
+                        message: authoringMessage,
+                        person: effectivePerson ?? undefined,
+                        commandFileId: newCommandDraft ? null : (detail?.id ?? null),
+                      })
+                    }
+                  />
+                </div>
               ) : (
                 <div className="empty-row">
                   <Loader size="sm" />
@@ -632,7 +867,7 @@ export function CommandsPage() {
               )}
             </div>
 
-            {detail ? (
+            {!newCommandDraft && detail ? (
               <>
                 <div
                   className="command-split-handle"
@@ -672,7 +907,7 @@ export function CommandsPage() {
                     showAdvanced={showAdvanced}
                     onToggleAdvanced={setShowAdvanced}
                     executionStatus={dirty ? null : (executionStatusQuery.data ?? null)}
-                    runBusy={runBusy}
+                    runBusy={runBusy || authoringMutation.isPending}
                     onSaveAndRun={() => void saveAndRun()}
                     selectedRecord={selectedRecord}
                     traceRecords={traceRecords}
@@ -691,13 +926,22 @@ export function CommandsPage() {
       <CreateCommandDialog
         key={createOpen ? "create-open" : "create-closed"}
         opened={createOpen}
-        pending={createMutation.isPending}
-        error={createMutation.error}
+        pending={createMutation.isPending || aiCreateMutation.isPending}
+        manualError={createMutation.error}
+        aiError={aiCreateMutation.error}
+        aiAvailable={Boolean(effectivePerson)}
         onClose={() => {
           createMutation.reset();
+          aiCreateMutation.reset();
           setCreateOpen(false);
         }}
-        onCreate={(command, format) => createMutation.mutate({ command, format })}
+        onCreateManually={(command, format) => createMutation.mutate({ command, format })}
+        onCreateWithAi={(authoringMessage) =>
+          aiCreateMutation.mutate({
+            authoringId: newAuthoringId(),
+            message: authoringMessage,
+          })
+        }
       />
 
       <Modal
@@ -780,19 +1024,28 @@ export function CommandsPage() {
 function CreateCommandDialog({
   opened,
   pending,
-  error,
+  manualError,
+  aiError,
+  aiAvailable,
   onClose,
-  onCreate,
+  onCreateManually,
+  onCreateWithAi,
 }: {
   opened: boolean;
   pending: boolean;
-  error: unknown;
+  manualError: unknown;
+  aiError: unknown;
+  aiAvailable: boolean;
   onClose: () => void;
-  onCreate: (command: string, format: CommandFileFormat) => void;
+  onCreateManually: (command: string, format: CommandFileFormat) => void;
+  onCreateWithAi: (message: string) => void;
 }) {
   const { t } = useTranslation();
+  const [method, setMethod] = useState<"ai" | "manual">("ai");
   const [name, setName] = useState("");
   const [format, setFormat] = useState<CommandFileFormat>("markdown");
+  const [request, setRequest] = useState("");
+  const error = method === "ai" ? aiError : manualError;
 
   const errorMessage =
     error instanceof ApiRequestError
@@ -802,38 +1055,85 @@ function CreateCommandDialog({
         : null;
 
   return (
-    <Modal opened={opened} onClose={onClose} title={t("commands.createTitle")}>
+    <Modal
+      opened={opened}
+      onClose={() => {
+        if (!pending) {
+          onClose();
+        }
+      }}
+      closeButtonProps={{ disabled: pending }}
+      closeOnClickOutside={!pending}
+      closeOnEscape={!pending}
+      title={t("commands.createTitle")}
+    >
       <Stack>
-        <TextInput
-          label={t("commands.createNameLabel")}
-          description={t("commands.createNameHelp")}
-          value={name}
-          onChange={(event) => setName(event.currentTarget.value)}
+        <SegmentedControl
+          aria-label={t("commands.createMethodLabel")}
+          disabled={pending}
+          fullWidth
+          value={method}
+          onChange={(value) => setMethod(value as "ai" | "manual")}
+          data={[
+            { value: "ai", label: t("commands.createMethodAi") },
+            { value: "manual", label: t("commands.createMethodManual") },
+          ]}
         />
-        <Select
-          label={t("commands.createFormatLabel")}
-          value={format}
-          onChange={(value) => value && setFormat(value as CommandFileFormat)}
-          data={CREATE_FORMATS.map((value) => ({
-            value,
-            label: t(`commands.formats.${value}`),
-          }))}
-        />
+        {method === "ai" ? (
+          <Textarea
+            autosize
+            disabled={pending}
+            minRows={4}
+            maxRows={10}
+            label={t("commands.createAiRequestLabel")}
+            description={t("commands.createAiRequestHelp")}
+            placeholder={t("commands.createAiRequestPlaceholder")}
+            value={request}
+            onChange={(event) => setRequest(event.currentTarget.value)}
+          />
+        ) : (
+          <>
+            <TextInput
+              label={t("commands.createNameLabel")}
+              disabled={pending}
+              description={t("commands.createNameHelp")}
+              value={name}
+              onChange={(event) => setName(event.currentTarget.value)}
+            />
+            <Select
+              label={t("commands.createFormatLabel")}
+              disabled={pending}
+              value={format}
+              onChange={(value) => value && setFormat(value as CommandFileFormat)}
+              data={CREATE_FORMATS.map((value) => ({
+                value,
+                label: t(`commands.formats.${value}`),
+              }))}
+            />
+          </>
+        )}
+        {method === "ai" && !aiAvailable ? (
+          <Alert color="warning">{t("commands.noMembersBody")}</Alert>
+        ) : null}
         {errorMessage ? (
           <Alert color="warning" title={t("commands.createErrorTitle")}>
             {errorMessage}
           </Alert>
         ) : null}
         <Group justify="flex-end">
-          <Button variant="subtle" onClick={onClose}>
+          <Button variant="subtle" disabled={pending} onClick={onClose}>
             {t("commands.createCancel")}
           </Button>
           <Button
             loading={pending}
-            disabled={!name.trim()}
-            onClick={() => onCreate(name.trim(), format)}
+            disabled={method === "ai" ? !aiAvailable || !request.trim() : !name.trim()}
+            onClick={() =>
+              method === "ai"
+                ? onCreateWithAi(request.trim())
+                : onCreateManually(name.trim(), format)
+            }
           >
-            {t("commands.createSubmit")}
+            {t(method === "ai" ? "commands.createAiSubmit" : "commands.createSubmit")}
           </Button>
         </Group>
       </Stack>

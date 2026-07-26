@@ -471,8 +471,28 @@ export type CommandFilesResponse = {
   files: CommandFileSummary[];
 };
 
+export type CommandAuthoringResponse = {
+  trace_id: string;
+  message: string;
+  command: string;
+  format: CommandFileFormat;
+  relative_path: string;
+  content: string;
+};
+
+export type CommandAuthoringRequest = {
+  mode: "create" | "edit";
+  authoring_id: string;
+  command?: string;
+  format?: CommandFileFormat;
+  content?: string;
+  message: string;
+  person?: string;
+};
+
 export type CommandFileBlockingCode =
   | "command_file_changed"
+  | "command_file_invalid_source"
   | "command_file_shadowed"
   | "command_requirement_missing"
   | "person_not_found";
@@ -995,6 +1015,12 @@ export async function runCommand(body: {
   return request("/commands/run", { method: "POST", body });
 }
 
+export async function authorCommand(
+  body: CommandAuthoringRequest,
+): Promise<CommandAuthoringResponse> {
+  return request("/commands/author", { method: "POST", body });
+}
+
 export async function getCommandOptions(person?: string): Promise<CommandOptionsResponse> {
   const query = person ? `?person=${encodeURIComponent(person)}` : "";
   return request(`/commands/options${query}`);
@@ -1011,6 +1037,7 @@ export async function getCommandFile(fileId: string): Promise<CommandFileDetail>
 export async function createCommandFile(body: {
   command: string;
   format: CommandFileFormat;
+  content?: string;
 }): Promise<CommandFileDetail> {
   return request("/commands/files", { method: "POST", body });
 }

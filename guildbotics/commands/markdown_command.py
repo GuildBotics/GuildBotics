@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from guildbotics.commands.brains import is_brain_disabled
 from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome, CommandSpec
@@ -36,7 +37,7 @@ class MarkdownCommand(CommandBase):
             return None
 
         params = {**self.context.shared_state, **self.options.params}
-        if self._is_brain_disabled(config):
+        if is_brain_disabled(config.get("brain", "")):
             template_engine = config.get("template_engine", "default")
             params = self._inject_session_state(params)
             result = replace_placeholders(config["body"], params, template_engine)
@@ -64,10 +65,6 @@ class MarkdownCommand(CommandBase):
         session_data = to_dict(self.context, {})
         session_state = session_data.get("session_state", {})
         return {**params, **session_state}
-
-    def _is_brain_disabled(self, config: dict[str, Any]) -> bool:
-        brain = str(config.get("brain", "")).lower()
-        return brain in {"none", "-", "null", "disabled"}
 
     def _load_markdown_metadata(self) -> tuple[dict[str, Any], bool]:
         prompt = self.spec.get_config_value(self.inline_key)

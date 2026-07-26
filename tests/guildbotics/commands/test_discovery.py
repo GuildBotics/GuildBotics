@@ -59,17 +59,6 @@ def test_shared_list_only_scans_shared_root(command_env: SimpleNamespace) -> Non
     assert result == {"review": shared}
 
 
-def test_shared_list_excludes_metadata_sidecars(
-    command_env: SimpleNamespace,
-) -> None:
-    _shared(command_env, "report.py", "def main():\n    return ''\n")
-    _shared(command_env, "report.metadata.yml", "name: Report\n")
-
-    result = _commands(list(discovery.iter_effective_shared_commands("en")))
-
-    assert set(result) == {"report"}
-
-
 def test_shared_list_returns_nested_command_names(
     command_env: SimpleNamespace,
 ) -> None:
@@ -171,3 +160,23 @@ def test_non_matching_locale_is_not_listed(command_env: SimpleNamespace) -> None
     result = _commands(list(discovery.iter_effective_shared_commands("ja")))
 
     assert result == {}
+
+
+@pytest.mark.parametrize(
+    ("filename", "language"),
+    [
+        ("report.metadata.yml", "metadata"),
+        ("report.metadata.en.yml", "en"),
+        ("report.metadata.ja.yaml", "ja"),
+    ],
+)
+def test_reserved_metadata_files_are_not_command_candidates(
+    command_env: SimpleNamespace, filename: str, language: str
+) -> None:
+    _shared(command_env, filename, "name: Reserved metadata\n")
+
+    result = discovery.iter_command_candidate_names(
+        [discovery.get_shared_commands_root()], language
+    )
+
+    assert result == []

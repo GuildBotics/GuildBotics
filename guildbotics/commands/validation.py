@@ -1,10 +1,9 @@
-"""Format-specific source validation for editable command files.
+"""Format-specific execution-readiness validation for command files.
 
-Saving or creating a command writes directly into a runnable command directory,
-so a syntactically broken source must never reach disk. Validation lives in the
-command domain (not the App API) because it reuses the same metadata parsing and
-argument definition rules the runtime uses. The App API converts a raised
-:class:`CommandValidationError` into an HTTP error model.
+Invalid drafts may be saved so users can preserve intermediate work. Validation
+lives in the command domain because it reuses the same metadata parsing and
+argument definition rules as execution. The App API calls it when determining
+whether a saved command can run and blocks execution until the source is valid.
 """
 
 from __future__ import annotations
@@ -16,12 +15,15 @@ import subprocess
 from typing import Any
 
 import yaml
+from jinja2 import Environment, TemplateSyntaxError, nodes
 
 from guildbotics.commands.arguments import parse_command_argument_definitions
+from guildbotics.commands.brains import is_brain_disabled
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import (
     find_main_function,
     parse_command_input_policy,
+    parse_python_metadata_from_module,
 )
 from guildbotics.commands.registry import get_command_types
 
@@ -72,6 +74,31 @@ def validate_command_source(extension: str, content: str) -> None:
         )
 
 
+def validate_generated_command_source(extension: str, content: str) -> None:
+    """Validate source plus invariants required of AI-generated commands."""
+    validate_command_source(extension, content)
+    if extension.lower() != ".md":
+        return
+    front_matter, body = split_frontmatter(content)
+    config = _load_frontmatter_mapping(front_matter) if front_matter.strip() else {}
+    if "brain" not in config:
+        raise CommandValidationError(
+            "command_file_invalid_source",
+            "AI-generated Markdown commands must explicitly declare 'brain' as "
+            "default, agent, or none.",
+            {"reason": "generated_brain_not_explicit"},
+        )
+    brain = config["brain"]
+    if not isinstance(brain, str) or brain not in {"default", "agent", "none"}:
+        raise CommandValidationError(
+            "command_file_invalid_source",
+            "AI-generated Markdown commands must set 'brain' to default, agent, "
+            "or none.",
+            {"reason": "generated_brain_invalid"},
+        )
+    _validate_generated_markdown_message_usage(config, body)
+
+
 def validate_markdown_source(content: str) -> None:
     """Validate a Markdown command's frontmatter and declarations."""
     front_matter, _ = split_frontmatter(content)
@@ -120,6 +147,12 @@ def validate_python_source(content: str) -> None:
             "command_file_invalid_source",
             "Python command must define a top-level 'main' function.",
         )
+    try:
+        metadata = parse_python_metadata_from_module(module)
+        parse_command_input_policy(metadata.get("inputs"))
+        parse_command_argument_definitions(metadata)
+    except CommandError as exc:
+        raise CommandValidationError("command_file_invalid_source", str(exc)) from exc
 
 
 def validate_shell_source(content: str) -> None:
@@ -194,6 +227,50 @@ def _validate_declarations(config: dict[str, Any]) -> None:
     except CommandError as exc:
         raise CommandValidationError("command_file_invalid_source", str(exc)) from exc
     _validate_commands_shape(config)
+
+
+def _validate_generated_markdown_message_usage(
+    config: dict[str, Any], body: str
+) -> None:
+    inputs = config.get("inputs")
+    message_required = isinstance(inputs, dict) and inputs.get("message") == "required"
+    if (
+        message_required
+        and is_brain_disabled(config.get("brain", ""))
+        and not config.get("commands")
+        and not _jinja_consumes_context_pipe(config, body)
+    ):
+        raise CommandValidationError(
+            "command_file_invalid_source",
+            "Markdown command declares a required input message, but brain: none "
+            "does not consume it and no child command can do so. Set "
+            "'brain: default' to use the configured LLM or add an input-consuming "
+            "child command.",
+            {"reason": "required_message_not_consumed"},
+        )
+
+
+def _jinja_consumes_context_pipe(config: dict[str, Any], body: str) -> bool:
+    if config.get("template_engine") != "jinja2":
+        return False
+    try:
+        parsed = Environment(autoescape=False).parse(body)
+    except TemplateSyntaxError:
+        return False
+    if any(
+        isinstance(node.node, nodes.Name)
+        and node.node.name == "context"
+        and node.attr == "pipe"
+        for node in parsed.find_all(nodes.Getattr)
+    ):
+        return True
+    return any(
+        isinstance(node.node, nodes.Name)
+        and node.node.name == "context"
+        and isinstance(node.arg, nodes.Const)
+        and node.arg.value == "pipe"
+        for node in parsed.find_all(nodes.Getitem)
+    )
 
 
 def _validate_commands_shape(config: dict[str, Any]) -> None:

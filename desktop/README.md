@@ -59,6 +59,8 @@ scripts/desktop-dev-frontend.sh
 
 `desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。
 
+コマンド画面の「新規作成」は、ダイアログ内で「AIに作成させる」と「自分で作成する」を切り替えます。AI作成では実現したいことだけを入力し、AIがコマンド名・形式・ソースを提案します。提案は未保存ドラフトとして会話しながら修正でき、「保存」を押した時点で初めてコマンドファイルが作成されます。自力作成ではコマンド名と形式を指定して従来どおり初期ファイルを作成します。バリデーションエラーのある編集中ソースも保存できますが、有効なソースへ直すまでは実行できません。自由記述本文を処理するコマンドは、個別の `text` 引数ではなく実行画面の「入力文」を使います。
+
 ---
 
 ## テスト
@@ -105,7 +107,7 @@ npm run e2e
 |---|---|
 | `e2e/setup.spec.ts` | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み |
 | `e2e/service.spec.ts` | ③ scheduler / events を start → running → stop |
-| `e2e/commands.spec.ts` | ④ コマンド編集: 新規作成 → source 編集 → 保存して実行（`/commands/files` + `/commands/run`）→ 実 file 反映 + `/events` ストリーム |
+| `e2e/commands.spec.ts` | ④ コマンド編集: 新規作成ダイアログのAI／自力切替、AIアシスタントパネル表示、自力作成 → source 編集 → 保存して実行（`/commands/files` + `/commands/run`）→ 実 file 反映 + `/events` ストリーム |
 | `e2e/members.spec.ts` | ② member 追加 → `person.yml` 実永続 |
 | `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画 |
 | `e2e/failure.spec.ts` | ⑥ backend down → Bootstrap error → 復帰 → retry |
