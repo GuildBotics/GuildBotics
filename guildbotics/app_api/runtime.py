@@ -494,7 +494,8 @@ class AppRuntime:
         path = self._command_file_service().resolve_existing(file_id)
         language_code = context.team.project.get_language_code()
 
-        current = file_revision(path.read_bytes())
+        data = path.read_bytes()
+        current = file_revision(data)
         if current != expected_revision:
             return "command_file_changed", {"current_revision": current}, []
 
@@ -512,7 +513,7 @@ class AppRuntime:
             return "command_file_shadowed", context_data, []
 
         try:
-            source = path.read_text(encoding="utf-8")
+            source = data.decode("utf-8")
         except UnicodeDecodeError:
             return (
                 "command_file_invalid_source",

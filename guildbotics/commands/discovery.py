@@ -17,6 +17,13 @@ def get_shared_commands_root() -> Path:
     return get_primary_config_path(Path("commands"))
 
 
+def is_command_source_path(path: Path) -> bool:
+    """Return whether ``path`` names a supported command source file."""
+    stem = path.with_suffix("").name
+    is_legacy_metadata = stem.endswith(".metadata") or ".metadata." in stem
+    return path.suffix.lower() in get_command_extensions() and not is_legacy_metadata
+
+
 def iter_candidate_paths(
     identifier: str, language_code: str, person_id: str | None = None
 ) -> Iterator[Path]:
@@ -68,7 +75,7 @@ def resolve_command_path(
         The resolved on-disk path, or ``None`` when the command is not found.
     """
     for path in iter_candidate_paths(identifier, language_code, person_id):
-        if path.exists():
+        if path.exists() and is_command_source_path(path):
             return path
     return None
 
@@ -104,17 +111,16 @@ def iter_command_candidate_names(
     """Collect logical command names present under the given physical roots.
 
     Files whose locale suffix does not match the active language or English are
-    skipped, as are unsupported extensions. Names are
-    de-duplicated while preserving discovery order.
+    skipped, as are unsupported extensions and reserved legacy metadata files.
+    Names are de-duplicated while preserving discovery order.
     """
-    extensions = set(get_command_extensions())
     names: list[str] = []
     seen: set[str] = set()
     for root in roots:
         if not root.exists():
             continue
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix.lower() not in extensions:
+            if not path.is_file() or not is_command_source_path(path):
                 continue
             name = logical_command_name(root, path, language_code)
             if name and name not in seen:

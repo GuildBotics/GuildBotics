@@ -303,6 +303,25 @@ def test_read_inactive_locale_file_rejected(env: SimpleNamespace) -> None:
     assert exc.value.code == "command_file_not_found"
 
 
+@pytest.mark.parametrize(
+    ("relative", "language"),
+    [
+        ("report.metadata.yml", "metadata"),
+        ("report.metadata.en.yml", "en"),
+        ("report.metadata.ja.yaml", "ja"),
+    ],
+)
+def test_read_legacy_metadata_file_rejected(
+    env: SimpleNamespace, relative: str, language: str
+) -> None:
+    _write(env.commands / relative, "name: Legacy metadata\n")
+
+    with pytest.raises(AppApiError) as exc:
+        _service(language).read_file(encode_file_id(relative))
+
+    assert exc.value.code == "command_file_not_found"
+
+
 def test_update_shadowed_file_rejected(env: SimpleNamespace) -> None:
     _write(env.commands / "greet.md", "---\nname: Md\n---\nBody\n")
     _write(env.commands / "greet.yaml", "commands: []\n")

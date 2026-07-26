@@ -1565,6 +1565,33 @@ def test_execution_status_blocks_non_utf8_saved_source(
     assert status.blocking_context["reason"] == "invalid_utf8"
 
 
+def test_execution_status_validates_the_revision_checked_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    path = config_dir / "commands/greet.md"
+    _write(path, "---\nbrain: none\n---\nBody.\n")
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "greet.md")
+    read_bytes = Path.read_bytes
+
+    def read_then_replace(target: Path) -> bytes:
+        data = read_bytes(target)
+        if target == path:
+            target.write_text(
+                "---\nbrain: none\nargs:\n  - text\n---\nBroken.\n",
+                encoding="utf-8",
+            )
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", read_then_replace)
+
+    status = runtime.get_command_file_execution_status(file_id, "bot", revision)
+
+    assert status.matches_selected_file is True
+    assert status.blocking_code is None
+
+
 def test_run_guard_rejects_invalid_saved_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

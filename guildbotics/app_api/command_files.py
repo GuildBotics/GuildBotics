@@ -34,6 +34,7 @@ from guildbotics.app_api.models import (
 from guildbotics.commands.discovery import (
     command_source,
     get_shared_commands_root,
+    is_command_source_path,
     is_within,
     iter_effective_shared_commands,
     logical_command_name,
@@ -232,7 +233,7 @@ class CommandFileService:
             raise _error(
                 "command_file_not_found", f"Unknown command file: {file_id!r}."
             )
-        if relative_path.suffix.lower() not in FORMAT_BY_EXTENSION:
+        if not is_command_source_path(relative_path):
             raise _error(
                 "command_file_not_found", f"Unknown command file: {file_id!r}."
             )

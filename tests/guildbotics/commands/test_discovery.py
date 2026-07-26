@@ -160,3 +160,23 @@ def test_non_matching_locale_is_not_listed(command_env: SimpleNamespace) -> None
     result = _commands(list(discovery.iter_effective_shared_commands("ja")))
 
     assert result == {}
+
+
+@pytest.mark.parametrize(
+    ("filename", "language"),
+    [
+        ("report.metadata.yml", "metadata"),
+        ("report.metadata.en.yml", "en"),
+        ("report.metadata.ja.yaml", "ja"),
+    ],
+)
+def test_legacy_metadata_files_are_not_command_candidates(
+    command_env: SimpleNamespace, filename: str, language: str
+) -> None:
+    _shared(command_env, filename, "name: Legacy metadata\n")
+
+    result = discovery.iter_command_candidate_names(
+        [discovery.get_shared_commands_root()], language
+    )
+
+    assert result == []
