@@ -20,8 +20,8 @@ def get_shared_commands_root() -> Path:
 def is_command_source_path(path: Path) -> bool:
     """Return whether ``path`` names a supported command source file."""
     stem = path.with_suffix("").name
-    is_legacy_metadata = stem.endswith(".metadata") or ".metadata." in stem
-    return path.suffix.lower() in get_command_extensions() and not is_legacy_metadata
+    is_reserved_metadata = stem.endswith(".metadata") or ".metadata." in stem
+    return path.suffix.lower() in get_command_extensions() and not is_reserved_metadata
 
 
 def iter_candidate_paths(
@@ -111,7 +111,7 @@ def iter_command_candidate_names(
     """Collect logical command names present under the given physical roots.
 
     Files whose locale suffix does not match the active language or English are
-    skipped, as are unsupported extensions and reserved legacy metadata files.
+    skipped, as are unsupported extensions and reserved metadata files.
     Names are de-duplicated while preserving discovery order.
     """
     names: list[str] = []

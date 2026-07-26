@@ -311,10 +311,10 @@ def test_read_inactive_locale_file_rejected(env: SimpleNamespace) -> None:
         ("report.metadata.ja.yaml", "ja"),
     ],
 )
-def test_read_legacy_metadata_file_rejected(
+def test_read_reserved_metadata_file_rejected(
     env: SimpleNamespace, relative: str, language: str
 ) -> None:
-    _write(env.commands / relative, "name: Legacy metadata\n")
+    _write(env.commands / relative, "name: Reserved metadata\n")
 
     with pytest.raises(AppApiError) as exc:
         _service(language).read_file(encode_file_id(relative))

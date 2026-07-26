@@ -170,10 +170,10 @@ def test_non_matching_locale_is_not_listed(command_env: SimpleNamespace) -> None
         ("report.metadata.ja.yaml", "ja"),
     ],
 )
-def test_legacy_metadata_files_are_not_command_candidates(
+def test_reserved_metadata_files_are_not_command_candidates(
     command_env: SimpleNamespace, filename: str, language: str
 ) -> None:
-    _shared(command_env, filename, "name: Legacy metadata\n")
+    _shared(command_env, filename, "name: Reserved metadata\n")
 
     result = discovery.iter_command_candidate_names(
         [discovery.get_shared_commands_root()], language
