@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiRequestError,
+  authorCommand,
   configureApi,
   createCommandFile,
   ensureAgentField,
@@ -356,6 +357,53 @@ describe("GET query parameter encoding", () => {
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(
       JSON.stringify({ command: "reports/weekly", format: "markdown" }),
+    );
+  });
+
+  it("posts a command authoring turn", async () => {
+    const { calls } = captureFetch(jsonResponse({}));
+    await authorCommand({
+      mode: "edit",
+      authoring_id: "authoring-1",
+      command: "greet",
+      format: "markdown",
+      content: "old",
+      message: "Make it friendlier",
+      person: "bot",
+    });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/author");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(
+      JSON.stringify({
+        mode: "edit",
+        authoring_id: "authoring-1",
+        command: "greet",
+        format: "markdown",
+        content: "old",
+        message: "Make it friendlier",
+        person: "bot",
+      }),
+    );
+  });
+
+  it("posts an initial AI creation turn without choosing a name or format", async () => {
+    const { calls } = captureFetch(jsonResponse({}));
+
+    await authorCommand({
+      mode: "create",
+      authoring_id: "authoring-2",
+      message: "Create a weekly report command",
+      person: "bot",
+    });
+
+    expect(calls[0].init.body).toBe(
+      JSON.stringify({
+        mode: "create",
+        authoring_id: "authoring-2",
+        message: "Create a weekly report command",
+        person: "bot",
+      }),
     );
   });
 

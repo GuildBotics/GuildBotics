@@ -40,9 +40,12 @@ test("creates, edits, saves and runs a shared command", async ({ page }) => {
 
   await page.goto("/#/commands");
   await expect(page.getByRole("heading", { name: "Edit Command" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "AI assistant" })).toBeVisible();
 
   // Create a new Markdown command through the dialog.
   await page.getByRole("button", { name: "New command" }).first().click();
+  await expect(page.getByRole("textbox", { name: "What should this command do?" })).toBeVisible();
+  await page.getByText("Create myself", { exact: true }).click();
   await page.getByRole("textbox", { name: "Command name" }).fill("e2e-note");
   await page.getByRole("button", { name: "Create" }).click();
 

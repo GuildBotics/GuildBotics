@@ -59,17 +59,6 @@ def test_shared_list_only_scans_shared_root(command_env: SimpleNamespace) -> Non
     assert result == {"review": shared}
 
 
-def test_shared_list_excludes_metadata_sidecars(
-    command_env: SimpleNamespace,
-) -> None:
-    _shared(command_env, "report.py", "def main():\n    return ''\n")
-    _shared(command_env, "report.metadata.yml", "name: Report\n")
-
-    result = _commands(list(discovery.iter_effective_shared_commands("en")))
-
-    assert set(result) == {"report"}
-
-
 def test_shared_list_returns_nested_command_names(
     command_env: SimpleNamespace,
 ) -> None:

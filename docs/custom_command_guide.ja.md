@@ -36,6 +36,7 @@ GuildBotics のカスタムコマンドは、エージェントに任意の処�
 
 ```markdown
 ---
+brain: default
 template_engine: jinja2
 inputs:
   message: required
@@ -57,6 +58,7 @@ commands:
 - 組み込みの汎用Pythonコマンド `functions/get_os_ui_language` がOSのUI言語を取得し、入力文を構造化データとして保持します。
 - OSのUI言語が英語の場合は、翻訳先または翻訳元として日本語を使用します。
 - 言語を実行時引数で指定する必要はありません。
+- 翻訳、校正、推敲、要約などの意味処理には `brain: default` を使います。AI CLIによるファイルやツールへのアクセスが必要な場合は `brain: agent`、決定的なレンダリングだけを行う場合は `brain: none` を使います。`brain: none` は呼び出し側の入力文を受け取らないため、`inputs.message: required` かつ子コマンドがないMarkdownコマンドでは使用できません。実行時は `brain` の省略も `default` として解決されますが、生成コマンドとサンプルでは実行方式を曖昧にしないため明示します。
 
 
 ### 1.2. コマンドを呼び出す
@@ -181,7 +183,17 @@ ID: {{ context.person.person_id }}
 
 ### 2.4. Desktop の入力欄設定
 
-Markdown の YAML フロントマターまたは YAML コマンドのメタデータに `inputs` を指定すると、Desktop の手動実行画面に表示する入力欄を制御できます。Python コマンドでは `<command>.metadata.yml` に同じ設定を記述します。
+Markdown の YAML フロントマターまたは YAML コマンドのメタデータに `inputs` を指定すると、Desktop の手動実行画面に表示する入力欄を制御できます。Python コマンドでは、モジュールレベルの静的な `COMMAND_METADATA` マッピングに同じ設定を記述します。
+
+```python
+COMMAND_METADATA = {
+    "inputs": {
+        "message": "hidden",
+    },
+}
+```
+
+`COMMAND_METADATA` は、文字列をキーに持つ辞書リテラルでなければなりません。GuildBotics はカタログ構築時にコマンドを import せず Python AST で読み取るため、`COMMAND_METADATA = build_metadata()` のような動的な宣言は拒否されます。
 
 | 項目 | 値 | デフォルト |
 | --- | --- | --- |
@@ -191,12 +203,16 @@ Markdown の YAML フロントマターまたは YAML コマンドのメタデ�
 
 `defined_args: auto` は `args` で宣言した引数、`${...}` プレースホルダーから検出した引数、または Python の `main` シグネチャの引数を表示します。Desktop は必須の宣言済み・検出済み引数に `*` を付け、宣言されたデフォルト値を入力欄のプレースホルダーとして表示します。`extra_args: optional` は自由形式の「追加引数」欄を有効にします。`message: required` の場合、入力文が空の間は実行できません。
 
+翻訳する文章や推敲するメールなど、コマンドが処理する主要な自由記述本文には `inputs.message` を使います。本文を必須にする場合は `inputs.message: required` を宣言すると、Desktop は「入力文」欄を表示し、その値をコマンドメッセージ / `Context.pipe` として渡します。`args` は翻訳先言語、ファイル、出力オプションなど、本文とは独立した値にだけ使います。
+
 デフォルト値は省略します。例えば、呼び出し側の入力文を使用しないコマンドには次の指定だけが必要です。
 
 ```yaml
 inputs:
   message: hidden
 ```
+
+Desktop はバリデーションを通らない編集中のソースも保存しますが、コマンドとして有効になるまでは実行を無効にします。これにより、未完成のドラフトを失わずに編集を続けられます。
 
 ## 3. AI CLIツールの利用
 
@@ -652,7 +668,7 @@ async def main(context: Context):
 宣言はコマンド自身のメタデータで行います。これにより、巡回候補を追加する際に edition 側のリストを編集する必要がなくなります。
 
 - Markdown / YAML コマンド: YAML フロントマターに `routine: true` を追加する。
-- Python コマンド: `<command>.metadata.yml` という sidecar metadata ファイルに `routine: true` を追加する。従来のモジュールレベル `ROUTINE = True` も fallback として引き続き利用できます。
+- Python コマンド: module-levelの`COMMAND_METADATA` mappingに`"routine": True`を追加する。
 
 ```markdown
 ---
@@ -662,15 +678,16 @@ routine: true
 ...
 ```
 
-```yaml
-# commands/workflows/reconcile_tickets.metadata.yml
-name:
-  en: Reconcile tickets
-  ja: チケット確認
-description:
-  en: Periodically reconcile open tickets.
-  ja: 未対応チケットを定期的に確認します。
-routine: true
+```python
+COMMAND_METADATA = {
+    "name": "チケット確認",
+    "description": "未対応チケットを定期的に確認します。",
+    "routine": True,
+}
+
+
+async def main(context) -> None:
+    ...
 ```
 
 スケジューラは巡回コマンドを呼び出し側からの入力なしで実行するため、巡回候補は呼び出し側の引数や入力文を要求しない必要があります。`routine: true` を宣言したコマンドは、`inputs.defined_args: auto` によって呼び出し側へ必須引数を表示する場合、または `inputs.message: required` の場合、一覧に残ったまま理由付きで「実行不可」と表示されます。`inputs.defined_args: hidden` の場合、プレースホルダはワークフロー内部から供給されるため、巡回実行の可否には影響しません。

@@ -236,9 +236,28 @@ The generic execution substrate used by workflows and custom commands:
   opaque file IDs (URL-safe relative path; re-validated for root containment /
   extension / symlink on every call), SHA-256 revisions with optimistic
   concurrency, atomic same-directory writes, and a prospective-resolution shadow
-  check on create. Delete takes the same expected revision as update and sweeps
-  the command's metadata sidecars in every locale once no localized source file
-  is left. Errors share one code namespace (`command_file_*`).
+  check on create. Persistence accepts syntactically invalid drafts so the editor
+  can save work in progress; the execution-readiness guard performs format
+  validation and blocks execution with `command_file_invalid_source`. Delete uses
+  the same expected revision as update. Errors share one code namespace
+  (`command_file_*`).
+- Python command metadata lives in a static module-level `COMMAND_METADATA`
+  dictionary. Catalog and validation code read it through the AST without
+  importing the command, so a Python command, its metadata, its editor revision,
+  and its save operation remain one physical file.
+- The Desktop command editor's AI assistant keeps the draft and chat messages in
+  the frontend. Each `/commands/author` request sends the complete current draft
+  and latest instruction; the backend retains no draft, chat, or authoring-status
+  state. The single New command dialog selects AI or manual creation. AI creation
+  starts without a command name or format; the agent proposes both according to
+  the requested behavior and returns a complete source. This remains a virtual
+  frontend draft with no file ID until Save creates the file atomically. Manual
+  creation keeps the explicit name/format fields and immediately creates the
+  normal starter source. A stable `authoring_id` selects one provider conversation
+  with `resume_policy=auto`, while every turn receives a fresh trace ID and returns
+  replacement draft identity and source. Existing-file authoring cannot rename or
+  change format. The provider conversation store retains only the session metadata
+  needed for resumption and traceability.
 - Run target guarantee: "save and run" sends the expected file ID + revision.
   Before running, the App API resolves the member once (request person, else the
   team default) and both the guard and the run use it, so the file that is
@@ -246,8 +265,9 @@ The generic execution substrate used by workflows and custom commands:
   that this member's normal `resolve_named_command()` resolves to that exact file;
   a member / template / higher-priority-extension shadow or a revision mismatch is
   rejected (409 `command_file_shadowed` / `command_file_changed`), never silently
-  running a different file. The execution-status endpoint surfaces the same codes
-  so the UI can disable the action ahead of time.
+  running a different file. It also validates the selected source before loading
+  execution metadata. The execution-status endpoint surfaces the same codes so
+  the UI can disable the action ahead of time while leaving Save available.
 
 See `docs/custom_command_guide.en.md` / `.ja.md` for the user-facing guide.
 

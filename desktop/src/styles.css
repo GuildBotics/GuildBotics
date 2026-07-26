@@ -707,6 +707,71 @@ pre {
   overflow: hidden;
 }
 
+.command-authoring-layout {
+  display: grid;
+  flex: 1;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  min-height: 0;
+  min-width: 0;
+}
+
+.command-authoring-panel {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.command-authoring-heading {
+  border-bottom: 1px solid var(--color-border-subtle);
+  flex: 0 0 auto;
+  padding: 8px 10px;
+}
+
+.command-authoring-heading h3 {
+  font-size: 14px;
+}
+
+.command-authoring-messages {
+  flex: 1;
+  min-height: 0;
+}
+
+.command-authoring-message {
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+}
+
+.command-authoring-message-user {
+  align-self: flex-end;
+  background: var(--color-bg-hover);
+  max-width: 90%;
+}
+
+.command-authoring-message-assistant {
+  background: var(--color-bg-panel-subtle);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.command-authoring-form {
+  border-top: 1px solid var(--color-border-subtle);
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 10px;
+}
+
+.command-authoring-form button {
+  justify-self: end;
+}
+
 .command-editor-path {
   background-color: var(--color-bg-panel);
   border-bottom: 1px solid var(--color-border-subtle);
@@ -757,6 +822,12 @@ pre {
    (not the viewport) is narrow, so a narrow window with a wide-but-cramped
    content area also stacks. Requires container-type on .command-editor-page. */
 @container (max-width: 900px) {
+  .command-authoring-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(220px, 1fr) minmax(220px, 0.75fr);
+    overflow-y: auto;
+  }
+
   .command-run-columns {
     grid-template-columns: minmax(0, 1fr);
   }

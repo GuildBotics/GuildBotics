@@ -1,5 +1,6 @@
 ---
 description: Translate input text between the OS UI language and English, using Japanese when the OS UI language is English.
+brain: default
 template_engine: jinja2
 inputs:
   message: required

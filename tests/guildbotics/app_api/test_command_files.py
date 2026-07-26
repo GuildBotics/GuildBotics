@@ -64,14 +64,12 @@ def test_list_read_and_empty(env: SimpleNamespace) -> None:
     assert detail.label == "Greet"
 
 
-def test_list_excludes_member_and_sidecar(env: SimpleNamespace) -> None:
+def test_list_excludes_member_commands(env: SimpleNamespace) -> None:
     _write(env.commands / "shared.md", "---\nname: Shared\n---\nBody\n")
     _write(
         env.config / "team/members/bot/commands/member.md",
         "---\nname: Member\n---\nBody\n",
     )
-    _write(env.commands / "shared.metadata.yml", "name: Sidecar\n")
-
     commands = {file.command for file in _service().list_files().files}
 
     assert commands == {"shared"}
@@ -94,6 +92,27 @@ def test_create_python_template_accepts_context(env: SimpleNamespace) -> None:
     # command templates, so the runtime passes the Context to it.
     _service().create_file("job", "python")
     assert "def main(context)" in (env.commands / "job.py").read_text(encoding="utf-8")
+
+
+def test_create_uses_supplied_ai_draft_as_initial_source(env: SimpleNamespace) -> None:
+    source = "def main(context) -> str:\n    return 'generated'\n"
+
+    detail = _service().create_file("generated", "python", source)
+
+    assert detail.content == source
+    assert (env.commands / "generated.py").read_text(encoding="utf-8") == source
+
+
+def test_create_saves_invalid_supplied_source_for_later_correction(
+    env: SimpleNamespace,
+) -> None:
+    source = "---\nargs:\n  - name: text\n---\nPolish the input text.\n"
+
+    detail = _service().create_file("broken", "markdown", source)
+
+    assert detail.content == source
+    assert detail.arguments == []
+    assert (env.commands / "broken.md").read_text(encoding="utf-8") == source
 
 
 def test_create_nested_command(env: SimpleNamespace) -> None:
@@ -182,16 +201,17 @@ def test_update_success_changes_revision(env: SimpleNamespace) -> None:
     )
 
 
-def test_update_rejects_invalid_source(env: SimpleNamespace) -> None:
-    _write(env.commands / "task.py", "def main(context):\n    return ''\n")
+def test_update_saves_invalid_source_for_later_correction(env: SimpleNamespace) -> None:
+    _write(env.commands / "task.md", "---\nbrain: none\n---\nBody.\n")
     service = _service()
     detail = service.read_file(service.list_files().files[0].id)
+    invalid = "---\nargs:\n  - name: text\n---\nPolish the input text.\n"
 
-    with pytest.raises(AppApiError) as exc:
-        service.update_file(detail.id, "def main(:\n    pass", detail.revision)
-    assert exc.value.code == "command_file_invalid_source"
-    # The invalid content is not written.
-    assert "def main(context)" in (env.commands / "task.py").read_text(encoding="utf-8")
+    updated = service.update_file(detail.id, invalid, detail.revision)
+
+    assert updated.content == invalid
+    assert updated.arguments == []
+    assert (env.commands / "task.md").read_text(encoding="utf-8") == invalid
 
 
 def test_update_rejects_oversized_content(env: SimpleNamespace) -> None:
@@ -219,44 +239,6 @@ def test_update_preserves_mode(env: SimpleNamespace) -> None:
 
 def _revision_of(path: Path) -> str:
     return file_revision(path.read_bytes())
-
-
-def test_delete_removes_file_and_sidecars_of_every_locale(
-    env: SimpleNamespace,
-) -> None:
-    greet = _write(env.commands / "greet.md", "---\nname: Greet\n---\nHi\n")
-    _write(env.commands / "greet.metadata.yml", "description: Greeting\n")
-    # A sidecar for another language must go too: a recreated command would
-    # otherwise inherit stale metadata.
-    _write(env.commands / "greet.metadata.ja.yml", "description: あいさつ\n")
-    _write(env.commands / "keep.md", "---\nname: Keep\n---\nHi\n")
-    _write(env.commands / "keep.metadata.yml", "description: Keep\n")
-    service = _service("en")
-    file_id = next(
-        file.id for file in service.list_files().files if file.command == "greet"
-    )
-
-    remaining = service.delete_file(file_id, _revision_of(greet))
-
-    assert [file.command for file in remaining.files] == ["keep"]
-    assert not (env.commands / "greet.md").exists()
-    assert not (env.commands / "greet.metadata.yml").exists()
-    assert not (env.commands / "greet.metadata.ja.yml").exists()
-    # Another command's files are untouched.
-    assert (env.commands / "keep.md").exists()
-    assert (env.commands / "keep.metadata.yml").exists()
-
-
-def test_delete_keeps_sidecar_used_by_a_localized_sibling(env: SimpleNamespace) -> None:
-    greet = _write(env.commands / "greet.md", "---\nname: Greet\n---\nHi\n")
-    _write(env.commands / "greet.ja.md", "---\nname: 挨拶\n---\nこんにちは\n")
-    _write(env.commands / "greet.metadata.yml", "description: Greeting\n")
-
-    _service("en").delete_file(encode_file_id("greet.md"), _revision_of(greet))
-
-    assert not (env.commands / "greet.md").exists()
-    # The Japanese sibling now resolves the command and still needs the sidecar.
-    assert (env.commands / "greet.metadata.yml").exists()
 
 
 def test_delete_revision_conflict_keeps_the_file(env: SimpleNamespace) -> None:
@@ -299,15 +281,6 @@ def test_read_unknown_id_is_not_found(env: SimpleNamespace) -> None:
 def test_read_absolute_path_id_rejected(env: SimpleNamespace) -> None:
     with pytest.raises(AppApiError) as exc:
         _service().read_file(encode_file_id("/etc/passwd"))
-    assert exc.value.code == "command_file_not_found"
-
-
-def test_read_metadata_sidecar_rejected(env: SimpleNamespace) -> None:
-    _write(env.commands / "report.py", "def main(context):\n    return None\n")
-    _write(env.commands / "report.metadata.yml", "name: Report\n")
-
-    with pytest.raises(AppApiError) as exc:
-        _service().read_file(encode_file_id("report.metadata.yml"))
     assert exc.value.code == "command_file_not_found"
 
 

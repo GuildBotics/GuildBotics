@@ -34,6 +34,7 @@ _PLACEHOLDER_PATTERNS = (
     re.compile(r"(?<![\{$])\{([A-Za-z_]\w*)\}(?!\})"),
 )
 _RESERVED_PLACEHOLDERS = {"context", "now"}
+PYTHON_COMMAND_METADATA_NAME = "COMMAND_METADATA"
 
 
 @dataclass(frozen=True)
@@ -238,10 +239,8 @@ def literal_default(node: ast.expr | None) -> str:
 
 
 def load_command_metadata(path: Path, language_code: str = "") -> dict[str, Any]:
-    """Load merged file + sidecar metadata for a command file."""
-    metadata = load_command_file_metadata(path)
-    metadata.update(load_command_sidecar_metadata(path, language_code))
-    return metadata
+    """Load and localize metadata embedded in a command file."""
+    return _localize_metadata(load_command_file_metadata(path), language_code)
 
 
 def load_command_file_metadata(path: Path) -> dict[str, Any]:
@@ -257,65 +256,76 @@ def load_command_file_metadata(path: Path) -> dict[str, Any]:
             module = ast.parse(path.read_text(encoding="utf-8"))
             main = find_main_function(module)
             description = ast.get_docstring(main) if main is not None else ""
-            return {"description": _first_line(description or "")}
-    except (OSError, SyntaxError, ValueError, yaml.YAMLError):
+            try:
+                metadata = parse_python_metadata_from_module(module)
+            except CommandError:
+                metadata = {}
+            if "description" not in metadata:
+                metadata["description"] = _first_line(description or "")
+            return metadata
+    except (CommandError, OSError, SyntaxError, ValueError, yaml.YAMLError):
         return {}
     return {}
 
 
-def load_command_sidecar_metadata(path: Path, language_code: str) -> dict[str, Any]:
-    """Load metadata from ``*.metadata.yml`` sidecar files."""
-    metadata: dict[str, Any] = {}
-    for sidecar in command_metadata_sidecar_paths(path, language_code):
-        if not sidecar.exists():
-            continue
-        try:
-            loaded = load_yaml_file(sidecar)
-        except (OSError, ValueError, yaml.YAMLError):
-            continue
-        if isinstance(loaded, dict):
-            metadata.update(loaded)
-    for key in ("name", "description"):
-        metadata[key] = _localized_metadata_value(metadata.get(key), language_code)
-    return {key: value for key, value in metadata.items() if value is not None}
+def parse_python_metadata_from_module(module: ast.Module) -> dict[str, Any]:
+    """Read the static ``COMMAND_METADATA`` mapping from a Python module AST.
 
+    Metadata discovery must never import a command module because its top-level
+    code may have side effects. Only a literal mapping is accepted so catalog
+    reads and editor validation remain deterministic.
 
-def command_metadata_sidecar_paths(path: Path, language_code: str) -> list[Path]:
-    """Return candidate sidecar paths for a command file, least specific first.
+    Args:
+        module: Parsed Python module.
 
-    The order is unsuffixed → ``.en`` → ``.<language>`` so that
-    :func:`load_command_sidecar_metadata` (which merges with ``dict.update``)
-    lets a more specific, later entry override an earlier one.
+    Returns:
+        The declared metadata, or an empty mapping when none is declared.
+
+    Raises:
+        CommandError: If the declaration is duplicated, dynamic, or not a
+            string-keyed mapping.
     """
-    base = _command_metadata_sidecar_base(path, language_code)
-    paths = [base.with_suffix(".metadata.yml"), base.with_suffix(".metadata.yaml")]
-    if language_code:
-        paths.extend(
-            [
-                base.with_suffix(".metadata.en.yml"),
-                base.with_suffix(".metadata.en.yaml"),
-                base.with_suffix(f".metadata.{language_code}.yml"),
-                base.with_suffix(f".metadata.{language_code}.yaml"),
-            ]
+    declarations = [
+        value
+        for node in module.body
+        if (value := _assigned_metadata_value(node)) is not None
+    ]
+    if not declarations:
+        return {}
+    if len(declarations) > 1:
+        raise CommandError(
+            f"Python command must declare {PYTHON_COMMAND_METADATA_NAME} at most once."
         )
-    return list(dict.fromkeys(paths))
+    try:
+        value = ast.literal_eval(declarations[0])
+    except (ValueError, TypeError, MemoryError, RecursionError) as exc:
+        raise CommandError(
+            f"Python command {PYTHON_COMMAND_METADATA_NAME} must be a static literal mapping."
+        ) from exc
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise CommandError(
+            f"Python command {PYTHON_COMMAND_METADATA_NAME} must be a string-keyed mapping."
+        )
+    return value
 
 
-def is_command_metadata_sidecar(path: Path) -> bool:
-    """Return whether a path is a metadata sidecar rather than a command."""
-    stem = path.with_suffix("").name
-    return ".metadata" in stem
+def _assigned_metadata_value(node: ast.stmt) -> ast.expr | None:
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        target = node.targets[0]
+    elif isinstance(node, ast.AnnAssign):
+        target = node.target
+    else:
+        return None
+    if isinstance(target, ast.Name) and target.id == PYTHON_COMMAND_METADATA_NAME:
+        return node.value
+    return None
 
 
-def _command_metadata_sidecar_base(path: Path, language_code: str) -> Path:
-    base = path.with_suffix("")
-    if language_code:
-        suffixes = {language_code, "en"}
-        if "." in base.name:
-            name, suffix = base.name.rsplit(".", 1)
-            if suffix in suffixes:
-                return base.with_name(name)
-    return base
+def _localize_metadata(metadata: dict[str, Any], language_code: str) -> dict[str, Any]:
+    localized = dict(metadata)
+    for key in ("name", "description"):
+        localized[key] = _localized_metadata_value(localized.get(key), language_code)
+    return {key: value for key, value in localized.items() if value is not None}
 
 
 def _localized_metadata_value(value: Any, language_code: str) -> Any:
@@ -331,7 +341,7 @@ def _localized_metadata_value(value: Any, language_code: str) -> Any:
 def _safe_read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
         return ""
 
 

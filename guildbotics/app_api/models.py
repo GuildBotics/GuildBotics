@@ -6,6 +6,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from guildbotics.app_api.activity_events import ActivityEventType
+from guildbotics.commands.formats import CommandFormat
 from guildbotics.commands.metadata import (
     CommandArgumentMetadata,
     CommandInputPolicy,
@@ -158,7 +159,7 @@ class CommandRunResponse(BaseModel):
     output: str
 
 
-CommandFileFormat = Literal["markdown", "python", "shell", "yaml"]
+CommandFileFormat = CommandFormat
 
 
 class CommandFileSummary(BaseModel):
@@ -187,6 +188,7 @@ class CommandFileExecutionStatus(BaseModel):
     blocking_code: (
         Literal[
             "command_file_changed",
+            "command_file_invalid_source",
             "command_file_shadowed",
             "command_requirement_missing",
             "person_not_found",
@@ -210,13 +212,52 @@ class HotkeySettings(BaseModel):
 
 
 class CommandFileCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     command: str
     format: CommandFileFormat
+    content: str | None = None
 
 
 class CommandFileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     content: str
     expected_revision: str
+
+
+class CommandAuthoringRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["create", "edit"]
+    authoring_id: str = Field(min_length=1, max_length=128)
+    command: str = ""
+    format: CommandFileFormat | None = None
+    content: str = ""
+    message: str = Field(min_length=1)
+    person: str | None = None
+
+    @model_validator(mode="after")
+    def validate_current_draft(self) -> CommandAuthoringRequest:
+        """Require a complete current identity except on initial AI creation."""
+        has_command = bool(self.command.strip())
+        has_format = self.format is not None
+        if self.mode == "edit" and not (has_command and has_format):
+            raise ValueError("Existing command authoring requires command and format.")
+        if self.mode == "create" and has_command != has_format:
+            raise ValueError(
+                "A new command draft requires command and format together."
+            )
+        return self
+
+
+class CommandAuthoringResponse(BaseModel):
+    trace_id: str
+    message: str
+    command: str
+    format: CommandFileFormat
+    relative_path: str
+    content: str
 
 
 def to_command_inputs(policy: CommandInputPolicy) -> CommandInputs:

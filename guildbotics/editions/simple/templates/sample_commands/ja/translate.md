@@ -1,5 +1,6 @@
 ---
 description: 入力文をOSのUI言語と英語の間で相互翻訳します。OSのUI言語が英語の場合は日本語を使用します。
+brain: default
 template_engine: jinja2
 inputs:
   message: required

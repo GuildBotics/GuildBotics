@@ -27,17 +27,20 @@ from guildbotics.app_api.command_files import encode_file_id, file_revision
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.models import (
+    CommandAuthoringRequest,
     CommandRunRequest,
     SchedulerStartRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.commands import metadata as metadata_module
+from guildbotics.commands.authoring import CommandAuthoringResult
 from guildbotics.commands.errors import (
     CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.drivers.execution import WorkRejectedError
 from guildbotics.entities import Person, Project, Team
+from guildbotics.observability import correlation_fields
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.service_lock import (
     ServiceLockMetadata,
@@ -82,10 +85,19 @@ def _make_context(
             github_enabled=github_enabled,
         )
 
+    async def aclose(self: object) -> None:
+        self.closed = True
+
     return type(
         "ContextStub",
         (),
-        {"team": team, "person": person, "clone_for": clone_for},
+        {
+            "team": team,
+            "person": person,
+            "clone_for": clone_for,
+            "closed": False,
+            "aclose": aclose,
+        },
     )()
 
 
@@ -322,7 +334,7 @@ def test_command_options_apply_declared_argument_requiredness_and_defaults(
     ]
 
 
-def test_command_options_reject_required_argument_with_default(
+def test_command_options_tolerate_invalid_argument_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
@@ -343,8 +355,13 @@ def test_command_options_reject_required_argument_with_default(
     context = _make_context([_make_person()])
     runtime = _runtime_with_context(monkeypatch, context)
 
-    with pytest.raises(CommandError, match="cannot be required and have a default"):
-        runtime.get_command_options()
+    option = next(
+        item
+        for item in runtime.get_command_options().options
+        if item.command == "invalid"
+    )
+
+    assert option.arguments == []
 
 
 def test_command_options_read_manual_input_contract(
@@ -381,7 +398,7 @@ def test_command_options_read_manual_input_contract(
     }
 
 
-def test_command_options_reject_invalid_manual_input_contract(
+def test_command_options_tolerate_invalid_manual_input_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
@@ -400,8 +417,17 @@ def test_command_options_reject_invalid_manual_input_contract(
     context = _make_context([_make_person()])
     runtime = _runtime_with_context(monkeypatch, context)
 
-    with pytest.raises(CommandError):
-        runtime.get_command_options()
+    option = next(
+        item
+        for item in runtime.get_command_options().options
+        if item.command == "invalid"
+    )
+
+    assert option.inputs.model_dump() == {
+        "defined_args": "auto",
+        "extra_args": "hidden",
+        "message": "optional",
+    }
 
 
 def test_command_options_detect_github_and_slack_requirements(
@@ -452,6 +478,10 @@ def test_command_options_detect_llm_and_cli_requirements(
         config_dir / "commands/cli_task.md",
         "\n".join(["---", "name: Agent Task", "brain: agent", "---", "Edit ${file}."]),
     )
+    _write(
+        config_dir / "commands/static.md",
+        "\n".join(["---", "name: Static", "brain: ' none '", "---", "Body."]),
+    )
     context = _make_context([_make_person()])
     runtime = _runtime_with_context(monkeypatch, context)
 
@@ -459,17 +489,16 @@ def test_command_options_detect_llm_and_cli_requirements(
 
     assert {req.kind for req in options["llm_task"].requirements} == {"llm"}
     assert {req.kind for req in options["cli_task"].requirements} == {"cli_agent"}
+    assert options["static"].requirements == []
 
 
 def test_command_options_ignore_invalid_metadata_without_crashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    # Broken YAML, unparseable Python and broken sidecar metadata must not abort
-    # discovery.
+    # Broken YAML and unparseable Python must not abort discovery.
     _write(config_dir / "commands/broken.yml", "::: not: valid: yaml:::\n- [")
     _write(config_dir / "commands/broken.py", "def main(:\n    pass")
-    _write(config_dir / "commands/ok.metadata.yml", "::: not: valid: yaml:::\n- [")
     _write(
         config_dir / "commands/ok.md",
         "\n".join(["---", "name: Ok", "brain: none", "---", "Body."]),
@@ -483,29 +512,6 @@ def test_command_options_ignore_invalid_metadata_without_crashing(
     # Invalid files are still listed but yield empty metadata / no requirements.
     assert options["broken"].requirements == []
     assert options["broken"].arguments == []
-
-
-def test_command_options_exclude_sidecar_metadata_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    _write(
-        config_dir / "commands/report.py",
-        "\n".join(
-            ["async def main(context):", '    """Run a report."""', "    return None"]
-        ),
-    )
-    _write(
-        config_dir / "commands/report.metadata.yml",
-        "\n".join(["name: Report", "description: Report metadata."]),
-    )
-    context = _make_context([_make_person()])
-    runtime = _runtime_with_context(monkeypatch, context)
-
-    options = {item.command for item in runtime.get_command_options().options}
-
-    assert "report" in options
-    assert "report.metadata" not in options
 
 
 def test_command_options_person_not_found_raises(
@@ -557,8 +563,7 @@ def test_routine_command_options_discover_only_declared_routines(
 ) -> None:
     # Only commands that self-declare ``routine: true`` are candidates. A plain
     # command is excluded, and the built-in template workflow (which declares
-    # routine metadata in a sidecar file) is discovered through the same single
-    # pass.
+    # embedded routine metadata) is discovered through the same single pass.
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
     _write(
         config_dir / "commands/my_routine.md",
@@ -585,7 +590,7 @@ def test_routine_command_options_discover_only_declared_routines(
     assert ticket.routine_eligible is True
 
 
-def test_routine_command_options_read_python_sidecar_metadata(
+def test_routine_command_options_read_embedded_python_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
@@ -593,23 +598,18 @@ def test_routine_command_options_read_python_sidecar_metadata(
         config_dir / "commands/my_routine.py",
         "\n".join(
             [
+                "COMMAND_METADATA = {",
+                "    'name': {'en': 'My Routine', 'ja': '私の巡回'},",
+                "    'description': {",
+                "        'en': 'Run my routine.',",
+                "        'ja': '私の巡回処理を実行します。',",
+                "    },",
+                "    'routine': True,",
+                "}",
+                "",
                 "async def main(context):",
                 '    """Fallback English description."""',
                 "    return None",
-            ]
-        ),
-    )
-    _write(
-        config_dir / "commands/my_routine.metadata.yml",
-        "\n".join(
-            [
-                "name:",
-                "  en: My Routine",
-                "  ja: 私の巡回",
-                "description:",
-                "  en: Run my routine.",
-                "  ja: 私の巡回処理を実行します。",
-                "routine: true",
             ]
         ),
     )
@@ -656,38 +656,7 @@ def test_routine_command_options_reuse_loaded_metadata(
     assert loads == [command_path]
 
 
-def test_routine_command_options_do_not_reload_duplicate_en_sidecar(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    _write(
-        config_dir / "commands/my_routine.py",
-        "\n".join(["async def main(context):", "    return None"]),
-    )
-    sidecar_path = _write(
-        config_dir / "commands/my_routine.metadata.en.yml",
-        "\n".join(["name: My Routine", "routine: true"]),
-    )
-    context = _make_context([_make_person()], language_code="en")
-    runtime = _runtime_with_context(monkeypatch, context)
-    original = metadata_module.load_yaml_file
-    loads: list[Path] = []
-
-    def counting_load_yaml_file(path: Path) -> Any:
-        if path == sidecar_path:
-            loads.append(path)
-        return original(path)
-
-    monkeypatch.setattr(metadata_module, "load_yaml_file", counting_load_yaml_file)
-
-    assert any(
-        item.command == "my_routine"
-        for item in runtime.get_routine_command_options().options
-    )
-    assert loads == [sidecar_path]
-
-
-def test_routine_command_options_localize_builtin_sidecar_metadata(
+def test_routine_command_options_localize_builtin_python_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _isolate_workspace(tmp_path, monkeypatch)
@@ -950,8 +919,108 @@ def test_routine_command_options_person_not_found_raises(
 
 
 # ---------------------------------------------------------------------------
-# run_command
+# author_command / run_command
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_author_command_uses_stable_authoring_identity_and_unique_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    captured: dict[str, Any] = {}
+
+    async def fake_author_command_turn(context: object, **kwargs: Any) -> Any:
+        captured["context"] = context
+        captured.update(kwargs)
+        captured["correlation"] = correlation_fields()
+        return CommandAuthoringResult(
+            message="Updated the draft.",
+            command="reports/weekly",
+            format="python",
+            content="updated source",
+        )
+
+    monkeypatch.setattr(runtime_module, "author_command_turn", fake_author_command_turn)
+
+    response = await runtime.author_command(
+        CommandAuthoringRequest(
+            mode="edit",
+            authoring_id="authoring-1",
+            command="reports/weekly",
+            format="python",
+            content="old source",
+            message="Add a weekly report.",
+            person="bot",
+        )
+    )
+
+    assert response.message == "Updated the draft."
+    assert response.content == "updated source"
+    assert response.relative_path == "reports/weekly.py"
+    assert captured["authoring_id"] == "authoring-1"
+    assert captured["mode"] == "edit"
+    assert captured["trace_id"] == response.trace_id
+    assert captured["instruction"] == "Add a weekly report."
+    assert captured["correlation"]["trace_id"] == response.trace_id
+    assert captured["correlation"]["source"] == "command_authoring"
+    assert captured["correlation"]["attributes"] == {"authoring.id": "authoring-1"}
+    assert captured["context"].closed is True
+
+
+@pytest.mark.asyncio
+async def test_author_command_maps_work_rejection_to_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    def reject_work(**_: Any) -> Any:
+        raise WorkRejectedError("busy", reason="lease_unavailable")
+
+    monkeypatch.setattr(runtime._execution, "track_work", reject_work)
+
+    with pytest.raises(AppApiError) as caught:
+        await runtime.author_command(
+            CommandAuthoringRequest(
+                mode="create",
+                authoring_id="authoring-1",
+                message="Create a command.",
+                person="bot",
+            )
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.code == "work_rejected"
+
+
+@pytest.mark.asyncio
+async def test_author_command_maps_command_error_to_bad_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    async def fail_authoring(*_: Any, **__: Any) -> Any:
+        raise CommandError("invalid agent response")
+
+    monkeypatch.setattr(runtime_module, "author_command_turn", fail_authoring)
+
+    with pytest.raises(AppApiError) as caught:
+        await runtime.author_command(
+            CommandAuthoringRequest(
+                mode="create",
+                authoring_id="authoring-1",
+                message="Create a command.",
+                person="bot",
+            )
+        )
+
+    assert caught.value.status_code == 502
+    assert caught.value.code == "command_authoring_failed"
 
 
 @pytest.mark.asyncio
@@ -1459,6 +1528,67 @@ def test_execution_status_reports_revision_change(
 
     assert status.matches_selected_file is False
     assert status.blocking_code == "command_file_changed"
+
+
+def test_execution_status_blocks_invalid_saved_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/broken.md",
+        "---\nargs:\n  - name: text\n---\nBody.\n",
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "broken.md")
+
+    status = runtime.get_command_file_execution_status(file_id, "bot", revision)
+
+    assert status.matches_selected_file is False
+    assert status.blocking_code == "command_file_invalid_source"
+    assert status.blocking_context["message"] == "Command 'args' must be a mapping."
+
+
+def test_execution_status_blocks_non_utf8_saved_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    path = config_dir / "commands/broken.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff")
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "broken.md")
+
+    status = runtime.get_command_file_execution_status(file_id, "bot", revision)
+
+    assert status.matches_selected_file is False
+    assert status.blocking_code == "command_file_invalid_source"
+    assert status.blocking_context["reason"] == "invalid_utf8"
+
+
+def test_run_guard_rejects_invalid_saved_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/broken.md",
+        "---\nargs:\n  - name: text\n---\nBody.\n",
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "broken.md")
+
+    with pytest.raises(AppApiError) as caught:
+        asyncio.run(
+            runtime.run_command(
+                CommandRunRequest(
+                    command="broken",
+                    person="bot",
+                    expected_command_file_id=file_id,
+                    expected_command_file_revision=revision,
+                )
+            )
+        )
+
+    assert caught.value.code == "command_file_invalid_source"
 
 
 def test_execution_status_member_override_is_shadowed(

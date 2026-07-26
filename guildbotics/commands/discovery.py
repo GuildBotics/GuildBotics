@@ -4,7 +4,6 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.commands.metadata import is_command_metadata_sidecar
 from guildbotics.commands.registry import get_command_extensions
 from guildbotics.runtime.context import Context
 from guildbotics.utils.fileio import (
@@ -105,7 +104,7 @@ def iter_command_candidate_names(
     """Collect logical command names present under the given physical roots.
 
     Files whose locale suffix does not match the active language or English are
-    skipped, as are metadata sidecars and unsupported extensions. Names are
+    skipped, as are unsupported extensions. Names are
     de-duplicated while preserving discovery order.
     """
     extensions = set(get_command_extensions())
@@ -116,8 +115,6 @@ def iter_command_candidate_names(
             continue
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.suffix.lower() not in extensions:
-                continue
-            if is_command_metadata_sidecar(path):
                 continue
             name = logical_command_name(root, path, language_code)
             if name and name not in seen:

@@ -19,6 +19,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 
 HTTP_OK = 200
+HTTP_UNPROCESSABLE_ENTITY = 422
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
@@ -204,6 +205,17 @@ def test_temp_workspace_command_files_crud_flow(
             encoding="utf-8"
         )
 
+        extra_update_field = client.put(
+            f"/commands/files/{created_payload['id']}",
+            headers=AUTH_HEADERS,
+            json={
+                "content": updated.json()["content"],
+                "expected_revision": updated.json()["revision"],
+                "unexpected": True,
+            },
+        )
+        assert extra_update_field.status_code == HTTP_UNPROCESSABLE_ENTITY
+
         # Stale revision now conflicts.
         stale = client.put(
             f"/commands/files/{created_payload['id']}",
@@ -311,6 +323,55 @@ def test_command_file_execution_status_and_run_guard(
         )
         assert run.status_code == 409
         assert run.json()["code"] == "command_file_changed"
+
+        invalid_source = (
+            "---\nbrain: agent\nargs:\n  - name: text\n---\nPolish the input text.\n"
+        )
+        saved = client.put(
+            f"/commands/files/{created['id']}",
+            headers=AUTH_HEADERS,
+            json={
+                "content": invalid_source,
+                "expected_revision": created["revision"],
+            },
+        )
+        assert saved.status_code == HTTP_OK
+        assert (config_dir / "commands/notes.md").read_text(
+            encoding="utf-8"
+        ) == invalid_source
+
+        invalid_status = client.get(
+            f"/commands/files/{created['id']}/execution-status",
+            headers=AUTH_HEADERS,
+            params={
+                "person": "local-agent",
+                "expected_revision": saved.json()["revision"],
+            },
+        )
+        assert invalid_status.status_code == HTTP_OK
+        assert invalid_status.json()["blocking_code"] == "command_file_invalid_source"
+
+        options = client.get("/commands/options", headers=AUTH_HEADERS)
+        assert options.status_code == HTTP_OK
+        notes = next(
+            option
+            for option in options.json()["options"]
+            if option["command"] == "notes"
+        )
+        assert notes["arguments"] == []
+
+        invalid_run = client.post(
+            "/commands/run",
+            headers=AUTH_HEADERS,
+            json={
+                "command": "notes",
+                "person": "local-agent",
+                "expected_command_file_id": created["id"],
+                "expected_command_file_revision": saved.json()["revision"],
+            },
+        )
+        assert invalid_run.status_code == 409
+        assert invalid_run.json()["code"] == "command_file_invalid_source"
 
 
 def test_run_request_expected_pair_must_be_complete(

@@ -36,6 +36,7 @@ Create a prompt file named `translate.md` under your prompt configuration folder
 
 ```markdown
 ---
+brain: default
 template_engine: jinja2
 inputs:
   message: required
@@ -57,6 +58,7 @@ Notes:
 - The built-in Python command `functions/get_os_ui_language` supplies the OS UI language and preserves the input text as structured data.
 - When the OS UI language is English, the command uses Japanese as the other language.
 - You do not need to provide languages as invocation arguments.
+- Use `brain: default` for semantic processing such as translation, proofreading, rewriting, or summarization. Use `brain: agent` when the command needs AI CLI file or tool access. Use `brain: none` only for deterministic rendering; it does not receive the caller's input message. A Markdown command with `inputs.message: required`, `brain: none`, and no child command is therefore invalid. Omitting `brain` still resolves to `default` at runtime, but generated commands and examples declare it explicitly to make the intended execution mode unambiguous.
 
 
 ### 1.2. Invoke the command
@@ -177,7 +179,17 @@ Team members:
 
 ### 2.4. Configuring Desktop inputs
 
-Use `inputs` in Markdown front matter or YAML command metadata to control fields on the Desktop manual-run screen. For Python commands, place the same mapping in `<command>.metadata.yml`.
+Use `inputs` in Markdown front matter or YAML command metadata to control fields on the Desktop manual-run screen. Python commands put the same mapping in the static module-level `COMMAND_METADATA` mapping.
+
+```python
+COMMAND_METADATA = {
+    "inputs": {
+        "message": "hidden",
+    },
+}
+```
+
+`COMMAND_METADATA` must be a literal, string-keyed dictionary. GuildBotics reads it with Python AST parsing and never imports the command while building the catalog, so calls such as `COMMAND_METADATA = build_metadata()` are rejected.
 
 | Field | Values | Default |
 | --- | --- | --- |
@@ -187,12 +199,16 @@ Use `inputs` in Markdown front matter or YAML command metadata to control fields
 
 `defined_args: auto` displays arguments declared under `args`, arguments discovered from `${...}` placeholders, or parameters from a Python `main` signature. The Desktop marks declared or discovered required arguments with `*` and shows declared defaults as field placeholders. `extra_args: optional` enables the free-form additional-arguments field. A required message prevents execution while the input text is empty.
 
+Use `inputs.message` for the command's primary free-form text, such as a sentence to translate or an email to polish. For required caller text, declare `inputs.message: required`; Desktop then presents its Input text field and supplies the value as the command message / `Context.pipe`. Use `args` only for independent values such as a target language, file, or output option.
+
 Omit default values. For example, a command that does not use caller text needs only:
 
 ```yaml
 inputs:
   message: hidden
 ```
+
+Desktop saves invalid work-in-progress source, but disables execution until the source passes command validation. This lets you keep and continue editing an incomplete draft without making it runnable.
 
 ## 3. Using the AI CLI tool
 
@@ -642,7 +658,7 @@ A command can declare itself as a candidate for a member's routine (patrol) exec
 Declare it in the command's own metadata, so adding a routine never requires editing an edition-side list:
 
 - Markdown / YAML commands: add `routine: true` to the YAML front matter.
-- Python commands: add a sidecar metadata file named `<command>.metadata.yml`. The legacy module-level `ROUTINE = True` flag is still accepted as a fallback.
+- Python commands: add `"routine": True` to the module-level `COMMAND_METADATA` mapping.
 
 ```markdown
 ---
@@ -652,15 +668,16 @@ routine: true
 ...
 ```
 
-```yaml
-# commands/workflows/reconcile_tickets.metadata.yml
-name:
-  en: Reconcile tickets
-  ja: チケット確認
-description:
-  en: Periodically reconcile open tickets.
-  ja: 未対応チケットを定期的に確認します。
-routine: true
+```python
+COMMAND_METADATA = {
+    "name": "Reconcile tickets",
+    "description": "Periodically reconcile open tickets.",
+    "routine": True,
+}
+
+
+async def main(context) -> None:
+    ...
 ```
 
 Because the scheduler runs a routine with no caller-supplied input, a routine candidate must not require caller-supplied arguments or a message. A command that declares `routine: true` stays listed but is marked ineligible when required arguments remain visible through `inputs.defined_args: auto` or when `inputs.message: required`. With `inputs.defined_args: hidden`, placeholders are supplied internally by the workflow and do not affect routine eligibility.

@@ -9,6 +9,7 @@ import pytest
 from guildbotics.commands.validation import (
     CommandValidationError,
     validate_command_source,
+    validate_generated_command_source,
 )
 
 
@@ -23,6 +24,34 @@ def test_markdown_valid_frontmatter() -> None:
     )
 
 
+def test_generated_markdown_requires_explicit_brain() -> None:
+    source = "---\ninputs:\n  message: required\n---\nRewrite the input.\n"
+    validate_command_source(".md", source)
+
+    with pytest.raises(CommandValidationError) as exc:
+        validate_generated_command_source(".md", source)
+
+    assert "explicitly declare 'brain'" in str(exc.value)
+
+
+@pytest.mark.parametrize("brain", ["gibberish", "disabled", "null"])
+def test_generated_markdown_rejects_unsupported_brain(brain: str) -> None:
+    source = f"---\nbrain: {brain}\n---\nBody.\n"
+    validate_command_source(".md", source)
+
+    with pytest.raises(CommandValidationError) as exc:
+        validate_generated_command_source(".md", source)
+
+    assert exc.value.context["reason"] == "generated_brain_invalid"
+
+
+def test_generated_markdown_rejects_non_string_brain() -> None:
+    with pytest.raises(CommandValidationError) as exc:
+        validate_generated_command_source(".md", "---\nbrain: []\n---\nBody.\n")
+
+    assert exc.value.context["reason"] == "generated_brain_invalid"
+
+
 def test_markdown_invalid_frontmatter_yaml() -> None:
     with pytest.raises(CommandValidationError) as exc:
         validate_command_source(".md", "---\nname: [\n---\nBody.\n")
@@ -33,6 +62,52 @@ def test_markdown_invalid_inputs_contract() -> None:
     with pytest.raises(CommandValidationError) as exc:
         validate_command_source(".md", "---\ninputs:\n  message: sometimes\n---\n")
     assert exc.value.code == "command_file_invalid_source"
+
+
+def test_markdown_disabled_brain_cannot_require_unconsumed_message() -> None:
+    source = (
+        "---\n"
+        "brain: none\n"
+        "inputs:\n"
+        "  message: required\n"
+        "---\n"
+        "Polish the supplied input text.\n"
+    )
+
+    validate_command_source(".md", source)
+
+    with pytest.raises(CommandValidationError) as exc:
+        validate_generated_command_source(".md", source)
+
+    assert "brain: none" in str(exc.value)
+    assert "brain: default" in str(exc.value)
+    assert "input message" in str(exc.value)
+
+
+def test_generated_markdown_disabled_brain_can_render_context_pipe() -> None:
+    source = (
+        "---\n"
+        "brain: none\n"
+        "template_engine: jinja2\n"
+        "inputs:\n"
+        "  message: required\n"
+        "---\n"
+        "Echo: {{ context.pipe }}\n"
+    )
+
+    validate_generated_command_source(".md", source)
+
+
+def test_generated_markdown_rejects_whitespace_padded_disabled_brain() -> None:
+    source = (
+        "---\nbrain: ' disabled '\ninputs:\n  message: required\n---\n"
+        "Unused input.\n"
+    )
+
+    with pytest.raises(CommandValidationError) as exc:
+        validate_generated_command_source(".md", source)
+
+    assert exc.value.context["reason"] == "generated_brain_invalid"
 
 
 def test_markdown_frontmatter_must_be_mapping() -> None:
@@ -76,7 +151,40 @@ def test_yaml_dict_entry_with_command_or_inline_key_valid() -> None:
 
 
 def test_python_valid() -> None:
-    validate_command_source(".py", "def main(context):\n    return ''\n")
+    validate_command_source(
+        ".py",
+        "COMMAND_METADATA = {'routine': True}\n\ndef main(context):\n    return ''\n",
+    )
+
+
+def test_python_metadata_must_be_static() -> None:
+    with pytest.raises(CommandValidationError) as exc:
+        validate_command_source(
+            ".py",
+            "COMMAND_METADATA = dict(routine=True)\n\ndef main(context):\n    return ''\n",
+        )
+    assert "static literal mapping" in str(exc.value)
+
+
+def test_python_metadata_validates_inputs() -> None:
+    with pytest.raises(CommandValidationError) as exc:
+        validate_command_source(
+            ".py",
+            "COMMAND_METADATA = {'inputs': {'message': 'sometimes'}}\n\n"
+            "def main(context):\n    return ''\n",
+        )
+    assert "inputs.message" in str(exc.value)
+
+
+def test_python_metadata_validates_argument_declarations() -> None:
+    with pytest.raises(CommandValidationError) as exc:
+        validate_command_source(
+            ".py",
+            "COMMAND_METADATA = {'args': [{'name': 'text'}]}\n\n"
+            "def main(context):\n    return ''\n",
+        )
+
+    assert "Command 'args' must be a mapping" in str(exc.value)
 
 
 def test_python_syntax_error() -> None:

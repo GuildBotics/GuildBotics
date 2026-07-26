@@ -29,6 +29,23 @@ from guildbotics.runtime import Context
 from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.i18n_tool import t
 
+COMMAND_METADATA = {
+    "name": {
+        "en": "Ticket-driven workflow",
+        "ja": "チケット駆動ワークフロー",
+    },
+    "description": {
+        "en": (
+            "Poll the ticket manager for one actionable GitHub issue or PR and "
+            "delegate it to the AI CLI tool."
+        ),
+        "ja": (
+            "対応可能な GitHub issue または PR を1件取得し、AI CLIツールへ委譲します。"
+        ),
+    },
+    "routine": True,
+}
+
 TICKET_MAX_ATTEMPTS_ENV = "GUILDBOTICS_TICKET_MAX_ATTEMPTS"
 _DEFAULT_MAX_ATTEMPTS = 5
 

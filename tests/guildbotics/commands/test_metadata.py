@@ -103,14 +103,15 @@ def test_parse_command_arguments_dispatches_on_extension(tmp_path: Path) -> None
     assert md_args == ["name"]
 
 
-def test_load_command_metadata_merges_sidecar(tmp_path: Path) -> None:
+def test_load_command_metadata_reads_embedded_python_metadata(tmp_path: Path) -> None:
     command = tmp_path / "report.py"
     command.write_text(
+        "COMMAND_METADATA = {\n"
+        "    'name': 'Report',\n"
+        "    'description': 'Reporting command.',\n"
+        "}\n\n"
         'def main(context):\n    """Ignored docstring."""\n    return None\n',
         encoding="utf-8",
-    )
-    (tmp_path / "report.metadata.yml").write_text(
-        "name: Report\ndescription: Reporting command.\n", encoding="utf-8"
     )
 
     metadata = load_command_metadata(command, "en")
@@ -119,11 +120,12 @@ def test_load_command_metadata_merges_sidecar(tmp_path: Path) -> None:
     assert metadata["description"] == "Reporting command."
 
 
-def test_load_command_metadata_localizes_sidecar_values(tmp_path: Path) -> None:
+def test_load_command_metadata_localizes_embedded_python_values(tmp_path: Path) -> None:
     command = tmp_path / "report.py"
-    command.write_text("def main(context):\n    return None\n", encoding="utf-8")
-    (tmp_path / "report.metadata.yml").write_text(
-        "name:\n  en: Report\n  ja: レポート\n", encoding="utf-8"
+    command.write_text(
+        "COMMAND_METADATA = {'name': {'en': 'Report', 'ja': 'レポート'}}\n\n"
+        "def main(context):\n    return None\n",
+        encoding="utf-8",
     )
 
     metadata = load_command_metadata(command, "ja")
@@ -136,3 +138,27 @@ def test_load_command_metadata_tolerates_broken_source(tmp_path: Path) -> None:
     broken.write_text("::: not: valid: yaml:::\n- [", encoding="utf-8")
 
     assert load_command_metadata(broken, "en") == {}
+
+
+def test_invalid_python_metadata_keeps_main_docstring_description(
+    tmp_path: Path,
+) -> None:
+    command = tmp_path / "report.py"
+    command.write_text(
+        "COMMAND_METADATA = dict(name='Report')\n\n"
+        "def main(context):\n"
+        '    \"\"\"Fallback description.\"\"\"\n'
+        "    return None\n",
+        encoding="utf-8",
+    )
+
+    assert load_command_metadata(command, "en") == {
+        "description": "Fallback description."
+    }
+
+
+def test_parse_python_arguments_tolerates_non_utf8_source(tmp_path: Path) -> None:
+    command = tmp_path / "broken.py"
+    command.write_bytes(b"\xff")
+
+    assert parse_command_arguments(command, {}) == []

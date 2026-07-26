@@ -202,6 +202,17 @@ class RuntimeStub:
             )
         return {"trace_id": "stub-request", "output": f"ran {request.command}"}
 
+    async def author_command(self, request):
+        self.authoring_request = request
+        return {
+            "trace_id": "author-trace",
+            "message": "Updated the draft.",
+            "command": request.command or "generated-command",
+            "format": request.format or "python",
+            "relative_path": f"{request.command or 'generated-command'}.py",
+            "content": "new source",
+        }
+
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
         return CommandOptionsResponse(
             options=[
@@ -723,6 +734,78 @@ def test_command_run_uses_runtime(tmp_path: Path) -> None:
         "trace_id": "stub-request",
         "output": "ran hello",
     }
+
+
+def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    app = create_app(session_token="secret", runtime=runtime)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/author",
+            headers=AUTH_HEADERS,
+            json={
+                "mode": "edit",
+                "authoring_id": "authoring-1",
+                "command": "hello",
+                "format": "python",
+                "content": "old source",
+                "message": "Update it",
+                "person": "bot",
+            },
+        )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "trace_id": "author-trace",
+        "message": "Updated the draft.",
+        "command": "hello",
+        "format": "python",
+        "relative_path": "hello.py",
+        "content": "new source",
+    }
+    assert runtime.authoring_request.authoring_id == "authoring-1"
+    assert runtime.authoring_request.content == "old source"
+
+
+def test_command_authoring_create_allows_ai_to_choose_identity(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    app = create_app(session_token="secret", runtime=runtime)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/author",
+            headers=AUTH_HEADERS,
+            json={
+                "mode": "create",
+                "authoring_id": "authoring-2",
+                "message": "Create a weekly report command.",
+            },
+        )
+
+    assert response.status_code == HTTP_OK
+    assert response.json()["command"] == "generated-command"
+    assert response.json()["format"] == "python"
+    assert response.json()["relative_path"] == "generated-command.py"
+    assert runtime.authoring_request.command == ""
+    assert runtime.authoring_request.format is None
+
+
+def test_command_authoring_edit_requires_existing_identity(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/author",
+            headers=AUTH_HEADERS,
+            json={
+                "mode": "edit",
+                "authoring_id": "authoring-3",
+                "message": "Update it.",
+            },
+        )
+
+    assert response.status_code == 422
 
 
 def test_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
@@ -2065,6 +2148,7 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/commands/options"),
     ("GET", "/commands/routine-options"),
     ("POST", "/commands/run"),
+    ("POST", "/commands/author"),
     ("GET", "/config/roles"),
     ("GET", "/scheduler/status"),
     ("POST", "/scheduler/start"),
