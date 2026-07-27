@@ -75,12 +75,15 @@ def traces_cmd(
     output_format: str,
 ) -> None:
     """List recorded executions, newest first."""
+    filters = {
+        "source": source,
+        "person_id": person_id,
+        "query": query,
+        "attr_key": attr_key,
+        "attr_value": attr_value,
+    }
     summaries = _store().list_traces(
-        source=source,
-        person_id=person_id,
-        query=query,
-        attr_key=attr_key,
-        attr_value=attr_value,
+        **filters,
         limit=limit if include_assistant else STORE_SCAN_LIMIT,
         # Investigating a recurrence means searching what the failure actually
         # said, and that text lives in the transcript rather than the index.
