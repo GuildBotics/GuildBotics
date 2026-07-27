@@ -890,9 +890,58 @@ describe("Diagnostics executions tab", () => {
     ).not.toBeInTheDocument();
 
     // The Global entry belongs only to the "all" source filter: narrowing to a
-    // specific source hides it.
+    // specific source hides it, and the selection it held goes with it.
     await user.click(screen.getByText(t("diagnostics.executions.sources.manual")));
     expect(screen.queryByText(t("diagnostics.executions.global.title"))).not.toBeInTheDocument();
+    expect(await screen.findByText(t("diagnostics.executions.selectHint"))).toBeInTheDocument();
+  });
+
+  it("keeps a URL-selected execution when the source filter narrows", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-1",
+          source: "manual",
+          person_id: "alice",
+          command: "workflows/demo",
+          workflow: "",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "success",
+          event_count: 1,
+          log_count: 0,
+          error_count: 0,
+          span_count: 0,
+          attributes: {},
+        },
+      ],
+    });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-1",
+      summary: null,
+      records: [makeTraceRecord({ message: "started", timestamp: "2026-06-12T00:00:01Z" })],
+    });
+
+    // The URL owns the selection, so narrowing the filters must not drop a
+    // trace the user explicitly navigated to.
+    renderApp("/diagnostics?tab=executions&trace_id=trace-1");
+    // The URL alone selects it: no click needed before narrowing the filter.
+    await waitFor(() => expect(vi.mocked(getTraceDetail)).toHaveBeenCalledWith("trace-1"));
+    await user.click(
+      document.querySelector(`input[aria-label="${t("diagnostics.executions.source")}"]`)!,
+    );
+    await user.click(
+      await screen.findByRole("option", { name: t("diagnostics.executions.sources.manual") }),
+    );
+
+    // Only a Global selection is tied to the "all" filter; an explicitly
+    // chosen execution survives the narrowing.
+    await waitFor(() =>
+      expect(screen.queryByText(t("diagnostics.executions.global.title"))).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText(t("diagnostics.executions.selectHint"))).not.toBeInTheDocument();
+    expect(screen.getAllByText("trace-1").length).toBeGreaterThan(0);
   });
 });
 

@@ -1460,23 +1460,15 @@ function TraceExplorer({
   const [personId, setPersonId] = useState("all");
   const [searchInput, setSearchInput] = useState("");
   const [query, setQuery] = useState("");
-  // Default to the pinned Global / system view so unscoped records (service
-  // lifecycle events and global logs such as Slack listener auth failures) are
-  // visible the moment the executions tab opens, without the user having to know
-  // to click the Global entry.
-  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(
-    focusedTraceId || (isComposite ? null : GLOBAL_TRACE_ID),
-  );
-  // A link into this route can change `trace_id` while the explorer stays
-  // mounted — the assistant's citations do exactly that — so the URL has to be
-  // able to move the selection, not just seed it.
-  const [observedFocusTraceId, setObservedFocusTraceId] = useState(focusedTraceId);
-  if (observedFocusTraceId !== focusedTraceId) {
-    setObservedFocusTraceId(focusedTraceId);
-    if (focusedTraceId) {
-      setSelectedTraceId(focusedTraceId);
-    }
-  }
+  // The URL owns the selection rather than seeding a copy of it, so a link into
+  // this route moves the view — the assistant's citations do exactly that.
+  // Without a trace in the URL the pinned Global / system view is shown, so
+  // unscoped records (service lifecycle events, global logs such as Slack
+  // listener auth failures) are visible the moment the executions tab opens.
+  // Global spans every source, so narrowing the filters leaves nothing selected.
+  const selectedTraceId = isComposite
+    ? null
+    : focusedTraceId || (source === "all" && personId === "all" ? GLOBAL_TRACE_ID : null);
   const [recordFilter, setRecordFilter] = useState("all");
   const [recordScopeFilter, setRecordScopeFilter] = useState<RecordScopeFilter | null>(null);
   // Both the record detail and the troubleshooting assistant occupy the right
@@ -1602,26 +1594,16 @@ function TraceExplorer({
       next.set("trace_id", traceId);
     }
     setSearchParams(next);
-    setSelectedTraceId(traceId);
     setRecordFilter("all");
     setRecordScopeFilter(null);
   };
 
-  // The pinned Global view only belongs under "all"; narrowing to a specific
-  // source filters traces, so drop a Global selection when leaving "all".
   const changeSource = (value: string) => {
     setSource(value);
-    if (value !== "all" && selectedTraceId === GLOBAL_TRACE_ID) {
-      setSelectedTraceId(null);
-    }
   };
 
   const changePerson = (value: string | null) => {
-    const nextVal = value ?? "all";
-    setPersonId(nextVal);
-    if (nextVal !== "all" && selectedTraceId === GLOBAL_TRACE_ID) {
-      setSelectedTraceId(null);
-    }
+    setPersonId(value ?? "all");
   };
 
   const applySearch = () => {
