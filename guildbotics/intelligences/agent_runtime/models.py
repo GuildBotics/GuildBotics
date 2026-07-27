@@ -85,6 +85,10 @@ class AgentExecutionContext:
     attempt: int = 1
     continuation_input: str = ""
     participant_labels: str = ""
+    # A read-only turn only inspects recorded state. Adapters must enforce this
+    # at the provider level rather than trusting the prompt: the material such a
+    # turn reads (logs, tickets, chat, tool output) is untrusted input.
+    read_only: bool = False
 
     def __post_init__(self) -> None:
         if self.person_id != self.conversation_key.person_id:

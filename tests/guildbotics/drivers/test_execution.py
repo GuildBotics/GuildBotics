@@ -136,3 +136,77 @@ def test_wait_for_drain_timeout_closes_drain_window() -> None:
 
     release.set()
     thread.join(timeout=5)
+
+
+def _start_non_exclusive_work(
+    coordinator: ExecutionCoordinator, release: threading.Event
+) -> threading.Thread:
+    entered = threading.Event()
+
+    def _work() -> None:
+        with coordinator.track_work(
+            source="manual",
+            person_id="alice",
+            command="troubleshoot:trace-1",
+            exclusive=False,
+        ):
+            entered.set()
+            release.wait(timeout=5)
+
+    thread = threading.Thread(target=_work)
+    thread.start()
+    assert entered.wait(timeout=5)
+    return thread
+
+
+def test_non_exclusive_work_runs_alongside_the_same_person_lease() -> None:
+    coordinator = ExecutionCoordinator()
+    release = threading.Event()
+    thread = _start_tracked_work(coordinator, release)
+    try:
+        # A read-only assistant turn must stay usable while the member it runs
+        # as is busy: that is exactly when its logs are worth investigating.
+        with coordinator.track_work(
+            source="manual",
+            person_id="alice",
+            command="troubleshoot:trace-1",
+            exclusive=False,
+        ):
+            assert {work.command for work in coordinator.snapshot()} == {
+                "demo",
+                "troubleshoot:trace-1",
+            }
+    finally:
+        release.set()
+        thread.join(timeout=5)
+
+
+def test_non_exclusive_work_does_not_hold_the_person_lease() -> None:
+    coordinator = ExecutionCoordinator()
+    release = threading.Event()
+    thread = _start_non_exclusive_work(coordinator, release)
+    try:
+        with coordinator.track_work(
+            source="routine", person_id="alice", command="scheduled"
+        ):
+            pass
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert coordinator.snapshot() == []
+
+
+def test_non_exclusive_work_is_still_rejected_while_draining() -> None:
+    coordinator = ExecutionCoordinator()
+    coordinator.begin_drain()
+
+    with pytest.raises(WorkRejectedError) as caught:
+        with coordinator.track_work(
+            source="manual",
+            person_id="alice",
+            command="troubleshoot:trace-1",
+            exclusive=False,
+        ):
+            pass
+
+    assert caught.value.reason == "draining"

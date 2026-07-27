@@ -129,6 +129,20 @@ describe("i18n resources", () => {
     expect(missingInJa).toEqual([]);
     expect(missingInEn).toEqual([]);
   });
+
+  it("gives every assistant chat namespace the same leaf keys", () => {
+    // AssistantChatPanel resolves its labels as `${namespace}.${leaf}`, so a
+    // namespace missing a leaf would render a raw key at runtime.
+    const bundle = i18n.getResourceBundle("en", "translation") as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const authoring = collectKeys(bundle.commands.authoring).sort();
+    const troubleshooting = collectKeys(bundle.diagnostics.troubleshooting).sort();
+
+    expect(authoring).not.toEqual([]);
+    expect(authoring.filter((key) => !troubleshooting.includes(key))).toEqual([]);
+  });
 });
 
 describe("language changes across windows", () => {

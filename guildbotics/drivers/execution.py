@@ -64,7 +64,28 @@ class ExecutionCoordinator:
         command: str,
         work_id: str | None = None,
         cancel: Callable[[], None] | None = None,
+        exclusive: bool = True,
     ) -> Iterator[ActiveWork]:
+        """Track one unit of member work for the lifetime of the context.
+
+        Args:
+            source: Which runtime path submitted the work.
+            person_id: Member the work runs as.
+            command: Command label reported in the runtime status.
+            work_id: Correlation identity, usually the work's trace id.
+            cancel: Called when a forced drain interrupts the work.
+            exclusive: Whether to hold the member's execution lease. Read-only
+                work that never touches the member's workspace, chat or tickets
+                passes ``False`` so it can run alongside scheduled work. It is
+                still drained and cancelled like any other tracked work.
+
+        Yields:
+            ActiveWork: The tracked work entry.
+
+        Raises:
+            WorkRejectedError: If the runtime is draining, or the member's
+                lease is held by other exclusive work.
+        """
         work = ActiveWork(
             id=work_id or new_id(),
             source=source,
@@ -78,16 +99,18 @@ class ExecutionCoordinator:
                     "Runtime is stopping; new work is not accepted.",
                     reason="draining",
                 )
-        lease = PersonExecutionLease(person_id)
-        try:
-            lease.acquire(source=source, command=command, work_id=work.id)
-        except PersonLeaseUnavailableError as exc:
-            raise WorkRejectedError(
-                str(exc), reason="lease_unavailable", holder=exc.metadata
-            ) from exc
+        lease = PersonExecutionLease(person_id) if exclusive else None
+        if lease is not None:
+            try:
+                lease.acquire(source=source, command=command, work_id=work.id)
+            except PersonLeaseUnavailableError as exc:
+                raise WorkRejectedError(
+                    str(exc), reason="lease_unavailable", holder=exc.metadata
+                ) from exc
         with self._condition:
             if self._draining:
-                lease.release()
+                if lease is not None:
+                    lease.release()
                 raise WorkRejectedError(
                     "Runtime is stopping; new work is not accepted.",
                     reason="draining",
@@ -105,7 +128,8 @@ class ExecutionCoordinator:
                 # work finishes but before the stop completes. wait_for_drain is
                 # the sole owner of clearing the flag.
                 self._condition.notify_all()
-            lease.release()
+            if lease is not None:
+                lease.release()
 
     def snapshot(self) -> list[ActiveWork]:
         with self._condition:

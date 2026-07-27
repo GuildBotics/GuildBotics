@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
   authorCommand,
+  troubleshoot,
   configureApi,
   createCommandFile,
   ensureAgentField,
@@ -364,7 +365,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({}));
     await authorCommand({
       mode: "edit",
-      authoring_id: "authoring-1",
+      conversation_id: "authoring-1",
       command: "greet",
       format: "markdown",
       content: "old",
@@ -377,7 +378,7 @@ describe("GET query parameter encoding", () => {
     expect(calls[0].init.body).toBe(
       JSON.stringify({
         mode: "edit",
-        authoring_id: "authoring-1",
+        conversation_id: "authoring-1",
         command: "greet",
         format: "markdown",
         content: "old",
@@ -392,7 +393,7 @@ describe("GET query parameter encoding", () => {
 
     await authorCommand({
       mode: "create",
-      authoring_id: "authoring-2",
+      conversation_id: "authoring-2",
       message: "Create a weekly report command",
       person: "bot",
     });
@@ -400,11 +401,47 @@ describe("GET query parameter encoding", () => {
     expect(calls[0].init.body).toBe(
       JSON.stringify({
         mode: "create",
-        authoring_id: "authoring-2",
+        conversation_id: "authoring-2",
         message: "Create a weekly report command",
         person: "bot",
       }),
     );
+  });
+
+  it("posts a troubleshooting turn with the focused view", async () => {
+    const { calls } = captureFetch(jsonResponse({}));
+
+    await troubleshoot({
+      conversation_id: "conv-1",
+      message: "Why did this fail?",
+      person: "bot",
+      focus: { view: "trace", trace_id: "abc123", source: "routine" },
+    });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/troubleshoot");
+    expect(calls[0].init.method).toBe("POST");
+    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
+    expect(calls[0].init.body).toBe(
+      JSON.stringify({
+        conversation_id: "conv-1",
+        message: "Why did this fail?",
+        person: "bot",
+        focus: { view: "trace", trace_id: "abc123", source: "routine" },
+      }),
+    );
+  });
+
+  it("surfaces a troubleshooting failure as an API request error", async () => {
+    captureFetch(
+      new Response(JSON.stringify({ code: "troubleshooting_failed", message: "no answer" }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      troubleshoot({ conversation_id: "conv-1", message: "Why?" }),
+    ).rejects.toMatchObject({ code: "troubleshooting_failed" });
   });
 
   it("puts an update command file request", async () => {

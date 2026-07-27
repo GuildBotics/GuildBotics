@@ -383,7 +383,10 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   `activity_links.py`). Display normalization lives *only* there — not in
   observability, not in the frontend. Manual desktop command runs (`source: manual`)
   are excluded from the session timeline because they fire constantly; anything they
-  changed still appears as an activity event. Diagnostics keeps every source.
+  changed still appears as an activity event. Desktop AI assistant turns record under
+  that same source for the same reason — the agent work kind scopes the provider
+  conversation, not the trace — so they are filterable in diagnostics and absent from
+  the timeline. Diagnostics keeps every source.
 - **System health alerts**: successful and failed verify/scenario-diagnostics runs are
   recorded as structured diagnostics events. `app_api/system_alerts.py` folds those
   events together with command outcomes, rate-limit events, and current runtime state
@@ -400,6 +403,18 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   polls `/system-alerts` and renders the result above every route with links to
   diagnostics, setup, service state, or the correlated trace. Provider classification
   remains in the backend; the frontend only translates stable alert codes.
+
+- **Read-only diagnostics queries**: `guildbotics diagnostics traces | trace <id> | system`
+  (`guildbotics/cli/diagnostics.py`) reads the index and transcripts through
+  `DiagnosticsStore` and emits raw records as JSON. It is a top-level group rather than
+  a `member` subgroup because a diagnostics query is workspace-scoped, not member-scoped:
+  it needs no acting member, takes no execution lease, and `--person` is a filter over the
+  records' `person_id`, not an identity. It never calls `start_maintenance()`, so reading
+  cannot rotate or prune what it reads, and it carries no display normalization — record
+  meaning is taught to its consumers instead. `--query` searches each candidate's full
+  transcript, not just the index, because the text a failure describes itself with lives
+  in log and I/O records that the index never stores. Desktop assistant traces are excluded by
+  default so the troubleshooting agent does not investigate its own conversations.
 
 ## 10. Desktop App
 
@@ -430,6 +445,31 @@ a monorepo on purpose.
   case the window waits. Because hotkeys only fire while the process lives, closing a
   window hides it and the app stays resident in the menu bar; quitting goes through the
   tray, which is where the "work still running" guard now lives.
+- **AI assistants**: the command editor and the diagnostics screen each host a
+  conversational assistant. Both share one substrate:
+  `guildbotics/intelligences/assistants.py` opens a resumable, structured turn (one JSON
+  payload in, one typed model out, keyed by a stable `work_identity` so the provider
+  resumes its own session), and `AppRuntime._assistant_turn` resolves the acting member,
+  tracks the turn as cancellable manual work and correlates it under a fresh trace.
+  A turn that is declared read-only is confined by the provider, not by its prompt: the
+  Claude adapter drops `bypassPermissions` for an explicit tool allowlist, the Codex
+  adapter forces a `read-only` sandbox with no network, and `cli_agent` takes no member
+  execution lease. Only such a turn is tracked non-exclusively, so it stays usable while
+  that member runs scheduled work — which is exactly when its logs are worth asking
+  about. A turn that can write (command authoring) keeps the lease it has always held.
+  On the frontend,
+  `desktop/src/assistant/` owns the shared chat panel and conversation state; each screen
+  keeps its own mutation. Conversations are never persisted on this side.
+- **Troubleshooting assistant**: opened from the diagnostics screen, it answers questions
+  about recorded executions. It is given only the question and the focused view; it
+  gathers its own evidence by running the read-only `guildbotics diagnostics` commands,
+  which keeps prompts small and lets it follow leads into other executions. What it reads
+  is untrusted — logs carry GitHub issue bodies, chat messages and external tool output —
+  which is why the read-only confinement above is enforced rather than requested. It returns
+  the answer plus the trace ids it read, and the backend drops any id that was never
+  recorded before the frontend turns it into a link. The record detail and the assistant
+  share one mutually exclusive right-edge panel, so two drawers never fight over the same
+  strip; the assistant is non-modal, so the executions list behind it stays clickable.
 - **Support targets**: macOS Apple Silicon (DMG) and Linux x86_64 (`.deb` / AppImage).
   The CLI remains the fallback everywhere else.
 

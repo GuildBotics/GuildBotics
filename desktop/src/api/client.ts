@@ -471,23 +471,51 @@ export type CommandFilesResponse = {
   files: CommandFileSummary[];
 };
 
-export type CommandAuthoringResponse = {
+export type AssistantTurnRequest = {
+  conversation_id: string;
+  message: string;
+  person?: string;
+};
+
+export type AssistantTurnResponse = {
   trace_id: string;
   message: string;
+};
+
+export type CommandAuthoringResponse = AssistantTurnResponse & {
   command: string;
   format: CommandFileFormat;
   relative_path: string;
   content: string;
 };
 
-export type CommandAuthoringRequest = {
+export type CommandAuthoringRequest = AssistantTurnRequest & {
   mode: "create" | "edit";
-  authoring_id: string;
   command?: string;
   format?: CommandFileFormat;
   content?: string;
-  message: string;
-  person?: string;
+};
+
+export type TroubleshootingFocus = {
+  view: "trace" | "global" | "memory";
+  trace_id?: string;
+  source?: string;
+  person_id?: string;
+  query?: string;
+  /** Set when the user asked about one specific record of the execution. */
+  span_id?: string;
+  call_id?: string;
+  record_timestamp?: string;
+  record_type?: string;
+  record_message?: string;
+};
+
+export type TroubleshootingRequest = AssistantTurnRequest & {
+  focus?: TroubleshootingFocus;
+};
+
+export type TroubleshootingResponse = AssistantTurnResponse & {
+  trace_ids: string[];
 };
 
 export type CommandFileBlockingCode =
@@ -1019,6 +1047,10 @@ export async function authorCommand(
   body: CommandAuthoringRequest,
 ): Promise<CommandAuthoringResponse> {
   return request("/commands/author", { method: "POST", body });
+}
+
+export async function troubleshoot(body: TroubleshootingRequest): Promise<TroubleshootingResponse> {
+  return request("/diagnostics/troubleshoot", { method: "POST", body });
 }
 
 export async function getCommandOptions(person?: string): Promise<CommandOptionsResponse> {

@@ -113,7 +113,7 @@ async def test_author_command_turn_sends_current_draft_and_stable_conversation(
     result = await author_command_turn(
         _ContextStub(brain),
         mode="edit",
-        authoring_id="authoring-1",
+        conversation_id="authoring-1",
         trace_id="trace-2",
         command="reports/weekly",
         command_format="python",
@@ -137,6 +137,8 @@ async def test_author_command_turn_sends_current_draft_and_stable_conversation(
         "work_identity": "authoring-1",
         "resume_policy": "auto",
         "workspace_data_root": str(tmp_path),
+        # Authoring writes command drafts, so it is not a read-only turn.
+        "read_only": False,
     }
     assert brain.kwargs["cwd"] == tmp_path / "command-authoring"
 
@@ -149,7 +151,7 @@ async def test_author_command_turn_rejects_unstructured_agent_output(
         await author_command_turn(
             _ContextStub(_InvalidBrainStub()),
             mode="edit",
-            authoring_id="authoring-1",
+            conversation_id="authoring-1",
             trace_id="trace-1",
             command="demo",
             command_format="markdown",
@@ -166,7 +168,7 @@ async def test_author_command_turn_allows_ai_to_choose_new_command_identity(
     result = await author_command_turn(
         _ContextStub(_BrainStub()),
         mode="create",
-        authoring_id="authoring-1",
+        conversation_id="authoring-1",
         trace_id="trace-1",
         command="",
         command_format=None,
@@ -187,7 +189,7 @@ async def test_author_command_turn_rejects_identity_change_for_existing_command(
         await author_command_turn(
             _ContextStub(_BrainStub()),
             mode="edit",
-            authoring_id="authoring-1",
+            conversation_id="authoring-1",
             trace_id="trace-1",
             command="existing",
             command_format="markdown",
@@ -206,7 +208,7 @@ async def test_author_command_turn_retries_invalid_generated_source(
     result = await author_command_turn(
         _ContextStub(brain),
         mode="create",
-        authoring_id="authoring-1",
+        conversation_id="authoring-1",
         trace_id="trace-1",
         command="",
         command_format=None,
@@ -233,7 +235,7 @@ async def test_author_command_turn_retries_no_op_message_transform(
     result = await author_command_turn(
         _ContextStub(brain),
         mode="create",
-        authoring_id="authoring-1",
+        conversation_id="authoring-1",
         trace_id="trace-1",
         command="",
         command_format=None,
@@ -258,7 +260,7 @@ async def test_author_command_turn_retries_implicit_default_brain(
     result = await author_command_turn(
         _ContextStub(brain),
         mode="create",
-        authoring_id="authoring-1",
+        conversation_id="authoring-1",
         trace_id="trace-1",
         command="",
         command_format=None,
@@ -282,7 +284,7 @@ async def test_author_command_turn_reports_validation_after_failed_retry(
     result = await author_command_turn(
         _ContextStub(brain),
         mode="create",
-        authoring_id="authoring-1",
+        conversation_id="authoring-1",
         trace_id="trace-1",
         command="",
         command_format=None,

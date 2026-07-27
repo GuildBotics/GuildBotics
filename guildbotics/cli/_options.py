@@ -1,13 +1,25 @@
-"""Shared Click option definitions for the GuildBotics CLI."""
+"""Shared Click options and their handling for the GuildBotics CLI."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import click
 
+from guildbotics.utils.env_loader import load_guildbotics_env
+from guildbotics.utils.workspace_state import WorkspaceState, apply_workspace_for_cli
+
 FormatChoice = click.Choice(["json", "markdown"])
+
+workspace_option = click.option(
+    "--workspace",
+    "workspace_dir",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Workspace root to use instead of the persisted active workspace.",
+)
 
 
 def format_option(default: str) -> Callable[[Any], Any]:
@@ -19,3 +31,27 @@ def format_option(default: str) -> Callable[[Any], Any]:
         default=default,
         help="Output format.",
     )
+
+
+def apply_workspace_option(workspace_dir: Path | None) -> WorkspaceState | None:
+    """Select the workspace a command group runs against and load its env.
+
+    Args:
+        workspace_dir: Value of :data:`workspace_option`, or ``None`` to use the
+            persisted active workspace.
+
+    Returns:
+        The applied workspace, or ``None`` when the current directory is used.
+
+    Raises:
+        click.ClickException: If the requested workspace does not exist.
+    """
+    try:
+        applied = apply_workspace_for_cli(workspace_dir)
+    except NotADirectoryError as exc:
+        raise click.ClickException(f"workspace does not exist: {exc}") from exc
+    if applied is not None:
+        load_guildbotics_env(applied.workspace, override=False, prefer_env_file=False)
+    else:
+        load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=True)
+    return applied

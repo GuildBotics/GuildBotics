@@ -14,6 +14,7 @@ from guildbotics.intelligences.agent_runtime.codex import (
     _agent_error_from_rpc,
     _decode_notification,
     _sandbox_policy,
+    _thread_sandbox,
 )
 from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.models import (
@@ -370,6 +371,31 @@ def test_codex_turn_sandbox_policy_matches_filesystem_access(
     policy = NativeAgentPolicy(filesystem_access=filesystem_access)
 
     assert _sandbox_policy(policy, "/workspace-data") == expected
+
+
+@pytest.mark.parametrize("filesystem_access", ["workspace", "host"])
+def test_codex_read_only_turn_overrides_the_configured_filesystem_access(
+    filesystem_access: str,
+) -> None:
+    policy = NativeAgentPolicy(filesystem_access=filesystem_access)
+
+    # A read-only turn reads untrusted material, so it must not inherit the
+    # member's configured write or network access.
+    assert _sandbox_policy(policy, "/workspace-data", True) == {
+        "type": "readOnly",
+        "networkAccess": False,
+    }
+    assert _thread_sandbox(policy, True) == "read-only"
+
+
+@pytest.mark.parametrize(
+    ("filesystem_access", "expected"),
+    [("workspace", "workspace-write"), ("host", "danger-full-access")],
+)
+def test_codex_thread_sandbox_matches_filesystem_access(
+    filesystem_access: str, expected: str
+) -> None:
+    assert _thread_sandbox(NativeAgentPolicy(filesystem_access=filesystem_access)) == expected
 
 
 @pytest.mark.asyncio

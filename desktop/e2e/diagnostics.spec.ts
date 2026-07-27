@@ -83,3 +83,33 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
   await expect(page.getByText("Global / system", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Service events & unscoped logs")).toBeVisible();
 });
+
+test("sends a troubleshooting question through the real backend and reports the failure", async ({
+  page,
+}) => {
+  // The diagnostics stack has no LLM API key, so the assistant turn reaches the
+  // real FastAPI endpoint and fails at the agent step. That is exactly the wire
+  // this journey exists to prove: client.ts -> /diagnostics/troubleshoot ->
+  // AppRuntime -> error mapping -> the panel's error alert. Answer quality and
+  // the branch matrix are covered by the unit / component tests.
+  await page.goto("/#/diagnostics?tab=executions");
+  await page.getByRole("button", { name: "Ask AI" }).click();
+
+  const panel = page.getByRole("region", { name: "Troubleshooting AI" });
+  await expect(panel).toBeVisible();
+  // The executions list stays visible: the drawer overlays, it does not replace.
+  await expect(page.getByText("Global / system", { exact: true }).first()).toBeVisible();
+
+  const request = page.waitForResponse(
+    (response) =>
+      response.url().includes("/diagnostics/troubleshoot") && response.request().method() === "POST",
+  );
+  await panel.getByLabel("Message to troubleshooting AI").fill("Why did the service fail?");
+  await panel.getByRole("button", { name: "Send" }).click();
+
+  const response = await request;
+  expect(response.status()).toBeGreaterThanOrEqual(400);
+  await expect(panel.getByText("The troubleshooting AI could not answer")).toBeVisible({
+    timeout: 60_000,
+  });
+});

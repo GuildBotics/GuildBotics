@@ -53,7 +53,8 @@ import {
   type CommandRunRecord,
 } from "../App";
 import { setNavigationGuard } from "../navigationGuard";
-import { CommandAuthoringPanel, type CommandAuthoringMessage } from "./CommandAuthoringPanel";
+import { AssistantChatPanel } from "../assistant/AssistantChatPanel";
+import { useAssistantConversation } from "../assistant/useAssistantConversation";
 import { CommandEditor } from "./CommandEditor";
 import { CommandHotkeyField } from "./CommandHotkeyField";
 import {
@@ -72,7 +73,8 @@ const CREATE_FORMATS: CommandFileFormat[] = ["markdown", "python", "shell", "yam
 const NEW_DRAFT_FILE_ID = "__new-command-draft__";
 
 type AuthoringTurnRequest = CommandAuthoringRequest & {
-  commandFileId: string | null;
+  /** Conversation target at submit time, so late replies can be discarded. */
+  targetKey: string;
 };
 
 type NewCommandDraft = {
@@ -85,8 +87,15 @@ function stringPayload(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function newAuthoringId(): string {
+function newConversationId(): string {
   return globalThis.crypto.randomUUID();
+}
+
+function authoringErrorMessage(error: unknown): string | null {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return error ? String(error) : null;
 }
 
 export function CommandsPage() {
@@ -141,14 +150,9 @@ export function CommandsPage() {
   const loadedKeyRef = useRef<string>("");
   const selectedFileIdRef = useRef<string | null>(selectedFileId);
   selectedFileIdRef.current = selectedFileId;
-  const [authoringId, setAuthoringId] = useState(newAuthoringId);
-  const authoringIdRef = useRef(authoringId);
-  authoringIdRef.current = authoringId;
-  const [authoringMessages, setAuthoringMessages] = useState<CommandAuthoringMessage[]>([]);
   const [newCommandDraft, setNewCommandDraft] = useState<NewCommandDraft | null>(null);
   const newCommandDraftRef = useRef(newCommandDraft);
   newCommandDraftRef.current = newCommandDraft;
-  const authoringTargetKeyRef = useRef("");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -259,6 +263,26 @@ export function CommandsPage() {
     [queryClient],
   );
 
+  const activeMembers = useMemo(
+    () => (team.data?.members ?? []).filter((member) => member.is_active),
+    [team.data?.members],
+  );
+  const selectedPerson =
+    activeMembers.find((member) => member.person_id === person)?.person_id ?? null;
+  // The backend owns the fallback rule; the team summary reports the member an
+  // omitted person resolves to, so no default is picked here.
+  const defaultPerson =
+    activeMembers.find((member) => member.person_id === team.data?.default_person_id) ?? null;
+  const effectivePerson = selectedPerson ?? defaultPerson?.person_id ?? null;
+
+  // One authoring conversation per member and command draft. Saving a new
+  // draft renames the target, so the conversation is carried over explicitly
+  // rather than restarted.
+  const authoringTargetKey = `${effectivePerson ?? ""}:${
+    newCommandDraft ? NEW_DRAFT_FILE_ID : (selectedFileId ?? "")
+  }`;
+  const authoring = useAssistantConversation(authoringTargetKey);
+
   const saveMutation = useMutation({
     mutationFn: () =>
       newCommandDraft
@@ -277,7 +301,12 @@ export function CommandsPage() {
     },
     onSuccess: (updated) => {
       if (newCommandDraft) {
-        authoringTargetKeyRef.current = `${effectivePerson ?? ""}:${updated.id}`;
+        // The draft keeps its conversation once it becomes a real file.
+        authoring.adopt(
+          authoring.conversationId,
+          authoring.messages,
+          `${effectivePerson ?? ""}:${updated.id}`,
+        );
         cacheCreatedCommand(updated);
         setNewCommandDraft(null);
         setSelectedFileId(updated.id);
@@ -335,38 +364,27 @@ export function CommandsPage() {
     },
   });
 
-  const activeMembers = useMemo(
-    () => (team.data?.members ?? []).filter((member) => member.is_active),
-    [team.data?.members],
-  );
-  const selectedPerson =
-    activeMembers.find((member) => member.person_id === person)?.person_id ?? null;
-  // The backend owns the fallback rule; the team summary reports the member an
-  // omitted person resolves to, so no default is picked here.
-  const defaultPerson =
-    activeMembers.find((member) => member.person_id === team.data?.default_person_id) ?? null;
-  const effectivePerson = selectedPerson ?? defaultPerson?.person_id ?? null;
-
   const aiCreateMutation = useMutation({
-    mutationFn: (request: { authoringId: string; message: string }) =>
+    mutationFn: (request: { conversationId: string; message: string }) =>
       authorCommand({
         mode: "create",
-        authoring_id: request.authoringId,
+        conversation_id: request.conversationId,
         message: request.message,
         person: effectivePerson ?? undefined,
       }),
     onSuccess: (response, request) => {
-      authoringIdRef.current = request.authoringId;
-      authoringTargetKeyRef.current = `${effectivePerson ?? ""}:${NEW_DRAFT_FILE_ID}`;
-      setAuthoringId(request.authoringId);
-      setAuthoringMessages([
-        { role: "user", content: request.message },
-        {
-          role: "assistant",
-          content: response.message,
-          traceId: response.trace_id,
-        },
-      ]);
+      authoring.adopt(
+        request.conversationId,
+        [
+          { role: "user", content: request.message },
+          {
+            role: "assistant",
+            content: response.message,
+            traceId: response.trace_id,
+          },
+        ],
+        `${effectivePerson ?? ""}:${NEW_DRAFT_FILE_ID}`,
+      );
       setNewCommandDraft({
         command: response.command,
         format: response.format,
@@ -387,7 +405,7 @@ export function CommandsPage() {
     mutationFn: (request: AuthoringTurnRequest) =>
       authorCommand({
         mode: request.mode,
-        authoring_id: request.authoring_id,
+        conversation_id: request.conversation_id,
         command: request.command,
         format: request.format,
         content: request.content,
@@ -395,18 +413,10 @@ export function CommandsPage() {
         person: request.person,
       }),
     onMutate: (request) => {
-      const targetMatches = request.commandFileId
-        ? selectedFileIdRef.current === request.commandFileId
-        : newCommandDraftRef.current !== null;
-      if (targetMatches && authoringIdRef.current === request.authoring_id) {
-        setAuthoringMessages((current) => [...current, { role: "user", content: request.message }]);
-      }
+      authoring.appendUser(request.conversation_id, request.targetKey, request.message);
     },
     onSuccess: (response, request) => {
-      const targetMatches = request.commandFileId
-        ? selectedFileIdRef.current === request.commandFileId
-        : newCommandDraftRef.current !== null;
-      if (!targetMatches || authoringIdRef.current !== request.authoring_id) {
+      if (!authoring.isCurrent(request.conversation_id, request.targetKey)) {
         return;
       }
       if (request.mode === "create") {
@@ -417,35 +427,12 @@ export function CommandsPage() {
         });
       }
       setDraftContent(response.content);
-      setAuthoringMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          content: response.message,
-          traceId: response.trace_id,
-        },
-      ]);
+      authoring.appendAssistant(request.conversation_id, request.targetKey, {
+        content: response.message,
+        traceId: response.trace_id,
+      });
     },
   });
-
-  useEffect(() => {
-    const targetId = newCommandDraft ? NEW_DRAFT_FILE_ID : selectedFileId;
-    if (!targetId) {
-      return;
-    }
-    const targetKey = `${effectivePerson ?? ""}:${targetId}`;
-    if (authoringTargetKeyRef.current === targetKey) {
-      return;
-    }
-    authoringTargetKeyRef.current = targetKey;
-    const nextAuthoringId = newAuthoringId();
-    authoringIdRef.current = nextAuthoringId;
-    setAuthoringId(nextAuthoringId);
-    setAuthoringMessages([]);
-    authoringMutation.reset();
-    // A selected file starts one simple frontend-owned authoring conversation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectivePerson, newCommandDraft, selectedFileId]);
 
   const executionStatusQuery = useQuery({
     queryKey: ["command-file-execution", selectedFileId, effectivePerson, revision],
@@ -752,7 +739,7 @@ export function CommandsPage() {
                 ? [
                     {
                       value: NEW_DRAFT_FILE_ID,
-                      label: t("commands.authoring.newDraftOption", {
+                      label: t("commands.newDraftOption", {
                         command: newCommandDraft.command,
                         format: t(`commands.formats.${newCommandDraft.format}`),
                       }),
@@ -770,7 +757,7 @@ export function CommandsPage() {
             <Group gap="xs">
               <Badge variant="light">{t(`commands.formats.${newCommandDraft.format}`)}</Badge>
               <Text c="dimmed" size="sm">
-                {t("commands.authoring.proposedByAi")}
+                {t("commands.proposedByAi")}
               </Text>
             </Group>
           ) : (
@@ -816,7 +803,7 @@ export function CommandsPage() {
           <div className="command-split" ref={splitRef}>
             <div className="command-split-editor" style={{ flexGrow: editorRatio }}>
               {activeDraft ? (
-                <div className="command-authoring-layout">
+                <div className="command-editor-with-assistant">
                   <CommandEditor
                     value={draftContent}
                     format={activeDraft.format}
@@ -834,28 +821,30 @@ export function CommandsPage() {
                         : () => void openLocalFile(displayPath).catch(() => {})
                     }
                   />
-                  <CommandAuthoringPanel
-                    key={authoringId}
-                    messages={authoringMessages}
+                  <AssistantChatPanel
+                    namespace="commands.authoring"
+                    key={authoring.conversationId}
+                    messages={authoring.messages}
                     pending={authoringMutation.isPending}
                     disabled={!effectivePerson}
+                    // A failure belongs to the command that produced it:
+                    // switching commands must not carry it into the next
+                    // conversation.
                     error={
-                      authoringMutation.error instanceof Error
-                        ? authoringMutation.error.message
-                        : authoringMutation.error
-                          ? String(authoringMutation.error)
-                          : null
+                      authoringMutation.variables?.targetKey === authoringTargetKey
+                        ? authoringErrorMessage(authoringMutation.error)
+                        : null
                     }
                     onSubmit={(authoringMessage) =>
                       authoringMutation.mutate({
                         mode: newCommandDraft ? "create" : "edit",
-                        authoring_id: authoringId,
+                        conversation_id: authoring.conversationId,
                         command: activeDraft.command,
                         format: activeDraft.format,
                         content: draftContent,
                         message: authoringMessage,
                         person: effectivePerson ?? undefined,
-                        commandFileId: newCommandDraft ? null : (detail?.id ?? null),
+                        targetKey: authoringTargetKey,
                       })
                     }
                   />
@@ -938,7 +927,7 @@ export function CommandsPage() {
         onCreateManually={(command, format) => createMutation.mutate({ command, format })}
         onCreateWithAi={(authoringMessage) =>
           aiCreateMutation.mutate({
-            authoringId: newAuthoringId(),
+            conversationId: newConversationId(),
             message: authoringMessage,
           })
         }

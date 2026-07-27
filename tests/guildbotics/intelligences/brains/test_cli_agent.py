@@ -992,3 +992,54 @@ def test_cursor_relation_orders_numeric_and_rejects_unorderable(
     current, persisted, expected
 ):
     assert cli_agent._cursor_relation(current, persisted) == expected
+
+
+@pytest.mark.asyncio
+async def test_read_only_native_turn_takes_no_person_execution_lease(
+    monkeypatch, tmp_path
+) -> None:
+    from guildbotics.runtime.person_lease import PersonExecutionLease
+
+    captured: dict = {}
+
+    async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
+        captured["context"] = context
+        return cli_agent.CliAgentExecutionResult(
+            stdout="answer", stderr="", returncode=0
+        )
+
+    monkeypatch.setattr(
+        cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
+    )
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+    brain.executable_info = cli_agent.ExecutableInfo(
+        script="", env={}, adapter="claude-stream-json"
+    )
+
+    # A routine already owns this member. A read-only assistant turn has to stay
+    # usable anyway: that is exactly when its logs are worth asking about.
+    lease = PersonExecutionLease("p1", tmp_path)
+    lease.acquire(source="routine", command="ticket", work_id="work-1")
+    try:
+        result = await brain._execute_native(
+            input="why did it fail?",
+            cwd=tmp_path,
+            kwargs={
+                "session_state": {
+                    "agent_execution_context": {
+                        "run_id": "run-9",
+                        "work_kind": "troubleshooting",
+                        "workspace_data_root": str(tmp_path),
+                        "read_only": True,
+                    }
+                }
+            },
+        )
+    finally:
+        lease.release()
+
+    assert not result.error_category
+    assert result.stdout == "answer"
+    assert captured["context"].read_only is True
+    assert captured["context"].lease_id == ""
+    assert captured["context"].delegation_id == ""

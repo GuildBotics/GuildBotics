@@ -78,6 +78,8 @@ from guildbotics.app_api.models import (
     TracesResponse,
     TranscriptSettingsStatus,
     TranscriptSettingsUpdateRequest,
+    TroubleshootingRequest,
+    TroubleshootingResponse,
     VerifyResponse,
     WorkspaceChangeRequest,
 )
@@ -556,6 +558,17 @@ def create_app(
         _: None = Depends(require_token),
     ) -> TraceDetailResponse:
         return app_runtime.get_global_records(limit=limit)
+
+    @app.post(
+        "/diagnostics/troubleshoot",
+        response_model=TroubleshootingResponse,
+        responses=error_responses,
+    )
+    async def diagnostics_troubleshoot(
+        request: TroubleshootingRequest,
+        _: None = Depends(require_token),
+    ) -> TroubleshootingResponse:
+        return await app_runtime.troubleshoot(request)
 
     @app.get(
         "/diagnostics/memory-events",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -186,7 +187,8 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     }
     policy_event = next(event for event in events if event.name == "policy")
     assert policy_event.approval == "bypassPermissions"
-    assert policy_event.details == {"bash_sandbox": False}
+    assert policy_event.details == {"bash_sandbox": False, "read_only": False}
+    assert "--allowed-tools" not in run_args
     command_events = [event for event in events if event.kind is AgentEventKind.COMMAND]
     assert [(event.name, event.item_id) for event in command_events] == [
         ("started", "tool-1"),
@@ -736,3 +738,56 @@ async def test_claude_empty_terminal_response_is_protocol_failure(
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROTOCOL
     assert excinfo.value.rotate_session is True
+
+
+@pytest.mark.asyncio
+async def test_claude_read_only_turn_is_confined_by_the_provider(
+    monkeypatch, tmp_path
+) -> None:
+    stream = _StreamProcess(
+        [
+            {"type": "system", "subtype": "init", "session_id": "session-9"},
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-9",
+                "result": "answer",
+                "usage": {},
+            },
+        ]
+    )
+    calls: list[tuple[Any, ...]] = []
+
+    async def create_process(*args, **kwargs):
+        calls.append(args)
+        return _HelpProcess() if args[-1] == "--help" else stream
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    context = replace(_context(tmp_path), read_only=True)
+    events: list[AgentEvent] = []
+
+    await adapter_run(monkeypatch, context, events)
+
+    run_args = calls[1]
+    # Diagnostics an assistant reads are untrusted input, so the limit has to be
+    # the provider's, not the prompt's.
+    assert run_args[run_args.index("--permission-mode") + 1] == "default"
+    assert "bypassPermissions" not in run_args
+    allowed = run_args[run_args.index("--allowed-tools") + 1 :]
+    assert "Bash(guildbotics diagnostics:*)" in allowed
+    assert "Read" in allowed
+    disallowed = run_args[run_args.index("--disallowed-tools") + 1 :]
+    for tool in ("Write", "Edit", "WebFetch", "WebSearch"):
+        assert tool in disallowed
+    policy_event = next(event for event in events if event.name == "policy")
+    assert policy_event.details == {"bash_sandbox": False, "read_only": True}
+
+
+async def adapter_run(monkeypatch, context, events) -> None:
+    adapter = ClaudeStreamJsonAdapter()
+    await adapter.run_turn(
+        "why did it fail?",
+        context,
+        ConversationRecord(key=context.conversation_key),
+        events.append,
+    )

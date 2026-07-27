@@ -226,16 +226,28 @@ class CommandFileUpdateRequest(BaseModel):
     expected_revision: str
 
 
-class CommandAuthoringRequest(BaseModel):
+class AssistantTurnRequest(BaseModel):
+    """One user turn sent to a Desktop AI assistant."""
+
     model_config = ConfigDict(extra="forbid")
 
+    conversation_id: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1)
+    person: str | None = None
+
+
+class AssistantTurnResponse(BaseModel):
+    """One assistant reply and the trace that produced it."""
+
+    trace_id: str
+    message: str
+
+
+class CommandAuthoringRequest(AssistantTurnRequest):
     mode: Literal["create", "edit"]
-    authoring_id: str = Field(min_length=1, max_length=128)
     command: str = ""
     format: CommandFileFormat | None = None
     content: str = ""
-    message: str = Field(min_length=1)
-    person: str | None = None
 
     @model_validator(mode="after")
     def validate_current_draft(self) -> CommandAuthoringRequest:
@@ -251,13 +263,38 @@ class CommandAuthoringRequest(BaseModel):
         return self
 
 
-class CommandAuthoringResponse(BaseModel):
-    trace_id: str
-    message: str
+class CommandAuthoringResponse(AssistantTurnResponse):
     command: str
     format: CommandFileFormat
     relative_path: str
     content: str
+
+
+class TroubleshootingFocus(BaseModel):
+    """What the user is looking at in the diagnostics screen."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    view: Literal["trace", "global", "memory"] = "trace"
+    trace_id: str = ""
+    source: str = ""
+    person_id: str = ""
+    query: str = ""
+    # Set when the user asked about one specific record. An execution can hold
+    # hundreds, so without these the assistant cannot tell which one is meant.
+    span_id: str = ""
+    call_id: str = ""
+    record_timestamp: str = ""
+    record_type: str = ""
+    record_message: str = ""
+
+
+class TroubleshootingRequest(AssistantTurnRequest):
+    focus: TroubleshootingFocus | None = None
+
+
+class TroubleshootingResponse(AssistantTurnResponse):
+    trace_ids: list[str] = Field(default_factory=list)
 
 
 def to_command_inputs(policy: CommandInputPolicy) -> CommandInputs:

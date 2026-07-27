@@ -101,7 +101,9 @@ class CodexAppServerAdapter:
                     "cwd": str(context.cwd),
                     "approvalPolicy": _APPROVAL_POLICY,
                     "sandboxPolicy": _sandbox_policy(
-                        self._policy, str(context.workspace_data_root)
+                        self._policy,
+                        str(context.workspace_data_root),
+                        context.read_only,
                     ),
                 },
             )
@@ -327,11 +329,7 @@ class CodexAppServerAdapter:
                 {
                     "cwd": str(context.cwd),
                     "approvalPolicy": _APPROVAL_POLICY,
-                    "sandbox": (
-                        "danger-full-access"
-                        if self._policy.filesystem_access == "host"
-                        else "workspace-write"
-                    ),
+                    "sandbox": _thread_sandbox(self._policy, context.read_only),
                 },
             )
         thread_id = _identifier(_dict(_dict(response).get("thread")))
@@ -523,9 +521,23 @@ class CodexAppServerAdapter:
                 future.set_exception(error)
 
 
+def _thread_sandbox(policy: NativeAgentPolicy, read_only: bool = False) -> str:
+    if read_only:
+        return "read-only"
+    return (
+        "danger-full-access"
+        if policy.filesystem_access == "host"
+        else "workspace-write"
+    )
+
+
 def _sandbox_policy(
-    policy: NativeAgentPolicy, workspace_data_root: str
+    policy: NativeAgentPolicy, workspace_data_root: str, read_only: bool = False
 ) -> dict[str, Any]:
+    # A read-only turn wins over the configured filesystem access: it exists to
+    # inspect recorded state, and what it reads is untrusted input.
+    if read_only:
+        return {"type": "readOnly", "networkAccess": False}
     if policy.filesystem_access == "host":
         return {"type": "dangerFullAccess"}
     return {
