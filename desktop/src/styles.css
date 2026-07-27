@@ -707,7 +707,7 @@ pre {
   overflow: hidden;
 }
 
-.command-authoring-layout {
+.command-editor-with-assistant {
   display: grid;
   flex: 1;
   gap: 12px;
@@ -716,7 +716,7 @@ pre {
   min-width: 0;
 }
 
-.command-authoring-panel {
+.assistant-chat-panel {
   background: var(--color-bg-panel);
   border: 1px solid var(--color-border-subtle);
   border-radius: 10px;
@@ -727,40 +727,48 @@ pre {
   overflow: hidden;
 }
 
-.command-authoring-heading {
+.assistant-chat-heading {
   border-bottom: 1px solid var(--color-border-subtle);
   flex: 0 0 auto;
   padding: 8px 10px;
 }
 
-.command-authoring-heading h3 {
+.assistant-chat-heading h3 {
   font-size: 14px;
 }
 
-.command-authoring-messages {
+.assistant-chat-header {
+  border-bottom: 1px solid var(--color-border-subtle);
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.assistant-chat-messages {
   flex: 1;
   min-height: 0;
 }
 
-.command-authoring-message {
+.assistant-chat-message {
   border-radius: 8px;
   overflow-wrap: anywhere;
   padding: 8px 10px;
   white-space: pre-wrap;
 }
 
-.command-authoring-message-user {
+.assistant-chat-message-user {
   align-self: flex-end;
   background: var(--color-bg-hover);
   max-width: 90%;
 }
 
-.command-authoring-message-assistant {
+.assistant-chat-message-assistant {
   background: var(--color-bg-panel-subtle);
   border: 1px solid var(--color-border-subtle);
 }
 
-.command-authoring-form {
+.assistant-chat-form {
   border-top: 1px solid var(--color-border-subtle);
   display: grid;
   flex: 0 0 auto;
@@ -768,8 +776,55 @@ pre {
   padding: 10px;
 }
 
-.command-authoring-form button {
+.assistant-chat-form button {
   justify-self: end;
+}
+
+.assistant-chat-references {
+  margin-top: 6px;
+}
+
+.assistant-chat-reference {
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  color: var(--color-text-main);
+  font-size: 12px;
+  padding: 2px 8px;
+  text-decoration: none;
+}
+
+.assistant-chat-reference:hover {
+  border-color: var(--color-brand);
+}
+
+.assistant-chat-progress {
+  display: grid;
+  gap: 2px;
+}
+
+/* The troubleshooting drawer hosts the panel as its whole body, so the panel
+   fills the drawer instead of sitting inside a page grid cell. */
+.assistant-chat-drawer .mantine-Drawer-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.assistant-chat-drawer .mantine-Drawer-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 0;
+}
+
+.assistant-chat-drawer .assistant-chat-panel {
+  flex: 1;
+}
+
+/* The drawer's own header already names the assistant. */
+.assistant-chat-drawer .assistant-chat-heading {
+  display: none;
 }
 
 .command-editor-path {
@@ -822,7 +877,7 @@ pre {
    (not the viewport) is narrow, so a narrow window with a wide-but-cramped
    content area also stacks. Requires container-type on .command-editor-page. */
 @container (max-width: 900px) {
-  .command-authoring-layout {
+  .command-editor-with-assistant {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(220px, 1fr) minmax(220px, 0.75fr);
     overflow-y: auto;

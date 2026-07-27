@@ -30,6 +30,24 @@ from guildbotics.runtime.person_lease import delegation_environment
 
 _PERMISSION_MODE = "bypassPermissions"
 _SESSION_SETTINGS = json.dumps({"sandbox": {"enabled": False}}, separators=(",", ":"))
+# A read-only turn runs under the ordinary permission mode, where anything not
+# allowed below is denied outright in non-interactive mode. The allowlist is the
+# enforcement; the prompt is only a description of it.
+_READ_ONLY_PERMISSION_MODE = "default"
+_READ_ONLY_ALLOWED_TOOLS = (
+    "Read",
+    "Glob",
+    "Grep",
+    "Bash(guildbotics diagnostics:*)",
+)
+_READ_ONLY_DISALLOWED_TOOLS = (
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+)
 _PROCESS_EXIT_GRACE_SECONDS = 2.0
 _PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
 _SESSION_LIMIT_PATTERN = re.compile(
@@ -65,6 +83,9 @@ class ClaudeStreamJsonAdapter:
         env, gh_config_dir = isolated_agent_environment(context.cwd)
         env.update(member_command_environment(context))
         env.update(delegation_environment(context.run_id))
+        permission_mode = (
+            _READ_ONLY_PERMISSION_MODE if context.read_only else _PERMISSION_MODE
+        )
         args = [
             self._executable,
             "-p",
@@ -78,8 +99,11 @@ class ClaudeStreamJsonAdapter:
             "--settings",
             _SESSION_SETTINGS,
             "--permission-mode",
-            _PERMISSION_MODE,
+            permission_mode,
         ]
+        if context.read_only:
+            args.extend(("--allowed-tools", *_READ_ONLY_ALLOWED_TOOLS))
+            args.extend(("--disallowed-tools", *_READ_ONLY_DISALLOWED_TOOLS))
         if conversation.provider_session_id:
             args.extend(("--resume", conversation.provider_session_id))
         try:
@@ -126,8 +150,8 @@ class ClaudeStreamJsonAdapter:
         policy_event = AgentEvent(
             AgentEventKind.APPROVAL,
             "policy",
-            approval=_PERMISSION_MODE,
-            details={"bash_sandbox": False},
+            approval=permission_mode,
+            details={"bash_sandbox": False, "read_only": context.read_only},
         )
         events.append(policy_event)
         emitted = emit(policy_event)

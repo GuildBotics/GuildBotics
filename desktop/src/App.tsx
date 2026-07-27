@@ -35,18 +35,28 @@ import {
   RotateCcw,
   Search,
   Settings,
+  Sparkles,
   Square,
   Terminal,
   Ticket,
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ActivityHistoryPage } from "./activity/ActivityHistory";
 import { CommandsPage } from "./commands/CommandsPage";
+import { TroubleshootingDrawer } from "./diagnostics/TroubleshootingDrawer";
 import { useHotkeyRegistration } from "./hotkeys/useHotkeyRegistration";
 import { requestNavigation } from "./navigationGuard";
 import {
@@ -80,6 +90,7 @@ import {
   type SystemAlert,
   type TraceDetailResponse,
   type TraceRecord,
+  type TroubleshootingFocus,
   type TraceSummary,
   type TranscriptSettingsStatus,
 } from "./api/client";
@@ -934,6 +945,18 @@ function DiagnosticsPage() {
         <div>
           <Title order={2}>{t("diagnostics.title")}</Title>
         </div>
+        <Button
+          leftSection={<Sparkles size={15} />}
+          variant="light"
+          onClick={() => {
+            const next = new URLSearchParams(searchParams);
+            next.set("tab", "executions");
+            next.set("assist", "1");
+            setSearchParams(next);
+          }}
+        >
+          {t("diagnostics.troubleshooting.open")}
+        </Button>
       </Group>
       <Tabs className="diagnostics-tabs" value={activeTab} onChange={changeDiagnosticsTab}>
         <Tabs.List>
@@ -1406,6 +1429,23 @@ function MemoryEventDetail({ event }: { event: MemoryEvent }) {
   );
 }
 
+/** The single right-edge panel of the executions view. */
+type RightPanel = { kind: "record"; record: TraceRecord } | null;
+
+/** Narrow the assistant's focus to the record the user asked about. */
+function recordFocus(record: TraceRecord | null): Partial<TroubleshootingFocus> {
+  if (!record) {
+    return {};
+  }
+  return {
+    span_id: record.span_id ?? "",
+    call_id: record.call_id ?? "",
+    record_timestamp: record.timestamp,
+    record_type: record.type,
+    record_message: record.message,
+  };
+}
+
 function TraceExplorer({
   members,
 }: {
@@ -1420,18 +1460,47 @@ function TraceExplorer({
   const [personId, setPersonId] = useState("all");
   const [searchInput, setSearchInput] = useState("");
   const [query, setQuery] = useState("");
-  // Default to the pinned Global / system view so unscoped records (service
-  // lifecycle events and global logs such as Slack listener auth failures) are
-  // visible the moment the executions tab opens, without the user having to know
-  // to click the Global entry.
-  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(
-    focusedTraceId || (isComposite ? null : GLOBAL_TRACE_ID),
-  );
+  // The URL owns the selection rather than seeding a copy of it, so a link into
+  // this route moves the view — the assistant's citations do exactly that.
+  // Without a trace in the URL the pinned Global / system view is shown, so
+  // unscoped records (service lifecycle events, global logs such as Slack
+  // listener auth failures) are visible the moment the executions tab opens.
+  // Global spans every source, so narrowing the filters leaves nothing selected.
+  const selectedTraceId = isComposite
+    ? null
+    : focusedTraceId || (source === "all" && personId === "all" ? GLOBAL_TRACE_ID : null);
   const [recordFilter, setRecordFilter] = useState("all");
   const [recordScopeFilter, setRecordScopeFilter] = useState<RecordScopeFilter | null>(null);
-  const [drawerRecord, setDrawerRecord] = useState<TraceRecord | null>(null);
+  // Both the record detail and the troubleshooting assistant occupy the right
+  // edge, so they are one mutually exclusive panel rather than two drawers
+  // fighting over the same strip.
+  const [rightPanel, setRightPanel] = useState<RightPanel>(null);
+  const drawerRecord = rightPanel?.kind === "record" ? rightPanel.record : null;
+  const assistantOpen = searchParams.get("assist") === "1";
   const [attrFilter, setAttrFilter] = useState<AttrFilter | null>(null);
   const isGlobal = !isComposite && selectedTraceId === GLOBAL_TRACE_ID;
+
+  // A record handed to the assistant outlives the drawer it came from, so the
+  // question keeps naming the record even after that drawer closes.
+  const [assistantRecord, setAssistantRecord] = useState<TraceRecord | null>(null);
+  const setAssistantOpen = (open: boolean, record: TraceRecord | null = null) => {
+    const next = new URLSearchParams(searchParams);
+    if (open) {
+      next.set("assist", "1");
+      setAssistantRecord(record);
+      setRightPanel(null);
+    } else {
+      next.delete("assist");
+      setAssistantRecord(null);
+    }
+    setSearchParams(next);
+  };
+  const showRecord = (record: TraceRecord | null) => {
+    if (record && assistantOpen) {
+      setAssistantOpen(false);
+    }
+    setRightPanel(record ? { kind: "record", record } : null);
+  };
 
   const selectableMembers = members.filter((member) => member.person_type !== "human");
 
@@ -1461,6 +1530,11 @@ function TraceExplorer({
     refetchInterval: isComposite ? 5000 : false,
   });
   const traceItems = useMemo(() => traces.data?.traces ?? [], [traces.data]);
+  const traceLabel = useCallback(
+    (traceId: string) =>
+      traceItems.find((trace) => trace.trace_id === traceId)?.command || shortTraceId(traceId),
+    [traceItems],
+  );
   const compositeSummary = useMemo(
     () => compositeTraceSummary(compositeDetail.data ?? [], compositeTraceIds, t),
     [compositeDetail.data, compositeTraceIds, t],
@@ -1473,6 +1547,28 @@ function TraceExplorer({
       traceItems.find((trace) => trace.trace_id === selectedTraceId) ?? detail.data?.summary ?? null
     );
   }, [isComposite, compositeSummary, traceItems, selectedTraceId, detail.data]);
+
+  const troubleshootingFocus = useMemo<TroubleshootingFocus>(
+    () => ({
+      view: isGlobal ? "global" : "trace",
+      trace_id: isGlobal ? "" : (selectedTraceId ?? ""),
+      source: source === "all" ? "" : source,
+      person_id: personId === "all" ? "" : personId,
+      query: query.trim(),
+      ...recordFocus(assistantRecord),
+    }),
+    [isGlobal, selectedTraceId, source, personId, query, assistantRecord],
+  );
+  const troubleshootingFocusLabel = assistantRecord
+    ? t("diagnostics.troubleshooting.focusRecord", {
+        record: tracePresentationLabel(t, assistantRecord.presentation),
+      })
+    : isGlobal
+      ? t("diagnostics.troubleshooting.focusGlobal")
+      : t("diagnostics.troubleshooting.focusTrace", {
+          command: selectedSummary?.command || traceLabel(selectedTraceId ?? ""),
+        });
+
   // The API returns records oldest-first; show them newest-first so a live
   // (polling) trace surfaces new records at the top without scrolling, matching
   // the descending order used by the rest of the diagnostics UI.
@@ -1498,26 +1594,16 @@ function TraceExplorer({
       next.set("trace_id", traceId);
     }
     setSearchParams(next);
-    setSelectedTraceId(traceId);
     setRecordFilter("all");
     setRecordScopeFilter(null);
   };
 
-  // The pinned Global view only belongs under "all"; narrowing to a specific
-  // source filters traces, so drop a Global selection when leaving "all".
   const changeSource = (value: string) => {
     setSource(value);
-    if (value !== "all" && selectedTraceId === GLOBAL_TRACE_ID) {
-      setSelectedTraceId(null);
-    }
   };
 
   const changePerson = (value: string | null) => {
-    const nextVal = value ?? "all";
-    setPersonId(nextVal);
-    if (nextVal !== "all" && selectedTraceId === GLOBAL_TRACE_ID) {
-      setSelectedTraceId(null);
-    }
+    setPersonId(value ?? "all");
   };
 
   const applySearch = () => {
@@ -1763,7 +1849,7 @@ function TraceExplorer({
                 scopeFilter={recordScopeFilter}
                 onFilter={setRecordFilter}
                 onClearScopeFilter={() => setRecordScopeFilter(null)}
-                onSelect={setDrawerRecord}
+                onSelect={showRecord}
               />
             </>
           ) : selectedSummary ? (
@@ -1853,6 +1939,14 @@ function TraceExplorer({
                           {t("diagnostics.tabs.memory")}
                         </Badge>
                       ) : null}
+                      <Button
+                        size="compact-xs"
+                        variant={selectedSummary.error_count ? "filled" : "light"}
+                        leftSection={<Sparkles size={13} />}
+                        onClick={() => setAssistantOpen(true)}
+                      >
+                        {t("diagnostics.troubleshooting.openForTrace")}
+                      </Button>
                     </Group>
                   </div>
                   <Tooltip
@@ -1948,7 +2042,7 @@ function TraceExplorer({
                 scopeFilter={recordScopeFilter}
                 onFilter={setRecordFilter}
                 onClearScopeFilter={() => setRecordScopeFilter(null)}
-                onSelect={setDrawerRecord}
+                onSelect={showRecord}
               />
             </>
           ) : (
@@ -1958,11 +2052,19 @@ function TraceExplorer({
       </div>
       <TraceRecordDrawer
         record={drawerRecord}
-        onClose={() => setDrawerRecord(null)}
+        onClose={() => showRecord(null)}
         onScopeFilter={(filter) => {
           setRecordScopeFilter(filter);
-          setDrawerRecord(null);
+          showRecord(null);
         }}
+        onAskAssistant={() => setAssistantOpen(true, drawerRecord)}
+      />
+      <TroubleshootingDrawer
+        opened={assistantOpen}
+        onClose={() => setAssistantOpen(false)}
+        focus={troubleshootingFocus}
+        focusLabel={troubleshootingFocusLabel}
+        traceLabel={traceLabel}
       />
     </Card>
   );
@@ -2059,10 +2161,12 @@ function TraceRecordDrawer({
   record,
   onClose,
   onScopeFilter,
+  onAskAssistant,
 }: {
   record: TraceRecord | null;
   onClose: () => void;
   onScopeFilter: (filter: RecordScopeFilter) => void;
+  onAskAssistant?: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -2073,7 +2177,13 @@ function TraceRecordDrawer({
       size="lg"
       title={record ? tracePresentationLabel(t, record.presentation) : ""}
     >
-      {record ? <TraceRecordDetail record={record} onScopeFilter={onScopeFilter} /> : null}
+      {record ? (
+        <TraceRecordDetail
+          record={record}
+          onScopeFilter={onScopeFilter}
+          onAskAssistant={onAskAssistant}
+        />
+      ) : null}
     </Drawer>
   );
 }
@@ -2081,9 +2191,11 @@ function TraceRecordDrawer({
 function TraceRecordDetail({
   record,
   onScopeFilter,
+  onAskAssistant,
 }: {
   record: TraceRecord;
   onScopeFilter: (filter: RecordScopeFilter) => void;
+  onAskAssistant?: () => void;
 }) {
   const { t } = useTranslation();
   const message = tracePresentationMessage(t, record.presentation);
@@ -2141,6 +2253,17 @@ function TraceRecordDetail({
         </Text>
       </div>
       <Group gap="xs">
+        {onAskAssistant ? (
+          <Button
+            radius="xl"
+            size="xs"
+            variant="light"
+            leftSection={<Sparkles size={14} />}
+            onClick={onAskAssistant}
+          >
+            {t("diagnostics.troubleshooting.openForRecord")}
+          </Button>
+        ) : null}
         {record.span_id ? (
           <Button
             radius="xl"

@@ -732,9 +732,13 @@ class CliAgentBrain(Brain):
             policy = ResumePolicy(str(configured.get("resume_policy") or "fresh"))
         except ValueError:
             policy = ResumePolicy.FRESH
-        lease = current_person_lease()
+        # A read-only turn takes no execution lease. It never touches the
+        # member's workspace, chat or tickets, and holding the lease would make
+        # it unusable exactly when it is most needed: while that member is busy.
+        read_only = bool(configured.get("read_only"))
+        lease = None if read_only else current_person_lease()
         owned_lease: PersonExecutionLease | None = None
-        if lease is None:
+        if lease is None and not read_only:
             owned_lease = PersonExecutionLease(self.person_id, data_root)
             try:
                 owned_lease.acquire(
@@ -752,7 +756,7 @@ class CliAgentBrain(Brain):
                 )
             lease = owned_lease
         try:
-            lease_metadata = lease.bind_run_id(run_id)
+            lease_metadata = lease.bind_run_id(run_id) if lease is not None else None
             context = AgentExecutionContext(
                 person_id=self.person_id,
                 run_id=run_id,
@@ -762,14 +766,15 @@ class CliAgentBrain(Brain):
                 resume_policy=policy,
                 context_cursor=str(configured.get("context_cursor") or ""),
                 event_id=str(configured.get("event_id") or ""),
-                lease_id=lease_metadata.lease_id,
-                delegation_id=lease_metadata.delegation_id,
+                lease_id=lease_metadata.lease_id if lease_metadata else "",
+                delegation_id=lease_metadata.delegation_id if lease_metadata else "",
                 model=str(configured.get("model") or ""),
                 rebuild_context=str(configured.get("rebuild_context") or ""),
                 rebuild_context_complete=_context_is_complete(configured),
                 attempt=_attempt(configured),
                 continuation_input=str(configured.get("continuation_input") or ""),
                 participant_labels=str(configured.get("participant_labels") or ""),
+                read_only=read_only,
             )
             return await self._execute_native_turn(
                 input=input,
@@ -779,7 +784,8 @@ class CliAgentBrain(Brain):
                 run_id=run_id,
             )
         finally:
-            lease.unbind_run_id(run_id)
+            if lease is not None:
+                lease.unbind_run_id(run_id)
             if owned_lease is not None:
                 owned_lease.release()
 

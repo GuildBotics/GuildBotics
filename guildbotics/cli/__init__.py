@@ -15,6 +15,7 @@ from pathlib import Path
 
 import click
 
+from guildbotics.cli.diagnostics import diagnostics
 from guildbotics.cli.member import member
 from guildbotics.cli.secrets import secrets
 from guildbotics.cli.workspace import workspace
@@ -110,6 +111,7 @@ def main() -> None:
     install_diagnostics_log_handler(get_logger())
 
 
+main.add_command(diagnostics)
 main.add_command(member)
 main.add_command(secrets)
 main.add_command(workspace)

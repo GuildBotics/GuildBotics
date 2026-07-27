@@ -18,6 +18,10 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | Command | Summary |
 | --- | --- |
 | [`guildbotics`](#guildbotics) | GuildBotics CLI entrypoint. |
+| [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
+| [`guildbotics diagnostics system`](#guildbotics-diagnostics-system) | Show service-wide records that belong to no single execution. |
+| [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace) | Show one execution's summary and records. |
+| [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces) | List recorded executions, newest first. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics member agent`](#guildbotics-member-agent) | Manage native agent runtime state. |
@@ -98,6 +102,7 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
+| [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics run`](#guildbotics-run) | Run the GuildBotics application. |
@@ -106,6 +111,75 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
+
+## `guildbotics diagnostics`
+
+Read recorded diagnostics for a workspace (read-only).
+
+```text
+guildbotics diagnostics [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--workspace DIRECTORY` | Workspace root to use instead of the persisted active workspace. |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics diagnostics system`](#guildbotics-diagnostics-system) | Show service-wide records that belong to no single execution. |
+| [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace) | Show one execution's summary and records. |
+| [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces) | List recorded executions, newest first. |
+
+## `guildbotics diagnostics system`
+
+Show service-wide records that belong to no single execution.
+
+```text
+guildbotics diagnostics system [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--limit INTEGER RANGE` | Maximum entries. [default: 50; 1\<=x\<=1000] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics diagnostics trace`
+
+Show one execution's summary and records.
+
+```text
+guildbotics diagnostics trace [OPTIONS] TRACE_ID
+```
+
+| Option | Description |
+| --- | --- |
+| `--kind [event\|log\|io\|memory]` | Only records of these kinds. Repeat to combine. |
+| `--level TEXT` | Only log records at this level, such as 'error'. |
+| `--limit INTEGER RANGE` | Maximum records, keeping the newest. [default: 200; 1\<=x\<=5000] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics diagnostics traces`
+
+List recorded executions, newest first.
+
+```text
+guildbotics diagnostics traces [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--source TEXT` | Only traces from this execution source. |
+| `--person TEXT` | Only traces recorded for this member. |
+| `--query TEXT` | Free-text filter over each execution's summary and full transcript. |
+| `--attr-key TEXT` | Only traces carrying this attribute key. |
+| `--attr-value TEXT` | Required value for --attr-key. |
+| `--limit INTEGER RANGE` | Maximum entries. [default: 50; 1\<=x\<=1000] |
+| `--include-assistant / --no-include-assistant` | Include the Desktop AI assistants' own traces. [default: no-include-assistant] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
 
 ## `guildbotics kill`
 

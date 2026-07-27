@@ -41,7 +41,11 @@ from guildbotics.capabilities.task_runs import (
     current_run_id,
     current_task_run_id,
 )
-from guildbotics.cli._options import format_option
+from guildbotics.cli._options import (
+    apply_workspace_option,
+    format_option,
+    workspace_option,
+)
 from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
@@ -55,10 +59,8 @@ from guildbotics.observability.interactive_sessions import (
     interactive_thread_key,
 )
 from guildbotics.runtime.member_context import resolve_member_context
-from guildbotics.utils.env_loader import load_guildbotics_env
 from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
 WorkspaceMode = Literal["member", "current"]
 SLACK_TS_FRACTION_DIGITS = 6
@@ -105,27 +107,10 @@ _required_content_stdin_option = click.option(
 
 @click.group()
 @click.pass_context
-@click.option(
-    "--workspace",
-    "workspace_dir",
-    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Workspace root to use instead of the persisted active workspace.",
-)
+@workspace_option
 def member(ctx: click.Context, workspace_dir: Path | None) -> None:
     """Operate as a configured GuildBotics member."""
-    try:
-        applied_workspace = apply_workspace_for_cli(workspace_dir)
-    except NotADirectoryError as exc:
-        raise click.ClickException(f"workspace does not exist: {exc}") from exc
-    if applied_workspace is not None:
-        load_guildbotics_env(
-            applied_workspace.workspace,
-            override=False,
-            prefer_env_file=False,
-        )
-    else:
-        load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=True)
+    applied_workspace = apply_workspace_option(workspace_dir)
     ctx.obj = {
         "workspace": str(
             (applied_workspace.workspace if applied_workspace else Path.cwd()).resolve()

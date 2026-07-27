@@ -104,6 +104,7 @@ with Markdown prompt / Python / Shell / YAML custom commands and schedule defini
 - **Slack Integration**: Chat workflow where members watch configured channels and reply or react as themselves
 - **Member Memory**: Personal and team memory that members recall and maintain across sessions
 - **Interactive Member Sessions**: The guildbotics skill lets an AI CLI tool work as a member in your current repository
+- **Desktop AI Assistants**: Conversational help inside the app — write a custom command in the editor, or ask the diagnostics screen why an execution failed and have it read the recorded logs for you
 - **Internationalization**: Multi-language support (English/Japanese)
 - **Custom Commands**: Define reusable command templates per person/role
 

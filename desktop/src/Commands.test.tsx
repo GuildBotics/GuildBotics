@@ -267,7 +267,7 @@ describe("Command editor screen", () => {
     await waitFor(() =>
       expect(authorCommandMock).toHaveBeenCalledWith({
         mode: "edit",
-        authoring_id: expect.any(String),
+        conversation_id: expect.any(String),
         command: "greet",
         format: "markdown",
         content: "---\nname: Greet\n---\nHi\n",
@@ -297,6 +297,33 @@ describe("Command editor screen", () => {
     expect(screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") })).toHaveValue(
       "Update it",
     );
+  });
+
+  it("leaves an AI authoring failure behind when another command is opened", async () => {
+    listCommandFilesMock.mockResolvedValue({
+      files: [summary(), summary({ id: "other-id", command: "other", label: "Other" })],
+    });
+    getCommandFileMock.mockImplementation((id) =>
+      Promise.resolve(id === "other-id" ? detail({ id: "other-id", command: "other" }) : detail()),
+    );
+    authorCommandMock.mockRejectedValue(new Error("Agent unavailable"));
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.type(
+      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
+      "Update it",
+    );
+    await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
+    expect(await screen.findByText("Agent unavailable")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("textbox", { name: t("commands.editSelectLabel") }));
+    await user.click(await screen.findByText("Other (other)"));
+
+    // The failure belonged to the previous command's conversation.
+    await waitFor(() => expect(screen.queryByText("Agent unavailable")).not.toBeInTheDocument());
+    expect(screen.queryByText(t("commands.authoring.errorTitle"))).not.toBeInTheDocument();
   });
 
   it("saves via the editor shortcut and returns to a clean state", async () => {
@@ -453,7 +480,7 @@ describe("Command editor screen", () => {
     await waitFor(() =>
       expect(authorCommandMock).toHaveBeenCalledWith({
         mode: "create",
-        authoring_id: expect.any(String),
+        conversation_id: expect.any(String),
         message: "Create a weekly report command",
         person: "bot",
       }),
@@ -463,7 +490,7 @@ describe("Command editor screen", () => {
     expect(screen.getByTestId("editor-path")).toHaveTextContent(
       "/workspace/.guildbotics/config/commands/reports/weekly.py",
     );
-    const authoringId = authorCommandMock.mock.calls[0][0].authoring_id;
+    const authoringId = authorCommandMock.mock.calls[0][0].conversation_id;
 
     authorCommandMock.mockResolvedValueOnce({
       trace_id: "author-revise-trace",
@@ -482,7 +509,7 @@ describe("Command editor screen", () => {
     await waitFor(() =>
       expect(authorCommandMock).toHaveBeenLastCalledWith({
         mode: "create",
-        authoring_id: authoringId,
+        conversation_id: authoringId,
         command: "reports/weekly",
         format: "python",
         content: source,
@@ -539,7 +566,7 @@ describe("Command editor screen", () => {
     await waitFor(() =>
       expect(authorCommandMock).toHaveBeenLastCalledWith({
         mode: "edit",
-        authoring_id: authoringId,
+        conversation_id: authoringId,
         command: "reports/weekly-workflow",
         format: "yaml",
         content: revisedSource,

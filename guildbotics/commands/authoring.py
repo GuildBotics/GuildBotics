@@ -8,7 +8,6 @@ used.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Literal
 
@@ -20,7 +19,7 @@ from guildbotics.commands.validation import (
     CommandValidationError,
     validate_generated_command_source,
 )
-from guildbotics.intelligences.functions import to_dict
+from guildbotics.intelligences.assistants import open_assistant_session
 from guildbotics.runtime import Context
 
 CommandAuthoringMode = Literal["create", "edit"]
@@ -42,7 +41,7 @@ async def author_command_turn(
     context: Context,
     *,
     mode: CommandAuthoringMode,
-    authoring_id: str,
+    conversation_id: str,
     trace_id: str,
     command: str,
     command_format: CommandAuthoringFormat | None,
@@ -55,7 +54,7 @@ async def author_command_turn(
     Args:
         context: Context resolved to the member acting as the authoring agent.
         mode: Whether this is an unsaved new command or an existing command.
-        authoring_id: Stable identity shared by every turn in this conversation.
+        conversation_id: Stable identity shared by every turn in this conversation.
         trace_id: Unique correlation identity for this turn.
         command: Current logical shared command name, or empty on initial create.
         command_format: Current command format, or ``None`` on initial create.
@@ -70,55 +69,38 @@ async def author_command_turn(
         CommandError: If the configured agent does not return the required
             structured response.
     """
-    brain = context.get_brain("functions/author_command", None, None)
-    prompt = json.dumps(
+    session = open_assistant_session(
+        context,
+        prompt="functions/author_command",
+        work_kind="command_authoring",
+        conversation_id=conversation_id,
+        trace_id=trace_id,
+        result_type=CommandAuthoringResult,
+        workspace_data_root=workspace_data_root,
+        cwd_name="command-authoring",
+    )
+    output = await session.send(
         {
             "mode": mode,
             "command": command,
             "format": command_format,
             "current_content": content,
             "instruction": instruction,
-        },
-        ensure_ascii=False,
+        }
     )
-    execution_context = {
-        "run_id": trace_id,
-        "work_kind": "command_authoring",
-        "work_identity": authoring_id,
-        "resume_policy": "auto",
-        "workspace_data_root": str(workspace_data_root),
-    }
-    authoring_cwd = workspace_data_root / "command-authoring"
-    authoring_cwd.mkdir(parents=True, exist_ok=True)
-    kwargs = to_dict(
-        context,
-        {"agent_execution_context": execution_context},
-        authoring_cwd,
-    )
-    output = await brain.run(message=prompt, **kwargs)
-    if not isinstance(output, CommandAuthoringResult):
-        raise CommandError(
-            "The command authoring agent did not return a valid structured response."
-        )
     try:
         validate_generated_command_source(
             EXTENSION_BY_FORMAT[output.format], output.content
         )
     except CommandValidationError as exc:
-        correction = json.dumps(
+        output = await session.send(
             {
                 "instruction": "Correct the proposed draft and return the complete result.",
                 "validation_error": str(exc),
                 "validation_context": exc.context,
                 "invalid_result": output.model_dump(),
-            },
-            ensure_ascii=False,
+            }
         )
-        output = await brain.run(message=correction, **kwargs)
-        if not isinstance(output, CommandAuthoringResult):
-            raise CommandError(
-                "The command authoring agent did not return a valid structured response."
-            ) from None
         try:
             validate_generated_command_source(
                 EXTENSION_BY_FORMAT[output.format], output.content

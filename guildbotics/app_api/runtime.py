@@ -8,7 +8,8 @@ import os
 import shlex
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -66,6 +67,9 @@ from guildbotics.app_api.models import (
     TraceSummary,
     TranscriptSettingsStatus,
     TranscriptSettingsUpdateRequest,
+    TroubleshootingFocus,
+    TroubleshootingRequest,
+    TroubleshootingResponse,
     VerifyResponse,
     to_command_arguments,
     to_command_inputs,
@@ -110,7 +114,11 @@ from guildbotics.drivers import (
     PersonSelectionRequiredError,
     run_command,
 )
-from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
+from guildbotics.drivers.execution import (
+    ExecutionCoordinator,
+    WorkRejectedError,
+    WorkSource,
+)
 from guildbotics.editions import get_edition
 from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
@@ -125,6 +133,7 @@ from guildbotics.intelligences.cli_agents import (
     discover_cli_agents,
     resolve_cli_agent_path,
 )
+from guildbotics.intelligences.troubleshooting import troubleshoot_turn
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.diagnostics_store import (
     DEFAULT_DIAGNOSTICS_MAX_BYTES,
@@ -167,6 +176,9 @@ WORKSPACE_DOTENV_PROTECTED_KEYS = {
     *HOME_ENV_PROTECTED_KEYS,
 }
 MIN_MEMORY_DOCUMENT_PATH_PARTS = 2
+# Desktop AI assistant turns are manual runs: user-initiated, frequent, and
+# scoped to one session. The agent work kind stays separate from this.
+ASSISTANT_TRACE_SOURCE: WorkSource = "manual"
 ACTIVITY_SYNC_COOLDOWN_SECONDS = 5 * 60
 ACTIVITY_SYNC_STATE_FILE = "activity_sync_weeks.json"
 ACTIVITY_SYNC_PERIOD_PARTS = 2
@@ -381,60 +393,109 @@ class AppRuntime:
     ) -> CommandFilesResponse:
         return self._command_file_service().delete_file(file_id, expected_revision)
 
-    async def author_command(
-        self, request: CommandAuthoringRequest
-    ) -> CommandAuthoringResponse:
-        """Apply one AI authoring turn to a frontend-owned command draft."""
-        base_context = self._get_context(request.message)
-        command_label = request.command or "new-command"
-        person = self._resolve_execution_person(
-            base_context, request.person, f"author:{command_label}"
-        )
-        context = base_context.clone_for(person)
+    @asynccontextmanager
+    async def _assistant_turn(
+        self,
+        *,
+        work_kind: str,
+        label: str,
+        conversation_id: str,
+        message: str,
+        person: str | None,
+        failure_code: str,
+        read_only: bool = False,
+    ) -> AsyncIterator[tuple[Context, str]]:
+        """Scope one Desktop AI assistant turn.
+
+        Resolves the acting member, tracks the turn as cancellable manual work
+        and correlates everything it records under a fresh trace.
+
+        Args:
+            work_kind: Trace name and agent work kind, such as ``troubleshooting``.
+            label: Command label reported in the runtime status and trace.
+            conversation_id: Stable identity shared by every turn of the conversation.
+            message: Latest user instruction, used to resolve the context language.
+            person: Requested member identifier, or ``None`` for the team default.
+            failure_code: App API error code used when the assistant fails.
+            read_only: Whether the turn is enforced read-only by the agent
+                adapter. Only such a turn skips the member's execution lease, so
+                it stays usable while that member runs scheduled work. A turn
+                that can write keeps the lease it has always held.
+
+        Yields:
+            The member-scoped context and this turn's trace id.
+
+        Raises:
+            AppApiError: If the member cannot be resolved, the runtime rejects
+                the work, or the assistant fails.
+        """
+        base_context = self._get_context(message)
+        acting = self._resolve_execution_person(base_context, person, label)
+        context = base_context.clone_for(acting)
         trace_id = new_id()
         loop = asyncio.get_running_loop()
         task = asyncio.current_task()
 
-        def _cancel_authoring() -> None:
+        def _cancel_turn() -> None:
             if task is not None:
                 loop.call_soon_threadsafe(task.cancel)
 
         try:
             with (
                 self._execution.track_work(
-                    source="manual",
-                    person_id=person.person_id,
-                    command=f"author:{command_label}",
+                    source=ASSISTANT_TRACE_SOURCE,
+                    person_id=acting.person_id,
+                    command=label,
                     work_id=trace_id,
-                    cancel=_cancel_authoring,
+                    cancel=_cancel_turn,
+                    exclusive=not read_only,
                 ),
                 trace_scope(
-                    "command_authoring",
-                    command=command_label,
-                    person_id=person.person_id,
+                    # An assistant turn is a Desktop-initiated run like any
+                    # other manual command, so it belongs to that source: it is
+                    # then filterable in diagnostics and, like other manual
+                    # runs, stays off the activity timeline it fires too often
+                    # for. `work_kind` scopes the provider conversation, not the
+                    # trace, and the `label` prefix still identifies the turn.
+                    ASSISTANT_TRACE_SOURCE,
+                    command=label,
+                    person_id=acting.person_id,
                     trace_id=trace_id,
-                    attributes={"authoring.id": request.authoring_id},
+                    attributes={f"{work_kind}.conversation_id": conversation_id},
                 ),
             ):
-                result = await author_command_turn(
-                    context,
-                    mode=request.mode,
-                    authoring_id=request.authoring_id,
-                    trace_id=trace_id,
-                    command=request.command,
-                    command_format=request.format,
-                    content=request.content,
-                    instruction=request.message,
-                    workspace_data_root=get_workspace_data_root(),
-                )
+                yield context, trace_id
         except WorkRejectedError as exc:
             raise AppApiError("work_rejected", str(exc), status_code=409) from exc
         except CommandError as exc:
-            raise AppApiError(
-                "command_authoring_failed", str(exc), status_code=502
-            ) from exc
+            raise AppApiError(failure_code, str(exc), status_code=502) from exc
         finally:
             await context.aclose()
+
+    async def author_command(
+        self, request: CommandAuthoringRequest
+    ) -> CommandAuthoringResponse:
+        """Apply one AI authoring turn to a frontend-owned command draft."""
+        command_label = request.command or "new-command"
+        async with self._assistant_turn(
+            work_kind="command_authoring",
+            label=f"author:{command_label}",
+            conversation_id=request.conversation_id,
+            message=request.message,
+            person=request.person,
+            failure_code="command_authoring_failed",
+        ) as (context, trace_id):
+            result = await author_command_turn(
+                context,
+                mode=request.mode,
+                conversation_id=request.conversation_id,
+                trace_id=trace_id,
+                command=request.command,
+                command_format=request.format,
+                content=request.content,
+                instruction=request.message,
+                workspace_data_root=get_workspace_data_root(),
+            )
         return CommandAuthoringResponse(
             trace_id=trace_id,
             message=result.message,
@@ -1085,6 +1146,46 @@ class AppRuntime:
             records=records,
             transcript_available=transcript_available,
         )
+
+    async def troubleshoot(
+        self, request: TroubleshootingRequest
+    ) -> TroubleshootingResponse:
+        """Answer one troubleshooting question about the recorded diagnostics."""
+        focus = request.focus or TroubleshootingFocus()
+        label = f"troubleshoot:{focus.trace_id or focus.view}"
+        async with self._assistant_turn(
+            work_kind="troubleshooting",
+            label=label,
+            conversation_id=request.conversation_id,
+            message=request.message,
+            person=request.person,
+            failure_code="troubleshooting_failed",
+            read_only=True,
+        ) as (context, trace_id):
+            result = await troubleshoot_turn(
+                context,
+                conversation_id=request.conversation_id,
+                trace_id=trace_id,
+                question=request.message,
+                focus=focus.model_dump(),
+                workspace_data_root=get_workspace_data_root(),
+            )
+        return TroubleshootingResponse(
+            trace_id=trace_id,
+            message=result.message,
+            # An agent can name a trace it never read, and the frontend turns
+            # every reference into a link, so only keep recorded ones.
+            trace_ids=[
+                candidate
+                for candidate in result.trace_ids
+                if self._trace_exists(candidate)
+            ],
+        )
+
+    def _trace_exists(self, trace_id: str) -> bool:
+        if not trace_id or self._diagnostics_store is None:
+            return False
+        return self._diagnostics_store.get_summary(trace_id) is not None
 
     def get_global_records(self, limit: int = 200) -> TraceDetailResponse:
         records: list[TraceRecord] = []

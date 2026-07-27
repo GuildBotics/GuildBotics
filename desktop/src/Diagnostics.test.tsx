@@ -15,6 +15,7 @@ import {
   getTeam,
   getTraceDetail,
   getTraces,
+  troubleshoot,
   getTranscriptSettings,
   runScenarioDiagnostics,
   subscribeEvents,
@@ -80,6 +81,7 @@ vi.mock("./api/client", async (importOriginal) => {
     getTraces: vi.fn(),
     getTraceDetail: vi.fn(),
     getGlobalRecords: vi.fn(),
+    troubleshoot: vi.fn(),
     subscribeEvents: vi.fn(),
     subscribeLogs: vi.fn(),
   };
@@ -157,6 +159,13 @@ beforeEach(() => {
   vi.mocked(getGlobalRecords)
     .mockReset()
     .mockResolvedValue({ trace_id: "", summary: null, records: [] });
+  vi.mocked(troubleshoot)
+    .mockReset()
+    .mockResolvedValue({
+      trace_id: "turn-1",
+      message: "The GitHub token expired at 00:00:02.",
+      trace_ids: ["trace-1"],
+    });
   vi.mocked(subscribeEvents)
     .mockReset()
     .mockReturnValue(() => {});
@@ -881,9 +890,58 @@ describe("Diagnostics executions tab", () => {
     ).not.toBeInTheDocument();
 
     // The Global entry belongs only to the "all" source filter: narrowing to a
-    // specific source hides it.
+    // specific source hides it, and the selection it held goes with it.
     await user.click(screen.getByText(t("diagnostics.executions.sources.manual")));
     expect(screen.queryByText(t("diagnostics.executions.global.title"))).not.toBeInTheDocument();
+    expect(await screen.findByText(t("diagnostics.executions.selectHint"))).toBeInTheDocument();
+  });
+
+  it("keeps a URL-selected execution when the source filter narrows", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-1",
+          source: "manual",
+          person_id: "alice",
+          command: "workflows/demo",
+          workflow: "",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "success",
+          event_count: 1,
+          log_count: 0,
+          error_count: 0,
+          span_count: 0,
+          attributes: {},
+        },
+      ],
+    });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-1",
+      summary: null,
+      records: [makeTraceRecord({ message: "started", timestamp: "2026-06-12T00:00:01Z" })],
+    });
+
+    // The URL owns the selection, so narrowing the filters must not drop a
+    // trace the user explicitly navigated to.
+    renderApp("/diagnostics?tab=executions&trace_id=trace-1");
+    // The URL alone selects it: no click needed before narrowing the filter.
+    await waitFor(() => expect(vi.mocked(getTraceDetail)).toHaveBeenCalledWith("trace-1"));
+    await user.click(
+      document.querySelector(`input[aria-label="${t("diagnostics.executions.source")}"]`)!,
+    );
+    await user.click(
+      await screen.findByRole("option", { name: t("diagnostics.executions.sources.manual") }),
+    );
+
+    // Only a Global selection is tied to the "all" filter; an explicitly
+    // chosen execution survives the narrowing.
+    await waitFor(() =>
+      expect(screen.queryByText(t("diagnostics.executions.global.title"))).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText(t("diagnostics.executions.selectHint"))).not.toBeInTheDocument();
+    expect(screen.getAllByText("trace-1").length).toBeGreaterThan(0);
   });
 });
 
@@ -1031,3 +1089,242 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     events_auth_failed_persons: [],
   };
 }
+
+describe("Diagnostics troubleshooting assistant", () => {
+  const failedTrace = {
+    trace_id: "trace-1",
+    source: "routine",
+    person_id: "alice",
+    command: "workflows/demo",
+    workflow: "",
+    started_at: "2026-06-12T00:00:01Z",
+    updated_at: "2026-06-12T00:00:03Z",
+    status: "failed" as const,
+    event_count: 2,
+    log_count: 1,
+    error_count: 1,
+    span_count: 0,
+    attributes: {},
+  };
+
+  beforeEach(() => {
+    vi.mocked(getTraces).mockResolvedValue({ traces: [failedTrace] });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-1",
+      summary: null,
+      records: [
+        makeTraceRecord({
+          kind: "log",
+          level: "error",
+          message: "gh: authentication required",
+          timestamp: "2026-06-12T00:00:02Z",
+        }),
+      ],
+    });
+  });
+
+  async function openAssistant(user: ReturnType<typeof userEvent.setup>) {
+    renderApp("/diagnostics?tab=executions");
+    await user.click(
+      await screen.findByRole("button", { name: t("diagnostics.troubleshooting.open") }),
+    );
+    return screen.findByRole("region", { name: t("diagnostics.troubleshooting.title") });
+  }
+
+  it("opens from the diagnostics header and answers a question", async () => {
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+
+    await user.type(
+      within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
+      "why did this fail?",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: t("diagnostics.troubleshooting.send") }),
+    );
+
+    await waitFor(() =>
+      expect(vi.mocked(troubleshoot)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "why did this fail?",
+          person: "alice",
+          focus: expect.objectContaining({ view: "global" }),
+        }),
+      ),
+    );
+    expect(
+      await within(panel).findByText("The GitHub token expired at 00:00:02."),
+    ).toBeInTheDocument();
+  });
+
+  it("links every cited trace back into the executions view", async () => {
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+
+    await user.type(
+      within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
+      "why?",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: t("diagnostics.troubleshooting.send") }),
+    );
+
+    const link = await within(panel).findByRole("link", { name: "workflows/demo" });
+    expect(link).toHaveAttribute("href", "/diagnostics?tab=executions&trace_id=trace-1&assist=1");
+  });
+
+  it("names the member the assistant runs as", async () => {
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+
+    expect(
+      within(panel).getByText(t("diagnostics.troubleshooting.runsAs", { person: "Alice" })),
+    ).toBeInTheDocument();
+  });
+
+  it("discloses that diagnostics leave the machine", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+
+    expect(
+      within(panel).getByText(t("diagnostics.troubleshooting.privacyTitle")),
+    ).toBeInTheDocument();
+
+    await user.click(
+      within(panel).getByRole("button", { name: t("diagnostics.troubleshooting.privacyDismiss") }),
+    );
+
+    expect(
+      within(panel).queryByText(t("diagnostics.troubleshooting.privacyTitle")),
+    ).not.toBeInTheDocument();
+  });
+
+  it("closes when the record detail takes over the right panel", async () => {
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+    await user.click(await screen.findByRole("button", { name: /trace-1|workflows\/demo/ }));
+
+    await user.click(await screen.findByRole("button", { name: /gh: authentication required/ }));
+
+    // One right-edge panel at a time, so the two drawers never fight over it.
+    await waitFor(() => expect(panel).not.toBeInTheDocument());
+    expect(
+      await screen.findByRole("button", { name: t("diagnostics.troubleshooting.openForRecord") }),
+    ).toBeInTheDocument();
+  });
+
+  it("switches the shown execution when a citation is clicked", async () => {
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [failedTrace, { ...failedTrace, trace_id: "trace-2", command: "git/push" }],
+    });
+    vi.mocked(troubleshoot).mockResolvedValue({
+      trace_id: "turn-1",
+      message: "See the earlier push.",
+      trace_ids: ["trace-2"],
+    });
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+
+    await user.type(
+      within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
+      "why?",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: t("diagnostics.troubleshooting.send") }),
+    );
+    await user.click(await within(panel).findByRole("link", { name: "git/push" }));
+
+    // A citation is only useful if it actually moves the view to that execution.
+    await waitFor(() => expect(vi.mocked(getTraceDetail)).toHaveBeenCalledWith("trace-2"));
+    // The drawer stays open across the move; only the conversation restarts,
+    // because the new execution is a new investigation.
+    expect(
+      await screen.findByRole("region", { name: t("diagnostics.troubleshooting.title") }),
+    ).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("region", { name: t("diagnostics.troubleshooting.title") }),
+      ).getByText(t("diagnostics.troubleshooting.empty")),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the record the user asked about in the focus", async () => {
+    const user = userEvent.setup();
+    renderApp("/diagnostics?tab=executions");
+    await user.click(await screen.findByRole("button", { name: /workflows\/demo/ }));
+    await user.click(await screen.findByRole("button", { name: /gh: authentication required/ }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: t("diagnostics.troubleshooting.openForRecord"),
+      }),
+    );
+
+    const panel = await screen.findByRole("region", {
+      name: t("diagnostics.troubleshooting.title"),
+    });
+    await user.type(
+      within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
+      "what is this?",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: t("diagnostics.troubleshooting.send") }),
+    );
+
+    // An execution holds many records; the question has to say which one.
+    await waitFor(() =>
+      expect(vi.mocked(troubleshoot)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          focus: expect.objectContaining({
+            record_message: "gh: authentication required",
+            record_timestamp: "2026-06-12T00:00:02Z",
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("shows the failure when a turn cannot be answered", async () => {
+    vi.mocked(troubleshoot).mockRejectedValue(new Error("assistant is unavailable"));
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+
+    await user.type(
+      within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
+      "why?",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: t("diagnostics.troubleshooting.send") }),
+    );
+
+    expect(await within(panel).findByText("assistant is unavailable")).toBeInTheDocument();
+  });
+
+  it("leaves a failure behind when the user moves to another execution", async () => {
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [failedTrace, { ...failedTrace, trace_id: "trace-2", command: "git/push" }],
+    });
+    vi.mocked(troubleshoot).mockRejectedValue(new Error("assistant is unavailable"));
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+
+    await user.type(
+      within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
+      "why?",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: t("diagnostics.troubleshooting.send") }),
+    );
+    expect(await within(panel).findByText("assistant is unavailable")).toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: /git\/push/ }));
+
+    // The error belonged to the previous execution's turn.
+    const next = await screen.findByRole("region", {
+      name: t("diagnostics.troubleshooting.title"),
+    });
+    await waitFor(() =>
+      expect(within(next).queryByText("assistant is unavailable")).not.toBeInTheDocument(),
+    );
+  });
+});

@@ -30,9 +30,12 @@ from guildbotics.app_api.models import (
     CommandAuthoringRequest,
     CommandRunRequest,
     SchedulerStartRequest,
+    TroubleshootingFocus,
+    TroubleshootingRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.commands.authoring import CommandAuthoringResult
+from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.commands.errors import (
     CommandError,
     PersonNotFoundError,
@@ -947,7 +950,7 @@ async def test_author_command_uses_stable_authoring_identity_and_unique_trace(
     response = await runtime.author_command(
         CommandAuthoringRequest(
             mode="edit",
-            authoring_id="authoring-1",
+            conversation_id="authoring-1",
             command="reports/weekly",
             format="python",
             content="old source",
@@ -959,13 +962,18 @@ async def test_author_command_uses_stable_authoring_identity_and_unique_trace(
     assert response.message == "Updated the draft."
     assert response.content == "updated source"
     assert response.relative_path == "reports/weekly.py"
-    assert captured["authoring_id"] == "authoring-1"
+    assert captured["conversation_id"] == "authoring-1"
     assert captured["mode"] == "edit"
     assert captured["trace_id"] == response.trace_id
     assert captured["instruction"] == "Add a weekly report."
     assert captured["correlation"]["trace_id"] == response.trace_id
-    assert captured["correlation"]["source"] == "command_authoring"
-    assert captured["correlation"]["attributes"] == {"authoring.id": "authoring-1"}
+    # A Desktop-initiated turn is a manual run, so it is filterable in
+    # diagnostics and stays off the activity timeline like other manual runs.
+    assert captured["correlation"]["source"] == "manual"
+    assert captured["correlation"]["command"] == "author:reports/weekly"
+    assert captured["correlation"]["attributes"] == {
+        "command_authoring.conversation_id": "authoring-1"
+    }
     assert captured["context"].closed is True
 
 
@@ -986,7 +994,7 @@ async def test_author_command_maps_work_rejection_to_conflict(
         await runtime.author_command(
             CommandAuthoringRequest(
                 mode="create",
-                authoring_id="authoring-1",
+                conversation_id="authoring-1",
                 message="Create a command.",
                 person="bot",
             )
@@ -1013,7 +1021,7 @@ async def test_author_command_maps_command_error_to_bad_gateway(
         await runtime.author_command(
             CommandAuthoringRequest(
                 mode="create",
-                authoring_id="authoring-1",
+                conversation_id="authoring-1",
                 message="Create a command.",
                 person="bot",
             )
@@ -1033,7 +1041,9 @@ async def test_run_command_publishes_started_and_finished_events(
     async def fake_run_command(*_: Any, **__: Any) -> str:
         return "output-value"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     response = await runtime.run_command(
@@ -1107,7 +1117,9 @@ async def test_logs_during_run_command_carry_the_trace_id(
         guildbotics_logger.info("progress message")
         return "done"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     try:
@@ -1208,7 +1220,9 @@ async def test_run_command_publishes_failed_event_for_command_error(
     async def fake_run_command(*_: Any, **__: Any) -> str:
         raise CommandError("boom")
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(AppApiError) as exc_info:
@@ -1238,7 +1252,9 @@ async def test_run_command_publishes_failed_event_for_unexpected_error(
     async def fake_run_command(*_: Any, **__: Any) -> str:
         raise ValueError("unexpected")
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(ValueError, match="unexpected"):
@@ -1265,7 +1281,9 @@ async def test_run_command_releases_reservation_after_failure(
             raise CommandError("first failure")
         return "second ok"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(AppApiError):
@@ -1291,7 +1309,9 @@ async def test_run_command_releases_reservation_after_unexpected_error(
             raise RuntimeError("crash")
         return "recovered"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     with pytest.raises(RuntimeError, match="crash"):
@@ -1310,7 +1330,9 @@ async def test_run_command_rejects_concurrent_run_with_conflict(
     # Simulate an in-flight command by holding the reservation.
     runtime._reserve_command("inflight-id")
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
 
     with pytest.raises(AppApiError) as exc_info:
         await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1366,7 +1388,9 @@ async def test_run_command_appears_in_runtime_active_work(
         await finish.wait()
         return "ok"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     task = asyncio.create_task(
@@ -1398,7 +1422,9 @@ async def test_stop_scheduler_waits_for_manual_command_to_finish(
         await finish.wait()
         return "ok"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     command_task = asyncio.create_task(
@@ -1434,7 +1460,9 @@ async def test_force_stop_scheduler_cancels_manual_command(
             raise
         return "unreachable"
 
-    monkeypatch.setattr(runtime, "_get_context", lambda message="": _make_context([_make_person()]))
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
     monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
 
     command_task = asyncio.create_task(
@@ -1865,3 +1893,199 @@ def test_run_command_guards_the_file_of_the_default_person(
 
     assert caught.value.code == "command_file_shadowed"
     assert caught.value.context["shadow_source"] == "member"
+
+
+# ---------------------------------------------------------------------------
+# troubleshoot
+# ---------------------------------------------------------------------------
+
+
+def _troubleshooting_runtime(
+    monkeypatch: pytest.MonkeyPatch, recorded_trace_ids: set[str]
+) -> AppRuntime:
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+
+    class _StoreStub:
+        def get_summary(self, trace_id: str) -> dict[str, Any] | None:
+            return {"trace_id": trace_id} if trace_id in recorded_trace_ids else None
+
+    runtime._diagnostics_store = _StoreStub()  # type: ignore[assignment]
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_scopes_the_turn_and_returns_the_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, {"abc123"})
+    captured: dict[str, Any] = {}
+
+    async def fake_turn(context: object, **kwargs: Any) -> Any:
+        captured["context"] = context
+        captured.update(kwargs)
+        captured["correlation"] = correlation_fields()
+        return TroubleshootingResult(message="The token expired.", trace_ids=["abc123"])
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fake_turn)
+
+    response = await runtime.troubleshoot(
+        TroubleshootingRequest(
+            conversation_id="conv-1",
+            message="Why did this fail?",
+            person="bot",
+            focus=TroubleshootingFocus(view="trace", trace_id="abc123"),
+        )
+    )
+
+    assert response.message == "The token expired."
+    assert response.trace_ids == ["abc123"]
+    assert captured["question"] == "Why did this fail?"
+    assert captured["conversation_id"] == "conv-1"
+    assert captured["trace_id"] == response.trace_id
+    assert captured["focus"]["trace_id"] == "abc123"
+    assert captured["correlation"]["source"] == "manual"
+    assert captured["correlation"]["command"] == "troubleshoot:abc123"
+    assert captured["correlation"]["attributes"] == {
+        "troubleshooting.conversation_id": "conv-1"
+    }
+    assert captured["context"].closed is True
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_drops_trace_ids_that_were_never_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, {"real"})
+
+    async def fake_turn(*_: Any, **__: Any) -> Any:
+        return TroubleshootingResult(message="…", trace_ids=["real", "invented", ""])
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fake_turn)
+
+    response = await runtime.troubleshoot(
+        TroubleshootingRequest(conversation_id="conv-1", message="Why?", person="bot")
+    )
+
+    # Every reference becomes a link, so an invented trace id must not survive.
+    assert response.trace_ids == ["real"]
+
+
+@pytest.mark.asyncio
+async def test_author_command_keeps_the_member_execution_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    exclusivity: dict[str, Any] = {}
+    original = runtime._execution.track_work
+
+    def record_exclusive(**kwargs: Any) -> Any:
+        exclusivity["exclusive"] = kwargs.get("exclusive", True)
+        return original(**kwargs)
+
+    monkeypatch.setattr(runtime._execution, "track_work", record_exclusive)
+
+    async def fake_author(*_: Any, **__: Any) -> Any:
+        return CommandAuthoringResult(
+            message="ok", command="a", format="python", content="x"
+        )
+
+    monkeypatch.setattr(runtime_module, "author_command_turn", fake_author)
+
+    await runtime.author_command(
+        CommandAuthoringRequest(
+            mode="create", conversation_id="c", message="Create it.", person="bot"
+        )
+    )
+
+    # Authoring is not enforced read-only, so it keeps the lease it always held.
+    assert exclusivity["exclusive"] is True
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_runs_while_the_member_is_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, set())
+
+    async def fake_turn(*_: Any, **__: Any) -> Any:
+        return TroubleshootingResult(message="…")
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fake_turn)
+
+    lease = PersonExecutionLease("bot")
+    lease.acquire(source="routine", command="workflows/ticket", work_id="other")
+    try:
+        response = await runtime.troubleshoot(
+            TroubleshootingRequest(
+                conversation_id="conv-1", message="Why?", person="bot"
+            )
+        )
+    finally:
+        lease.release()
+
+    assert response.message == "…"
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_maps_assistant_failure_to_bad_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, set())
+
+    async def fail(*_: Any, **__: Any) -> Any:
+        raise CommandError("invalid agent response")
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
+
+    with pytest.raises(AppApiError) as caught:
+        await runtime.troubleshoot(
+            TroubleshootingRequest(
+                conversation_id="conv-1", message="Why?", person="bot"
+            )
+        )
+
+    assert caught.value.status_code == 502
+    assert caught.value.code == "troubleshooting_failed"
+
+
+@pytest.mark.asyncio
+async def test_assistant_turns_are_recorded_as_manual_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both assistants must be filterable, and neither may reach activity."""
+    from guildbotics.app_api.activity_history import MANUAL_SESSION_SOURCE
+
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, set())
+    sources: list[str] = []
+
+    async def capture_troubleshoot(*_: Any, **__: Any) -> Any:
+        sources.append(str(correlation_fields()["source"]))
+        return TroubleshootingResult(message="…")
+
+    async def capture_author(*_: Any, **__: Any) -> Any:
+        sources.append(str(correlation_fields()["source"]))
+        return CommandAuthoringResult(
+            message="ok", command="a", format="python", content="x"
+        )
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", capture_troubleshoot)
+    monkeypatch.setattr(runtime_module, "author_command_turn", capture_author)
+
+    await runtime.troubleshoot(
+        TroubleshootingRequest(conversation_id="c", message="Why?", person="bot")
+    )
+    await runtime.author_command(
+        CommandAuthoringRequest(
+            mode="create", conversation_id="c", message="Create it.", person="bot"
+        )
+    )
+
+    # "manual" is both a source the diagnostics screen offers as a filter and
+    # the one activity history excludes, which is what these turns need.
+    assert sources == [MANUAL_SESSION_SOURCE, MANUAL_SESSION_SOURCE]

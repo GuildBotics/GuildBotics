@@ -109,7 +109,7 @@ npm run e2e
 | `e2e/service.spec.ts` | ③ scheduler / events を start → running → stop |
 | `e2e/commands.spec.ts` | ④ コマンド編集: 新規作成ダイアログのAI／自力切替、AIアシスタントパネル表示、自力作成 → source 編集 → 保存して実行（`/commands/files` + `/commands/run`）→ 実 file 反映 + `/events` ストリーム |
 | `e2e/members.spec.ts` | ② member 追加 → `person.yml` 実永続 |
-| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画 |
+| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画 |
 | `e2e/failure.spec.ts` | ⑥ backend down → Bootstrap error → 復帰 → retry |
 
 補足:

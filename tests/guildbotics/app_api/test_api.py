@@ -213,6 +213,14 @@ class RuntimeStub:
             "content": "new source",
         }
 
+    async def troubleshoot(self, request):
+        self.troubleshooting_request = request
+        return {
+            "trace_id": "troubleshoot-trace",
+            "message": "The GitHub token expired.",
+            "trace_ids": ["abc123"],
+        }
+
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
         return CommandOptionsResponse(
             options=[
@@ -746,7 +754,7 @@ def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
             headers=AUTH_HEADERS,
             json={
                 "mode": "edit",
-                "authoring_id": "authoring-1",
+                "conversation_id": "authoring-1",
                 "command": "hello",
                 "format": "python",
                 "content": "old source",
@@ -764,7 +772,7 @@ def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
         "relative_path": "hello.py",
         "content": "new source",
     }
-    assert runtime.authoring_request.authoring_id == "authoring-1"
+    assert runtime.authoring_request.conversation_id == "authoring-1"
     assert runtime.authoring_request.content == "old source"
 
 
@@ -778,7 +786,7 @@ def test_command_authoring_create_allows_ai_to_choose_identity(tmp_path: Path) -
             headers=AUTH_HEADERS,
             json={
                 "mode": "create",
-                "authoring_id": "authoring-2",
+                "conversation_id": "authoring-2",
                 "message": "Create a weekly report command.",
             },
         )
@@ -800,7 +808,7 @@ def test_command_authoring_edit_requires_existing_identity(tmp_path: Path) -> No
             headers=AUTH_HEADERS,
             json={
                 "mode": "edit",
-                "authoring_id": "authoring-3",
+                "conversation_id": "authoring-3",
                 "message": "Update it.",
             },
         )
@@ -2857,3 +2865,80 @@ def test_verify_endpoint_uses_runtime(tmp_path: Path) -> None:
     assert payload["ok"] is False
     assert payload["errors"][0]["code"] == "active_members"
     assert payload["checks"][0]["status"] == "error"
+
+
+def test_diagnostics_troubleshoot_uses_runtime(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    app = create_app(session_token="secret", runtime=runtime)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/diagnostics/troubleshoot",
+            headers=AUTH_HEADERS,
+            json={
+                "conversation_id": "conv-1",
+                "message": "Why did this fail?",
+                "person": "bot",
+                "focus": {"view": "trace", "trace_id": "abc123"},
+            },
+        )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "trace_id": "troubleshoot-trace",
+        "message": "The GitHub token expired.",
+        "trace_ids": ["abc123"],
+    }
+    assert runtime.troubleshooting_request.conversation_id == "conv-1"
+    assert runtime.troubleshooting_request.focus.trace_id == "abc123"
+
+
+def test_diagnostics_troubleshoot_defaults_the_focus_to_absent(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    app = create_app(session_token="secret", runtime=runtime)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/diagnostics/troubleshoot",
+            headers=AUTH_HEADERS,
+            json={"conversation_id": "conv-1", "message": "Why?"},
+        )
+
+    assert response.status_code == HTTP_OK
+    assert runtime.troubleshooting_request.focus is None
+    assert runtime.troubleshooting_request.person is None
+
+
+def test_diagnostics_troubleshoot_requires_the_session_token(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/diagnostics/troubleshoot",
+            json={"conversation_id": "conv-1", "message": "Why?"},
+        )
+
+    assert response.status_code == HTTP_UNAUTHORIZED
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"conversation_id": "conv-1", "message": ""},
+        {"conversation_id": "", "message": "Why?"},
+        {"message": "Why?"},
+        {"conversation_id": "conv-1", "message": "Why?", "focus": {"view": "nope"}},
+        {"conversation_id": "conv-1", "message": "Why?", "unexpected": 1},
+    ],
+)
+def test_diagnostics_troubleshoot_rejects_invalid_requests(
+    tmp_path: Path, body: dict
+) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/diagnostics/troubleshoot", headers=AUTH_HEADERS, json=body
+        )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY

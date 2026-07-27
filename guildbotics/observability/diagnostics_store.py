@@ -143,7 +143,25 @@ class DiagnosticsStore:
         attr_key: str | None = None,
         attr_value: str | None = None,
         limit: int = 200,
+        include_transcripts: bool = False,
     ) -> list[dict[str, Any]]:
+        """List execution summaries, newest first.
+
+        Args:
+            source: Only executions from this source.
+            person_id: Only executions recorded for this member.
+            query: Free-text filter.
+            attr_key: Attribute key that must be present.
+            attr_value: Required value for ``attr_key``.
+            limit: Maximum summaries to return.
+            include_transcripts: Whether ``query`` also searches each candidate's
+                session transcript. The index holds only execution boundaries and
+                domain events, so log and I/O bodies — where failures actually
+                describe themselves — are invisible without this.
+
+        Returns:
+            Matching summaries, newest first.
+        """
         with self._lock:
             self._refresh_path_locked()
             records = list(self._records)
@@ -158,6 +176,14 @@ class DiagnosticsStore:
             _finalize_summary(summary)
             for summary in summaries.values()
             if _summary_matches(summary, source, person_id, query, attr_key, attr_value)
+            or (
+                include_transcripts
+                and query
+                and _summary_matches(
+                    summary, source, person_id, None, attr_key, attr_value
+                )
+                and self._transcript_contains(summary["trace_id"], query)
+            )
         ]
         if source is None and person_id is None and attr_key is None:
             result.extend(_system_summaries(records, query=query, include_latest=False))
@@ -166,6 +192,23 @@ class DiagnosticsStore:
             key=lambda summary: _timestamp_sort_key(summary["started_at"]), reverse=True
         )
         return result[: max(1, limit)]
+
+    def _transcript_contains(self, trace_id: str, query: str) -> bool:
+        """Report whether an execution's transcript mentions ``query``."""
+        needle = query.lower()
+        for item in self.get_records(trace_id):
+            for value in (item.get("message"), item.get("type"), item.get("span")):
+                if value and needle in str(value).lower():
+                    return True
+            for section in ("payload", "attributes"):
+                body = item.get(section)
+                if (
+                    body
+                    and needle
+                    in json.dumps(body, ensure_ascii=False, default=str).lower()
+                ):
+                    return True
+        return False
 
     def get_records(self, trace_id: str) -> list[dict[str, Any]]:
         with self._lock:
