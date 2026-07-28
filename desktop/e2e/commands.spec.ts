@@ -59,6 +59,29 @@ test("creates, edits, saves and runs a shared command", async ({ page }) => {
   await page.keyboard.type(SOURCE);
 
   await expect(page.getByText("Unsaved changes")).toBeVisible();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+
+  // Browser-preview mode cannot expose native dropped paths, but it exercises
+  // the other half of the attachment contract: a pasted clipboard image is
+  // persisted by the REAL Local API and its absolute path enters the message.
+  const message = page.getByRole("textbox", { name: "Input text" });
+  await message.evaluate((element) => {
+    const clipboard = new DataTransfer();
+    clipboard.items.add(new File(["e2e-image"], "clipboard.png", { type: "image/png" }));
+    element.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: clipboard,
+      }),
+    );
+  });
+  await expect(message).toHaveValue(
+    /guildbotics-command-inputs[/\\]session-[^/\\]+[/\\][a-f0-9]+\.png$/,
+  );
+  const pastedImage = await message.inputValue();
+  expect(readFileSync(pastedImage, "utf-8")).toBe("e2e-image");
 
   // Save-and-run against the REAL backend.
   const run = page.getByRole("button", { name: "Save and run" });

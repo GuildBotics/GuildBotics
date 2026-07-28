@@ -1,9 +1,10 @@
-import { Alert, Button, Select, Stack, Switch, Text, TextInput, Textarea } from "@mantine/core";
+import { Alert, Button, Select, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { Play } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { CommandFileDetail, CommandFileExecutionStatus, TraceRecord } from "../api/client";
 import { CommandRunDetails, type CommandRunRecord } from "../App";
+import { CommandInput } from "./CommandInput";
 import { blockingMessageKey, hasMissingRequiredArgument } from "./commandEditorState";
 
 type ActiveMember = { person_id: string; name: string };
@@ -99,14 +100,14 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
           ) : null}
 
           {showMessage ? (
-            <Textarea
+            <CommandInput
               required={messageRequired}
               label={t("commands.message")}
               description={t("commands.messageDescription")}
               rows={3}
               resize="vertical"
               value={props.message}
-              onChange={(event) => props.onMessageChange(event.currentTarget.value)}
+              onChange={props.onMessageChange}
             />
           ) : null}
 

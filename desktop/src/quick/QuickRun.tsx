@@ -11,7 +11,6 @@ import {
   Select,
   Text,
   TextInput,
-  Textarea,
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
@@ -30,6 +29,7 @@ import {
   type CommandOption,
 } from "../api/client";
 import { buildFileRunArgs } from "../commands/commandEditorState";
+import { CommandInput } from "../commands/CommandInput";
 import { clipboardWatchSupported, hideQuickWindow, pollClipboard } from "../hotkeys/hotkeyRuntime";
 import {
   tracePresentationLabel,
@@ -507,16 +507,15 @@ export function QuickRun(props: QuickRunProps) {
         : null}
 
       {showMessage ? (
-        <Textarea
-          ref={messageRef}
+        <CommandInput
+          inputRef={messageRef}
           size="sm"
           aria-label={t("quickRun.message")}
           placeholder={t("quickRun.messagePlaceholder")}
           required={selected?.inputs.message === "required"}
           rows={4}
           value={message}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
+          onChange={(value) => {
             setMessage(value);
             scheduleIdleRun(value);
           }}

@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.hotkeys import load_hotkeys, save_hotkeys
@@ -44,6 +45,7 @@ from guildbotics.app_api.models import (
     CommandFileExecutionStatus,
     CommandFilesResponse,
     CommandFileUpdateRequest,
+    CommandInputFileResponse,
     CommandOptionsResponse,
     CommandRunRequest,
     CommandRunResponse,
@@ -124,6 +126,7 @@ def create_app(
     runtime: AppRuntime | None = None,
     event_bus: EventBus | None = None,
     diagnostics_store: DiagnosticsStore | None = None,
+    command_input_file_store: CommandInputFileStore | None = None,
     restore_workspace_environment: bool = False,
     inherited_data_dir: str | None = None,
 ) -> FastAPI:
@@ -145,33 +148,40 @@ def create_app(
     system_service_run_id = getattr(
         app_runtime, "system_service_run_id", secrets.token_urlsafe(16)
     )
+    input_file_store = command_input_file_store or CommandInputFileStore()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger = logging.getLogger("guildbotics")
         uvicorn_error_logger = logging.getLogger("uvicorn.error")
-        store.start_system_session(system_service_run_id)
-        store.start_maintenance()
         added_app_handler = False
-        if not any(
-            isinstance(handler, EventBusLogHandler) for handler in logger.handlers
-        ):
-            logger.addHandler(log_handler)
-            added_app_handler = True
         added_uvicorn_handler = False
-        if log_handler not in uvicorn_error_logger.handlers:
-            uvicorn_error_logger.addHandler(log_handler)
-            added_uvicorn_handler = True
+        input_file_store.start()
         try:
-            yield
+            store.start_system_session(system_service_run_id)
+            store.start_maintenance()
+            if not any(
+                isinstance(handler, EventBusLogHandler) for handler in logger.handlers
+            ):
+                logger.addHandler(log_handler)
+                added_app_handler = True
+            if log_handler not in uvicorn_error_logger.handlers:
+                uvicorn_error_logger.addHandler(log_handler)
+                added_uvicorn_handler = True
+            try:
+                yield
+            finally:
+                try:
+                    app_runtime.stop_scheduler(force=True)
+                finally:
+                    if added_app_handler:
+                        logger.removeHandler(log_handler)
+                    if added_uvicorn_handler:
+                        uvicorn_error_logger.removeHandler(log_handler)
+                    store.finish_system_session()
+                    store.stop_maintenance()
         finally:
-            app_runtime.stop_scheduler(force=True)
-            if added_app_handler:
-                logger.removeHandler(log_handler)
-            if added_uvicorn_handler:
-                uvicorn_error_logger.removeHandler(log_handler)
-            store.finish_system_session()
-            store.stop_maintenance()
+            input_file_store.close()
 
     app = FastAPI(title="GuildBotics App API", version="0.1.0", lifespan=lifespan)
     app.state.session_token = token
@@ -281,6 +291,32 @@ def create_app(
         _: None = Depends(require_token),
     ) -> CommandRunResponse:
         return await app_runtime.run_command(request)
+
+    @app.post(
+        "/commands/input-files",
+        response_model=CommandInputFileResponse,
+        responses=error_responses,
+    )
+    def command_input_file_upload(
+        file: UploadFile = File(...),  # noqa: B008
+        _: None = Depends(require_token),
+    ) -> CommandInputFileResponse:
+        try:
+            path = input_file_store.save(file)
+        except ValueError as exc:
+            raise AppApiError(
+                "command_input_file_invalid",
+                str(exc),
+                status_code=400,
+            ) from exc
+        except OSError as exc:
+            logger.exception("Failed to save a command input file")
+            raise AppApiError(
+                "command_input_file_save_failed",
+                "Failed to save the pasted image.",
+                status_code=500,
+            ) from exc
+        return CommandInputFileResponse(path=path)
 
     @app.post(
         "/commands/author",

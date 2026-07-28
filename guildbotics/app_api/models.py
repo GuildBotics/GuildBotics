@@ -159,6 +159,10 @@ class CommandRunResponse(BaseModel):
     output: str
 
 
+class CommandInputFileResponse(BaseModel):
+    path: Path
+
+
 CommandFileFormat = CommandFormat
 
 

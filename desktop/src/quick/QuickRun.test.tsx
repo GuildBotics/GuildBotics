@@ -1,6 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +10,7 @@ import {
   getTraceDetail,
   runCommand,
   subscribeEvents,
+  uploadCommandInputFile,
   type CommandOption,
   type CommandRunResponse,
   type RuntimeEvent,
@@ -21,6 +22,19 @@ import "../i18n";
 import { QuickRun } from "./QuickRun";
 import { IDLE_RUN_MS, type QuickRunTrigger } from "./quickRunState";
 
+const tauriDrag = vi.hoisted(() => ({
+  handler: null as ((event: unknown) => void) | null,
+}));
+
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: vi.fn(async (handler: (event: unknown) => void) => {
+      tauriDrag.handler = handler;
+      return vi.fn();
+    }),
+  }),
+}));
+
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
@@ -30,6 +44,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getTeam: vi.fn(),
     getTraceDetail: vi.fn(),
     subscribeEvents: vi.fn(),
+    uploadCommandInputFile: vi.fn(),
   };
 });
 const hideQuickWindowMock = vi.fn();
@@ -141,8 +156,11 @@ beforeEach(() => {
   hideQuickWindowMock.mockReset();
   watchSupportedMock.mockReset().mockResolvedValue(true);
   pollClipboardMock.mockReset();
+  tauriDrag.handler = null;
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   setClipboard(1, "initial");
   vi.mocked(runCommand).mockReset().mockResolvedValue({ trace_id: "t1", output: "done" });
+  vi.mocked(uploadCommandInputFile).mockReset();
   vi.mocked(getTeam)
     .mockReset()
     .mockResolvedValue({
@@ -202,6 +220,63 @@ describe("QuickRun", () => {
       ),
     );
     expect(await screen.findByText("done")).toBeInTheDocument();
+  });
+
+  it("inserts a dropped file path into the selected Polish command", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    vi.mocked(getCommandOptions).mockResolvedValue({
+      options: [option({ command: "polish", label: "Polish" })],
+    });
+    renderWindow();
+    await fire({ command: null, text: "" });
+    const input = await screen.findByRole("textbox", { name: t("quickRun.message") });
+    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({
+      bottom: 110,
+      height: 100,
+      left: 10,
+      right: 210,
+      top: 10,
+      width: 200,
+      x: 10,
+      y: 10,
+      toJSON: () => ({}),
+    });
+    await waitFor(() => expect(tauriDrag.handler).not.toBeNull());
+
+    act(() => {
+      tauriDrag.handler?.({
+        payload: {
+          type: "drop",
+          paths: ["/tmp/source document.pdf"],
+          position: { x: 20, y: 20 },
+        },
+      });
+    });
+
+    expect(input).toHaveValue("/tmp/source document.pdf");
+  });
+
+  it("saves a screenshot pasted into the selected Polish command", async () => {
+    vi.mocked(getCommandOptions).mockResolvedValue({
+      options: [option({ command: "polish", label: "Polish" })],
+    });
+    vi.mocked(uploadCommandInputFile).mockResolvedValue({ path: "/tmp/screenshot.png" });
+    renderWindow();
+    await fire({ command: null, text: "" });
+    const input = await screen.findByRole("textbox", { name: t("quickRun.message") });
+    const image = new File(["pixels"], "clipboard.png", { type: "image/png" });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+      },
+    });
+
+    await waitFor(() => expect(uploadCommandInputFile).toHaveBeenCalledWith(image));
+    await waitFor(() => expect(input).toHaveValue("/tmp/screenshot.png"));
   });
 
   it("offers a command picker only for the generic hotkey", async () => {

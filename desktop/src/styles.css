@@ -873,6 +873,20 @@ pre {
   min-width: 0;
 }
 
+.command-input {
+  border: 1px solid transparent;
+  border-radius: var(--mantine-radius-sm);
+  padding: 3px;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.command-input-drop-active {
+  background: var(--mantine-color-blue-light);
+  border-color: var(--mantine-color-blue-5);
+}
+
 /* Stack the run settings / result below each other when the main content
    (not the viewport) is narrow, so a narrow window with a wide-but-cramped
    content area also stacks. Requires container-type on .command-editor-page. */

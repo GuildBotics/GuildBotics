@@ -269,6 +269,10 @@ export type CommandRunResponse = {
   output: string;
 };
 
+export type CommandInputFileResponse = {
+  path: string;
+};
+
 export type TraceSummary = {
   trace_id: string;
   source: string;
@@ -1043,6 +1047,10 @@ export async function runCommand(body: {
   return request("/commands/run", { method: "POST", body });
 }
 
+export async function uploadCommandInputFile(file: File): Promise<CommandInputFileResponse> {
+  return uploadFile("/commands/input-files", file);
+}
+
 export async function authorCommand(
   body: CommandAuthoringRequest,
 ): Promise<CommandAuthoringResponse> {
@@ -1190,9 +1198,13 @@ export async function uploadMemberAvatar(
   personId: string,
   file: File,
 ): Promise<AvatarMutationResponse> {
+  return uploadFile(`/config/members/${encodeURIComponent(personId)}/avatar`, file);
+}
+
+async function uploadFile<T>(path: string, file: File): Promise<T> {
   const formData = new FormData();
   formData.append("file", file);
-  const response = await fetch(`${apiBase}/config/members/${encodeURIComponent(personId)}/avatar`, {
+  const response = await fetch(`${apiBase}${path}`, {
     method: "POST",
     headers: {
       "X-GuildBotics-Session-Token": sessionToken,
