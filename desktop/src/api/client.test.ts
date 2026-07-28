@@ -31,6 +31,8 @@ import {
   subscribeLogs,
   updateRuntimeDebug,
   updateTranscriptSettings,
+  uploadCommandInputFile,
+  uploadMemberAvatar,
   verify,
   type RuntimeEvent,
   type RuntimeLog,
@@ -140,6 +142,28 @@ describe("request headers and body", () => {
     expect(calls[0].init.method).toBe("POST");
     expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
     expect(calls[0].init.body).toBe(JSON.stringify({ workspace_dir: "/projects/demo" }));
+  });
+
+  it("uploads command input images and member avatars as multipart data", async () => {
+    const { calls } = captureFetch(jsonResponse({ path: "/tmp/input.png" }));
+    const commandInput = new File(["image"], "clipboard.png", { type: "image/png" });
+    const avatar = new File(["avatar"], "avatar.png", { type: "image/png" });
+
+    await uploadCommandInputFile(commandInput);
+    await uploadMemberAvatar("a/b", avatar);
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/input-files");
+    expect(calls[1].url).toBe("http://127.0.0.1:8765/config/members/a%2Fb/avatar");
+    for (const [call, file] of [
+      [calls[0], commandInput],
+      [calls[1], avatar],
+    ] as const) {
+      expect(call.init.method).toBe("POST");
+      expect(headerValue(call.init, "X-GuildBotics-Session-Token")).toBe("test-token");
+      expect(headerValue(call.init, "Content-Type")).toBeUndefined();
+      expect(call.init.body).toBeInstanceOf(FormData);
+      expect((call.init.body as FormData).get("file")).toBe(file);
+    }
   });
 
   it("omits the body for POST without a payload", async () => {

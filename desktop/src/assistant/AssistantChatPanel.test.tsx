@@ -128,4 +128,37 @@ describe("AssistantChatPanel", () => {
 
     expect(screen.getByText("reading trace abc123")).toBeInTheDocument();
   });
+
+  it("scrolls to a newly appended assistant response only", () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const panel = (messages: AssistantChatPanelProps["messages"]) => (
+      <MemoryRouter>
+        <MantineProvider>
+          <AssistantChatPanel
+            namespace="commands.authoring"
+            messages={messages}
+            pending={false}
+            disabled={false}
+            error={null}
+            onSubmit={vi.fn()}
+            autoScrollOnAssistantResponse
+          />
+        </MantineProvider>
+      </MemoryRouter>
+    );
+    const userMessage: AssistantChatPanelProps["messages"][number] = {
+      role: "user",
+      content: "Polish this command.",
+    };
+    const { rerender } = render(panel([]));
+
+    rerender(panel([userMessage]));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    rerender(panel([userMessage, { role: "assistant", content: "I updated the command." }]));
+    expect(scrollIntoView).toHaveBeenCalledOnce();
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "end" });
+
+    scrollIntoView.mockRestore();
+  });
 });

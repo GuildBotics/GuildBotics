@@ -9,6 +9,10 @@ from fastapi.testclient import TestClient
 from yaml import safe_load
 
 from guildbotics.app_api.api import create_app
+from guildbotics.app_api.command_input_files import (
+    COMMAND_INPUT_DIRECTORY_NAME,
+    CommandInputFileStore,
+)
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
@@ -742,6 +746,46 @@ def test_command_run_uses_runtime(tmp_path: Path) -> None:
         "trace_id": "stub-request",
         "output": "ran hello",
     }
+
+
+def test_command_input_file_upload_uses_app_session_temporary_directory(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeStub(tmp_path)
+    store = CommandInputFileStore(temporary_root=tmp_path)
+    app = create_app(
+        session_token="secret",
+        runtime=runtime,
+        command_input_file_store=store,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/input-files",
+            headers=AUTH_HEADERS,
+            files={"file": ("clipboard.png", b"image-data", "image/png")},
+        )
+
+        assert response.status_code == HTTP_OK
+        saved = Path(response.json()["path"])
+        assert saved.is_relative_to(tmp_path / COMMAND_INPUT_DIRECTORY_NAME)
+        assert saved.read_bytes() == b"image-data"
+
+    assert not saved.exists()
+
+
+def test_command_input_file_upload_rejects_non_image(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/input-files",
+            headers=AUTH_HEADERS,
+            files={"file": ("document.pdf", b"pdf", "application/pdf")},
+        )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "command_input_file_invalid"
 
 
 def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
@@ -2156,6 +2200,7 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/commands/options"),
     ("GET", "/commands/routine-options"),
     ("POST", "/commands/run"),
+    ("POST", "/commands/input-files"),
     ("POST", "/commands/author"),
     ("GET", "/config/roles"),
     ("GET", "/scheduler/status"),

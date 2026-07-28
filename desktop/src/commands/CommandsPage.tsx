@@ -827,6 +827,7 @@ export function CommandsPage() {
                     messages={authoring.messages}
                     pending={authoringMutation.isPending}
                     disabled={!effectivePerson}
+                    autoScrollOnAssistantResponse
                     // A failure belongs to the command that produced it:
                     // switching commands must not carry it into the next
                     // conversation.

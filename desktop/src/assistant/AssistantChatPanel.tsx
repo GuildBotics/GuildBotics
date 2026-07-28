@@ -27,6 +27,8 @@ export type AssistantChatPanelProps = {
   disabled: boolean;
   error: string | null;
   onSubmit: (message: string) => void;
+  /** Scroll the transcript when a new assistant response is appended. */
+  autoScrollOnAssistantResponse?: boolean;
   /** Rendered above the transcript, for target badges and disclosures. */
   header?: ReactNode;
   /** Rendered while pending, for live progress from the running turn. */
@@ -40,6 +42,7 @@ export function AssistantChatPanel({
   disabled,
   error,
   onSubmit,
+  autoScrollOnAssistantResponse = false,
   header,
   progress,
 }: AssistantChatPanelProps) {
@@ -47,6 +50,8 @@ export function AssistantChatPanel({
   const [input, setInput] = useState("");
   const submittedInputRef = useRef("");
   const previousErrorRef = useRef<string | null>(null);
+  const previousMessageCountRef = useRef(messages.length);
+  const messageEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (error && !previousErrorRef.current) {
@@ -54,6 +59,17 @@ export function AssistantChatPanel({
     }
     previousErrorRef.current = error;
   }, [error]);
+
+  useEffect(() => {
+    const previousMessageCount = previousMessageCountRef.current;
+    previousMessageCountRef.current = messages.length;
+    if (
+      autoScrollOnAssistantResponse &&
+      messages.slice(previousMessageCount).some((message) => message.role === "assistant")
+    ) {
+      messageEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [autoScrollOnAssistantResponse, messages]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -118,6 +134,7 @@ export function AssistantChatPanel({
               {progress}
             </div>
           ) : null}
+          <div ref={messageEndRef} aria-hidden="true" />
         </Stack>
       </ScrollArea>
 
