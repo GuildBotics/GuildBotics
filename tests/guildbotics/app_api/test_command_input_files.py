@@ -22,13 +22,28 @@ def _upload(content: bytes, content_type: str = "image/png") -> UploadFile:
 
 
 def test_save_command_input_file_uses_private_random_path(tmp_path: Path) -> None:
-    saved = save_command_input_file(tmp_path, _upload(b"png-data"))
+    directory = tmp_path / "session"
+    directory.mkdir(mode=0o755)
 
-    assert saved.parent == tmp_path
+    saved = save_command_input_file(directory, _upload(b"png-data"))
+
+    assert saved.parent == directory
+    assert directory.stat().st_mode & 0o777 == 0o700
     assert saved.suffix == ".png"
     assert saved.read_bytes() == b"png-data"
     assert saved.stat().st_mode & 0o777 == 0o600
     assert not list(saved.parent.glob(".*.upload"))
+
+
+def test_save_command_input_file_does_not_recreate_missing_session(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "missing"
+
+    with pytest.raises(FileNotFoundError):
+        save_command_input_file(directory, _upload(b"png-data"))
+
+    assert not directory.exists()
 
 
 def test_save_command_input_file_rejects_unsupported_content_type(

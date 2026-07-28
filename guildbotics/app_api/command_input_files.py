@@ -103,7 +103,7 @@ def save_command_input_file(directory: Path, upload_file: UploadFile) -> Path:
     if suffix is None:
         raise ValueError("Only PNG, JPEG, GIF, and WebP images are supported.")
 
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
     destination = directory / f"{uuid4().hex}{suffix}"
     temporary = directory / f".{destination.name}.upload"
     size = 0

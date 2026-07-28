@@ -297,7 +297,7 @@ def create_app(
         response_model=CommandInputFileResponse,
         responses=error_responses,
     )
-    async def command_input_file_upload(
+    def command_input_file_upload(
         file: UploadFile = File(...),  # noqa: B008
         _: None = Depends(require_token),
     ) -> CommandInputFileResponse:

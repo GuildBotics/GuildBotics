@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import os
 import threading
 from pathlib import Path
@@ -6,6 +7,7 @@ from typing import Any, ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi.routing import APIRoute
 from yaml import safe_load
 
 from guildbotics.app_api.api import create_app
@@ -772,6 +774,20 @@ def test_command_input_file_upload_uses_app_session_temporary_directory(
         assert saved.read_bytes() == b"image-data"
 
     assert not saved.exists()
+
+
+def test_command_input_file_upload_runs_sync_io_outside_event_loop(
+    tmp_path: Path,
+) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    route = next(
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/commands/input-files"
+    )
+
+    assert not inspect.iscoroutinefunction(route.endpoint)
 
 
 def test_command_input_file_upload_rejects_non_image(tmp_path: Path) -> None:
