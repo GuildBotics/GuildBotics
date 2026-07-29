@@ -384,7 +384,9 @@ class GrokAcpAdapter:
 
     @property
     def _supports_resume(self) -> bool:
-        return "resume" in _dict(self._capabilities.get("sessionCapabilities"))
+        # An advertised-but-disabled capability is a refusal, not an offer:
+        # calling session/resume on it would only earn a protocol error.
+        return bool(_dict(self._capabilities.get("sessionCapabilities")).get("resume"))
 
     async def _authenticate(self, result: dict[str, Any], env: dict[str, str]) -> None:
         methods = [

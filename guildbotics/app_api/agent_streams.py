@@ -43,15 +43,17 @@ def collapse_assistant_streams(
         elif name == "completed":
             dropped.update(pending.pop(stream, []))
     for indexes in reasoning.values():
-        # A lone reasoning record is already what the timeline should show.
-        if len(indexes) < _MERGEABLE:
-            continue
-        anchor = indexes[-1]
-        dropped.update(index for index in indexes if index != anchor)
-        replaced[anchor] = {
-            **records[anchor],
-            "payload": {"name": "thinking", "message": _joined(records, indexes)},
-        }
+        for run in _consecutive_runs(indexes):
+            # A lone reasoning record is already what the timeline should show,
+            # and separate runs must keep their own place on it.
+            if len(run) < _MERGEABLE:
+                continue
+            anchor = run[-1]
+            dropped.update(index for index in run if index != anchor)
+            replaced[anchor] = {
+                **records[anchor],
+                "payload": {"name": "thinking", "message": _joined(records, run)},
+            }
     for indexes in pending.values():
         deltas = [
             index
@@ -75,6 +77,17 @@ def collapse_assistant_streams(
         for index, item in enumerate(records)
         if index not in dropped
     ]
+
+
+def _consecutive_runs(indexes: list[int]) -> list[list[int]]:
+    """Split ascending indexes into runs with nothing in between."""
+    runs: list[list[int]] = []
+    for index in indexes:
+        if runs and index == runs[-1][-1] + 1:
+            runs[-1].append(index)
+        else:
+            runs.append([index])
+    return runs
 
 
 def _joined(records: list[dict[str, Any]], indexes: list[int]) -> str:

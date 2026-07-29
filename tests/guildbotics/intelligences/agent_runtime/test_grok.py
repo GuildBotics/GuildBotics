@@ -1460,3 +1460,39 @@ async def test_a_failed_turn_emits_no_completed_record(monkeypatch, tmp_path) ->
 
     # Without it the display keeps the partial chunks, which is what happened.
     assert not [event for event in events if event.name == "completed"]
+
+
+@pytest.mark.asyncio
+async def test_resume_advertised_as_false_is_not_used(monkeypatch, tmp_path) -> None:
+    """A peer that explicitly disables resume must still be loaded, not resumed."""
+    initialize = _initialize()
+    initialize["agentCapabilities"]["sessionCapabilities"] = {"resume": False}
+    peer = _Peer(initialize=initialize)
+    _install(monkeypatch, peer)
+    conversation = ConversationRecord(
+        key=_context(tmp_path).conversation_key,
+        provider_session_id=_Peer.SESSION_ID,
+    )
+
+    _result, events = await _run(GrokAcpAdapter(), tmp_path, conversation)
+
+    assert "session/load" in peer.methods()
+    assert "session/resume" not in peer.methods()
+    started = next(event for event in events if event.name == "started")
+    assert started.details["resume_session"] is False
+
+
+@pytest.mark.asyncio
+async def test_disabled_resume_without_load_session_is_unsupported(
+    monkeypatch, tmp_path
+) -> None:
+    initialize = _initialize()
+    initialize["agentCapabilities"]["loadSession"] = False
+    initialize["agentCapabilities"]["sessionCapabilities"] = {"resume": False}
+    peer = _Peer(initialize=initialize)
+    _install(monkeypatch, peer)
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await _run(GrokAcpAdapter(), tmp_path)
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION

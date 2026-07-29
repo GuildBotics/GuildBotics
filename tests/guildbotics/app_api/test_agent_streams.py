@@ -179,3 +179,38 @@ def test_a_single_reasoning_record_is_left_alone() -> None:
 def _payload(item: dict[str, Any]) -> dict[str, Any]:
     value = item.get("payload")
     return value if isinstance(value, dict) else {}
+
+
+def test_reasoning_runs_split_by_a_reply_keep_their_place() -> None:
+    records = [
+        _assistant("thinking", "first "),
+        _assistant("thinking", "block"),
+        _assistant("delta", "answer"),
+        _assistant("thinking", "second "),
+        _assistant("thinking", "block"),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    # Early reasoning must not be moved into the later run's record.
+    assert [_payload(item)["message"] for item in collapsed] == [
+        "first block",
+        "answer",
+        "second block",
+    ]
+
+
+def test_reasoning_separated_by_a_tool_record_is_not_merged_across_it() -> None:
+    records = [
+        _assistant("thinking", "before"),
+        _event("agent_runtime.command"),
+        _assistant("thinking", "after"),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    assert [_payload(item).get("message", "") for item in collapsed] == [
+        "before",
+        "",
+        "after",
+    ]
