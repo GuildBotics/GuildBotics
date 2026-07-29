@@ -1231,6 +1231,9 @@ const resources = {
         save: "Save",
         editSelectLabel: "Command to edit",
         noCommandOptions: "No commands found",
+        modeCatalog: "Catalog",
+        modeCustom: "Custom",
+        command: "Command",
         saveState: {
           clean: "Saved",
           dirty: "Unsaved changes",
@@ -2644,6 +2647,9 @@ const resources = {
         save: "保存",
         editSelectLabel: "編集するコマンド",
         noCommandOptions: "コマンド候補がありません",
+        modeCatalog: "カタログ選択",
+        modeCustom: "直接入力",
+        command: "コマンド",
         saveState: {
           clean: "保存済み",
           dirty: "未保存の変更あり",
