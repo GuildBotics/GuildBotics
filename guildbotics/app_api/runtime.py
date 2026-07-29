@@ -34,6 +34,9 @@ from guildbotics.app_api.models import (
     CliAgentUsage,
     CliAgentUsagesResponse,
     CliAgentUsageWindow,
+    CommandAuthoringApplyRequest,
+    CommandAuthoringApplyResponse,
+    CommandAuthoringChange,
     CommandAuthoringRequest,
     CommandAuthoringResponse,
     CommandFileCreateRequest,
@@ -475,7 +478,7 @@ class AppRuntime:
     async def author_command(
         self, request: CommandAuthoringRequest
     ) -> CommandAuthoringResponse:
-        """Apply one AI authoring turn to a frontend-owned command draft."""
+        """Return one answer or reviewed-change proposal for shared commands."""
         command_label = request.command or "new-command"
         async with self._assistant_turn(
             work_kind="command_authoring",
@@ -484,6 +487,7 @@ class AppRuntime:
             message=request.message,
             person=request.person,
             failure_code="command_authoring_failed",
+            read_only=True,
         ) as (context, trace_id):
             result = await author_command_turn(
                 context,
@@ -494,16 +498,52 @@ class AppRuntime:
                 command_format=request.format,
                 content=request.content,
                 instruction=request.message,
+                available_commands=self._command_authoring_context(),
                 workspace_data_root=get_workspace_data_root(),
             )
         return CommandAuthoringResponse(
             trace_id=trace_id,
             message=result.message,
-            command=result.command,
-            format=result.format,
-            relative_path=f"{result.command}{EXTENSION_BY_FORMAT[result.format]}",
-            content=result.content,
+            action=result.action,
+            changes=[
+                CommandAuthoringChange(
+                    operation=change.operation,
+                    command=change.command,
+                    format=change.format,
+                    relative_path=(
+                        f"{change.command}{EXTENSION_BY_FORMAT[change.format]}"
+                    ),
+                    content=change.content,
+                    file_id=request.file_id if change.operation == "update" else "",
+                    expected_revision=(
+                        request.revision if change.operation == "update" else ""
+                    ),
+                )
+                for change in result.changes
+            ],
         )
+
+    def apply_command_authoring(
+        self, request: CommandAuthoringApplyRequest
+    ) -> CommandAuthoringApplyResponse:
+        """Apply a user-reviewed AI command change set."""
+        return CommandAuthoringApplyResponse(
+            files=self._command_file_service().apply_authoring_changes(request.changes)
+        )
+
+    def _command_authoring_context(self) -> list[dict[str, str]]:
+        """Return effective shared command sources for read-only AI inspection."""
+        service = self._command_file_service()
+        return [
+            {
+                "command": detail.command,
+                "format": detail.format,
+                "relative_path": detail.relative_path,
+                "content": detail.content,
+            }
+            for summary in service.list_files().files
+            for detail in [service.read_file(summary.id)]
+        ]
 
     def get_command_file_execution_status(
         self, file_id: str, person: str | None, expected_revision: str

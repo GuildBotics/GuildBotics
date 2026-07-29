@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiRequestError,
+  applyCommandAuthoring,
   authorCommand,
   createCommandFile,
   deleteCommandFile,
@@ -66,6 +67,7 @@ vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
   return {
     ...actual,
+    applyCommandAuthoring: vi.fn(),
     authorCommand: vi.fn(),
     getConfigStatus: vi.fn(),
     getTeam: vi.fn(),
@@ -82,6 +84,7 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 const getConfigStatusMock = vi.mocked(getConfigStatus);
+const applyCommandAuthoringMock = vi.mocked(applyCommandAuthoring);
 const authorCommandMock = vi.mocked(authorCommand);
 const getTeamMock = vi.mocked(getTeam);
 const getTraceDetailMock = vi.mocked(getTraceDetail);
@@ -155,11 +158,17 @@ beforeEach(() => {
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   authorCommandMock.mockReset().mockResolvedValue({
     trace_id: "author-trace-1",
-    message: "Updated the draft.",
-    command: "greet",
-    format: "markdown",
-    relative_path: "greet.md",
-    content: "---\nname: Friendly greet\n---\nHello there!\n",
+    message: "This is possible.",
+    action: "answer",
+    changes: [],
+  });
+  applyCommandAuthoringMock.mockReset().mockResolvedValue({
+    files: [
+      detail({
+        content: "---\nname: Friendly greet\nbrain: none\n---\nHello there!\n",
+        revision: "rev-2",
+      }),
+    ],
   });
   getTeamMock.mockReset().mockResolvedValue(team());
   getTraceDetailMock.mockReset().mockResolvedValue({ trace_id: "", summary: null, records: [] });
@@ -253,14 +262,14 @@ describe("Command editor screen", () => {
     expect(screen.getByRole("button", { name: t("commands.save") })).toBeEnabled();
   });
 
-  it("applies an AI authoring response to the unsaved editor draft", async () => {
+  it("does not change the editor when the AI answers a question", async () => {
     const user = userEvent.setup();
     await renderPage();
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
 
     await user.type(
       screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
-      "Make it friendlier",
+      "Can this be done? Just tell me whether it is possible.",
     );
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
 
@@ -271,13 +280,213 @@ describe("Command editor screen", () => {
         command: "greet",
         format: "markdown",
         content: "---\nname: Greet\n---\nHi\n",
-        message: "Make it friendlier",
+        file_id: "greet-id",
+        revision: "rev-1",
+        message: "Can this be done? Just tell me whether it is possible.",
         person: "bot",
       }),
     );
-    expect(editor).toHaveValue("---\nname: Friendly greet\n---\nHello there!\n");
-    expect(screen.getByText("Updated the draft.")).toBeInTheDocument();
-    expect(screen.getByText(t("commands.saveState.dirty"))).toBeInTheDocument();
+    expect(editor).toHaveValue("---\nname: Greet\n---\nHi\n");
+    expect(screen.getByText("This is possible.")).toBeInTheDocument();
+    expect(screen.getByText(t("commands.saveState.clean"))).toBeInTheDocument();
+    expect(applyCommandAuthoringMock).not.toHaveBeenCalled();
+  });
+
+  it("changes the editor only after the user applies an AI proposal", async () => {
+    const proposed = "---\nname: Friendly greet\nbrain: none\n---\nHello there!\n";
+    const helperChange = {
+      operation: "create" as const,
+      command: "helpers/greet-input",
+      format: "python" as const,
+      relative_path: "helpers/greet-input.py",
+      content: "def main(context):\n    return context.pipe\n",
+      file_id: "",
+      expected_revision: "",
+    };
+    const updateChange = {
+      operation: "update" as const,
+      command: "greet",
+      format: "markdown" as const,
+      relative_path: "greet.md",
+      content: proposed,
+      file_id: "greet-id",
+      expected_revision: "rev-1",
+    };
+    authorCommandMock.mockResolvedValue({
+      trace_id: "author-trace-1",
+      message: "Review the proposed change.",
+      action: "propose_changes",
+      changes: [helperChange, updateChange],
+    });
+    applyCommandAuthoringMock.mockResolvedValue({
+      files: [
+        detail({
+          id: "helper-id",
+          command: "helpers/greet-input",
+          format: "python",
+          relative_path: "helpers/greet-input.py",
+          content: helperChange.content,
+          revision: "helper-rev",
+        }),
+        detail({ content: proposed, revision: "rev-2" }),
+      ],
+    });
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText<HTMLTextAreaElement>("editor");
+
+    await user.type(
+      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
+      "Make it friendlier",
+    );
+    await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
+
+    const assistant = screen.getByRole("region", { name: t("commands.authoring.title") });
+    await waitFor(() =>
+      expect(assistant).toHaveTextContent(t("commands.authoringProposal.ready", { count: 2 })),
+    );
+    expect(assistant).toHaveTextContent("Review the proposed change.");
+    expect(within(assistant).queryByDisplayValue(helperChange.content)).not.toBeInTheDocument();
+
+    const review = screen.getByRole("region", {
+      name: t("commands.authoringProposal.reviewRegion"),
+    });
+    expect(within(review).getByRole("tab", { name: /Current.*greet\.md/ })).toBeInTheDocument();
+    expect(
+      within(review).getByRole("tab", { name: /Create.*helpers\/greet-input\.py/ }),
+    ).toBeInTheDocument();
+    expect(within(review).getByRole("tab", { name: /Update.*greet\.md/ })).toBeInTheDocument();
+    expect(
+      within(review).getByRole("region", {
+        name: t("commands.authoringProposal.sourceLabel", {
+          path: "/workspace/.guildbotics/config/commands/helpers/greet-input.py",
+        }),
+      }),
+    ).toHaveTextContent("return context.pipe");
+
+    await user.click(within(review).getByRole("tab", { name: /Current.*greet\.md/ }));
+    expect(
+      within(review).getByRole("region", {
+        name: t("commands.authoringProposal.sourceLabel", {
+          path: "/workspace/.guildbotics/config/commands/greet.md",
+        }),
+      }),
+    ).toHaveTextContent("name: Greet");
+    await user.click(within(review).getByRole("tab", { name: /Update.*greet\.md/ }));
+    const diff = within(review).getByRole("table", {
+      name: t("commands.authoringProposal.diffLabel", {
+        path: "/workspace/.guildbotics/config/commands/greet.md",
+      }),
+    });
+    expect(diff.querySelector('[data-diff-kind="deletion"]')).toHaveTextContent("name: Greet");
+    expect(diff.querySelector('[data-diff-kind="addition"]')).toHaveTextContent(
+      "name: Friendly greet",
+    );
+    expect(applyCommandAuthoringMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: t("commands.authoringProposal.apply") }));
+
+    await waitFor(() =>
+      expect(applyCommandAuthoringMock).toHaveBeenCalledWith([helperChange, updateChange]),
+    );
+    expect(await screen.findByLabelText<HTMLTextAreaElement>("editor")).toHaveValue(proposed);
+    expect(screen.getByText(t("commands.saveState.clean"))).toBeInTheDocument();
+  });
+
+  it("keeps the open command selected when a proposal only creates another file", async () => {
+    const helperChange = {
+      operation: "create" as const,
+      command: "helpers/greet-input",
+      format: "python" as const,
+      relative_path: "helpers/greet-input.py",
+      content: "def main(context):\n    return context.pipe\n",
+      file_id: "",
+      expected_revision: "",
+    };
+    authorCommandMock.mockResolvedValue({
+      trace_id: "author-trace-1",
+      message: helperChange.content,
+      action: "propose_changes",
+      changes: [helperChange],
+    });
+    applyCommandAuthoringMock.mockResolvedValue({
+      files: [
+        detail({
+          id: "helper-id",
+          command: helperChange.command,
+          format: helperChange.format,
+          relative_path: helperChange.relative_path,
+          content: helperChange.content,
+          revision: "helper-rev",
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.type(
+      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
+      "Create a helper instead of changing this command",
+    );
+    await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
+
+    const assistant = screen.getByRole("region", { name: t("commands.authoring.title") });
+    expect(within(assistant).queryByText(helperChange.content)).not.toBeInTheDocument();
+    expect(within(assistant).queryByDisplayValue(helperChange.content)).not.toBeInTheDocument();
+    const review = await screen.findByRole("region", {
+      name: t("commands.authoringProposal.reviewRegion"),
+    });
+    expect(
+      within(review).getByRole("region", {
+        name: t("commands.authoringProposal.sourceLabel", {
+          path: "/workspace/.guildbotics/config/commands/helpers/greet-input.py",
+        }),
+      }),
+    ).toHaveTextContent("return context.pipe");
+
+    await user.click(
+      within(review).getByRole("button", { name: t("commands.authoringProposal.apply") }),
+    );
+
+    await waitFor(() => expect(applyCommandAuthoringMock).toHaveBeenCalledWith([helperChange]));
+    expect(screen.getByLabelText("editor")).toHaveValue("---\nname: Greet\n---\nHi\n");
+    expect(screen.getByTestId("editor-path")).toHaveTextContent(
+      "/workspace/.guildbotics/config/commands/greet.md",
+    );
+  });
+
+  it("switches the member used by the AI assistant", async () => {
+    getTeamMock.mockResolvedValue(
+      team({
+        members: [
+          { person_id: "bot", name: "Bot", is_active: true, roles: [] },
+          { person_id: "aiko", name: "Aiko", is_active: true, roles: [] },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: t("commands.authoring.runner", { member: "Bot" }),
+      }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Aiko" }));
+    await user.type(
+      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
+      "Make it friendlier",
+    );
+    await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
+
+    await waitFor(() =>
+      expect(authorCommandMock).toHaveBeenCalledWith(expect.objectContaining({ person: "aiko" })),
+    );
+    expect(
+      screen.getByRole("button", { name: t("commands.runner", { member: "Bot" }) }),
+    ).toBeInTheDocument();
   });
 
   it("shows AI authoring errors in the assistant panel", async () => {
@@ -446,83 +655,32 @@ describe("Command editor screen", () => {
     );
   });
 
-  it("lets AI choose the name and format and creates the file only on save", async () => {
+  it("reviews and applies an AI-created command explicitly", async () => {
     const source = "def main(context) -> str:\n    return 'weekly'\n";
-    const revisedSource = "commands: []\n";
     const created = detail({
       id: "ai-created-id",
-      command: "reports/weekly-workflow",
-      format: "yaml",
-      relative_path: "reports/weekly-workflow.yaml",
-      content: revisedSource,
-      revision: "ai-rev-1",
-    });
-    authorCommandMock.mockResolvedValue({
-      trace_id: "author-create-trace",
-      message: "Python fits the required data processing.",
       command: "reports/weekly",
       format: "python",
       relative_path: "reports/weekly.py",
       content: source,
+      revision: "ai-rev-1",
     });
-    createCommandFileMock.mockResolvedValue(created);
-    const user = userEvent.setup();
-    await renderPage();
-    await screen.findByLabelText("editor");
-
-    await user.click(screen.getByRole("button", { name: t("commands.newFile") }));
-    await user.type(
-      await screen.findByRole("textbox", { name: t("commands.createAiRequestLabel") }),
-      "Create a weekly report command",
-    );
-    await user.click(screen.getByRole("button", { name: t("commands.createAiSubmit") }));
-
-    await waitFor(() =>
-      expect(authorCommandMock).toHaveBeenCalledWith({
-        mode: "create",
-        conversation_id: expect.any(String),
-        message: "Create a weekly report command",
-        person: "bot",
-      }),
-    );
-    expect(createCommandFileMock).not.toHaveBeenCalled();
-    expect(await screen.findByLabelText<HTMLTextAreaElement>("editor")).toHaveValue(source);
-    expect(screen.getByTestId("editor-path")).toHaveTextContent(
-      "/workspace/.guildbotics/config/commands/reports/weekly.py",
-    );
-    const authoringId = authorCommandMock.mock.calls[0][0].conversation_id;
-
-    authorCommandMock.mockResolvedValueOnce({
-      trace_id: "author-revise-trace",
-      message: "Changed it to a declarative workflow.",
-      command: "reports/weekly-workflow",
-      format: "yaml",
-      relative_path: "reports/weekly-workflow.yaml",
-      content: revisedSource,
+    const change = {
+      operation: "create" as const,
+      command: "reports/weekly",
+      format: "python" as const,
+      relative_path: "reports/weekly.py",
+      content: source,
+      file_id: "",
+      expected_revision: "",
+    };
+    authorCommandMock.mockResolvedValue({
+      trace_id: "author-create-trace",
+      message: "Review the new Python command.",
+      action: "propose_changes",
+      changes: [change],
     });
-    await user.type(
-      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
-      "Use a declarative workflow instead",
-    );
-    await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
-
-    await waitFor(() =>
-      expect(authorCommandMock).toHaveBeenLastCalledWith({
-        mode: "create",
-        conversation_id: authoringId,
-        command: "reports/weekly",
-        format: "python",
-        content: source,
-        message: "Use a declarative workflow instead",
-        person: "bot",
-      }),
-    );
-    expect(screen.getByLabelText<HTMLTextAreaElement>("editor")).toHaveValue(revisedSource);
-    expect(screen.getByTestId("editor-path")).toHaveTextContent(
-      "/workspace/.guildbotics/config/commands/reports/weekly-workflow.yaml",
-    );
-    expect(screen.getByText("Changed it to a declarative workflow.")).toBeInTheDocument();
-
+    applyCommandAuthoringMock.mockResolvedValue({ files: [created] });
     listCommandFilesMock.mockResolvedValue({
       files: [
         summary(),
@@ -538,54 +696,62 @@ describe("Command editor screen", () => {
     getCommandFileMock.mockImplementation((id) =>
       Promise.resolve(id === created.id ? created : detail()),
     );
-    await user.click(screen.getByRole("button", { name: t("commands.save") }));
+    const user = userEvent.setup();
+    await renderPage();
+    const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
 
-    await waitFor(() =>
-      expect(createCommandFileMock).toHaveBeenCalledWith({
-        command: "reports/weekly-workflow",
-        format: "yaml",
-        content: revisedSource,
-      }),
-    );
-
-    authorCommandMock.mockResolvedValueOnce({
-      trace_id: "author-after-save-trace",
-      message: "Added another workflow step.",
-      command: "reports/weekly-workflow",
-      format: "yaml",
-      relative_path: "reports/weekly-workflow.yaml",
-      content: "commands:\n  - print: done\n",
-    });
-    expect(screen.getByText("Changed it to a declarative workflow.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: t("commands.newFile") }));
     await user.type(
-      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
-      "Add a final status",
+      await screen.findByRole("textbox", { name: t("commands.createAiRequestLabel") }),
+      "Create a weekly report command",
     );
-    await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
+    await user.click(screen.getByRole("button", { name: t("commands.createAiSubmit") }));
 
-    await waitFor(() =>
-      expect(authorCommandMock).toHaveBeenLastCalledWith({
-        mode: "edit",
-        conversation_id: authoringId,
-        command: "reports/weekly-workflow",
-        format: "yaml",
-        content: revisedSource,
-        message: "Add a final status",
-        person: "bot",
+    const dialog = screen.getByRole("dialog");
+    expect(
+      await within(dialog).findByText(t("commands.authoringProposal.ready", { count: 1 })),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("Review the new Python command.")).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("tab", { name: /Create.*reports\/weekly\.py/ }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("region", {
+        name: t("commands.authoringProposal.sourceLabel", {
+          path: "/workspace/.guildbotics/config/commands/reports/weekly.py",
+        }),
       }),
+    ).toHaveTextContent("return 'weekly'");
+    expect(editor).toHaveValue("---\nname: Greet\n---\nHi\n");
+    expect(applyCommandAuthoringMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: t("commands.authoringProposal.apply") }));
+
+    await waitFor(() => expect(applyCommandAuthoringMock).toHaveBeenCalledWith([change]));
+    expect(editor).toHaveValue(source);
+    expect(screen.getByTestId("editor-path")).toHaveTextContent(
+      "/workspace/.guildbotics/config/commands/reports/weekly.py",
     );
+    expect(createCommandFileMock).not.toHaveBeenCalled();
   });
 
-  it("explains how to resolve an AI-proposed name collision", async () => {
-    authorCommandMock.mockResolvedValue({
-      trace_id: "author-create-trace",
-      message: "Draft created.",
+  it("keeps a failed AI proposal available for review", async () => {
+    const change = {
+      operation: "create" as const,
       command: "greet",
-      format: "markdown",
+      format: "markdown" as const,
       relative_path: "greet.md",
       content: "---\nbrain: none\n---\nHello.\n",
+      file_id: "",
+      expected_revision: "",
+    };
+    authorCommandMock.mockResolvedValue({
+      trace_id: "author-create-trace",
+      message: "Review the greeting command.",
+      action: "propose_changes",
+      changes: [change],
     });
-    createCommandFileMock.mockRejectedValue(
+    applyCommandAuthoringMock.mockRejectedValue(
       new ApiRequestError({
         code: "command_file_exists",
         message: "Command 'greet' already exists.",
@@ -602,12 +768,14 @@ describe("Command editor screen", () => {
       "Create a greeting command",
     );
     await user.click(screen.getByRole("button", { name: t("commands.createAiSubmit") }));
-    await screen.findByText("Draft created.");
-    await user.click(screen.getByRole("button", { name: t("commands.save") }));
+    await user.click(
+      await screen.findByRole("button", { name: t("commands.authoringProposal.apply") }),
+    );
 
+    expect(await screen.findByText("Command 'greet' already exists.")).toBeInTheDocument();
     expect(
-      await screen.findByText(t("commands.aiNameCollisionHelp"), { exact: false }),
-    ).toBeInTheDocument();
+      screen.getByRole("button", { name: t("commands.authoringProposal.apply") }),
+    ).toBeEnabled();
   });
 
   it("blocks the run with a member-shadow message and disables save-and-run", async () => {
@@ -659,7 +827,7 @@ describe("Command editor screen", () => {
     );
   });
 
-  it("runs without a person when no member is picked and shows the default in the field", async () => {
+  it("runs without a person when no member is picked and shows the default avatar", async () => {
     getTeamMock.mockResolvedValue(
       team({
         members: [
@@ -673,11 +841,8 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
-    await user.click(screen.getByText(t("commands.advanced")));
     expect(
-      await screen.findByPlaceholderText(
-        t("commands.memberDefaultPlaceholder", { member: "Aiko (aiko)" }),
-      ),
+      screen.getByRole("button", { name: t("commands.runner", { member: "Aiko" }) }),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
@@ -686,7 +851,7 @@ describe("Command editor screen", () => {
     expect(runCommandMock.mock.calls[0][0].person).toBeUndefined();
   });
 
-  it("sends the picked member and keeps it out of the request once cleared", async () => {
+  it("sends the member picked from the run heading", async () => {
     getTeamMock.mockResolvedValue(
       team({
         members: [
@@ -700,13 +865,15 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
-    await user.click(screen.getByText(t("commands.advanced")));
     await user.click(
-      await screen.findByPlaceholderText(
-        t("commands.memberDefaultPlaceholder", { member: "Aiko (aiko)" }),
-      ),
+      screen.getByRole("button", { name: t("commands.runner", { member: "Aiko" }) }),
     );
-    await user.click(await screen.findByRole("option", { name: "Bot (bot)" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Bot" }));
+    expect(
+      screen.getByRole("button", {
+        name: t("commands.authoring.runner", { member: "Aiko" }),
+      }),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
 
     await waitFor(() => expect(runCommandMock).toHaveBeenCalled());
@@ -729,15 +896,16 @@ describe("Command editor screen", () => {
     expect(screen.getByRole("button", { name: t("commands.saveAndRun") })).toBeDisabled();
   });
 
-  it("keeps the member and cwd inputs inside the collapsed advanced section", async () => {
+  it("keeps only the cwd input inside the collapsed advanced section", async () => {
     const user = userEvent.setup();
     await renderPage();
     await screen.findByLabelText("editor");
 
-    expect(screen.queryByRole("textbox", { name: t("commands.member") })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: t("commands.runner", { member: "Bot" }) }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: t("commands.cwd") })).not.toBeInTheDocument();
     await user.click(screen.getByText(t("commands.advanced")));
-    expect(screen.getByRole("textbox", { name: t("commands.member") })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: t("commands.cwd") })).toBeInTheDocument();
   });
 

@@ -59,7 +59,7 @@ scripts/desktop-dev-frontend.sh
 
 `desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。
 
-コマンド画面の「新規作成」は、ダイアログ内で「AIに作成させる」と「自分で作成する」を切り替えます。AI作成では実現したいことだけを入力し、AIがコマンド名・形式・ソースを提案します。提案は未保存ドラフトとして会話しながら修正でき、「保存」を押した時点で初めてコマンドファイルが作成されます。自力作成ではコマンド名と形式を指定して従来どおり初期ファイルを作成します。バリデーションエラーのある編集中ソースも保存できますが、有効なソースへ直すまでは実行できません。自由記述本文を処理するコマンドは、個別の `text` 引数ではなく実行画面の「入力文」を使います。
+コマンド画面の「新規作成」は、ダイアログ内で「AIに作成させる」と「自分で作成する」を切り替えます。AIアシスタントは質問には回答だけを返し、エディタやファイルを変更しません。ソース変更を依頼した場合は、現在のコマンドの更新と必要な補助コマンドの新規作成をまとめて提案します。提案ソースはチャット履歴には展開せず、エディタ側の読み取り専用ファイルタブへ「現在」「新規作成」「更新」を区別して表示します。「更新」タブは追加行と削除行を行番号付きの差分として表示し、「新規作成」タブは完成版ソースを表示します。各表示は領域内で縦横にスクロールできます。内容を確認して「変更を適用」を押した時点で、リビジョン競合と全ソースの妥当性を確認したうえで反映されます。新規ファイルだけを適用した場合、開いていた既存コマンドは切り替えません。自力作成ではコマンド名と形式を指定して従来どおり初期ファイルを作成します。通常の手動編集ではバリデーションエラーのある途中のソースも保存できますが、有効なソースへ直すまでは実行できません。自由記述本文を処理するコマンドは、個別の `text` 引数ではなく実行画面の「入力文」を使います。
 
 ---
 
@@ -103,14 +103,14 @@ npm run e2e
 
 `npm run e2e` は backend（temp workspace）と Vite を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。
 
-| spec | journey |
-|---|---|
-| `e2e/setup.spec.ts` | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み |
-| `e2e/service.spec.ts` | ③ scheduler / events を start → running → stop |
-| `e2e/commands.spec.ts` | ④ コマンド編集: 新規作成ダイアログのAI／自力切替、AIアシスタントパネル表示、自力作成 → source 編集 → 保存して実行（`/commands/files` + `/commands/run`）→ 実 file 反映 + `/events` ストリーム |
-| `e2e/members.spec.ts` | ② member 追加 → `person.yml` 実永続 |
-| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画 |
-| `e2e/failure.spec.ts` | ⑥ backend down → Bootstrap error → 復帰 → retry |
+| spec                      | journey                                                                                                                                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `e2e/setup.spec.ts`       | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み                                                                                                                                   |
+| `e2e/service.spec.ts`     | ③ scheduler / events を start → running → stop                                                                                                                                                |
+| `e2e/commands.spec.ts`    | ④ コマンド編集: 新規作成ダイアログのAI／自力切替、AIアシスタントパネル表示、自力作成 → source 編集 → 保存して実行（`/commands/files` + `/commands/run`）→ 実 file 反映 + `/events` ストリーム |
+| `e2e/members.spec.ts`     | ② member 追加 → `person.yml` 実永続                                                                                                                                                           |
+| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画                                                               |
+| `e2e/failure.spec.ts`     | ⑥ backend down → Bootstrap error → 復帰 → retry                                                                                                                                               |
 
 補足:
 
@@ -123,13 +123,13 @@ npm run e2e
 
 ## 1. 前提ツール
 
-| ツール | バージョン目安 | 用途 |
-|---|---|---|
-| [uv](https://docs.astral.sh/uv/) | 最新 | Python 依存解決・sidecar build |
-| Node.js | 24 以上（CI は 24） | frontend build / Tauri CLI |
-| Rust (rustup) | **stable 1.88 以上** | Tauri 本体の build |
-| Xcode Command Line Tools（macOS） | — | macOS 向けリンク・署名 |
-| WebKitGTK 4.1 開発パッケージ（Linux） | — | Linux 向けリンク |
+| ツール                                | バージョン目安       | 用途                           |
+| ------------------------------------- | -------------------- | ------------------------------ |
+| [uv](https://docs.astral.sh/uv/)      | 最新                 | Python 依存解決・sidecar build |
+| Node.js                               | 24 以上（CI は 24）  | frontend build / Tauri CLI     |
+| Rust (rustup)                         | **stable 1.88 以上** | Tauri 本体の build             |
+| Xcode Command Line Tools（macOS）     | —                    | macOS 向けリンク・署名         |
+| WebKitGTK 4.1 開発パッケージ（Linux） | —                    | Linux 向けリンク               |
 
 ### Rust ツールチェーンの注意（重要）
 
@@ -295,15 +295,15 @@ chmod +x GuildBotics_<version>_amd64.AppImage
 
 CI（[../.github/workflows/desktop-macos.yml](../.github/workflows/desktop-macos.yml)）は、以下の GitHub Secrets が設定されている場合だけ署名・notarization を行います。未設定なら unsigned DMG を生成します。
 
-| Secret | 内容 |
-|---|---|
-| `APPLE_CERTIFICATE` | Developer ID Application 証明書（base64 化した `.p12`） |
-| `APPLE_CERTIFICATE_PASSWORD` | `.p12` のパスワード |
-| `APPLE_KEYCHAIN_PASSWORD` | CI 上の一時 keychain 用パスワード |
-| `APPLE_SIGNING_IDENTITY` | 署名 identity（例: `Developer ID Application: Name (TEAMID)`） |
-| `APPLE_ID` | notarization 用 Apple ID |
-| `APPLE_PASSWORD` | notarization 用 app-specific password |
-| `APPLE_TEAM_ID` | Apple Developer Team ID |
+| Secret                       | 内容                                                           |
+| ---------------------------- | -------------------------------------------------------------- |
+| `APPLE_CERTIFICATE`          | Developer ID Application 証明書（base64 化した `.p12`）        |
+| `APPLE_CERTIFICATE_PASSWORD` | `.p12` のパスワード                                            |
+| `APPLE_KEYCHAIN_PASSWORD`    | CI 上の一時 keychain 用パスワード                              |
+| `APPLE_SIGNING_IDENTITY`     | 署名 identity（例: `Developer ID Application: Name (TEAMID)`） |
+| `APPLE_ID`                   | notarization 用 Apple ID                                       |
+| `APPLE_PASSWORD`             | notarization 用 app-specific password                          |
+| `APPLE_TEAM_ID`              | Apple Developer Team ID                                        |
 
 `APPLE_CERTIFICATE` が無ければ署名 step を skip、`APPLE_CERTIFICATE` と `APPLE_ID` が揃った時だけ notarization を実行します。
 
@@ -311,13 +311,13 @@ CI（[../.github/workflows/desktop-macos.yml](../.github/workflows/desktop-macos
 
 ## 6. トラブルシュート
 
-| 症状 | 原因 / 対処 |
-|---|---|
-| `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.88+ を使う（§1 参照）。 |
-| `tauri build` で sidecar が見つからない | §2.1 を実行し、現在の target に対応する `desktop/src-tauri/binaries/guildbotics-app-api-<target>` と `desktop/src-tauri/binaries/guildbotics-cli-<target>` が存在するか確認。 |
-| PyInstaller 実行時に `ModuleNotFoundError` | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) または [sidecar/guildbotics-cli.spec](sidecar/guildbotics-cli.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
-| GUI で PDF 変換（`to_pdf`）が使えない | v1 既知の制約。sidecar は `weasyprint` を同梱しない。PDF が必要な場合は native dependency を入れた CLI を使う。 |
-| 「開発元を確認できません」で起動できない | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。 |
-| Linux で WebKitGTK が見つからず build / 起動できない | §1 の Linux 依存を導入し、利用しているディストリビューション用の Tauri prerequisites を確認する。 |
-| 初回起動が遅い | onefile sidecar の自己展開のため。約 10 秒待つ。 |
-| `guildbotics` が PATH で古い CLI を指す | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。 |
+| 症状                                                                  | 原因 / 対処                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.88+ を使う（§1 参照）。                                                                                                                                                                                     |
+| `tauri build` で sidecar が見つからない                               | §2.1 を実行し、現在の target に対応する `desktop/src-tauri/binaries/guildbotics-app-api-<target>` と `desktop/src-tauri/binaries/guildbotics-cli-<target>` が存在するか確認。                                                                |
+| PyInstaller 実行時に `ModuleNotFoundError`                            | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) または [sidecar/guildbotics-cli.spec](sidecar/guildbotics-cli.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
+| GUI で PDF 変換（`to_pdf`）が使えない                                 | v1 既知の制約。sidecar は `weasyprint` を同梱しない。PDF が必要な場合は native dependency を入れた CLI を使う。                                                                                                                              |
+| 「開発元を確認できません」で起動できない                              | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。                                                                                                                                                                        |
+| Linux で WebKitGTK が見つからず build / 起動できない                  | §1 の Linux 依存を導入し、利用しているディストリビューション用の Tauri prerequisites を確認する。                                                                                                                                            |
+| 初回起動が遅い                                                        | onefile sidecar の自己展開のため。約 10 秒待つ。                                                                                                                                                                                             |
+| `guildbotics` が PATH で古い CLI を指す                               | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。                                                                                                                             |

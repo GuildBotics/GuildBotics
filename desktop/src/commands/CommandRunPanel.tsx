@@ -1,17 +1,14 @@
-import { Alert, Button, Select, Stack, Switch, Text, TextInput } from "@mantine/core";
+import { Alert, Button, Group, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { Play } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { CommandFileDetail, CommandFileExecutionStatus, TraceRecord } from "../api/client";
 import { CommandRunDetails, type CommandRunRecord } from "../App";
+import { MemberSelector } from "../MemberSelector";
 import { CommandInput } from "./CommandInput";
 import { blockingMessageKey, hasMissingRequiredArgument } from "./commandEditorState";
 
 type ActiveMember = { person_id: string; name: string };
-
-function memberLabel(member: ActiveMember): string {
-  return `${member.name} (${member.person_id})`;
-}
 
 export type CommandRunPanelProps = {
   file: CommandFileDetail | null;
@@ -58,6 +55,7 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
   const blockingCode = executionStatus?.blocking_code ?? null;
   const unsatisfied = (executionStatus?.requirements ?? []).filter((req) => !req.satisfied);
   const noMembers = members.length === 0;
+  const runner = members.find((member) => member.person_id === props.person) ?? props.defaultPerson;
   const runDisabled =
     !file ||
     noMembers ||
@@ -68,9 +66,15 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
 
   return (
     <div className="command-run-panel">
-      <Text fw={700} className="command-run-heading">
-        {t("commands.verifyHeading")}
-      </Text>
+      <Group gap="xs" className="command-run-heading">
+        <MemberSelector
+          ariaLabel={t("commands.runner", { member: runner?.name ?? "" })}
+          member={runner}
+          members={members}
+          onChange={props.onPersonChange}
+        />
+        <Text fw={700}>{t("commands.verifyHeading")}</Text>
+      </Group>
       <div className="command-run-columns">
         <Stack className="command-run-settings" gap="sm">
           {showDefinedArgs ? (
@@ -117,31 +121,12 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
             onChange={(event) => props.onToggleAdvanced(event.currentTarget.checked)}
           />
           {props.showAdvanced ? (
-            <>
-              <Select
-                label={t("commands.member")}
-                placeholder={
-                  props.defaultPerson
-                    ? t("commands.memberDefaultPlaceholder", {
-                        member: memberLabel(props.defaultPerson),
-                      })
-                    : t("commands.memberPlaceholder")
-                }
-                clearable
-                value={props.person}
-                onChange={(value) => props.onPersonChange(value)}
-                data={members.map((member) => ({
-                  value: member.person_id,
-                  label: memberLabel(member),
-                }))}
-              />
-              <TextInput
-                label={t("commands.cwd")}
-                description={t("commands.cwdDescription", { cwd: props.workspaceCwd })}
-                value={props.cwd}
-                onChange={(event) => props.onCwdChange(event.currentTarget.value)}
-              />
-            </>
+            <TextInput
+              label={t("commands.cwd")}
+              description={t("commands.cwdDescription", { cwd: props.workspaceCwd })}
+              value={props.cwd}
+              onChange={(event) => props.onCwdChange(event.currentTarget.value)}
+            />
           ) : null}
 
           {noMembers ? (

@@ -34,7 +34,7 @@ from guildbotics.app_api.models import (
     TroubleshootingRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.commands.authoring import CommandAuthoringResult
+from guildbotics.commands.authoring import CommandAuthoringChange, CommandAuthoringResult
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.commands.errors import (
     CommandError,
@@ -930,7 +930,9 @@ def test_routine_command_options_person_not_found_raises(
 async def test_author_command_uses_stable_authoring_identity_and_unique_trace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    ocr_source = "def main(context):\n    return context.pipe\n"
+    _write(config_dir / "commands/ocr/extract-text.py", ocr_source)
     runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
     captured: dict[str, Any] = {}
 
@@ -939,10 +941,16 @@ async def test_author_command_uses_stable_authoring_identity_and_unique_trace(
         captured.update(kwargs)
         captured["correlation"] = correlation_fields()
         return CommandAuthoringResult(
-            message="Updated the draft.",
-            command="reports/weekly",
-            format="python",
-            content="updated source",
+            action="propose_changes",
+            message="Review the proposed change.",
+            changes=[
+                CommandAuthoringChange(
+                    operation="update",
+                    command="reports/weekly",
+                    format="python",
+                    content="def main(context):\n    return 'updated'\n",
+                )
+            ],
         )
 
     monkeypatch.setattr(runtime_module, "author_command_turn", fake_author_command_turn)
@@ -954,18 +962,28 @@ async def test_author_command_uses_stable_authoring_identity_and_unique_trace(
             command="reports/weekly",
             format="python",
             content="old source",
+            file_id="cmVwb3J0cy93ZWVrbHkucHk",
+            revision="revision-1",
             message="Add a weekly report.",
             person="bot",
         )
     )
 
-    assert response.message == "Updated the draft."
-    assert response.content == "updated source"
-    assert response.relative_path == "reports/weekly.py"
+    assert response.message == "Review the proposed change."
+    assert response.action == "propose_changes"
+    assert response.changes[0].content == "def main(context):\n    return 'updated'\n"
+    assert response.changes[0].relative_path == "reports/weekly.py"
+    assert response.changes[0].file_id == "cmVwb3J0cy93ZWVrbHkucHk"
     assert captured["conversation_id"] == "authoring-1"
     assert captured["mode"] == "edit"
     assert captured["trace_id"] == response.trace_id
     assert captured["instruction"] == "Add a weekly report."
+    assert {
+        "command": "ocr/extract-text",
+        "format": "python",
+        "relative_path": "ocr/extract-text.py",
+        "content": ocr_source,
+    } in captured["available_commands"]
     assert captured["correlation"]["trace_id"] == response.trace_id
     # A Desktop-initiated turn is a manual run, so it is filterable in
     # diagnostics and stays off the activity timeline like other manual runs.
@@ -1973,7 +1991,7 @@ async def test_troubleshoot_drops_trace_ids_that_were_never_recorded(
 
 
 @pytest.mark.asyncio
-async def test_author_command_keeps_the_member_execution_lease(
+async def test_author_command_is_read_only_and_skips_the_member_execution_lease(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _isolate_workspace(tmp_path, monkeypatch)
@@ -1989,7 +2007,7 @@ async def test_author_command_keeps_the_member_execution_lease(
 
     async def fake_author(*_: Any, **__: Any) -> Any:
         return CommandAuthoringResult(
-            message="ok", command="a", format="python", content="x"
+            action="answer", message="This is possible.", changes=[]
         )
 
     monkeypatch.setattr(runtime_module, "author_command_turn", fake_author)
@@ -2000,8 +2018,7 @@ async def test_author_command_keeps_the_member_execution_lease(
         )
     )
 
-    # Authoring is not enforced read-only, so it keeps the lease it always held.
-    assert exclusivity["exclusive"] is True
+    assert exclusivity["exclusive"] is False
 
 
 @pytest.mark.asyncio
@@ -2071,7 +2088,7 @@ async def test_assistant_turns_are_recorded_as_manual_runs(
     async def capture_author(*_: Any, **__: Any) -> Any:
         sources.append(str(correlation_fields()["source"]))
         return CommandAuthoringResult(
-            message="ok", command="a", format="python", content="x"
+            action="answer", message="This is possible.", changes=[]
         )
 
     monkeypatch.setattr(runtime_module, "troubleshoot_turn", capture_troubleshoot)

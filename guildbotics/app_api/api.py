@@ -38,6 +38,8 @@ from guildbotics.app_api.models import (
     ChatReceiveResetResponse,
     CliAgentDetectionsResponse,
     CliAgentUsagesResponse,
+    CommandAuthoringApplyRequest,
+    CommandAuthoringApplyResponse,
     CommandAuthoringRequest,
     CommandAuthoringResponse,
     CommandFileCreateRequest,
@@ -328,6 +330,17 @@ def create_app(
         _: None = Depends(require_token),
     ) -> CommandAuthoringResponse:
         return await app_runtime.author_command(request)
+
+    @app.post(
+        "/commands/author/apply",
+        response_model=CommandAuthoringApplyResponse,
+        responses=error_responses,
+    )
+    def apply_command_authoring(
+        request: CommandAuthoringApplyRequest,
+        _: None = Depends(require_token),
+    ) -> CommandAuthoringApplyResponse:
+        return app_runtime.apply_command_authoring(request)
 
     @app.get(
         "/commands/files",

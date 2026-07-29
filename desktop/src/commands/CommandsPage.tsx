@@ -28,6 +28,7 @@ import { NavLink } from "react-router-dom";
 
 import {
   ApiRequestError,
+  applyCommandAuthoring,
   authorCommand,
   createCommandFile,
   deleteCommandFile,
@@ -44,6 +45,7 @@ import {
   type CommandFilesResponse,
   type CommandFileSummary,
   type CommandAuthoringRequest,
+  type CommandAuthoringResponse,
 } from "../api/client";
 import {
   commandFailureDetail,
@@ -55,6 +57,8 @@ import {
 import { setNavigationGuard } from "../navigationGuard";
 import { AssistantChatPanel } from "../assistant/AssistantChatPanel";
 import { useAssistantConversation } from "../assistant/useAssistantConversation";
+import { MemberSelector } from "../MemberSelector";
+import { CommandAuthoringWorkspace } from "./CommandAuthoringWorkspace";
 import { CommandEditor } from "./CommandEditor";
 import { CommandHotkeyField } from "./CommandHotkeyField";
 import {
@@ -70,17 +74,19 @@ import {
 import { CommandRunPanel } from "./CommandRunPanel";
 
 const CREATE_FORMATS: CommandFileFormat[] = ["markdown", "python", "shell", "yaml"];
-const NEW_DRAFT_FILE_ID = "__new-command-draft__";
 
 type AuthoringTurnRequest = CommandAuthoringRequest & {
   /** Conversation target at submit time, so late replies can be discarded. */
   targetKey: string;
 };
 
-type NewCommandDraft = {
-  command: string;
-  format: CommandFileFormat;
-  relativePath: string;
+type PendingAuthoringProposal = {
+  response: CommandAuthoringResponse;
+  conversationId: string;
+  targetKey: string;
+  userMessage: string;
+  source: "create" | "editor";
+  baseContent?: string;
 };
 
 function stringPayload(value: unknown): string {
@@ -98,6 +104,12 @@ function authoringErrorMessage(error: unknown): string | null {
   return error ? String(error) : null;
 }
 
+function authoringResponseMessage(response: CommandAuthoringResponse, proposalReady: string) {
+  return response.action === "propose_changes"
+    ? `${proposalReady}\n\n${response.message}`
+    : response.message;
+}
+
 export function CommandsPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -110,6 +122,7 @@ export function CommandsPage() {
   const [initial] = useState(() => loadEditorState(storageDir));
   const [selectedFileId, setSelectedFileId] = useState<string | null>(initial.selectedFileId);
   const [person, setPerson] = useState<string | null>(initial.person);
+  const [authoringPersonId, setAuthoringPersonId] = useState<string | null>(null);
   const [argValues, setArgValues] = useState<Record<string, string>>(initial.argValues);
   const [extraArgs, setExtraArgs] = useState(initial.extraArgs);
   const [message, setMessage] = useState(initial.message);
@@ -131,6 +144,7 @@ export function CommandsPage() {
     const restored = loadEditorState(storageDir);
     setSelectedFileId(restored.selectedFileId);
     setPerson(restored.person);
+    setAuthoringPersonId(null);
     setArgValues(restored.argValues);
     setExtraArgs(restored.extraArgs);
     setMessage(restored.message);
@@ -150,9 +164,7 @@ export function CommandsPage() {
   const loadedKeyRef = useRef<string>("");
   const selectedFileIdRef = useRef<string | null>(selectedFileId);
   selectedFileIdRef.current = selectedFileId;
-  const [newCommandDraft, setNewCommandDraft] = useState<NewCommandDraft | null>(null);
-  const newCommandDraftRef = useRef(newCommandDraft);
-  newCommandDraftRef.current = newCommandDraft;
+  const [pendingProposal, setPendingProposal] = useState<PendingAuthoringProposal | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -201,13 +213,13 @@ export function CommandsPage() {
 
   // Keep the selection valid as the file list loads / changes.
   useEffect(() => {
-    if (!files.length || newCommandDraft) {
+    if (!files.length) {
       return;
     }
     if (!selectedFileId || !files.some((file) => file.id === selectedFileId)) {
       setSelectedFileId(files[0].id);
     }
-  }, [files, newCommandDraft, selectedFileId]);
+  }, [files, selectedFileId]);
 
   const detailQuery = useQuery({
     queryKey: ["command-file", selectedFileId],
@@ -234,23 +246,23 @@ export function CommandsPage() {
     setSaveError(null);
   }, [detail]);
 
-  const dirty = Boolean(newCommandDraft) || draftContent !== savedContent;
+  const dirty = draftContent !== savedContent;
 
-  const cacheCreatedCommand = useCallback(
-    (created: Awaited<ReturnType<typeof createCommandFile>>) => {
-      queryClient.setQueryData(["command-file", created.id], created);
+  const cacheCommandFile = useCallback(
+    (file: Awaited<ReturnType<typeof createCommandFile>>) => {
+      queryClient.setQueryData(["command-file", file.id], file);
       queryClient.setQueryData<CommandFilesResponse>(["command-files"], (previous) => {
         const files = previous?.files ?? [];
-        if (files.some((file) => file.id === created.id)) {
+        if (files.some((current) => current.id === file.id)) {
           return { files };
         }
         const summary: CommandFileSummary = {
-          id: created.id,
-          command: created.command,
-          label: created.label,
-          description: created.description,
-          relative_path: created.relative_path,
-          format: created.format,
+          id: file.id,
+          command: file.command,
+          label: file.label,
+          description: file.description,
+          relative_path: file.relative_path,
+          format: file.format,
         };
         return {
           files: [...files, summary].sort((a, b) => a.command.localeCompare(b.command)),
@@ -267,50 +279,32 @@ export function CommandsPage() {
     () => (team.data?.members ?? []).filter((member) => member.is_active),
     [team.data?.members],
   );
-  const selectedPerson =
-    activeMembers.find((member) => member.person_id === person)?.person_id ?? null;
+  const selectedMember = activeMembers.find((member) => member.person_id === person) ?? null;
+  const selectedPerson = selectedMember?.person_id ?? null;
   // The backend owns the fallback rule; the team summary reports the member an
   // omitted person resolves to, so no default is picked here.
   const defaultPerson =
     activeMembers.find((member) => member.person_id === team.data?.default_person_id) ?? null;
-  const effectivePerson = selectedPerson ?? defaultPerson?.person_id ?? null;
+  const runMember = selectedMember ?? defaultPerson;
+  const runPerson = runMember?.person_id ?? null;
+  const authoringMember =
+    activeMembers.find((member) => member.person_id === authoringPersonId) ?? defaultPerson;
+  const authoringPerson = authoringMember?.person_id ?? null;
 
-  // One authoring conversation per member and command draft. Saving a new
-  // draft renames the target, so the conversation is carried over explicitly
-  // rather than restarted.
-  const authoringTargetKey = `${effectivePerson ?? ""}:${
-    newCommandDraft ? NEW_DRAFT_FILE_ID : (selectedFileId ?? "")
-  }`;
+  const authoringTargetKey = [authoringPerson ?? "", selectedFileId ?? ""].join(":");
   const authoring = useAssistantConversation(authoringTargetKey);
 
   const saveMutation = useMutation({
     mutationFn: () =>
-      newCommandDraft
-        ? createCommandFile({
-            command: newCommandDraft.command,
-            format: newCommandDraft.format,
-            content: draftContent,
-          })
-        : updateCommandFile(selectedFileId as string, {
-            content: draftContent,
-            expected_revision: revision,
-          }),
+      updateCommandFile(selectedFileId as string, {
+        content: draftContent,
+        expected_revision: revision,
+      }),
     onMutate: () => {
       setSaveError(null);
       setConflict(false);
     },
     onSuccess: (updated) => {
-      if (newCommandDraft) {
-        // The draft keeps its conversation once it becomes a real file.
-        authoring.adopt(
-          authoring.conversationId,
-          authoring.messages,
-          `${effectivePerson ?? ""}:${updated.id}`,
-        );
-        cacheCreatedCommand(updated);
-        setNewCommandDraft(null);
-        setSelectedFileId(updated.id);
-      }
       loadedKeyRef.current = `${updated.id}:${updated.revision}`;
       setSavedContent(updated.content);
       setRevision(updated.revision);
@@ -322,12 +316,6 @@ export function CommandsPage() {
     onError: (error) => {
       if (error instanceof ApiRequestError && error.code === "command_file_changed") {
         setConflict(true);
-      } else if (
-        newCommandDraft &&
-        error instanceof ApiRequestError &&
-        error.code === "command_file_exists"
-      ) {
-        setSaveError(`${error.message} ${t("commands.aiNameCollisionHelp")}`);
       } else {
         setSaveError(error instanceof Error ? error.message : String(error));
       }
@@ -337,7 +325,7 @@ export function CommandsPage() {
   const createMutation = useMutation({
     mutationFn: (body: { command: string; format: CommandFileFormat }) => createCommandFile(body),
     onSuccess: (created) => {
-      cacheCreatedCommand(created);
+      cacheCommandFile(created);
       setSelectedFileId(created.id);
       setCreateOpen(false);
     },
@@ -370,34 +358,16 @@ export function CommandsPage() {
         mode: "create",
         conversation_id: request.conversationId,
         message: request.message,
-        person: effectivePerson ?? undefined,
+        person: authoringPerson ?? undefined,
       }),
     onSuccess: (response, request) => {
-      authoring.adopt(
-        request.conversationId,
-        [
-          { role: "user", content: request.message },
-          {
-            role: "assistant",
-            content: response.message,
-            traceId: response.trace_id,
-          },
-        ],
-        `${effectivePerson ?? ""}:${NEW_DRAFT_FILE_ID}`,
-      );
-      setNewCommandDraft({
-        command: response.command,
-        format: response.format,
-        relativePath: response.relative_path,
+      setPendingProposal({
+        response,
+        conversationId: request.conversationId,
+        targetKey: [authoringPerson ?? "", "new-command"].join(":"),
+        userMessage: request.message,
+        source: "create",
       });
-      setSelectedFileId(null);
-      loadedKeyRef.current = "";
-      setDraftContent(response.content);
-      setSavedContent("");
-      setRevision("");
-      setConflict(false);
-      setSaveError(null);
-      setCreateOpen(false);
     },
   });
 
@@ -409,6 +379,8 @@ export function CommandsPage() {
         command: request.command,
         format: request.format,
         content: request.content,
+        file_id: request.file_id,
+        revision: request.revision,
         message: request.message,
         person: request.person,
       }),
@@ -419,35 +391,86 @@ export function CommandsPage() {
       if (!authoring.isCurrent(request.conversation_id, request.targetKey)) {
         return;
       }
-      if (request.mode === "create") {
-        setNewCommandDraft({
-          command: response.command,
-          format: response.format,
-          relativePath: response.relative_path,
+      if (response.action === "propose_changes") {
+        setPendingProposal({
+          response,
+          conversationId: request.conversation_id,
+          targetKey: request.targetKey,
+          userMessage: request.message,
+          source: "editor",
+          baseContent: request.content,
         });
       }
-      setDraftContent(response.content);
       authoring.appendAssistant(request.conversation_id, request.targetKey, {
-        content: response.message,
+        content: authoringResponseMessage(
+          response,
+          t("commands.authoringProposal.ready", { count: response.changes.length }),
+        ),
         traceId: response.trace_id,
       });
     },
   });
 
+  const applyAuthoringMutation = useMutation({
+    mutationFn: (proposal: PendingAuthoringProposal) =>
+      applyCommandAuthoring(proposal.response.changes),
+    onSuccess: (result, proposal) => {
+      for (const file of result.files) {
+        cacheCommandFile(file);
+      }
+      const primaryIndex =
+        proposal.source === "editor"
+          ? proposal.response.changes.findIndex((change) => change.operation === "update")
+          : 0;
+      const primary = primaryIndex < 0 ? undefined : result.files[primaryIndex];
+      if (primary) {
+        queryClient.setQueryData(["command-file", primary.id], primary);
+        loadedKeyRef.current = `${primary.id}:${primary.revision}`;
+        setSelectedFileId(primary.id);
+        setSavedContent(primary.content);
+        setDraftContent(primary.content);
+        setRevision(primary.revision);
+        setConflict(false);
+        setSaveError(null);
+        if (proposal.source === "create") {
+          authoring.adopt(
+            proposal.conversationId,
+            [
+              { role: "user", content: proposal.userMessage },
+              {
+                role: "assistant",
+                content: authoringResponseMessage(
+                  proposal.response,
+                  t("commands.authoringProposal.ready", {
+                    count: proposal.response.changes.length,
+                  }),
+                ),
+                traceId: proposal.response.trace_id,
+              },
+            ],
+            [authoringPerson ?? "", primary.id].join(":"),
+          );
+        }
+      }
+      setPendingProposal(null);
+      setCreateOpen(false);
+    },
+  });
+
   const executionStatusQuery = useQuery({
-    queryKey: ["command-file-execution", selectedFileId, effectivePerson, revision],
+    queryKey: ["command-file-execution", selectedFileId, runPerson, revision],
     queryFn: () =>
       getCommandFileExecutionStatus(selectedFileId as string, {
-        person: effectivePerson ?? undefined,
+        person: runPerson ?? undefined,
         expected_revision: revision,
       }),
-    enabled: Boolean(selectedFileId && effectivePerson && revision) && !dirty,
+    enabled: Boolean(selectedFileId && runPerson && revision) && !dirty,
     retry: false,
   });
 
   const [runBusy, setRunBusy] = useState(false);
   const saveAndRun = useCallback(async () => {
-    if (!selectedFileId || !effectivePerson || !detail) {
+    if (!selectedFileId || !runPerson || !detail) {
       return;
     }
     setRunBusy(true);
@@ -472,7 +495,7 @@ export function CommandsPage() {
       setHistory((current) =>
         upsertCommandRecord(current, {
           traceId: response.trace_id,
-          person: effectivePerson,
+          person: runPerson,
           command: runFile.command,
           startedAt: new Date().toISOString(),
           status: "success",
@@ -486,7 +509,7 @@ export function CommandsPage() {
       setHistory((current) =>
         upsertCommandRecord(current, {
           traceId,
-          person: effectivePerson,
+          person: runPerson,
           command: detail.command,
           startedAt: new Date().toISOString(),
           status: "failed",
@@ -501,7 +524,7 @@ export function CommandsPage() {
     cwd,
     detail,
     dirty,
-    effectivePerson,
+    runPerson,
     extraArgs,
     message,
     saveMutation,
@@ -629,36 +652,28 @@ export function CommandsPage() {
   );
 
   const selectFile = (fileId: string | null) => {
-    if (fileId === NEW_DRAFT_FILE_ID) {
-      return;
-    }
     guard(() => {
-      if (newCommandDraft) {
-        setNewCommandDraft(null);
-        loadedKeyRef.current = "";
-      }
+      applyAuthoringMutation.reset();
+      setPendingProposal(null);
       setSelectedFileId(fileId);
     });
   };
   const openCreate = () => {
     guard(() => {
-      if (newCommandDraft) {
-        setNewCommandDraft(null);
-        loadedKeyRef.current = "";
-        setSelectedFileId(files[0]?.id ?? null);
-      }
       createMutation.reset();
       aiCreateMutation.reset();
+      applyAuthoringMutation.reset();
+      setPendingProposal(null);
       setCreateOpen(true);
     });
   };
 
-  const activeDraft = newCommandDraft ?? detail;
-  const displayPath = newCommandDraft
-    ? `${configDir}/commands/${newCommandDraft.relativePath}`
-    : detail
-      ? `${configDir}/commands/${detail.relative_path}`
-      : "";
+  const commandsRoot = `${configDir}/commands`;
+  const displayPath = detail ? `${commandsRoot}/${detail.relative_path}` : "";
+  const editorProposal =
+    pendingProposal?.source === "editor" && pendingProposal.targetKey === authoringTargetKey
+      ? pendingProposal
+      : null;
   const saveStatus = deriveSaveStatus(draftContent, savedContent, saveMutation.isPending, conflict);
 
   if (!hasProjectConfig) {
@@ -677,7 +692,7 @@ export function CommandsPage() {
     );
   }
 
-  const isEmpty = !newCommandDraft && !filesQuery.isLoading && files.length === 0;
+  const isEmpty = !filesQuery.isLoading && files.length === 0;
 
   return (
     <Stack gap="lg" className="command-editor-page">
@@ -687,7 +702,7 @@ export function CommandsPage() {
           <Button
             variant="default"
             leftSection={<FilePlus size={16} />}
-            disabled={authoringMutation.isPending}
+            disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
             onClick={openCreate}
           >
             {t("commands.newFile")}
@@ -696,7 +711,9 @@ export function CommandsPage() {
             variant="default"
             color="danger"
             leftSection={<Trash2 size={16} />}
-            disabled={!selectedFileId || Boolean(newCommandDraft) || authoringMutation.isPending}
+            disabled={
+              !selectedFileId || authoringMutation.isPending || applyAuthoringMutation.isPending
+            }
             onClick={() => {
               deleteMutation.reset();
               setDeleteOpen(true);
@@ -707,7 +724,9 @@ export function CommandsPage() {
           <Button
             leftSection={<Save size={16} />}
             loading={saveMutation.isPending}
-            disabled={!activeDraft || !dirty || authoringMutation.isPending}
+            disabled={
+              !detail || !dirty || authoringMutation.isPending || applyAuthoringMutation.isPending
+            }
             onClick={() => saveMutation.mutate()}
           >
             {t("commands.save")}
@@ -731,38 +750,16 @@ export function CommandsPage() {
             label={t("commands.editSelectLabel")}
             searchable
             nothingFoundMessage={t("commands.noCommandOptions")}
-            value={newCommandDraft ? NEW_DRAFT_FILE_ID : selectedFileId}
-            disabled={authoringMutation.isPending}
+            value={selectedFileId}
+            disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
             onChange={(value) => selectFile(value)}
-            data={[
-              ...(newCommandDraft
-                ? [
-                    {
-                      value: NEW_DRAFT_FILE_ID,
-                      label: t("commands.newDraftOption", {
-                        command: newCommandDraft.command,
-                        format: t(`commands.formats.${newCommandDraft.format}`),
-                      }),
-                    },
-                  ]
-                : []),
-              ...files.map((file) => ({
-                value: file.id,
-                label: `${file.label} (${file.command})`,
-              })),
-            ]}
+            data={files.map((file) => ({
+              value: file.id,
+              label: `${file.label} (${file.command})`,
+            }))}
           />
 
-          {newCommandDraft ? (
-            <Group gap="xs">
-              <Badge variant="light">{t(`commands.formats.${newCommandDraft.format}`)}</Badge>
-              <Text c="dimmed" size="sm">
-                {t("commands.proposedByAi")}
-              </Text>
-            </Group>
-          ) : (
-            <CommandHotkeyField command={detail?.command ?? null} />
-          )}
+          <CommandHotkeyField command={detail?.command ?? null} />
 
           <Group gap="xs">
             <Badge variant="light" color={saveStatus === "clean" ? "success" : "warning"}>
@@ -802,32 +799,65 @@ export function CommandsPage() {
 
           <div className="command-split" ref={splitRef}>
             <div className="command-split-editor" style={{ flexGrow: editorRatio }}>
-              {activeDraft ? (
+              {detail ? (
                 <div className="command-editor-with-assistant">
-                  <CommandEditor
-                    value={draftContent}
-                    format={activeDraft.format}
-                    path={displayPath}
-                    disabled={authoringMutation.isPending}
-                    onChange={setDraftContent}
-                    onSave={() => {
-                      if (activeDraft && dirty && !authoringMutation.isPending) {
-                        saveMutation.mutate();
+                  {editorProposal ? (
+                    <CommandAuthoringWorkspace
+                      changes={editorProposal.response.changes}
+                      commandsRoot={commandsRoot}
+                      current={{
+                        relativePath: detail.relative_path,
+                        path: displayPath,
+                        content: editorProposal.baseContent ?? draftContent,
+                      }}
+                      pending={applyAuthoringMutation.isPending}
+                      error={
+                        applyAuthoringMutation.variables?.source === "editor"
+                          ? applyAuthoringMutation.error
+                          : null
                       }
-                    }}
-                    onOpenExternal={
-                      newCommandDraft
-                        ? undefined
-                        : () => void openLocalFile(displayPath).catch(() => {})
-                    }
-                  />
+                      onApply={() => applyAuthoringMutation.mutate(editorProposal)}
+                      onDiscard={() => {
+                        applyAuthoringMutation.reset();
+                        setPendingProposal(null);
+                      }}
+                    />
+                  ) : (
+                    <CommandEditor
+                      value={draftContent}
+                      format={detail.format}
+                      path={displayPath}
+                      disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
+                      onChange={setDraftContent}
+                      onSave={() => {
+                        if (dirty && !authoringMutation.isPending) {
+                          saveMutation.mutate();
+                        }
+                      }}
+                      onOpenExternal={() => void openLocalFile(displayPath).catch(() => {})}
+                    />
+                  )}
                   <AssistantChatPanel
                     namespace="commands.authoring"
                     key={authoring.conversationId}
                     messages={authoring.messages}
                     pending={authoringMutation.isPending}
-                    disabled={!effectivePerson}
+                    disabled={!authoringPerson || Boolean(pendingProposal)}
                     autoScrollOnAssistantResponse
+                    identity={
+                      <MemberSelector
+                        ariaLabel={t("commands.authoring.runner", {
+                          member: authoringMember?.name ?? "",
+                        })}
+                        member={authoringMember}
+                        members={activeMembers}
+                        onChange={(personId) => {
+                          applyAuthoringMutation.reset();
+                          setPendingProposal(null);
+                          setAuthoringPersonId(personId);
+                        }}
+                      />
+                    }
                     // A failure belongs to the command that produced it:
                     // switching commands must not carry it into the next
                     // conversation.
@@ -838,13 +868,15 @@ export function CommandsPage() {
                     }
                     onSubmit={(authoringMessage) =>
                       authoringMutation.mutate({
-                        mode: newCommandDraft ? "create" : "edit",
+                        mode: "edit",
                         conversation_id: authoring.conversationId,
-                        command: activeDraft.command,
-                        format: activeDraft.format,
+                        command: detail.command,
+                        format: detail.format,
                         content: draftContent,
+                        file_id: detail.id,
+                        revision,
                         message: authoringMessage,
-                        person: effectivePerson ?? undefined,
+                        person: authoringPerson ?? undefined,
                         targetKey: authoringTargetKey,
                       })
                     }
@@ -857,7 +889,7 @@ export function CommandsPage() {
               )}
             </div>
 
-            {!newCommandDraft && detail ? (
+            {detail ? (
               <>
                 <div
                   className="command-split-handle"
@@ -916,13 +948,27 @@ export function CommandsPage() {
       <CreateCommandDialog
         key={createOpen ? "create-open" : "create-closed"}
         opened={createOpen}
-        pending={createMutation.isPending || aiCreateMutation.isPending}
+        pending={
+          createMutation.isPending ||
+          aiCreateMutation.isPending ||
+          (applyAuthoringMutation.isPending &&
+            applyAuthoringMutation.variables?.source === "create")
+        }
         manualError={createMutation.error}
-        aiError={aiCreateMutation.error}
-        aiAvailable={Boolean(effectivePerson)}
+        aiError={
+          aiCreateMutation.error ||
+          (applyAuthoringMutation.variables?.source === "create"
+            ? applyAuthoringMutation.error
+            : null)
+        }
+        aiAvailable={Boolean(authoringPerson)}
+        aiResponse={pendingProposal?.source === "create" ? pendingProposal.response : null}
+        commandsRoot={commandsRoot}
         onClose={() => {
           createMutation.reset();
           aiCreateMutation.reset();
+          applyAuthoringMutation.reset();
+          setPendingProposal(null);
           setCreateOpen(false);
         }}
         onCreateManually={(command, format) => createMutation.mutate({ command, format })}
@@ -932,6 +978,15 @@ export function CommandsPage() {
             message: authoringMessage,
           })
         }
+        onApplyAiProposal={() => {
+          if (pendingProposal?.source === "create") {
+            applyAuthoringMutation.mutate(pendingProposal);
+          }
+        }}
+        onDiscardAiProposal={() => {
+          applyAuthoringMutation.reset();
+          setPendingProposal(null);
+        }}
       />
 
       <Modal
@@ -1017,18 +1072,26 @@ function CreateCommandDialog({
   manualError,
   aiError,
   aiAvailable,
+  aiResponse,
+  commandsRoot,
   onClose,
   onCreateManually,
   onCreateWithAi,
+  onApplyAiProposal,
+  onDiscardAiProposal,
 }: {
   opened: boolean;
   pending: boolean;
   manualError: unknown;
   aiError: unknown;
   aiAvailable: boolean;
+  aiResponse: CommandAuthoringResponse | null;
+  commandsRoot: string;
   onClose: () => void;
   onCreateManually: (command: string, format: CommandFileFormat) => void;
   onCreateWithAi: (message: string) => void;
+  onApplyAiProposal: () => void;
+  onDiscardAiProposal: () => void;
 }) {
   const { t } = useTranslation();
   const [method, setMethod] = useState<"ai" | "manual">("ai");
@@ -1055,12 +1118,13 @@ function CreateCommandDialog({
       closeButtonProps={{ disabled: pending }}
       closeOnClickOutside={!pending}
       closeOnEscape={!pending}
+      size={method === "ai" && aiResponse?.action === "propose_changes" ? "xl" : "md"}
       title={t("commands.createTitle")}
     >
       <Stack>
         <SegmentedControl
           aria-label={t("commands.createMethodLabel")}
-          disabled={pending}
+          disabled={pending || Boolean(aiResponse)}
           fullWidth
           value={method}
           onChange={(value) => setMethod(value as "ai" | "manual")}
@@ -1069,7 +1133,32 @@ function CreateCommandDialog({
             { value: "manual", label: t("commands.createMethodManual") },
           ]}
         />
-        {method === "ai" ? (
+        {method === "ai" && aiResponse ? (
+          <Stack gap="sm">
+            {aiResponse.action === "propose_changes" ? (
+              <>
+                <Text size="sm">
+                  {t("commands.authoringProposal.ready", { count: aiResponse.changes.length })}
+                </Text>
+                <Text c="dimmed" size="sm">
+                  {aiResponse.message}
+                </Text>
+              </>
+            ) : (
+              <Text size="sm">{aiResponse.message}</Text>
+            )}
+            {aiResponse.action === "propose_changes" ? (
+              <CommandAuthoringWorkspace
+                changes={aiResponse.changes}
+                commandsRoot={commandsRoot}
+                pending={pending}
+                error={aiError}
+                onApply={onApplyAiProposal}
+                onDiscard={onDiscardAiProposal}
+              />
+            ) : null}
+          </Stack>
+        ) : method === "ai" ? (
           <Textarea
             autosize
             disabled={pending}
@@ -1105,7 +1194,7 @@ function CreateCommandDialog({
         {method === "ai" && !aiAvailable ? (
           <Alert color="warning">{t("commands.noMembersBody")}</Alert>
         ) : null}
-        {errorMessage ? (
+        {errorMessage && !(method === "ai" && aiResponse?.action === "propose_changes") ? (
           <Alert color="warning" title={t("commands.createErrorTitle")}>
             {errorMessage}
           </Alert>
@@ -1114,17 +1203,23 @@ function CreateCommandDialog({
           <Button variant="subtle" disabled={pending} onClick={onClose}>
             {t("commands.createCancel")}
           </Button>
-          <Button
-            loading={pending}
-            disabled={method === "ai" ? !aiAvailable || !request.trim() : !name.trim()}
-            onClick={() =>
-              method === "ai"
-                ? onCreateWithAi(request.trim())
-                : onCreateManually(name.trim(), format)
-            }
-          >
-            {t(method === "ai" ? "commands.createAiSubmit" : "commands.createSubmit")}
-          </Button>
+          {method === "ai" && aiResponse?.action === "answer" ? (
+            <Button variant="default" disabled={pending} onClick={onDiscardAiProposal}>
+              {t("commands.authoringProposal.back")}
+            </Button>
+          ) : method === "ai" && aiResponse ? null : (
+            <Button
+              loading={pending}
+              disabled={method === "ai" ? !aiAvailable || !request.trim() : !name.trim()}
+              onClick={() =>
+                method === "ai"
+                  ? onCreateWithAi(request.trim())
+                  : onCreateManually(name.trim(), format)
+              }
+            >
+              {t(method === "ai" ? "commands.createAiSubmit" : "commands.createSubmit")}
+            </Button>
+          )}
         </Group>
       </Stack>
     </Modal>

@@ -33,6 +33,8 @@ export type QuickRunTrigger = {
   command: string | null;
   /** Clipboard text captured when the hotkey fired. */
   text: string;
+  /** Clipboard image resource captured when the hotkey fired. */
+  image?: number | null;
 };
 
 /** Requirements (GitHub, Slack, LLM, ...) the command needs but does not have. */

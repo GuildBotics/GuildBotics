@@ -252,26 +252,80 @@ class CommandAuthoringRequest(AssistantTurnRequest):
     command: str = ""
     format: CommandFileFormat | None = None
     content: str = ""
+    file_id: str = ""
+    revision: str = ""
 
     @model_validator(mode="after")
     def validate_current_draft(self) -> CommandAuthoringRequest:
         """Require a complete current identity except on initial AI creation."""
         has_command = bool(self.command.strip())
         has_format = self.format is not None
-        if self.mode == "edit" and not (has_command and has_format):
-            raise ValueError("Existing command authoring requires command and format.")
-        if self.mode == "create" and has_command != has_format:
+        has_file = bool(self.file_id)
+        has_revision = bool(self.revision)
+        if self.mode == "edit" and not (
+            has_command and has_format and has_file and has_revision
+        ):
             raise ValueError(
-                "A new command draft requires command and format together."
+                "Existing command authoring requires command, format, file_id, and revision."
+            )
+        if self.mode == "create" and any(
+            (has_command, has_format, has_file, has_revision, bool(self.content))
+        ):
+            raise ValueError(
+                "New command authoring cannot include an existing draft identity."
+            )
+        return self
+
+
+class CommandAuthoringChange(BaseModel):
+    """One reviewed shared-command change proposed by the assistant."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["create", "update"]
+    command: str
+    format: CommandFileFormat
+    relative_path: str
+    content: str
+    file_id: str = ""
+    expected_revision: str = ""
+
+    @model_validator(mode="after")
+    def validate_target(self) -> CommandAuthoringChange:
+        """Require optimistic-concurrency identity only for updates."""
+        has_file = bool(self.file_id)
+        has_revision = bool(self.expected_revision)
+        if self.operation == "update" and not (has_file and has_revision):
+            raise ValueError("Command updates require file_id and expected_revision.")
+        if self.operation == "create" and (has_file or has_revision):
+            raise ValueError(
+                "Command creations cannot include an existing file identity."
             )
         return self
 
 
 class CommandAuthoringResponse(AssistantTurnResponse):
-    command: str
-    format: CommandFileFormat
-    relative_path: str
-    content: str
+    action: Literal["answer", "propose_changes"]
+    changes: list[CommandAuthoringChange] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_action(self) -> CommandAuthoringResponse:
+        """Keep conversational answers separate from source proposals."""
+        if self.action == "answer" and self.changes:
+            raise ValueError("An answer cannot include command changes.")
+        if self.action == "propose_changes" and not self.changes:
+            raise ValueError("A change proposal must include at least one change.")
+        return self
+
+
+class CommandAuthoringApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    changes: list[CommandAuthoringChange] = Field(min_length=1, max_length=10)
+
+
+class CommandAuthoringApplyResponse(BaseModel):
+    files: list[CommandFileDetail]
 
 
 class TroubleshootingFocus(BaseModel):

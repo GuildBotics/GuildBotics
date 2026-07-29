@@ -8,93 +8,44 @@ from typing import Any
 
 import pytest
 
-from guildbotics.commands.authoring import CommandAuthoringResult, author_command_turn
+from guildbotics.commands.authoring import (
+    CommandAuthoringChange,
+    CommandAuthoringFormat,
+    CommandAuthoringMode,
+    CommandAuthoringResult,
+    author_command_turn,
+)
 from guildbotics.commands.errors import CommandError
+from guildbotics.commands.validation import CommandValidationError
 
 AUTHOR_PROMPT = Path("guildbotics/templates/commands/functions/author_command")
+PYTHON_SOURCE = "def main(context):\n    return 'new'\n"
+CURRENT_SOURCE = "def main(context):\n    return 'old'\n"
+
+
+def _proposal(*changes: CommandAuthoringChange) -> CommandAuthoringResult:
+    return CommandAuthoringResult(
+        action="propose_changes",
+        message="Review the proposed changes.",
+        changes=list(changes),
+    )
 
 
 class _BrainStub:
-    def __init__(self) -> None:
-        self.message = ""
+    def __init__(self, *results: CommandAuthoringResult | str) -> None:
+        self.results = list(results)
+        self.messages: list[str] = []
         self.kwargs: dict[str, Any] = {}
 
-    async def run(self, message: str, **kwargs: Any) -> CommandAuthoringResult:
-        self.message = message
+    async def run(self, message: str, **kwargs: Any) -> CommandAuthoringResult | str:
+        self.messages.append(message)
         self.kwargs = kwargs
-        return CommandAuthoringResult(
-            message="Draft updated.",
-            command="reports/weekly",
-            format="python",
-            content="def main(context):\n    return 'new'\n",
-        )
-
-
-class _InvalidBrainStub:
-    async def run(self, message: str, **kwargs: Any) -> str:
-        return "not structured"
-
-
-class _CorrectionBrainStub:
-    def __init__(self) -> None:
-        self.messages: list[str] = []
-
-    async def run(self, message: str, **kwargs: Any) -> CommandAuthoringResult:
-        self.messages.append(message)
-        if len(self.messages) == 1:
-            content = "---\nargs:\n  - name: text\n---\nPolish the text.\n"
-        else:
-            content = (
-                "---\nbrain: default\ninputs:\n  message: required\n---\n"
-                "Polish the supplied input text.\n"
-            )
-        return CommandAuthoringResult(
-            message="Draft updated.",
-            command="polish-email",
-            format="markdown",
-            content=content,
-        )
-
-
-class _BrainSelectionCorrectionStub:
-    def __init__(self, first_brain: str) -> None:
-        self.messages: list[str] = []
-        self.first_brain = first_brain
-
-    async def run(self, message: str, **kwargs: Any) -> CommandAuthoringResult:
-        self.messages.append(message)
-        brain = self.first_brain if len(self.messages) == 1 else "brain: default\n"
-        return CommandAuthoringResult(
-            message="Draft updated.",
-            command="polish-email",
-            format="markdown",
-            content=(
-                "---\n"
-                f"{brain}"
-                "inputs:\n"
-                "  message: required\n"
-                "---\n"
-                "Polish the supplied input text as a business email.\n"
-            ),
-        )
-
-
-class _AlwaysInvalidCorrectionBrainStub:
-    def __init__(self) -> None:
-        self.messages: list[str] = []
-
-    async def run(self, message: str, **kwargs: Any) -> CommandAuthoringResult:
-        self.messages.append(message)
-        return CommandAuthoringResult(
-            message="Draft updated.",
-            command="polish-email",
-            format="markdown",
-            content="---\nbrain: default\nargs:\n  - name: text\n---\nBody.\n",
-        )
+        index = min(len(self.messages) - 1, len(self.results) - 1)
+        return self.results[index]
 
 
 class _ContextStub:
-    def __init__(self, brain: Any) -> None:
+    def __init__(self, brain: _BrainStub) -> None:
         self.brain = brain
 
     def get_brain(self, name: str, config: None, class_resolver: None) -> _BrainStub:
@@ -104,31 +55,73 @@ class _ContextStub:
         return self.brain
 
 
-@pytest.mark.asyncio
-async def test_author_command_turn_sends_current_draft_and_stable_conversation(
+async def _run(
     tmp_path: Path,
-) -> None:
-    brain = _BrainStub()
-
-    result = await author_command_turn(
+    brain: _BrainStub,
+    *,
+    mode: CommandAuthoringMode = "edit",
+    command: str = "reports/weekly",
+    command_format: CommandAuthoringFormat | None = "python",
+    content: str = CURRENT_SOURCE,
+    instruction: str = "Return the current week.",
+) -> CommandAuthoringResult:
+    return await author_command_turn(
         _ContextStub(brain),
-        mode="edit",
+        mode=mode,
         conversation_id="authoring-1",
         trace_id="trace-2",
-        command="reports/weekly",
-        command_format="python",
-        content="def main(context):\n    return 'old'\n",
-        instruction="Return the current week.",
+        command=command,
+        command_format=command_format,
+        content=content,
+        instruction=instruction,
+        available_commands=[
+            {
+                "command": "ocr/extract-text",
+                "format": "python",
+                "relative_path": "ocr/extract-text.py",
+                "content": "def main(context):\n    return context.pipe\n",
+            }
+        ],
         workspace_data_root=tmp_path,
     )
 
-    assert result.content == "def main(context):\n    return 'new'\n"
-    assert json.loads(brain.message) == {
+
+@pytest.mark.asyncio
+async def test_author_command_turn_sends_scope_and_uses_read_only_session(
+    tmp_path: Path,
+) -> None:
+    change = CommandAuthoringChange(
+        operation="update",
+        command="reports/weekly",
+        format="python",
+        content=PYTHON_SOURCE,
+    )
+    brain = _BrainStub(_proposal(change))
+
+    result = await _run(tmp_path, brain)
+
+    assert result.changes == [change]
+    assert json.loads(brain.messages[0]) == {
         "mode": "edit",
         "command": "reports/weekly",
         "format": "python",
-        "current_content": "def main(context):\n    return 'old'\n",
+        "current_content": CURRENT_SOURCE,
         "instruction": "Return the current week.",
+        "available_commands": [
+            {
+                "command": "ocr/extract-text",
+                "format": "python",
+                "relative_path": "ocr/extract-text.py",
+                "content": "def main(context):\n    return context.pipe\n",
+            }
+        ],
+        "allowed_operations": {
+            "update_current_command": True,
+            "create_shared_commands": True,
+            "delete_commands": False,
+            "change_current_command_format": False,
+            "modify_platform_code": False,
+        },
     }
     execution = brain.kwargs["session_state"]["agent_execution_context"]
     assert execution == {
@@ -137,10 +130,40 @@ async def test_author_command_turn_sends_current_draft_and_stable_conversation(
         "work_identity": "authoring-1",
         "resume_policy": "auto",
         "workspace_data_root": str(tmp_path),
-        # Authoring writes command drafts, so it is not a read-only turn.
-        "read_only": False,
+        "read_only": True,
     }
     assert brain.kwargs["cwd"] == tmp_path / "command-authoring"
+
+
+@pytest.mark.asyncio
+async def test_question_answer_skips_validation_and_never_proposes_a_change(
+    tmp_path: Path,
+) -> None:
+    current = (
+        "---\nname: Translate\nbrain: translation\n"
+        "inputs:\n  message: required\n---\nTranslate the input.\n"
+    )
+    brain = _BrainStub(
+        CommandAuthoringResult(
+            action="answer",
+            message="現在の許可範囲では、新しいPython helperの提案により実現可能です。",
+            changes=[],
+        )
+    )
+
+    result = await _run(
+        tmp_path,
+        brain,
+        command="translate",
+        command_format="markdown",
+        content=current,
+        instruction="とりあえずできるかどうかだけ教えてください。",
+    )
+
+    assert result.action == "answer"
+    assert result.changes == []
+    assert len(brain.messages) == 1
+    assert json.loads(brain.messages[0])["current_content"] == current
 
 
 @pytest.mark.asyncio
@@ -148,166 +171,117 @@ async def test_author_command_turn_rejects_unstructured_agent_output(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(CommandError, match="structured response"):
-        await author_command_turn(
-            _ContextStub(_InvalidBrainStub()),
-            mode="edit",
-            conversation_id="authoring-1",
-            trace_id="trace-1",
-            command="demo",
-            command_format="markdown",
-            content="body",
-            instruction="Update it",
-            workspace_data_root=tmp_path,
-        )
+        await _run(tmp_path, _BrainStub("not structured"))
 
 
 @pytest.mark.asyncio
-async def test_author_command_turn_allows_ai_to_choose_new_command_identity(
-    tmp_path: Path,
-) -> None:
-    result = await author_command_turn(
-        _ContextStub(_BrainStub()),
+async def test_create_may_propose_primary_and_helper_commands(tmp_path: Path) -> None:
+    primary = CommandAuthoringChange(
+        operation="create",
+        command="translate-file-aware",
+        format="python",
+        content=PYTHON_SOURCE,
+    )
+    helper = CommandAuthoringChange(
+        operation="create",
+        command="helpers/find-existing-path",
+        format="python",
+        content="def main(context):\n    return context.pipe\n",
+    )
+
+    result = await _run(
+        tmp_path,
+        _BrainStub(_proposal(primary, helper)),
         mode="create",
-        conversation_id="authoring-1",
-        trace_id="trace-1",
         command="",
         command_format=None,
         content="",
-        instruction="Create a weekly report.",
-        workspace_data_root=tmp_path,
+        instruction="Create a file-aware translation command.",
     )
 
-    assert result.command == "reports/weekly"
-    assert result.format == "python"
+    assert result.changes == [primary, helper]
 
 
 @pytest.mark.asyncio
-async def test_author_command_turn_rejects_identity_change_for_existing_command(
+async def test_invalid_generated_source_is_retried_with_original_instruction(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(CommandError, match="cannot rename or change the format"):
-        await author_command_turn(
-            _ContextStub(_BrainStub()),
-            mode="edit",
-            conversation_id="authoring-1",
-            trace_id="trace-1",
-            command="existing",
-            command_format="markdown",
-            content="body",
-            instruction="Update it",
-            workspace_data_root=tmp_path,
-        )
+    invalid = CommandAuthoringChange(
+        operation="create",
+        command="polish-email",
+        format="markdown",
+        content="---\nargs:\n  - name: text\n---\nPolish the text.\n",
+    )
+    corrected = invalid.model_copy(
+        update={
+            "content": (
+                "---\nbrain: default\ninputs:\n  message: required\n---\n"
+                "Polish the supplied input text.\n"
+            )
+        }
+    )
+    brain = _BrainStub(_proposal(invalid), _proposal(corrected))
 
-
-@pytest.mark.asyncio
-async def test_author_command_turn_retries_invalid_generated_source(
-    tmp_path: Path,
-) -> None:
-    brain = _CorrectionBrainStub()
-
-    result = await author_command_turn(
-        _ContextStub(brain),
+    result = await _run(
+        tmp_path,
+        brain,
         mode="create",
-        conversation_id="authoring-1",
-        trace_id="trace-1",
         command="",
         command_format=None,
         content="",
         instruction="Polish input email text.",
-        workspace_data_root=tmp_path,
     )
 
-    assert len(brain.messages) == 2
     correction = json.loads(brain.messages[1])
+    assert correction["original_instruction"] == "Polish input email text."
     assert correction["validation_error"] == "Command 'args' must be a mapping."
-    assert result.content == (
-        "---\nbrain: default\ninputs:\n  message: required\n---\n"
-        "Polish the supplied input text.\n"
-    )
+    assert result.changes == [corrected]
 
 
 @pytest.mark.asyncio
-async def test_author_command_turn_retries_no_op_message_transform(
-    tmp_path: Path,
-) -> None:
-    brain = _BrainSelectionCorrectionStub("brain: none\n")
-
-    result = await author_command_turn(
-        _ContextStub(brain),
-        mode="create",
-        conversation_id="authoring-1",
-        trace_id="trace-1",
-        command="",
-        command_format=None,
-        content="",
-        instruction="Polish the entered text as a business email.",
-        workspace_data_root=tmp_path,
+async def test_no_op_proposal_can_be_corrected_to_an_answer(tmp_path: Path) -> None:
+    no_op = CommandAuthoringChange(
+        operation="update",
+        command="reports/weekly",
+        format="python",
+        content=CURRENT_SOURCE,
     )
+    answer = CommandAuthoringResult(
+        action="answer", message="No source change was requested.", changes=[]
+    )
+    brain = _BrainStub(_proposal(no_op), answer)
 
+    result = await _run(tmp_path, brain, instruction="Can this be done?")
+
+    assert result == answer
     assert len(brain.messages) == 2
-    correction = json.loads(brain.messages[1])
-    assert "brain: none" in correction["validation_error"]
-    assert "brain: none" not in result.content
-    assert "brain: default" in result.content
 
 
 @pytest.mark.asyncio
-async def test_author_command_turn_retries_implicit_default_brain(
-    tmp_path: Path,
-) -> None:
-    brain = _BrainSelectionCorrectionStub("")
-
-    result = await author_command_turn(
-        _ContextStub(brain),
-        mode="create",
-        conversation_id="authoring-1",
-        trace_id="trace-1",
-        command="",
-        command_format=None,
-        content="",
-        instruction="Polish the entered text as a business email.",
-        workspace_data_root=tmp_path,
+async def test_second_invalid_proposal_is_rejected(tmp_path: Path) -> None:
+    wrong_target = CommandAuthoringChange(
+        operation="update",
+        command="another-command",
+        format="python",
+        content=PYTHON_SOURCE,
     )
+    brain = _BrainStub(_proposal(wrong_target))
+
+    with pytest.raises(CommandValidationError, match="currently edited command"):
+        await _run(tmp_path, brain)
 
     assert len(brain.messages) == 2
-    correction = json.loads(brain.messages[1])
-    assert "explicitly declare 'brain'" in correction["validation_error"]
-    assert "brain: default" in result.content
 
 
-@pytest.mark.asyncio
-async def test_author_command_turn_reports_validation_after_failed_retry(
-    tmp_path: Path,
-) -> None:
-    brain = _AlwaysInvalidCorrectionBrainStub()
-
-    result = await author_command_turn(
-        _ContextStub(brain),
-        mode="create",
-        conversation_id="authoring-1",
-        trace_id="trace-1",
-        command="",
-        command_format=None,
-        content="",
-        instruction="Create a command.",
-        workspace_data_root=tmp_path,
-    )
-
-    assert len(brain.messages) == 2
-    assert "Command 'args' must be a mapping" in result.message
-
-
-@pytest.mark.parametrize(
-    "language",
-    ["en", "ja"],
-)
-def test_author_prompt_uses_message_for_free_form_input(
-    language: str,
-) -> None:
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_author_prompt_defines_answer_and_reviewed_proposal_contract(language: str) -> None:
     body = AUTHOR_PROMPT.with_suffix(f".{language}.md").read_text(encoding="utf-8")
 
+    assert "action: answer" in body
+    assert "action: propose_changes" in body
+    assert "available_commands" in body
+    assert "allowed_operations" in body
+    assert "`message`" in body
+    assert "Markdown fence" in body
     assert "Context.pipe" in body
-    assert "message: required" in body
-    assert "args:" in body
-    assert "target:" in body
     assert "brain: default" in body

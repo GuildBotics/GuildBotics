@@ -18,6 +18,9 @@ import pytest
 from pydantic import ValidationError
 
 from guildbotics.app_api.models import (
+    CommandAuthoringChange,
+    CommandAuthoringRequest,
+    CommandAuthoringResponse,
     CommandOption,
     CommandRunRequest,
     ProjectConfigUpdateRequest,
@@ -30,6 +33,46 @@ from guildbotics.editions.simple.setup_service import (
 
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
+
+
+def test_command_authoring_edit_requires_file_revision_identity() -> None:
+    with pytest.raises(ValidationError):
+        CommandAuthoringRequest(
+            mode="edit",
+            conversation_id="conversation",
+            message="Update it.",
+            command="translate",
+            format="markdown",
+            content="source",
+        )
+
+
+def test_command_authoring_create_rejects_existing_draft_fields() -> None:
+    with pytest.raises(ValidationError):
+        CommandAuthoringRequest(
+            mode="create",
+            conversation_id="conversation",
+            message="Create it.",
+            content="source",
+        )
+
+
+def test_command_authoring_answer_cannot_contain_changes() -> None:
+    change = CommandAuthoringChange(
+        operation="create",
+        command="helper",
+        format="python",
+        relative_path="helper.py",
+        content="def main(context):\n    return ''\n",
+    )
+
+    with pytest.raises(ValidationError):
+        CommandAuthoringResponse(
+            trace_id="trace",
+            message="Answer.",
+            action="answer",
+            changes=[change],
+        )
 
 
 def _project_update_kwargs(**overrides: object) -> dict[str, object]:

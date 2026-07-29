@@ -1175,11 +1175,80 @@ describe("Diagnostics troubleshooting assistant", () => {
 
   it("names the member the assistant runs as", async () => {
     const user = userEvent.setup();
-    const panel = await openAssistant(user);
+    await openAssistant(user);
 
     expect(
-      within(panel).getByText(t("diagnostics.troubleshooting.runsAs", { person: "Alice" })),
+      screen.getByRole("button", {
+        name: t("diagnostics.troubleshooting.runner", { person: "Alice" }),
+      }),
     ).toBeInTheDocument();
+  });
+
+  it("switches the member used by the troubleshooting assistant", async () => {
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      members: [
+        {
+          person_id: "alice",
+          name: "Alice",
+          person_type: "agent",
+          is_active: true,
+          roles: ["developer"],
+        },
+        {
+          person_id: "bob",
+          name: "Bob",
+          person_type: "agent",
+          is_active: true,
+          roles: ["reviewer"],
+        },
+      ],
+      default_person_id: "alice",
+    });
+    const user = userEvent.setup();
+    await openAssistant(user);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: t("diagnostics.troubleshooting.runner", { person: "Alice" }),
+      }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Bob" }));
+    const nextPanel = await screen.findByRole("region", {
+      name: t("diagnostics.troubleshooting.title"),
+    });
+    await user.type(
+      within(nextPanel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
+      "why did this fail?",
+    );
+    await user.click(
+      within(nextPanel).getByRole("button", { name: t("diagnostics.troubleshooting.send") }),
+    );
+
+    await waitFor(() =>
+      expect(vi.mocked(troubleshoot)).toHaveBeenCalledWith(
+        expect.objectContaining({ person: "bob" }),
+      ),
+    );
+  });
+
+  it("scrolls to a troubleshooting response", async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const user = userEvent.setup();
+    const panel = await openAssistant(user);
+    scrollIntoView.mockClear();
+
+    await user.type(
+      within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
+      "why?",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: t("diagnostics.troubleshooting.send") }),
+    );
+
+    await within(panel).findByText("The GitHub token expired at 00:00:02.");
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "end" });
+    scrollIntoView.mockRestore();
   });
 
   it("discloses that diagnostics leave the machine", async () => {

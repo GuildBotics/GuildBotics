@@ -29,6 +29,8 @@ export type AssistantChatPanelProps = {
   onSubmit: (message: string) => void;
   /** Scroll the transcript when a new assistant response is appended. */
   autoScrollOnAssistantResponse?: boolean;
+  /** Replaces the decorative assistant icon with an interactive identity control. */
+  identity?: ReactNode;
   /** Rendered above the transcript, for target badges and disclosures. */
   header?: ReactNode;
   /** Rendered while pending, for live progress from the running turn. */
@@ -43,6 +45,7 @@ export function AssistantChatPanel({
   error,
   onSubmit,
   autoScrollOnAssistantResponse = false,
+  identity,
   header,
   progress,
 }: AssistantChatPanelProps) {
@@ -85,7 +88,7 @@ export function AssistantChatPanel({
   return (
     <section className="assistant-chat-panel" aria-label={t(`${namespace}.title`)}>
       <Group className="assistant-chat-heading" gap="xs">
-        <Sparkles size={16} />
+        {identity ?? <Sparkles size={16} />}
         <Title order={3}>{t(`${namespace}.title`)}</Title>
       </Group>
 

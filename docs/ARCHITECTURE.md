@@ -8,11 +8,11 @@ document and the implementation disagree, fix the document (see `AGENTS.md`).
 
 ## 1. System Overview
 
-GuildBotics runs AI agents as *team members* that collaborate through GitHub and Slack.
+GuildBotics runs AI agents as _team members_ that collaborate through GitHub and Slack.
 A scheduler starts one worker per active member; workers pick up work from GitHub
 Projects (tickets) or from incoming Slack events, then delegate the actual
 investigation/editing/judgment to an external AI CLI tool (Claude Code, Codex CLI,
-Antigravity CLI, ...). External side effects that the AI agent performs *as the member*
+Antigravity CLI, ...). External side effects that the AI agent performs _as the member_
 — git pushes, GitHub comments and PRs, Slack posts, memory writes — go through a single
 boundary: the `guildbotics member ...` CLI (member capability). Workflows additionally
 perform a narrow set of orchestration/status writes of their own (see §3).
@@ -121,7 +121,7 @@ attributes, `Context.shared_state` injection), while discovery stays asymmetric 
 purpose:
 
 - **Ticket workflow** (`workflows/ticket_driven_workflow`, the default routine of the
-  Simple edition): a routine that *polls* GitHub ProjectV2. The project board is treated
+  Simple edition): a routine that _polls_ GitHub ProjectV2. The project board is treated
   as a loose queue/trigger — GuildBotics does not reimplement fine-grained GitHub/git
   operations around it, and there is no GitHub webhook receiver (local-first design).
   Ticket selection lives in `drivers/ticket_selector.py`.
@@ -141,7 +141,7 @@ Invariants:
   undeclared commands fail closed as write-capable instead of being classified from
   command-name strings.
 - The long-running background service is singleton per machine. CLI `guildbotics
-  start` and the Desktop-managed service contend on the same OS advisory lock at
+start` and the Desktop-managed service contend on the same OS advisory lock at
   `<machine-state-root>/run/service.lock`; the lock covers scheduler workers and the
   event listener together. The persistent file contains owner metadata for status and
   CLI stop handling, but file existence is not a liveness signal. Desktop-owned
@@ -245,19 +245,26 @@ The generic execution substrate used by workflows and custom commands:
   dictionary. Catalog and validation code read it through the AST without
   importing the command, so a Python command, its metadata, its editor revision,
   and its save operation remain one physical file.
-- The Desktop command editor's AI assistant keeps the draft and chat messages in
-  the frontend. Each `/commands/author` request sends the complete current draft
-  and latest instruction; the backend retains no draft, chat, or authoring-status
-  state. The single New command dialog selects AI or manual creation. AI creation
-  starts without a command name or format; the agent proposes both according to
-  the requested behavior and returns a complete source. This remains a virtual
-  frontend draft with no file ID until Save creates the file atomically. Manual
-  creation keeps the explicit name/format fields and immediately creates the
-  normal starter source. A stable `authoring_id` selects one provider conversation
-  with `resume_policy=auto`, while every turn receives a fresh trace ID and returns
-  replacement draft identity and source. Existing-file authoring cannot rename or
-  change format. The provider conversation store retains only the session metadata
-  needed for resumption and traceability.
+- The Desktop command editor's AI assistant separates conversation from mutation.
+  Each read-only `/commands/author` request sends the complete current editor buffer,
+  latest instruction, permitted operations and effective shared command sources.
+  A question returns `action=answer` with no changes and bypasses source validation;
+  an explicit modification request returns a reviewed `create`/`update` proposal.
+  Existing-file authoring can update only the current command without renaming or
+  changing its format, but may create new shared helper/wrapper commands. Desktop
+  does not change the editor when either response arrives. Chat retains only a
+  short proposal notice; a separate read-only editor workspace displays one
+  scrollable tab per current, created, or updated file with its relative path.
+  Updated files use a line-numbered inline diff with explicit additions and
+  deletions. Only an explicit Apply calls `/commands/author/apply`, and a
+  create-only edit proposal leaves the originally selected command open.
+  That endpoint preflights every source, target and expected revision before writing
+  the change set and rolls back completed writes if persistence fails. Manual
+  creation still creates the normal starter source immediately. A stable
+  `conversation_id` selects one provider conversation with `resume_policy=auto`,
+  while every turn receives a fresh trace ID. The backend retains no chat or pending
+  proposal state; the provider store keeps only session metadata needed for
+  resumption and traceability.
 - Run target guarantee: "save and run" sends the expected file ID + revision.
   Before running, the App API resolves the member once (request person, else the
   team default) and both the guard and the run use it, so the file that is
@@ -305,12 +312,12 @@ Members persist knowledge across runs as a document store (mechanism in
 
 Path resolution separates four roots (implementation: `utils/fileio.py`).
 
-| Root | Location | Holds |
-|---|---|---|
-| Machine state root | `$HOME/.guildbotics/data` (fixed) | `active-workspace.json`, `run/service.lock` — state needed *before* a workspace is chosen |
-| Runtime workspace root | selected workspace (App API `chdir`s to it; member CLI resolves `--workspace` → explicit config → cwd → active workspace) | `.env`, `.guildbotics/config` |
-| Workspace data root | `<workspace>/.guildbotics/data`, overridable via `GUILDBOTICS_DATA_DIR` | member workspaces (`workspaces/<person_id>`), task-run evidence (`task-runs/*.jsonl`), diagnostics index (`run/diagnostics.jsonl`), execution transcripts (`run/sessions/*.jsonl`), chat state, documents |
-| Config root | `GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`; package templates as fallback | project / member configuration, desktop hotkey assignments (`hotkeys.yml`) |
+| Root                   | Location                                                                                                                  | Holds                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Machine state root     | `$HOME/.guildbotics/data` (fixed)                                                                                         | `active-workspace.json`, `run/service.lock` — state needed _before_ a workspace is chosen                                                                                                                 |
+| Runtime workspace root | selected workspace (App API `chdir`s to it; member CLI resolves `--workspace` → explicit config → cwd → active workspace) | `.env`, `.guildbotics/config`                                                                                                                                                                             |
+| Workspace data root    | `<workspace>/.guildbotics/data`, overridable via `GUILDBOTICS_DATA_DIR`                                                   | member workspaces (`workspaces/<person_id>`), task-run evidence (`task-runs/*.jsonl`), diagnostics index (`run/diagnostics.jsonl`), execution transcripts (`run/sessions/*.jsonl`), chat state, documents |
+| Config root            | `GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`; package templates as fallback                                      | project / member configuration, desktop hotkey assignments (`hotkeys.yml`)                                                                                                                                |
 
 Invariants:
 
@@ -319,9 +326,9 @@ Invariants:
 - App API startup restores `active-workspace.json` before constructing stores and runtime
   services. Missing or invalid state falls back to the process startup directory. The Desktop
   frontend neither persists nor restores workspace state from browser storage.
-- `GUILDBOTICS_CONFIG_DIR` selects the *config source* only; it is not a workspace or
+- `GUILDBOTICS_CONFIG_DIR` selects the _config source_ only; it is not a workspace or
   data root.
-- The effective workspace data root is fixed at the *workspace application boundary*
+- The effective workspace data root is fixed at the _workspace application boundary_
   (App API `set_workspace()`, CLI/member CLI startup, `run`/`start` initialization) and
   written to `os.environ["GUILDBOTICS_DATA_DIR"]` there — and only there. Workers,
   workflows, and commands never mutate it mid-run; native agent invocations carry the
@@ -344,12 +351,12 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   machines). New workspace setup pins the backend: keyring when a keychain is
   available, env-file otherwise. Backend selection: `GUILDBOTICS_SECRETS_BACKEND`
   env var > `secrets.yml` > env-file. Machine moves use `guildbotics secrets
-  export` / `import`.
+export` / `import`.
 - **Resolution priority** at process start: real environment variables > OS keychain >
   `.env`. Values are injected into `os.environ` once at startup; app_api removes its
   own injected keys on workspace switch but preserves variables inherited from the
   parent process.
-- **Exception**: `*_GITHUB_PRIVATE_KEY` (GitHub App PEM content) is *never* injected
+- **Exception**: `*_GITHUB_PRIVATE_KEY` (GitHub App PEM content) is _never_ injected
   into the environment — AI CLI tool subprocesses inherit `os.environ` wholesale, so an
   App private key in the environment would leak to every agent process. Consumers read
   it on demand through the secret store; env-file workspaces configure a
@@ -380,7 +387,7 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
 - **Consumption**: `app_api` reads the index, selected execution transcript, and memory
   audit, and converts provider payloads into provider-neutral activity
   events/links/titles for the desktop Activity History (`activity_events.py`,
-  `activity_links.py`). Display normalization lives *only* there — not in
+  `activity_links.py`). Display normalization lives _only_ there — not in
   observability, not in the frontend. Manual desktop command runs (`source: manual`)
   are excluded from the session timeline because they fire constantly; anything they
   changed still appears as an activity event. Desktop AI assistant turns record under
@@ -433,18 +440,20 @@ a monorepo on purpose.
 - **Packaging**: `scripts/desktop-build-backend.sh` builds two PyInstaller sidecars
   (`guildbotics-app-api`, `guildbotics-cli`) into `desktop/src-tauri/binaries/`. The
   app also installs a managed `guildbotics` CLI shim and the GuildBotics skill for
-  interactive agents. External AI CLI tools are *not* bundled — the GUI detects,
+  interactive agents. External AI CLI tools are _not_ bundled — the GUI detects,
   verifies, and configures them only.
 - **Global hotkeys and the quick-run window**: assignments live in the workspace config
   (`.guildbotics/config/hotkeys.yml`, served by `GET`/`PUT /hotkeys`), so they travel
   with the workspace rather than being pinned to one machine. `guildbotics/app_api/hotkeys.py`
   owns the accelerator grammar and the conflict rules; the Tauri host only registers
-  what the frontend hands it. Pressing a combination reads the clipboard and opens a
-  frameless window (`quick.html`): the generic hotkey offers a command picker, a
-  per-command hotkey runs straight away unless a required input is missing, in which
-  case the window waits. Because hotkeys only fire while the process lives, closing a
-  window hides it and the app stays resident in the menu bar; quitting goes through the
-  tray, which is where the "work still running" guard now lives.
+  what the frontend hands it. Pressing a combination reads clipboard text or an image
+  and opens a resizable frameless window (`quick.html`); clipboard images are persisted
+  through the same session-scoped input-file store used by paste. The generic hotkey
+  offers a command picker, while a per-command hotkey runs straight away unless a
+  required input is missing, in which case the window waits. Because hotkeys only fire
+  while the process lives, closing a window hides it and the app stays resident in the
+  menu bar; quitting goes through the tray, which is where the "work still running"
+  guard now lives.
 - **AI assistants**: the command editor and the diagnostics screen each host a
   conversational assistant. Both share one substrate:
   `guildbotics/intelligences/assistants.py` opens a resumable, structured turn (one JSON
@@ -456,8 +465,9 @@ a monorepo on purpose.
   adapter forces a `read-only` sandbox with no network, and `cli_agent` takes no member
   execution lease. Only such a turn is tracked non-exclusively, so it stays usable while
   that member runs scheduled work — which is exactly when its logs are worth asking
-  about. A turn that can write (command authoring) keeps the lease it has always held.
-  On the frontend,
+  about. Command authoring is also read-only: it can inspect the effective shared
+  command sources and return structured proposals, but only the separate explicit
+  apply endpoint writes them. On the frontend,
   `desktop/src/assistant/` owns the shared chat panel and conversation state; each screen
   keeps its own mutation. Conversations are never persisted on this side.
 - **Troubleshooting assistant**: opened from the diagnostics screen, it answers questions
@@ -482,7 +492,7 @@ Two Person distinctions matter architecturally:
 
 - **AI members** are execution subjects: active members get a scheduler worker, Slack
   subscriptions, credentials, and an intelligence (brain) configuration.
-- **Human members** are *references to real people* (roles, Slack user id, GitHub
+- **Human members** are _references to real people_ (roles, Slack user id, GitHub
   username, avatar) used for handoff candidates and assignee mapping. They are saved
   with `is_active: false`, are never scheduled, hold no bot/app credentials, and the
   desktop settings UI intentionally hides all agent-execution fields for them. Treat

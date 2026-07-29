@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, ResourceId, WebviewWindow};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -44,6 +44,8 @@ pub struct HotkeyTrigger {
     command: Option<String>,
     /// Clipboard text at the moment the combination fired.
     text: String,
+    /// Clipboard image captured as a resource owned by the quick webview.
+    image: Option<ResourceId>,
 }
 
 #[derive(serde::Serialize)]
@@ -235,6 +237,16 @@ pub struct ClipboardPoll {
     change_count: i64,
     /// Contents, read only when the counter moved since `since`.
     text: Option<String>,
+    /// Image resource, present instead of text when the clipboard holds an image.
+    image: Option<ResourceId>,
+}
+
+fn read_clipboard(window: &WebviewWindow) -> (String, Option<ResourceId>) {
+    if let Ok(image) = window.clipboard().read_image() {
+        let resource_id = window.resources_table().add(image.to_owned());
+        return (String::new(), Some(resource_id));
+    }
+    (window.clipboard().read_text().unwrap_or_default(), None)
 }
 
 #[tauri::command]
@@ -243,22 +255,28 @@ pub fn clipboard_watch_supported() -> bool {
 }
 
 #[tauri::command]
-pub fn poll_clipboard(app: AppHandle, since: i64) -> ClipboardPoll {
+pub async fn poll_clipboard(window: WebviewWindow, since: i64) -> ClipboardPoll {
     let Some(change_count) = pasteboard_change_count() else {
         return ClipboardPoll {
             change_count: since,
             text: None,
+            image: None,
         };
     };
-    if change_count == since {
+    if since < 0 || change_count == since {
         return ClipboardPoll {
             change_count,
             text: None,
+            image: None,
         };
     }
+    let (text, image) = tauri::async_runtime::spawn_blocking(move || read_clipboard(&window))
+        .await
+        .unwrap_or_default();
     ClipboardPoll {
         change_count,
-        text: Some(app.clipboard().read_text().unwrap_or_default()),
+        text: image.is_none().then_some(text),
+        image,
     }
 }
 
@@ -287,15 +305,27 @@ fn on_hotkey(app: &AppHandle, shortcut: &Shortcut) {
         Err(_) => return,
     };
 
-    // Read before revealing the window: the clipboard belongs to whatever the
-    // user was working in, and showing the window takes focus away from it.
-    let text = app.clipboard().read_text().unwrap_or_default();
-    let _ = app.emit("hotkey://triggered", HotkeyTrigger { command, text });
-
-    if let Some(window) = app.get_webview_window(QUICK_WINDOW) {
-        let _ = window.show();
-        focus_quick_window(&window);
-    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(window) = app.get_webview_window(QUICK_WINDOW) else {
+            return;
+        };
+        // Read before revealing the window: the clipboard belongs to whatever
+        // the user was working in, and showing the window takes focus away from it.
+        let (text, image) = read_clipboard(&window);
+        let _ = app.run_on_main_thread(move || {
+            let _ = window.emit(
+                "hotkey://triggered",
+                HotkeyTrigger {
+                    command,
+                    text,
+                    image,
+                },
+            );
+            let _ = window.show();
+            focus_quick_window(&window);
+        });
+    });
 }
 
 /// Prepare the quick-run window. Called once, after the windows exist.

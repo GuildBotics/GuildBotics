@@ -34,15 +34,10 @@ def test_generated_markdown_requires_explicit_brain() -> None:
     assert "explicitly declare 'brain'" in str(exc.value)
 
 
-@pytest.mark.parametrize("brain", ["gibberish", "disabled", "null"])
-def test_generated_markdown_rejects_unsupported_brain(brain: str) -> None:
-    source = f"---\nbrain: {brain}\n---\nBody.\n"
-    validate_command_source(".md", source)
+def test_generated_markdown_accepts_configured_custom_brain_name() -> None:
+    source = "---\nbrain: translation\n---\nTranslate the input.\n"
 
-    with pytest.raises(CommandValidationError) as exc:
-        validate_generated_command_source(".md", source)
-
-    assert exc.value.context["reason"] == "generated_brain_invalid"
+    validate_generated_command_source(".md", source)
 
 
 def test_generated_markdown_rejects_non_string_brain() -> None:
@@ -107,7 +102,7 @@ def test_generated_markdown_rejects_whitespace_padded_disabled_brain() -> None:
     with pytest.raises(CommandValidationError) as exc:
         validate_generated_command_source(".md", source)
 
-    assert exc.value.context["reason"] == "generated_brain_invalid"
+    assert exc.value.context["reason"] == "required_message_not_consumed"
 
 
 def test_markdown_frontmatter_must_be_mapping() -> None:

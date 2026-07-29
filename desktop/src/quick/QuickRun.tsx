@@ -1,18 +1,15 @@
 import {
   ActionIcon,
   Alert,
-  Avatar,
   Badge,
   Button,
   Checkbox,
   Group,
   Loader,
-  Menu,
   Select,
   Text,
   TextInput,
   Tooltip,
-  UnstyledButton,
 } from "@mantine/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Play, X } from "lucide-react";
@@ -23,19 +20,26 @@ import {
   getCommandOptions,
   getTeam,
   getTraceDetail,
-  memberAvatarUrl,
   runCommand,
   subscribeEvents,
+  uploadCommandInputFile,
   type CommandOption,
 } from "../api/client";
 import { buildFileRunArgs } from "../commands/commandEditorState";
 import { CommandInput } from "../commands/CommandInput";
-import { clipboardWatchSupported, hideQuickWindow, pollClipboard } from "../hotkeys/hotkeyRuntime";
+import {
+  clipboardImageFile,
+  clipboardWatchSupported,
+  hideQuickWindow,
+  pollClipboard,
+  releaseClipboardImage,
+} from "../hotkeys/hotkeyRuntime";
 import {
   tracePresentationLabel,
   tracePresentationMessage,
   tracePresentationTone,
 } from "../tracePresentation";
+import { MemberSelector } from "../MemberSelector";
 import {
   canRunUnattended,
   CLIPBOARD_POLL_MS,
@@ -217,37 +221,59 @@ export function QuickRun(props: QuickRunProps) {
   const subscribe = props.subscribe;
   useEffect(() => {
     return subscribe(async (trigger) => {
-      // The hotkey can fire before the team and command list have loaded, so
-      // wait for them rather than deciding against an empty list — and resolve
-      // the member first, since the catalogue depends on it.
-      const teamData = await queryClient.ensureQueryData(TEAM_QUERY);
-      const activeRunner = resolveRunner(teamData, loadLastPerson());
-      const { options: available } = await queryClient.ensureQueryData(
-        optionsQueryFor(activeRunner?.person_id ?? null),
-      );
-      const next = trigger.command ?? initialCommand(available, loadLastCommand());
-      const option = available.find((candidate) => candidate.command === next);
-      if (!trigger.command && next) {
-        // Remember the fallback too, so the picker keeps showing the same
-        // command until the user chooses a different one.
-        saveLastCommand(next);
-      }
-      const auto = trigger.command != null;
-      dismissing.current = false;
-      clearIdleRun();
-      setCommand(next);
-      setDedicated(auto);
-      setAutoRun(auto);
-      setMessage(trigger.text);
-      setArgValues({});
-      setRun({ status: "idle" });
-      setVisible(true);
+      let pendingImage = trigger.image;
+      try {
+        // The hotkey can fire before the team and command list have loaded, so
+        // wait for them rather than deciding against an empty list — and resolve
+        // the member first, since the catalogue depends on it.
+        const teamData = await queryClient.ensureQueryData(TEAM_QUERY);
+        const activeRunner = resolveRunner(teamData, loadLastPerson());
+        const { options: available } = await queryClient.ensureQueryData(
+          optionsQueryFor(activeRunner?.person_id ?? null),
+        );
+        const next = trigger.command ?? initialCommand(available, loadLastCommand());
+        const option = available.find((candidate) => candidate.command === next);
+        if (!trigger.command && next) {
+          // Remember the fallback too, so the picker keeps showing the same
+          // command until the user chooses a different one.
+          saveLastCommand(next);
+        }
+        const auto = trigger.command != null;
+        dismissing.current = false;
+        clearIdleRun();
+        setCommand(next);
+        setDedicated(auto);
+        setAutoRun(auto);
+        setMessage(trigger.text);
+        setArgValues({});
+        setRun({ status: "idle" });
+        setVisible(true);
 
-      // Auto-run still waits when something the command requires is missing.
-      if (auto && option && canRunUnattended(option, trigger.text, {})) {
-        void execute(option, trigger.text, {});
-      } else {
-        messageRef.current?.focus();
+        let input = trigger.text;
+        if (pendingImage != null) {
+          try {
+            const resourceId = pendingImage;
+            pendingImage = null;
+            const file = await clipboardImageFile(resourceId);
+            input = (await uploadCommandInputFile(file)).path;
+            setMessage(input);
+          } catch (cause) {
+            setRun({ status: "failed", message: String(cause) });
+            messageRef.current?.focus();
+            return;
+          }
+        }
+
+        // Auto-run still waits when something the command requires is missing.
+        if (auto && option && canRunUnattended(option, input, {})) {
+          void execute(option, input, {});
+        } else {
+          messageRef.current?.focus();
+        }
+      } finally {
+        if (pendingImage != null) {
+          await releaseClipboardImage(pendingImage);
+        }
       }
     });
   }, [clearIdleRun, execute, queryClient, subscribe]);
@@ -350,22 +376,50 @@ export function QuickRun(props: QuickRunProps) {
     let stopped = false;
     const timer = window.setInterval(async () => {
       const poll = await pollClipboard(since ?? -1);
-      if (stopped || !poll) {
+      if (!poll) {
+        return;
+      }
+      if (stopped) {
+        if (poll.image !== null) {
+          void releaseClipboardImage(poll.image);
+        }
         return;
       }
       const baseline = since === null;
       since = poll.change_count;
-      if (baseline || poll.text === null) {
+      if (baseline) {
         return;
       }
-      if (poll.text === selfCopied.current) {
+
+      let input = poll.text;
+      if (poll.image !== null) {
+        try {
+          const file = await clipboardImageFile(poll.image);
+          if (stopped) {
+            return;
+          }
+          input = (await uploadCommandInputFile(file)).path;
+          if (stopped) {
+            return;
+          }
+        } catch (cause) {
+          if (!stopped) {
+            setRun({ status: "failed", message: String(cause) });
+          }
+          return;
+        }
+      }
+      if (input === null) {
+        return;
+      }
+      if (input === selfCopied.current) {
         // Our own copy. The baseline has already advanced, so the next copy
         // from anywhere still registers.
         selfCopied.current = null;
         return;
       }
-      setMessage(poll.text);
-      runOnInputChange(poll.text);
+      setMessage(input);
+      runOnInputChange(input);
     }, CLIPBOARD_POLL_MS);
     return () => {
       stopped = true;
@@ -408,41 +462,16 @@ export function QuickRun(props: QuickRunProps) {
       </ActionIcon>
 
       <Group gap="xs" wrap="nowrap" className="quick-run-header">
-        <Menu position="bottom-start" withinPortal>
-          <Menu.Target>
-            <UnstyledButton
-              className="quick-run-runner"
-              aria-label={t("quickRun.runner", { member: runner?.name ?? "" })}
-            >
-              <Avatar
-                src={runner ? memberAvatarUrl(runner.person_id) : undefined}
-                size={28}
-                radius="xl"
-                alt={runner?.name ?? ""}
-              >
-                {runner?.name.slice(0, 1) ?? ""}
-              </Avatar>
-            </UnstyledButton>
-          </Menu.Target>
-          <Menu.Dropdown>
-            {activeMembers.map((member) => (
-              <Menu.Item
-                key={member.person_id}
-                leftSection={
-                  <Avatar src={memberAvatarUrl(member.person_id)} size={20} radius="xl">
-                    {member.name.slice(0, 1)}
-                  </Avatar>
-                }
-                onClick={() => {
-                  setPerson(member.person_id);
-                  saveLastPerson(member.person_id);
-                }}
-              >
-                {member.name}
-              </Menu.Item>
-            ))}
-          </Menu.Dropdown>
-        </Menu>
+        <MemberSelector
+          className="quick-run-runner"
+          ariaLabel={t("quickRun.runner", { member: runner?.name ?? "" })}
+          member={runner}
+          members={activeMembers}
+          onChange={(personId) => {
+            setPerson(personId);
+            saveLastPerson(personId);
+          }}
+        />
 
         {dedicated ? (
           <Text fw={500} size="sm" className="quick-run-title">

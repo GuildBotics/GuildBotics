@@ -716,6 +716,165 @@ pre {
   min-width: 0;
 }
 
+.command-authoring-workspace {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.command-authoring-tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.command-authoring-tabs-list {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.command-authoring-tabs-list button {
+  flex: 0 0 auto;
+  max-width: 320px;
+}
+
+.command-authoring-tabs-panel[data-active] {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.command-authoring-actions {
+  background: var(--color-bg-panel);
+  border-top: 1px solid var(--color-border-subtle);
+  flex: 0 0 auto;
+  padding: 10px;
+  position: relative;
+  z-index: 1;
+}
+
+.command-authoring-help {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.command-authoring-buttons {
+  flex: 0 0 auto;
+}
+
+.command-source-preview,
+.command-source-diff {
+  border: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.command-source-preview-scroll,
+.command-source-diff-scroll {
+  background: var(--color-bg-panel);
+  flex: 1;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+  height: 0;
+  line-height: 1.5;
+  min-height: 0;
+  min-width: 0;
+  overscroll-behavior: contain;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.command-source-preview-line {
+  display: grid;
+  grid-template-columns: 42px max-content;
+  min-height: 20px;
+  min-width: 100%;
+  width: max-content;
+}
+
+.command-source-preview-number {
+  border-right: 1px solid var(--color-border-subtle);
+  color: var(--color-text-subtle);
+  padding: 0 7px;
+  text-align: right;
+  user-select: none;
+}
+
+.command-source-preview-line code {
+  color: inherit;
+  font-family: inherit;
+  padding: 0 12px 0 8px;
+  white-space: pre;
+}
+
+.command-source-diff-line {
+  display: grid;
+  grid-template-columns: 42px 42px 24px max-content;
+  min-height: 20px;
+  min-width: 100%;
+  width: max-content;
+}
+
+.command-source-diff-line-addition {
+  background: color-mix(in srgb, var(--mantine-color-green-6) 14%, transparent);
+}
+
+.command-source-diff-line-deletion {
+  background: color-mix(in srgb, var(--mantine-color-red-6) 14%, transparent);
+}
+
+.command-source-diff-number,
+.command-source-diff-marker {
+  color: var(--color-text-subtle);
+  padding: 0 7px;
+  text-align: right;
+  user-select: none;
+}
+
+.command-source-diff-number {
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.command-source-diff-marker {
+  font-weight: 700;
+  text-align: center;
+}
+
+.command-source-diff-line-addition .command-source-diff-marker {
+  color: var(--mantine-color-green-7);
+}
+
+.command-source-diff-line-deletion .command-source-diff-marker {
+  color: var(--mantine-color-red-7);
+}
+
+.command-source-diff-line code {
+  color: inherit;
+  font-family: inherit;
+  padding-right: 12px;
+  white-space: pre;
+}
+
+.mantine-Modal-body .command-authoring-workspace {
+  flex: none;
+  height: clamp(280px, 55vh, 520px);
+}
+
 .assistant-chat-panel {
   background: var(--color-bg-panel);
   border: 1px solid var(--color-border-subtle);
@@ -842,6 +1001,7 @@ pre {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .command-editor-surface .cm-editor {
@@ -851,6 +1011,7 @@ pre {
 .command-editor-surface .cm-scroller {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 13px;
+  overflow: auto;
 }
 
 .command-run-panel {

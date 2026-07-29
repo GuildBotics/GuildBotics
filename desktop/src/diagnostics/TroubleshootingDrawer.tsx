@@ -12,6 +12,7 @@ import {
 } from "../api/client";
 import { AssistantChatPanel, type AssistantReference } from "../assistant/AssistantChatPanel";
 import { useAssistantConversation } from "../assistant/useAssistantConversation";
+import { MemberSelector } from "../MemberSelector";
 import { tracePresentationMessage } from "../tracePresentation";
 
 const PRIVACY_STORAGE_KEY = "guildbotics.troubleshootingPrivacyAck";
@@ -40,6 +41,7 @@ export function TroubleshootingDrawer({
   const { t } = useTranslation();
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const [followTarget, setFollowTarget] = useState(true);
+  const [personId, setPersonId] = useState<string | null>(null);
   const [pinnedFocus, setPinnedFocus] = useState<TroubleshootingFocus>(focus);
   const [pinnedLabel, setPinnedLabel] = useState(focusLabel);
   const [privacyAcknowledged, setPrivacyAcknowledged] = useState(
@@ -49,14 +51,18 @@ export function TroubleshootingDrawer({
   const activeFocus = followTarget ? focus : pinnedFocus;
   const activeLabel = followTarget ? focusLabel : pinnedLabel;
 
+  const activeMembers = (team.data?.members ?? []).filter((member) => member.is_active);
   const person =
-    team.data?.members?.find((member) => member.person_id === team.data?.default_person_id) ?? null;
+    activeMembers.find((member) => member.person_id === personId) ??
+    activeMembers.find((member) => member.person_id === team.data?.default_person_id) ??
+    null;
   const effectivePerson = person?.person_id ?? null;
 
-  // The conversation follows whatever it is currently pointed at, so switching
-  // executions — or asking about a different record of the same one — starts a
-  // fresh investigation rather than continuing the old one.
+  // The conversation follows its member and target, so switching either — or
+  // asking about a different record of the same execution — starts a fresh
+  // investigation rather than continuing the old one.
   const targetKey = [
+    effectivePerson ?? "",
     activeFocus.view,
     activeFocus.trace_id ?? "",
     activeFocus.span_id ?? "",
@@ -65,12 +71,18 @@ export function TroubleshootingDrawer({
   const conversation = useAssistantConversation(targetKey);
 
   const mutation = useMutation({
-    mutationFn: (request: { conversationId: string; targetKey: string; message: string }) =>
+    mutationFn: (request: {
+      conversationId: string;
+      targetKey: string;
+      message: string;
+      person: string;
+      focus: TroubleshootingFocus;
+    }) =>
       troubleshoot({
         conversation_id: request.conversationId,
         message: request.message,
-        person: effectivePerson ?? undefined,
-        focus: activeFocus,
+        person: request.person,
+        focus: request.focus,
       }),
     onMutate: (request) => {
       conversation.appendUser(request.conversationId, request.targetKey, request.message);
@@ -117,11 +129,7 @@ export function TroubleshootingDrawer({
           }}
         />
       </Group>
-      {effectivePerson ? (
-        <Text c="dimmed" size="xs">
-          {t("diagnostics.troubleshooting.runsAs", { person: person?.name || effectivePerson })}
-        </Text>
-      ) : (
+      {effectivePerson ? null : (
         <Alert color="warning">{t("diagnostics.troubleshooting.noMember")}</Alert>
       )}
       {privacyAcknowledged ? null : (
@@ -142,7 +150,17 @@ export function TroubleshootingDrawer({
       onClose={onClose}
       position="right"
       size={520}
-      title={t("diagnostics.troubleshooting.title")}
+      title={
+        <Group gap="xs" wrap="nowrap">
+          <MemberSelector
+            ariaLabel={t("diagnostics.troubleshooting.runner", { person: person?.name ?? "" })}
+            member={person}
+            members={activeMembers}
+            onChange={setPersonId}
+          />
+          <Text fw={600}>{t("diagnostics.troubleshooting.title")}</Text>
+        </Group>
+      }
       // Non-modal: the executions list behind the drawer stays clickable so the
       // user can move between traces without losing the conversation.
       withOverlay={false}
@@ -156,18 +174,23 @@ export function TroubleshootingDrawer({
         messages={conversation.messages}
         pending={mutation.isPending}
         disabled={!effectivePerson}
+        autoScrollOnAssistantResponse
         // A failure belongs to the turn that produced it: moving to another
         // execution must not leave the previous one's error on screen.
         error={mutation.variables?.targetKey === targetKey ? errorMessage(mutation.error) : null}
         header={header}
         progress={progress}
-        onSubmit={(message) =>
-          mutation.mutate({
-            conversationId: conversation.conversationId,
-            targetKey,
-            message,
-          })
-        }
+        onSubmit={(message) => {
+          if (effectivePerson) {
+            mutation.mutate({
+              conversationId: conversation.conversationId,
+              targetKey,
+              message,
+              person: effectivePerson,
+              focus: activeFocus,
+            });
+          }
+        }}
       />
     </Drawer>
   );
