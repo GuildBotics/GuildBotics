@@ -162,7 +162,7 @@ def agent_conversation() -> None:
 @_person_option
 @click.option(
     "--adapter",
-    type=click.Choice(["codex", "claude"]),
+    type=click.Choice(["codex", "claude", "grok"]),
     required=True,
     help=t("cli.member.agent_conversation_reset.adapter_help"),
 )

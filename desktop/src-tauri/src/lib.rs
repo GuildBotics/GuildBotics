@@ -30,9 +30,10 @@ const BOOT_LOG_COMPACT_BYTES: usize = BOOT_LOG_MAX_BYTES / 2;
 const BOOT_LOG_TAIL_BYTES: usize = 64 * 1024;
 const BOOT_LOG_TAIL_LINES: usize = 100;
 
-const CLI_AGENT_HOMES: [(&str, &str, &str); 4] = [
+const CLI_AGENT_HOMES: [(&str, &str, &str); 5] = [
     ("codex", "CODEX_HOME", ".codex"),
     ("claude", "CLAUDE_HOME", ".claude"),
+    ("grok", "GROK_HOME", ".grok"),
     ("antigravity", "ANTIGRAVITY_HOME", ".gemini/config"),
     ("copilot", "COPILOT_HOME", ".copilot"),
 ];

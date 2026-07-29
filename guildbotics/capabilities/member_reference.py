@@ -45,7 +45,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             (
                 "guildbotics member agent conversation reset --person <person> "
-                "--adapter codex|claude --work-kind ticket|chat|manual "
+                "--adapter codex|claude|grok --work-kind ticket|chat|manual "
                 "--work-identity <stable-id>",
                 "Rotate one persisted provider session while keeping its logical work identity.",
             ),

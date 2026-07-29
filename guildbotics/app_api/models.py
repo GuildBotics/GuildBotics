@@ -728,17 +728,23 @@ class BrainAssignment(BaseModel):
     target: str
 
 
-class CodexNativeAgentPolicySettings(BaseModel):
+class AdapterNativeAgentPolicySettings(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     filesystem_access: Literal["workspace", "host"] = "workspace"
 
 
 class NativeAgentPolicySettings(BaseModel):
+    """Per-adapter policies. Each native adapter keeps its own field so one
+    adapter's sandbox choice can never be read as another's."""
+
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    codex: CodexNativeAgentPolicySettings = Field(
-        default_factory=CodexNativeAgentPolicySettings
+    codex: AdapterNativeAgentPolicySettings = Field(
+        default_factory=AdapterNativeAgentPolicySettings
+    )
+    grok: AdapterNativeAgentPolicySettings = Field(
+        default_factory=AdapterNativeAgentPolicySettings
     )
 
 

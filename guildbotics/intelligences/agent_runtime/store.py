@@ -23,6 +23,9 @@ _STORE_VERSION = 1
 _DEFAULT_TTL = timedelta(days=7)
 _DEFAULT_MAX_TURNS = 100
 _DEFAULT_MAX_TOKENS = 1_000_000
+# Providers that report an absolute session context size rotate before the peer
+# has to compact history behind our back.
+_MAX_CONTEXT_UTILIZATION = 0.90
 
 
 class ConversationStore:
@@ -99,6 +102,8 @@ class ConversationStore:
             turn_count=_integer(payload.get("turn_count")),
             input_tokens=_integer(payload.get("input_tokens")),
             output_tokens=_integer(payload.get("output_tokens")),
+            context_used_tokens=_integer(payload.get("context_used_tokens")),
+            context_size_tokens=_integer(payload.get("context_size_tokens")),
             created_at=_text(payload.get("created_at")),
             updated_at=_text(payload.get("updated_at")),
             rotation_reason=_text(payload.get("rotation_reason")),
@@ -138,6 +143,11 @@ class ConversationStore:
             return "turn_limit"
         if record.input_tokens + record.output_tokens >= self._max_tokens:
             return "usage_limit"
+        if record.context_size_tokens > 0 and (
+            record.context_used_tokens / record.context_size_tokens
+            >= _MAX_CONTEXT_UTILIZATION
+        ):
+            return "context_limit"
         updated = _parse_datetime(record.updated_at)
         if updated is not None and datetime.now(UTC) - updated > self._ttl:
             return "ttl_expired"

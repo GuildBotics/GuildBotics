@@ -12,9 +12,9 @@ from guildbotics.app_api.intelligences import (
     IntelligenceConfigService,
 )
 from guildbotics.app_api.models import (
+    AdapterNativeAgentPolicySettings,
     BrainAssignment,
     CliAgentDefinition,
-    CodexNativeAgentPolicySettings,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
     NativeAgentPolicySettings,
@@ -98,6 +98,7 @@ def test_read_config_template_fallback_when_team_config_absent(tmp_path: Path) -
     assert all(model.path.startswith("models/") for model in response.models)
     assert response.brain_mapping, "template brain mapping should be parsed"
     assert response.native_agent_policy.codex.filesystem_access == "workspace"
+    assert response.native_agent_policy.grok.filesystem_access == "workspace"
 
 
 def test_policy_update_model_rejects_coercion_and_unknown_keys(tmp_path: Path) -> None:
@@ -406,7 +407,8 @@ def test_team_update_writes_native_agent_policy(tmp_path: Path) -> None:
     request = _team_update_request(tmp_path).model_copy(
         update={
             "native_agent_policy": NativeAgentPolicySettings(
-                codex=CodexNativeAgentPolicySettings(filesystem_access="host")
+                codex=AdapterNativeAgentPolicySettings(filesystem_access="host"),
+                grok=AdapterNativeAgentPolicySettings(filesystem_access="workspace"),
             )
         }
     )
@@ -417,6 +419,7 @@ def test_team_update_writes_native_agent_policy(tmp_path: Path) -> None:
     assert policy_file in {item.path for item in result.files}
     assert load_yaml_file(policy_file) == {
         "codex": {"filesystem_access": "host"},
+        "grok": {"filesystem_access": "workspace"},
     }
 
 
@@ -569,7 +572,8 @@ def test_member_override_writes_changed_brain_assignment_only(tmp_path: Path) ->
 
 def test_member_override_update_writes_native_agent_policy(tmp_path: Path) -> None:
     policy = NativeAgentPolicySettings(
-        codex=CodexNativeAgentPolicySettings(filesystem_access="host"),
+        codex=AdapterNativeAgentPolicySettings(filesystem_access="host"),
+        grok=AdapterNativeAgentPolicySettings(filesystem_access="host"),
     )
     request = IntelligenceConfigUpdateRequest(
         config_dir=tmp_path,
@@ -584,7 +588,10 @@ def test_member_override_update_writes_native_agent_policy(tmp_path: Path) -> No
     stored = load_yaml_file(
         _member_intelligences(tmp_path, "alice") / "native_agent_policy.yml"
     )
-    assert stored == {"codex": {"filesystem_access": "host"}}
+    assert stored == {
+        "codex": {"filesystem_access": "host"},
+        "grok": {"filesystem_access": "host"},
+    }
 
 
 def test_member_override_prunes_reverted_slot(tmp_path: Path) -> None:
@@ -596,10 +603,7 @@ def test_member_override_prunes_reverted_slot(tmp_path: Path) -> None:
     request = IntelligenceConfigUpdateRequest(
         config_dir=tmp_path,
         person_id="alice",
-        model_mapping={
-            "default": "models/openai/gpt.yml",
-            "openai": "models/openai/gpt.yml",
-        },
+        model_mapping={"default": "models/openai/gpt.yml", "openai": "models/openai/gpt.yml"},
         cli_agent_mapping={"default": "codex-cli.yml"},
         brain_mapping=_team_brain_assignments(),
     )

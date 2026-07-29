@@ -1,9 +1,13 @@
 # Native Agent Runtime
 
-GuildBotics uses native protocol adapters for Codex and Claude Code. Codex is driven
-through [Codex App Server](https://developers.openai.com/codex/app-server); Claude Code
-is driven with its documented `stream-json` input/output and an exact `--resume`
-session id. Antigravity and GitHub Copilot remain one-shot YAML script adapters.
+GuildBotics uses native protocol adapters for Codex, Claude Code, and Grok Build. Codex
+is driven through [Codex App Server](https://developers.openai.com/codex/app-server);
+Claude Code is driven with its documented `stream-json` input/output and an exact
+`--resume` session id; Grok Build is driven through the
+[Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/initialization)
+(ACP) v1 that `grok agent stdio` serves over stdin/stdout. Codex and Grok share one
+line-based JSON-RPC transport, which differs only in dialect and reverse-request
+handling. Antigravity and GitHub Copilot remain one-shot YAML script adapters.
 
 ## Configuration
 
@@ -13,15 +17,18 @@ Select a native provider directly in `intelligences/cli_agent_mapping.yml`:
 default: codex
 codex: codex
 claude: claude
+grok: grok
 ```
 
-Native Codex and Claude definitions do not use files under
-`intelligences/cli_agents/`. The only user-configurable native runtime boundary is
-the Codex filesystem scope in
+Native definitions do not use files under `intelligences/cli_agents/`. The only
+user-configurable native runtime boundary is the per-adapter filesystem scope in
 `intelligences/native_agent_policy.yml`:
 
 ```yaml
 codex:
+  filesystem_access: workspace
+
+grok:
   filesystem_access: workspace
 ```
 
@@ -37,6 +44,18 @@ For headless operation, edit the YAML directly. `filesystem_access` accepts
 with network enabled; host access removes the Codex filesystem sandbox. Codex always
 uses the non-interactive `never` approval policy, and any unexpected approval request
 is declined. These fixed settings are not exposed as user choices.
+
+For Grok Build, `workspace` maps to `--sandbox workspace` and `host` maps to
+`--sandbox off`. The launch command is fixed as
+`grok --no-auto-update --sandbox <profile> --always-approve agent stdio`; no arbitrary
+CLI flag can be injected from configuration. `--always-approve` is always paired with a
+sandbox, and an unexpected ACP `session/request_permission` is declined and recorded.
+The decline uses the option id the agent supplied for its `reject_once` option (falling
+back to `reject_always`); option ids are chosen per request, so the option kind is never
+sent back as an id. When no rejecting option is offered, the request is answered with
+`cancelled` rather than reinterpreted as an allow.
+`--no-auto-update` keeps a headless run from updating the CLI mid-session, and
+GuildBotics never rewrites the user's `config.toml`.
 
 Claude Code always runs non-interactively with `bypassPermissions`, preserving the
 previous `--dangerously-skip-permissions` behavior. GuildBotics also passes a
@@ -54,10 +73,17 @@ unknown values fail validation instead of silently changing the effective bounda
 ## Authentication
 
 Install and authenticate each selected CLI before starting GuildBotics. Use the
-provider's normal interactive login (`codex login` or `claude auth login`) as the same
-OS user that runs the GuildBotics service. Provider credentials stay in the provider's
-own credential store. GuildBotics does not copy them into its conversation store or
-diagnostics.
+provider's normal interactive login (`codex login`, `claude auth login`, or
+`grok login`) as the same OS user that runs the GuildBotics service. Provider
+credentials stay in the provider's own credential store. GuildBotics does not copy them
+into its conversation store or diagnostics.
+
+For Grok Build, GuildBotics selects only an advertised authentication method: the saved
+login `cached_token`, or `xai.api_key` when `XAI_API_KEY` is set and that method is
+advertised. The browser-based `grok.com` flow is never started during a headless run;
+without a saved login the turn fails as an authentication error that points at
+`grok login` (or `grok login --device-auth`). Only the chosen method id is recorded;
+the contents of `~/.grok/auth.json` are never read.
 
 GitHub, Git, and SSH write credentials are deliberately removed from native
 agent process environments. The agent performs member-side writes only through a
@@ -104,8 +130,10 @@ turn. A completion retry with the same cursor is delivered as a continuation.
 
 Records are atomically stored under
 `<workspace-data-root>/agent-runtime/conversations/<person>/<adapter>/`. They contain
-provider session/turn ids, cursor, usage counters, health, generation, and rotation
-reason. They never contain provider credentials or raw protocol payloads.
+provider session/turn ids, cursor, usage counters, the absolute session context
+snapshot, health, generation, and rotation reason. They never contain provider
+credentials or raw protocol payloads. ACP has no standard provider turn id, so the Grok
+adapter leaves it empty rather than persisting a transport-local JSON-RPC request id.
 
 GuildBotics never uses a provider's “latest” or implicit continuation mode. A missing
 or unhealthy session fails exact `resume`; `auto` starts a new generation and rebuilds
@@ -114,6 +142,51 @@ process failure, provider context compaction, TTL/turn/usage limits, or a model 
 Codex `contextCompaction` and Claude `compact_boundary` events are normalized to the
 same runtime event; the completed turn remains successful, while the next dispatch
 starts a new generation and rebuilds the Slack snapshot.
+
+ACP has no standard compaction notification, so Grok compaction is normalized from
+xAI's `auto_compact_*` extension notifications. Grok Build 0.2.114 does not emit the
+standard ACP `usage_update` at all, so the absolute session context snapshot stays empty
+and the 90% `context_limit` rotation does not arm on that version. The handling is
+implemented for a version that does emit it, where a drop in `used` also serves as a
+name-independent compaction signal.
+
+On 0.2.114 the only channel that reports token usage is the xAI `turn_completed`
+extension. Its `inputTokens`, `outputTokens`, `cachedReadTokens`, `reasoningTokens`, and
+`totalTokens` are normalized to the shared usage keys, so TTL, turn-count, and usage
+limits rotate normally. `costUsdTicks`, `modelCalls`, and `apiDurationMs` are not token
+counts and are kept in event details so they are never summed with usage.
+
+xAI extension updates arrive on two channels, `_x.ai/session_notification` and
+`_x.ai/session/update`; both are handled identically. Every other `_x.ai/*` method is
+peer UI state and is aggregated into one record per turn. Channels whose payloads were
+inspected on 0.2.114 (`_x.ai/queue/changed`, `_x.ai/sessions/changed`,
+`_x.ai/settings/update`, `_x.ai/announcements/update`, and similar) echo the submitted
+prompt text, the workspace path, or promotional copy, so only their counts are kept. A
+channel that has not been seen before additionally records its payload's top-level field
+names. No payload value is ever stored: the diagnostics redactor operates on mapping
+keys, so a serialized payload would carry a secret through verbatim.
+
+Tool calls are classified from the ACP `kind`: `execute` becomes a command and
+`edit`, `delete`, or `move` become a file change. `locations` lists every file a tool
+touched, reads included, so it records the affected paths without classifying the call.
+A `tool_call_update` may carry only `toolCallId`, so the kind declared when the call
+started is retained per `toolCallId` and applied to later updates.
+
+Reasoning arrives as `agent_thought_chunk` and is recorded for transcripts, but only
+`agent_message_chunk` builds the reply.
+
+ACP answers `session/prompt` only when the turn ends, so that one request carries no
+per-request deadline; the turn as a whole is bounded by the turn timeout, which sends
+`session/cancel` and stops the process group when it expires. Requests that answer
+immediately, such as initialize and session load, keep their per-request deadline.
+
+Exact Grok resume uses ACP `session/resume` when advertised and `session/load`
+otherwise. `session/load` replays the whole transcript before it answers, so that
+response is the boundary: replayed history is excluded from the current turn's events,
+from Slack, and from the normal transcript, and only the replayed count is recorded.
+History replays on the xAI extension channels as well as the standard one and includes
+the previous turn's `turn_completed` token usage, so replayed updates are counted but
+never decoded; an earlier turn's usage is never reported as the current turn's.
 
 Reset an exact logical conversation explicitly:
 
@@ -152,4 +225,14 @@ Diagnostics and `<workspace-data-root>/run/diagnostics.jsonl`.
 
 If startup reports `unsupported_version`, update the provider CLI. Claude capability
 detection requires `--input-format`, `--output-format`, `stream-json`, and `--resume`;
-Codex capability detection occurs through App Server initialization.
+Codex capability detection occurs through App Server initialization. Grok capability
+detection requires ACP protocol version 1 plus either `loadSession` or
+`sessionCapabilities.resume`. It never gates on the version string, so any newer Grok
+Build that still speaks ACP v1 keeps working. The verified baseline is 0.2.114.
+
+Grok rate limits are classified as `rate_limited` only when ACP or an xAI extension
+returns structured data; stderr text and assistant prose are never parsed. No equivalent of Codex
+`account/rateLimits/read` is exposed over ACP (`x.ai/session/usage` answers `Method
+not found` on 0.2.114), so GuildBotics does not present a weekly or 5-hour usage meter
+for Grok. Activity History treats "no usage
+data" as a normal state and never synthesizes an empty window or a 0% figure.

@@ -1,2 +1,5 @@
 codex:
   filesystem_access: workspace
+
+grok:
+  filesystem_access: workspace

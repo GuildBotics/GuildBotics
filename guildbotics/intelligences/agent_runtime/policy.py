@@ -1,13 +1,15 @@
-"""User-configurable filesystem boundary for the native Codex adapter."""
+"""User-configurable filesystem boundary for the native agent adapters."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 
-CODEX_FILESYSTEM_ACCESS = frozenset({"workspace", "host"})
+FILESYSTEM_ACCESS = frozenset({"workspace", "host"})
+#: Native adapters that own a filesystem boundary the user can configure.
+POLICY_ADAPTERS = ("codex", "grok")
 
 
 class NativeAgentPolicyError(ValueError):
@@ -15,27 +17,35 @@ class NativeAgentPolicyError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class NativeAgentPolicy:
+class AdapterFilesystemPolicy:
+    """The one public policy setting a native adapter honours."""
+
     filesystem_access: str = "workspace"
 
 
+@dataclass(frozen=True, slots=True)
+class NativeAgentPolicy:
+    """Per-adapter policies, so one adapter never inherits another's sandbox."""
+
+    codex: AdapterFilesystemPolicy = field(default_factory=AdapterFilesystemPolicy)
+    grok: AdapterFilesystemPolicy = field(default_factory=AdapterFilesystemPolicy)
+
+    def for_adapter(self, adapter: str) -> AdapterFilesystemPolicy:
+        policy = getattr(self, adapter, None)
+        if not isinstance(policy, AdapterFilesystemPolicy):
+            raise NativeAgentPolicyError(
+                f"No native agent policy is defined for adapter '{adapter}'."
+            )
+        return policy
+
+
 def parse_native_agent_policy(payload: Any) -> NativeAgentPolicy:
-    """Validate the one public native-agent policy setting."""
+    """Validate the per-adapter native-agent policy mapping."""
     if not isinstance(payload, dict):
         raise NativeAgentPolicyError("Native agent policy must be a YAML mapping.")
-    _reject_unknown_keys(payload, {"codex"}, "root")
-
-    raw = payload.get("codex", {})
-    if not isinstance(raw, dict):
-        raise NativeAgentPolicyError("Native agent policy 'codex' must be a mapping.")
-    _reject_unknown_keys(raw, {"filesystem_access"}, "codex")
+    _reject_unknown_keys(payload, set(POLICY_ADAPTERS), "root")
     return NativeAgentPolicy(
-        filesystem_access=_enum_value(
-            raw,
-            "filesystem_access",
-            "workspace",
-            CODEX_FILESYSTEM_ACCESS,
-        )
+        **{adapter: _adapter_policy(payload, adapter) for adapter in POLICY_ADAPTERS}
     )
 
 
@@ -44,12 +54,22 @@ def load_native_agent_policy(person_id: str) -> NativeAgentPolicy:
     return parse_native_agent_policy(load_yaml_file(path))
 
 
-def _enum_value(
-    raw: dict[Any, Any], key: str, default: str, allowed: frozenset[str]
-) -> str:
+def _adapter_policy(payload: dict[Any, Any], adapter: str) -> AdapterFilesystemPolicy:
+    raw = payload.get(adapter, {})
+    if not isinstance(raw, dict):
+        raise NativeAgentPolicyError(
+            f"Native agent policy '{adapter}' must be a mapping."
+        )
+    _reject_unknown_keys(raw, {"filesystem_access"}, adapter)
+    return AdapterFilesystemPolicy(
+        filesystem_access=_enum_value(raw, "filesystem_access", "workspace")
+    )
+
+
+def _enum_value(raw: dict[Any, Any], key: str, default: str) -> str:
     value = raw.get(key, default)
-    if not isinstance(value, str) or value not in allowed:
-        supported = ", ".join(sorted(allowed))
+    if not isinstance(value, str) or value not in FILESYSTEM_ACCESS:
+        supported = ", ".join(sorted(FILESYSTEM_ACCESS))
         raise NativeAgentPolicyError(
             f"Native agent policy value '{key}' must be one of: {supported}."
         )

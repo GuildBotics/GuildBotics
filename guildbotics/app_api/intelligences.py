@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from guildbotics.app_api.models import (
+    AdapterNativeAgentPolicySettings,
     BrainAssignment,
     CliAgentDefinition,
-    CodexNativeAgentPolicySettings,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
@@ -15,7 +15,10 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.editions.simple.setup_service import CreatedFile
-from guildbotics.intelligences.agent_runtime.policy import parse_native_agent_policy
+from guildbotics.intelligences.agent_runtime.policy import (
+    POLICY_ADAPTERS,
+    parse_native_agent_policy,
+)
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.cli_agents import (
     discover_cli_agents,
@@ -543,9 +546,14 @@ class IntelligenceConfigService:
         )
         policy = parse_native_agent_policy(payload)
         return NativeAgentPolicySettings(
-            codex=CodexNativeAgentPolicySettings(
-                filesystem_access=cast(Any, policy.filesystem_access)
-            ),
+            **{
+                adapter: AdapterNativeAgentPolicySettings(
+                    filesystem_access=cast(
+                        Any, policy.for_adapter(adapter).filesystem_access
+                    )
+                )
+                for adapter in POLICY_ADAPTERS
+            }
         )
 
     def _write_native_agent_policy(

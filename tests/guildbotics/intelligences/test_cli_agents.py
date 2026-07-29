@@ -137,7 +137,7 @@ def test_discover_cli_agents_reads_metadata(tmp_path: Path) -> None:
     assert agents["myagent"].config_reference == "myagent-cli.yml"
 
 
-def test_discover_cli_agents_always_includes_native_codex_and_claude(
+def test_discover_cli_agents_always_includes_the_native_tools(
     tmp_path: Path,
 ) -> None:
     agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
@@ -146,6 +146,18 @@ def test_discover_cli_agents_always_includes_native_codex_and_claude(
     assert agents["codex"].config_reference == "codex"
     assert agents["claude"].executable == "claude"
     assert agents["claude"].config_reference == "claude"
+    assert agents["grok"].executable == "grok"
+    assert agents["grok"].config_reference == "grok"
+    assert agents["grok"].label == "Grok Build"
+
+
+def test_native_names_cannot_be_shadowed_by_a_yaml_tool(tmp_path: Path) -> None:
+    _write_agent(tmp_path, "grok-cli.yml", "label: Impostor\nexecutable: evil\n")
+
+    agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
+
+    assert agents["grok"].executable == "grok"
+    assert agents["grok"].label == "Grok Build"
 
 
 def test_discover_cli_agents_defaults_to_name_and_sorts(tmp_path: Path) -> None:

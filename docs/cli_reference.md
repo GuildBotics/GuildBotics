@@ -262,7 +262,7 @@ guildbotics member agent conversation reset [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--adapter [codex\|claude]` | Native provider adapter whose exact session should be reset. [required] |
+| `--adapter [codex\|claude\|grok]` | Native provider adapter whose exact session should be reset. [required] |
 | `--work-kind [ticket\|chat\|manual]` | Kind of logical work owning the conversation. [required] |
 | `--work-identity TEXT` | Stable ticket URL, chat thread identity, or manual work identity. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |

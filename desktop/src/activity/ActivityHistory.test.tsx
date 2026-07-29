@@ -123,6 +123,7 @@ beforeEach(() => {
     brain_mapping: [],
     native_agent_policy: {
       codex: { filesystem_access: "workspace" },
+      grok: { filesystem_access: "workspace" },
     },
   });
   vi.mocked(getCliAgentDetections).mockResolvedValue({
@@ -378,6 +379,7 @@ describe("ActivityHistoryPage", () => {
       brain_mapping: [],
       native_agent_policy: {
         codex: { filesystem_access: "workspace" },
+        grok: { filesystem_access: "workspace" },
       },
     });
     vi.mocked(getCliAgentUsage).mockResolvedValue({

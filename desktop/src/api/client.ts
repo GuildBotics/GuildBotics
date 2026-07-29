@@ -763,11 +763,17 @@ export type BrainAssignment = {
   target: string;
 };
 
+export type NativeAgentFilesystemAccess = "workspace" | "host";
+
+// One entry per native adapter; the backend rejects unknown keys.
 export type NativeAgentPolicySettings = {
-  codex: {
-    filesystem_access: "workspace" | "host";
-  };
+  codex: { filesystem_access: NativeAgentFilesystemAccess };
+  grok: { filesystem_access: NativeAgentFilesystemAccess };
 };
+
+export const NATIVE_POLICY_ADAPTERS = ["codex", "grok"] as const;
+
+export type NativeAgentPolicyAdapter = (typeof NATIVE_POLICY_ADAPTERS)[number];
 
 // A selectable LLM provider, discovered server-side from
 // `models/<provider>/default.yml`. Single source of truth for the catalog.
