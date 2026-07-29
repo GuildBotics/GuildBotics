@@ -210,14 +210,36 @@ class RuntimeStub:
 
     async def author_command(self, request):
         self.authoring_request = request
+        if request.mode == "create":
+            change = {
+                "operation": "create",
+                "command": "generated-command",
+                "format": "python",
+                "relative_path": "generated-command.py",
+                "content": "def main(context):\n    return ''\n",
+                "file_id": "",
+                "expected_revision": "",
+            }
+        else:
+            change = {
+                "operation": "update",
+                "command": request.command,
+                "format": request.format,
+                "relative_path": f"{request.command}.py",
+                "content": "def main(context):\n    return ''\n",
+                "file_id": request.file_id,
+                "expected_revision": request.revision,
+            }
         return {
             "trace_id": "author-trace",
-            "message": "Updated the draft.",
-            "command": request.command or "generated-command",
-            "format": request.format or "python",
-            "relative_path": f"{request.command or 'generated-command'}.py",
-            "content": "new source",
+            "message": "Review the proposed changes.",
+            "action": "propose_changes",
+            "changes": [change],
         }
+
+    def apply_command_authoring(self, request):
+        self.authoring_apply_request = request
+        return {"files": []}
 
     async def troubleshoot(self, request):
         self.troubleshooting_request = request
@@ -818,6 +840,8 @@ def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
                 "command": "hello",
                 "format": "python",
                 "content": "old source",
+                "file_id": "aGVsbG8ucHk",
+                "revision": "revision-1",
                 "message": "Update it",
                 "person": "bot",
             },
@@ -826,11 +850,19 @@ def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
     assert response.status_code == HTTP_OK
     assert response.json() == {
         "trace_id": "author-trace",
-        "message": "Updated the draft.",
-        "command": "hello",
-        "format": "python",
-        "relative_path": "hello.py",
-        "content": "new source",
+        "message": "Review the proposed changes.",
+        "action": "propose_changes",
+        "changes": [
+            {
+                "operation": "update",
+                "command": "hello",
+                "format": "python",
+                "relative_path": "hello.py",
+                "content": "def main(context):\n    return ''\n",
+                "file_id": "aGVsbG8ucHk",
+                "expected_revision": "revision-1",
+            }
+        ],
     }
     assert runtime.authoring_request.conversation_id == "authoring-1"
     assert runtime.authoring_request.content == "old source"
@@ -852,9 +884,10 @@ def test_command_authoring_create_allows_ai_to_choose_identity(tmp_path: Path) -
         )
 
     assert response.status_code == HTTP_OK
-    assert response.json()["command"] == "generated-command"
-    assert response.json()["format"] == "python"
-    assert response.json()["relative_path"] == "generated-command.py"
+    assert response.json()["action"] == "propose_changes"
+    assert response.json()["changes"][0]["command"] == "generated-command"
+    assert response.json()["changes"][0]["format"] == "python"
+    assert response.json()["changes"][0]["relative_path"] == "generated-command.py"
     assert runtime.authoring_request.command == ""
     assert runtime.authoring_request.format is None
 
@@ -874,6 +907,31 @@ def test_command_authoring_edit_requires_existing_identity(tmp_path: Path) -> No
         )
 
     assert response.status_code == 422
+
+
+def test_command_authoring_apply_uses_reviewed_changes(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    app = create_app(session_token="secret", runtime=runtime)
+    change = {
+        "operation": "create",
+        "command": "helper",
+        "format": "python",
+        "relative_path": "helper.py",
+        "content": "def main(context):\n    return ''\n",
+        "file_id": "",
+        "expected_revision": "",
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/author/apply",
+            headers=AUTH_HEADERS,
+            json={"changes": [change]},
+        )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {"files": []}
+    assert runtime.authoring_apply_request.changes[0].command == "helper"
 
 
 def test_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
@@ -2218,6 +2276,7 @@ PROTECTED_ENDPOINTS = [
     ("POST", "/commands/run"),
     ("POST", "/commands/input-files"),
     ("POST", "/commands/author"),
+    ("POST", "/commands/author/apply"),
     ("GET", "/config/roles"),
     ("GET", "/scheduler/status"),
     ("POST", "/scheduler/start"),

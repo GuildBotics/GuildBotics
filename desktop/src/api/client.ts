@@ -487,10 +487,18 @@ export type AssistantTurnResponse = {
 };
 
 export type CommandAuthoringResponse = AssistantTurnResponse & {
+  action: "answer" | "propose_changes";
+  changes: CommandAuthoringChange[];
+};
+
+export type CommandAuthoringChange = {
+  operation: "create" | "update";
   command: string;
   format: CommandFileFormat;
   relative_path: string;
   content: string;
+  file_id: string;
+  expected_revision: string;
 };
 
 export type CommandAuthoringRequest = AssistantTurnRequest & {
@@ -498,6 +506,12 @@ export type CommandAuthoringRequest = AssistantTurnRequest & {
   command?: string;
   format?: CommandFileFormat;
   content?: string;
+  file_id?: string;
+  revision?: string;
+};
+
+export type CommandAuthoringApplyResponse = {
+  files: CommandFileDetail[];
 };
 
 export type TroubleshootingFocus = {
@@ -1055,6 +1069,15 @@ export async function authorCommand(
   body: CommandAuthoringRequest,
 ): Promise<CommandAuthoringResponse> {
   return request("/commands/author", { method: "POST", body });
+}
+
+export async function applyCommandAuthoring(
+  changes: CommandAuthoringChange[],
+): Promise<CommandAuthoringApplyResponse> {
+  return request("/commands/author/apply", {
+    method: "POST",
+    body: { changes },
+  });
 }
 
 export async function troubleshoot(body: TroubleshootingRequest): Promise<TroubleshootingResponse> {

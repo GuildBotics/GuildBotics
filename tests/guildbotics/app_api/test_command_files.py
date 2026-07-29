@@ -16,6 +16,7 @@ from guildbotics.app_api.command_files import (
     file_revision,
 )
 from guildbotics.app_api.errors import AppApiError
+from guildbotics.app_api.models import CommandAuthoringChange
 from guildbotics.commands import discovery
 from guildbotics.utils import fileio
 
@@ -199,6 +200,129 @@ def test_update_success_changes_revision(env: SimpleNamespace) -> None:
     assert (env.commands / "greet.md").read_text(encoding="utf-8") == (
         "---\nname: Greet\n---\nHello\n"
     )
+
+
+def test_apply_authoring_changes_updates_current_and_creates_helper(
+    env: SimpleNamespace,
+) -> None:
+    service = _service()
+    original = service.create_file(
+        "translate",
+        "markdown",
+        "---\nbrain: translation\n---\nTranslate the input.\n",
+    )
+    helper_source = "def main(context):\n    return context.pipe\n"
+    updated_source = (
+        "---\nbrain: translation\ncommands:\n  - helper\n---\nTranslate the input.\n"
+    )
+
+    files = service.apply_authoring_changes(
+        [
+            CommandAuthoringChange(
+                operation="create",
+                command="helper",
+                format="python",
+                relative_path="helper.py",
+                content=helper_source,
+            ),
+            CommandAuthoringChange(
+                operation="update",
+                command="translate",
+                format="markdown",
+                relative_path="translate.md",
+                content=updated_source,
+                file_id=original.id,
+                expected_revision=original.revision,
+            ),
+        ]
+    )
+
+    assert [file.command for file in files] == ["helper", "translate"]
+    assert (env.commands / "helper.py").read_text(encoding="utf-8") == helper_source
+    assert (env.commands / "translate.md").read_text(encoding="utf-8") == updated_source
+
+
+def test_apply_authoring_changes_preflights_every_revision_before_writing(
+    env: SimpleNamespace,
+) -> None:
+    service = _service()
+    original = service.create_file("translate", "python")
+    (env.commands / "translate.py").write_text(
+        "def main(context):\n    return 'changed elsewhere'\n", encoding="utf-8"
+    )
+
+    with pytest.raises(AppApiError) as caught:
+        service.apply_authoring_changes(
+            [
+                CommandAuthoringChange(
+                    operation="create",
+                    command="helper",
+                    format="python",
+                    relative_path="helper.py",
+                    content="def main(context):\n    return context.pipe\n",
+                ),
+                CommandAuthoringChange(
+                    operation="update",
+                    command="translate",
+                    format="python",
+                    relative_path="translate.py",
+                    content="def main(context):\n    return 'new'\n",
+                    file_id=original.id,
+                    expected_revision=original.revision,
+                ),
+            ]
+        )
+
+    assert caught.value.code == "command_file_changed"
+    assert not (env.commands / "helper.py").exists()
+
+
+def test_apply_authoring_changes_rejects_tampered_relative_path(
+    env: SimpleNamespace,
+) -> None:
+    with pytest.raises(AppApiError) as caught:
+        _service().apply_authoring_changes(
+            [
+                CommandAuthoringChange(
+                    operation="create",
+                    command="helper",
+                    format="python",
+                    relative_path="another.py",
+                    content="def main(context):\n    return context.pipe\n",
+                )
+            ]
+        )
+
+    assert caught.value.code == "command_file_invalid_name"
+    assert not (env.commands / "another.py").exists()
+
+
+def test_apply_authoring_changes_rejects_same_command_in_multiple_formats(
+    env: SimpleNamespace,
+) -> None:
+    with pytest.raises(AppApiError) as caught:
+        _service().apply_authoring_changes(
+            [
+                CommandAuthoringChange(
+                    operation="create",
+                    command="helper",
+                    format="markdown",
+                    relative_path="helper.md",
+                    content="---\nbrain: none\n---\nHelp.\n",
+                ),
+                CommandAuthoringChange(
+                    operation="create",
+                    command="helper",
+                    format="shell",
+                    relative_path="helper.sh",
+                    content="#!/bin/sh\nprintf '%s\\n' \"$1\"\n",
+                ),
+            ]
+        )
+
+    assert caught.value.code == "command_file_exists"
+    assert not (env.commands / "helper.md").exists()
+    assert not (env.commands / "helper.sh").exists()
 
 
 def test_update_saves_invalid_source_for_later_correction(env: SimpleNamespace) -> None:

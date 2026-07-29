@@ -49,6 +49,8 @@ vi.mock("../api/client", async (importOriginal) => {
 });
 const hideQuickWindowMock = vi.fn();
 const pollClipboardMock = vi.fn();
+const clipboardImageFileMock = vi.fn();
+const releaseClipboardImageMock = vi.fn();
 const watchSupportedMock = vi.fn(async () => true);
 // Shorten the idle auto-run pause; three real seconds per case is not worth it.
 vi.mock("./quickRunState", async (importOriginal) => {
@@ -59,6 +61,8 @@ vi.mock("../hotkeys/hotkeyRuntime", () => ({
   hideQuickWindow: () => hideQuickWindowMock(),
   clipboardWatchSupported: () => watchSupportedMock(),
   pollClipboard: (since: number) => pollClipboardMock(since),
+  clipboardImageFile: (resourceId: number) => clipboardImageFileMock(resourceId),
+  releaseClipboardImage: (resourceId: number) => releaseClipboardImageMock(resourceId),
 }));
 
 const t = i18n.getFixedT("en");
@@ -156,6 +160,8 @@ beforeEach(() => {
   hideQuickWindowMock.mockReset();
   watchSupportedMock.mockReset().mockResolvedValue(true);
   pollClipboardMock.mockReset();
+  clipboardImageFileMock.mockReset();
+  releaseClipboardImageMock.mockReset();
   tauriDrag.handler = null;
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   setClipboard(1, "initial");
@@ -184,8 +190,16 @@ beforeEach(() => {
 function setClipboard(changeCount: number, text: string) {
   pollClipboardMock.mockImplementation(async (since: number) =>
     since === changeCount
-      ? { change_count: changeCount, text: null }
-      : { change_count: changeCount, text },
+      ? { change_count: changeCount, text: null, image: null }
+      : { change_count: changeCount, text, image: null },
+  );
+}
+
+function setClipboardImage(changeCount: number, resourceId: number) {
+  pollClipboardMock.mockImplementation(async (since: number) =>
+    since === changeCount
+      ? { change_count: changeCount, text: null, image: null }
+      : { change_count: changeCount, text: null, image: resourceId },
   );
 }
 
@@ -277,6 +291,41 @@ describe("QuickRun", () => {
 
     await waitFor(() => expect(uploadCommandInputFile).toHaveBeenCalledWith(image));
     await waitFor(() => expect(input).toHaveValue("/tmp/screenshot.png"));
+  });
+
+  it("saves and runs the clipboard image carried by a command hotkey", async () => {
+    const image = new File(["pixels"], "clipboard.png", { type: "image/png" });
+    clipboardImageFileMock.mockResolvedValue(image);
+    vi.mocked(uploadCommandInputFile).mockResolvedValue({ path: "/tmp/hotkey-image.png" });
+    renderWindow();
+
+    await fire({ command: "review", text: "", image: 41 });
+
+    const input = await screen.findByRole("textbox", { name: t("quickRun.message") });
+    await waitFor(() => expect(clipboardImageFileMock).toHaveBeenCalledWith(41));
+    await waitFor(() => expect(uploadCommandInputFile).toHaveBeenCalledWith(image));
+    await waitFor(() => expect(input).toHaveValue("/tmp/hotkey-image.png"));
+    await waitFor(() =>
+      expect(runCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "review", message: "/tmp/hotkey-image.png" }),
+      ),
+    );
+  });
+
+  it("releases a hotkey clipboard image when the backend is unavailable", async () => {
+    vi.mocked(getTeam).mockRejectedValue(new Error("backend is down"));
+    renderWindow();
+    await waitFor(() => expect(activate).toBeDefined());
+
+    const activation = (activate as unknown as (trigger: QuickRunTrigger) => Promise<void>)({
+      command: "review",
+      text: "",
+      image: 42,
+    });
+
+    await expect(activation).rejects.toThrow("backend is down");
+    expect(releaseClipboardImageMock).toHaveBeenCalledWith(42);
+    expect(clipboardImageFileMock).not.toHaveBeenCalled();
   });
 
   it("offers a command picker only for the generic hotkey", async () => {
@@ -471,6 +520,26 @@ describe("QuickRun", () => {
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: t("quickRun.message") })).toHaveValue(
         "copied later",
+      ),
+    );
+  });
+
+  it("replaces the input with a saved path when a clipboard image is copied", async () => {
+    const image = new File(["pixels"], "clipboard.png", { type: "image/png" });
+    clipboardImageFileMock.mockResolvedValue(image);
+    vi.mocked(uploadCommandInputFile).mockResolvedValue({ path: "/tmp/watched-image.png" });
+    const user = userEvent.setup();
+    renderWindow();
+    await fire({ command: null, text: "first" });
+    await user.click(await screen.findByRole("checkbox", { name: t("quickRun.watchClipboard") }));
+    await waitFor(() => expect(pollClipboardMock).toHaveBeenCalled());
+
+    setClipboardImage(2, 73);
+
+    await waitFor(() => expect(clipboardImageFileMock).toHaveBeenCalledWith(73));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: t("quickRun.message") })).toHaveValue(
+        "/tmp/watched-image.png",
       ),
     );
   });

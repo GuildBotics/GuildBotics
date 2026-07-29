@@ -6,13 +6,12 @@ import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, keymap } from "@codemirror/view";
-import { ActionIcon, Group, Text, Tooltip, useComputedColorScheme } from "@mantine/core";
+import { useComputedColorScheme } from "@mantine/core";
 import { basicSetup } from "codemirror";
-import { Copy, ExternalLink } from "lucide-react";
 import { useEffect, useRef } from "react";
-import { useTranslation } from "react-i18next";
 
 import type { CommandFileFormat } from "../api/client";
+import { CommandFilePathBar } from "./CommandFilePathBar";
 
 const languageCompartment = new Compartment();
 const themeCompartment = new Compartment();
@@ -54,7 +53,6 @@ export function CommandEditor({
   onSave,
   onOpenExternal,
 }: CommandEditorProps) {
-  const { t } = useTranslation();
   const colorScheme = useComputedColorScheme("light");
   const dark = colorScheme === "dark";
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -142,35 +140,7 @@ export function CommandEditor({
 
   return (
     <div className="command-editor">
-      <Group className="command-editor-path" gap="xs" justify="space-between" wrap="nowrap">
-        <Text className="command-editor-path-text" size="sm" title={path} truncate="end">
-          {path}
-        </Text>
-        <Group gap={4} wrap="nowrap">
-          <Tooltip label={t("commands.copyScriptPath")}>
-            <ActionIcon
-              aria-label={t("commands.copyScriptPath")}
-              size="sm"
-              variant="subtle"
-              onClick={() => void navigator.clipboard?.writeText(path).catch(() => {})}
-            >
-              <Copy size={14} />
-            </ActionIcon>
-          </Tooltip>
-          {onOpenExternal ? (
-            <Tooltip label={t("commands.openScript")}>
-              <ActionIcon
-                aria-label={t("commands.openScript")}
-                size="sm"
-                variant="subtle"
-                onClick={onOpenExternal}
-              >
-                <ExternalLink size={14} />
-              </ActionIcon>
-            </Tooltip>
-          ) : null}
-        </Group>
-      </Group>
+      <CommandFilePathBar path={path} onOpenExternal={onOpenExternal} />
       <div ref={containerRef} className="command-editor-surface" data-testid="command-editor" />
     </div>
   );

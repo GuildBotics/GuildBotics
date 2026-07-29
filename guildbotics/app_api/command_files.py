@@ -23,6 +23,7 @@ from typing import Any
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import (
     CommandArgumentOption,
+    CommandAuthoringChange,
     CommandFileDetail,
     CommandFileFormat,
     CommandFilesResponse,
@@ -50,6 +51,10 @@ from guildbotics.commands.metadata import (
     parse_command_input_policy,
 )
 from guildbotics.commands.registry import get_command_extensions
+from guildbotics.commands.validation import (
+    CommandValidationError,
+    validate_generated_command_source,
+)
 
 MAX_COMMAND_FILE_BYTES = 1024 * 1024
 
@@ -181,6 +186,91 @@ class CommandFileService:
         path.unlink()
         return self.list_files()
 
+    def apply_authoring_changes(
+        self, changes: list[CommandAuthoringChange]
+    ) -> list[CommandFileDetail]:
+        """Validate and atomically apply a reviewed AI change set."""
+        prepared: list[tuple[CommandAuthoringChange, Path, int]] = []
+        commands: set[str] = set()
+        targets: set[Path] = set()
+        for change in changes:
+            if change.command in commands:
+                raise _error(
+                    "command_file_exists",
+                    f"Command '{change.command}' is proposed more than once.",
+                )
+            commands.add(change.command)
+            extension = EXTENSION_BY_FORMAT[change.format]
+            expected_relative = self._validate_command_name(change.command, extension)
+            if change.relative_path != expected_relative:
+                raise _error(
+                    "command_file_invalid_name",
+                    "The proposed command path does not match its name and format.",
+                    {"relative_path": change.relative_path},
+                )
+            self._check_content(change.content)
+            try:
+                validate_generated_command_source(extension, change.content)
+            except CommandValidationError as exc:
+                raise _error(exc.code, str(exc), exc.context) from exc
+            if change.operation == "update":
+                target = self.resolve_existing(change.file_id)
+                if _relative_to(self._root, target) != expected_relative:
+                    raise _error(
+                        "command_file_changed",
+                        "The proposed update no longer targets the selected command.",
+                    )
+                current = target.read_bytes()
+                if file_revision(current) != change.expected_revision:
+                    raise _error(
+                        "command_file_changed",
+                        "The command file changed since the proposal was created.",
+                        {"current_revision": file_revision(current)},
+                    )
+                mode = stat.S_IMODE(target.stat().st_mode)
+            else:
+                target = self._safe_target(expected_relative)
+                for other in get_command_extensions():
+                    sibling = self._safe_target(f"{change.command}{other}")
+                    if sibling.exists() or sibling.is_symlink():
+                        raise _error(
+                            "command_file_exists",
+                            f"Command '{change.command}' already exists.",
+                            {"relative_path": _relative_to(self._root, sibling)},
+                        )
+                self._reject_shadowed_creation(change.command, target)
+                mode = 0o755 if change.format == "shell" else 0o644
+            resolved = target.resolve(strict=False)
+            if resolved in targets:
+                raise _error(
+                    "command_file_exists",
+                    f"Command '{change.command}' is proposed more than once.",
+                )
+            targets.add(resolved)
+            prepared.append((change, target, mode))
+
+        originals = {
+            path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+            if path.exists()
+            else None
+            for _, path, _ in prepared
+        }
+        written: list[Path] = []
+        try:
+            for change, path, mode in prepared:
+                self._atomic_write(path, change.content, mode)
+                written.append(path)
+        except BaseException:
+            for path in reversed(written):
+                original = originals[path]
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    data, mode = original
+                    self._atomic_write_bytes(path, data, mode)
+            raise
+        return [self._detail(path) for _, path, _ in prepared]
+
     # -- internals -------------------------------------------------------
 
     def _reject_shadowed_creation(self, command: str, target: Path) -> None:
@@ -274,6 +364,11 @@ class CommandFileService:
             )
 
     def _atomic_write(self, path: Path, content: str, mode: int | None = None) -> None:
+        self._atomic_write_bytes(path, content.encode("utf-8"), mode)
+
+    def _atomic_write_bytes(
+        self, path: Path, content: bytes, mode: int | None = None
+    ) -> None:
         directory = path.parent
         directory.mkdir(parents=True, exist_ok=True)
         if mode is None and path.exists():
@@ -283,7 +378,7 @@ class CommandFileService:
         )
         tmp_path = Path(tmp_name)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            with os.fdopen(fd, "wb") as handle:
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())

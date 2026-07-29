@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiRequestError,
+  applyCommandAuthoring,
   authorCommand,
   troubleshoot,
   configureApi,
@@ -393,6 +394,8 @@ describe("GET query parameter encoding", () => {
       command: "greet",
       format: "markdown",
       content: "old",
+      file_id: "Z3JlZXQubWQ",
+      revision: "revision-1",
       message: "Make it friendlier",
       person: "bot",
     });
@@ -406,10 +409,33 @@ describe("GET query parameter encoding", () => {
         command: "greet",
         format: "markdown",
         content: "old",
+        file_id: "Z3JlZXQubWQ",
+        revision: "revision-1",
         message: "Make it friendlier",
         person: "bot",
       }),
     );
+  });
+
+  it("posts only reviewed authoring changes to the apply endpoint", async () => {
+    const { calls } = captureFetch(jsonResponse({ files: [] }));
+    const changes = [
+      {
+        operation: "create" as const,
+        command: "helper",
+        format: "python" as const,
+        relative_path: "helper.py",
+        content: "def main(context):\n    return context.pipe\n",
+        file_id: "",
+        expected_revision: "",
+      },
+    ];
+
+    await applyCommandAuthoring(changes);
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/author/apply");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify({ changes }));
   });
 
   it("posts an initial AI creation turn without choosing a name or format", async () => {
