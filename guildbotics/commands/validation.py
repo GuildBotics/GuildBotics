@@ -85,15 +85,14 @@ def validate_generated_command_source(extension: str, content: str) -> None:
         raise CommandValidationError(
             "command_file_invalid_source",
             "AI-generated Markdown commands must explicitly declare 'brain' as "
-            "a configured brain name.",
+            "a non-empty string.",
             {"reason": "generated_brain_not_explicit"},
         )
     brain = config["brain"]
     if not isinstance(brain, str) or not brain.strip():
         raise CommandValidationError(
             "command_file_invalid_source",
-            "AI-generated Markdown commands must set 'brain' to a non-empty "
-            "configured brain name.",
+            "AI-generated Markdown commands must set 'brain' to a non-empty string.",
             {"reason": "generated_brain_invalid"},
         )
     _validate_generated_markdown_message_usage(config, body)

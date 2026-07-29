@@ -23,7 +23,7 @@ export function MemberSelector({
   return (
     <Menu position="bottom-start" withinPortal>
       <Menu.Target>
-        <UnstyledButton className={className} aria-label={ariaLabel} disabled={!member}>
+        <UnstyledButton className={className} aria-label={ariaLabel} disabled={!members.length}>
           <Avatar
             src={member ? memberAvatarUrl(member.person_id) : undefined}
             size={28}

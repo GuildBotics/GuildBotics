@@ -796,7 +796,27 @@ pre {
   min-width: 0;
   overscroll-behavior: contain;
   overflow: auto;
+  scrollbar-color: var(--color-border) var(--color-bg-panel);
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.command-source-preview-scroll::-webkit-scrollbar,
+.command-source-diff-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+.command-source-preview-scroll::-webkit-scrollbar-track,
+.command-source-diff-scroll::-webkit-scrollbar-track {
+  background: var(--color-bg-panel);
+}
+
+.command-source-preview-scroll::-webkit-scrollbar-thumb,
+.command-source-diff-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border: 2px solid var(--color-bg-panel);
+  border-radius: 999px;
 }
 
 .command-source-preview-line {

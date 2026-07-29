@@ -32,6 +32,7 @@ def test_generated_markdown_requires_explicit_brain() -> None:
         validate_generated_command_source(".md", source)
 
     assert "explicitly declare 'brain'" in str(exc.value)
+    assert "non-empty string" in str(exc.value)
 
 
 def test_generated_markdown_accepts_configured_custom_brain_name() -> None:
@@ -44,6 +45,7 @@ def test_generated_markdown_rejects_non_string_brain() -> None:
     with pytest.raises(CommandValidationError) as exc:
         validate_generated_command_source(".md", "---\nbrain: []\n---\nBody.\n")
 
+    assert "non-empty string" in str(exc.value)
     assert exc.value.context["reason"] == "generated_brain_invalid"
 
 
