@@ -42,6 +42,13 @@ _NATIVE_AGENTS = (
         executable="claude",
         config_reference="claude",
     ),
+    CliAgentInfo(
+        name="grok",
+        label="Grok Build",
+        order=30,
+        executable="grok",
+        config_reference="grok",
+    ),
 )
 _NATIVE_AGENT_NAMES = frozenset(agent.name for agent in _NATIVE_AGENTS)
 

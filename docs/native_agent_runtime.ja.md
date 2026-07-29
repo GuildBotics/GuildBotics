@@ -1,11 +1,13 @@
-# Codex・Claude Codeのセッション連携
+# Codex・Claude Code・Grok Buildのセッション連携
 
-GuildBoticsでCodexまたはClaude Codeを利用する場合は、Slackスレッドやチケットに
+GuildBoticsでCodex、Claude Code、Grok Buildを利用する場合は、Slackスレッドやチケットに
 セッションを対応付け、前回の続きから作業を再開できます。Codexとの連携には
 [Codex App Server](https://developers.openai.com/codex/app-server)を使用し、Claude Codeとの
-連携には公式の`stream-json`入出力と`--resume <session-id>`を使用します。
+連携には公式の`stream-json`入出力と`--resume <session-id>`を使用します。Grok Buildとの連携には
+`grok agent stdio`が提供する[Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/initialization)
+（ACP）v1を使用します。
 
-AntigravityやGitHub Copilotなど、Codex・Claude Code以外のAI CLIツールは、
+AntigravityやGitHub Copilotなど、これら3つ以外のAI CLIツールは、
 `intelligences/cli_agents/`にあるYAML形式の設定に従ってスクリプト経由で実行します。
 これらのツールに会話履歴を渡す方法については、
 [Slackスレッドの文脈を渡す方法](#slackスレッドの文脈を渡す方法)を参照してください。
@@ -18,14 +20,18 @@ AntigravityやGitHub Copilotなど、Codex・Claude Code以外のAI CLIツール
 default: codex
 codex: codex
 claude: claude
+grok: grok
 ```
 
-CodexとClaude Codeの実行には、`intelligences/cli_agents/`配下のスクリプト設定を
+これら3つの実行には、`intelligences/cli_agents/`配下のスクリプト設定を
 使用しません。ユーザーが変更できる実行権限は、
-`intelligences/native_agent_policy.yml`で指定するCodexのファイルアクセス範囲だけです。
+`intelligences/native_agent_policy.yml`でAI CLIツールごとに指定するファイルアクセス範囲だけです。
 
 ```yaml
 codex:
+  filesystem_access: workspace
+
+grok:
   filesystem_access: workspace
 ```
 
@@ -40,6 +46,16 @@ codex:
 制限し、`host`ではファイルアクセスの制限を設けません。どちらの場合もネットワークアクセスは
 有効です。Codexには操作の確認を求めない`never`を常に指定し、Codexから予期しない確認要求が
 届いた場合は拒否します。ネットワークアクセスと確認方法はユーザー設定として公開しません。
+
+Grok Buildでは、`workspace`が`--sandbox workspace`、`host`が`--sandbox off`に対応します。
+起動時のコマンドは`grok --no-auto-update --sandbox <profile> --always-approve agent stdio`で
+固定し、任意のCLIオプションを設定から注入することはできません。`--always-approve`は必ず
+sandboxと併用し、ACPの`session/request_permission`で予期しない確認要求が届いた場合は拒否して
+診断記録へ残します。拒否の際は、要求に含まれる`options`から`reject_once`（無ければ
+`reject_always`）のoption IDを選んで返します。option IDは要求ごとにGrokが決める識別子であり、
+種別名をIDとして送り返しません。拒否用のoptionが提示されない場合は、許可用のoptionへ
+読み替えず`cancelled`を返します。headless実行中にCLIが自動更新されないよう`--no-auto-update`を常に渡し、
+ユーザーの`config.toml`は書き換えません。
 
 Claude Codeは、従来の`--dangerously-skip-permissions`と同じく、操作ごとの確認を省略する
 `bypassPermissions`で常に実行します。Bash sandboxはチケット作業やチャットからの依頼に必要な
@@ -57,10 +73,17 @@ Claude Codeは、従来の`--dangerously-skip-permissions`と同じく、操作�
 
 GuildBoticsを起動する前に、使用するAI CLIツールをインストールしてください。その後、
 GuildBoticsのサービスを実行するOSユーザーと同じユーザーで、各ツールの標準的なログイン操作
-（`codex login`または`claude auth login`）を行います。ログイン情報は各ツール自身の
+（`codex login`、`claude auth login`、または`grok login`）を行います。ログイン情報は各ツール自身の
 認証情報保存先にだけ保持され、GuildBoticsのセッション情報や診断記録には複製されません。
 
-GitHub、Git、SSHへの書き込みに使う認証情報は、CodexとClaude Codeのプロセスへ渡しません。
+Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
+`cached_token`だけを選択します。`XAI_API_KEY`が設定されていて、かつCLIが`xai.api_key`を
+提示した場合に限りAPIキー方式を使用します。ブラウザを開く`grok.com`の対話認証は、headless実行
+中に自動で開始しません。保存済みの認証がない場合は認証エラーとして停止し、`grok login`
+（または`grok login --device-auth`）の実行を案内します。診断記録に残すのは選択した認証方式の
+識別子だけで、`~/.grok/auth.json`の内容は読み取りません。
+
+GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ渡しません。
 AI CLIツールは、GuildBoticsが検証した`guildbotics member ...`コマンドを通してのみ、
 メンバーとして書き込み操作を行います。そのコマンドから呼び出される子コマンドが引き継ぐのは、
 有効期間の短い実行委任用の識別情報であり、AI CLIツールの認証トークンではありません。
@@ -111,8 +134,9 @@ Slackイベントの処理済み位置を示すcursorは、AI CLIツールから
 
 セッションとの対応付けは、
 `<workspace-data-root>/agent-runtime/conversations/<person>/<adapter>/`へ安全に保存します。
-保存内容には、AI CLIツールのセッションIDとturn ID、cursor、使用量、セッションの状態、世代、
-切り替え理由が含まれます。AI CLIツールの認証情報と、プロトコルから受信した未加工データは
+保存内容には、AI CLIツールのセッションIDとturn ID、cursor、使用量、セッション文脈量、
+セッションの状態、世代、切り替え理由が含まれます。ACPには標準のturn IDがないため、Grok Build
+ではJSON-RPCのリクエストIDをturn IDとして保存せず、空のままにします。AI CLIツールの認証情報と、プロトコルから受信した未加工データは
 保存しません。
 
 GuildBoticsは、AI CLIツール側の「最新のセッション」や暗黙の会話継続には依存せず、保存した
@@ -123,6 +147,48 @@ GuildBoticsは、AI CLIツール側の「最新のセッション」や暗黙の
 Codexの`contextCompaction`とClaude Codeの`compact_boundary`は、GuildBotics内では同じ種類の
 イベントとして記録します。文脈圧縮が完了したturn自体は成功として扱い、次の依頼で新しい
 セッションを開始してSlackスレッドの履歴を再構築します。
+
+Grok BuildにはACP標準の文脈圧縮通知がないため、xAI独自拡張の`auto_compact_started`などの
+通知を`context_compaction`として正規化します。0.2.114ではACP標準の`usage_update`が送られて
+こないため、そこから得るセッション文脈量（`used` / `size`）による90%到達時の`context_limit`
+切り替えは、この版では作動しません。`usage_update`を送る版に備えて処理自体は実装しており、
+その場合は`used`の減少も文脈圧縮の検出手段として併用します。
+
+0.2.114でトークン使用量が届く経路は、xAI独自拡張の`turn_completed`だけです。ここに含まれる
+`inputTokens` / `outputTokens` / `cachedReadTokens` / `reasoningTokens` / `totalTokens`を
+共通のトークン項目へ正規化するため、有効期間・turn数・使用量の上限による切り替えは通常どおり
+機能します。`costUsdTicks`、`modelCalls`、`apiDurationMs`はトークン数ではないので、使用量とは
+合算せず診断記録の詳細情報として保持します。
+
+xAI独自拡張は`_x.ai/session_notification`と`_x.ai/session/update`の2経路で届くため、どちらも
+同じように処理します。これら以外の`_x.ai/*`は画面表示用の状態通知であり、ターンごとに1件へ
+集約します。0.2.114で内容を確認済みの経路（`_x.ai/queue/changed`、`_x.ai/sessions/changed`、
+`_x.ai/settings/update`、`_x.ai/announcements/update`など）は、送信したプロンプト本文や
+ワークスペースのパスを含むため、件数だけを記録します。未知の経路が現れた場合は、経路名・件数に
+加えてpayloadの第一階層のフィールド名だけを残します。診断記録の伏せ字処理はマッピングのキーに
+対して働くため、payloadを文字列化して保存すると秘密情報がそのまま残ります。値は保存しません。
+
+ツール実行の種別は、ACPの`kind`が`execute`のものをコマンド、`edit` / `delete` / `move`の
+ものをファイル変更として記録します。`locations`は変更したファイルだけでなく読み取っただけの
+ファイルも含むため、種別の判定には使わず、関係するパスの記録にとどめます。`tool_call_update`は
+`toolCallId`以外を省略できるので、開始時に宣言された種別を`toolCallId`ごとに保持し、種別を
+含まない完了通知にも同じ種別を適用します。
+
+推論（reasoning）の途中経過は`agent_thought_chunk`として届きますが、回答本文には含めません。
+応答として組み立てるのは`agent_message_chunk`だけです。
+
+ACPの`session/prompt`はターンが終了した時点で応答が返るため、この要求だけはリクエスト単位の
+締め切りを設けません。ターン全体の実行時間は上位のターンタイムアウトで制限し、超過した場合は
+`session/cancel`を送ってプロセスグループごと停止します。initializeやsession/loadなど、即座に
+応答が返る要求にはリクエスト単位の締め切りを維持します。
+
+Grok Buildの正確な再開には、`initialize`が提示した機能に応じてACPの`session/resume`または
+`session/load`を使用します。`session/load`はセッション全体の履歴を再送してから応答を返すため、
+その応答を境界として、再送された履歴を現在のturnのイベント、Slackへの投稿、通常の実行記録から
+除外します。再送された件数だけを診断記録に残します。履歴は標準の`session/update`だけでなく
+xAI独自拡張の経路でも再送され、前回turnの`turn_completed`（トークン使用量）が含まれます。
+これらも履歴として数えるだけで解釈しないため、前回のトークン使用量が今回のturnの使用量として
+二重に計上されることはありません。
 
 保存したセッションとの対応付けは、次のコマンドで明示的にリセットできます。
 
@@ -143,7 +209,7 @@ OSのadvisory lockを使った実行権の管理により、スケジューラ�
 `guildbotics member ...`コマンドは、メンバー、実行権、委任情報、実行ID、実行中のプロセスID、
 保持中のロックがすべて一致した場合にだけ受け付けます。
 
-CodexとClaude Codeのプロセスは、独立したプロセスグループとして起動します。キャンセル、
+これらのAI CLIツールのプロセスは、独立したプロセスグループとして起動します。キャンセル、
 サービスの停止、通信エラー、実行コンテキストの終了時には、グループ全体を停止して終了を確認します。
 そのため、GuildBoticsの停止後にAI CLIツールのプロセスだけが背後で動き続けることはありません。
 
@@ -166,3 +232,14 @@ cursor、実行権を記録し、同じ作業に属するイベントを対応�
 `unsupported_version`が記録された場合は、使用しているAI CLIツールを更新してください。
 Claude Codeでは`--input-format`、`--output-format`、`stream-json`、`--resume`への対応を確認します。
 CodexではApp Serverの初期化処理を通して、必要な機能に対応しているか確認します。
+Grok Buildでは、ACPの`initialize`が返すプロトコル版数が1であることと、正確な再開に必要な
+`loadSession`または`sessionCapabilities.resume`のいずれかが提示されることを確認します。
+バージョン文字列では判定しないため、ACP v1に対応する新しいGrok Buildはそのまま利用できます。
+動作確認済みの基準バージョンは0.2.114です。
+
+Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データを返した場合にだけ`rate_limited`
+として分類します。標準エラー出力や応答本文の解析は行いません。Codexの
+`account/rateLimits/read`に相当する利用量取得手段はACP経由では公開されていない
+（`x.ai/session/usage`は`Method not found`、0.2.114で確認）ため、Grok Buildでは
+週間・5時間枠の利用量メーターを提供しません。Activity Historyでは「使用量情報なし」を通常の
+状態として扱い、利用率0%のような値は生成しません。

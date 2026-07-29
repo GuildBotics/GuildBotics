@@ -112,6 +112,10 @@ class ConversationRecord:
     turn_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    # Absolute size of the provider's session context at the last turn, not a
+    # per-turn token count: it is replaced, never accumulated.
+    context_used_tokens: int = 0
+    context_size_tokens: int = 0
     created_at: str = ""
     updated_at: str = ""
     rotation_reason: str = ""
@@ -127,6 +131,8 @@ class ConversationRecord:
         self.turn_count = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.context_used_tokens = 0
+        self.context_size_tokens = 0
         self.rotation_reason = reason
 
 

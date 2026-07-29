@@ -273,3 +273,22 @@ def _string_literals(value: ast.AST) -> set[str]:
         and isinstance(child.value, str)
         and _EVENT_TYPE_RE.fullmatch(child.value)
     }
+
+
+def test_reasoning_is_labelled_apart_from_the_reply() -> None:
+    reasoning = normalize_trace_presentation(
+        _event(
+            "agent_runtime.assistant",
+            payload={"name": "thinking", "message": "The user wants a path."},
+        )
+    )
+    reply = normalize_trace_presentation(
+        _event(
+            "agent_runtime.assistant",
+            payload={"name": "completed", "message": "Here it is."},
+        )
+    )
+
+    assert reasoning.label_key.endswith("assistant_thinking")
+    assert reasoning.message == "The user wants a path."
+    assert reply.label_key.endswith("agentRuntime.assistant")

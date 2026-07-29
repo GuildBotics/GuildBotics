@@ -213,6 +213,10 @@ def _agent_presentation(payload: dict[str, Any], event_type: str) -> TracePresen
     label = _AGENT_LABELS.get(subtype, "")
     if subtype == "assistant" and payload.get("partial") is True:
         label = "assistant_partial"
+    if subtype == "assistant" and payload.get("name") == "thinking":
+        # Reasoning is not the reply; labelling both "Response" made a stream of
+        # reasoning chunks look like a stuttering answer.
+        label = "assistant_thinking"
     if subtype == "approval" and payload.get("name") == "policy":
         label = "approval_policy"
     message = _first_text(payload, "message")

@@ -127,3 +127,90 @@ def test_non_assistant_records_pass_through_unchanged() -> None:
     ]
 
     assert collapse_assistant_streams(records) == records
+
+
+def test_reasoning_chunks_are_collapsed_into_one_record() -> None:
+    records = [
+        _assistant("thinking", "The "),
+        _assistant("thinking", "user "),
+        _assistant("thinking", "wants "),
+        _assistant("thinking", "a path."),
+        _assistant("delta", "OK"),
+        _assistant("completed", "OK"),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    assert [_payload(item)["name"] for item in collapsed] == ["thinking", "completed"]
+    assert _payload(collapsed[0])["message"] == "The user wants a path."
+
+
+def test_reasoning_and_reply_streams_do_not_merge() -> None:
+    records = [
+        _assistant("thinking", "reasoning text"),
+        _assistant("delta", "reply "),
+        _assistant("delta", "text"),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    messages = {_payload(item)["name"]: _payload(item)["message"] for item in collapsed}
+    assert messages["thinking"] == "reasoning text"
+    assert messages["partial"] == "reply text"
+
+
+def test_reasoning_streams_are_separated_by_span() -> None:
+    records = [
+        _assistant("thinking", "first", span_id="span-1"),
+        _assistant("thinking", "second", span_id="span-2"),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    assert [_payload(item)["message"] for item in collapsed] == ["first", "second"]
+
+
+def test_a_single_reasoning_record_is_left_alone() -> None:
+    records = [_assistant("thinking", "only one")]
+
+    assert collapse_assistant_streams(records) == records
+
+
+def _payload(item: dict[str, Any]) -> dict[str, Any]:
+    value = item.get("payload")
+    return value if isinstance(value, dict) else {}
+
+
+def test_reasoning_runs_split_by_a_reply_keep_their_place() -> None:
+    records = [
+        _assistant("thinking", "first "),
+        _assistant("thinking", "block"),
+        _assistant("delta", "answer"),
+        _assistant("thinking", "second "),
+        _assistant("thinking", "block"),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    # Early reasoning must not be moved into the later run's record.
+    assert [_payload(item)["message"] for item in collapsed] == [
+        "first block",
+        "answer",
+        "second block",
+    ]
+
+
+def test_reasoning_separated_by_a_tool_record_is_not_merged_across_it() -> None:
+    records = [
+        _assistant("thinking", "before"),
+        _event("agent_runtime.command"),
+        _assistant("thinking", "after"),
+    ]
+
+    collapsed = collapse_assistant_streams(records)
+
+    assert [_payload(item).get("message", "") for item in collapsed] == [
+        "before",
+        "",
+        "after",
+    ]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import suppress
 from typing import Any
 
@@ -13,6 +12,12 @@ from guildbotics.intelligences.agent_runtime.environment import (
     member_command_environment,
     remove_isolated_config,
     terminate_process_tree,
+)
+from guildbotics.intelligences.agent_runtime.jsonrpc import (
+    FATAL_NOTIFICATION,
+    METHOD_NOT_FOUND,
+    LineJsonRpcTransport,
+    RpcError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
@@ -24,11 +29,10 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     EventSink,
 )
-from guildbotics.intelligences.agent_runtime.policy import NativeAgentPolicy
+from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
 from guildbotics.runtime.person_lease import delegation_environment
 
-_METHOD_NOT_FOUND = -32601
 _MODERN_APPROVAL_METHODS = frozenset(
     {
         "item/commandExecution/requestApproval",
@@ -40,12 +44,6 @@ _UNSUPPORTED_APPROVAL_METHODS = frozenset({"item/permissions/requestApproval"})
 _APPROVAL_POLICY = "never"
 
 
-class _RpcError(RuntimeError):
-    def __init__(self, error: Any) -> None:
-        super().__init__(str(error))
-        self.error = error
-
-
 class CodexAppServerAdapter:
     name = "codex-app-server"
 
@@ -54,22 +52,19 @@ class CodexAppServerAdapter:
         *,
         executable: str = "codex",
         timeout: float = 3600.0,
-        policy: NativeAgentPolicy | None = None,
+        policy: AdapterFilesystemPolicy | None = None,
     ) -> None:
         self._executable = executable
         self._timeout = timeout
-        self._process: asyncio.subprocess.Process | None = None
-        self._reader_task: asyncio.Task[None] | None = None
-        self._stderr_task: asyncio.Task[None] | None = None
-        self._pending: dict[int, asyncio.Future[Any]] = {}
-        self._notifications: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._request_id = 0
-        self._stderr: list[str] = []
-        self._fatal_error: AgentRuntimeError | None = None
+        self._transport = LineJsonRpcTransport(
+            label="Codex App Server",
+            request_timeout=min(timeout, 30.0),
+            on_reverse_request=self._handle_server_request,
+        )
         self._gh_config_dir = ""
         self._active_thread_id = ""
         self._active_turn_id = ""
-        self._policy = policy or NativeAgentPolicy()
+        self._policy = policy or AdapterFilesystemPolicy()
 
     async def run_turn(
         self,
@@ -107,7 +102,7 @@ class CodexAppServerAdapter:
                     ),
                 },
             )
-        except _RpcError as exc:
+        except RpcError as exc:
             raise _agent_error_from_rpc(exc) from exc
         turn = _dict(_dict(response).get("turn"))
         self._active_turn_id = _identifier(turn)
@@ -126,10 +121,10 @@ class CodexAppServerAdapter:
         try:
             async with asyncio.timeout(self._timeout):
                 while True:
-                    message = await self._notifications.get()
+                    message = await self._transport.next_notification()
                     method = str(message.get("method", ""))
-                    if method == "guildbotics/fatal":
-                        raise self._fatal_error or AgentRuntimeError(
+                    if method == FATAL_NOTIFICATION:
+                        raise self._transport.fatal_error or AgentRuntimeError(
                             AgentRuntimeErrorCategory.PROCESS,
                             "Codex App Server stopped unexpectedly.",
                             rotate_session=True,
@@ -209,7 +204,7 @@ class CodexAppServerAdapter:
             provider_turn_id=_identifier(turn) or self._active_turn_id,
             finish_reason=finish_reason,
             usage=usage,
-            stderr="\n".join(self._stderr),
+            stderr=self._transport.stderr_text(),
         )
 
     async def interrupt(self) -> None:
@@ -224,11 +219,12 @@ class CodexAppServerAdapter:
                         "turnId": self._active_turn_id,
                     },
                 )
-        if self._process is not None and self._process.returncode is None:
-            await terminate_process_tree(self._process)
+        process = self._transport.process
+        if process is not None and process.returncode is None:
+            await terminate_process_tree(process)
 
     async def close(self) -> None:
-        process = self._process
+        process = self._transport.process
         if process is not None and process.returncode is None:
             if process.stdin is not None:
                 with suppress(BrokenPipeError, ConnectionError, OSError):
@@ -237,36 +233,22 @@ class CodexAppServerAdapter:
                 await asyncio.wait_for(process.wait(), timeout=2.0)
             except TimeoutError:
                 await terminate_process_tree(process)
-        for task in (self._reader_task, self._stderr_task):
-            if task is not None and not task.done():
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
+        await self._transport.aclose()
         remove_isolated_config(self._gh_config_dir)
-        self._process = None
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
     ) -> None:
-        if (
-            self._process is not None
-            and self._process.returncode is None
-            and self._reader_task is not None
-            and not self._reader_task.done()
-            and self._fatal_error is None
-        ):
+        if self._transport.running:
             return
-        if self._process is not None:
+        if self._transport.process is not None:
             await self.close()
         cwd = context.cwd
-        self._fatal_error = None
-        self._stderr.clear()
-        self._notifications = asyncio.Queue()
         env, self._gh_config_dir = isolated_agent_environment(cwd)
         env.update(member_command_environment(context))
         env.update(delegation_environment(context.run_id))
         try:
-            self._process = await asyncio.create_subprocess_exec(
+            process = await asyncio.create_subprocess_exec(
                 self._executable,
                 "app-server",
                 cwd=str(cwd),
@@ -283,8 +265,7 @@ class CodexAppServerAdapter:
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Codex App Server: {exc}",
             ) from exc
-        self._reader_task = asyncio.create_task(self._read_messages())
-        self._stderr_task = asyncio.create_task(self._drain_stderr())
+        self._transport.start(process)
         try:
             await self._request(
                 "initialize",
@@ -297,7 +278,7 @@ class CodexAppServerAdapter:
                 },
             )
             await self._notify("initialized", {})
-        except _RpcError as exc:
+        except RpcError as exc:
             await self.close()
             raise _agent_error_from_rpc(exc) from exc
         except Exception:
@@ -316,7 +297,7 @@ class CodexAppServerAdapter:
                 response = await self._request(
                     "thread/resume", {"threadId": conversation.provider_session_id}
                 )
-            except _RpcError as exc:
+            except RpcError as exc:
                 raise AgentRuntimeError(
                     AgentRuntimeErrorCategory.SESSION_UNAVAILABLE,
                     "The exact Codex thread could not be resumed.",
@@ -344,7 +325,7 @@ class CodexAppServerAdapter:
     async def _check_account(self) -> None:
         try:
             result = _dict(await self._request("account/read", {"refreshToken": False}))
-        except _RpcError as exc:
+        except RpcError as exc:
             raise _agent_error_from_rpc(exc) from exc
         requires_auth = result.get(
             "requiresOpenaiAuth", result.get("requires_openai_auth")
@@ -358,7 +339,7 @@ class CodexAppServerAdapter:
     async def _check_rate_limits(self) -> None:
         try:
             result = _dict(await self._request("account/rateLimits/read", {}))
-        except _RpcError:
+        except RpcError:
             # API-key and non-ChatGPT providers may not expose this capability.
             return
         snapshot = parse_codex_rate_limits(result)
@@ -376,99 +357,18 @@ class CodexAppServerAdapter:
             )
 
     async def _request(self, method: str, params: dict[str, Any]) -> Any:
-        self._request_id += 1
-        request_id = self._request_id
-        future = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = future
-        try:
-            await self._write({"method": method, "id": request_id, "params": params})
-            return await asyncio.wait_for(future, timeout=min(self._timeout, 30.0))
-        except TimeoutError as exc:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                f"Codex App Server request '{method}' timed out.",
-                rotate_session=True,
-            ) from exc
-        finally:
-            self._pending.pop(request_id, None)
+        return await self._transport.request(method, params)
 
     async def _notify(self, method: str, params: dict[str, Any]) -> None:
-        await self._write({"method": method, "params": params})
+        await self._transport.notify(method, params)
 
-    async def _write(self, message: dict[str, Any]) -> None:
-        process = self._process
-        if process is None or process.stdin is None or process.returncode is not None:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Codex App Server is not running.",
-                rotate_session=True,
-            )
-        try:
-            process.stdin.write(
-                (
-                    json.dumps(message, ensure_ascii=False, separators=(",", ":"))
-                    + "\n"
-                ).encode()
-            )
-            await process.stdin.drain()
-        except (BrokenPipeError, ConnectionError, OSError) as exc:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Codex App Server connection closed while sending a request.",
-                rotate_session=True,
-            ) from exc
-
-    async def _read_messages(self) -> None:
-        process = self._process
-        assert process is not None and process.stdout is not None
-        try:
-            while line := await process.stdout.readline():
-                message = json.loads(line)
-                if not isinstance(message, dict):
-                    continue
-                response_id = message.get("id")
-                if response_id is not None and (
-                    "result" in message or "error" in message
-                ):
-                    future = self._pending.get(int(response_id))
-                    if future is not None and not future.done():
-                        if "error" in message:
-                            future.set_exception(_RpcError(message["error"]))
-                        else:
-                            future.set_result(message.get("result"))
-                    continue
-                if response_id is not None:
-                    await self._handle_server_request(message)
-                    continue
-                await self._notifications.put(message)
-        except ValueError as exc:
-            # Covers oversized readline() chunks and malformed JSON alike.
-            self._fatal_error = AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROTOCOL,
-                f"Codex App Server output could not be read: {exc}",
-                rotate_session=True,
-            )
-        finally:
-            if self._fatal_error is None:
-                self._fatal_error = AgentRuntimeError(
-                    AgentRuntimeErrorCategory.PROCESS,
-                    "Codex App Server stdout closed unexpectedly.",
-                    details={
-                        "returncode": process.returncode,
-                        "stderr": "\n".join(self._stderr[-5:]),
-                    },
-                    rotate_session=True,
-                )
-            self._fail_pending(self._fatal_error)
-            await self._notifications.put({"method": "guildbotics/fatal"})
-
-    async def _handle_server_request(self, message: dict[str, Any]) -> None:
-        method = str(message.get("method", ""))
-        response_id = message.get("id")
+    async def _handle_server_request(
+        self, method: str, request_id: Any, _params: dict[str, Any]
+    ) -> None:
         if method in _MODERN_APPROVAL_METHODS | _LEGACY_APPROVAL_METHODS:
             decision = "decline" if method in _MODERN_APPROVAL_METHODS else "denied"
-            await self._write({"id": response_id, "result": {"decision": decision}})
-            await self._notifications.put(
+            await self._transport.respond(request_id, result={"decision": decision})
+            self._transport.push_notification(
                 {
                     "method": "guildbotics/approval",
                     "params": {
@@ -479,16 +379,14 @@ class CodexAppServerAdapter:
             )
             return
         if method in _UNSUPPORTED_APPROVAL_METHODS:
-            await self._write(
-                {
-                    "id": response_id,
-                    "error": {
-                        "code": _METHOD_NOT_FOUND,
-                        "message": f"Unsupported approval request: {method}",
-                    },
-                }
+            await self._transport.respond(
+                request_id,
+                error={
+                    "code": METHOD_NOT_FOUND,
+                    "message": f"Unsupported approval request: {method}",
+                },
             )
-            await self._notifications.put(
+            self._transport.push_notification(
                 {
                     "method": "guildbotics/approval",
                     "params": {
@@ -499,29 +397,16 @@ class CodexAppServerAdapter:
                 }
             )
             return
-        await self._write(
-            {
-                "id": response_id,
-                "error": {"code": -32601, "message": f"Unsupported request: {method}"},
-            }
+        await self._transport.respond(
+            request_id,
+            error={
+                "code": METHOD_NOT_FOUND,
+                "message": f"Unsupported request: {method}",
+            },
         )
 
-    async def _drain_stderr(self) -> None:
-        process = self._process
-        assert process is not None and process.stderr is not None
-        while line := await process.stderr.readline():
-            text = line.decode(errors="replace").rstrip()
-            if text:
-                self._stderr.append(text[:8192])
-                del self._stderr[:-100]
 
-    def _fail_pending(self, error: Exception) -> None:
-        for future in self._pending.values():
-            if not future.done():
-                future.set_exception(error)
-
-
-def _thread_sandbox(policy: NativeAgentPolicy, read_only: bool = False) -> str:
+def _thread_sandbox(policy: AdapterFilesystemPolicy, read_only: bool = False) -> str:
     if read_only:
         return "read-only"
     return (
@@ -532,7 +417,7 @@ def _thread_sandbox(policy: NativeAgentPolicy, read_only: bool = False) -> str:
 
 
 def _sandbox_policy(
-    policy: NativeAgentPolicy, workspace_data_root: str, read_only: bool = False
+    policy: AdapterFilesystemPolicy, workspace_data_root: str, read_only: bool = False
 ) -> dict[str, Any]:
     # A read-only turn wins over the configured filesystem access: it exists to
     # inspect recorded state, and what it reads is untrusted input.
@@ -763,7 +648,7 @@ def _identifier(value: dict[str, Any]) -> str:
     )
 
 
-def _agent_error_from_rpc(exc: _RpcError) -> AgentRuntimeError:
+def _agent_error_from_rpc(exc: RpcError) -> AgentRuntimeError:
     error = _dict(exc.error)
     data = _dict(error.get("data"))
     identifiers = {
@@ -806,7 +691,7 @@ def _agent_error_from_rpc(exc: _RpcError) -> AgentRuntimeError:
             "Codex account rate limit is active.",
             details=details,
         )
-    if error.get("code") == _METHOD_NOT_FOUND:
+    if error.get("code") == METHOD_NOT_FOUND:
         return AgentRuntimeError(
             AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
             "The installed Codex App Server does not support the required protocol.",

@@ -164,3 +164,87 @@ def test_rotation_clears_last_run_and_event_identity(tmp_path) -> None:
 
     assert rotated.last_run_id == ""
     assert rotated.last_event_id == ""
+
+
+def test_context_snapshot_round_trips_and_defaults_to_zero(tmp_path) -> None:
+    store = ConversationStore(tmp_path)
+    record = store.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "sess-1"
+    record.context_used_tokens = 120_000
+    record.context_size_tokens = 500_000
+    store.save(record)
+
+    reloaded = store.load(_key())
+
+    assert reloaded is not None
+    assert reloaded.context_used_tokens == 120_000
+    assert reloaded.context_size_tokens == 500_000
+    assert (
+        ConversationStore(tmp_path / "other")
+        .resolve(_key(), ResumePolicy.AUTO)
+        .context_size_tokens
+        == 0
+    )
+
+
+def test_context_utilization_at_or_above_the_limit_rotates(tmp_path) -> None:
+    store = ConversationStore(tmp_path)
+    record = store.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "sess-1"
+    record.context_used_tokens = 450_000
+    record.context_size_tokens = 500_000
+    store.save(record)
+
+    rotated = store.resolve(_key(), ResumePolicy.AUTO)
+
+    assert rotated.rotation_reason == "context_limit"
+    assert rotated.provider_session_id == ""
+    assert rotated.context_used_tokens == 0
+    assert rotated.context_size_tokens == 0
+    assert rotated.generation == 1
+
+
+def test_context_utilization_below_the_limit_keeps_the_session(tmp_path) -> None:
+    store = ConversationStore(tmp_path)
+    record = store.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "sess-1"
+    record.context_used_tokens = 449_999
+    record.context_size_tokens = 500_000
+    store.save(record)
+
+    kept = store.resolve(_key(), ResumePolicy.AUTO)
+
+    assert kept.provider_session_id == "sess-1"
+    assert kept.rotation_reason == ""
+
+
+def test_unusable_context_size_is_never_used_for_rotation(tmp_path) -> None:
+    store = ConversationStore(tmp_path)
+    record = store.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "sess-1"
+    record.context_used_tokens = 900_000
+    record.context_size_tokens = 0
+    store.save(record)
+
+    kept = store.resolve(_key(), ResumePolicy.AUTO)
+
+    assert kept.provider_session_id == "sess-1"
+    assert kept.rotation_reason == ""
+
+
+def test_stored_record_without_context_fields_loads_as_zero(tmp_path) -> None:
+    store = ConversationStore(tmp_path)
+    record = store.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "sess-1"
+    store.save(record)
+    path = next(tmp_path.rglob("*.json"))
+    payload = json.loads(path.read_text())
+    del payload["context_used_tokens"]
+    del payload["context_size_tokens"]
+    path.write_text(json.dumps(payload))
+
+    reloaded = store.load(_key())
+
+    assert reloaded is not None
+    assert reloaded.context_used_tokens == 0
+    assert reloaded.context_size_tokens == 0

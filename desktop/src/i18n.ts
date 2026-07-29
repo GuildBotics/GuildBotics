@@ -332,6 +332,7 @@ const resources = {
             turn: "Turn",
             assistant: "Response",
             assistant_partial: "Response (partial)",
+            assistant_thinking: "Reasoning",
             command: "Command",
             file_change: "File change",
             tool: "Tool",
@@ -563,16 +564,24 @@ const resources = {
           envJson: "Environment variables (JSON)",
           envJsonError: "Enter a JSON object.",
           script: "Script",
-          nativePolicy: "Codex execution permissions",
-          nativePolicyDescription: "Choose where Codex can access files.",
-          filesystemAccess: "File access",
+          nativePolicy: "Native AI CLI tool execution permissions",
+          nativePolicyDescription: "Choose where each native AI CLI tool can access files.",
+          nativeAgents: {
+            codex: "Codex",
+            grok: "Grok Build",
+          },
+          filesystemAccessFor: "{{agent}} file access",
+          sandboxMapping: {
+            codex: "Runs Codex with workspace-write or danger-full-access.",
+            grok: "Runs grok with --sandbox workspace or --sandbox off.",
+          },
           filesystemOptions: {
             workspace: "Workspace only",
             host: "Unrestricted",
           },
           hostAccessWarningTitle: "Unrestricted file access",
           hostAccessWarningBody:
-            "Codex can read and write files outside the workspace. Select this only when it is genuinely required.",
+            "{{agent}} can read and write files outside the workspace. Select this only when it is genuinely required.",
         },
         members: {
           avatar: {
@@ -1667,16 +1676,25 @@ const resources = {
           envJson: "環境変数（JSON）",
           envJsonError: "JSONオブジェクトを入力してください。",
           script: "スクリプト",
-          nativePolicy: "Codexの実行権限",
-          nativePolicyDescription: "Codexがアクセスできるファイルの範囲を設定します。",
-          filesystemAccess: "ファイルアクセス",
+          nativePolicy: "ネイティブAI CLIツールの実行権限",
+          nativePolicyDescription:
+            "各ネイティブAI CLIツールがアクセスできるファイルの範囲を設定します。",
+          nativeAgents: {
+            codex: "Codex",
+            grok: "Grok Build",
+          },
+          filesystemAccessFor: "{{agent}}のファイルアクセス",
+          sandboxMapping: {
+            codex: "Codexをworkspace-writeまたはdanger-full-accessで実行します。",
+            grok: "grokを--sandbox workspaceまたは--sandbox offで実行します。",
+          },
           filesystemOptions: {
             workspace: "ワークスペース内のみ",
             host: "制限なし",
           },
           hostAccessWarningTitle: "ファイルアクセスを制限しない設定",
           hostAccessWarningBody:
-            "Codexがワークスペース外のファイルも読み書きできるようになります。本当に必要な場合だけ選択してください。",
+            "{{agent}}がワークスペース外のファイルも読み書きできるようになります。本当に必要な場合だけ選択してください。",
         },
         members: {
           avatar: {
@@ -2220,6 +2238,7 @@ const resources = {
             turn: "ターン",
             assistant: "応答",
             assistant_partial: "応答(部分)",
+            assistant_thinking: "推論",
             command: "コマンド",
             file_change: "ファイル変更",
             tool: "ツール",

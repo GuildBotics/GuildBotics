@@ -68,6 +68,9 @@ import {
   type ConfigStatus,
   type BrainAssignment,
   type IntelligenceConfig,
+  NATIVE_POLICY_ADAPTERS,
+  type NativeAgentFilesystemAccess,
+  type NativeAgentPolicyAdapter,
   type NativeAgentPolicySettings,
   type ModelDefinition,
   type MemberSetupRequest,
@@ -1402,9 +1405,11 @@ function NativeAgentPolicyEditor({
   onChange: (policy: NativeAgentPolicySettings) => void;
 }) {
   const { t } = useTranslation();
-  const setCodex = (updates: Partial<NativeAgentPolicySettings["codex"]>) =>
-    onChange({ ...policy, codex: { ...policy.codex, ...updates } });
   const filesystemOptions = ["workspace", "host"] as const;
+  const setAdapter = (
+    adapter: NativeAgentPolicyAdapter,
+    filesystem_access: NativeAgentFilesystemAccess,
+  ) => onChange({ ...policy, [adapter]: { filesystem_access } });
 
   return (
     <Card withBorder radius="sm" p="md">
@@ -1417,24 +1422,30 @@ function NativeAgentPolicyEditor({
             {t("setup.intelligence.nativePolicyDescription")}
           </Text>
         </div>
-        <Select
-          label={t("setup.intelligence.filesystemAccess")}
-          data={filesystemOptions.map((value) => ({
-            value,
-            label: t(`setup.intelligence.filesystemOptions.${value}`),
-          }))}
-          value={policy.codex.filesystem_access}
-          onChange={(value) =>
-            setCodex({
-              filesystem_access: (value ?? "workspace") as (typeof filesystemOptions)[number],
-            })
-          }
-        />
-        {policy.codex.filesystem_access === "host" ? (
-          <Alert color="warning" title={t("setup.intelligence.hostAccessWarningTitle")}>
-            {t("setup.intelligence.hostAccessWarningBody")}
-          </Alert>
-        ) : null}
+        {NATIVE_POLICY_ADAPTERS.map((adapter) => {
+          const agent = t(`setup.intelligence.nativeAgents.${adapter}`);
+          return (
+            <Stack gap="xs" key={adapter}>
+              <Select
+                label={t("setup.intelligence.filesystemAccessFor", { agent })}
+                description={t(`setup.intelligence.sandboxMapping.${adapter}`)}
+                data={filesystemOptions.map((value) => ({
+                  value,
+                  label: t(`setup.intelligence.filesystemOptions.${value}`),
+                }))}
+                value={policy[adapter].filesystem_access}
+                onChange={(value) =>
+                  setAdapter(adapter, (value ?? "workspace") as NativeAgentFilesystemAccess)
+                }
+              />
+              {policy[adapter].filesystem_access === "host" ? (
+                <Alert color="warning" title={t("setup.intelligence.hostAccessWarningTitle")}>
+                  {t("setup.intelligence.hostAccessWarningBody", { agent })}
+                </Alert>
+              ) : null}
+            </Stack>
+          );
+        })}
       </Stack>
     </Card>
   );

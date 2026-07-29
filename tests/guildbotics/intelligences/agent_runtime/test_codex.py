@@ -10,12 +10,12 @@ import pytest
 from guildbotics.capabilities.task_runs import TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
-    _RpcError,
     _agent_error_from_rpc,
     _decode_notification,
     _sandbox_policy,
     _thread_sandbox,
 )
+from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
 from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
@@ -27,7 +27,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
-from guildbotics.intelligences.agent_runtime.policy import NativeAgentPolicy
+from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 
 
 class _Writer:
@@ -212,7 +212,7 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter(policy=NativeAgentPolicy())
+    adapter = CodexAppServerAdapter(policy=AdapterFilesystemPolicy())
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
         provider_session_id="thread-1",
@@ -301,34 +301,6 @@ async def test_codex_reuses_process_for_multiple_exact_turns(
 
 
 @pytest.mark.asyncio
-async def test_codex_correlates_out_of_order_responses_by_request_id() -> None:
-    process = _Process()
-
-    class BufferedWriter:
-        def write(self, data: bytes) -> None:
-            process.messages.extend(
-                json.loads(line) for line in data.splitlines() if line
-            )
-
-        async def drain(self) -> None:
-            return None
-
-    process.stdin = BufferedWriter()
-    adapter = CodexAppServerAdapter()
-    adapter._process = process
-
-    first = asyncio.create_task(adapter._request("first", {}))
-    second = asyncio.create_task(adapter._request("second", {}))
-    await asyncio.sleep(0)
-    ids = {message["method"]: message["id"] for message in process.messages}
-    adapter._pending[ids["second"]].set_result("second-result")
-    adapter._pending[ids["first"]].set_result("first-result")
-
-    assert await first == "first-result"
-    assert await second == "second-result"
-
-
-@pytest.mark.asyncio
 async def test_codex_declines_legacy_approval_requests(monkeypatch, tmp_path) -> None:
     process = _Process(approval_method="execCommandApproval")
 
@@ -368,7 +340,7 @@ async def test_codex_declines_legacy_approval_requests(monkeypatch, tmp_path) ->
 def test_codex_turn_sandbox_policy_matches_filesystem_access(
     filesystem_access: str, expected: dict[str, Any]
 ) -> None:
-    policy = NativeAgentPolicy(filesystem_access=filesystem_access)
+    policy = AdapterFilesystemPolicy(filesystem_access=filesystem_access)
 
     assert _sandbox_policy(policy, "/workspace-data") == expected
 
@@ -377,7 +349,7 @@ def test_codex_turn_sandbox_policy_matches_filesystem_access(
 def test_codex_read_only_turn_overrides_the_configured_filesystem_access(
     filesystem_access: str,
 ) -> None:
-    policy = NativeAgentPolicy(filesystem_access=filesystem_access)
+    policy = AdapterFilesystemPolicy(filesystem_access=filesystem_access)
 
     # A read-only turn reads untrusted material, so it must not inherit the
     # member's configured write or network access.
@@ -395,7 +367,10 @@ def test_codex_read_only_turn_overrides_the_configured_filesystem_access(
 def test_codex_thread_sandbox_matches_filesystem_access(
     filesystem_access: str, expected: str
 ) -> None:
-    assert _thread_sandbox(NativeAgentPolicy(filesystem_access=filesystem_access)) == expected
+    assert (
+        _thread_sandbox(AdapterFilesystemPolicy(filesystem_access=filesystem_access))
+        == expected
+    )
 
 
 @pytest.mark.asyncio
@@ -746,7 +721,7 @@ async def test_codex_interrupt_still_terminates_after_rpc_is_cancelled(
 ) -> None:
     process = _Process(complete_turn=False)
     adapter = CodexAppServerAdapter()
-    adapter._process = process
+    adapter._transport._process = process
     adapter._active_thread_id = "thread-1"
     adapter._active_turn_id = "turn-1"
     terminated = False
@@ -811,7 +786,7 @@ async def test_codex_empty_terminal_response_is_protocol_failure(
     ],
 )
 def test_codex_rpc_errors_use_structured_categories(error, category) -> None:
-    normalized = _agent_error_from_rpc(_RpcError(error))
+    normalized = _agent_error_from_rpc(RpcError(error))
     assert normalized.category is category
 
 

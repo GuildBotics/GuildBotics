@@ -178,6 +178,7 @@ vi.mock("../api/client", async (importOriginal) => {
       brain_mapping: [],
       native_agent_policy: {
         codex: { filesystem_access: "workspace" },
+        grok: { filesystem_access: "workspace" },
       },
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
@@ -1730,6 +1731,7 @@ describe("toIntelligenceUpdatePayload", () => {
     brain_mapping: [],
     native_agent_policy: {
       codex: { filesystem_access: "workspace" as const },
+      grok: { filesystem_access: "workspace" as const },
     },
   };
 
@@ -2929,6 +2931,7 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
     ],
     native_agent_policy: {
       codex: { filesystem_access: "workspace" },
+      grok: { filesystem_access: "workspace" },
     },
     ...overrides,
   };
@@ -3198,12 +3201,16 @@ describe("IntelligenceEditor (team default)", () => {
     expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
   });
 
-  it("autosaves the native Codex execution policy", async () => {
+  it("autosaves one native adapter policy without changing the others", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
     await user.click(
-      await screen.findByRole("textbox", { name: t("setup.intelligence.filesystemAccess") }),
+      await screen.findByRole("textbox", {
+        name: t("setup.intelligence.filesystemAccessFor", {
+          agent: t("setup.intelligence.nativeAgents.grok"),
+        }),
+      }),
     );
     await user.click(
       await screen.findByRole("option", {
@@ -3215,8 +3222,51 @@ describe("IntelligenceEditor (team default)", () => {
       timeout: 3000,
     });
     expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].native_agent_policy).toMatchObject({
-      codex: { filesystem_access: "host" },
+      codex: { filesystem_access: "workspace" },
+      grok: { filesystem_access: "host" },
     });
+  });
+
+  it("shows the unrestricted-access warning for the adapter it applies to", async () => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    await user.click(
+      await screen.findByRole("textbox", {
+        name: t("setup.intelligence.filesystemAccessFor", {
+          agent: t("setup.intelligence.nativeAgents.codex"),
+        }),
+      }),
+    );
+    await user.click(
+      await screen.findByRole("option", {
+        name: t("setup.intelligence.filesystemOptions.host"),
+      }),
+    );
+
+    const warning = await screen.findByText(
+      t("setup.intelligence.hostAccessWarningBody", {
+        agent: t("setup.intelligence.nativeAgents.codex"),
+      }),
+    );
+    expect(warning).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        t("setup.intelligence.hostAccessWarningBody", {
+          agent: t("setup.intelligence.nativeAgents.grok"),
+        }),
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("explains the real sandbox each native adapter uses", async () => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    expect(
+      await screen.findByText(t("setup.intelligence.sandboxMapping.grok")),
+    ).toBeInTheDocument();
+    expect(screen.getByText(t("setup.intelligence.sandboxMapping.codex"))).toBeInTheDocument();
   });
 
   it("surfaces a save error returned by updateIntelligenceConfig", async () => {
@@ -3373,12 +3423,16 @@ describe("IntelligenceEditor (member override)", () => {
     expect(byValue("custom")).not.toBeDisabled();
   });
 
-  it("persists a member-specific Codex filesystem boundary", async () => {
+  it("persists a member-specific Grok filesystem boundary", async () => {
     const user = userEvent.setup();
     await openMemberIntelligenceAdvanced(user);
 
     await user.click(
-      await screen.findByRole("textbox", { name: t("setup.intelligence.filesystemAccess") }),
+      await screen.findByRole("textbox", {
+        name: t("setup.intelligence.filesystemAccessFor", {
+          agent: t("setup.intelligence.nativeAgents.grok"),
+        }),
+      }),
     );
     await user.click(
       await screen.findByRole("option", {
@@ -3389,7 +3443,7 @@ describe("IntelligenceEditor (member override)", () => {
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].native_agent_policy).toMatchObject({
-      codex: { filesystem_access: "host" },
+      grok: { filesystem_access: "host" },
     });
   });
 

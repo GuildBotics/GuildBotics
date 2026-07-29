@@ -897,6 +897,13 @@ class CliAgentBrain(Brain):
         conversation.turn_count += 1
         conversation.input_tokens += terminal.usage.get("input_tokens", 0)
         conversation.output_tokens += terminal.usage.get("output_tokens", 0)
+        # Context usage is the provider's absolute session size, so the latest
+        # snapshot replaces the stored one instead of being summed with it.
+        if "context_size_tokens" in terminal.usage:
+            conversation.context_used_tokens = terminal.usage.get(
+                "context_used_tokens", 0
+            )
+            conversation.context_size_tokens = terminal.usage["context_size_tokens"]
         compacted = any(
             event.kind is AgentEventKind.TURN and event.name == "context_compaction"
             for event in terminal.events
