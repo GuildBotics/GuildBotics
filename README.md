@@ -2,29 +2,16 @@
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-GuildBotics lets AI agents join your development team as team members. Each member acts
-under its own configured GitHub / Slack identity, picks up tickets from GitHub Projects, works through
-investigation, implementation, and pull request creation, and responds to review comments
-and Slack mentions. The actual investigation, coding, and judgment are delegated to an AI
-CLI tool such as Claude Code or Codex, while every external action the member takes
-(commits, PRs, comments, Slack posts, memory writes) goes through a single dedicated CLI
-(`guildbotics member`), where it is executed and recorded.
+GuildBotics lets you run AI CLI tools such as Claude Code or Codex as team members who keep working with your development team. Each member has its own name, GitHub / Slack account, roles, and memory. The actual investigation, coding, and judgment are delegated to the AI CLI tool, while every external action the member takes (commits, PR creation, comments, Slack posts, memory writes) goes through a single dedicated CLI (`guildbotics member`), where it is executed and recorded.
 
-There are two ways to work with a member:
+There are two ways to work with the same member:
 
-- **Work together** — invoke the member in your Claude Code or Codex session via the
-  guildbotics skill and pair-program in the repository you currently have open, teaching
-  them how you work as you go.
-- **Delegate** — the scheduler runs the member periodically; they pick up tickets and carry
-  the work through to a pull request on their own. You give feedback through PR reviews,
-  ticket comments, and Slack replies (see [6. GitHub Integration](#6-github-integration)).
+- **Work together** — invoke the member in your Claude Code or Codex session and pair-program in the repository you currently have open (→ [Work Together with a Member](#work-together-with-a-member))
+- **Delegate** — ask through a GitHub Projects ticket or a Slack message, and the member investigates, implements, opens the pull request, and replies on its own (→ [Delegate GitHub Tickets](#delegate-github-tickets) / [Ask for Work in Slack](#ask-for-work-in-slack))
 
-Both modes drive the same member — same identity, same memory. What you teach while working
-together is kept as memory and carries over to the work you delegate.
+Both ways drive the same member — same identity, same memory. What you teach while working together is kept as memory and carries over to the work you delegate.
 
-You configure and monitor GuildBotics with the Desktop app (GUI) and run it with the
-`guildbotics` CLI (it also runs on servers without a GUI). Member behavior can be customized
-with Markdown prompt / Python / Shell / YAML custom commands and schedule definitions.
+You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GUI). Configuration is stored as plain text files inside the workspace, so you can move it to a server without a GUI and operate it with the `guildbotics` CLI alone (→ [Run on a Server](#run-on-a-server)).
 
 ---
 
@@ -35,248 +22,323 @@ with Markdown prompt / Python / Shell / YAML custom commands and schedule defini
 
 ---
 
-- [1. Key Features](#1-key-features)
-  - [Core Framework](#core-framework)
-  - [Built-in Capabilities](#built-in-capabilities)
-- [2. Quick Start](#2-quick-start)
-- [3. Environment](#3-environment)
-  - [3.1. Supported Platforms](#31-supported-platforms)
-  - [3.2. Required Software](#32-required-software)
-  - [3.3. LLM API](#33-llm-api)
-  - [3.4. AI CLI Tool](#34-ai-cli-tool)
-- [4. Installation](#4-installation)
-- [5. Basic Usage](#5-basic-usage)
-  - [5.1. Initial Setup](#51-initial-setup)
-  - [5.2. Other Settings](#52-other-settings)
-  - [5.3. Run Commands](#53-run-commands)
-    - [5.3.1. Command Types and Placement](#531-command-types-and-placement)
-    - [5.3.2. Command Execution Methods](#532-command-execution-methods)
-  - [5.4. Schedule Features](#54-schedule-features)
-    - [5.4.1. Routine Commands](#541-routine-commands)
-    - [5.4.2. Scheduled Tasks](#542-scheduled-tasks)
-    - [5.4.3. Cron Expression Format](#543-cron-expression-format)
-    - [5.4.4. How Scheduling Works Internally](#544-how-scheduling-works-internally)
-  - [5.5. Schedule Configuration Examples](#55-schedule-configuration-examples)
-    - [Multi-Agent Scheduled Workflow](#multi-agent-scheduled-workflow)
-    - [Multiple Schedule Patterns](#multiple-schedule-patterns)
-    - [Randomization Usage](#randomization-usage)
-  - [5.6. Slack Chat Workflow](#56-slack-chat-workflow)
-    - [5.6.1. Prerequisites (Slack Side)](#561-prerequisites-slack-side)
-      - [Basic Setup](#basic-setup)
-      - [Adding Multiple Agents](#adding-multiple-agents)
-    - [5.6.2. `person.yml` Example](#562-personyml-example)
-- [6. GitHub Integration](#6-github-integration)
-  - [6.1. Prerequisites](#61-prerequisites)
-    - [6.1.1. Git Environment](#611-git-environment)
-    - [6.1.2. Create a GitHub Project](#612-create-a-github-project)
-    - [6.1.3. Prepare a GitHub Account for the AI Agent](#613-prepare-a-github-account-for-the-ai-agent)
-      - [Using a Machine Account (Machine User)](#using-a-machine-account-machine-user)
-      - [Using a GitHub App](#using-a-github-app)
-      - [Using Your Own Account as a Proxy Agent](#using-your-own-account-as-a-proxy-agent)
-  - [6.2. Setup for GitHub Integration](#62-setup-for-github-integration)
-  - [6.3. Running the Ticket-Driven Workflow](#63-running-the-ticket-driven-workflow)
-    - [6.3.1. Start](#631-start)
-    - [6.3.2. How to Instruct the AI Agent](#632-how-to-instruct-the-ai-agent)
-    - [6.3.3. Interacting with the AI Agent](#633-interacting-with-the-ai-agent)
-  - [6.4. Capabilities](#64-capabilities)
-- [7. Reference](#7-reference)
-  - [7.1. Account-Related Environment Variables](#71-account-related-environment-variables)
-  - [7.2. Secret Storage](#72-secret-storage)
-  - [7.3. Configuration Files](#73-configuration-files)
-- [8. Troubleshooting](#8-troubleshooting)
+- [What You Can Do](#what-you-can-do)
+- [Getting Started](#getting-started)
+- [Work Together with a Member](#work-together-with-a-member)
+- [Delegate GitHub Tickets](#delegate-github-tickets)
+- [Ask for Work in Slack](#ask-for-work-in-slack)
+- [Automate Recurring Work](#automate-recurring-work)
+- [Create Your Own Commands](#create-your-own-commands)
+- [Operations Reference](#operations-reference)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
-# 1. Key Features
+## What You Can Do
 
-## Core Framework
-- **Multi-Agent Management**: Define multiple AI agents (persons) with distinct roles, personalities, and capabilities
-- **Flexible Scheduling**: Cron-based scheduled commands and routine commands per person
-- **Command Execution Framework**:
-  - Markdown commands (LLM prompts with structured output)
-  - Python scripts (with context injection)
-  - Shell scripts
-  - YAML workflows (command composition)
-- **Brain Abstraction**: Swap LLM providers or delegate to AI CLI tools (Antigravity, Codex, Claude Code, GitHub Copilot, etc., which are AI tools launched from a local CLI)
+- **Multiple members**: Define multiple AI members with distinct roles, personalities, and memory (the identifier in configuration files is `person`)
+- **GitHub integration**: Ticket management via GitHub Projects / Issues, plus PR creation, comments, and review handling by members
+- **Slack integration**: Members watch configured channels and handle the requests they receive there as themselves
+- **Member memory**: Personal and team memory that members recall and maintain across sessions
+- **Interactive member sessions**: The guildbotics skill lets an AI CLI tool work as a member in your current repository
+- **Scheduled execution**: Per-member patrol commands and cron-based scheduled commands
+- **Custom commands**: Define your own work as a Markdown prompt / Python / Shell / YAML command and reuse it per member or role
+- **Swappable LLM / AI CLI tool**: Swap LLM providers or delegate to an AI CLI tool (Codex, Claude Code, Grok Build, Antigravity, and other AI tools launched from a local CLI)
+- **Desktop AI assistants**: Ask questions and apply proposed source changes in the command editor, and investigate execution failures in the diagnostics screen
+- **Internationalization**: English / Japanese
 
-## Built-in Capabilities
-- **GitHub Integration** (default): Ticket management via GitHub Projects/Issues, PR creation, code hosting
-- **Slack Integration**: Chat workflow where members watch configured channels and reply or react as themselves
-- **Member Memory**: Personal and team memory that members recall and maintain across sessions
-- **Interactive Member Sessions**: The guildbotics skill lets an AI CLI tool work as a member in your current repository
-- **Desktop AI Assistants**: Conversational help inside the app — ask about a custom command or review and explicitly apply proposed source changes, and ask the diagnostics screen why an execution failed and have it read the recorded logs for you
-- **Internationalization**: Multi-language support (English/Japanese)
-- **Custom Commands**: Define reusable command templates per person/role
+## Getting Started
 
-# 2. Quick Start
+### What You Need
 
-GuildBotics is configured through the **GuildBotics Desktop app (GUI)**, and run through the
-**`guildbotics` CLI**. The desktop app bundles the CLI and installs a managed copy for AI
-CLI tools on first launch. Setup writes plain config files (`.env` and `.guildbotics/config/...`)
-while secrets such as API keys and account tokens go to the OS keychain when one is available
-(see [7.2. Secret Storage](#72-secret-storage)). Once configured you can run the CLI on any
-machine, including headless servers, by copying those files over and transferring secrets with
-`guildbotics secrets export` / `import`.
+- **OS**: Linux (verified on Ubuntu 24.04) or macOS (verified on Sequoia)
+  - The desktop app supports macOS Apple Silicon (arm64) and Linux x86_64
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: used to build GuildBotics and install the CLI
+- **An LLM API key** (obtain one of the following in advance):
+  - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
+  - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
+  - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
+- **An AI CLI tool** (install one of the following in advance, launch it once, and complete authentication):
+  - [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
+  - [OpenAI Codex CLI](https://github.com/openai/codex/)
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires a Claude Pro or Max subscription)
+  - [Grok Build](https://docs.x.ai/build/overview)
+  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
 
-```bash
-# 1. Configure with the GUI
-#    Launch the GuildBotics Desktop app and complete project + member setup.
-#    It writes .env and .guildbotics/config/... into your chosen workspace.
-#    See desktop/README.md for installation.
+With Codex, Claude Code, or Grok Build, a member can carry a session over and resume where it left off. For authentication, how sessions are bound to Slack threads and tickets, and how execution permissions are configured, see [Native Agent Runtime](docs/native_agent_runtime.en.md).
 
-# 2. Run with the managed CLI installed by the desktop app
-#    If ~/.local/bin is on PATH, the "guildbotics" shim is available.
-#    The stable absolute path always works:
-~/.guildbotics/bin/guildbotics workspace status
+### Installation
 
-# Run a custom command
-echo "Hello" | ~/.guildbotics/bin/guildbotics run translate
+There is no general-purpose installer for the desktop app yet. Clone the repository and build it locally. In addition to uv, the build requires **Node.js 24 or later** and **Rust (rustup) stable 1.88 or later** (plus the WebKitGTK 4.1 development package on Linux). For prerequisites and build / install steps, see [desktop/README.md](desktop/README.md) (the "1. 前提ツール" section lists the required tools).
 
-# Or start the member workers and event listener
-~/.guildbotics/bin/guildbotics start
+On first launch, the desktop app installs the following:
+
+- `~/.guildbotics/bin/guildbotics`: the managed GuildBotics CLI used by AI CLI tools and skills
+- `~/.local/bin/guildbotics`: a small shim that forwards to the CLI above. It is only written when missing or when it is an existing managed shim
+- The GuildBotics skill under the user skill directory of each detected Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI. Skills you created or edited are never overwritten
+
+In environments without the desktop app (headless servers and the like), install the CLI on its own with `uv tool install guildbotics` (→ [Run on a Server](#run-on-a-server)).
+
+### Initial Setup
+
+Launching the desktop app opens **Project** setup, where you configure:
+
+- Display language (English / Japanese)
+- The workspace folder
+- The project description
+- Whether to use GitHub integration
+
+In GuildBotics, the folder you choose as the project's working location is called the **workspace**. Plain text configuration files are written there:
+
+- `.env`: environment variable settings (non-secret settings such as the log level)
+- `.guildbotics/config/secrets.yml`: index of key names stored in the OS keychain (never the values)
+- `.guildbotics/config/team/project.yml`: project definition
+- `.guildbotics/config/intelligences/`: LLM and AI CLI tool settings
+
+API keys and account tokens are stored in the OS keychain when one is available, and only their key names are recorded in the files above (→ [Storing API Keys and Tokens](#storing-api-keys-and-tokens)).
+
+After project setup, configure the following in the desktop app:
+
+- **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
+- **Members**: add and configure team members
+- **GitHub**: GitHub integration settings (only when you use GitHub)
+
+### Quick Start
+
+Confirm that setup is complete by creating and running a simple custom command. Open the **Edit Command** screen in the desktop app.
+
+1. Press **New command**, choose **Create myself** as the method, enter `translate` as the command name, pick **Markdown (.md)** as the format, and create it.
+
+2. Enter the following in the editor.
+
+   ```markdown
+   Translate the input text into English if it is Japanese, and into Japanese if it is English.
+   Return only the translated text.
+   ```
+
+3. Type `Hello` into **Input text** in the run panel and press **Save and run**.
+
+You are set if the translated text appears under **Output**. The default LLM you configured was called, and your custom command works. The command is saved in the workspace as `.guildbotics/config/commands/translate.md`.
+
+You can assign hotkeys to commands you use every day.
+
+- **Setup → Shortcuts**: a hotkey that opens the **Quick run window**. Copy the text you want to translate, press the key, and run it as the input text
+- **The hotkey field in the Edit Command screen**: runs that command directly. The quick run window opens instead when an input is missing
+
+### What Next
+
+- Pair-program with a member in the repository you have open → [Work Together with a Member](#work-together-with-a-member)
+- Delegate everything from ticket to pull request → [Delegate GitHub Tickets](#delegate-github-tickets)
+- Have a member handle requests in Slack → [Ask for Work in Slack](#ask-for-work-in-slack)
+- Automate recurring work or build your own commands → [Automate Recurring Work](#automate-recurring-work) / [Create Your Own Commands](#create-your-own-commands)
+
+## Work Together with a Member
+
+You can invoke a member in a Claude Code or Codex session and work together in the repository you currently have open.
+
+There are two prerequisites:
+
+- You have launched the desktop app once (this installs the guildbotics skill and the managed CLI)
+- A member is configured
+
+Start your AI CLI tool in the repository you want to work in and ask for work as the member.
+
+```text
+Use the guildbotics skill and commit and push this change as the member alice
 ```
 
-See [Basic Usage](#5-basic-usage) for details, or [GitHub Integration](#6-github-integration) for the ticket-driven workflow setup.
+The AI CLI tool loads the member's profile (roles, judgment criteria, speaking style) and memory, and responds as that member from then on. External actions such as commits, pushes, PR creation, and Slack posts are performed under the member's own identity.
 
-# 3. Environment
-## 3.1. Supported Platforms
-GuildBotics runs on the following environments:
-- OS: Linux (verified on Ubuntu 24.04) / macOS (verified on Sequoia)
+If you say "remember this" during the session, it is saved as the member's memory. That memory is also used when you delegate work through tickets or Slack.
 
-## 3.2. Required Software
-Please install the following software:
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+## Delegate GitHub Tickets
 
-## 3.3. LLM API
-Please obtain one of the following API keys:
-- Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
-- OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
-- Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
+This is the flow where you ask a member for work through a GitHub Projects ticket and delegate investigation, implementation, and PR creation (using the default `ticket_driven_workflow`).
 
-## 3.4. AI CLI Tool
-Please install one of the following AI CLI tools and authenticate:
+**Note**: GitHub integration is optional. Without it you can still use the Slack chat workflow and automate commands on a schedule.
 
-- [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
-- [OpenAI Codex CLI](https://github.com/openai/codex/)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Pro or Max subscription)
-- [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
+### What It Does
 
-Codex and Claude Code use GuildBotics' native resumable runtime; authentication,
-conversation identity, approval policy, reset, and troubleshooting are documented in
-[Native Agent Runtime](docs/native_agent_runtime.en.md).
+- **Assign work on the task board**: pick the member in the ticket's `Agent` field and move the ticket to the ready lane, and the member runs that task
+- **Check the results**: when a task completes, the member leaves the result as a comment, a PR, a review reply, or a reaction
+- **Create pull requests**: when code changes are needed, the member publishes a working branch and creates or reuses a pull request
+- **Create tickets**: when asked to file a follow-up ticket, the member creates a real issue in the repository
 
+### Create a GitHub Project
 
-# 4. Installation
+Create a GitHub Projects (v2) project and add the following columns (statuses) up front:
 
-Setup is performed with the **GuildBotics Desktop app**; command execution uses the
-**`guildbotics` CLI**.
+- Todo (ready)
+- In Progress
+- Done
 
-**Desktop app (setup + managed CLI):** Build or install the GuildBotics Desktop app. See
-[desktop/README.md](desktop/README.md) for build and install instructions
-(macOS Apple Silicon and Linux x86_64). On first launch, the app installs:
+If you want to keep the status names of an existing project, map them with the lane mapping described below.
 
-- `~/.guildbotics/bin/guildbotics`: managed GuildBotics CLI used by AI CLI tools and skills
-- `~/.local/bin/guildbotics`: a small shim, only when the path is missing or already managed
-- GuildBotics skill files for detected Codex, Claude Code, Antigravity, and GitHub Copilot
-  user skill directories. User-created or user-edited skills are not overwritten.
+### Prepare a GitHub Account for the AI Agent
 
-**Standalone CLI (headless / non-desktop environments):** Use `uv tool install guildbotics`
-when you are not using the desktop app, or when you intentionally want a separately managed CLI
-installation.
+Prepare an account the member uses to access GitHub. Any of the following works:
 
-# 5. Basic Usage
+- **Machine account** (machine user)
+  - Recommended if you want the feel of "working with an AI agent through the task board and pull requests". Note that under [GitHub's Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service#3-account-requirements), each user may create only one free machine account.
+- **GitHub App**
+  - There is no limit on the number of accounts, but a GitHub App cannot access a GitHub Project owned by a **personal** account. GitHub also labels it as a bot, which takes away some of the atmosphere.
+- **Proxy agent** (use your own account for the AI agent)
+  - The simplest option. With this approach it looks less like working with an AI agent and more like talking to yourself.
 
-## 5.1. Initial Setup
+**Using a machine account**:
 
-Project setup is done in the **GuildBotics Desktop app**.
-When you launch the app, the **Project** settings open first. Configure:
+1. Add the machine account you created to the Project and the repository as a collaborator
+2. Issue a **Classic** PAT (Personal Access Token) with both the `repo` and `project` scopes
 
-- Language (English/Japanese)
-- Workspace folder
-- Project description
-- Whether to enable GitHub integration
+**Using a GitHub App**:
 
-In GuildBotics, a **workspace** is the folder selected as the working location for a project.
-GuildBotics writes configuration files such as the following into the workspace:
+Configure the following permissions when creating the GitHub App.
 
-- `.env`: Environment variable settings (non-secret settings such as log level)
-- `.guildbotics/config/secrets.yml`: Names of the secrets stored in the OS keychain (no values)
-- `.guildbotics/config/team/project.yml`: Project definition
-- `.guildbotics/config/intelligences/`: Brain and AI CLI tool settings
+- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** as Read & Write
+- **Organization permissions**: **Projects** as Read & Write
 
-These are all plain text configuration files, and none of them contains secret values when the
-OS keychain is in use — API keys and account tokens are stored in the keychain and only their
-key names are recorded in `secrets.yml` (see [7.2. Secret Storage](#72-secret-storage)).
-Because GuildBotics stores all non-secret settings in these files, you can copy the workspace
-folder to a GUI-less environment such as a server and operate it with only the `guildbotics`
-CLI; move the secrets separately with `guildbotics secrets export` / `import`, or provide them
-as environment variables.
+After creating the GitHub App:
 
-The selected workspace is recorded in `~/.guildbotics/data/active-workspace.json`. Desktop and
-the Local API restore this backend-owned state before runtime services are created; if it is
-missing, invalid, or points to a missing directory, they use the process startup directory.
-Use the following commands to inspect or change the workspace from the CLI:
+1. Use "Generate a private key" on the GitHub App settings page to download and store the `.pem` file
+2. Install the app to your repository / organization from "Install App" and obtain the **installation ID**. The trailing number of the URL shown after installation (`.../settings/installations/<installation ID>`) is the installation ID. Keep it — you need it during configuration
 
-```bash
-guildbotics workspace current
-guildbotics workspace use /path/to/workspace
+**Using a proxy agent**:
+
+Issue a **Classic** PAT for your own account as well, with both the `repo` and `project` scopes.
+
+### Prepare Credentials and the Execution Environment
+
+- Register each member's GitHub credentials (the PAT, or the GitHub App settings) in GuildBotics from member settings in the desktop app. Writes to GitHub / git use the assigned member's credentials, not your local `gh auth` user
+- Ticket-driven work happens in a per-member working directory (default: `<workspace>/.guildbotics/data/workspaces/<person_id>`). Cloning, pushing, PR creation, and comments are executed by the member itself through the `guildbotics member` CLI
+- If you also use the AI CLI tool interactively, we recommend denying or requiring approval for `gh`, direct token / API writes, and `git push`. This is a guardrail against falling back to your own GitHub account, not a sandbox that fully contains token leakage
+- When using Codex as the AI CLI tool, check the Codex CLI's authentication and network reachability:
+
+  ```bash
+  codex doctor
+  ```
+
+### Validate the Configuration
+
+Press **Validate settings** under **Setup → Verification** in the desktop app to check whether each active member's LLM, AI CLI tool, GitHub, Slack, and Git settings actually work (GitHub and Slack are accessed read-only).
+
+**Custom fields**: GuildBotics manages an `Agent` field that selects the member who runs a task. It is created automatically the first time GuildBotics touches the GitHub Project, so no explicit setup is required. Because a GitHub App member cannot be a GitHub assignee, use this field to pick the member.
+
+**Lane mapping**: GuildBotics treats GitHub Projects statuses as three lanes (ready / working / done).
+
+- By default `Todo` is ready, `In Progress` is working, and `Done` is done. A standard board needs no configuration
+- Statuses **between** ready and done (for example `In Review`) are automatically treated as working
+- Statuses **before** ready (for example `Backlog`) and **at or after** done (for example `Icebox`) are ignored. Intermediate or holding lanes can be added just by ordering the board columns
+- If you use your own status names, map them under **Setup → GitHub** → **Lane mapping** in the desktop app. Without the GUI, set `services.ticket_manager.lane_map` in `team/project.yml` (→ [Configuration Files](#configuration-files))
+
+### Start the Service and Ask for Work
+
+Open the **Service** screen in the desktop app and press **Run**. A worker starts for each active member and runs the work of the selected sources in order.
+
+The screen has three execution sources, each toggled individually with **Include in service run** (only while the service is stopped).
+
+- **Patrol commands**: runs each member's patrol commands (the default for a new member is the ticket-driven workflow) once per **Patrol interval (minutes)**
+- **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
+- **Event triggers**: receives events such as Slack messages and routes them to the chat workflow
+
+To use the ticket-driven workflow, start the service with **Patrol commands** included. When **Stop after consecutive failures** (default 3) is reached, that member's worker stops.
+
+You can follow what is happening in the **Runtime stream** (events / logs) on the same screen, and per-member results are collected on the **Activity** screen.
+
+To ask for work, use a GitHub Projects ticket as follows:
+
+1. Create a ticket, select the target Git repository, and save it as an issue
+2. Write the instructions for the member in the ticket (this becomes the prompt, so be as specific as possible)
+3. Select the member in the `Agent` field
+4. Move the ticket to the ready lane
+
+Once work starts, you interact with the member like this:
+
+- When the member has a question, it posts it as a ticket comment. Answer in a ticket comment and the member picks up your answer on its next check and continues
+- When the task completes, the member leaves a comment / PR URL / review reply / reaction
+- Review the PR created from the ticket on the PR itself. Unresolved review threads are delegated back to the member in charge
+
+To stop, press **Stop**. The service stops accepting new work and exits after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work.
+
+To start and stop the service from the CLI, see [Run on a Server](#run-on-a-server).
+
+## Ask for Work in Slack
+
+A member watches the Slack channels you configure and handles the requests it receives there as itself. Ask something like "please handle the review comments on this PR" and the member identifies the target repository, prepares a working branch, actually investigates, edits code, and performs the GitHub operations, then reports the result back in Slack.
+
+How it behaves in Slack (reply with a message / only add a reaction / do nothing / ask a clarifying question / report why it is blocked) is decided by the member (the AI CLI tool) from the message content, its own role and profile, and the per-channel participation policy. It does not force a reply into small talk or into conversations where its role adds nothing.
+
+Two things need to be configured:
+
+1. **Create a Slack App**: create a Slack App (Socket Mode) in Slack that acts as the member
+2. **Register it with the member**: configure the following under **Setup → Members → Slack** in the desktop app
+   - **Slack Bot token** (`xoxb-...`) and **Slack App token** (`xapp-...`)
+   - **Channel**: add the channel names or IDs to watch
+   - **When to join**: choose Join actively / Join when needed / Mentions only
+
+These settings are stored in the member's `person.yml` (`message_channels`).
+
+To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
+
+For the Slack App setup steps (including the list of required scopes), sharing one connection across members, the details of thread participation policies, and scheduled post examples, see the [Slack Integration Guide](docs/slack_integration.en.md).
+
+## Automate Recurring Work
+
+Configure two kinds of automated execution per member under **Setup → Members → Patrol** in the desktop app. Both are run by the service you start on the **Service** screen.
+
+- **Patrol commands**: while the service is running, these run repeatedly in round-robin order once per **Patrol interval (minutes)** (for example, patrolling the task board). Turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work
+- **Scheduled commands**: use **Add schedule** to choose a command and its execution time (for example, periodic reports or cleanup). The time can be an Hourly / Daily / Weekly preset, or a **Detailed schedule** (five-field cron notation)
+
+The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.
+
+These settings are stored in the member's `person.yml`. On a server without the GUI, edit that file directly.
+
+```yaml
+person_id: alice
+name: Alice
+is_active: true
+
+routine_commands:
+  - workflows/ticket_driven_workflow
+
+task_schedules:
+  - command: workflows/morning_standup
+    schedules:
+      - "0 9 * * 1-5" # Weekdays at 9:00 AM
 ```
 
-GuildBotics writes two kinds of local data:
+In addition to standard five-field cron notation, GuildBotics supports its own syntax for randomizing execution times (`?` / `?(min-max)`, useful for avoiding simultaneous execution across members). You can enter this syntax in the **Detailed schedule** field as well.
 
-- Computer-wide control files, such as the selected workspace and the CLI scheduler PID,
-  are stored under `$HOME/.guildbotics/data`.
-- Workspace-specific run data, such as member work directories, task and chat run records,
-  execution transcripts, and chat state, is stored under `<workspace>/.guildbotics/data` by
-  default. To change this location, set `GUILDBOTICS_DATA_DIR` in `.env`.
+For cron details, the randomization syntax, how the scheduler works internally, and multi-agent configuration examples, see the [Scheduling Guide](docs/scheduling.en.md).
 
-## 5.2. Other Settings
+## Create Your Own Commands
 
-After completing the project settings, configure the following initial settings:
+Like the `translate` command from the quick start, you can define your own commands and use them for manual runs, scheduled runs, and scheduled Slack posts. You author and try them out on the **Edit Command** screen in the desktop app.
 
-- **LLM / AI CLI tool:** Default LLM, AI CLI tool, and LLM API keys
-- **Members:** Team member creation and settings
-- **GitHub:** GitHub integration settings (only when using GitHub)
+**Let the AI assistant write it**: choose **Create with AI** under **New command**, describe what you want, and the command name, format, and source are proposed. For the command you are editing, you can ask the **AI assistant** questions or request changes.
 
-## 5.3. Run Commands
+Proposed changes are not expanded into the chat history; they appear as read-only editor tabs labeled Current / Create / Update. The Update tab shows added and removed lines as a diff with line numbers, and the Create tab shows the complete source. Nothing is written until you review the content and press **Apply changes**.
 
-### 5.3.1. Command Types and Placement
+**Trying it out**: **Save and run** shows the execution result (output and events) right there. Switch the **Run as** member to run with that member's own settings.
 
-GuildBotics supports multiple types of commands. Commands should be placed in your project's configuration directory.
+**Command types**:
 
-**Command Types**:
+1. **Markdown commands** (`.md`): executed as LLM prompts. Best for text processing, translation, and summarization
+2. **Python scripts** (`.py`): executed with access to project and team member information. Best for complex processing and API integration
+3. **Shell scripts** (`.sh`): executed as shell commands
+4. **YAML workflows** (`.yml`): compose multiple commands
 
-1. **Markdown commands** (`.md`): Executed as LLM prompts
-   - Can specify model and output format in frontmatter
-   - Ideal for text processing, translation, summarization, etc.
-
-2. **Python scripts** (`.py`): Executed with context injection
-   - Access to project and team member information
-   - Ideal for complex processing and API integration
-
-3. **Shell scripts** (`.sh`): Executed as shell commands
-   - Ideal for system commands and tool invocation
-
-4. **YAML workflows** (`.yml`): Execute multiple commands in composition
-   - Ideal for command composition and conditional branching
-
-**Command Placement**:
-
-Commands are resolved from the following locations (in priority order):
+**Command locations** (in priority order):
 
 1. **Per-member commands**: `.guildbotics/config/team/members/<person_id>/commands/`
-   - Commands specific to a particular member
+2. **Project-shared commands**: `.guildbotics/config/commands/`
+3. **Built-in commands**: shipped in the package under `guildbotics/templates/` (fallback; for example `workflows/ticket_driven_workflow`)
 
-2. **Project-local commands**: `.guildbotics/config/commands/`
-   - Commands shared across the project
+The Edit Command screen reads and writes project-shared commands. Per-member commands are placed as files directly. If a file is shadowed by a higher-priority one and would not be the command that actually runs, the screen shows a warning.
 
-3. **Built-in commands**: Located in `guildbotics/templates/` within the package (fallback)
-   - Example: `workflows/ticket_driven_workflow`
+The configuration directory defaults to `.guildbotics/config` in the workspace and can be changed with the `GUILDBOTICS_CONFIG_DIR` environment variable.
 
-The configuration directory is the workspace's `.guildbotics/config` by default and can be
-overridden with the `GUILDBOTICS_CONFIG_DIR` environment variable.
+**A step further**: Markdown commands can declare a template engine and child commands (`commands:`) in front matter. The example below fetches the OS display language with a child command and switches the translation direction accordingly (`.guildbotics/config/commands/translate.md`).
 
-**Simple example** (`.guildbotics/config/commands/translate.md`):
 ```markdown
 ---
 template_engine: jinja2
@@ -286,684 +348,188 @@ commands:
 ---
 The input message is structured data.
 {% if os_ui_language.language_code == "en" %}
-If the text in the `input` field is in Japanese, translate it to English; if it is in English, translate it to Japanese.
+Translate the text in the `input` field into English if it is Japanese, and into Japanese if it is English.
 {% else %}
-If the text in the `input` field is in {{ os_ui_language.language_name }}, translate it to English; if it is in English, translate it to {{ os_ui_language.language_name }}.
+Translate the text in the `input` field into English if it is {{ os_ui_language.language_name }}, and into {{ os_ui_language.language_name }} if it is English.
 {% endif %}
 Return only the translated text.
 ```
 
-`functions/get_os_ui_language` is a built-in command, so no companion file is required in the workspace.
+`functions/get_os_ui_language` is a built-in command, so no helper file has to be placed in the workspace.
 
-For detailed creation methods, see [Custom Command Development Guide](docs/custom_command_guide.en.md).
+**How to run a command**:
 
-### 5.3.2. Command Execution Methods
+- **Run** on the **Edit Command** screen (you can supply input text and additional args)
+- The **Quick run window** opened with a hotkey
+- Patrol / scheduled execution under **Setup → Members → Patrol** (→ [Automate Recurring Work](#automate-recurring-work))
+- Scheduled Slack posts (configured as a scheduled command combined with `workflows/chat_post_command`)
+- The CLI: `guildbotics run <command_name> [args...]` (→ [Run on a Server](#run-on-a-server))
 
-**Manual execution**:
+For all front matter options, context injection, and command composition, see the [Custom Command Development Guide](docs/custom_command_guide.en.md).
 
-```bash
-guildbotics run <command_name> [args...]
-```
+## Operations Reference
 
-Example:
-```bash
-echo "Hello" | guildbotics run translate
-```
+### Storing API Keys and Tokens
 
-**Automated execution with member workers**:
+GuildBotics keeps secrets (LLM API keys and account tokens) out of plain text files whenever it can.
 
-```bash
-guildbotics start
-```
+- **OS keychain (default for new workspaces):** when a keychain is available (macOS Keychain, Windows Credential Manager, Linux Secret Service such as GNOME Keyring), setup stores secret values there. The workspace only keeps a non-secret index file, `.guildbotics/config/secrets.yml`, listing the stored key names.
+- **`.env` backend:** workspaces without that index file (for example one created on a machine without a keychain) use the workspace `.env`. This is the supported approach for headless servers and CI. The `.env` file GuildBotics writes is owner read/write only (`0600`).
+- **Precedence:** real environment variables > OS keychain > `.env`. In server operation, injecting environment variables always wins regardless of the backend.
+- **GitHub App private key:** saving member settings in a keychain-backed workspace copies the contents of the PEM file referenced by `*_GITHUB_PRIVATE_KEY_PATH` into the keychain and removes the path entry from `.env`. The keychain copy replaces the file, so all that remains is deleting the plaintext `.pem` yourself. Unlike other secrets, the key material is never exposed in environment variables; it is read from the keychain only at the moment a GitHub App token is issued, so AI CLI tool child processes never see it.
+- **`GUILDBOTICS_SECRETS_BACKEND`:** set to `keyring` or `env-file` to force a backend for that process only (for CI and scripted environments).
 
-By default, this starts:
-
-- Member workers (routine commands / scheduled tasks / queued events)
-- Event listener runner (event-driven receivers such as Slack Socket Mode)
-
-Each member worker runs the routine commands configured in that member's `person.yml` (`routine_commands`).
-
-You can also limit startup to one side:
-
-```bash
-guildbotics start --only scheduler
-guildbotics start --only events
-```
-
-To stop the running service:
-
-```bash
-guildbotics stop
-```
-
-The scheduler stops accepting new work, waits for in-flight work to finish, then exits.
-Running `guildbotics stop` a second time cancels the in-flight work, and `guildbotics kill`
-force-stops immediately. For options such as `--timeout` and `--force`, see the
-[CLI Reference](docs/cli_reference.md#guildbotics-stop).
-
-## 5.4. Schedule Features
-
-GuildBotics allows you to configure scheduled tasks for each team member via the `person.yml` configuration file. The scheduler supports two types of command execution methods.
-
-### 5.4.1. Routine Commands
-
-**Routine Commands** (`routine_commands`) are commands that execute continuously in a round-robin fashion.
-
-**Features**:
-- Execute every minute when the scheduler is active
-- If multiple commands are specified, they execute one at a time in order
-- Initial setup seeds `workflows/ticket_driven_workflow` for new agent members; a member with no `routine_commands` runs no routine commands
-
-**Configuration example**:
-```yaml
-person_id: alice
-name: Alice
-is_active: true
-
-# Override default routine commands (optional)
-routine_commands:
-  - workflows/ticket_driven_workflow
-  - workflows/custom_workflow
-```
-
-**Typical use cases**:
-- Periodic checking of task boards (e.g., `workflows/ticket_driven_workflow`)
-- Continuous monitoring tasks
-- Event-driven processing
-
-### 5.4.2. Scheduled Tasks
-
-**Scheduled Tasks** (`task_schedules`) are commands that execute at specific times defined by cron expressions.
-
-**Features**:
-- Checked every minute and executed when the current time matches the schedule
-- Multiple schedule patterns can be configured for a single command
-- Supports special randomization syntax (jitter)
-
-**Configuration example**:
-```yaml
-person_id: alice
-name: Alice
-is_active: true
-
-# Schedule commands to run at specific times
-task_schedules:
-  - command: workflows/cleanup
-    schedules:
-      - "0 2 * * *"        # Daily at 2:00 AM
-      - "30 14 * * 5"      # Every Friday at 14:30
-  - command: workflows/backup
-    schedules:
-      - "0 0 1 * *"        # First day of every month at midnight
-```
-
-**Typical use cases**:
-- Periodic cleanup tasks
-- Backups and report generation
-- Tasks that need to run at scheduled times
-
-### 5.4.3. Cron Expression Format
-
-GuildBotics uses standard 5-field cron expressions:
-
-```
-* * * * *
-│ │ │ │ │
-│ │ │ │ └─── Day of week (0-6, Sunday=0)
-│ │ │ └───── Month (1-12)
-│ │ └─────── Day of month (1-31)
-│ └───────── Hour (0-23)
-└─────────── Minute (0-59)
-```
-
-**Common Examples**:
-```yaml
-schedules:
-  - "0 9 * * *"          # Every day at 9:00 AM
-  - "*/15 * * * *"       # Every 15 minutes
-  - "0 */2 * * *"        # Every 2 hours
-  - "0 0 * * 0"          # Every Sunday at midnight
-  - "30 8 1,15 * *"      # 1st and 15th of each month at 8:30 AM
-  - "0 22 * * 1-5"       # Weekdays at 10:00 PM
-```
-
-**Special Randomization Syntax (Jitter)**:
-
-GuildBotics extends standard cron with randomization syntax:
-
-- `?`: Random value within the default range
-- `?(min-max)`: Random value within the specified range
-
-**Examples**:
-```yaml
-schedules:
-  - "? 9 * * *"          # Random minute between 9:00-9:59 AM daily
-  - "?(0-30) 14 * * *"   # Random minute between 14:00-14:30 daily
-  - "0 ?(9-17) * * 1-5"  # Weekdays at random hour 9-17, on the hour
-```
-
-**Randomization use cases**:
-- Avoiding simultaneous execution across multiple agents
-- Simulating human-like irregular timing
-- Load distribution across time windows
-
-### 5.4.4. How Scheduling Works Internally
-
-The scheduler behavior (from `guildbotics/drivers/task_scheduler.py` and `guildbotics/entities/task.py`):
-
-**Architecture**:
-1. **Per-person worker threads**: Each active team member gets a dedicated worker thread
-2. **Minute-based check cycle**: Every minute, each worker thread:
-   - Checks all `task_schedules` for the current person
-   - Executes commands whose schedule matches the current time
-   - Executes one `routine_command` in round-robin order
-
-**Randomization handling**:
-1. On initialization, calculates the next execution time for randomized schedules
-2. For `?` fields, samples a random value within the boundary
-3. Re-samples after each execution boundary is reached
-
-**Error handling**:
-- Consecutive command failures (default: 3) stop the worker thread
-- Searchable execution summaries are recorded in
-  `<workspace>/.guildbotics/data/run/diagnostics.jsonl`; full per-execution records are stored
-  under `run/sessions/`
-
-## 5.5. Schedule Configuration Examples
-
-This section provides practical examples of schedule configurations.
-
-### Multi-Agent Scheduled Workflow
-
-**Scenario**: Two agents with different schedules
-
-**Agent 1** (`.guildbotics/config/team/members/agent1/person.yml`):
-```yaml
-person_id: agent1
-name: Agent One
-is_active: true
-
-# Periodically execute ticket-driven workflow
-routine_commands:
-  - workflows/ticket_driven_workflow
-
-# Generate morning standup report on weekday mornings at 9 AM
-task_schedules:
-  - command: workflows/morning_standup
-    schedules:
-      - "0 9 * * 1-5"     # Weekday mornings at 9:00 AM
-```
-
-**Agent 2** (`.guildbotics/config/team/members/agent2/person.yml`):
-```yaml
-person_id: agent2
-name: Agent Two
-is_active: true
-
-# Periodically execute code review checks
-routine_commands:
-  - workflows/code_review_check
-
-# Weekly and monthly maintenance tasks
-task_schedules:
-  - command: workflows/cleanup_old_branches
-    schedules:
-      - "0 0 * * 0"       # Sunday midnight
-  - command: workflows/dependency_update_check
-    schedules:
-      - "?(0-59) 10 1 * *"  # First of month, random minute in 10 AM hour
-```
-
-**Start both agents**:
-```bash
-guildbotics start
-```
-
-Both agents will run concurrently, each executing their routine commands continuously and their scheduled tasks at the specified times.
-
-### Multiple Schedule Patterns
-
-Example of configuring multiple schedules for a single command:
-
-```yaml
-person_id: maintenance_bot
-name: Maintenance Bot
-is_active: true
-
-task_schedules:
-  # Execute cleanup at 2 AM on weekdays and midnight on weekends
-  - command: workflows/cleanup
-    schedules:
-      - "0 2 * * 1-5"     # Weekdays at 2:00 AM
-      - "0 0 * * 0,6"     # Weekends at midnight
-
-  # Execute backup at 3 AM daily and midnight on first of month
-  - command: workflows/backup
-    schedules:
-      - "0 3 * * *"       # Daily at 3:00 AM
-      - "0 0 1 * *"       # First of month at midnight (monthly backup)
-```
-
-### Randomization Usage
-
-Randomization configuration to avoid conflicts between multiple agents:
-
-```yaml
-person_id: agent_alpha
-name: Agent Alpha
-is_active: true
-
-task_schedules:
-  # Execute checks at random time in 9 AM hour
-  - command: workflows/morning_check
-    schedules:
-      - "?(0-59) 9 * * 1-5"  # Weekdays, random minute between 9:00-9:59
-
-  # Execute monitoring randomly during daytime hours
-  - command: workflows/health_check
-    schedules:
-      - "0 ?(9-17) * * *"    # Daily, random hour between 9-17, on the hour
-```
-
-## 5.6. Slack Chat Workflow
-
-In the Slack chat workflow, channels configured in `message_channels` of `person.yml` are monitored, and incoming events are delegated to the configured AI CLI tool. The AI CLI tool decides whether to reply, add a reaction, record a no-op, ask a question, or report a blocked state. Slack posts, replies, and reactions are written only through the public member capability commands under `guildbotics member chat ...`.
-
-Scheduled command output posting remains separate: use `task_schedules` + `workflows/chat_post_command` for scheduled posts.
-
-Incoming chat events are received by the event listener runner started with `guildbotics start`, then handled serially by each member worker's event queue source. If you start only scheduled/routine work with `--only scheduler`, incoming chat events are not received. If you start only events with `--only events`, scheduled and routine commands are disabled, but member workers still drain queued chat events.
-
-For AI CLI tool chat handling, GuildBotics runs `functions/handle_chat_event` from the per-member work directory. By default, that directory is `<workspace>/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories can be inspected. The workflow verifies completion through evidence recorded by `guildbotics member chat complete`; natural-language tool stdout alone is not treated as proof that Slack was updated.
-You can define interests, preferences, and conversation participation rules in `character` within `person.yml`. Chat decisions and reply generation use this profile through the AI CLI tool.
-
-### 5.6.1. Prerequisites (Slack Side)
-
-#### Basic Setup
-
-Create a Slack App that acts as the AI agent (send + receive).
-
-1. Create a Slack App at https://api.slack.com/apps
-2. Grant required scopes
-   - Add them from `OAuth & Permissions` -> `Scopes`
-   - Minimum required scopes (add based on conversation types you use)
-     - `chat:write` (for `chat.postMessage`)
-     - `reactions:write` (for `reactions.add`)
-     - `channels:history` (for public channel `conversations.history`)
-     - `groups:history` (for private channel `conversations.history`)
-     - `im:history` (if handling DMs)
-     - `mpim:history` (if handling group DMs)
-   - If you want to configure via `channel_name`, also add name resolution scopes (`conversations.list`)
-     - `channels:read` (public channels)
-     - `groups:read` (private channels)
-   - If you want to import member avatars from Slack (Setup screen), also add
-     - `users:read` (for `users.info`)
-   - Reference URLs (official Slack docs)
-     - `conversations.history`: `https://api.slack.com/methods/conversations.history`
-     - `conversations.list`: `https://api.slack.com/methods/conversations.list`
-     - `chat.postMessage`: `https://api.slack.com/methods/chat.postMessage`
-     - `reactions.add`: `https://api.slack.com/methods/reactions.add`
-     - `users.info`: `https://api.slack.com/methods/users.info`
-3. Install the app to your workspace (reinstall may be required after scope changes)
-4. Set Bot Token (`xoxb-...`) in environment variable `{PERSON_ID}_SLACK_BOT_TOKEN`
-   - Example: for `alice`, set `ALICE_SLACK_BOT_TOKEN`
-5. Configure Socket Mode
-   - Enable `Enable Socket Mode` in `Socket Mode`
-   - Enable `Event Subscriptions` and add bot events
-     - For channels: `message.channels`, `message.groups`
-     - For DMs: `message.im`, `message.mpim`
-   - Issue an App-Level Token (`xapp-...`) in `Basic Information` and set `{PERSON_ID}_SLACK_APP_TOKEN`
-     - Example: for `alice`, set `ALICE_SLACK_APP_TOKEN`
-6. Invite the bot to target channels
-7. Configure target channels in `person.yml` under `message_channels`
-
-#### Adding Multiple Agents
-
-You can add additional agents with the same setup. Alternatively, you can skip Socket Mode setup for later agents and share the communication path configured for the first AI agent.
-
-To share incoming connections, set the later person's `{PERSON_ID}_SLACK_APP_TOKEN` to the same App-Level Token as the existing person.
-
-- Example: if `alice` and `bob` share the same incoming connection
-  - `ALICE_SLACK_APP_TOKEN=<alice_xapp_token>`
-  - `BOB_SLACK_APP_TOKEN=<alice_xapp_token>`
-
-If you want a separate incoming path (for example, separate workspaces or separate Slack Apps), create and configure another Slack App with its own Socket Mode / Event Subscriptions / App-Level Token.
-
-### 5.6.2. `person.yml` Example
-
-Configure chat receiving channels (`message_channels`) and scheduled posting (`task_schedules`) in `team/members/<person_id>/person.yml`.
-
-```yaml
-# team/members/alice/person.yml
-person_id: alice
-name: Alice
-is_active: true
-
-message_channels:
-  - service: slack
-    name: dev-chat
-    chat:
-      enabled: true
-      participation: strict
-      startup_backfill_minutes: 60
-      backfill_interval_seconds: 300
-
-task_schedules:
-  - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
-    schedules:
-      - "0 9 * * 1-5"
-```
-
-Points:
-
-- Monitored channels are defined in `message_channels`; entries with `chat.enabled: true` are monitored.
-- `chat.participation` controls when the member joins a Slack thread: `strict` (default) handles direct mentions and follow-ups after the member was mentioned, `social` also allows unmentioned ambient participation for casual channels, and `muted` handles direct mentions only.
-- On startup, GuildBotics backfills recent channel messages and known thread replies from Slack history. `startup_backfill_minutes` defaults to `60`; `backfill_interval_seconds` defaults to `300` and can be set to `0` to disable periodic history checks after startup.
-- Incoming replies, reactions, no-op records, and completion evidence go through `guildbotics member chat reply|post|reaction add|noop|complete`.
-- For scheduled posting, use `task_schedules` + `workflows/chat_post_command` (the post body is generated from a GuildBotics custom command output).
-- Example: `examples/reports/ai_news_digest` gets candidate news from Google News RSS first, then an LLM formats it into a Slack-friendly summary.
-
-Interactive member chat examples:
-
-```bash
-guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --content-stdin <<'EOF'
-Reply body with literal `$HOME`, backticks (`command`), and `$(command)`.
-EOF
-guildbotics member chat reaction add --person alice --service slack --channel-id C0123456789 --message-ts 1777554000.000000 --reaction ack
-```
-
-Example scheduled command (AI news digest):
-
-```bash
-guildbotics run examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24
-```
-
-Example posting command (manual):
-
-```bash
-guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
-```
-
-This command first fetches candidate articles from Google News RSS, then uses an LLM to format a Japanese digest suitable for Slack.
-
-# 6. GitHub Integration
-
-This section describes how to use the default `ticket_driven_workflow` which integrates with GitHub Projects and Issues for ticket-based AI agent collaboration.
-
-**Note**: GitHub integration is optional. Without it, GuildBotics can still run the Slack chat workflow and scheduled automation commands.
-
-## 6.1. Prerequisites
-
-### 6.1.1. Git Environment
-- Ticket-driven work is performed through the `guildbotics member ...` CLI. The workflow
-  selects a GitHub Project item, starts the AI CLI tool in that member's work directory, and
-  verifies that the tool recorded task completion. By default, the work directory is
-  `<workspace>/.guildbotics/data/workspaces/<person_id>`. The tool itself performs
-  clone/push/PR/comment/reply operations through
-  `guildbotics member`.
-- Configure each AI member's GitHub credentials in GuildBotics. GitHub/git writes use the
-  assigned member's configured machine-user token or GitHub App installation, not the local
-  `gh auth` user. Credential-required member commands load these values from the selected
-  workspace's OS keychain entries and `.env`, `GUILDBOTICS_ENV_FILE`, or `.env` in the
-  current directory.
-- For interactive AI CLI tool sessions, launch the GuildBotics Desktop app at least
-  once after selecting the workspace. The app installs the GuildBotics skill and managed CLI
-  under `~/.guildbotics/bin/guildbotics`. Configure the client to reject or require approval
-  for `gh`, direct GitHub token/API writes, and `git push`. This is a guardrail against
-  falling back to your own local GitHub account; it is not a complete technical sandbox
-  against token exfiltration.
-- When using Codex as the AI CLI tool, verify its authentication and network reachability:
-  ```bash
-  codex doctor
-  ```
-
-### 6.1.2. Create a GitHub Project
-Create a GitHub Projects (v2) project and add the following columns (statuses) in advance:
-  - Todo
-  - In Progress
-  - Done
-
-Note:
-- For existing projects, you can map already-existing statuses to the above lanes with the settings described later.
-
-### 6.1.3. Prepare a GitHub Account for the AI Agent
-Prepare an account the AI agent will use to access GitHub. You can choose one of the following:
-
-- **Machine Account** (Machine User)
-  - Recommended if you want to keep the “work with an AI agent via the task board and Pull Requests” feel. However, per the [GitHub Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service#3-account-requirements), free machine accounts are limited to one per user.
-- **GitHub App**
-  - There is no limit on the number of apps, but it cannot access GitHub Projects owned by a personal account. Also, GitHub UI clearly marks the app as a bot, which slightly changes the feel.
-- Use your own account as a **proxy agent**
-  - The simplest option. The visual impression is more like “talking to yourself” than interacting with a separate AI agent.
-
-#### Using a Machine Account (Machine User)
-After creating a machine account, do the following:
-
-1. Add the machine account as a Collaborator to the project and repositories.
-2. Issue a Classic PAT
-  - Issue a **Classic** Personal Access Token.
-  - Select the scopes `repo` and `project`.
-
-#### Using a GitHub App
-When creating a GitHub App, set the following permissions:
-
-- Repository permissions
-  - Contents: Read & Write
-  - Issues: Read & Write
-  - Projects: Read & Write
-  - Pull requests: Read & Write
-- Organization permissions
-  - Projects: Read & Write
-
-After creating the GitHub App, do the following:
-
-1. On the app settings page, click “Generate a private key” to download a `.pem` file and save it.
-2. Install the app to your repository/organization via “Install App” and record the installation ID. The last digits in the page URL (`.../settings/installations/<installation_id>`) are the installation ID; keep it for configuration.
-
-#### Using Your Own Account as a Proxy Agent
-If you use your own account as the AI agent, issue a **Classic** PAT. Select the scopes `repo` and `project`.
-
-
-## 6.2. Setup for GitHub Integration
-
-After completing [Basic Usage](#5-basic-usage) steps, verify the configuration from the
-**Diagnostics / Verify** view in the Desktop app. This checks that each active member's GitHub,
-LLM, and AI CLI tool settings are usable.
-
-**Custom fields** are created automatically the first time GuildBotics operates on a GitHub
-Project, so no explicit setup step is required. GuildBotics manages the `Agent` field to select
-the AI agent when GitHub assignees are not enough.
-
-**Lane mapping**: GuildBotics uses GitHub Projects statuses as lightweight workflow lanes.
-By default it treats `Todo` as ready, `In Progress` as working, and `Done` as done.
-The ready and done lanes also act as the boundaries of the work window: statuses positioned
-**between** them on the board (for example `In Review`) are automatically treated as working
-lanes, while statuses placed **before** ready (for example `Backlog`) or **at/after** done
-(for example `Icebox`) are ignored. This means you can add intermediate or parked lanes by
-ordering board columns alone, without touching `lane_map`.
-If your GitHub Project uses custom status names for the ready/working/done lanes, map them with
-the `services.ticket_manager.lane_map` key in `team/project.yml`
-(see [Configuration Files](#73-configuration-files)). The desktop setup app also exposes these
-lanes in the GitHub section: it offers your Project's status options when they can be read, and
-otherwise falls back to manual entry. Defaults work for a standard `Todo` / `In Progress` / `Done`
-board, so no lane configuration is required there.
-
-## 6.3. Running the Ticket-Driven Workflow
-
-### 6.3.1. Start
-Start with:
-
-```bash
-guildbotics start
-```
-
-### 6.3.2. How to Instruct the AI Agent
-
-To request a task from the AI agent, operate the GitHub Projects ticket as follows:
-
-1. Create a ticket, select the target Git repository, and save it as an Issue
-2. Describe instructions to the AI agent in the ticket
-   - This becomes the prompt to the agent, so be as specific as possible
-3. Assign the target AI agent, or set the `Agent` field when GitHub assignees are not enough
-4. Move the ticket to the ready lane
-
-Note:
-The AI agent prepares repositories in the member work directory by running `guildbotics member git prepare` and works there. By default, that directory is `<workspace>/.guildbotics/data/workspaces/<person_id>`.
-
-### 6.3.3. Interacting with the AI Agent
-- If the AI agent has questions during work, it posts questions as ticket comments. Please respond in ticket comments. The agent periodically checks ticket comments and proceeds accordingly once answers are provided.
-- When the AI agent completes a task, it posts the result, PR URL, review reply, or reaction itself through `guildbotics member ...`, then records `guildbotics member task complete`.
-- For Pull Requests created from a ticket, write review results on the PR. GuildBotics checks unresolved review threads and delegates them back to the assigned agent.
-
-## 6.4. Capabilities
-
-With the ticket-driven workflow, you can:
-
-- **Request tasks for AI agents on a task board**
-  - Assign an AI agent to a ticket and move it to the ready lane to have the AI agent execute the task
-- **Review AI agent results on the task board**
-  - When the agent completes a task, it leaves a comment, PR, review reply, or reaction through the member capability
-- **Create Pull Requests by AI agents**
-  - When a task requires code changes, the agent publishes the member work-directory branch and creates or reuses a Pull Request through `guildbotics member github pr create`
-- **Create tickets**
-  - If you instruct the AI agent to create follow-up tickets, it creates real repository issues with `guildbotics member github issue create`
-
-# 7. Reference
-
-The complete list of CLI commands and their options is generated from the source and
-published as the [CLI Reference](docs/cli_reference.md).
-
-## 7.1. Account-Related Environment Variables
-
-**LLM API Keys**:
-- `GOOGLE_API_KEY`: Google Gemini API
-- `OPENAI_API_KEY`: OpenAI API
-- `ANTHROPIC_API_KEY`: Anthropic Claude API
-
-**Slack Access**:
-- `{PERSON_ID}_SLACK_BOT_TOKEN`: Slack Bot Token per person
-- `{PERSON_ID}_SLACK_APP_TOKEN`: Slack App-Level Token per person
-
-**GitHub Access** (per-person, format: `{PERSON_ID}_...`):
-- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: PAT for machine accounts/proxy agents
-- `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: For GitHub Apps
-
-If a `.env` file exists in the current directory, it is loaded automatically, and secrets held
-in the OS keychain (see [7.2. Secret Storage](#72-secret-storage)) are injected the same way.
-`guildbotics member` commands first honor `--workspace <dir>`. Without that option, they use the
-selected workspace recorded by the desktop app or `guildbotics workspace use`, unless the command is
-already running inside a configured workspace. The selected workspace sets `GUILDBOTICS_CONFIG_DIR`
-to `<workspace>/.guildbotics/config` and, when `<workspace>/.env` exists, `GUILDBOTICS_ENV_FILE`.
-
-Useful workspace commands:
-
-```bash
-guildbotics workspace status
-guildbotics workspace current
-guildbotics workspace use /path/to/workspace
-guildbotics member --workspace /path/to/workspace context --person <person_id> --check-credentials
-```
-
-The fallback for non-desktop/headless use is `GUILDBOTICS_ENV_FILE` pointing to an absolute
-`.env` path, or `.env` in the current directory. `guildbotics start` and the desktop runtime
-set `GUILDBOTICS_ENV_FILE` automatically when they load the workspace `.env`.
-`GUILDBOTICS_DATA_DIR` may be set in the workspace `.env` to move the directory used for
-workspace-specific run data. If it is set in the process environment at startup and the workspace
-`.env` does not define it, that process uses the startup value as its shared run-data directory.
-
-## 7.2. Secret Storage
-
-GuildBotics keeps secrets (LLM API keys and the account tokens listed above) out of plaintext
-files whenever possible:
-
-- **OS keychain (default for new workspaces):** When a functional keychain is available —
-  macOS Keychain, Windows Credential Manager, or Linux Secret Service (GNOME Keyring etc.) —
-  setup stores secret values there. The workspace keeps only a non-secret index file,
-  `.guildbotics/config/secrets.yml`, that names the stored keys.
-- **`.env` backend:** Workspaces without that index file — e.g. created on a machine without
-  a functional keychain — use the workspace `.env`. This is the supported mode for
-  headless servers and CI. `.env` files written by GuildBotics get owner-only (`0600`)
-  permissions.
-- **Precedence:** real environment variable > OS keychain > `.env`. Server deployments can
-  always inject secrets as plain environment variables, regardless of the backend.
-- **GitHub App private keys:** Member setup on a keychain-backed workspace copies the PEM
-  content referenced by `*_GITHUB_PRIVATE_KEY_PATH` into the keychain and removes the path
-  entry from `.env` — the stored content replaces the file, so all that remains is deleting
-  the plaintext `.pem` file yourself. Unlike other secrets, the key content is never
-  published to environment variables — it is read from the keychain only at the moment a
-  GitHub App token is issued, so AI CLI tool subprocesses never see it.
-- **`GUILDBOTICS_SECRETS_BACKEND`:** set to `keyring` or `env-file` to force a backend for a
-  single process (useful for CI and scripted environments).
-
-Manage secrets with the `guildbotics secrets` CLI (see the
-[CLI Reference](docs/cli_reference.md#guildbotics-secrets) for all subcommands and options):
+Manage secrets with the `guildbotics secrets` CLI (see the [CLI Reference](docs/cli_reference.md#guildbotics-secrets) for all subcommands and options):
 
 ```bash
 guildbotics secrets status                        # backend in use and keychain availability
-guildbotics secrets export --file secrets.env     # dump secrets for moving machines
-guildbotics secrets import secrets.env            # load them on the target machine
+guildbotics secrets export --file secrets.env     # export secrets for a move
+guildbotics secrets import secrets.env            # import them on the new machine
 ```
 
-Secrets are stored per workspace (the keychain entries are namespaced by the `store_id` in
-`secrets.yml`). Like `guildbotics member`, the target workspace can be set with `--workspace`
-before the subcommand; without it, the current directory's workspace or the selected active
-workspace is used. `guildbotics secrets status` always prints the resolved workspace.
+Secrets are stored per workspace (keychain entries are namespaced by the `store_id` in `secrets.yml`). Choose the target workspace with `--workspace` before the subcommand. Without it, the workspace in the current directory is used, or the active workspace when there is none. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
 guildbotics secrets --workspace /path/to/workspace migrate
 ```
 
-To move a workspace to another machine, copy the workspace folder, then run
-`guildbotics secrets export --file ...` on the source machine and
-`guildbotics secrets import ...` on the target machine (delete the export file afterwards).
-Keychain entries themselves never leave the machine. For servers without a keychain, keep the
-values in `.env` or provide them as environment variables instead.
+### Run on a Server
 
-## 7.3. Configuration Files
+All non-secret configuration is stored as plain text files inside the workspace, so once you have set things up you can move them to an environment without a GUI (a headless server, for example) and operate with the CLI alone.
 
-**Project Configuration** (`team/project.yml`):
-- `name`: Project name
-- `description`: Brief project description used as agent context
-- `language`: Project language
-- `repositories`: Repository definitions
+1. Install the CLI on the target machine with `uv tool install guildbotics`
+2. Copy the workspace folder to the target machine
+3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target (delete the export file afterwards). Keychain entries themselves never leave the machine
+4. On servers without a keychain, store secrets in `.env` or pass them as environment variables
+
+**Starting and stopping the service** (equivalent to the **Service** screen in the desktop app):
+
+```bash
+guildbotics workspace status   # check the target workspace and its configuration
+guildbotics start              # start the service
+guildbotics stop               # stop accepting new work and exit after in-flight work finishes
+guildbotics kill               # force stop immediately
+```
+
+Running `guildbotics stop` a second time cancels the in-flight work (equivalent to **Force stop** in the GUI). For options such as `--timeout` and `--force`, see the [CLI Reference](docs/cli_reference.md#guildbotics-stop).
+
+By default `guildbotics start` starts both the member workers (patrol / scheduled / queued events) and the event listener. `--only` narrows what runs, but the member workers start in either case.
+
+- `--only scheduler`: runs only patrol and scheduled commands; the event listener does not start (no Slack events are received)
+- `--only events`: only receives events and runs queued events; patrol and scheduled commands do not run
+
+**Running commands** (equivalent to running from the **Edit Command** screen in the desktop app):
+
+```bash
+guildbotics run <command_name> [args...]
+echo "Hello" | guildbotics run translate
+```
+
+Use `--person` or `<command>@<person_id>` to choose the member that runs it.
+
+The CLI and the desktop app share a lock file (`~/.guildbotics/data/run/service.lock`), so the service can never start twice on the same machine.
+
+### Account-Related Environment Variables
+
+**LLM API keys**:
+
+- `GOOGLE_API_KEY`: Google Gemini API
+- `OPENAI_API_KEY`: OpenAI API
+- `ANTHROPIC_API_KEY`: Anthropic Claude API
+
+**Slack access** (per member, format: `{PERSON_ID}_...`):
+
+- `{PERSON_ID}_SLACK_BOT_TOKEN`: Slack Bot Token
+- `{PERSON_ID}_SLACK_APP_TOKEN`: Slack App-Level Token
+
+**GitHub access** (per member, format: `{PERSON_ID}_...`):
+
+- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: PAT for a machine account / proxy agent
+- `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: for a GitHub App
+
+A `.env` file in the current directory is loaded automatically. Secrets stored in the OS keychain are loaded automatically as well.
+
+When running without the desktop app, `GUILDBOTICS_ENV_FILE` pointing at an absolute `.env` path, or the `.env` in the current directory, is the fallback. `guildbotics start` and the desktop runtime also set `GUILDBOTICS_ENV_FILE` automatically when they load a workspace `.env`.
+
+### Workspace and Data Locations
+
+The workspace in use is recorded in `~/.guildbotics/data/active-workspace.json`. From the CLI, inspect and change it with:
+
+```bash
+guildbotics workspace status
+guildbotics workspace current
+guildbotics workspace use /path/to/workspace
+```
+
+The workspace used by `guildbotics member` commands is resolved in this order:
+
+1. `--workspace <dir>` given before the subcommand
+2. The workspace you are running inside, when it is already configured (an explicit `GUILDBOTICS_CONFIG_DIR`, or `.guildbotics/config` in the current directory)
+3. The workspace in use as recorded by the desktop app or `guildbotics workspace use`
+
+From the selected workspace, `GUILDBOTICS_CONFIG_DIR` is set to `<workspace>/.guildbotics/config`, and `GUILDBOTICS_ENV_FILE` is set too when `<workspace>/.env` exists.
+
+GuildBotics stores two kinds of local data:
+
+- Machine-wide management information — the workspace in use, the CLI scheduler PID, and so on — is stored in `$HOME/.guildbotics/data`
+- Per-workspace runtime data — per-member working directories, task and chat execution records, diagnostics logs, prompt transcripts, and chat state — is stored by default in `<workspace>/.guildbotics/data`
+
+You can change where per-workspace runtime data is stored by setting `GUILDBOTICS_DATA_DIR` in the workspace `.env`. If `GUILDBOTICS_DATA_DIR` is present in the environment at startup and the workspace `.env` does not set it, it is used as the shared runtime data location for that running process.
+
+### Configuration Files
+
+**Project settings** (`team/project.yml`):
+
+- `name`: project name
+- `description`: short project description used as agent context
+- `language`: project language
+- `repositories`: repository definitions
 - `services.ticket_manager`: GitHub Projects settings
-- `services.ticket_manager.lane_map`: Maps ready, working, and done lanes to your GitHub Project's status names. Set this when your Project uses custom status names.
+- `services.ticket_manager.lane_map`: maps the ready / working / done lanes to GitHub Project status names. Set this when your Project uses its own status names
 - `services.code_hosting_service`: GitHub repository settings
 
-**Member Configuration** (`team/members/<person_id>/person.yml`):
-- `person_id`: Unique identifier (lowercase alphanumeric, `-`, `_` only)
-- `name`: Display name
-- `is_active`: Whether the member acts as an AI agent
-- `roles`: Role assignments
-- `routine_commands`: Override default routine commands
-- `task_schedules`: Cron-based scheduled commands
-- `task_schedules[].command`: Scheduled posting can be configured with `workflows/chat_post_command ...`
-- `message_channels`: Monitored channel settings (`chat.enabled`, `chat.event_source=socket_mode`, `channel_id`/`name`)
+**Member settings** (`team/members/<person_id>/person.yml`):
 
-**Brain/AI CLI Tool Configuration**:
-- `intelligences/cli_agent_mapping.yml`: Default AI CLI tool selection
-- `intelligences/native_agent_policy.yml`: Codex filesystem scope (`workspace` or
-  `host`). New workspace setup creates it; configure it in Desktop under **LLM / AI
-  CLI tools → Advanced**, or edit it directly for headless operation. Network and
-  non-interactive approval behavior are fixed by the native adapters.
-- `intelligences/cli_agents/*.yml`: One-shot AI CLI tool scripts (not Codex / Claude)
-- `team/members/<person_id>/intelligences/`: Per-member overrides, including an
-  optional native policy; members inherit the team policy by default
+- `person_id`: unique identifier (lowercase alphanumerics, `-`, `_` only)
+- `name`: display name
+- `is_active`: whether the member runs as an AI agent
+- `roles`: role assignment
+- `routine_commands`: override the default patrol commands
+- `task_schedules`: cron-based scheduled commands
+- `message_channels`: watched channel settings (`chat.enabled`, `chat.event_source=socket_mode`, `channel_id`/`name`)
+- `character`: profile such as interests, preferences, and conversation participation policy
 
-The accepted policy values and security implications are documented in
-[Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).
+**LLM / AI CLI tool settings**:
 
+- `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
+- `intelligences/native_agent_policy.yml`: filesystem access scope for Codex and Grok Build (`workspace` or `host`). It is created during setup of a new workspace and configured under **LLM / AI CLI tools → Advanced settings** in the desktop app, or by editing the file directly in environments without a screen. Network access and the no-confirmation execution mode are fixed inside the GuildBotics integration
+- `intelligences/cli_agents/*.yml`: settings for running AI CLI tools other than Codex, Claude Code, and Grok Build through a script
+- `team/members/<person_id>/intelligences/`: optional per-member overrides, including the execution permissions for Codex and Grok Build. By default they inherit the team settings
 
-# 8. Troubleshooting
+For the available values and security considerations, see [Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).
 
-**Diagnostics**: Searchable execution summaries are recorded in
-`<workspace>/.guildbotics/data/run/diagnostics.jsonl`. Full event, log, span, and I/O records
-are stored as one JSONL file per execution under `run/sessions/`. The Desktop diagnostics view
-shows both execution history and the latest global/system session.
+### CLI Reference
 
-**Debug Output**: Set environment variables for detailed logging:
+For the complete list of CLI commands and options, see the [CLI Reference](docs/cli_reference.md), which is generated from the source code.
+
+## Troubleshooting
+
+| Symptom | What to check first |
+| --- | --- |
+| `guildbotics` command not found | Run `~/.guildbotics/bin/guildbotics` with its absolute path. Also check that `~/.local/bin` is on your PATH |
+| Not sure which workspace is in use | Check and change it under **Setup → Project** in the desktop app. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
+| A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** in the desktop app |
+| Cannot write to GitHub | Check the member's PAT scopes (`repo` + `project`) or the GitHub App permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this |
+| Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether the service was started with **Event triggers** included (from the CLI, whether it was started with `--only scheduler`) |
+| A command execution failed | Open the session on the **Diagnostics** screen in the desktop app and read the logs. You can also ask the AI assistant to investigate the cause |
+| The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |
+
+**Diagnostics logs**: a searchable execution summary is recorded in `<workspace>/.guildbotics/data/run/diagnostics.jsonl`, and the full events, logs, spans, and inputs/outputs are stored per execution as JSONL under `run/sessions/`. The **Diagnostics** screen in the desktop app shows both the execution history and the latest global / system session.
+
+**Debug output**: environment variables for more verbose logging:
+
 - `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
-- `AGNO_DEBUG`: Extra debug output for the Agno engine (`true`/`false`)
-- `GUILDBOTICS_TRANSCRIPT_DETAIL`: `standard` (default) or `full`; `standard` omits
-  high-volume thinking/delta events and keeps only the final 8 KiB of AI CLI tool stderr
-- `GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS`: Days to retain session JSONL files (default: `30`)
+- `AGNO_DEBUG`: extra debug output from the Agno engine (`true`/`false`)
+- `GUILDBOTICS_TRANSCRIPT_DETAIL`: `standard` (default) or `full`. `standard` omits high-volume thinking/delta events and keeps only the last 8 KiB of AI CLI tool stderr
+- `GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS`: how many days session JSONL files are kept (default: `30`)
