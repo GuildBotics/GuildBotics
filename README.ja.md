@@ -7,11 +7,11 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 同じメンバーと 2 つの方法で仕事ができます。
 
 - **一緒に作業する** — Claude Code や Codex のセッションにメンバーを呼び出し、いま開いているリポジトリでペアプログラミングします（→ [メンバーと一緒に作業する](#メンバーと一緒に作業する)）
-- **任せる** — GitHub Projects のチケットや Slack のメンションで依頼すると、メンバーが調査・実装・PR 作成・返信まで自律的に進めます（→ [GitHub チケットを任せる](#github-チケットを任せる) / [Slack で応答させる](#slack-で応答させる)）
+- **任せる** — GitHub Projects のチケットや Slack のメンションで依頼すると、メンバーが調査・実装・PR 作成・返信まで自律的に進めます（→ [GitHub チケットを任せる](#github-チケットを任せる) / [Slack で作業を依頼する](#slack-で作業を依頼する)）
 
 どちらの働き方でも同じメンバー（同じ名義、同じ記憶）が働きます。一緒に作業しながら教えたことは記憶として残り、任せたときの作業にも引き継がれます。
 
-設定と監視は GuildBotics デスクトップアプリ（GUI）で行い、実行は `guildbotics` CLI が担います。GUI のないサーバーだけでも運用できます（→ [サーバーで運用する](#サーバーで運用する)）。
+設定・実行・監視は GuildBotics デスクトップアプリ（GUI）で行います。設定はワークスペース内のプレーンテキストファイルに保存されるため、そのまま GUI の無いサーバーへ移して `guildbotics` CLI だけで運用することもできます（→ [サーバーで運用する](#サーバーで運用する)）。
 
 ---
 
@@ -26,7 +26,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 - [はじめる](#はじめる)
 - [メンバーと一緒に作業する](#メンバーと一緒に作業する)
 - [GitHub チケットを任せる](#github-チケットを任せる)
-- [Slack で応答させる](#slack-で応答させる)
+- [Slack で作業を依頼する](#slack-で作業を依頼する)
 - [決まった作業を自動で実行する](#決まった作業を自動で実行する)
 - [独自のコマンドを作る](#独自のコマンドを作る)
 - [運用リファレンス](#運用リファレンス)
@@ -38,12 +38,12 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 - **複数メンバーの定義**: 異なる役割、個性、記憶を持つ複数の AI メンバーを定義できます（設定ファイル上の識別子は `person`）
 - **GitHub 統合**: GitHub Projects / Issues によるチケット管理と、メンバーによる PR 作成・コメント・レビュー対応
-- **Slack 統合**: 設定したチャネルをメンバーが監視し、本人として返信・リアクション
+- **Slack 統合**: 設定したチャネルをメンバーが監視し、そこで受けた依頼を本人として処理・応答
 - **メンバー記憶**: メンバーがセッションを越えて参照・維持する個人/チームの記憶
 - **対話メンバーセッション**: guildbotics スキルにより、AI CLI ツールが現在のリポジトリでメンバーとして作業
-- **スケジュール実行**: cron ベースのスケジュールタスクと、メンバーごとのルーチンコマンド
+- **スケジュール実行**: メンバーごとの巡回実行コマンドと、cron ベースの定期実行コマンド
 - **カスタムコマンド**: Markdown プロンプト / Python / Shell / YAML で独自の作業を定義し、メンバーや役割ごとに再利用
-- **LLM / AI CLI ツールの切り替え**: LLM プロバイダーの切り替え、または AI CLI ツール（Codex、Claude Code、Antigravity など、ローカル CLI から起動する AI 実行ツール）への委譲
+- **LLM / AI CLI ツールの切り替え**: LLM プロバイダーの切り替え、または AI CLI ツール（Codex、Claude Code、Grok Build、Antigravity など、ローカル CLI から起動する AI 実行ツール）への委譲
 - **Desktop AI アシスタント**: コマンドエディタでの質問応答・変更提案の適用と、診断画面での実行失敗の原因調査
 - **多言語対応**: 英語 / 日本語
 
@@ -53,7 +53,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 - **OS**: Linux（Ubuntu 24.04 で動作確認）または macOS（Sequoia で動作確認）
   - デスクトップアプリは macOS Apple Silicon (arm64) と Linux x86_64 に対応
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: 事前にインストールしてください
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: GuildBotics のビルドと CLI のインストールに使います
 - **LLM API キー**（いずれか 1 つを事前に取得）:
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
   - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
@@ -62,19 +62,20 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
   - [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（Claude Pro または Max サブスクリプションが必要）
+  - [Grok Build](https://docs.x.ai/build/overview)
   - [GitHub Copilot CLI](https://docs.github.com/ja/copilot/concepts/agents/about-copilot-cli)
 
-Codex または Claude Code を利用する場合、メンバーはセッションを引き継いで前回の続きから作業を再開できます。認証方法、Slack スレッドやチケットとセッションの対応付け、実行権限の設定については [Codex・Claude Code のセッション連携](docs/native_agent_runtime.ja.md)を参照してください。
+Codex・Claude Code・Grok Build を利用する場合、メンバーはセッションを引き継いで前回の続きから作業を再開できます。認証方法、Slack スレッドやチケットとセッションの対応付け、実行権限の設定については [Codex・Claude Code・Grok Build のセッション連携](docs/native_agent_runtime.ja.md)を参照してください。
 
 ### インストール
 
-現在、デスクトップアプリの一般向けインストーラーは配布していません。リポジトリを取得し、ローカルでビルドします。ビルド・インストール手順は [desktop/README.md](desktop/README.md) を参照してください。
+現在、デスクトップアプリの一般向けインストーラーは配布していません。リポジトリを取得し、ローカルでビルドします。ビルドには uv に加えて **Node.js 24 以上**と **Rust (rustup) stable 1.88 以上**（Linux では WebKitGTK 4.1 開発パッケージ）が必要です。前提ツールとビルド・インストール手順は [desktop/README.md](desktop/README.md#1-前提ツール) を参照してください。
 
 デスクトップアプリの初回起動時に、以下が配置されます。
 
 - `~/.guildbotics/bin/guildbotics`: AI CLI ツール / スキルが使う管理用 GuildBotics CLI
 - `~/.local/bin/guildbotics`: 上記 CLI へ転送する小さな実行ファイル（shim）。未作成、または既存の管理用 shim の場合だけ更新されます
-- 検出済みの Codex / Claude Code / Antigravity CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の GuildBotics スキル。ユーザーが作成・編集したスキルは上書きしません
+- 検出済みの Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の GuildBotics スキル。ユーザーが作成・編集したスキルは上書きしません
 
 デスクトップアプリを使わない環境（ヘッドレスサーバーなど）では、`uv tool install guildbotics` で CLI を単体インストールできます（→ [サーバーで運用する](#サーバーで運用する)）。
 
@@ -104,37 +105,31 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 
 ### クイックスタート
 
-セットアップが完了したことを、簡単なカスタムコマンドの実行で確認します。
+セットアップが完了したことを、簡単なカスタムコマンドの作成と実行で確認します。デスクトップアプリの **コマンド編集** 画面を開いてください。
 
-1. ワークスペースフォルダへ移動し、設定を確認します。
+1. **新規作成** を押し、作成方法に **自分で作成する**、コマンド名に `translate`、形式に **Markdown (.md)** を選んで作成します。
 
-   ```bash
-   cd /path/to/workspace
-   ~/.guildbotics/bin/guildbotics workspace status
-   ```
-
-   `~/.local/bin` が PATH にあれば、以降は `guildbotics` だけでも実行できます。
-
-2. `.guildbotics/config/commands/translate.md` を以下の内容で作成します。
+2. エディタに以下を入力します。
 
    ```markdown
    入力テキストが日本語であれば英語に、英語であれば日本語に翻訳してください。
    翻訳結果だけを返してください。
    ```
 
-3. 作成したコマンドを実行します。
+3. 実行パネルの **入力文** に `Hello` と入力し、**保存して実行** を押します。
 
-   ```bash
-   echo "Hello" | ~/.guildbotics/bin/guildbotics run translate
-   ```
+**出力** に翻訳結果（「こんにちは」など）が表示されれば成功です。設定したデフォルト LLM が呼び出され、カスタムコマンドが動作しています。作成したコマンドは、ワークスペースの `.guildbotics/config/commands/translate.md` として保存されます。
 
-翻訳結果（「こんにちは」など）が表示されれば成功です。設定したデフォルト LLM が呼び出され、カスタムコマンドが動作しています。
+日常的に使うコマンドには、ホットキーを割り当てられます。
+
+- **設定 → ショートカット**: **コマンド実行ウィンドウ** を開くホットキー。翻訳したい文字列をコピーしてから押せば、そのまま入力文として実行できます
+- **コマンド編集画面のホットキー**: 押すとそのコマンドを直接実行します。入力が足りない場合はコマンド実行ウィンドウが開きます
 
 ### 次にやること
 
 - いま開いているリポジトリでメンバーとペアプログラミングする → [メンバーと一緒に作業する](#メンバーと一緒に作業する)
 - チケットから PR 作成までを任せる → [GitHub チケットを任せる](#github-チケットを任せる)
-- Slack でメンバーに応答させる → [Slack で応答させる](#slack-で応答させる)
+- Slack でメンバーに作業を依頼する → [Slack で作業を依頼する](#slack-で作業を依頼する)
 - 定期処理や独自コマンドを作る → [決まった作業を自動で実行する](#決まった作業を自動で実行する) / [独自のコマンドを作る](#独自のコマンドを作る)
 
 ## メンバーと一緒に作業する
@@ -164,7 +159,7 @@ GitHub Projects のチケットでメンバーに作業を依頼し、調査・�
 
 ### できること
 
-- **タスクボードでのタスク依頼**: チケットにメンバーをアサインして着手可能レーンへ移動すれば、メンバーがそのタスクを実行します
+- **タスクボードでのタスク依頼**: チケットの `Agent` フィールドでメンバーを選び、着手可能レーンへ移動すれば、メンバーがそのタスクを実行します
 - **実行結果の確認**: タスクが完了すると、メンバーがコメント、PR、レビュー返信、リアクションのいずれかの形で結果を残します
 - **Pull Request の作成**: コード変更が必要な場合、メンバーが作業ブランチを公開し、Pull Request を作成または再利用します
 - **チケット作成**: follow-up ticket の作成を指示すると、メンバーがリポジトリに実 issue を作成します
@@ -224,37 +219,36 @@ GitHub App 作成後に以下の作業を行ってください。
 
 ### 設定を検証する
 
-デスクトップアプリの **Diagnostics / Verify** ビューで、各アクティブメンバーの GitHub・LLM・AI CLI ツール設定が実際に利用可能かをチェックできます。
+デスクトップアプリの **設定 → 検証** で **設定を検証** を押すと、各アクティブメンバーの LLM・AI CLI ツール・GitHub・Slack・Git 設定が実際に利用可能かをチェックできます（GitHub / Slack へは読み取り専用でアクセスします）。
 
-**カスタムフィールド**: GuildBotics が GitHub Project を最初に操作したときに自動で作成されるため、明示的なセットアップは不要です。GitHub assignee だけでは表現しきれない場合のために、タスクを実行するメンバーを選ぶ `Agent` フィールドが管理されます。
+**カスタムフィールド**: タスクを実行するメンバーを選ぶ `Agent` フィールドが管理されます。GuildBotics が GitHub Project を最初に操作したときに自動で作成されるため、明示的なセットアップは不要です。GitHub App のメンバーは GitHub の assignee にできないため、メンバーの指定にはこのフィールドを使います。
 
 **レーンマッピング**: GuildBotics は GitHub Projects のステータスを 3 つのレーン（着手可能 / 作業中 / 完了）として扱います。
 
 - 既定では `Todo` が着手可能、`In Progress` が作業中、`Done` が完了です。標準的なボードなら設定は不要です
 - 着手可能と完了の**間**にあるステータス（例: `In Review`）は、自動的に作業中として扱われます
 - 着手可能より**前**のステータス（例: `Backlog`）と、完了**以降**のステータス（例: `Icebox`）は無視されます。途中レーンや保留レーンは、ボード列の並び順だけで追加できます
-- 独自のステータス名を使っている場合は、`team/project.yml` の `services.ticket_manager.lane_map` でマッピングを指定するか、デスクトップアプリの GitHub セクションで設定してください（→ [設定ファイル](#設定ファイル)）
+- 独自のステータス名を使っている場合は、デスクトップアプリの **設定 → GitHub** の **レーンマッピング** で対応付けてください。GUI を使わない場合は `team/project.yml` の `services.ticket_manager.lane_map` に指定します（→ [設定ファイル](#設定ファイル)）
 
-### 起動して作業を依頼する
+### サービスを起動して作業を依頼する
 
-メンバーを起動します。
+デスクトップアプリの **サービス実行** 画面を開き、**実行** を押します。有効メンバーごとにワーカーが起動し、選択した経路の作業を順に実行します。
 
-```bash
-guildbotics start
-```
+画面には 3 つの実行経路があり、それぞれ **サービス実行に含める** で個別に切り替えられます（切り替えはサービス停止中のみ）。
 
-既定では、以下の 2 つが起動します。
+- **巡回実行コマンド**: 各メンバーの巡回実行コマンド（新規メンバーの既定は チケット駆動ワークフロー）を **巡回間隔（分）** ごとに実行します
+- **定期実行コマンド**: メンバー設定の定期実行コマンドを、指定した時刻に実行します
+- **イベント起動**: Slack などのイベントを受信し、チャットワークフローへ渡します
 
-- メンバーワーカー（ルーチンコマンド / スケジュールタスク / キュー済みイベントの実行）
-- イベントリスナーランナー（Slack Socket Mode などのイベント駆動受信）
+チケット駆動ワークフローを使うには、**巡回実行コマンド** を含めた状態で開始します。**連続失敗で停止する回数**（既定 3 回）に達すると、そのメンバーのワーカーは停止します。
 
-各メンバーワーカーは、そのメンバーの `person.yml` に設定された `routine_commands`（新規メンバーの既定は `workflows/ticket_driven_workflow`）を実行します。`guildbotics start --only scheduler` / `--only events` で起動対象を片方に限定することもできます。
+実行中の状況は同じ画面の **実行ストリーム**（イベント / ログ）で確認でき、メンバーごとの作業結果は **アクティビティ** 画面にまとまります。
 
 タスクを依頼するには、GitHub Projects のチケットを以下のように操作します。
 
 1. チケットを作成し、対象の Git リポジトリを選択して Issue として保存
 2. チケットにメンバーへの指示を記述（この内容がプロンプトとなるため、できるだけ具体的に記述）
-3. 対象のメンバーを assign するか、必要に応じて `Agent` フィールドで選択
+3. `Agent` フィールドで対象のメンバーを選択
 4. チケットを着手可能レーンへ移動
 
 作業が始まると、メンバーとは次のようにやり取りします。
@@ -263,42 +257,40 @@ guildbotics start
 - タスクが完了すると、メンバーがコメント / PR URL / レビュー返信 / リアクションを残します
 - チケットから作成された PR へのレビューは PR 上で書き込んでください。未対応の review thread は担当メンバーへ再委譲されます
 
-停止するには以下を実行します。
+止めるときは **停止** を押します。新しい作業の受付を止め、実行中の作業の完了を待ってから終了します。待たずに終了する場合は **強制停止** を押すと、実行中の作業をキャンセルします。
 
-```bash
-guildbotics stop
-```
+CLI からサービスを起動・停止する方法は [サーバーで運用する](#サーバーで運用する)を参照してください。
 
-スケジューラは新しい作業の受付を止め、実行中の作業の完了を待ってから終了します。`guildbotics stop` をもう一度実行すると実行中の作業をキャンセルし、`guildbotics kill` は即座に強制停止します。`--timeout` や `--force` などのオプションは [CLI リファレンス](docs/cli_reference.md#guildbotics-stop)を参照してください。
+## Slack で作業を依頼する
 
-## Slack で応答させる
+メンバーが指定された Slack チャンネルを監視し、そこで受けた依頼を本人として処理します。「この PR のレビューコメントに対応して」のように依頼すると、メンバーは対象リポジトリを特定して作業ブランチを準備し、実際に調査・修正・GitHub 操作まで行ったうえで、その結果を Slack に返します。
 
-メンバーが `person.yml` の `message_channels` で指定した Slack チャネルを監視し、本人として返信・リアクションします。返信するか、リアクションだけにするか、何もしないかはメンバー（AI CLI ツール）がメッセージ内容と自身のプロフィールから判断します。
+Slack でどう振る舞うか（本文で返信する / リアクションだけ付ける / 何もしない / 確認の質問を返す / 対応できない理由を報告する）は、メンバー（AI CLI ツール）がメッセージ内容、自身の役割とプロフィール、チャンネルごとの参加条件から判断します。単なる雑談や、自分の役割で価値を足せない会話には無理に返信しません。
 
 必要な設定は 2 つです。
 
-1. **Slack App の作成**: メンバーとして振る舞う Slack App（Socket Mode）を作成し、Bot Token と App-Level Token を設定します
-2. **`person.yml` の設定**: 監視するチャネルを指定します
+1. **Slack App の作成**: メンバーとして振る舞う Slack App（Socket Mode）を Slack 上で作成します
+2. **メンバーへの登録**: デスクトップアプリの **設定 → メンバー → Slack** タブで、以下を設定します
+   - **Slack Bot トークン**（`xoxb-...`）と **Slack App トークン**（`xapp-...`）
+   - **チャンネル**: 監視するチャンネル名または ID を追加します
+   - **会話への参加条件**: 積極的に参加 / 必要なときだけ参加 / メンションのみに対応 から選びます
 
-```yaml
-# team/members/alice/person.yml（抜粋）
-message_channels:
-  - service: slack
-    name: dev-chat
-    chat:
-      enabled: true
-```
+設定内容はメンバーの `person.yml`（`message_channels`）に保存されます。
 
-チャットイベントの受信には `guildbotics start` の実行が必要です。決まった時刻の定期投稿（ニュースダイジェストなど）は、受信とは別に `task_schedules` + `workflows/chat_post_command` で設定します。
+チャットイベントを受信するには、**サービス実行** 画面で **イベント起動** を含めてサービスを開始します。決まった時刻の定期投稿（ニュースダイジェストなど）は受信とは別経路で、定期実行コマンドとして `workflows/chat_post_command` を設定します。
 
-Slack App の作成手順（必要な scope の一覧）、複数メンバーでの接続共有、thread への参加条件（`participation`）、定期投稿の設定例は [Slack 連携ガイド](docs/slack_integration.ja.md)を参照してください。
+Slack App の作成手順（必要な scope の一覧）、複数メンバーでの接続共有、thread への参加条件の詳細、定期投稿の設定例は [Slack 連携ガイド](docs/slack_integration.ja.md)を参照してください。
 
 ## 決まった作業を自動で実行する
 
-メンバーごとの `person.yml` で、2 種類の自動実行を設定できます。どちらも `guildbotics start` で起動するスケジューラが実行します。
+デスクトップアプリの **設定 → メンバー → 巡回** タブで、メンバーごとに 2 種類の自動実行を設定します。どちらも **サービス実行** 画面で開始したサービスが実行します。
 
-- **ルーチンコマンド** (`routine_commands`): スケジューラの稼働中、毎分ラウンドロビンで繰り返し実行します（例: タスクボードの巡回）
-- **スケジュールタスク** (`task_schedules`): cron 表記で指定した時刻に実行します（例: 定期レポート、クリーンアップ）
+- **巡回実行コマンド**: サービスの稼働中、**巡回間隔（分）** ごとにラウンドロビンで繰り返し実行します（例: タスクボードの巡回）。「このメンバーの巡回実行コマンドを設定する」をオンにして、保存済みコマンドを選びます。オフのメンバーは巡回実行しません
+- **定期実行コマンド**: **定期実行を追加** でコマンドと実行時刻を指定します（例: 定期レポート、クリーンアップ）。時刻は 毎時 / 毎日 / 毎週 のプリセットか、**詳細 cron**（5 フィールドの cron 表記）で指定します
+
+巡回間隔と、連続失敗でワーカーを止める回数は **サービス実行** 画面で指定します。
+
+設定内容はメンバーの `person.yml` に保存されます。GUI を使わないサーバーでは、このファイルを直接編集します。
 
 ```yaml
 person_id: alice
@@ -314,13 +306,19 @@ task_schedules:
       - "0 9 * * 1-5" # 平日午前9:00
 ```
 
-cron 表記は標準の 5 フィールドに加え、実行時刻をランダム化する独自構文（`?` / `?(min-max)`。複数メンバーの同時実行回避などに使用）をサポートします。
+cron 表記は標準の 5 フィールドに加え、実行時刻をランダム化する独自構文（`?` / `?(min-max)`。複数メンバーの同時実行回避などに使用）をサポートします。この構文は **詳細 cron** の入力欄にもそのまま指定できます。
 
 cron 表記の詳細、ランダム化構文、スケジューラの内部動作、マルチエージェント構成の設定例は[スケジュール実行ガイド](docs/scheduling.ja.md)を参照してください。
 
 ## 独自のコマンドを作る
 
-クイックスタートで作成した `translate.md` のように、独自のコマンドを定義して、手動実行・スケジュール実行・Slack 定期投稿に使えます。
+クイックスタートで作成した `translate` のように、独自のコマンドを定義して、手動実行・定期実行・Slack 定期投稿に使えます。作成と動作確認はデスクトップアプリの **コマンド編集** 画面で行います。
+
+**AI アシスタントに作らせる**: **新規作成** で **AIに作成させる** を選び、やりたいことを書いて依頼すると、コマンド名・形式・ソースが提案されます。編集中のコマンドについては、**AIアシスタント** に質問したり、変更を依頼したりできます。
+
+変更提案は、チャット履歴ではなくエディタ側の読み取り専用タブに「現在」「新規作成」「更新」として表示されます。「更新」タブは行番号付きの差分、「新規作成」タブは完成版ソースです。内容を確認して **変更を適用** を押すまで、ファイルは変更されません。
+
+**動作確認**: **保存して実行** で、その場で実行結果（出力・イベント）を確認できます。**実行者** を切り替えると、メンバー個別の設定で実行できます。
 
 **コマンドの種類**:
 
@@ -334,6 +332,8 @@ cron 表記の詳細、ランダム化構文、スケジューラの内部動作
 1. **メンバー毎のコマンド**: `.guildbotics/config/team/members/<person_id>/commands/`
 2. **プロジェクト共有コマンド**: `.guildbotics/config/commands/`
 3. **組み込みコマンド**: パッケージ内の `guildbotics/templates/` に配置（フォールバック。例: `workflows/ticket_driven_workflow`）
+
+コマンド編集画面が読み書きするのはプロジェクト共有コマンドです。メンバー毎のコマンドはファイルを直接配置します。優先度の高いファイルに隠れて実行対象にならない場合は、画面上に警告が表示されます。
 
 設定ディレクトリは既定でワークスペースの `.guildbotics/config` であり、環境変数 `GUILDBOTICS_CONFIG_DIR` で変更できます。
 
@@ -359,11 +359,11 @@ commands:
 
 **実行方法**:
 
-```bash
-guildbotics run <command_name> [args...]
-```
-
-スケジュール実行するには `person.yml` の `task_schedules` に、Slack へ定期投稿するには `workflows/chat_post_command` と組み合わせて設定します。
+- **コマンド編集** 画面の **実行**（入力文と追加引数を指定できます）
+- ホットキーから開く **コマンド実行ウィンドウ**
+- **設定 → メンバー → 巡回** タブでの巡回実行 / 定期実行（→ [決まった作業を自動で実行する](#決まった作業を自動で実行する)）
+- Slack への定期投稿（`workflows/chat_post_command` と組み合わせて定期実行に設定）
+- CLI の `guildbotics run <command_name> [args...]`（→ [サーバーで運用する](#サーバーで運用する)）
 
 フロントマターの全オプション、コンテキスト注入、コマンド合成などの詳細は[カスタムコマンド開発ガイド](docs/custom_command_guide.ja.md)を参照してください。
 
@@ -402,6 +402,33 @@ guildbotics secrets --workspace /path/to/workspace migrate
 2. ワークスペースフォルダを移行先へコピーします
 3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行します（エクスポートファイルは使用後に削除してください）。キーチェーンのエントリ自体がマシンの外に出ることはありません
 4. キーチェーンの無いサーバーでは、シークレットは `.env` に保存するか環境変数で渡してください
+
+**サービスの起動と停止**（デスクトップアプリの **サービス実行** 画面に相当します）:
+
+```bash
+guildbotics workspace status   # 対象ワークスペースと設定の確認
+guildbotics start              # サービスを起動
+guildbotics stop               # 新規受付を止め、実行中の作業の完了を待って終了
+guildbotics kill               # 即座に強制停止
+```
+
+`guildbotics stop` をもう一度実行すると、実行中の作業をキャンセルします（GUI の **強制停止** に相当）。`--timeout` や `--force` などのオプションは [CLI リファレンス](docs/cli_reference.md#guildbotics-stop)を参照してください。
+
+`guildbotics start` は既定でメンバーワーカー（巡回 / 定期 / キュー済みイベント）とイベントリスナーの両方を起動します。`--only` で実行内容を絞れますが、どちらの場合もメンバーワーカー自体は起動します。
+
+- `--only scheduler`: 巡回実行コマンドと定期実行コマンドだけを実行し、イベントリスナーは起動しません（Slack イベントを受信しません）
+- `--only events`: イベント受信とキュー済みイベントの実行だけを行い、巡回実行コマンドと定期実行コマンドは実行しません
+
+**コマンドの実行**（デスクトップアプリの **コマンド編集** 画面での実行に相当します）:
+
+```bash
+guildbotics run <command_name> [args...]
+echo "Hello" | guildbotics run translate
+```
+
+`--person` または `<command>@<person_id>` で実行メンバーを指定できます。
+
+CLI とデスクトップアプリは共通のロックファイル（`~/.guildbotics/data/run/service.lock`）を使うため、同じマシンでサービスが二重起動することはありません。
 
 ### アカウント関連環境変数
 
@@ -476,11 +503,11 @@ GuildBotics が保存するローカルデータは、大きく 2 種類あり�
 **LLM / AI CLI ツール設定**:
 
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
-- `intelligences/native_agent_policy.yml`: Codex のファイルアクセス範囲（`workspace` または `host`）。新規ワークスペースの setup 時に作成され、デスクトップアプリの **LLM・AI CLIツール → 詳細設定**、または画面を利用できない環境でのファイル直接編集により設定します。ネットワークアクセスと確認を求めない実行方式は GuildBotics の Codex 連携内で固定します
-- `intelligences/cli_agents/*.yml`: Codex・Claude Code 以外の AI CLI ツールをスクリプト経由で実行するための設定
-- `team/members/<person_id>/intelligences/`: Codex の実行権限を含むメンバーごとの任意の上書き。既定ではチーム設定を継承します
+- `intelligences/native_agent_policy.yml`: Codex・Grok Build のファイルアクセス範囲（`workspace` または `host`）。新規ワークスペースの setup 時に作成され、デスクトップアプリの **LLM・AI CLIツール → 詳細設定**、または画面を利用できない環境でのファイル直接編集により設定します。ネットワークアクセスと確認を求めない実行方式は GuildBotics の連携内で固定します
+- `intelligences/cli_agents/*.yml`: Codex・Claude Code・Grok Build 以外の AI CLI ツールをスクリプト経由で実行するための設定
+- `team/members/<person_id>/intelligences/`: Codex・Grok Build の実行権限を含むメンバーごとの任意の上書き。既定ではチーム設定を継承します
 
-設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。
+設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。
 
 ### CLI リファレンス
 
@@ -491,14 +518,14 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 | 症状 | 最初に確認すること |
 | --- | --- |
 | `guildbotics` コマンドが見つからない | `~/.guildbotics/bin/guildbotics` を絶対パスで実行してください。`~/.local/bin` が PATH に含まれているかも確認してください |
-| どのワークスペースが使われているか分からない | `guildbotics workspace status` で確認し、`guildbotics workspace use <path>` で切り替えてください |
-| メンバーが動作しない・設定に不安がある | デスクトップアプリの **Diagnostics / Verify** で GitHub・LLM・AI CLI ツール設定を検証してください |
+| どのワークスペースが使われているか分からない | デスクトップアプリの **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います |
+| メンバーが動作しない・設定に不安がある | デスクトップアプリの **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください |
 | GitHub に書き込めない | メンバーの PAT スコープ（`repo` + `project`）または GitHub App の Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます |
-| Slack イベントを受信しない | Socket Mode、App-Level Token、bot events の設定と、`--only scheduler` で起動していないかを確認してください |
-| コマンド実行が失敗した | デスクトップアプリの診断画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます |
-| スケジューラが止まった | 連続コマンド失敗（既定: 3 回）でワーカーが停止します。診断ログで失敗原因を確認してから再起動してください |
+| Slack イベントを受信しない | Socket Mode、App-Level Token、bot events の設定と、**サービス実行** 画面で **イベント起動** を含めて開始しているか（CLI なら `--only scheduler` で起動していないか）を確認してください |
+| コマンド実行が失敗した | デスクトップアプリの **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます |
+| スケジューラが止まった | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください |
 
-**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/data/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの診断画面では、実行履歴と最新の Global / system session の両方を確認できます。
+**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/data/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。
 
 **デバッグ出力**: 詳細なログを取得するための環境変数:
 
