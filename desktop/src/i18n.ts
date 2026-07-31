@@ -502,6 +502,9 @@ const resources = {
             "The saved value is hidden. Leave this field empty to keep the current key.",
           apiKeyConfigured: "API key set",
           apiKeyMissing: "API key missing",
+          apiKeyRequiredTitle: "API key required",
+          apiKeyRequiredBody:
+            "Set the API key of the selected LLM provider with its key button. This section stays incomplete until the key is set.",
           detected: "Detected",
           notDetected: "Not detected",
           notDetectedOnPath: "This agent was not detected on your PATH.",
@@ -1613,6 +1616,9 @@ const resources = {
             "保存済みの値は表示しません。空欄のままなら現在のキーを維持します。",
           apiKeyConfigured: "API key 設定済み",
           apiKeyMissing: "API key 未設定",
+          apiKeyRequiredTitle: "APIキーが必要です",
+          apiKeyRequiredBody:
+            "選択中の LLM プロバイダのAPIキーを、キーのボタンから設定してください。設定するまでこのセクションは未完了のままです。",
           detected: "検出済み",
           notDetected: "未検出",
           notDetectedOnPath: "このエージェントは PATH 上に検出されていません。",

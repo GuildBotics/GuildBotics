@@ -401,16 +401,24 @@ export function SetupPage() {
   const [forceWorkspaceSwitching, setForceWorkspaceSwitching] = useState(false);
   const workspaceSwitchId = useRef(0);
   const canAutosave = hasExistingProject && projectConfig.isSuccess;
+  // Keys already stored in the workspace secret store. Only a saved project has
+  // them; during first setup the snapshot belongs to no workspace yet (and may
+  // still be cached from a previously opened one), so it must not be consulted.
+  const storedProviderKeys = hasExistingProject ? projectConfig.data?.provider_api_keys : undefined;
+  // Single source of truth for "this provider can be used": either the key was
+  // typed into the form now, or it is already stored in the workspace. Both the
+  // provider cards and the section readiness rule read this.
   const llmProviderAvailability = useMemo(() => {
     const result: Record<string, boolean> = {};
     for (const provider of llmProviders.data ?? []) {
-      result[provider.provider] = Boolean(
-        (form.values.providerApiKeys[provider.provider] ?? "").trim() ||
-        projectConfig.data?.provider_api_keys?.[provider.provider],
+      result[provider.provider] = isProviderKeyAvailable(
+        provider.provider,
+        form.values,
+        storedProviderKeys,
       );
     }
     return result;
-  }, [llmProviders.data, form.values.providerApiKeys, projectConfig.data?.provider_api_keys]);
+  }, [llmProviders.data, form.values, storedProviderKeys]);
   const effectiveActiveMemberCount = hasExistingProject
     ? activeMemberCount
     : draftActiveMemberCount;
@@ -418,8 +426,14 @@ export function SetupPage() {
     ? CORE_SETUP_SECTIONS_CONFIGURED
     : CORE_SETUP_SECTIONS_INITIAL;
   const initialProgress = useMemo(
-    () => getInitialCoreStatus(form.values, effectiveActiveMemberCount, selectedCliAgentDetected),
-    [effectiveActiveMemberCount, form.values, selectedCliAgentDetected],
+    () =>
+      getInitialCoreStatus(
+        form.values,
+        effectiveActiveMemberCount,
+        selectedCliAgentDetected,
+        storedProviderKeys,
+      ),
+    [effectiveActiveMemberCount, form.values, selectedCliAgentDetected, storedProviderKeys],
   );
   const activeSection = coreSections.includes(section) ? section : coreSections[0];
   const currentCoreSectionIndex = coreSections.indexOf(activeSection);
@@ -511,9 +525,12 @@ export function SetupPage() {
       return;
     }
     setDraftActiveMemberCount(0);
-    queryClient.setQueryData(["team"], undefined);
-    queryClient.setQueryData(["project-config"], undefined);
-    queryClient.invalidateQueries({ queryKey: ["project-config"] });
+    // Drop the previous workspace's snapshots outright: `setQueryData(key,
+    // undefined)` bails out instead of clearing, and a query disabled by the
+    // new workspace state is never refetched, so stale data would survive and
+    // be shown as if it belonged to the workspace just opened.
+    queryClient.removeQueries({ queryKey: ["team"] });
+    queryClient.removeQueries({ queryKey: ["project-config"] });
     queryClient.invalidateQueries({ queryKey: ["intelligence-config"] });
     queryClient.invalidateQueries({ queryKey: ["command-options"] });
     // Hotkey assignments live in the workspace config, so the previous
@@ -637,7 +654,7 @@ export function SetupPage() {
               autosaveEnabled={canAutosave}
               detections={cliDetections.data?.agents ?? []}
               detectionLoading={cliDetections.isLoading}
-              projectConfig={projectConfig.data}
+              storedProviderKeys={storedProviderKeys}
               providers={llmProviders.data ?? []}
             />
           ) : null}
@@ -915,7 +932,7 @@ function IntelligenceSection({
   autosaveEnabled,
   detections,
   detectionLoading,
-  projectConfig,
+  storedProviderKeys,
   providers,
 }: {
   form: ProjectForm;
@@ -923,7 +940,7 @@ function IntelligenceSection({
   autosaveEnabled: boolean;
   detections: CliAgentDetection[];
   detectionLoading: boolean;
-  projectConfig: ProjectConfig | undefined;
+  storedProviderKeys: Record<string, boolean> | undefined;
   providers: LlmProviderInfo[];
 }) {
   const { t } = useTranslation();
@@ -995,12 +1012,20 @@ function IntelligenceSection({
             <Text size="sm" c="dimmed">
               {t("setup.intelligence.providerDescription")}
             </Text>
+            {isProviderKeyAvailable(
+              form.values.llmApiType,
+              form.values,
+              storedProviderKeys,
+            ) ? null : (
+              <Alert color="warning" title={t("setup.intelligence.apiKeyRequiredTitle")}>
+                {t("setup.intelligence.apiKeyRequiredBody")}
+              </Alert>
+            )}
             <DefaultProviderCards
               providers={providers}
               isActive={(provider) => form.values.llmApiType === provider}
               isAvailable={(provider) =>
-                (form.values.providerApiKeys[provider] ?? "").trim().length > 0 ||
-                Boolean(projectConfig?.provider_api_keys?.[provider])
+                isProviderKeyAvailable(provider, form.values, storedProviderKeys)
               }
               onSelect={(provider) => form.setFieldValue("llmApiType", provider)}
               renderExtra={(option) => (
@@ -1023,12 +1048,12 @@ function IntelligenceSection({
                       size="sm"
                       label={t("setup.intelligence.apiKeyLabel", { provider: option.label })}
                       description={
-                        projectConfig?.provider_api_keys?.[option.provider]
+                        storedProviderKeys?.[option.provider]
                           ? t("setup.intelligence.keyConfiguredDescription")
                           : undefined
                       }
                       placeholder={
-                        projectConfig?.provider_api_keys?.[option.provider]
+                        storedProviderKeys?.[option.provider]
                           ? MASKED_SECRET_PLACEHOLDER
                           : t("setup.intelligence.keyPlaceholder")
                       }
@@ -5475,6 +5500,7 @@ function getInitialCoreStatus(
   values: ProjectFormValues,
   activeMemberCount: number,
   selectedCliAgentDetected: boolean,
+  storedProviderKeys: Record<string, boolean> | undefined,
 ): InitialProgress {
   const projectReady =
     values.workspaceDir.trim().length > 0 &&
@@ -5484,7 +5510,7 @@ function getInitialCoreStatus(
     Boolean(values.llmApiType) &&
     Boolean(values.cliAgent) &&
     selectedCliAgentDetected &&
-    isProviderKeyProvided(values);
+    isProviderKeyAvailable(values.llmApiType, values, storedProviderKeys);
   const githubReady = isGitHubDecisionComplete(values);
   const membersReady = activeMemberCount > 0;
   const verificationReady = projectReady && intelligenceReady && githubReady && membersReady;
@@ -5823,8 +5849,18 @@ function isGitHubAccessToken(value: string): boolean {
   return /^(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})$/.test(value.trim());
 }
 
-function isProviderKeyProvided(values: ProjectFormValues): boolean {
-  return (values.providerApiKeys[values.llmApiType] ?? "").trim().length > 0;
+// A provider is usable when its API key was typed into the form now, or when it
+// is already stored in the saved workspace. Display and readiness share this
+// rule so a provider can never look configured while blocking the setup.
+function isProviderKeyAvailable(
+  provider: string,
+  values: ProjectFormValues,
+  storedProviderKeys: Record<string, boolean> | undefined,
+): boolean {
+  return (
+    (values.providerApiKeys[provider] ?? "").trim().length > 0 ||
+    Boolean(storedProviderKeys?.[provider])
+  );
 }
 
 function getInitialEnvFileOption(
