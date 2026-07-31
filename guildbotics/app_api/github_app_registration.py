@@ -1,7 +1,10 @@
 """Browser-facing pages for the GitHub App manifest round trip.
 
 These pages are served without the session token (the user's browser cannot
-send it); the single-use registration state in the URL is the credential.
+send it); the unguessable registration state in the URL is the credential. It
+stays valid until the registration expires so reloads and polling keep
+working, while the one-time manifest code consumed on conversion prevents
+replaying the credential exchange itself.
 """
 
 from __future__ import annotations

@@ -1,8 +1,8 @@
 export async function openExternal(url: string): Promise<void> {
-  if (!url) {
+  if (!url || typeof window === "undefined") {
     return;
   }
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+  if ("__TAURI_INTERNALS__" in window) {
     const { open } = await import("@tauri-apps/plugin-shell");
     await open(url);
     return;

@@ -1021,7 +1021,8 @@ def create_app(
 
     # The two routes below are opened as top-level browser navigations by
     # github.com and the external browser, which cannot send the session
-    # token; the single-use registration state in the URL is the credential.
+    # token; the unguessable registration state in the URL is the credential
+    # (valid until the registration expires, so reloads and retries work).
     @app.get("/github-app/registrations/{state}/start", include_in_schema=False)
     def github_app_registration_start_page(state: str) -> Response:
         from guildbotics.app_api.github_app_registration import (
