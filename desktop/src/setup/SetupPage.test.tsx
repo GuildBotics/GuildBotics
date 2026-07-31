@@ -404,7 +404,7 @@ describe("SetupPage", () => {
     await user.click(screen.getByRole("button", { name: "Choose" }));
 
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools", exact: true }));
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
     expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
 
     // The new workspace stores no key yet, so no provider may claim otherwise
@@ -423,7 +423,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools", exact: true }));
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
 
     // Selecting a provider and an AI CLI tool is not enough on its own.
     expect(
@@ -451,7 +451,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools", exact: true }));
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
 
     expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
     // The stored OpenAI key counts as configured without retyping it.
