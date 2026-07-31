@@ -379,6 +379,86 @@ describe("SetupPage", () => {
     expect(screen.getByLabelText("Workspace")).toHaveValue("/empty-workspace");
   });
 
+  it("drops the previous workspace API key status after switching to an unconfigured workspace", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    renderSetupPage("/setup");
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    // The configured workspace has a stored OpenAI key.
+    await waitFor(() => expect(getProjectConfig).toHaveBeenCalled());
+
+    dialogMock.open.mockResolvedValueOnce("/empty-workspace");
+    vi.mocked(getConfigStatus).mockResolvedValue(
+      configStatus({
+        cwd: "/empty-workspace",
+        env_file: "/empty-workspace/.env",
+        env_file_exists: false,
+        config_dir: "/empty-workspace/.guildbotics/config",
+        project_file: "/empty-workspace/.guildbotics/config/team/project.yml",
+        project_file_exists: false,
+      }),
+    );
+    vi.mocked(getTeam).mockRejectedValue(new Error("project config missing"));
+
+    await user.click(screen.getByRole("button", { name: "Choose" }));
+
+    expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
+
+    // The new workspace stores no key yet, so no provider may claim otherwise
+    // and the section explains what is still missing.
+    expect(screen.queryByText(t("setup.intelligence.apiKeyConfigured"))).not.toBeInTheDocument();
+    expect(screen.getByText(t("setup.intelligence.apiKeyRequiredTitle"))).toBeInTheDocument();
+    expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
+  });
+
+  it("completes the LLM section in first setup once the selected provider key is typed", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
+    vi.mocked(getTeam).mockRejectedValue(
+      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
+    );
+    renderSetupPage("/setup");
+
+    await screen.findByRole("heading", { name: "First setup" });
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+
+    // Selecting a provider and an AI CLI tool is not enough on its own.
+    expect(
+      await screen.findByText(t("setup.intelligence.apiKeyRequiredTitle")),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
+      }),
+    );
+    await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(t("setup.intelligence.apiKeyRequiredTitle")),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
+  });
+
+  it("keeps the stored key valid for the LLM section of a configured workspace", async () => {
+    const user = userEvent.setup();
+    renderSetupPage("/setup");
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+
+    expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
+    // The stored OpenAI key counts as configured without retyping it.
+    expect(screen.getByText(t("setup.intelligence.apiKeyConfigured"))).toBeInTheDocument();
+    expect(screen.queryByText(t("setup.intelligence.apiKeyRequiredTitle"))).not.toBeInTheDocument();
+  });
+
   it("switches from first setup mode to settings mode when the selected workspace is configured", async () => {
     const user = userEvent.setup();
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
