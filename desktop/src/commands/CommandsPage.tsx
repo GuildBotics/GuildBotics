@@ -1,7 +1,7 @@
 import {
   Alert,
-  Badge,
   Button,
+  Drawer,
   Group,
   Loader,
   Modal,
@@ -14,7 +14,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FilePlus, Save, Trash2 } from "lucide-react";
+import { FilePlus, Save, Sparkles, Trash2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -59,8 +59,8 @@ import { AssistantChatPanel } from "../assistant/AssistantChatPanel";
 import { useAssistantConversation } from "../assistant/useAssistantConversation";
 import { MemberSelector } from "../MemberSelector";
 import { CommandAuthoringWorkspace } from "./CommandAuthoringWorkspace";
+import { CommandBar } from "./CommandBar";
 import { CommandEditor } from "./CommandEditor";
-import { CommandHotkeyField } from "./CommandHotkeyField";
 import {
   buildFileRunArgs,
   clampEditorRatio,
@@ -168,6 +168,7 @@ export function CommandsPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
   // Draggable editor / verify split. The ratio is the fraction of height given
@@ -695,10 +696,17 @@ export function CommandsPage() {
   const isEmpty = !filesQuery.isLoading && files.length === 0;
 
   return (
-    <Stack gap="lg" className="command-editor-page">
+    <Stack gap="lg" className="command-editor-page workspace-fill">
       <Group justify="space-between" wrap="wrap">
         <Title order={2}>{t("commands.title")}</Title>
         <Group gap="sm">
+          <Button
+            variant="default"
+            leftSection={<Sparkles size={15} />}
+            onClick={() => setAssistantOpen(true)}
+          >
+            {t("commands.authoring.open")}
+          </Button>
           <Button
             variant="default"
             leftSection={<FilePlus size={16} />}
@@ -745,28 +753,6 @@ export function CommandsPage() {
         </Alert>
       ) : (
         <>
-          <Select
-            aria-label={t("commands.editSelectLabel")}
-            label={t("commands.editSelectLabel")}
-            searchable
-            nothingFoundMessage={t("commands.noCommandOptions")}
-            value={selectedFileId}
-            disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
-            onChange={(value) => selectFile(value)}
-            data={files.map((file) => ({
-              value: file.id,
-              label: `${file.label} (${file.command})`,
-            }))}
-          />
-
-          <CommandHotkeyField command={detail?.command ?? null} />
-
-          <Group gap="xs">
-            <Badge variant="light" color={saveStatus === "clean" ? "success" : "warning"}>
-              {t(`commands.saveState.${saveStatus}`)}
-            </Badge>
-          </Group>
-
           {saveError ? (
             <Alert color="warning" title={t("commands.saveErrorTitle")}>
               {saveError}
@@ -799,89 +785,54 @@ export function CommandsPage() {
 
           <div className="command-split" ref={splitRef}>
             <div className="command-split-editor" style={{ flexGrow: editorRatio }}>
+              <CommandBar
+                files={files}
+                selectedFileId={selectedFileId}
+                onSelectFile={selectFile}
+                command={detail?.command ?? null}
+                saveStatus={saveStatus}
+                path={displayPath}
+                pathLabel={detail ? `commands/${detail.relative_path}` : ""}
+                disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
+                onOpenExternal={
+                  displayPath ? () => void openLocalFile(displayPath).catch(() => {}) : undefined
+                }
+              />
               {detail ? (
-                <div className="command-editor-with-assistant">
-                  {editorProposal ? (
-                    <CommandAuthoringWorkspace
-                      changes={editorProposal.response.changes}
-                      commandsRoot={commandsRoot}
-                      current={{
-                        relativePath: detail.relative_path,
-                        path: displayPath,
-                        content: editorProposal.baseContent ?? draftContent,
-                      }}
-                      pending={applyAuthoringMutation.isPending}
-                      error={
-                        applyAuthoringMutation.variables?.source === "editor"
-                          ? applyAuthoringMutation.error
-                          : null
-                      }
-                      onApply={() => applyAuthoringMutation.mutate(editorProposal)}
-                      onDiscard={() => {
-                        applyAuthoringMutation.reset();
-                        setPendingProposal(null);
-                      }}
-                    />
-                  ) : (
-                    <CommandEditor
-                      value={draftContent}
-                      format={detail.format}
-                      path={displayPath}
-                      disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
-                      onChange={setDraftContent}
-                      onSave={() => {
-                        if (dirty && !authoringMutation.isPending) {
-                          saveMutation.mutate();
-                        }
-                      }}
-                      onOpenExternal={() => void openLocalFile(displayPath).catch(() => {})}
-                    />
-                  )}
-                  <AssistantChatPanel
-                    namespace="commands.authoring"
-                    key={authoring.conversationId}
-                    messages={authoring.messages}
-                    pending={authoringMutation.isPending}
-                    disabled={!authoringPerson || Boolean(pendingProposal)}
-                    autoScrollOnAssistantResponse
-                    identity={
-                      <MemberSelector
-                        ariaLabel={t("commands.authoring.runner", {
-                          member: authoringMember?.name ?? "",
-                        })}
-                        member={authoringMember}
-                        members={activeMembers}
-                        onChange={(personId) => {
-                          applyAuthoringMutation.reset();
-                          setPendingProposal(null);
-                          setAuthoringPersonId(personId);
-                        }}
-                      />
-                    }
-                    // A failure belongs to the command that produced it:
-                    // switching commands must not carry it into the next
-                    // conversation.
+                editorProposal ? (
+                  <CommandAuthoringWorkspace
+                    changes={editorProposal.response.changes}
+                    commandsRoot={commandsRoot}
+                    current={{
+                      relativePath: detail.relative_path,
+                      path: displayPath,
+                      content: editorProposal.baseContent ?? draftContent,
+                    }}
+                    pending={applyAuthoringMutation.isPending}
                     error={
-                      authoringMutation.variables?.targetKey === authoringTargetKey
-                        ? authoringErrorMessage(authoringMutation.error)
+                      applyAuthoringMutation.variables?.source === "editor"
+                        ? applyAuthoringMutation.error
                         : null
                     }
-                    onSubmit={(authoringMessage) =>
-                      authoringMutation.mutate({
-                        mode: "edit",
-                        conversation_id: authoring.conversationId,
-                        command: detail.command,
-                        format: detail.format,
-                        content: draftContent,
-                        file_id: detail.id,
-                        revision,
-                        message: authoringMessage,
-                        person: authoringPerson ?? undefined,
-                        targetKey: authoringTargetKey,
-                      })
-                    }
+                    onApply={() => applyAuthoringMutation.mutate(editorProposal)}
+                    onDiscard={() => {
+                      applyAuthoringMutation.reset();
+                      setPendingProposal(null);
+                    }}
                   />
-                </div>
+                ) : (
+                  <CommandEditor
+                    value={draftContent}
+                    format={detail.format}
+                    disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
+                    onChange={setDraftContent}
+                    onSave={() => {
+                      if (dirty && !authoringMutation.isPending) {
+                        saveMutation.mutate();
+                      }
+                    }}
+                  />
+                )
               ) : (
                 <div className="empty-row">
                   <Loader size="sm" />
@@ -944,6 +895,68 @@ export function CommandsPage() {
           </div>
         </>
       )}
+
+      <Drawer
+        className="assistant-chat-drawer"
+        opened={assistantOpen}
+        onClose={() => setAssistantOpen(false)}
+        position="right"
+        size={520}
+        title={
+          <Group gap="xs" wrap="nowrap">
+            <MemberSelector
+              ariaLabel={t("commands.authoring.runner", { member: authoringMember?.name ?? "" })}
+              member={authoringMember}
+              members={activeMembers}
+              onChange={(personId) => {
+                applyAuthoringMutation.reset();
+                setPendingProposal(null);
+                setAuthoringPersonId(personId);
+              }}
+            />
+            <Text fw={600}>{t("commands.authoring.title")}</Text>
+          </Group>
+        }
+        // Non-modal: the editor behind the drawer stays editable so the source
+        // can be read and changed while the conversation continues.
+        withOverlay={false}
+        lockScroll={false}
+        closeOnClickOutside={false}
+        trapFocus={false}
+      >
+        <AssistantChatPanel
+          namespace="commands.authoring"
+          key={authoring.conversationId}
+          messages={authoring.messages}
+          pending={authoringMutation.isPending}
+          disabled={!authoringPerson || !detail || Boolean(pendingProposal)}
+          autoScrollOnAssistantResponse
+          // A failure belongs to the command that produced it: switching
+          // commands must not carry it into the next conversation.
+          error={
+            authoringMutation.variables?.targetKey === authoringTargetKey
+              ? authoringErrorMessage(authoringMutation.error)
+              : null
+          }
+          onSubmit={(authoringMessage) => {
+            if (!detail) {
+              return;
+            }
+            authoringMutation.mutate({
+              mode: "edit",
+              conversation_id: authoring.conversationId,
+              command: detail.command,
+              format: detail.format,
+              content: draftContent,
+              file_id: detail.id,
+              revision,
+              message: authoringMessage,
+              person: authoringPerson ?? undefined,
+              targetKey: authoringTargetKey,
+            });
+          }}
+        />
+      </Drawer>
 
       <CreateCommandDialog
         key={createOpen ? "create-open" : "create-closed"}

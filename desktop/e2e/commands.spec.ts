@@ -40,7 +40,14 @@ test("creates, edits, saves and runs a shared command", async ({ page }) => {
 
   await page.goto("/#/commands");
   await expect(page.getByRole("heading", { name: "Edit Command" })).toBeVisible();
+
+  // The assistant is a drawer, as on the diagnostics screen: the editor owns
+  // the full width until it is asked for, and closing it hands the width back.
+  await expect(page.getByRole("region", { name: "AI assistant" })).toBeHidden();
+  await page.getByRole("button", { name: "Ask AI" }).click();
   await expect(page.getByRole("region", { name: "AI assistant" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("region", { name: "AI assistant" })).toBeHidden();
 
   // Create a new Markdown command through the dialog.
   await page.getByRole("button", { name: "New command" }).first().click();

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError, getHotkeys, updateHotkeys } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
-import { CommandHotkeyField } from "./CommandHotkeyField";
+import { CommandHotkeyChip } from "./CommandHotkeyChip";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -24,15 +24,21 @@ vi.mock("../hotkeys/hotkeyRuntime", () => ({
 
 const t = i18n.getFixedT("en");
 
-function renderField(command: string | null = "greet") {
+function renderChip(command: string | null = "greet") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MantineProvider>
       <QueryClientProvider client={queryClient}>
-        <CommandHotkeyField command={command} />
+        <CommandHotkeyChip command={command} />
       </QueryClientProvider>
     </MantineProvider>,
   );
+}
+
+/** Open the chip's popover and hand back the recording input inside it. */
+async function openRecorder(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: t("hotkey.commandLabel") }));
+  return await screen.findByRole("textbox", { name: t("hotkey.commandLabel") });
 }
 
 beforeEach(() => {
@@ -47,28 +53,54 @@ beforeEach(() => {
     .mockImplementation(async (body) => body);
 });
 
-describe("CommandHotkeyField", () => {
+describe("CommandHotkeyChip", () => {
   it("shows nothing until a command is selected", () => {
-    renderField(null);
+    renderChip(null);
 
+    expect(
+      screen.queryByRole("button", { name: t("hotkey.commandLabel") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the assigned combination on the chip without opening it", async () => {
+    renderChip();
+
+    // jsdom is not macOS, so the chip spells the modifiers out; the macOS
+    // symbol notation is covered by the HotkeyInput tests.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: t("hotkey.commandLabel") })).toHaveTextContent(
+        "Control+Alt+1",
+      ),
+    );
     expect(
       screen.queryByRole("textbox", { name: t("hotkey.commandLabel") }),
     ).not.toBeInTheDocument();
   });
 
-  it("shows the combination already assigned to the command", async () => {
-    renderField();
+  it("reads as unset when the command has no combination", async () => {
+    vi.mocked(getHotkeys).mockResolvedValue({ quick_run: "Control+Alt+G", commands: {} });
+    renderChip();
 
-    // jsdom is not macOS, so the field spells the modifiers out; the macOS
-    // symbol notation is covered by the HotkeyInput tests.
-    const field = await screen.findByRole("textbox", { name: t("hotkey.commandLabel") });
-    await waitFor(() => expect(field).toHaveValue("Control+Alt+1"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: t("hotkey.commandLabel") })).toHaveTextContent(
+        t("hotkey.unset"),
+      ),
+    );
+  });
+
+  it("explains the per-command scope inside the popover", async () => {
+    const user = userEvent.setup();
+    renderChip();
+
+    await openRecorder(user);
+
+    expect(screen.getByText(t("hotkey.commandDescription"))).toBeInTheDocument();
   });
 
   it("saves a recorded combination on its own and re-registers it", async () => {
     const user = userEvent.setup();
-    renderField();
-    const field = await screen.findByRole("textbox", { name: t("hotkey.commandLabel") });
+    renderChip();
+    const field = await openRecorder(user);
 
     await user.click(field);
     await user.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
@@ -84,9 +116,10 @@ describe("CommandHotkeyField", () => {
 
   it("releases the registered combinations while recording", async () => {
     const user = userEvent.setup();
-    renderField();
+    renderChip();
+    const field = await openRecorder(user);
 
-    await user.click(await screen.findByRole("textbox", { name: t("hotkey.commandLabel") }));
+    await user.click(field);
     expect(suspendMock).toHaveBeenCalled();
 
     await user.keyboard("{Escape}");
@@ -95,9 +128,10 @@ describe("CommandHotkeyField", () => {
 
   it("drops the assignment when the field is cleared", async () => {
     const user = userEvent.setup();
-    renderField();
+    renderChip();
+    const field = await openRecorder(user);
 
-    await user.click(await screen.findByRole("textbox", { name: t("hotkey.commandLabel") }));
+    await user.click(field);
     await user.keyboard("{Backspace}");
 
     await waitFor(() =>
@@ -105,6 +139,28 @@ describe("CommandHotkeyField", () => {
         quick_run: "Control+Alt+G",
         commands: {},
       }),
+    );
+  });
+
+  it("offers a clear button as soon as the popover opens", async () => {
+    const user = userEvent.setup();
+    renderChip();
+
+    // Opening must not put the field straight into recording mode: that hides
+    // the clear button and leaves no way to unassign with the mouse.
+    await openRecorder(user);
+    await user.click(await screen.findByRole("button", { name: t("hotkey.clear") }));
+
+    await waitFor(() =>
+      expect(updateHotkeys).toHaveBeenCalledWith({
+        quick_run: "Control+Alt+G",
+        commands: {},
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: t("hotkey.commandLabel") })).toHaveTextContent(
+        t("hotkey.unset"),
+      ),
     );
   });
 
@@ -117,9 +173,10 @@ describe("CommandHotkeyField", () => {
       }),
     );
     const user = userEvent.setup();
-    renderField();
+    renderChip();
+    const field = await openRecorder(user);
 
-    await user.click(await screen.findByRole("textbox", { name: t("hotkey.commandLabel") }));
+    await user.click(field);
     await user.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
 
     expect(await screen.findByText(t("hotkey.errors.hotkey_conflict"))).toBeInTheDocument();

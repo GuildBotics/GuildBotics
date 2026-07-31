@@ -1289,6 +1289,7 @@ const resources = {
         copyScriptPath: "Copy path",
         authoring: {
           title: "AI assistant",
+          open: "Ask AI",
           empty: "Ask about this command or request a source change.",
           thinking: "Considering your request…",
           inputLabel: "Message to AI assistant",
@@ -2719,6 +2720,7 @@ const resources = {
         copyScriptPath: "パスをコピー",
         authoring: {
           title: "AIアシスタント",
+          open: "AIに相談",
           empty: "このコマンドについて質問するか、ソースの変更を依頼してください。",
           thinking: "依頼内容を検討しています…",
           inputLabel: "AIアシスタントへのメッセージ",

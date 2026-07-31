@@ -124,7 +124,7 @@ You are set if the translated text appears under **Output**. The default LLM you
 You can assign hotkeys to commands you use every day.
 
 - **Setup → Shortcuts**: a hotkey that opens the **Quick run window**. Copy the text you want to translate, press the key, and run it as the input text
-- **The hotkey field in the Edit Command screen**: runs that command directly. The quick run window opens instead when an input is missing
+- **The hotkey chip in the Edit Command screen's command bar**: runs that command directly. The quick run window opens instead when an input is missing
 
 ### What Next
 

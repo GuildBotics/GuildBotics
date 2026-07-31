@@ -11,7 +11,6 @@ function renderEditor(format: CommandFileFormat) {
       <CommandEditor
         value={"---\nname: X\n---\nbody"}
         format={format}
-        path="/workspace/.guildbotics/config/commands/x.md"
         onChange={vi.fn()}
         onSave={vi.fn()}
       />
@@ -20,11 +19,13 @@ function renderEditor(format: CommandFileFormat) {
 }
 
 describe("CommandEditor", () => {
-  it("renders the display path and editor surface", () => {
+  it("renders only the editor surface; the path lives in the command bar", () => {
     renderEditor("markdown");
 
-    expect(screen.getByText("/workspace/.guildbotics/config/commands/x.md")).toBeInTheDocument();
     expect(screen.getByTestId("command-editor")).toBeInTheDocument();
+    expect(
+      screen.queryByText("/workspace/.guildbotics/config/commands/x.md"),
+    ).not.toBeInTheDocument();
   });
 
   it("mounts for every supported format without crashing", () => {

@@ -14,6 +14,7 @@ import {
   getCommandFile,
   getCommandFileExecutionStatus,
   getConfigStatus,
+  getHotkeys,
   getTeam,
   getTraceDetail,
   listCommandFiles,
@@ -40,15 +41,12 @@ vi.mock("./commands/CommandEditor", () => ({
     value,
     onChange,
     onSave,
-    path,
   }: {
     value: string;
     onChange: (value: string) => void;
     onSave: () => void;
-    path: string;
   }) => (
     <div>
-      <div data-testid="editor-path">{path}</div>
       <textarea aria-label="editor" value={value} onChange={(e) => onChange(e.target.value)} />
       <button type="button" onClick={onSave}>
         mock-save-shortcut
@@ -70,6 +68,8 @@ vi.mock("./api/client", async (importOriginal) => {
     applyCommandAuthoring: vi.fn(),
     authorCommand: vi.fn(),
     getConfigStatus: vi.fn(),
+    getHotkeys: vi.fn(),
+    updateHotkeys: vi.fn(),
     getTeam: vi.fn(),
     getTraceDetail: vi.fn(),
     listCommandFiles: vi.fn(),
@@ -84,6 +84,7 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 const getConfigStatusMock = vi.mocked(getConfigStatus);
+const getHotkeysMock = vi.mocked(getHotkeys);
 const applyCommandAuthoringMock = vi.mocked(applyCommandAuthoring);
 const authorCommandMock = vi.mocked(authorCommand);
 const getTeamMock = vi.mocked(getTeam);
@@ -156,6 +157,7 @@ beforeEach(() => {
   eventListener = null;
   window.localStorage.clear();
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
+  getHotkeysMock.mockReset().mockResolvedValue({ quick_run: "", commands: {} });
   authorCommandMock.mockReset().mockResolvedValue({
     trace_id: "author-trace-1",
     message: "This is possible.",
@@ -207,6 +209,15 @@ async function renderPage() {
   );
 }
 
+/**
+ * Open the AI assistant drawer, which hosts the authoring conversation the way
+ * the diagnostics screen hosts troubleshooting.
+ */
+async function openAssistant(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: t("commands.authoring.open") }));
+  return await screen.findByRole("textbox", { name: t("commands.authoring.inputLabel") });
+}
+
 describe("Command editor screen", () => {
   it("shows the empty state when there are no commands", async () => {
     listCommandFilesMock.mockResolvedValue({ files: [] });
@@ -220,8 +231,61 @@ describe("Command editor screen", () => {
 
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
     expect(editor).toHaveValue("---\nname: Greet\n---\nHi\n");
-    expect(screen.getByTestId("editor-path")).toHaveTextContent(
-      "/workspace/.guildbotics/config/commands/greet.md",
+    expect(screen.getByTitle("/workspace/.guildbotics/config/commands/greet.md")).toBeVisible();
+  });
+
+  it("keeps the assistant out of the way until it is asked for", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    // The conversation is a drawer, as on the diagnostics screen, so the editor
+    // owns the full width until the user opens it.
+    expect(
+      screen.queryByRole("textbox", { name: t("commands.authoring.inputLabel") }),
+    ).not.toBeInTheDocument();
+
+    await openAssistant(user);
+
+    expect(
+      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
+    ).toBeInTheDocument();
+  });
+
+  it("puts selection, save state, path and hotkey in one command bar", async () => {
+    getHotkeysMock.mockResolvedValue({ quick_run: "", commands: { greet: "Control+Alt+1" } });
+    const { container } = await renderPage();
+    await screen.findByLabelText("editor");
+
+    // All of it is one strip attached to the editor, not a stack of rows above
+    // it, so everything below must resolve inside that single element.
+    const bar = container.querySelector<HTMLElement>(".command-bar");
+    expect(bar).not.toBeNull();
+    const inBar = within(bar as HTMLElement);
+    expect(inBar.getByRole("textbox", { name: t("commands.editSelectLabel") })).toHaveValue(
+      "Greet (greet)",
+    );
+    expect(inBar.getByText(t("commands.saveState.clean"))).toBeInTheDocument();
+    expect(inBar.getByTitle("/workspace/.guildbotics/config/commands/greet.md")).toBeVisible();
+    expect(inBar.getByRole("button", { name: t("commands.copyScriptPath") })).toBeEnabled();
+    await waitFor(() =>
+      expect(inBar.getByRole("button", { name: t("hotkey.commandLabel") })).toHaveTextContent(
+        "Control+Alt+1",
+      ),
+    );
+  });
+
+  it("keeps the save-state label inline inside its status wrapper", async () => {
+    const { container } = await renderPage();
+    await screen.findByLabelText("editor");
+
+    // The dot and its label share an inline <span> wrapper, so the label must
+    // not render as a <p>: that nesting is invalid HTML.
+    const status = container.querySelector<HTMLElement>(".command-bar-status");
+    expect(status).not.toBeNull();
+    expect(status?.querySelector("p")).toBeNull();
+    expect(within(status as HTMLElement).getByText(t("commands.saveState.clean")).tagName).toBe(
+      "SPAN",
     );
   });
 
@@ -268,7 +332,7 @@ describe("Command editor screen", () => {
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
 
     await user.type(
-      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
+      await openAssistant(user),
       "Can this be done? Just tell me whether it is possible.",
     );
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
@@ -335,10 +399,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText<HTMLTextAreaElement>("editor");
 
-    await user.type(
-      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
-      "Make it friendlier",
-    );
+    await user.type(await openAssistant(user), "Make it friendlier");
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
 
     const assistant = screen.getByRole("region", { name: t("commands.authoring.title") });
@@ -425,10 +486,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
-    await user.type(
-      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
-      "Create a helper instead of changing this command",
-    );
+    await user.type(await openAssistant(user), "Create a helper instead of changing this command");
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
 
     const assistant = screen.getByRole("region", { name: t("commands.authoring.title") });
@@ -451,9 +509,7 @@ describe("Command editor screen", () => {
 
     await waitFor(() => expect(applyCommandAuthoringMock).toHaveBeenCalledWith([helperChange]));
     expect(screen.getByLabelText("editor")).toHaveValue("---\nname: Greet\n---\nHi\n");
-    expect(screen.getByTestId("editor-path")).toHaveTextContent(
-      "/workspace/.guildbotics/config/commands/greet.md",
-    );
+    expect(screen.getByTitle("/workspace/.guildbotics/config/commands/greet.md")).toBeVisible();
   });
 
   it("switches the member used by the AI assistant", async () => {
@@ -469,12 +525,16 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
+    // The assistant's member lives in the drawer title; the run member stays on
+    // the run bar, so the two selectors can no longer be confused.
+    await openAssistant(user);
     await user.click(
       screen.getByRole("button", {
         name: t("commands.authoring.runner", { member: "Bot" }),
       }),
     );
     await user.click(await screen.findByRole("menuitem", { name: "Aiko" }));
+    // Switching members starts a new conversation, so the input is re-mounted.
     await user.type(
       screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
       "Make it friendlier",
@@ -495,10 +555,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
-    await user.type(
-      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
-      "Update it",
-    );
+    await user.type(await openAssistant(user), "Update it");
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
 
     expect(await screen.findByText(t("commands.authoring.errorTitle"))).toBeInTheDocument();
@@ -520,10 +577,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
-    await user.type(
-      screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
-      "Update it",
-    );
+    await user.type(await openAssistant(user), "Update it");
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
     expect(await screen.findByText("Agent unavailable")).toBeInTheDocument();
 
@@ -729,9 +783,9 @@ describe("Command editor screen", () => {
 
     await waitFor(() => expect(applyCommandAuthoringMock).toHaveBeenCalledWith([change]));
     expect(editor).toHaveValue(source);
-    expect(screen.getByTestId("editor-path")).toHaveTextContent(
-      "/workspace/.guildbotics/config/commands/reports/weekly.py",
-    );
+    expect(
+      screen.getByTitle("/workspace/.guildbotics/config/commands/reports/weekly.py"),
+    ).toBeVisible();
     expect(createCommandFileMock).not.toHaveBeenCalled();
   });
 
@@ -869,6 +923,8 @@ describe("Command editor screen", () => {
       screen.getByRole("button", { name: t("commands.runner", { member: "Aiko" }) }),
     );
     await user.click(await screen.findByRole("menuitem", { name: "Bot" }));
+    // Picking a run member leaves the assistant's own member alone.
+    await openAssistant(user);
     expect(
       screen.getByRole("button", {
         name: t("commands.authoring.runner", { member: "Aiko" }),

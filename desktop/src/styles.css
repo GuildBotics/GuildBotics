@@ -639,11 +639,18 @@ pre {
    verify area stay visible together without an outer scroll. The editor flexes
    to take the leftover height and scrolls internally; the verify area keeps its
    natural height at the bottom. */
-.command-editor-page {
-  container-type: inline-size;
+/* Pages whose content pane fills the workspace instead of scrolling with it.
+   The workspace is a flex column, so the page takes the leftover height rather
+   than guessing it from the viewport — that keeps working when the system alert
+   band appears above the routes. */
+.workspace-fill {
   flex: 1;
   min-height: 0;
   min-width: 0;
+}
+
+.command-editor-page {
+  container-type: inline-size;
 }
 
 /* Resizable editor / verify split. The editor and verify panes share the
@@ -667,10 +674,12 @@ pre {
 }
 
 .command-split-verify {
+  display: grid;
   flex-basis: 0;
   min-height: 140px;
   min-width: 0;
-  overflow-y: auto;
+  /* The run console manages its own scrolling, so the pane itself never does. */
+  overflow: hidden;
 }
 
 .command-split-handle {
@@ -696,24 +705,66 @@ pre {
   background: var(--color-accent, var(--color-text-subtle));
 }
 
-.command-editor {
+/* The editor pane is one framed surface: the command bar is its header, the
+   code surface (or the proposal review) fills the rest. */
+.command-split-editor {
+  background: var(--color-bg-panel);
   border: 1px solid var(--color-border-subtle);
   border-radius: 10px;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
 }
 
-.command-editor-with-assistant {
-  display: grid;
+.command-bar {
+  background: var(--color-bg-panel-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: 10px 10px 0 0;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+}
+
+.command-bar-identity {
   flex: 1;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
-  min-height: 0;
   min-width: 0;
+}
+
+.command-bar-status {
+  align-items: center;
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  padding-inline: 4px;
+}
+
+.command-bar-status-dot {
+  background: var(--color-success);
+  border-radius: 50%;
+  flex: none;
+  height: 7px;
+  width: 7px;
+}
+
+/* Anything other than a saved buffer — dirty, saving, conflict — reads as
+   "not on disk yet", which is the one thing the dot has to convey. */
+.command-bar-status:not([data-status="clean"]) .command-bar-status-dot {
+  background: var(--color-warning);
+}
+
+.command-bar-select {
+  flex: 0 1 320px;
+  min-width: 240px;
+}
+
+.command-bar-select input {
+  font-weight: 600;
+}
+
+.command-bar-path {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.command-hotkey-chip {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 .command-authoring-workspace {
@@ -1006,13 +1057,13 @@ pre {
   display: none;
 }
 
-.command-editor-path {
+.command-path-header {
   background-color: var(--color-bg-panel);
   border-bottom: 1px solid var(--color-border-subtle);
   padding: 6px 10px;
 }
 
-.command-editor-path-text {
+.command-path-header-text {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   min-width: 0;
 }
@@ -1034,24 +1085,77 @@ pre {
   overflow: auto;
 }
 
+/* Run console: toolbar row, the inputs the command declares, then the result
+   fills the rest inside its own surface. */
+/* Flex rather than fixed grid rows: the inputs and notices are conditional, so
+   the output must claim the leftover height whatever precedes it. */
 .command-run-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
 }
 
-.command-run-heading {
-  margin-bottom: 10px;
+.command-run-bar {
+  row-gap: 8px;
 }
 
+/* Inputs and result side by side: stacking them would halve the height each
+   one gets, and both need to be readable at the same time. */
 .command-run-columns {
   display: grid;
+  flex: 1;
   gap: 16px;
   grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
+  min-height: 0;
   min-width: 0;
 }
 
-.command-run-settings,
-.command-run-result {
+.command-run-settings {
+  min-height: 0;
   min-width: 0;
+  overflow-y: auto;
+}
+
+/* Exactly one scrollbar: the surface and the run summary stay put, the status
+   row and tab list stay pinned, and only the active tab's content scrolls. */
+.command-run-output {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.command-run-details {
+  display: grid;
+  flex: 1;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+}
+
+.command-run-tabs {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+}
+
+.command-run-tabs [role="tabpanel"] {
+  min-height: 0;
+  overflow: auto;
+}
+
+/* The tab panel is the scroller here, so the pre must not add a second one. */
+.command-run-tabs .command-output {
+  max-height: none;
+  overflow: visible;
 }
 
 .command-input {
@@ -1072,14 +1176,13 @@ pre {
    (not the viewport) is narrow, so a narrow window with a wide-but-cramped
    content area also stacks. Requires container-type on .command-editor-page. */
 @container (max-width: 900px) {
-  .command-editor-with-assistant {
+  .command-run-columns {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(220px, 1fr) minmax(220px, 0.75fr);
     overflow-y: auto;
   }
 
-  .command-run-columns {
-    grid-template-columns: minmax(0, 1fr);
+  .command-run-settings {
+    overflow-y: visible;
   }
 }
 
@@ -2290,7 +2393,6 @@ pre {
 }
 
 .diagnostics-page {
-  height: calc(100vh - 48px);
   min-height: 0;
 }
 
@@ -2639,23 +2741,4 @@ pre {
 .mantine-NumberInput-input,
 .mantine-Switch-track {
   border-radius: 6px !important;
-}
-
-.command-hotkey-field {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 12px;
-  background: var(--color-bg-panel-subtle);
-  border-radius: 8px;
-}
-
-.command-hotkey-field > *:first-child {
-  width: 220px;
-  flex: none;
-}
-
-.command-hotkey-help {
-  padding-top: 26px;
-  line-height: 1.6;
 }

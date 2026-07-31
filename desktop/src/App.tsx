@@ -940,7 +940,7 @@ function DiagnosticsPage() {
     setSearchParams(next);
   };
   return (
-    <Stack className="diagnostics-page" gap="lg">
+    <Stack className="diagnostics-page workspace-fill" gap="lg">
       <Group justify="space-between">
         <div>
           <Title order={2}>{t("diagnostics.title")}</Title>
@@ -3211,7 +3211,7 @@ export function CommandRunDetails({
   );
   return (
     <>
-      <Stack>
+      <Stack className="command-run-details">
         <div className="command-run-meta">
           <Badge color={statusColor(record.status)} variant="light">
             {t(`commands.status.${record.status}`)}
@@ -3219,7 +3219,7 @@ export function CommandRunDetails({
           <span>{record.command}</span>
           <span>{record.person || t("commands.defaultPerson")}</span>
         </div>
-        <Tabs value={activeTab} onChange={onTabChange}>
+        <Tabs className="command-run-tabs" value={activeTab} onChange={onTabChange}>
           <Tabs.List>
             <Tabs.Tab value="events">{t("commands.events")}</Tabs.Tab>
             <Tabs.Tab value="output">{t("commands.output")}</Tabs.Tab>

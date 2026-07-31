@@ -11,7 +11,6 @@ import { basicSetup } from "codemirror";
 import { useEffect, useRef } from "react";
 
 import type { CommandFileFormat } from "../api/client";
-import { CommandFilePathBar } from "./CommandFilePathBar";
 
 const languageCompartment = new Compartment();
 const themeCompartment = new Compartment();
@@ -37,21 +36,17 @@ function themeExtension(dark: boolean): Extension {
 export type CommandEditorProps = {
   value: string;
   format: CommandFileFormat;
-  path: string;
   disabled?: boolean;
   onChange: (value: string) => void;
   onSave: () => void;
-  onOpenExternal?: () => void;
 };
 
 export function CommandEditor({
   value,
   format,
-  path,
   disabled = false,
   onChange,
   onSave,
-  onOpenExternal,
 }: CommandEditorProps) {
   const colorScheme = useComputedColorScheme("light");
   const dark = colorScheme === "dark";
@@ -138,10 +133,5 @@ export function CommandEditor({
     });
   }, [disabled]);
 
-  return (
-    <div className="command-editor">
-      <CommandFilePathBar path={path} onOpenExternal={onOpenExternal} />
-      <div ref={containerRef} className="command-editor-surface" data-testid="command-editor" />
-    </div>
-  );
+  return <div ref={containerRef} className="command-editor-surface" data-testid="command-editor" />;
 }
