@@ -106,7 +106,7 @@ After project setup, configure the following in the desktop app:
 
 - **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
 - **Members**: add and configure team members (assigning a GitHub account needs the credentials above)
-- **GitHub**: GitHub integration settings (only when you use GitHub). Set the GitHub Project URL and, when you use your own status names, the [lane mapping](#task-board-conventions)
+- **GitHub**: task board settings (only when you use GitHub; the GitHub Project URL itself is entered in the **Project** section). Configure the [lane mapping](#task-board-conventions) when you use your own status names, and the `Agent` field
 - **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, GitHub, Slack, and Git. It does not update GitHub or Slack data
 
 ### Quick Start
@@ -195,7 +195,9 @@ Prepare an account the member uses to access GitHub. Any of the following works:
 
 **Using a GitHub App**:
 
-Configure the following permissions when creating the GitHub App.
+The member edit screen in the desktop app (select "GitHub Apps" on the GitHub tab) offers a "Register a new app" mode, which creates and installs the app on GitHub semi-automatically. You only approve the creation and pick the repositories in the browser; the App ID, private key, and installation ID are then filled in automatically, so the manual steps below are not needed.
+
+When creating the GitHub App manually, configure the following permissions.
 
 - **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** as Read & Write
 - **Organization permissions**: **Projects** as Read & Write

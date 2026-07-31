@@ -124,6 +124,7 @@ import {
 } from "../api/backend";
 import { announceWorkspaceChange } from "../appEvents";
 import { cliAgentLabelFromConfig, useMemberCliAgentLabel } from "../cliAgent";
+import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { normalizeLanguage } from "../i18n";
 
@@ -675,6 +676,10 @@ export function SetupPage() {
               config={config.data}
               workspaceDir={form.values.workspaceDir}
               projectGithubEnabled={form.values.githubDecision === "enabled"}
+              githubOrganizationDefault={parseGitHub(form.values.githubProjectUrl).organization}
+              agentFieldTarget={
+                form.values.githubDecision === "enabled" ? buildLaneFetchTarget(form.values) : null
+              }
               cliDetections={cliDetections.data?.agents ?? []}
               llmProviderAvailability={llmProviderAvailability}
               providers={llmProviders.data ?? []}
@@ -921,6 +926,18 @@ function ProjectSection({
           }}
           error={form.errors.githubDecision}
         />
+        {form.values.githubDecision === "enabled" ? (
+          <TextInput
+            label={<RequiredLabel text={t("setup.github.projectUrl")} />}
+            aria-label={t("setup.github.projectUrl")}
+            aria-required
+            description={t("setup.github.projectUrlHint")}
+            {...form.getInputProps("githubProjectUrl")}
+            error={
+              getGitHubFieldErrors(form.values, t).githubProjectUrl || form.errors.githubProjectUrl
+            }
+          />
+        ) : null}
       </Stack>
     </Card>
   );
@@ -2407,6 +2424,8 @@ function MembersSection({
   config,
   workspaceDir,
   projectGithubEnabled,
+  githubOrganizationDefault,
+  agentFieldTarget,
   cliDetections,
   llmProviderAvailability,
   providers,
@@ -2426,6 +2445,8 @@ function MembersSection({
   config: ConfigStatus | undefined;
   workspaceDir: string;
   projectGithubEnabled: boolean;
+  githubOrganizationDefault: string;
+  agentFieldTarget: ProjectStatusOptionsRequest | null;
   cliDetections: CliAgentDetection[];
   llmProviderAvailability: LlmProviderAvailability;
   providers: LlmProviderInfo[];
@@ -2451,6 +2472,9 @@ function MembersSection({
   const [githubInstallationId, setGithubInstallationId] = useState("");
   const [githubAppId, setGithubAppId] = useState("");
   const [githubPrivateKeyPath, setGithubPrivateKeyPath] = useState("");
+  // GitHub Apps entry mode: register a new app on GitHub, or reference an
+  // already-registered one via its settings URL.
+  const [githubAppsSetupMode, setGithubAppsSetupMode] = useState<"create" | "existing">("create");
   const [speakingStylePreset, setSpeakingStylePreset] = useState<SpeakingStylePreset | "">(
     "energetic",
   );
@@ -2738,6 +2762,7 @@ function MembersSection({
     setGithubInstallationId("");
     setGithubAppId("");
     setGithubPrivateKeyPath("");
+    setGithubAppsSetupMode("create");
     if (withDefaults) {
       setSpeakingStylePreset("energetic");
       applyPresetFields("energetic");
@@ -2811,6 +2836,9 @@ function MembersSection({
     setGithubInstallationId(member.github_installation_id?.toString() ?? "");
     setGithubAppId(member.github_app_id?.toString() ?? "");
     setGithubPrivateKeyPath(member.github_private_key_path);
+    setGithubAppsSetupMode(
+      member.github_app_id != null || member.has_github_app_id ? "existing" : "create",
+    );
     setSlackBotToken("");
     setSlackAppToken("");
     setRoutineOverrideEnabled(member.routine_commands.length > 0);
@@ -3240,6 +3268,27 @@ function MembersSection({
     return request;
   };
 
+  // A member that cannot be a GitHub assignee is assigned through the
+  // project's Agent field, so keep the field's options in sync whenever a
+  // GitHub-linked non-human member is saved. Best-effort: the member save
+  // itself already succeeded, so a failure only warns.
+  const syncAgentFieldAfterSave = (request: MemberSetupRequest) => {
+    if (!agentFieldTarget || request.person_type === "human" || !request.github_account_type) {
+      return;
+    }
+    ensureAgentField(agentFieldTarget)
+      .then((state) => {
+        queryClient.setQueryData(["agentFieldState", agentFieldTarget], state);
+      })
+      .catch(() => {
+        notifications.show({
+          color: "warning",
+          title: t("setup.members.agentFieldSyncFailedTitle"),
+          message: t("setup.members.agentFieldSyncFailedBody"),
+        });
+      });
+  };
+
   const handleSaveMember = async () => {
     if (!canSubmit) {
       return;
@@ -3268,12 +3317,14 @@ function MembersSection({
             original_person_id: editingPersonId,
           },
         });
+        syncAgentFieldAfterSave(request);
         if (!isHumanMember) {
           await memberIntelligenceSaveRef.current?.();
         }
         return;
       }
       await addMemberMutation.mutateAsync(request);
+      syncAgentFieldAfterSave(request);
     } finally {
       setSavingMember(false);
     }
@@ -3914,55 +3965,101 @@ function MembersSection({
                       setIdentityResolveError("");
                     }}
                   />
+                  {githubAccountType === "github_apps" ? (
+                    <SegmentedControl
+                      aria-label={t("setup.members.githubAppsSetupMode.label")}
+                      value={githubAppsSetupMode}
+                      onChange={(value) => {
+                        setGithubAppsSetupMode(value === "existing" ? "existing" : "create");
+                        setIdentityResolveError("");
+                      }}
+                      data={[
+                        {
+                          value: "create",
+                          label: t("setup.members.githubAppsSetupMode.create"),
+                        },
+                        {
+                          value: "existing",
+                          label: t("setup.members.githubAppsSetupMode.existing"),
+                        },
+                      ]}
+                    />
+                  ) : null}
+                  {githubAccountType === "github_apps" && githubAppsSetupMode === "create" ? (
+                    <GitHubAppRegistrationPanel
+                      defaultAppName={personId}
+                      defaultOrganization={githubOrganizationDefault}
+                      onApplied={(fields) => {
+                        if (fields.githubUsername) {
+                          setGithubUsername(fields.githubUsername);
+                        }
+                        if (fields.gitEmail) {
+                          setGitEmail(fields.gitEmail);
+                        }
+                        if (fields.appId) {
+                          setGithubAppId(fields.appId);
+                        }
+                        if (fields.privateKeyPath) {
+                          setGithubPrivateKeyPath(fields.privateKeyPath);
+                        }
+                        if (fields.installationId) {
+                          setGithubInstallationId(fields.installationId);
+                        }
+                        setIdentityResolveError("");
+                      }}
+                    />
+                  ) : null}
                   {!usesGitHubMember ? (
                     <Text size="sm" c="dimmed">
                       {t("setup.members.githubDisabledMemberHint")}
                     </Text>
                   ) : (
                     <>
-                      <Stack gap={4}>
-                        <div>
-                          <Text fw={500} size="sm">
-                            {githubResolveLabel}
-                            <Text span c="danger" inherit aria-hidden="true">
-                              {" *"}
+                      {githubAccountType !== "github_apps" || githubAppsSetupMode === "existing" ? (
+                        <Stack gap={4}>
+                          <div>
+                            <Text fw={500} size="sm">
+                              {githubResolveLabel}
+                              <Text span c="danger" inherit aria-hidden="true">
+                                {" *"}
+                              </Text>
                             </Text>
-                          </Text>
-                          <Text c="dimmed" size="xs">
-                            {githubResolveDescription}
-                          </Text>
-                        </div>
-                        <div className="field-action-row">
-                          <TextInput
-                            aria-label={githubResolveLabel}
-                            aria-required
-                            value={githubResolveValue}
-                            onChange={(event) => {
-                              if (githubAccountType === "github_apps") {
-                                setIdentity(event.currentTarget.value);
-                              } else {
-                                setGithubUsername(event.currentTarget.value);
-                              }
-                              setIdentityResolveError("");
-                            }}
-                            error={Boolean(githubResolveError)}
-                            flex={1}
-                          />
-                          <Button
-                            variant="default"
-                            loading={resolveMutation.isPending}
-                            disabled={!canResolveIdentity}
-                            onClick={() => void handleResolve()}
-                          >
-                            {t("setup.members.resolve")}
-                          </Button>
-                        </div>
-                        {githubResolveError ? (
-                          <Text c="danger" size="xs">
-                            {githubResolveError}
-                          </Text>
-                        ) : null}
-                      </Stack>
+                            <Text c="dimmed" size="xs">
+                              {githubResolveDescription}
+                            </Text>
+                          </div>
+                          <div className="field-action-row">
+                            <TextInput
+                              aria-label={githubResolveLabel}
+                              aria-required
+                              value={githubResolveValue}
+                              onChange={(event) => {
+                                if (githubAccountType === "github_apps") {
+                                  setIdentity(event.currentTarget.value);
+                                } else {
+                                  setGithubUsername(event.currentTarget.value);
+                                }
+                                setIdentityResolveError("");
+                              }}
+                              error={Boolean(githubResolveError)}
+                              flex={1}
+                            />
+                            <Button
+                              variant="default"
+                              loading={resolveMutation.isPending}
+                              disabled={!canResolveIdentity}
+                              onClick={() => void handleResolve()}
+                            >
+                              {t("setup.members.resolve")}
+                            </Button>
+                          </div>
+                          {githubResolveError ? (
+                            <Text c="danger" size="xs">
+                              {githubResolveError}
+                            </Text>
+                          ) : null}
+                        </Stack>
+                      ) : null}
                       {githubAccountType === "github_apps" ? (
                         <TextInput
                           label={<RequiredLabel text={t("setup.members.githubResolvedIdentity")} />}
@@ -4755,16 +4852,12 @@ function buildLaneFetchTarget(values: ProjectFormValues): ProjectStatusOptionsRe
 
 function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
   const { t } = useTranslation();
-  const githubErrors = getGitHubFieldErrors(form.values, t);
   const githubEnabled = form.values.githubDecision === "enabled";
 
-  // Lane status options are fetched live for the entered Project URL (not the
-  // saved project) so they appear before saving. The fetch target is seeded
-  // from the current form values so an already-configured Project URL loads its
-  // lanes as soon as the section opens, and is refreshed when the URL changes.
-  const [laneFetchTarget, setLaneFetchTarget] = useState<ProjectStatusOptionsRequest | null>(() =>
-    buildLaneFetchTarget(form.values),
-  );
+  // Lane status options are fetched live for the Project URL entered in the
+  // Project section (not the saved project) so they appear before saving. The
+  // section remounts on navigation, so the target reflects the current URL.
+  const laneFetchTarget = buildLaneFetchTarget(form.values);
   const statusOptions = useQuery({
     queryKey: ["projectStatusOptions", laneFetchTarget],
     queryFn: () => getProjectStatusOptions(laneFetchTarget as ProjectStatusOptionsRequest),
@@ -4774,14 +4867,6 @@ function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
     githubEnabled && laneFetchTarget !== null && statusOptions.data?.available
       ? statusOptions.data.statuses
       : [];
-
-  // Always update the target (to null for an invalid/cleared URL) so the lane
-  // Selects never keep showing options fetched for a different project.
-  const refreshLaneOptions = () => {
-    setLaneFetchTarget(buildLaneFetchTarget(form.values));
-  };
-
-  const projectUrlProps = form.getInputProps("githubProjectUrl");
 
   if (!githubEnabled) {
     return (
@@ -4796,22 +4881,31 @@ function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
     );
   }
 
+  if (laneFetchTarget === null) {
+    return (
+      <Card withBorder radius="md" p="lg">
+        <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
+        <Box mt="md">
+          <InfoCallout title={t("setup.github.projectUrlMissingTitle")}>
+            {t("setup.github.projectUrlMissingHint")}
+          </InfoCallout>
+        </Box>
+      </Card>
+    );
+  }
+
   return (
     <Card withBorder radius="md" p="lg">
       <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
       <Stack mt="md">
-        <TextInput
-          label={<RequiredLabel text={t("setup.github.projectUrl")} />}
-          aria-label={t("setup.github.projectUrl")}
-          aria-required
-          description={t("setup.github.projectUrlHint")}
-          {...projectUrlProps}
-          onBlur={(event) => {
-            projectUrlProps.onBlur?.(event);
-            refreshLaneOptions();
-          }}
-          error={githubErrors.githubProjectUrl || form.errors.githubProjectUrl}
-        />
+        <div>
+          <Text fw={500} size="sm">
+            {t("setup.github.projectUrl")}
+          </Text>
+          <Text size="sm" c="dimmed">
+            {laneFetchTarget.github_project_url}
+          </Text>
+        </div>
         <Fieldset legend={t("setup.github.laneMapping")} radius="md">
           <Stack>
             <Text size="sm" c="dimmed">
@@ -6284,6 +6378,9 @@ export function parseGitHub(projectUrl: string) {
   );
   return {
     owner: projectValid ? owner : "",
+    // Owner only when the project lives under an organization; a `users/`
+    // project has no organization to create a GitHub App under.
+    organization: projectValid && projectType === "orgs" ? owner : "",
     projectId: projectValid ? projectId : "",
     projectUrl: projectValid
       ? `https://github.com/${projectType}/${owner}/projects/${projectId}`

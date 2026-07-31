@@ -1,0 +1,6 @@
+en:
+  redirecting: "Redirecting to GitHub…"
+  submit: "Continue to GitHub"
+  error_title: "GitHub App registration failed."
+  error_hint: "Close this page and retry from the GuildBotics app."
+  missing_code: "The callback from GitHub is missing the one-time code."

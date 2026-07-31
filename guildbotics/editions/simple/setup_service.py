@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
 from guildbotics.entities.team import Person
 from guildbotics.intelligences.cli_agents import native_cli_agent_name
-from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
+from guildbotics.utils.fileio import (
+    get_template_path,
+    get_workspace_data_root,
+    load_yaml_file,
+    save_yaml_file,
+)
 from guildbotics.utils.secret_store import (
     KEYRING_BACKEND,
     KeyringSecretStore,
@@ -49,6 +54,17 @@ DEFAULT_LANE_DONE = "Done"
 def is_valid_person_id(value: str) -> bool:
     """Return whether a person ID is usable as a member directory name."""
     return bool(PERSON_ID_PATTERN.match(value))
+
+
+def github_app_key_dir(workspace_data_root: Path) -> Path:
+    """Directory for PEM files created by the GitHub App registration flow.
+
+    Files in this directory are GuildBotics-generated temporaries: they may be
+    deleted once the keychain absorbs their content or the registration that
+    wrote them expires unclaimed. User-supplied key files live elsewhere and
+    are never touched.
+    """
+    return workspace_data_root / "github-apps"
 
 
 def _to_int_or_none(value: object) -> int | None:
@@ -1293,18 +1309,31 @@ class SimplePersonSetupService:
         """Copy the GitHub App PEM into the keychain.
 
         Runtime prefers this content over the ``*_GITHUB_PRIVATE_KEY_PATH``
-        file, so the plaintext PEM can be deleted afterwards. An unreadable
-        path is ignored; the path entry in .env stays as the fallback.
+        file, so the plaintext PEM can be deleted afterwards: a flow-generated
+        file is removed here, a user-supplied file is left to the user. An
+        unreadable path is ignored; the path entry in .env stays as the
+        fallback.
         """
         if not config.github_private_key_path:
             return False
+        key_file = Path(config.github_private_key_path).expanduser()
         try:
-            pem = Path(config.github_private_key_path).expanduser().read_text()
+            pem = key_file.read_text()
         except OSError:
             return False
         prefix = self._person_env_prefix(config.person_id)
         store.set(f"{prefix}_GITHUB_PRIVATE_KEY", pem)
+        self._discard_generated_key_file(config.config_dir, key_file)
         return True
+
+    def _discard_generated_key_file(self, config_dir: Path, key_file: Path) -> None:
+        """Delete a registration-flow PEM once the keychain holds its content."""
+        workspace_root = config_dir.parent.parent
+        generated_dir = github_app_key_dir(
+            get_workspace_data_root(workspace_root)
+        ).resolve(strict=False)
+        if key_file.resolve(strict=False).is_relative_to(generated_dir):
+            key_file.unlink(missing_ok=True)
 
     def _split_secret_env_vars(
         self, person_id: str, env_vars: list[str]

@@ -15,6 +15,7 @@ import {
   getCommandFile,
   getCommandFileExecutionStatus,
   getCommandOptions,
+  getGitHubAppRegistration,
   getRoutineCommandOptions,
   listCommandFiles,
   updateCommandFile,
@@ -28,6 +29,7 @@ import {
   memberAvatarUrl,
   runScenarioDiagnostics,
   setWorkspace,
+  startGitHubAppRegistration,
   subscribeEvents,
   subscribeLogs,
   updateRuntimeDebug,
@@ -165,6 +167,31 @@ describe("request headers and body", () => {
       expect(call.init.body).toBeInstanceOf(FormData);
       expect((call.init.body as FormData).get("file")).toBe(file);
     }
+  });
+
+  it("POSTs the GitHub App registration with the API base as callback", async () => {
+    const { calls } = captureFetch(jsonResponse({ state: "s1", status: "pending" }));
+    await startGitHubAppRegistration({ app_name: "my-bot", organization: "acme" });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/github-app/registrations");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(
+      JSON.stringify({
+        app_name: "my-bot",
+        organization: "acme",
+        callback_base_url: "http://127.0.0.1:8765",
+      }),
+    );
+  });
+
+  it("GETs the GitHub App registration status by state", async () => {
+    const { calls } = captureFetch(jsonResponse({ state: "s/1", status: "pending" }));
+    await getGitHubAppRegistration("s/1");
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8765/config/members/github-app/registrations/s%2F1",
+    );
+    expect(calls[0].init.method).toBe("GET");
   });
 
   it("omits the body for POST without a payload", async () => {

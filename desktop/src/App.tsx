@@ -95,6 +95,7 @@ import {
   type TranscriptSettingsStatus,
 } from "./api/client";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
+import { openExternal } from "./openExternal";
 import { SetupPage } from "./setup/SetupPage";
 import {
   tracePresentationLabel,
@@ -2594,18 +2595,6 @@ function isTicketSearchToken(token: string, singleToken: boolean): boolean {
     token.includes("#") ||
     (singleToken && /^\d+$/.test(token))
   );
-}
-
-async function openExternal(url: string): Promise<void> {
-  if (!url) {
-    return;
-  }
-  if (isTauriRuntime()) {
-    const { open } = await import("@tauri-apps/plugin-shell");
-    await open(url);
-    return;
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 export function shortTraceId(id: string): string {

@@ -11,6 +11,7 @@ from guildbotics.commands.metadata import (
     CommandArgumentMetadata,
     CommandInputPolicy,
 )
+from guildbotics.editions.simple.github_app_setup import GitHubAppRegistrationInfo
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 
@@ -873,3 +874,17 @@ class MemberResolveResponse(BaseModel):
     github_username: str
     github_user_id: int
     git_email: str
+
+
+class GitHubAppRegistrationStartRequest(BaseModel):
+    app_name: str = Field(min_length=1)
+    organization: str = ""
+    # Base URL of this local API as seen from the user's browser; GitHub
+    # redirects the manifest callback here.
+    callback_base_url: str = Field(min_length=1)
+
+
+class GitHubAppRegistrationStatus(GitHubAppRegistrationInfo):
+    status: Literal["pending", "converted", "installed"]
+    # URL the desktop opens in the external browser to post the manifest.
+    start_url: str = ""

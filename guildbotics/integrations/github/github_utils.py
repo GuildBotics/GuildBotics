@@ -147,12 +147,16 @@ def _build_github_app_jwt(app_id: str, private_key: RSAPrivateKey) -> str:
     return jwt.encode(payload, private_key, algorithm="RS256")
 
 
+def create_github_app_jwt(app_id: str, private_key_pem: bytes) -> str:
+    """Create a short-lived JWT that authenticates as the GitHub App itself."""
+    return _build_github_app_jwt(app_id, _load_rsa_private_key(private_key_pem))
+
+
 async def create_github_app_installation_token(
     app_id: str, installation_id: str, private_key_pem: bytes, base_url: str
 ) -> str:
     """Create a short-lived GitHub App installation token."""
-    private_key = _load_rsa_private_key(private_key_pem)
-    jwt_token = _build_github_app_jwt(app_id, private_key)
+    jwt_token = create_github_app_jwt(app_id, private_key_pem)
     async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
         resp = await client.post(
             f"/app/installations/{installation_id}/access_tokens",
