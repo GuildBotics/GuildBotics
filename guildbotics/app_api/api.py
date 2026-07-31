@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, cast
 
+import httpx
 from dotenv import dotenv_values
 from fastapi import (
     Depends,
@@ -23,7 +24,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from guildbotics.app_api.command_input_files import CommandInputFileStore
@@ -53,6 +54,8 @@ from guildbotics.app_api.models import (
     CommandRunResponse,
     ConfigStatus,
     DefaultPersonUpdateRequest,
+    GitHubAppRegistrationStartRequest,
+    GitHubAppRegistrationStatus,
     HealthResponse,
     HotkeySettings,
     IntelligenceConfigResponse,
@@ -88,6 +91,10 @@ from guildbotics.app_api.models import (
     WorkspaceChangeRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.editions.simple.github_app_setup import (
+    GitHubAppRegistration,
+    GitHubAppRegistrationService,
+)
 from guildbotics.editions.simple.setup_service import (
     PersonConfigSnapshot,
     PersonSetupInput,
@@ -100,6 +107,7 @@ from guildbotics.editions.simple.setup_service import (
     SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
+    github_app_key_dir,
 )
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
@@ -968,6 +976,87 @@ def create_app(
             raise AppApiError(exc.code, exc.message) from exc
         return MemberResolveResponse.model_validate(reference.model_dump())
 
+    github_app_registrations = GitHubAppRegistrationService()
+
+    @app.post(
+        "/config/members/github-app/registrations",
+        response_model=GitHubAppRegistrationStatus,
+        responses=error_responses,
+    )
+    def github_app_registration_start(
+        request: GitHubAppRegistrationStartRequest,
+        _: None = Depends(require_token),
+    ) -> GitHubAppRegistrationStatus:
+        status = app_runtime.get_config_status()
+        base = request.callback_base_url.rstrip("/")
+        try:
+            registration = github_app_registrations.start(
+                app_name=request.app_name,
+                organization=request.organization,
+                callback_url=f"{base}/github-app/registrations/callback",
+                key_dir=github_app_key_dir(Path(status.storage_dir)),
+                env_file_path=Path(status.env_file),
+            )
+        except SetupServiceError as exc:
+            raise AppApiError(exc.code, exc.message) from exc
+        return _github_app_registration_status(
+            registration,
+            start_url=f"{base}/github-app/registrations/{registration.state}/start",
+        )
+
+    @app.get(
+        "/config/members/github-app/registrations/{state}",
+        response_model=GitHubAppRegistrationStatus,
+        responses=error_responses,
+    )
+    async def github_app_registration_status(
+        state: str,
+        _: None = Depends(require_token),
+    ) -> GitHubAppRegistrationStatus:
+        try:
+            registration = await github_app_registrations.check_installation(state)
+        except SetupServiceError as exc:
+            raise AppApiError(exc.code, exc.message, status_code=404) from exc
+        return _github_app_registration_status(registration)
+
+    # The two routes below are opened as top-level browser navigations by
+    # github.com and the external browser, which cannot send the session
+    # token; the single-use registration state in the URL is the credential.
+    @app.get("/github-app/registrations/{state}/start", include_in_schema=False)
+    def github_app_registration_start_page(state: str) -> Response:
+        from guildbotics.app_api.github_app_registration import (
+            manifest_post_page,
+            registration_error_page,
+        )
+
+        try:
+            submission_url, manifest_json = github_app_registrations.manifest_form(
+                state
+            )
+        except SetupServiceError as exc:
+            return registration_error_page(exc.message)
+        return manifest_post_page(submission_url, manifest_json)
+
+    @app.get("/github-app/registrations/callback", include_in_schema=False)
+    async def github_app_registration_callback(
+        code: str = "", state: str = ""
+    ) -> Response:
+        from guildbotics.app_api.github_app_registration import (
+            missing_code_error_page,
+            registration_error_page,
+        )
+
+        if not code:
+            return missing_code_error_page()
+        try:
+            registration = await github_app_registrations.complete(state, code)
+        except SetupServiceError as exc:
+            return registration_error_page(exc.message)
+        except httpx.HTTPError as exc:
+            logger.exception("GitHub App manifest conversion failed")
+            return registration_error_page(str(exc))
+        return RedirectResponse(registration.installation_page_url, status_code=302)
+
     @app.get(
         "/config/members/{person_id}/avatar",
         responses={**error_responses, 404: {"model": ApiError}},
@@ -1197,6 +1286,12 @@ def _get_existing_config_dir(status: ConfigStatus) -> Path | None:
     if status.project_file_exists:
         return status.config_dir
     return None
+
+
+def _github_app_registration_status(
+    registration: GitHubAppRegistration, start_url: str = ""
+) -> GitHubAppRegistrationStatus:
+    return GitHubAppRegistrationStatus(start_url=start_url, **registration.info_dump())
 
 
 def _error_response(

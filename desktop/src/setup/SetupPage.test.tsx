@@ -630,23 +630,26 @@ describe("SetupPage", () => {
 
     await screen.findByRole("heading", { name: "First setup" });
 
-    // The GitHub use/don't decision now lives in the Project section (default).
+    // The GitHub use/don't decision lives in the Project section (default).
     // The control is a Mantine Select; its hidden listbox shares the accessible
     // label, so target the input via its textbox role.
     const decision = await screen.findByRole("textbox", { name: "GitHub integration" });
     await user.click(decision);
     await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
 
-    // GitHub connection details (incl. the project URL) live in the GitHub
-    // section, which now comes last.
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    // Choosing "use" reveals the required Project URL right below the decision.
     expect(screen.getByLabelText(t("setup.github.projectUrl"))).toBeEnabled();
 
-    // Switch the decision off from the Project section: the GitHub section then
-    // shows the disabled hint instead of connection fields.
+    // Without a URL the GitHub section only points back to the Project section.
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    expect(screen.getByText(t("setup.github.projectUrlMissingHint"))).toBeInTheDocument();
+
+    // Switch the decision off from the Project section: the URL field
+    // disappears and the GitHub section shows the disabled hint instead.
     await user.click(screen.getByRole("button", { name: "Project" }));
     await user.click(screen.getByRole("textbox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
+    expect(screen.queryByLabelText(t("setup.github.projectUrl"))).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "GitHub" }));
     expect(screen.getByText(t("setup.github.disabledHint"))).toBeInTheDocument();
   });
@@ -665,18 +668,17 @@ describe("SetupPage", () => {
 
     await screen.findByRole("heading", { name: "First setup" });
 
-    // Enable GitHub in the Project section, then open the GitHub section.
+    // Enable GitHub and enter the Project URL, both in the Project section.
     const decision = await screen.findByRole("textbox", { name: "GitHub integration" });
     await user.click(decision);
     await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
-
-    // Lane options are fetched when the Project URL loses focus.
     const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
     await user.type(projectUrl, "https://github.com/orgs/acme/projects/9");
-    await user.tab();
 
-    const readyInput = screen.getByRole("textbox", { name: t("setup.github.laneReady") });
+    // The GitHub section reads the URL from the Project section and fetches
+    // the lane options for it on open.
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    const readyInput = await screen.findByRole("textbox", { name: t("setup.github.laneReady") });
     expect(readyInput).toHaveValue("Todo");
     // Opening the lane Select shows every fetched option, with no filtering by
     // the current value ("Todo").
@@ -791,15 +793,16 @@ describe("SetupPage", () => {
     await screen.findByRole("textbox", { name: t("setup.github.laneReady") });
     expect(screen.getByText(t("setup.github.laneMappingHint"))).toBeInTheDocument();
 
-    // Editing the Project URL into an invalid value must drop the stale options
-    // (the lanes fall back to manual entry rather than showing another
-    // project's lanes).
+    // Corrupting the URL in the Project section must drop the stale options:
+    // the GitHub section gates on the missing URL rather than showing another
+    // project's lanes.
+    await user.click(screen.getByRole("button", { name: "Project" }));
     const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
     await user.clear(projectUrl);
     await user.type(projectUrl, "not-a-valid-url");
-    await user.tab();
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
 
-    expect(await screen.findByText(t("setup.github.laneMappingManualHint"))).toBeInTheDocument();
+    expect(await screen.findByText(t("setup.github.projectUrlMissingHint"))).toBeInTheDocument();
     expect(screen.queryByText(t("setup.github.laneMappingHint"))).not.toBeInTheDocument();
   });
 
@@ -1263,6 +1266,7 @@ describe("parseGitHub", () => {
     const parsed = parseGitHub("https://github.com/orgs/acme/projects/12");
     expect(parsed).toMatchObject({
       owner: "acme",
+      organization: "acme",
       projectId: "12",
       projectUrl: "https://github.com/orgs/acme/projects/12",
       projectValid: true,
@@ -1272,6 +1276,9 @@ describe("parseGitHub", () => {
   it("parses a user project URL", () => {
     const parsed = parseGitHub("https://github.com/users/alice/projects/3?query=1");
     expect(parsed.owner).toBe("alice");
+    // A personal-account project has no organization to create a GitHub App
+    // under.
+    expect(parsed.organization).toBe("");
     expect(parsed.projectId).toBe("3");
     expect(parsed.projectUrl).toBe("https://github.com/users/alice/projects/3");
     expect(parsed.projectValid).toBe(true);
@@ -2215,6 +2222,63 @@ describe("MembersSection", () => {
     expect(lastMemberAddRequest().routine_commands).toEqual(["workflows/ticket_driven_workflow"]);
   });
 
+  it("syncs the project's Agent field after saving a GitHub-linked member", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({
+        github_enabled: true,
+        github_project_url: "https://github.com/orgs/acme/projects/9",
+      }),
+    );
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await selectGitHubAccountType(user, "Machine Account (Machine User)");
+    await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
+    await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
+    fireEvent.change(screen.getByLabelText(t("setup.members.accessToken")), {
+      target: { value: "ghp_0123456789abcdef0123456789abcdef0123" },
+    });
+    await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+
+    await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(ensureAgentField).toHaveBeenCalledWith({
+        owner: "acme",
+        project_id: "9",
+        github_project_url: "https://github.com/orgs/acme/projects/9",
+      }),
+    );
+  });
+
+  it("does not touch the Agent field when the saved member has no GitHub link", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({
+        github_enabled: true,
+        github_project_url: "https://github.com/orgs/acme/projects/9",
+      }),
+    );
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await fillRequiredMemberBasics(user, { personId: "bob", personName: "Bob" });
+    await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+
+    await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+    expect(ensureAgentField).not.toHaveBeenCalled();
+  });
+
   it("preselects patrol commands for a new agent when the project uses GitHub", async () => {
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({
@@ -2453,6 +2517,37 @@ describe("MembersSection", () => {
     expect(screen.getByLabelText(t("setup.members.appId"))).toBeInTheDocument();
     expect(screen.getByLabelText(t("setup.members.privateKeyPath"))).toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.accessToken"))).not.toBeInTheDocument();
+  });
+
+  it("splits GitHub Apps setup into register-new and use-existing modes", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await screen.findByLabelText("Member ID");
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await selectGitHubAccountType(user, "GitHub Apps");
+
+    // A new member defaults to registering the app on GitHub; the resolve-URL
+    // flow for already-registered apps stays out of the way.
+    expect(
+      await screen.findByRole("button", {
+        name: t("setup.members.githubAppRegistration.register"),
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.githubAppsUrl"))).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("radio", { name: t("setup.members.githubAppsSetupMode.existing") }),
+    );
+    expect(await screen.findByLabelText(t("setup.members.githubAppsUrl"))).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+    ).not.toBeInTheDocument();
   });
 
   it("locks human members inactive and uses Slack User ID settings", async () => {

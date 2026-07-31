@@ -106,7 +106,7 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 
 - **LLM・AI CLIツール**: デフォルトの LLM、AI CLI ツールの選択と LLM API キーの設定
 - **メンバー**: チームメンバーの追加と設定（GitHub アカウントを割り当てる場合は、上記の認証情報が必要です）
-- **GitHub**: GitHub 連携の設定（GitHub を利用する場合のみ）。GitHub Project の URL と、独自ステータス名を使う場合の[レーンマッピング](#タスクボードの取り決め)を指定します
+- **GitHub**: タスクボードの設定（GitHub を利用する場合のみ。GitHub Project の URL 自体は**プロジェクト**セクションで入力します）。独自ステータス名を使う場合の[レーンマッピング](#タスクボードの取り決め)と、`Agent` フィールドを設定します
 - **検証**: **設定を検証** を押すと、LLM、AI CLI ツール、GitHub、Slack、Git を読み取り専用でチェックします。GitHub や Slack のデータは更新しません
 
 ### クイックスタート
@@ -195,7 +195,9 @@ GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステ�
 
 **GitHub App を利用する場合**:
 
-GitHub App 作成の際には、以下の Permission 設定を行ってください。
+デスクトップアプリのメンバー編集画面（GitHub タブで「GitHub Apps」を選択）で「新規に App を登録」を選ぶと、GitHub 上への App 作成とインストールを半自動で行えます。ブラウザで作成とインストール先の選択を承認するだけで、App ID・秘密鍵・インストール ID などの設定値は自動で取り込まれるため、以下の手動手順は不要です。
+
+手動で作成する場合は、GitHub App 作成の際に以下の Permission 設定を行ってください。
 
 - **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** をそれぞれ Read & Write
 - **Organization permissions**: **Projects** を Read & Write

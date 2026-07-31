@@ -695,6 +695,31 @@ const resources = {
           installationId: "GitHub Installation ID",
           appId: "GitHub App ID",
           privateKeyPath: "GitHub private key path",
+          agentFieldSyncFailedTitle: "Agent field update failed",
+          agentFieldSyncFailedBody:
+            "The member was saved, but the project's Agent field could not be updated. Update it from Setup → GitHub, or it will be synced automatically on the first run.",
+          githubAppsSetupMode: {
+            label: "GitHub App setup method",
+            create: "Register a new app",
+            existing: "Use a registered app",
+          },
+          githubAppRegistration: {
+            hint: "Create the GitHub App from here. Approve the creation and installation in the browser, and the fields below are filled in automatically. The app is created under your personal account, or under an organization when you enter its name.",
+            appName: "App name",
+            organization: "Organization",
+            register: "Register on GitHub",
+            pending: "In the browser, click “Create GitHub App”…",
+            reopen: "Reopen the registration page",
+            converted:
+              "Created app “{{slug}}”. Choose the repositories to install it on in the browser…",
+            openInstall: "Open the install page",
+            installed: "Registration finished. The fields below have been filled in.",
+            installCheckError: "Failed to check the installation status: {{message}}",
+            errors: {
+              invalidAppName: "App name must be 1-34 characters.",
+              expired: "The registration session has expired. Please start again.",
+            },
+          },
           accessToken: "GitHub access token",
           accessTokenPlaceholder: "ghp_... or github_pat_...",
           githubAuthNotRequired: "GitHub auth is not required for human members.",
@@ -818,7 +843,11 @@ const resources = {
           disabledHint:
             "GitHub-dependent routines stay disabled until you enable GitHub in the Project section.",
           projectUrl: "GitHub Project URL",
-          projectUrlHint: "The lanes below are read from this Project.",
+          projectUrlHint:
+            "URL of the GitHub Project used as the task board (https://github.com/orgs/<org>/projects/<number>).",
+          projectUrlMissingTitle: "GitHub Project URL is not set",
+          projectUrlMissingHint:
+            "Enter the GitHub Project URL in the Project section; the board settings below become available afterwards.",
           laneMapping: "Lane mapping",
           laneMappingHint:
             "Map workflow lanes to your GitHub Project status options. Defaults work with a standard Todo / In Progress / Done board.",
@@ -1811,6 +1840,31 @@ const resources = {
           installationId: "GitHub Installation ID",
           appId: "GitHub App ID",
           privateKeyPath: "GitHub秘密鍵パス",
+          agentFieldSyncFailedTitle: "Agent フィールドの更新に失敗しました",
+          agentFieldSyncFailedBody:
+            "メンバーは保存されましたが、プロジェクトの Agent フィールドを更新できませんでした。設定 → GitHub から更新するか、初回実行時の自動同期をお待ちください。",
+          githubAppsSetupMode: {
+            label: "GitHub App の設定方法",
+            create: "新規に App を登録",
+            existing: "登録済みの App を使う",
+          },
+          githubAppRegistration: {
+            hint: "ここから GitHub 上に App を作成できます。ブラウザで作成とインストールを承認すると、以下の項目が自動入力されます。App は個人アカウント配下に作成されます。組織配下に作成する場合は Organization に組織名を入力してください。",
+            appName: "App 名",
+            organization: "Organization",
+            register: "GitHub に登録",
+            pending: "ブラウザで「Create GitHub App」をクリックしてください…",
+            reopen: "登録ページを再度開く",
+            converted:
+              "App「{{slug}}」を作成しました。ブラウザでインストール先リポジトリを選択してください…",
+            openInstall: "インストール画面を開く",
+            installed: "登録が完了しました。以下の項目に反映済みです。",
+            installCheckError: "インストール状態の確認に失敗しました: {{message}}",
+            errors: {
+              invalidAppName: "App 名は 1〜34 文字で入力してください。",
+              expired: "登録セッションの有効期限が切れました。もう一度やり直してください。",
+            },
+          },
           accessToken: "GitHubアクセストークン",
           accessTokenPlaceholder: "ghp_... または github_pat_...",
           githubAuthNotRequired: "人間メンバーでは GitHub 認証は不要です。",
@@ -1935,7 +1989,11 @@ const resources = {
           disabledHint:
             "GitHub が必要な routine は、プロジェクト画面で GitHub を有効にするまで起動できません。",
           projectUrl: "GitHub Project URL",
-          projectUrlHint: "下のレーンはこの Project から取得します。",
+          projectUrlHint:
+            "タスクボードとして使う GitHub Project の URL（https://github.com/orgs/<組織>/projects/<番号> 形式）。",
+          projectUrlMissingTitle: "GitHub Project URL が未設定です",
+          projectUrlMissingHint:
+            "プロジェクトセクションで GitHub Project URL を入力すると、以下のボード設定が利用できます。",
           laneMapping: "レーンマッピング",
           laneMappingHint:
             "ワークフローのレーンを GitHub Project の status option に対応付けます。標準的な Todo / In Progress / Done のボードなら既定値のままで動作します。",

@@ -671,6 +671,27 @@ export type MemberResolveResponse = {
   git_email: string;
 };
 
+export type GitHubAppRegistrationStartRequest = {
+  app_name: string;
+  organization?: string;
+};
+
+export type GitHubAppRegistrationStatus = {
+  state: string;
+  status: "pending" | "converted" | "installed";
+  app_name: string;
+  start_url: string;
+  slug: string;
+  app_id: number | null;
+  html_url: string;
+  github_username: string;
+  git_email: string;
+  private_key_path: string;
+  installation_id: number | null;
+  installation_page_url: string;
+  installation_check_error: string;
+};
+
 export type MemberConfig = {
   person_id: string;
   person_name: string;
@@ -1193,6 +1214,21 @@ export async function resolveMemberIdentity(
   body: MemberResolveRequest,
 ): Promise<MemberResolveResponse> {
   return request("/config/members/resolve", { method: "POST", body });
+}
+
+export async function startGitHubAppRegistration(
+  body: GitHubAppRegistrationStartRequest,
+): Promise<GitHubAppRegistrationStatus> {
+  return request("/config/members/github-app/registrations", {
+    method: "POST",
+    body: { ...body, callback_base_url: apiBase },
+  });
+}
+
+export async function getGitHubAppRegistration(
+  state: string,
+): Promise<GitHubAppRegistrationStatus> {
+  return request(`/config/members/github-app/registrations/${encodeURIComponent(state)}`);
 }
 
 export async function getMemberConfig(personId: string): Promise<MemberConfig> {

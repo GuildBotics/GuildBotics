@@ -280,6 +280,36 @@ class TestPersonSecrets:
         assert snapshot.has_github_private_key is True
         assert snapshot.has_github_private_key_path is False
 
+    def test_write_person_deletes_registration_generated_key_file(
+        self, fake_keyring, tmp_path
+    ):
+        from guildbotics.editions.simple.setup_service import github_app_key_dir
+        from guildbotics.utils.fileio import get_workspace_data_root
+
+        config_dir, env_file = self._pinned_workspace(tmp_path)
+        generated_dir = github_app_key_dir(get_workspace_data_root(tmp_path))
+        generated_dir.mkdir(parents=True)
+        pem_file = generated_dir / "alice.private-key.pem"
+        pem_file.write_text("-----BEGIN RSA PRIVATE KEY-----\npem\n")
+
+        SimplePersonSetupService().write_person(
+            _person_input(
+                config_dir,
+                env_file,
+                append_env_file=True,
+                github_private_key_path=pem_file,
+                github_app_id=7,
+            )
+        )
+
+        # The keychain absorbed the content, so the flow-generated plaintext
+        # file (unlike a user-supplied one) is removed.
+        store = KeyringSecretStore(config_dir)
+        assert store.get("ALICE_GITHUB_PRIVATE_KEY") == (
+            "-----BEGIN RSA PRIVATE KEY-----\npem\n"
+        )
+        assert not pem_file.exists()
+
     def test_write_person_ignores_unreadable_private_key_path(
         self, fake_keyring, tmp_path
     ):

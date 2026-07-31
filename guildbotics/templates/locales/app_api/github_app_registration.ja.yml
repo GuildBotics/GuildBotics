@@ -1,0 +1,6 @@
+ja:
+  redirecting: "GitHub へリダイレクトしています…"
+  submit: "GitHub へ進む"
+  error_title: "GitHub App の登録に失敗しました。"
+  error_hint: "このページを閉じて、GuildBotics アプリからやり直してください。"
+  missing_code: "GitHub からのコールバックにワンタイムコードが含まれていません。"
