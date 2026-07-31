@@ -50,7 +50,8 @@ export function CommandBar({
           title={t(`commands.saveState.${saveStatus}`)}
         >
           <span className="command-bar-status-dot" aria-hidden="true" />
-          <Text size="xs" c="dimmed">
+          {/* `span`: Text renders a <p> by default, which is invalid inside a <span>. */}
+          <Text span size="xs" c="dimmed">
             {t(`commands.saveState.${saveStatus}`)}
           </Text>
         </span>

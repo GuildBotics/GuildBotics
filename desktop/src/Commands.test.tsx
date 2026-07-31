@@ -275,6 +275,20 @@ describe("Command editor screen", () => {
     );
   });
 
+  it("keeps the save-state label inline inside its status wrapper", async () => {
+    const { container } = await renderPage();
+    await screen.findByLabelText("editor");
+
+    // The dot and its label share an inline <span> wrapper, so the label must
+    // not render as a <p>: that nesting is invalid HTML.
+    const status = container.querySelector<HTMLElement>(".command-bar-status");
+    expect(status).not.toBeNull();
+    expect(status?.querySelector("p")).toBeNull();
+    expect(within(status as HTMLElement).getByText(t("commands.saveState.clean")).tagName).toBe(
+      "SPAN",
+    );
+  });
+
   it("hydrates the persisted per-workspace state after the config resolves", async () => {
     // storageDir arrives asynchronously; a value stored under that workspace key
     // must still be restored even though the first render had no storageDir.
