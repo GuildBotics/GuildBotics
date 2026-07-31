@@ -88,6 +88,11 @@ Launching the desktop app opens **Project** setup, where you configure:
 - The project description
 - Whether to use GitHub integration
 
+**Integrating with GitHub or Slack requires preparation on the service side before you start configuring.** Both integrations are optional and can be enabled later from the **Setup** screen. If you just want to see GuildBotics run, answer "Do not use GitHub" and move on.
+
+- **GitHub**: a valid GitHub Project URL is required to finish the initial setup. Do [Create a GitHub Project](#create-a-github-project) (with the Todo / In Progress / Done statuses) and [Prepare a GitHub Account for the AI Agent](#prepare-a-github-account-for-the-ai-agent) (pick an account type and issue the token) first. Assigning a GitHub account to a member also requires that member's username, git email address, and credentials
+- **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
+
 In GuildBotics, the folder you choose as the project's working location is called the **workspace**. Plain text configuration files are written there:
 
 - `.env`: environment variable settings (non-secret settings such as the log level)
@@ -100,25 +105,21 @@ API keys and account tokens are stored in the OS keychain when one is available,
 After project setup, configure the following in the desktop app:
 
 - **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
-- **Members**: add and configure team members
-- **GitHub**: GitHub integration settings (only when you use GitHub)
+- **Members**: add and configure team members (assigning a GitHub account needs the credentials above)
+- **GitHub**: GitHub integration settings (only when you use GitHub). Set the GitHub Project URL and, when you use your own status names, the [lane mapping](#task-board-conventions)
+- **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, GitHub, Slack, and Git. It does not update GitHub or Slack data
 
 ### Quick Start
 
-Confirm that setup is complete by creating and running a simple custom command. Open the **Edit Command** screen in the desktop app.
+Confirm that setup is complete by running a custom command. Open the **Edit Command** screen in the desktop app.
 
-1. Press **New command**, choose **Create myself** as the method, enter `translate` as the command name, pick **Markdown (.md)** as the format, and create it.
+The initial setup placed sample commands in `.guildbotics/config/commands/` under your workspace. This walkthrough uses the `translate` sample.
 
-2. Enter the following in the editor.
+1. Pick `translate` from the command list.
 
-   ```markdown
-   Translate the input text into English if it is Japanese, and into Japanese if it is English.
-   Return only the translated text.
-   ```
+2. Type `Hello` into **Input text** in the run panel and press **Save and run**.
 
-3. Type `Hello` into **Input text** in the run panel and press **Save and run**.
-
-You are set if the translated text appears under **Output**. The default LLM you configured was called, and your custom command works. The command is saved in the workspace as `.guildbotics/config/commands/translate.md`.
+You are set if the translated text appears under **Output**. The default LLM you configured was called, and your custom command works.
 
 You can assign hotkeys to commands you use every day.
 
@@ -134,14 +135,16 @@ You can assign hotkeys to commands you use every day.
 
 ## Work Together with a Member
 
-You can invoke a member in a Claude Code or Codex session and work together in the repository you currently have open.
+The first launch of the desktop app installs the **guildbotics skill** into the user skill directory of each detected AI CLI tool, such as Claude Code or Codex (→ [Installation](#installation)). That skill is what lets you work together with a member in the repository you currently have open.
+
+The skill lives in the tool's user configuration directory (`~/.claude`, `~/.codex`, and so on), so the same skill is used whether you start the tool from its CLI or from its app. To check that it is installed, see each tool's skill status under **Setup → LLM / AI CLI tools** in the desktop app.
 
 There are two prerequisites:
 
 - You have launched the desktop app once (this installs the guildbotics skill and the managed CLI)
 - A member is configured
 
-Start your AI CLI tool in the repository you want to work in and ask for work as the member.
+Start your AI CLI tool in the repository you want to work in and ask for work, **naming the skill and the member**. That phrase is what invokes the skill.
 
 ```text
 Use the guildbotics skill and commit and push this change as the member alice
@@ -220,6 +223,8 @@ Issue a **Classic** PAT for your own account as well, with both the `repo` and `
 ### Validate the Configuration
 
 Press **Validate settings** under **Setup → Verification** in the desktop app to check whether each active member's LLM, AI CLI tool, GitHub, Slack, and Git settings actually work (GitHub and Slack are accessed read-only).
+
+### Task Board Conventions
 
 **Custom fields**: GuildBotics manages an `Agent` field that selects the member who runs a task. It is created automatically the first time GuildBotics touches the GitHub Project, so no explicit setup is required. Because a GitHub App member cannot be a GitHub assignee, use this field to pick the member.
 
@@ -312,7 +317,7 @@ For cron details, the randomization syntax, how the scheduler works internally, 
 
 ## Create Your Own Commands
 
-Like the `translate` command from the quick start, you can define your own commands and use them for manual runs, scheduled runs, and scheduled Slack posts. You author and try them out on the **Edit Command** screen in the desktop app.
+Like the `translate` command you ran in the quick start, you can define your own commands and use them for manual runs, scheduled runs, and scheduled Slack posts. You author and try them out on the **Edit Command** screen in the desktop app.
 
 **Let the AI assistant write it**: choose **Create with AI** under **New command**, describe what you want, and the command name, format, and source are proposed. For the command you are editing, you can ask the **AI assistant** questions or request changes.
 
@@ -337,20 +342,24 @@ The Edit Command screen reads and writes project-shared commands. Per-member com
 
 The configuration directory defaults to `.guildbotics/config` in the workspace and can be changed with the `GUILDBOTICS_CONFIG_DIR` environment variable.
 
-**A step further**: Markdown commands can declare a template engine and child commands (`commands:`) in front matter. The example below fetches the OS display language with a child command and switches the translation direction accordingly (`.guildbotics/config/commands/translate.md`).
+**A step further**: Markdown commands can declare a template engine and child commands (`commands:`) in front matter. The source below is the `translate` sample you ran in the quick start (`.guildbotics/config/commands/translate.md`): it fetches the OS display language with a child command and switches the translation direction accordingly.
 
 ```markdown
 ---
+description: Translate input text between the OS UI language and English, using Japanese when the OS UI language is English.
+brain: default
 template_engine: jinja2
+inputs:
+  message: required
 commands:
   - name: os_ui_language
     command: functions/get_os_ui_language
 ---
 The input message is structured data.
 {% if os_ui_language.language_code == "en" %}
-Translate the text in the `input` field into English if it is Japanese, and into Japanese if it is English.
+If the text in the `input` field is in Japanese, translate it to English; if it is in English, translate it to Japanese.
 {% else %}
-Translate the text in the `input` field into English if it is {{ os_ui_language.language_name }}, and into {{ os_ui_language.language_name }} if it is English.
+If the text in the `input` field is in {{ os_ui_language.language_name }}, translate it to English; if it is in English, translate it to {{ os_ui_language.language_name }}.
 {% endif %}
 Return only the translated text.
 ```
