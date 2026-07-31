@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import { CommandFilePathBar } from "./CommandFilePathBar";
+import { CommandPathHeader } from "./CommandPathHeader";
 
 export type CommandSourcePreviewProps = {
   path: string;
@@ -21,7 +21,7 @@ export function CommandSourcePreview({ path, source }: CommandSourcePreviewProps
 
   return (
     <div className="command-source-preview">
-      <CommandFilePathBar path={path} />
+      <CommandPathHeader path={path} />
       <div
         aria-label={t("commands.authoringProposal.sourceLabel", { path })}
         className="command-source-preview-scroll"

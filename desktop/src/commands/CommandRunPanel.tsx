@@ -40,6 +40,13 @@ export type CommandRunPanelProps = {
   onTabChange: (value: string | null) => void;
 };
 
+/**
+ * Run console for the command being edited.
+ *
+ * A toolbar row carries the runner and the run action, then the inputs and the
+ * result sit side by side — the same toolbar-over-master/detail shape the
+ * diagnostics execution card uses, so neither column loses height to the other.
+ */
 export function CommandRunPanel(props: CommandRunPanelProps) {
   const { t } = useTranslation();
   const { file, members, executionStatus } = props;
@@ -64,17 +71,32 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
     (messageRequired && !props.message.trim()) ||
     blockingCode != null;
 
+  const showUnsatisfied = unsatisfied.length > 0 && blockingCode !== "command_requirement_missing";
+
   return (
-    <div className="command-run-panel">
-      <Group gap="xs" className="command-run-heading">
-        <MemberSelector
-          ariaLabel={t("commands.runner", { member: runner?.name ?? "" })}
-          member={runner}
-          members={members}
-          onChange={props.onPersonChange}
-        />
-        <Text fw={700}>{t("commands.verifyHeading")}</Text>
+    <section className="command-run-panel" aria-label={t("commands.verifyHeading")}>
+      <Group className="command-run-bar" gap="xs" justify="space-between" wrap="wrap">
+        <Group gap="xs" wrap="nowrap">
+          <MemberSelector
+            ariaLabel={t("commands.runner", { member: runner?.name ?? "" })}
+            member={runner}
+            members={members}
+            onChange={props.onPersonChange}
+          />
+          <Text fw={600} size="sm">
+            {t("commands.verifyHeading")}
+          </Text>
+        </Group>
+        <Button
+          leftSection={<Play size={16} />}
+          loading={props.runBusy}
+          disabled={runDisabled}
+          onClick={props.onSaveAndRun}
+        >
+          {t("commands.saveAndRun")}
+        </Button>
       </Group>
+
       <div className="command-run-columns">
         <Stack className="command-run-settings" gap="sm">
           {showDefinedArgs ? (
@@ -115,6 +137,7 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
             />
           ) : null}
 
+          {/* The toggle stays directly above what it reveals. */}
           <Switch
             checked={props.showAdvanced}
             label={t("commands.advanced")}
@@ -141,23 +164,14 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
             </Alert>
           ) : null}
 
-          {unsatisfied.length > 0 && blockingCode !== "command_requirement_missing" ? (
+          {showUnsatisfied ? (
             <Text c="dimmed" size="sm">
               {unsatisfied.map((req) => t(`commands.requirements.${req.kind}`)).join(", ")}
             </Text>
           ) : null}
-
-          <Button
-            leftSection={<Play size={16} />}
-            loading={props.runBusy}
-            disabled={runDisabled}
-            onClick={props.onSaveAndRun}
-          >
-            {t("commands.saveAndRun")}
-          </Button>
         </Stack>
 
-        <div className="command-run-result">
+        <div className="command-run-output">
           {props.selectedRecord ? (
             <CommandRunDetails
               key={props.selectedRecord.traceId}
@@ -173,6 +187,6 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
           )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }

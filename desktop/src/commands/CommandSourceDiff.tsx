@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
-import { CommandFilePathBar } from "./CommandFilePathBar";
+import { CommandPathHeader } from "./CommandPathHeader";
 
 export type CommandSourceDiffProps = {
   before: string;
@@ -129,7 +129,7 @@ export function CommandSourceDiff({ before, after, path }: CommandSourceDiffProp
 
   return (
     <div className="command-source-diff">
-      <CommandFilePathBar path={path} />
+      <CommandPathHeader path={path} />
       <div
         aria-label={t("commands.authoringProposal.diffLabel", { path })}
         className="command-source-diff-scroll"
