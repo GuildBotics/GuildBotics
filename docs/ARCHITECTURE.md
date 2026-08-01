@@ -496,7 +496,11 @@ Two Person distinctions matter architecturally:
   username, avatar) used for handoff candidates and assignee mapping. They are saved
   with `is_active: false`, are never scheduled, hold no bot/app credentials, and the
   desktop settings UI intentionally hides all agent-execution fields for them. Treat
-  any path that would execute a human member as a boundary bug, not a feature.
+  any path that would execute a human member as a boundary bug, not a feature. The
+  rule is enforced in one place, `ensure_execution_subject()` in
+  `guildbotics/runtime/member_context.py`, applied by both command execution
+  (`drivers/command_runner.py`) and member capability resolution
+  (`resolve_member_context()`, used by every `guildbotics member ...` command).
 
 ## 12. Extension Points
 

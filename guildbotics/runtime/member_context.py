@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from guildbotics.commands.errors import (
+    PersonExecutionNotAllowedError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
@@ -14,8 +15,21 @@ from guildbotics.runtime.context import Context
 def resolve_member_context(person_identifier: str) -> tuple[Context, Person]:
     """Resolve a GuildBotics context and explicit member by id or name."""
     base_context = get_edition().get_context()
-    person = resolve_person(base_context.team, person_identifier)
+    person = ensure_execution_subject(
+        resolve_person(base_context.team, person_identifier)
+    )
     return base_context.clone_for(person), person
+
+
+def ensure_execution_subject(person: Person) -> Person:
+    """Return the member, rejecting the ones that are not AI execution subjects.
+
+    A human member is a reference to a real person in the team, so any path that
+    would run commands or member capabilities as that member is a boundary bug.
+    """
+    if person.person_type == "human":
+        raise PersonExecutionNotAllowedError(person.person_id)
+    return person
 
 
 def resolve_person(

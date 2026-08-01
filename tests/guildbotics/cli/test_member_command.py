@@ -40,6 +40,55 @@ class FakeContext:
         self.team = Team(project=Project(name="demo"), members=[person])
         self.logger = None
 
+    def clone_for(self, person):
+        return FakeContext(person)
+
+
+def _use_real_member_resolution(monkeypatch, *members):
+    """Run member commands through the real person resolution for a fake team."""
+    from guildbotics.runtime import member_context as member_context_module
+
+    team = Team(project=Project(name="demo"), members=list(members))
+    base_context = FakeContext(members[0])
+    base_context.team = team
+
+    class FakeEdition:
+        def get_context(self):
+            return base_context
+
+    monkeypatch.setattr(member_context_module, "get_edition", lambda: FakeEdition())
+
+
+def _files_containing(root, needle):
+    """Return files under root whose text contains needle."""
+    return [
+        path
+        for path in root.rglob("*")
+        if path.is_file() and needle in path.read_text(errors="ignore")
+    ]
+
+
+def _domain_event_records(*fields):
+    """Return recorded events without the member CLI's own command lifecycle.
+
+    The interactive session attributes carried by every member CLI event depend
+    on the host environment, so they are dropped as well.
+    """
+    return [
+        {field: _domain_event_field(record, field) for field in fields}
+        for record in DiagnosticsStore().records_between(includes=lambda _ts: True)
+        if not record["type"].startswith("member.command.")
+    ]
+
+
+def _domain_event_field(record, field):
+    value = record[field]
+    if field != "attributes":
+        return value
+    return {
+        key: item for key, item in value.items() if not key.startswith("interactive.")
+    }
+
 
 @pytest.fixture(autouse=True)
 def _isolate_member_data_root(monkeypatch, tmp_path):
@@ -78,24 +127,98 @@ def test_member_context_outputs_no_secret(monkeypatch):
     assert "super-secret-sentinel-value" not in result.output
 
 
-def test_member_context_rejects_human_member(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return FakeContext(person), person
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["context", "--person", "hana"], id="context"),
+        pytest.param(
+            [
+                "agent",
+                "conversation",
+                "reset",
+                "--person",
+                "hana",
+                "--adapter",
+                "codex",
+                "--work-kind",
+                "ticket",
+                "--work-identity",
+                "issue-1",
+            ],
+            id="agent",
+        ),
+        pytest.param(
+            [
+                "git",
+                "prepare",
+                "--person",
+                "hana",
+                "--repo",
+                "owner/repo",
+                "--branch",
+                "feature",
+            ],
+            id="git",
+        ),
+        pytest.param(
+            [
+                "github",
+                "issue",
+                "inspect",
+                "--person",
+                "hana",
+                "--url",
+                "https://github.com/owner/repo/issues/1",
+            ],
+            id="github",
+        ),
+        pytest.param(["chat", "identity", "--person", "hana"], id="chat"),
+        pytest.param(
+            ["memory", "recall", "--person", "hana", "--query", "note"], id="memory"
+        ),
+    ],
+)
+def test_member_commands_reject_human_member(monkeypatch, argv):
+    _use_real_member_resolution(
+        monkeypatch,
+        Person(person_id="hana", name="Hana", person_type="human"),
     )
-    runner = CliRunner()
 
-    result = runner.invoke(
-        member_module.member, ["context", "--person", "aiko", "--format", "json"]
+    result = CliRunner().invoke(member_module.member, argv)
+
+    assert result.exit_code != 0
+    assert "Human member 'hana' cannot be used as an AI execution subject" in (
+        result.output
+    )
+
+
+def test_member_memory_record_rejects_human_member_without_writing(
+    monkeypatch, tmp_path
+):
+    _use_real_member_resolution(
+        monkeypatch,
+        Person(person_id="hana", name="Hana", person_type="human"),
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "memory",
+            "record",
+            "--person",
+            "hana",
+            "--scope",
+            "personal",
+            "--title",
+            "Should not be stored",
+            "--content-stdin",
+        ],
+        input="body\n",
     )
 
     assert result.exit_code != 0
     assert "cannot be used as an AI execution subject" in result.output
+    assert _files_containing(tmp_path, "Should not be stored") == []
 
 
 def test_member_help_prints_capability_reference():
@@ -209,7 +332,7 @@ def test_workflow_member_write_rejects_missing_delegation(monkeypatch) -> None:
 
 
 def test_member_memory_record_and_recall_cli(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -263,7 +386,7 @@ def test_member_memory_record_and_recall_cli(monkeypatch):
 
 
 def test_member_memory_update_reads_stdin_only_when_requested(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -807,7 +930,7 @@ def test_write_command_titles_reject_empty_or_multiline_values(command, title, e
 
 
 def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = []
     activity_calls = []
 
@@ -906,7 +1029,7 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
 
 
 def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     activity_calls = []
 
     monkeypatch.setattr(
@@ -980,7 +1103,7 @@ def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
 def test_member_git_publish_current_mode_uses_current_workspace_service(
     monkeypatch, tmp_path
 ):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     calls = {}
@@ -1046,7 +1169,7 @@ def test_member_git_publish_current_mode_uses_current_workspace_service(
 def test_member_git_commit_current_mode_uses_current_workspace_service(
     monkeypatch, tmp_path
 ):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     calls = {}
@@ -1111,7 +1234,7 @@ def test_member_git_commit_current_mode_uses_current_workspace_service(
 
 
 def test_member_git_commit_reads_message_from_stdin(monkeypatch, tmp_path):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     calls = {}
@@ -1267,7 +1390,7 @@ def test_member_git_commit_rejects_removed_message_options(tmp_path):
 def test_member_git_push_current_mode_uses_current_workspace_service(
     monkeypatch, tmp_path
 ):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     calls = {}
@@ -1331,15 +1454,7 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
     assert calls["cwd"].is_absolute()
     assert calls["closed"] is True
     assert '"status": "pushed"' in result.output
-    events = DiagnosticsStore().records_between(includes=lambda _timestamp: True)
-    assert [
-        {
-            "type": event["type"],
-            "person_id": event["person_id"],
-            "payload": event["payload"],
-        }
-        for event in events
-    ] == [
+    assert _domain_event_records("type", "person_id", "payload") == [
         {
             "type": "github.push",
             "person_id": "aiko",
@@ -1387,7 +1502,7 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
 
 
 def test_member_github_pr_inspect_passes_include_diff(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1455,7 +1570,7 @@ def test_member_github_pr_inspect_passes_include_diff(monkeypatch):
 
 
 def test_member_github_pr_create_passes_base(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1533,16 +1648,7 @@ def test_member_github_pr_create_passes_base(monkeypatch):
         "closed": True,
     }
     assert '"base": "ticket-driven-workflow"' in result.output
-    events = DiagnosticsStore().records_between(includes=lambda _timestamp: True)
-    assert [
-        {
-            "type": event["type"],
-            "person_id": event["person_id"],
-            "payload": event["payload"],
-            "attributes": event["attributes"],
-        }
-        for event in events
-    ] == [
+    assert _domain_event_records("type", "person_id", "payload", "attributes") == [
         {
             "type": "github.pull_request",
             "person_id": "aiko",
@@ -1567,7 +1673,7 @@ def test_member_github_pr_create_passes_base(monkeypatch):
 
 
 def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1713,7 +1819,7 @@ def test_member_github_pr_update_rejects_missing_content_source():
 
 
 def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1765,7 +1871,7 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
 ):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     lease = _set_workflow_delegation(monkeypatch)
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1838,7 +1944,7 @@ def test_member_github_issue_update_rejects_missing_content_source():
 
 
 def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1890,7 +1996,7 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
 ):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     lease = _set_workflow_delegation(monkeypatch)
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
     def fake_resolve_member_context(identifier):
@@ -1946,7 +2052,7 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
 def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     lease = _set_workflow_delegation(monkeypatch)
-    person = Person(person_id="aiko", name="Aiko", person_type="human")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
     def fake_resolve_member_context(identifier):

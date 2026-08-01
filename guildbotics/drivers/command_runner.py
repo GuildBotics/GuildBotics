@@ -15,7 +15,7 @@ from guildbotics.commands.errors import (
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.member_context import resolve_person
+from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
 
 __all__ = [
     "CommandRunner",
@@ -123,9 +123,9 @@ async def run_command(
     cwd: Path | None = None,
 ) -> str:
     """Execute a command within the given context."""
-    person = resolve_person(base_context.team, person_identifier, allow_default=True)
-    if person.person_type == "human":
-        raise PersonExecutionNotAllowedError(person.person_id)
+    person = ensure_execution_subject(
+        resolve_person(base_context.team, person_identifier, allow_default=True)
+    )
     from guildbotics.runtime.person_lease import (
         PersonExecutionLease,
         PersonLeaseUnavailableError,
