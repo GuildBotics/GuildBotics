@@ -83,7 +83,7 @@ In environments without the desktop app (headless servers and the like), install
 
 Launching the desktop app opens **Project** setup, where you configure:
 
-- Display language (English / Japanese)
+- The agent default language (English / Japanese), used for command and role definitions and for LLM output instructions
 - The workspace folder
 - The project description
 - Whether to use GitHub integration
@@ -243,13 +243,13 @@ Open the **Service** screen in the desktop app and press **Run**. A worker start
 
 The screen has three execution sources, each toggled individually with **Include in service run** (only while the service is stopped).
 
-- **Patrol commands**: runs each member's patrol commands (the default for a new member is the ticket-driven workflow) once per **Patrol interval (minutes)**
+- **Patrol commands**: runs each member's patrol commands once per **Patrol interval (minutes)**. A new member with a GitHub account gets the ticket-driven workflow as its default; a member without one starts with no patrol commands, so pick them under **Setup → Members → Patrol**
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
 - **Event triggers**: receives events such as Slack messages and routes them to the chat workflow
 
 To use the ticket-driven workflow, start the service with **Patrol commands** included. When **Stop after consecutive failures** (default 3) is reached, that member's worker stops.
 
-You can follow what is happening in the **Runtime stream** (events / logs) on the same screen, and per-member results are collected on the **Activity** screen.
+You can follow what is happening in the events and logs of the **Global / system** session on the **Diagnostics** screen, and per-member results are collected on the **Activity** screen.
 
 To ask for work, use a GitHub Projects ticket as follows:
 
@@ -310,7 +310,7 @@ routine_commands:
   - workflows/ticket_driven_workflow
 
 task_schedules:
-  - command: workflows/morning_standup
+  - command: examples/reports/morning_summary
     schedules:
       - "0 9 * * 1-5" # Weekdays at 9:00 AM
 ```
@@ -404,7 +404,7 @@ Secrets are stored per workspace (keychain entries are namespaced by the `store_
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
-guildbotics secrets --workspace /path/to/workspace migrate
+guildbotics secrets --workspace /path/to/workspace list
 ```
 
 ### Run on a Server
@@ -507,11 +507,11 @@ You can change where per-workspace runtime data is stored by setting `GUILDBOTIC
 - `person_id`: unique identifier (lowercase alphanumerics, `-`, `_` only)
 - `name`: display name
 - `is_active`: whether the member runs as an AI agent
-- `roles`: role assignment
+- `profile.roles`: role assignment
 - `routine_commands`: override the default patrol commands
 - `task_schedules`: cron-based scheduled commands
 - `message_channels`: watched channel settings (`chat.enabled`, `chat.event_source=socket_mode`, `channel_id`/`name`)
-- `character`: profile such as interests, preferences, and conversation participation policy
+- `profile.character`: profile such as interests, preferences, and conversation participation policy
 
 **LLM / AI CLI tool settings**:
 

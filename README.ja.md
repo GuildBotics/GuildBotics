@@ -83,7 +83,7 @@ Codex・Claude Code・Grok Build を利用する場合、メンバーはセッ�
 
 デスクトップアプリを起動すると **プロジェクト** 設定が開くので、以下を設定します。
 
-- 言語選択（英語/日本語）
+- エージェントの既定言語（英語/日本語）。コマンド、ロール定義、LLM への指示で使う
 - ワークスペースフォルダの選択
 - プロジェクトの説明文
 - GitHub 連携を行うかどうか
@@ -243,13 +243,13 @@ GitHub App 作成後に以下の作業を行ってください。
 
 画面には 3 つの実行経路があり、それぞれ **サービス実行に含める** で個別に切り替えられます（切り替えはサービス停止中のみ）。
 
-- **巡回実行コマンド**: 各メンバーの巡回実行コマンド（新規メンバーの既定は チケット駆動ワークフロー）を **巡回間隔（分）** ごとに実行します
+- **巡回実行コマンド**: 各メンバーの巡回実行コマンドを **巡回間隔（分）** ごとに実行します。GitHub アカウントを設定した新規メンバーの既定は チケット駆動ワークフローです。GitHub を使わないメンバーには巡回実行コマンドが設定されないため、**設定 → メンバー → 巡回** で選んでください
 - **定期実行コマンド**: メンバー設定の定期実行コマンドを、指定した時刻に実行します
 - **イベント起動**: Slack などのイベントを受信し、チャットワークフローへ渡します
 
 チケット駆動ワークフローを使うには、**巡回実行コマンド** を含めた状態で開始します。**連続失敗で停止する回数**（既定 3 回）に達すると、そのメンバーのワーカーは停止します。
 
-実行中の状況は同じ画面の **実行ストリーム**（イベント / ログ）で確認でき、メンバーごとの作業結果は **アクティビティ** 画面にまとまります。
+実行中の状況は **診断** 画面の **Global / システム** セッション（イベント / ログ）で確認でき、メンバーごとの作業結果は **アクティビティ** 画面にまとまります。
 
 タスクを依頼するには、GitHub Projects のチケットを以下のように操作します。
 
@@ -310,7 +310,7 @@ routine_commands:
   - workflows/ticket_driven_workflow
 
 task_schedules:
-  - command: workflows/morning_standup
+  - command: examples/reports/morning_summary
     schedules:
       - "0 9 * * 1-5" # 平日午前9:00
 ```
@@ -404,7 +404,7 @@ guildbotics secrets import secrets.env            # 移行先マシンで読み�
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
-guildbotics secrets --workspace /path/to/workspace migrate
+guildbotics secrets --workspace /path/to/workspace list
 ```
 
 ### サーバーで運用する
@@ -507,11 +507,11 @@ GuildBotics が保存するローカルデータは、大きく 2 種類あり�
 - `person_id`: 一意な識別子（英数字小文字、`-`、`_` のみ）
 - `name`: 表示名
 - `is_active`: AI エージェントとして動作するかどうか
-- `roles`: 役割の割り当て
+- `profile.roles`: 役割の割り当て
 - `routine_commands`: デフォルトルーチンコマンドの上書き
 - `task_schedules`: cron ベースのスケジュールコマンド
 - `message_channels`: 監視対象チャネル設定（`chat.enabled`, `chat.event_source=socket_mode`, `channel_id`/`name`）
-- `character`: 興味・嗜好・会話参加方針などのプロフィール
+- `profile.character`: 興味・嗜好・会話参加方針などのプロフィール
 
 **LLM / AI CLI ツール設定**:
 

@@ -183,9 +183,9 @@ is_active: true
 routine_commands:
   - workflows/ticket_driven_workflow
 
-# 平日午前9時に朝会レポートを生成
+# 平日午前9時にモーニングレポートを生成
 task_schedules:
-  - command: workflows/morning_standup
+  - command: examples/reports/morning_summary
     schedules:
       - "0 9 * * 1-5" # 平日午前9:00
 ```

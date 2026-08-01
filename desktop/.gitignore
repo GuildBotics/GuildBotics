@@ -11,3 +11,4 @@ src-tauri/binaries/
 /e2e/.stack-context-members.json
 /e2e/.stack-context-diagnostics.json
 /e2e/.stack-context-down.json
+/e2e/.stack-context-readme.json
