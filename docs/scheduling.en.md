@@ -183,9 +183,9 @@ is_active: true
 routine_commands:
   - workflows/ticket_driven_workflow
 
-# Generate a standup report on weekday mornings
+# Generate a morning report on weekday mornings
 task_schedules:
-  - command: workflows/morning_standup
+  - command: examples/reports/morning_summary
     schedules:
       - "0 9 * * 1-5" # Weekdays at 9:00 AM
 ```
