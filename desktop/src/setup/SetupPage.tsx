@@ -125,6 +125,8 @@ import {
 import { announceWorkspaceChange } from "../appEvents";
 import { cliAgentLabelFromConfig, useMemberCliAgentLabel } from "../cliAgent";
 import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
+import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
+import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { normalizeLanguage } from "../i18n";
 
@@ -2475,6 +2477,9 @@ function MembersSection({
   // GitHub Apps entry mode: register a new app on GitHub, or reference an
   // already-registered one via its settings URL.
   const [githubAppsSetupMode, setGithubAppsSetupMode] = useState<"create" | "existing">("create");
+  // Slack App entry mode, mirroring GitHub Apps: create a new app from a
+  // manifest deep link, or paste tokens from an app that already exists.
+  const [slackAppsSetupMode, setSlackAppsSetupMode] = useState<"create" | "existing">("create");
   const [speakingStylePreset, setSpeakingStylePreset] = useState<SpeakingStylePreset | "">(
     "energetic",
   );
@@ -2703,6 +2708,11 @@ function MembersSection({
   );
   const formVisible = mode !== "idle" || displayedMembers.length === 0;
   const formMode = mode === "edit" ? "edit" : "add";
+  // The member form is reused across members, so the app registration panels
+  // would carry one member's edited name and started registration over to the
+  // next. They reset their own state whenever this edit-session identity
+  // changes.
+  const memberFormKey = `${formMode}:${editingPersonId ?? ""}`;
 
   const applyPresetFields = useCallback(
     (preset: SpeakingStylePreset) => {
@@ -2794,6 +2804,7 @@ function MembersSection({
       slackBotToken: false,
       slackAppToken: false,
     });
+    setSlackAppsSetupMode("create");
     setIdentityResolveError("");
     setActiveTab(initialTab ?? "basic");
   };
@@ -2860,6 +2871,11 @@ function MembersSection({
       slackBotToken: member.has_slack_bot_token,
       slackAppToken: member.has_slack_app_token,
     });
+    // A member that already carries Slack credentials is being edited, not
+    // set up, so default to the mode that does not push them into Slack.
+    setSlackAppsSetupMode(
+      member.has_slack_bot_token || member.has_slack_app_token ? "existing" : "create",
+    );
     setIsActive(nextPersonType === "human" ? false : member.is_active);
   };
 
@@ -3987,6 +4003,7 @@ function MembersSection({
                   ) : null}
                   {githubAccountType === "github_apps" && githubAppsSetupMode === "create" ? (
                     <GitHubAppRegistrationPanel
+                      memberKey={memberFormKey}
                       defaultAppName={personId}
                       defaultOrganization={githubOrganizationDefault}
                       onApplied={(fields) => {
@@ -4156,6 +4173,29 @@ function MembersSection({
                     />
                   ) : (
                     <>
+                      <SegmentedControl
+                        aria-label={t("setup.members.slackAppsSetupMode.label")}
+                        value={slackAppsSetupMode}
+                        onChange={(value) =>
+                          setSlackAppsSetupMode(value === "existing" ? "existing" : "create")
+                        }
+                        data={[
+                          {
+                            value: "create",
+                            label: t("setup.members.slackAppsSetupMode.create"),
+                          },
+                          {
+                            value: "existing",
+                            label: t("setup.members.slackAppsSetupMode.existing"),
+                          },
+                        ]}
+                      />
+                      {slackAppsSetupMode === "create" ? (
+                        <SlackAppRegistrationPanel
+                          memberKey={memberFormKey}
+                          defaultAppName={personId}
+                        />
+                      ) : null}
                       <Stack gap="xs">
                         <Group align="end">
                           <TextInput
@@ -4278,6 +4318,14 @@ function MembersSection({
                         value={slackAppToken}
                         onChange={(event) => setSlackAppToken(event.currentTarget.value)}
                         error={memberErrors.slackAppToken}
+                      />
+                      <SlackTokenVerificationPanel
+                        botToken={slackBotToken}
+                        appToken={slackAppToken}
+                        // Empty fields keep the saved tokens, so verification
+                        // needs to know whose saved tokens those are.
+                        personId={formMode === "edit" ? (editingPersonId ?? "") : ""}
+                        channels={slackChannels}
                       />
                     </>
                   )}
@@ -5178,10 +5226,28 @@ function diagnosticIcon(status: DiagnosticCheck["status"]) {
   return <XCircle size={18} />;
 }
 
+// i18next reads these option names itself, so a check context may not shadow
+// them when its values are used for interpolation.
+const I18N_RESERVED_KEYS = new Set(["count", "context", "ns", "lng", "defaultValue", "replace"]);
+
+/** Scalar context values a check message may interpolate, e.g. a channel name. */
+function diagnosticValues(check: DiagnosticCheck): Record<string, string | number> {
+  const values: Record<string, string | number> = { target: check.target };
+  for (const [key, value] of Object.entries(check.context)) {
+    if (!I18N_RESERVED_KEYS.has(key) && (typeof value === "string" || typeof value === "number")) {
+      values[key] = value;
+    }
+  }
+  return values;
+}
+
 function diagnosticTitle(t: TFunction, check: DiagnosticCheck) {
   const namespace =
     check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
-  return t(`${namespace}.${check.code}.title`, { defaultValue: check.message });
+  return t(`${namespace}.${check.code}.title`, {
+    defaultValue: check.message,
+    ...diagnosticValues(check),
+  });
 }
 
 function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
@@ -5189,6 +5255,7 @@ function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
     check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
   return t(`${namespace}.${check.code}.description`, {
     defaultValue: check.status === "ok" ? "" : check.message,
+    ...diagnosticValues(check),
   });
 }
 

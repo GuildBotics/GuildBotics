@@ -307,7 +307,12 @@ def _load_participant_labels() -> dict[str, str]:
     }
 
 
-async def probe_slack_app_token(app_token: str, base_url: str | None) -> None:
+async def probe_slack_app_token(
+    app_token: str,
+    base_url: str | None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> None:
     """Validate a Slack app-level token via ``apps.connections.open``.
 
     Raises ``MemberCapabilityError`` carrying only the Slack error code so callers
@@ -315,7 +320,9 @@ async def probe_slack_app_token(app_token: str, base_url: str | None) -> None:
     """
     url = (base_url or "https://slack.com/api").rstrip("/") + "/apps.connections.open"
     async with httpx.AsyncClient(
-        timeout=10.0, headers={"Authorization": f"Bearer {app_token}"}
+        timeout=10.0,
+        transport=transport,
+        headers={"Authorization": f"Bearer {app_token}"},
     ) as client:
         response = await client.post(url)
         response.raise_for_status()

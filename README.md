@@ -276,17 +276,19 @@ How it behaves in Slack (reply with a message / only add a reaction / do nothing
 
 Two things need to be configured:
 
-1. **Create a Slack App**: create a Slack App (Socket Mode) in Slack that acts as the member
-2. **Register it with the member**: configure the following under **Setup → Members → Slack** in the desktop app
-   - **Slack Bot token** (`xoxb-...`) and **Slack App token** (`xapp-...`)
+1. **Create a Slack App**: under **Setup → Members → Slack** in the desktop app, choose **Register a new app** and press **Create the app on Slack**. The browser opens with the required scopes, Socket Mode and event subscriptions already configured, so you pick a workspace and create the app. Then press **Reinstall to Workspace** under **OAuth & Permissions** and copy the two tokens (`xoxb-...` / `xapp-...`) — the first bot token Slack issues does not carry the scopes, so the reinstall is required
+2. **Register it with the member**: on the same Slack tab, configure the following
+   - Paste the **Slack Bot token** (`xoxb-...`) and **Slack App token** (`xapp-...`), then press **Verify app** to confirm the bot name, workspace, granted scopes, and channel membership
    - **Channel**: add the channel names or IDs to watch
    - **When to join**: choose Join actively / Join when needed / Mentions only
+
+If you already have a Slack App, choose **Use a registered app** and start from pasting the tokens.
 
 These settings are stored in the member's `person.yml` (`message_channels`).
 
 To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
 
-For the Slack App setup steps (including the list of required scopes), sharing one connection across members, the details of thread participation policies, and scheduled post examples, see the [Slack Integration Guide](docs/slack_integration.en.md).
+For the manual Slack App setup steps (including the list of required scopes), sharing one connection across members, the details of thread participation policies, and scheduled post examples, see the [Slack Integration Guide](docs/slack_integration.en.md).
 
 ## Automate Recurring Work
 

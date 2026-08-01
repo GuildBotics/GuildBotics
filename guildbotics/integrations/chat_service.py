@@ -17,6 +17,9 @@ SEMANTIC_REACTIONS: tuple[SemanticReaction, ...] = (
 class ChatIdentity:
     user_id: str
     display_name: str = ""
+    # Human-readable name of the workspace the credential belongs to, so the
+    # setup GUI can show which workspace a pasted token actually reaches.
+    workspace: str = ""
 
 
 @dataclass(slots=True)

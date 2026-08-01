@@ -888,3 +888,17 @@ class GitHubAppRegistrationStatus(GitHubAppRegistrationInfo):
     status: Literal["pending", "converted", "installed"]
     # URL the desktop opens in the external browser to post the manifest.
     start_url: str = ""
+
+
+class SlackAppRegistrationStartRequest(BaseModel):
+    app_name: str = Field(min_length=1)
+
+
+class SlackTokenVerifyRequest(BaseModel):
+    bot_token: str = ""
+    app_token: str = ""
+    # Member being edited, if any. An empty token field means "keep the stored
+    # one" on save, so verification resolves that member's stored token.
+    person_id: str = ""
+    # Channels as currently edited in the form, checked for bot membership.
+    channels: list[str] = Field(default_factory=list)

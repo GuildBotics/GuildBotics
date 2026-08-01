@@ -25,6 +25,7 @@ from guildbotics.integrations.github.github_utils import (
     get_proxy_agent_signature,
     is_proxy_agent,
 )
+from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.cli_agents import (
     resolve_cli_agent_path,
@@ -709,7 +710,12 @@ class ScenarioDiagnosticsService:
                 )
                 for sub in subscriptions:
                     checks.append(
-                        await self._check_slack_channel(c, sub, member.person_id)
+                        await self._check_slack_channel(
+                            c,
+                            sub,
+                            member.person_id,
+                            identity.display_name or identity.user_id,
+                        )
                     )
             except Exception as exc:
                 checks.append(
@@ -770,7 +776,11 @@ class ScenarioDiagnosticsService:
         )
 
     async def _check_slack_channel(
-        self, context: Context, subscription: dict[str, Any], person_id: str
+        self,
+        context: Context,
+        subscription: dict[str, Any],
+        person_id: str,
+        bot_name: str = "",
     ) -> DiagnosticCheck:
         chat_service = context.get_chat_service()
         channel_id = str(subscription.get("channel_id", "") or "").strip()
@@ -787,7 +797,29 @@ class ScenarioDiagnosticsService:
                 person_id=person_id,
                 target=target,
             )
-        await chat_service.list_channel_events(channel_id, limit=1)
+        try:
+            await chat_service.list_channel_events(channel_id, limit=1)
+        except SlackApiError as exc:
+            if exc.error != "not_in_channel":
+                raise
+            # A bot that was never invited is the ordinary first-run state, not
+            # a credential problem, so it gets its own actionable check instead
+            # of the generic "check your tokens" failure.
+            return self._check(
+                "slack",
+                "slack_channel_not_joined",
+                "error",
+                "Slack bot has not joined the channel.",
+                person_id=person_id,
+                target=target or channel_id,
+                # Named so the GUI can spell out the exact /invite to run
+                # instead of a generic instruction.
+                context={
+                    "channel_id": channel_id,
+                    "channel": channel_name or target or channel_id,
+                    "bot_name": bot_name,
+                },
+            )
         return self._check(
             "slack",
             "slack_channel_history",

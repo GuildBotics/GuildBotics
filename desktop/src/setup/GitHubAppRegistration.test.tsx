@@ -69,10 +69,34 @@ function renderPanel(onApplied = vi.fn(), defaultOrganization = "") {
         defaultOrganization={defaultOrganization}
         onApplied={onApplied}
         pollIntervalMs={20}
+        memberKey="edit:my-bot"
       />
     </MantineProvider>,
   );
   return onApplied;
+}
+
+function renderSwitchablePanel() {
+  const props = {
+    defaultOrganization: "acme",
+    onApplied: vi.fn(),
+    pollIntervalMs: 20,
+  };
+  const { rerender } = render(
+    <MantineProvider>
+      <GitHubAppRegistrationPanel {...props} defaultAppName="my-bot" memberKey="edit:my-bot" />
+    </MantineProvider>,
+  );
+  return () =>
+    rerender(
+      <MantineProvider>
+        <GitHubAppRegistrationPanel
+          {...props}
+          defaultAppName="other-bot"
+          memberKey="edit:other-bot"
+        />
+      </MantineProvider>,
+    );
 }
 
 beforeEach(() => {
@@ -96,9 +120,11 @@ describe("GitHubAppRegistrationPanel", () => {
       screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
     );
 
+    // GitHub App names are globally unique, so the suggested name qualifies
+    // the member ID with the organization.
     await waitFor(() =>
       expect(startGitHubAppRegistration).toHaveBeenCalledWith({
-        app_name: "my-bot",
+        app_name: "my-bot-acme",
         organization: "acme",
       }),
     );
@@ -147,6 +173,9 @@ describe("GitHubAppRegistrationPanel", () => {
       name: t("setup.members.githubAppRegistration.organization"),
     });
     expect(organizationField).toHaveValue("acme");
+    expect(
+      screen.getByRole("textbox", { name: t("setup.members.githubAppRegistration.appName") }),
+    ).toHaveValue("my-bot-acme");
 
     // Clearing the field must mean "personal account", not fall back to the
     // project default.
@@ -161,6 +190,108 @@ describe("GitHubAppRegistrationPanel", () => {
         organization: "",
       }),
     );
+  });
+
+  it("stops following the organization once the app name was edited", async () => {
+    const user = userEvent.setup();
+    renderPanel(vi.fn(), "acme");
+
+    const appNameField = screen.getByRole("textbox", {
+      name: t("setup.members.githubAppRegistration.appName"),
+    });
+    await user.clear(appNameField);
+    await user.type(appNameField, "custom-name");
+    await user.type(
+      screen.getByRole("textbox", {
+        name: t("setup.members.githubAppRegistration.organization"),
+      }),
+      "-2",
+    );
+
+    expect(appNameField).toHaveValue("custom-name");
+
+    await user.click(
+      screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+    );
+
+    await waitFor(() =>
+      expect(startGitHubAppRegistration).toHaveBeenCalledWith({
+        app_name: "custom-name",
+        organization: "acme-2",
+      }),
+    );
+  });
+
+  it("drops the previous member's edited fields and started registration", async () => {
+    const user = userEvent.setup();
+    const switchMember = renderSwitchablePanel();
+
+    const appNameField = () =>
+      screen.getByRole("textbox", { name: t("setup.members.githubAppRegistration.appName") });
+    await user.clear(appNameField());
+    await user.type(appNameField(), "custom-app");
+    await user.click(
+      screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+    );
+    await screen.findByText(t("setup.members.githubAppRegistration.pending"));
+
+    switchMember();
+
+    expect(appNameField()).toHaveValue("other-bot-acme");
+    // The pending state polls and reopens the previous member's registration.
+    expect(
+      screen.queryByText(t("setup.members.githubAppRegistration.pending")),
+    ).not.toBeInTheDocument();
+  });
+
+  it("caps the suggested name at the length the backend accepts", async () => {
+    renderPanel(vi.fn(), "very-long-organization-name");
+
+    const appNameField = screen.getByRole("textbox", {
+      name: t("setup.members.githubAppRegistration.appName"),
+    });
+    // "my-bot-very-long-organization-name" is 34 characters exactly.
+    expect(appNameField).toHaveValue("my-bot-very-long-organization-name");
+
+    renderPanel(vi.fn(), "very-long-organization-name-that-overflows");
+    const [, secondField] = screen.getAllByRole("textbox", {
+      name: t("setup.members.githubAppRegistration.appName"),
+    });
+    expect((secondField as HTMLInputElement).value.length).toBeLessThanOrEqual(34);
+    expect((secondField as HTMLInputElement).value).not.toMatch(/-$/);
+  });
+
+  it("blocks a hand-edited name that exceeds the length limit", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const appNameField = screen.getByRole("textbox", {
+      name: t("setup.members.githubAppRegistration.appName"),
+    });
+    await user.clear(appNameField);
+    await user.type(appNameField, "x".repeat(35));
+
+    expect(
+      screen.getByText(t("setup.members.githubAppRegistration.errors.invalidAppName")),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+    ).toBeDisabled();
+    expect(startGitHubAppRegistration).not.toHaveBeenCalled();
+  });
+
+  it("keeps an emptied app name empty instead of falling back to the member ID", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.clear(
+      screen.getByRole("textbox", { name: t("setup.members.githubAppRegistration.appName") }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+    ).toBeDisabled();
+    expect(startGitHubAppRegistration).not.toHaveBeenCalled();
   });
 
   it("shows the backend error when starting fails", async () => {

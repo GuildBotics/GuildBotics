@@ -15,6 +15,7 @@ from guildbotics.entities.team import (
     Role,
     Team,
 )
+from guildbotics.integrations.chat_service import ChatIdentity
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 
 TICKET_STATUSES = ["Todo", "Doing", "Done"]
@@ -43,7 +44,7 @@ class _StubChatService:
         self.bot_user_id = bot_user_id
 
     async def get_bot_identity(self) -> Any:
-        return type("Identity", (), {"user_id": self.bot_user_id})()
+        return ChatIdentity(user_id=self.bot_user_id, display_name="alice-bot")
 
     async def resolve_channel_id(self, channel_name: str) -> str:
         return f"C-{channel_name}"
@@ -891,6 +892,37 @@ async def test_slack_credential_present_and_channel_ok(
     assert checks["slack_bot_auth"].status == "ok"
     assert checks["slack_bot_auth"].context["bot_user_id"] == "U123"
     assert checks["slack_channel_history"].status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_slack_channel_not_joined_is_reported_on_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An uninvited bot is a first-run state, not a credential failure."""
+    from guildbotics.integrations.slack.slack_chat_service import SlackApiError
+
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch)
+    _patch_app_token_probe(monkeypatch)
+    monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
+
+    async def not_in_channel(self: Any, channel_id: str, limit: int = 1) -> list:
+        raise SlackApiError("conversations.history", "not_in_channel")
+
+    monkeypatch.setattr(_StubChatService, "list_channel_events", not_in_channel)
+    context = _StubContext(
+        team=_team([_slack_member("alice")]),
+        brain=_StubBrain(_CliResult()),
+    )
+
+    response = await _run(context)
+
+    checks = _by_code(response)
+    assert checks["slack_channel_not_joined"].status == "error"
+    assert checks["slack_channel_not_joined"].context["channel_id"] == "C001"
+    # The generic credential-shaped failure must not fire for this.
+    assert "slack_access" not in checks
+    assert checks["slack_bot_auth"].status == "ok"
 
 
 @pytest.mark.asyncio

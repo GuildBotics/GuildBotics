@@ -52,10 +52,21 @@ def _record_slack_auth_failure(code: str) -> None:
 class SlackApiError(RuntimeError):
     """Raised when Slack returns ok=false for a Web API method."""
 
-    def __init__(self, method: str, error: str) -> None:
+    def __init__(
+        self, method: str, error: str, needed: str = "", provided: str = ""
+    ) -> None:
         self.method = method
         self.error = error
-        super().__init__(f"Slack API '{method}' failed: {error}")
+        # Slack returns these alongside ``missing_scope``. Without them the
+        # message only says a scope is missing, never which one, which is the
+        # single fact needed to fix the app's configuration.
+        self.needed = needed
+        self.provided = provided
+        message = f"Slack API '{method}' failed: {error}"
+        if needed:
+            message += f" (needed: {needed}"
+            message += f", provided: {provided})" if provided else ")"
+        super().__init__(message)
 
 
 class SlackChatService(ChatService):
@@ -68,11 +79,18 @@ class SlackChatService(ChatService):
         token: str | None = None,
         base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+        record_credential_events: bool = True,
     ) -> None:
         self._logger = logger
         self._base_url = (base_url or "https://slack.com/api").rstrip("/")
         self._token = token or ""
         self._client = client
+        self._transport = transport
+        # Setup-time checks try credentials the user is still editing, so a
+        # rejection there is an answer to a question rather than a runtime
+        # credential failure worth alerting the whole desktop about.
+        self._record_credential_events = record_credential_events
         self._owns_client = client is None
         self._channel_name_cache: dict[str, str] = {}
 
@@ -81,6 +99,7 @@ class SlackChatService(ChatService):
         return ChatIdentity(
             user_id=str(payload.get("user_id", "")),
             display_name=str(payload.get("user", "")),
+            workspace=str(payload.get("team", "")),
         )
 
     async def list_channel_events(
@@ -154,6 +173,23 @@ class SlackChatService(ChatService):
         if events:
             page_oldest = max((ev.message_ts for ev in events), default=None)
         return ChatEventPage(events=events, cursor=next_cursor, oldest_ts=page_oldest)
+
+    async def probe_read_scopes(self) -> None:
+        """Make the narrowest scoped read call, to prove scopes were granted.
+
+        ``auth.test`` needs no scope at all, so it cannot tell a fully scoped
+        token from one that was issued before the app's scopes were added.
+        This asks for a single conversation instead, which fails with
+        ``missing_scope`` when the token lacks the channel read scopes.
+        """
+        await self._post_form(
+            "conversations.list",
+            {
+                "limit": "1",
+                "exclude_archived": "true",
+                "types": "public_channel,private_channel",
+            },
+        )
 
     async def resolve_channel_id(self, channel_name: str) -> str | None:
         name = channel_name.strip().lstrip("#")
@@ -269,7 +305,7 @@ class SlackChatService(ChatService):
     async def _post_form(self, method: str, form: dict[str, str]) -> dict[str, Any]:
         client = self._get_client()
         response = await client.post(f"{self._base_url}/{method}", data=form)
-        if response.status_code == HTTP_UNAUTHORIZED:
+        if response.status_code == HTTP_UNAUTHORIZED and self._record_credential_events:
             _record_slack_auth_failure("unauthorized")
         response.raise_for_status()
         payload = response.json()
@@ -277,9 +313,14 @@ class SlackChatService(ChatService):
             raise RuntimeError(f"Slack API '{method}' returned non-object JSON.")
         if not payload.get("ok", False):
             error = str(payload.get("error", "unknown_error") or "unknown_error")
-            if is_slack_auth_error(error):
+            if is_slack_auth_error(error) and self._record_credential_events:
                 _record_slack_auth_failure(error)
-            raise SlackApiError(method, error)
+            raise SlackApiError(
+                method,
+                error,
+                needed=str(payload.get("needed", "") or ""),
+                provided=str(payload.get("provided", "") or ""),
+            )
         return payload
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -288,7 +329,9 @@ class SlackChatService(ChatService):
                 raise RuntimeError("Slack bot token is not configured.")
             headers = {}
             headers["Authorization"] = f"Bearer {self._token}"
-            self._client = httpx.AsyncClient(timeout=10.0, headers=headers)
+            self._client = httpx.AsyncClient(
+                timeout=10.0, transport=self._transport, headers=headers
+            )
             self._owns_client = True
         return self._client
 
