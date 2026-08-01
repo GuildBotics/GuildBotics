@@ -78,6 +78,8 @@ from guildbotics.app_api.models import (
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SchedulerStopRequest,
+    SlackAppRegistrationStartRequest,
+    SlackTokenVerifyRequest,
     SystemAlertDismissRequest,
     SystemAlertsResponse,
     TeamSummary,
@@ -91,6 +93,7 @@ from guildbotics.app_api.models import (
     WorkspaceChangeRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.editions.simple import slack_app_setup
 from guildbotics.editions.simple.github_app_setup import (
     GitHubAppRegistration,
     GitHubAppRegistrationService,
@@ -108,6 +111,10 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
     github_app_key_dir,
+)
+from guildbotics.editions.simple.slack_app_setup import (
+    SlackAppRegistrationInfo,
+    SlackTokenVerification,
 )
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
@@ -1057,6 +1064,51 @@ def create_app(
             logger.exception("GitHub App manifest conversion failed")
             return registration_error_page(str(exc))
         return RedirectResponse(registration.installation_page_url, status_code=302)
+
+    # Slack has no manifest callback (its OAuth redirect rejects localhost and
+    # app-level tokens have no creation API), so the desktop only needs the
+    # deep link plus a way to check the two tokens the user pastes back.
+    @app.post(
+        "/config/members/slack-app/registrations",
+        response_model=SlackAppRegistrationInfo,
+        responses=error_responses,
+    )
+    def slack_app_registration_start(
+        request: SlackAppRegistrationStartRequest,
+        _: None = Depends(require_token),
+    ) -> SlackAppRegistrationInfo:
+        try:
+            return slack_app_setup.start_registration(request.app_name)
+        except SetupServiceError as exc:
+            raise AppApiError(exc.code, exc.message) from exc
+
+    @app.post(
+        "/config/members/slack-app/verify",
+        response_model=SlackTokenVerification,
+        responses=error_responses,
+    )
+    async def slack_app_token_verify(
+        request: SlackTokenVerifyRequest,
+        _: None = Depends(require_token),
+    ) -> SlackTokenVerification:
+        stored_bot_token = ""
+        stored_app_token = ""
+        if request.person_id:
+            status = app_runtime.get_config_status()
+            stored_bot_token, stored_app_token = (
+                SimplePersonSetupService().read_slack_tokens(
+                    config_dir=status.config_dir,
+                    person_id=request.person_id,
+                    env_file_path=status.env_file,
+                )
+            )
+        return await slack_app_setup.verify_tokens(
+            request.bot_token,
+            request.app_token,
+            stored_bot_token=stored_bot_token,
+            stored_app_token=stored_app_token,
+            channels=request.channels,
+        )
 
     @app.get(
         "/config/members/{person_id}/avatar",

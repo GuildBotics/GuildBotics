@@ -30,6 +30,8 @@ import {
   runScenarioDiagnostics,
   setWorkspace,
   startGitHubAppRegistration,
+  startSlackAppRegistration,
+  verifySlackTokens,
   subscribeEvents,
   subscribeLogs,
   updateRuntimeDebug,
@@ -192,6 +194,41 @@ describe("request headers and body", () => {
       "http://127.0.0.1:8765/config/members/github-app/registrations/s%2F1",
     );
     expect(calls[0].init.method).toBe("GET");
+  });
+
+  it("POSTs the Slack App name and returns the manifest deep link", async () => {
+    const { calls } = captureFetch(
+      jsonResponse({ app_name: "alice", registration_url: "https://api.slack.com/apps?new_app=1" }),
+    );
+    const result = await startSlackAppRegistration({ app_name: "alice" });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/slack-app/registrations");
+    expect(calls[0].init.method).toBe("POST");
+    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
+    expect(calls[0].init.body).toBe(JSON.stringify({ app_name: "alice" }));
+    expect(result.registration_url).toBe("https://api.slack.com/apps?new_app=1");
+  });
+
+  it("POSTs both Slack tokens to the verification endpoint", async () => {
+    const { calls } = captureFetch(jsonResponse({ bot_ok: true, app_token_ok: true }));
+    await verifySlackTokens({ bot_token: "xoxb-1", app_token: "xapp-1" });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/slack-app/verify");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify({ bot_token: "xoxb-1", app_token: "xapp-1" }));
+  });
+
+  it("surfaces the Slack App name error code from the API", async () => {
+    captureFetch(
+      jsonResponse(
+        { code: "invalid_slack_app_name", message: "too long" },
+        { ok: false, status: 400 },
+      ),
+    );
+
+    await expect(startSlackAppRegistration({ app_name: "x".repeat(36) })).rejects.toMatchObject({
+      code: "invalid_slack_app_name",
+    });
   });
 
   it("omits the body for POST without a payload", async () => {

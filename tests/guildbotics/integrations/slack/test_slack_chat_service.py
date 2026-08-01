@@ -347,3 +347,56 @@ async def test_slack_api_error_raises_runtime_error(monkeypatch):
         "code": "invalid_auth",
     }
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_missing_scope_error_names_the_scope_slack_asked_for():
+    """``missing_scope`` alone cannot be acted on; the needed scope can."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": False,
+                "error": "missing_scope",
+                "needed": "channels:read",
+                "provided": "chat:write,users:read",
+            },
+        )
+
+    client = _client_for(handler)
+    svc = SlackChatService(
+        logging.getLogger("test"), client=client, base_url="https://x.test"
+    )
+    with pytest.raises(SlackApiError) as exc_info:
+        await svc.resolve_channel_id("general")
+    assert exc_info.value.needed == "channels:read"
+    assert exc_info.value.provided == "chat:write,users:read"
+    assert "needed: channels:read" in str(exc_info.value)
+    assert "provided: chat:write,users:read" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_auth_error_records_no_credential_event_when_opted_out(monkeypatch):
+    """Setup-time checks try tokens the user is still editing, not saved ones."""
+    recorded = []
+    monkeypatch.setattr(
+        "guildbotics.integrations.slack.slack_chat_service.record_correlated_event",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"ok": False, "error": "invalid_auth"})
+
+    client = _client_for(handler)
+    svc = SlackChatService(
+        logging.getLogger("test"),
+        client=client,
+        base_url="https://x.test",
+        record_credential_events=False,
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await svc.get_bot_identity()
+    assert recorded == []
+    await client.aclose()

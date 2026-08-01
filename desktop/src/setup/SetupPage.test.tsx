@@ -30,6 +30,7 @@ import {
   updateIntelligenceConfig,
   updateMemberConfig,
   updateProjectConfig,
+  verifySlackTokens,
   type CommandOption,
   type ConfigStatus,
   type IntelligenceConfig,
@@ -277,6 +278,25 @@ vi.mock("../api/client", async (importOriginal) => {
         events_auth_failed_persons: [],
       },
       active_works: [],
+    })),
+    startSlackAppRegistration: vi.fn(async () => ({
+      app_name: "alice",
+      registration_url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+      app_directory_url: "https://api.slack.com/apps",
+    })),
+    verifySlackTokens: vi.fn(async () => ({
+      bot_ok: true,
+      bot_user_id: "U0BOT",
+      bot_display_name: "alice-bot",
+      workspace: "GuildBotics HQ",
+      bot_error: "",
+      bot_source: "input",
+      scopes_ok: true,
+      scope_error: "",
+      scope_needed: "",
+      app_token_ok: true,
+      app_token_error: "",
+      app_token_source: "input",
     })),
     updateDefaultPerson: vi.fn(async () => configWriteResponse()),
     updateIntelligenceConfig: vi.fn(async () => configWriteResponse()),
@@ -2353,6 +2373,137 @@ describe("MembersSection", () => {
       person_id: "alice",
       person_name: "Alice Cooper",
     });
+  });
+
+  it("defaults a new member to registering a Slack app and can switch to an existing one", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members&tab=slack");
+
+    await screen.findByLabelText("Member ID");
+
+    expect(
+      await screen.findByRole("button", {
+        name: t("setup.members.slackAppRegistration.register"),
+      }),
+    ).toBeInTheDocument();
+    // The token fields stay available in both modes.
+    expect(screen.getByLabelText(t("setup.members.slackBotToken"))).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("radio", { name: t("setup.members.slackAppsSetupMode.existing") }),
+    );
+
+    expect(
+      screen.queryByRole("button", { name: t("setup.members.slackAppRegistration.register") }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText(t("setup.members.slackBotToken"))).toBeInTheDocument();
+  });
+
+  it("defaults a member that already has Slack tokens to the existing-app mode", async () => {
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({ has_slack_bot_token: true, has_slack_app_token: true }),
+    );
+    const user = userEvent.setup();
+    renderSetupPage("/setup?section=members&tab=slack");
+
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    await screen.findByText(t("setup.members.editingBadge", { id: "alice" }));
+
+    expect(
+      screen.getByRole("radio", { name: t("setup.members.slackAppsSetupMode.existing") }),
+    ).toBeChecked();
+    expect(
+      screen.queryByRole("button", { name: t("setup.members.slackAppRegistration.register") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("resets the Slack app registration panel when switching members", async () => {
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [
+        { person_id: "alice", name: "Alice", person_type: "agent", is_active: true, roles: [] },
+        { person_id: "bob", name: "Bob", person_type: "agent", is_active: true, roles: [] },
+      ],
+    });
+    vi.mocked(getMemberConfig).mockImplementation(async (personId: string) =>
+      memberConfigDetail({ person_id: personId, person_name: personId }),
+    );
+    const user = userEvent.setup();
+    renderSetupPage("/setup?section=members&tab=slack");
+
+    const [aliceEdit, bobEdit] = await screen.findAllByRole("button", {
+      name: t("setup.members.editButton"),
+    });
+    await user.click(aliceEdit);
+    await screen.findByText(t("setup.members.editingBadge", { id: "alice" }));
+
+    const appNameField = () =>
+      screen.getByRole("textbox", { name: t("setup.members.slackAppRegistration.appName") });
+    expect(appNameField()).toHaveValue("alice");
+
+    // Hand-editing the name must not make the next member inherit it.
+    await user.clear(appNameField());
+    await user.type(appNameField(), "custom-app");
+
+    await user.click(bobEdit);
+    await screen.findByText(t("setup.members.editingBadge", { id: "bob" }));
+
+    expect(appNameField()).toHaveValue("bob");
+  });
+
+  it("verifies the entered Slack tokens and reports the resolved bot", async () => {
+    vi.mocked(verifySlackTokens).mockResolvedValue({
+      bot_ok: true,
+      bot_user_id: "U0BOT",
+      bot_display_name: "alice-bot",
+      workspace: "GuildBotics HQ",
+      bot_error: "",
+      bot_source: "input",
+      scopes_ok: true,
+      scope_error: "",
+      scope_needed: "",
+      app_token_ok: true,
+      app_token_error: "",
+      app_token_source: "input",
+      channels: [],
+    });
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members&tab=slack");
+
+    await screen.findByLabelText("Member ID");
+    await user.type(screen.getByLabelText(t("setup.members.slackBotToken")), "xoxb-1");
+    await user.type(screen.getByLabelText(t("setup.members.slackAppToken")), "xapp-1");
+    await user.click(
+      screen.getByRole("button", { name: t("setup.members.slackTokenVerify.button") }),
+    );
+
+    await waitFor(() =>
+      expect(verifySlackTokens).toHaveBeenCalledWith({
+        bot_token: "xoxb-1",
+        app_token: "xapp-1",
+        // A member being added has no saved tokens to fall back to.
+        person_id: "",
+        channels: [],
+      }),
+    );
+    const botLabel = t("setup.members.slackTokenVerify.labels.bot");
+    const botDetail = t("setup.members.slackTokenVerify.ok.bot", {
+      displayName: "alice-bot",
+      userId: "U0BOT",
+      workspace: "GuildBotics HQ",
+    });
+    expect(await screen.findByText(`${botLabel}: ${botDetail}`)).toBeInTheDocument();
   });
 
   it("edits Slack channel participation policies", async () => {

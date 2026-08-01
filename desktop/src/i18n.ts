@@ -720,6 +720,65 @@ const resources = {
               expired: "The registration session has expired. Please start again.",
             },
           },
+          slackAppsSetupMode: {
+            label: "Slack App setup method",
+            create: "Register a new app",
+            existing: "Use a registered app",
+          },
+          slackAppRegistration: {
+            hint: "Create the Slack App from here. The browser opens with the scopes, Socket Mode and event subscriptions already configured, so all you do is pick a workspace and copy the two tokens back.",
+            appName: "App name",
+            register: "Create the app on Slack",
+            reopen: "Reopen the creation page",
+            openAppList: "Open the Slack app list",
+            signedOutHint:
+              "If Slack asks you to sign in, sign in first and then press the button again — Slack drops the prepared settings on the sign-in redirect.",
+            stepsTitle: "Then, in the browser:",
+            steps: {
+              create: "Pick the workspace and click “Create”.",
+              reinstall:
+                "Open “OAuth & Permissions” and press “Reinstall to Workspace”, then approve. Slack issues the app's first bot token without the manifest's scopes, so this step is required — not optional.",
+              copyBot: "On that same page, copy the Bot User OAuth Token (xoxb-…).",
+              copyAppToken:
+                "Open “Basic Information” → “App-Level Tokens” and copy the token (xapp-…).",
+              paste: "Paste both tokens into the fields below and verify them.",
+            },
+            errors: {
+              invalidAppName: "App name must be 1-35 characters.",
+            },
+          },
+          slackTokenVerify: {
+            button: "Verify app",
+            labels: {
+              bot: "Bot token",
+              botStored: "Saved bot token",
+              appToken: "App token",
+              appTokenStored: "Saved app token",
+              scopes: "Bot permissions",
+            },
+            ok: {
+              bot: "OK — {{displayName}} ({{userId}}) in {{workspace}}",
+              botNoWorkspace: "OK — {{displayName}} ({{userId}})",
+              appToken: "OK — Socket Mode connected.",
+              scopes: "OK — the token can read channels.",
+              channel: "OK — the bot can read this channel.",
+            },
+            channelNotJoined:
+              "the bot has not joined this channel. Run /invite @{{botName}} in it.",
+            channelNotFound:
+              "no such channel in this workspace. Check the name, or use the channel ID.",
+            scopeMissing:
+              "the token carries none of the scopes this read needs ({{needed}}). Scopes reach a token only when the app is installed, so ones added later need a reinstall: open the app's “OAuth & Permissions”, press “Reinstall to Workspace”, and copy the bot token again.",
+            scopeMissingUnnamed:
+              "the token is missing a required scope. Reinstall the app from “OAuth & Permissions” and copy the bot token again.",
+            errors: {
+              missing: "not entered.",
+              wrong_token_type: "wrong token type. Check that xoxb- and xapp- are not swapped.",
+              unreachable: "could not reach Slack. Check your network connection.",
+              invalid_auth: "rejected by Slack (invalid_auth). The token is invalid or revoked.",
+              unknown: "verification failed ({{code}}).",
+            },
+          },
           accessToken: "GitHub access token",
           accessTokenPlaceholder: "ghp_... or github_pat_...",
           githubAuthNotRequired: "GitHub auth is not required for human members.",
@@ -1111,6 +1170,11 @@ const resources = {
             title: "Slack channel history could not be read",
             description:
               "Slack channel history could not be read. Check channel access and token scopes.",
+          },
+          slack_channel_not_joined: {
+            title: "Slack bot has not joined #{{channel}}",
+            description:
+              "The bot is not a member of #{{channel}}, so it cannot read its history. Run /invite @{{bot_name}} in that channel.",
           },
           slack_access: {
             title: "Slack read-only check failed",
@@ -1865,6 +1929,67 @@ const resources = {
               expired: "登録セッションの有効期限が切れました。もう一度やり直してください。",
             },
           },
+          slackAppsSetupMode: {
+            label: "Slack App の設定方法",
+            create: "新規に App を登録",
+            existing: "登録済みの App を使う",
+          },
+          slackAppRegistration: {
+            hint: "ここから Slack 上に App を作成できます。scope・Socket Mode・イベント購読を設定済みの状態でブラウザが開くので、ワークスペースを選んで 2 つのトークンをコピーするだけです。",
+            appName: "App 名",
+            register: "Slack で App を作成",
+            reopen: "作成ページを再度開く",
+            openAppList: "Slack の App 一覧を開く",
+            signedOutHint:
+              "Slack からサインインを求められた場合は、サインインしてからもう一度ボタンを押してください（サインインの遷移で設定内容が失われます）。",
+            stepsTitle: "続けて、ブラウザ側で以下を行います:",
+            steps: {
+              create: "ワークスペースを選び「Create」をクリックします。",
+              reinstall:
+                "「OAuth & Permissions」を開き「Reinstall to Workspace」を実行して承認します。作成直後に発行される Bot トークンには manifest の scope が付与されないため、この手順は必須です。",
+              copyBot: "同じ画面の Bot User OAuth Token（xoxb-…）をコピーします。",
+              copyAppToken:
+                "「Basic Information」→「App-Level Tokens」でトークン（xapp-…）をコピーします。",
+              paste: "2 つのトークンを下の入力欄に貼り付けて検証します。",
+            },
+            errors: {
+              invalidAppName: "App 名は 1〜35 文字で入力してください。",
+            },
+          },
+          slackTokenVerify: {
+            button: "App を検証",
+            labels: {
+              bot: "Bot トークン",
+              botStored: "保存済みの Bot トークン",
+              appToken: "App トークン",
+              appTokenStored: "保存済みの App トークン",
+              scopes: "Bot の権限",
+            },
+            ok: {
+              bot: "OK — {{displayName}}（{{userId}}）/ {{workspace}}",
+              botNoWorkspace: "OK — {{displayName}}（{{userId}}）",
+              appToken: "OK — Socket Mode に接続できました。",
+              scopes: "OK — チャンネルを読み取れます。",
+              channel: "OK — Bot が読み取れます。",
+            },
+            channelNotJoined:
+              "Bot が参加していません。このチャンネルで /invite @{{botName}} を実行してください。",
+            channelNotFound:
+              "このワークスペースに見つかりません。名前を確認するか、チャンネル ID を指定してください。",
+            scopeMissing:
+              "この読み取りに必要な scope（{{needed}}）がトークンに付与されていません。scope はインストール時にトークンへ付与されるため、後から追加した分は再インストールが必要です。App の「OAuth & Permissions」で「Reinstall to Workspace」を実行し、Bot トークンをコピーし直してください。",
+            scopeMissingUnnamed:
+              "トークンに必要な scope が不足しています。App の「OAuth & Permissions」から再インストールし、Bot トークンをコピーし直してください。",
+            errors: {
+              missing: "入力されていません。",
+              wrong_token_type:
+                "トークンの種類が違います。xoxb- と xapp- が入れ替わっていないか確認してください。",
+              unreachable: "Slack に接続できませんでした。ネットワーク接続を確認してください。",
+              invalid_auth:
+                "Slack に拒否されました（invalid_auth）。トークンが無効か失効しています。",
+              unknown: "検証に失敗しました（{{code}}）。",
+            },
+          },
           accessToken: "GitHubアクセストークン",
           accessTokenPlaceholder: "ghp_... または github_pat_...",
           githubAuthNotRequired: "人間メンバーでは GitHub 認証は不要です。",
@@ -2566,6 +2691,11 @@ const resources = {
             title: "Slack チャンネル履歴を読み取れません",
             description:
               "Slack チャンネル履歴を読み取れませんでした。チャンネル権限と token scope を確認してください。",
+          },
+          slack_channel_not_joined: {
+            title: "Bot が #{{channel}} に参加していません",
+            description:
+              "Bot が #{{channel}} のメンバーではないため、履歴を読み取れません。このチャンネルで /invite @{{bot_name}} を実行して招待してください。",
           },
           slack_access: {
             title: "Slack の読み取り検証に失敗しました",

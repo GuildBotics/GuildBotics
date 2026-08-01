@@ -692,6 +692,49 @@ export type GitHubAppRegistrationStatus = {
   installation_check_error: string;
 };
 
+export type SlackAppRegistrationStartRequest = {
+  app_name: string;
+};
+
+export type SlackAppRegistrationStatus = {
+  app_name: string;
+  registration_url: string;
+  app_directory_url: string;
+};
+
+export type SlackTokenVerifyRequest = {
+  bot_token: string;
+  app_token: string;
+  person_id?: string;
+  channels?: string[];
+};
+
+export type SlackChannelVerification = {
+  channel: string;
+  ok: boolean;
+  error: string;
+};
+
+// Which token was actually checked: the one typed in, the one already saved
+// for the member (an empty field keeps it), or neither.
+export type SlackTokenSource = "input" | "stored" | "none";
+
+export type SlackTokenVerifyResponse = {
+  bot_ok: boolean;
+  bot_user_id: string;
+  bot_display_name: string;
+  workspace: string;
+  bot_error: string;
+  bot_source: SlackTokenSource;
+  scopes_ok: boolean;
+  scope_error: string;
+  scope_needed: string;
+  app_token_ok: boolean;
+  app_token_error: string;
+  app_token_source: SlackTokenSource;
+  channels: SlackChannelVerification[];
+};
+
 export type MemberConfig = {
   person_id: string;
   person_name: string;
@@ -1229,6 +1272,18 @@ export async function getGitHubAppRegistration(
   state: string,
 ): Promise<GitHubAppRegistrationStatus> {
   return request(`/config/members/github-app/registrations/${encodeURIComponent(state)}`);
+}
+
+export async function startSlackAppRegistration(
+  body: SlackAppRegistrationStartRequest,
+): Promise<SlackAppRegistrationStatus> {
+  return request("/config/members/slack-app/registrations", { method: "POST", body });
+}
+
+export async function verifySlackTokens(
+  body: SlackTokenVerifyRequest,
+): Promise<SlackTokenVerifyResponse> {
+  return request("/config/members/slack-app/verify", { method: "POST", body });
 }
 
 export async function getMemberConfig(personId: string): Promise<MemberConfig> {

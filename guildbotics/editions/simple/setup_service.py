@@ -815,6 +815,22 @@ class SimpleProjectSetupService:
 
 
 class SimplePersonSetupService:
+    def read_slack_tokens(
+        self, *, config_dir: Path, person_id: str, env_file_path: Path
+    ) -> tuple[str, str]:
+        """Return the member's stored Slack bot and app tokens.
+
+        Resolved the same way as ``has_slack_bot_token`` in the member
+        snapshot, so a token the GUI reports as saved is the token returned
+        here. Missing members simply have no secrets and yield empty strings.
+        """
+        store = resolve_secret_store(config_dir, env_file_path)
+        prefix = self._person_env_prefix(person_id)
+        return (
+            store.get(f"{prefix}_SLACK_BOT_TOKEN") or "",
+            store.get(f"{prefix}_SLACK_APP_TOKEN") or "",
+        )
+
     def read_person_config(
         self, *, config_dir: Path, person_id: str, env_file_path: Path
     ) -> PersonConfigSnapshot:
