@@ -759,7 +759,7 @@ async def test_issue_comment_returns_issue_and_comment_activity_fields():
 
 @pytest.mark.asyncio
 async def test_issue_update_patches_only_body_and_returns_updated_issue():
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.patch_payloads["/repos/owner/repo/issues/42"] = {
         "number": 42,
@@ -787,7 +787,7 @@ async def test_issue_update_patches_only_body_and_returns_updated_issue():
 @pytest.mark.parametrize("requested_body", ["", "Requested body"])
 @pytest.mark.asyncio
 async def test_issue_update_normalizes_null_response_body(requested_body):
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.patch_payloads["/repos/owner/repo/issues/42"] = {
         "number": 42,
@@ -815,7 +815,7 @@ async def test_issue_update_normalizes_null_response_body(requested_body):
 )
 @pytest.mark.asyncio
 async def test_issue_update_rejects_invalid_or_non_issue_url(url, error):
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     service._client = fake
 
@@ -827,7 +827,7 @@ async def test_issue_update_rejects_invalid_or_non_issue_url(url, error):
 
 @pytest.mark.asyncio
 async def test_issue_update_propagates_github_api_error():
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.patch_status_codes["/repos/owner/repo/issues/42"] = HTTP_BAD_REQUEST
     service._client = fake
@@ -842,7 +842,7 @@ async def test_issue_update_propagates_github_api_error():
 
 @pytest.mark.asyncio
 async def test_pr_create_uses_explicit_base_branch():
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.get_payloads["/repos/owner/repo/pulls"] = []
     fake.post_payloads["/repos/owner/repo/pulls"] = {
@@ -894,7 +894,7 @@ async def test_pr_create_uses_explicit_base_branch():
 
 @pytest.mark.asyncio
 async def test_pr_create_uses_default_branch_when_base_is_empty():
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.get_payloads["/repos/owner/repo"] = {"default_branch": "develop"}
     fake.get_payloads["/repos/owner/repo/pulls"] = []
@@ -929,7 +929,7 @@ async def test_pr_create_uses_default_branch_when_base_is_empty():
 
 @pytest.mark.asyncio
 async def test_pr_create_returns_matching_open_pr_without_updating_it():
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.get_payloads["/repos/owner/repo/pulls"] = [
         {
@@ -971,7 +971,7 @@ async def test_pr_create_returns_matching_open_pr_without_updating_it():
 
 @pytest.mark.asyncio
 async def test_pr_update_patches_only_body_and_returns_updated_pr():
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
         "number": 7,
@@ -1001,7 +1001,7 @@ async def test_pr_update_patches_only_body_and_returns_updated_pr():
 @pytest.mark.parametrize("requested_body", ["", "Requested body"])
 @pytest.mark.asyncio
 async def test_pr_update_normalizes_null_response_body(requested_body):
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
         "number": 7,
@@ -1029,7 +1029,7 @@ async def test_pr_update_normalizes_null_response_body(requested_body):
 )
 @pytest.mark.asyncio
 async def test_pr_update_rejects_invalid_or_non_pull_request_url(url, error):
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     service._client = fake
 
@@ -1041,7 +1041,7 @@ async def test_pr_update_rejects_invalid_or_non_pull_request_url(url, error):
 
 @pytest.mark.asyncio
 async def test_pr_update_propagates_github_api_error():
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     fake.patch_status_codes["/repos/owner/repo/pulls/7"] = HTTP_BAD_REQUEST
     service._client = fake
@@ -1056,7 +1056,7 @@ async def test_pr_update_propagates_github_api_error():
 
 @pytest.mark.asyncio
 async def test_reaction_add_uses_target_specific_endpoint():
-    service = _service(person_type="human")
+    service = _service(person_type="agent")
     fake = FakeClient()
     service._client = fake
 

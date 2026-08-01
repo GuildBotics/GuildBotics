@@ -23,7 +23,7 @@ EXPECTED_DIGEST_N = 3
 
 @pytest.fixture
 def person() -> Person:
-    return Person(person_id="aiko", name="Aiko", person_type="human")
+    return Person(person_id="aiko", name="Aiko", person_type="agent")
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +103,7 @@ def test_team_memory_tracks_creator_and_updater(
         scope="team", title="Shared context", body="Initial context"
     )
 
-    updater = Person(person_id="yuki", name="Yuki", person_type="human")
+    updater = Person(person_id="yuki", name="Yuki", person_type="agent")
     MemberMemoryService(updater).update(
         doc_id=recorded["doc_id"], scope="team", body="Updated context"
     )
@@ -131,7 +131,7 @@ def test_updating_legacy_memory_does_not_fabricate_creator(
     legacy_meta.pop("updated_by")
     save_yaml_file(meta_path, legacy_meta)
 
-    updater = Person(person_id="yuki", name="Yuki", person_type="human")
+    updater = Person(person_id="yuki", name="Yuki", person_type="agent")
     MemberMemoryService(updater).update(
         doc_id=recorded["doc_id"], scope="team", body="Updated context"
     )

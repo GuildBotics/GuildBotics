@@ -644,10 +644,6 @@ async def _context_cmd(
     person: str, check_credentials: bool, output_format: str
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
-    if member_person.person_type == "human":
-        raise click.ClickException(
-            str(PersonExecutionNotAllowedError(member_person.person_id))
-        )
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
         result = await service.context(check_credentials=check_credentials)
@@ -1947,6 +1943,8 @@ async def _task_status(run_id: str, person: str) -> dict[str, Any]:
 def _resolve(person: str):
     try:
         return resolve_member_context(person)
+    except PersonExecutionNotAllowedError as exc:
+        raise click.ClickException(str(exc)) from exc
     except PersonNotFoundError as exc:
         message = f"Unknown member '{exc.identifier}'."
         if exc.available:
@@ -2180,8 +2178,6 @@ def _interactive_session_for_current_command() -> InteractiveTraceSession | None
     try:
         _context, member_person = _resolve(person)
     except (click.ClickException, FileNotFoundError):
-        return None
-    if member_person.person_type == "human":
         return None
     workspace = _current_workspace()
     return InteractiveTraceStore().start_or_touch(
