@@ -498,9 +498,12 @@ Two Person distinctions matter architecturally:
   desktop settings UI intentionally hides all agent-execution fields for them. Treat
   any path that would execute a human member as a boundary bug, not a feature. The
   rule is enforced in one place, `ensure_execution_subject()` in
-  `guildbotics/runtime/member_context.py`, applied by both command execution
-  (`drivers/command_runner.py`) and member capability resolution
-  (`resolve_member_context()`, used by every `guildbotics member ...` command).
+  `guildbotics/runtime/member_context.py`, applied by command execution
+  (`guildbotics/drivers/command_runner.py`) and by member capability resolution
+  (`resolve_member_context()`). Every `guildbotics member ...` command that acts as
+  a member resolves it that way, so the rejection happens before any capability
+  runs; the commands that do not act as a member (`member help`, and
+  `member task status`, which ignores `--person`) never resolve one.
 
 ## 12. Extension Points
 
