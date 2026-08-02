@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from guildbotics.intelligences.brains.brain import Brain
+from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.runtime import BrainFactory
 from guildbotics.utils.fileio import (
     get_person_config_path,
@@ -74,6 +75,8 @@ class SimpleBrainFactory(BrainFactory):
         description = config.get("body", "")
         template_engine = config.get("template_engine", "default")
 
+        effort = normalize_effort(config.get("effort", ""))
+
         brain_mapping = get_brain_mapping(person_id)
         brain_config = brain_mapping[config.get("brain", "default")]
         brain = brain_config.type(
@@ -83,6 +86,7 @@ class SimpleBrainFactory(BrainFactory):
             description,
             template_engine,
             response_class,
+            effort=effort,
             **brain_config.args,
         )
         return brain

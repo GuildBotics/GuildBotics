@@ -3,6 +3,22 @@ order: 30
 executable: agy
 conversation_scope: dispatch
 env:
+effort:
+  low:
+    effort: low
+  high:
+    effort: high
+
+# What this script translates into flags. `effort` values come from
+# `agy --help`; `model` is left to a picker because the ids depend on the
+# account (see `agy models`).
+effort_fields:
+  - key: effort
+    type: enum
+    values: [low, medium, high]
+  - key: model
+    type: model_id
+
 script: |
   res=$(mktemp)
   log=$(mktemp)
@@ -31,6 +47,16 @@ script: |
   set --
   if [ -n "$conv_file" ] && [ -s "$conv_file" ]; then
     set -- --conversation "$(cat "$conv_file")"
+  fi
+
+  # GuildBotics exports the effort as GUILDBOTICS_CLI_AGENT_EFFORT and the
+  # model as GUILDBOTICS_CLI_AGENT_MODEL (both unset for `default`). Any further
+  # mapping keys arrive as JSON in GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS.
+  if [ -n "${GUILDBOTICS_CLI_AGENT_MODEL:-}" ]; then
+    set -- "$@" --model "$GUILDBOTICS_CLI_AGENT_MODEL"
+  fi
+  if [ -n "${GUILDBOTICS_CLI_AGENT_EFFORT:-}" ]; then
+    set -- "$@" --effort "$GUILDBOTICS_CLI_AGENT_EFFORT"
   fi
 
   status=0

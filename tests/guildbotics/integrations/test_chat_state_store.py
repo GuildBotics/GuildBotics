@@ -512,3 +512,34 @@ def test_clear_channel_receive_backlog_empties_pending_when_unlink_fails(
     # Even when the pending file cannot be deleted, the backlog is emptied via an
     # overwrite fallback, so nothing stale is drained on the next start.
     assert store.load_pending_events("slack", "alice", "C1") == []
+
+
+def test_thread_effort_roundtrips_and_defaults_to_unset(tmp_path):
+    store = FileConversationStateStore(base_dir=Path(tmp_path))
+    state = store.load_thread_state("slack", "alice", "C1", "100.1")
+    assert state.effort == ""
+
+    state.effort = "high"
+    store.save_thread_state("slack", "alice", "C1", "100.1", state)
+
+    assert store.load_thread_state("slack", "alice", "C1", "100.1").effort == "high"
+
+
+def test_a_corrupted_stored_effort_loads_as_unset(tmp_path):
+    """A bad value must start the thread over, never block loading it."""
+    store = FileConversationStateStore(base_dir=Path(tmp_path))
+    state = store.load_thread_state("slack", "alice", "C1", "100.1")
+    state.effort = "extreme"
+    store.save_thread_state("slack", "alice", "C1", "100.1", state)
+
+    assert store.load_thread_state("slack", "alice", "C1", "100.1").effort == ""
+
+
+def test_thread_effort_is_recorded_per_person(tmp_path):
+    """Thread state is one member's view, not a value shared by the thread."""
+    store = FileConversationStateStore(base_dir=Path(tmp_path))
+    state = store.load_thread_state("slack", "alice", "C1", "100.1")
+    state.effort = "high"
+    store.save_thread_state("slack", "alice", "C1", "100.1", state)
+
+    assert store.load_thread_state("slack", "bob", "C1", "100.1").effort == ""

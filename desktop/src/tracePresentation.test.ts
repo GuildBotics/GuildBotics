@@ -21,6 +21,7 @@ function presentation(overrides: Partial<TracePresentation> = {}): TracePresenta
     message: "guildbotics member memory record",
     message_params: {},
     tone: "success",
+    effort: "",
     ...overrides,
   };
 }

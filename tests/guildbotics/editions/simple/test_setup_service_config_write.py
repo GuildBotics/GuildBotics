@@ -296,7 +296,7 @@ def test_write_project_empty_intelligence_selection_keeps_template_defaults(
     model_mapping = load_yaml_file(config_dir / "intelligences/model_mapping.yml")
     cli_mapping = load_yaml_file(config_dir / "intelligences/cli_agent_mapping.yml")
     assert model_mapping["default"] == "models/openai/default.yml"
-    assert cli_mapping["default"] == "codex"
+    assert cli_mapping["default"] == "cli_agents/codex/default.yml"
 
 
 def test_write_project_creates_policy_from_template_without_overwriting(
@@ -440,7 +440,7 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
     model_mapping = load_yaml_file(config_dir / "intelligences/model_mapping.yml")
     cli_mapping = load_yaml_file(config_dir / "intelligences/cli_agent_mapping.yml")
     assert model_mapping["default"] == "models/gemini/default.yml"
-    assert cli_mapping["default"] == "claude"
+    assert cli_mapping["default"] == "cli_agents/claude/default.yml"
 
 
 # --------------------------------------------------------------------------- #
@@ -685,7 +685,9 @@ def test_set_default_person_reports_no_change_when_already_set(tmp_path: Path) -
     service = SimpleProjectSetupService()
     service.set_default_person(config_dir=config_dir, person_id="alice")
 
-    assert service.set_default_person(config_dir=config_dir, person_id="alice").files == []
+    assert (
+        service.set_default_person(config_dir=config_dir, person_id="alice").files == []
+    )
 
 
 def test_set_default_person_rejects_unknown_member(tmp_path: Path) -> None:
@@ -801,10 +803,14 @@ def test_default_person_is_cleared_when_the_member_is_deleted(tmp_path: Path) ->
         config_dir=config_dir, person_id="bob"
     )
 
-    service.delete_person(config_dir=config_dir, person_id="alice", env_file_path=env_file)
+    service.delete_person(
+        config_dir=config_dir, person_id="alice", env_file_path=env_file
+    )
     assert _default_person_id(config_dir) == "bob"
 
-    service.delete_person(config_dir=config_dir, person_id="bob", env_file_path=env_file)
+    service.delete_person(
+        config_dir=config_dir, person_id="bob", env_file_path=env_file
+    )
     assert _default_person_id(config_dir) == ""
 
 

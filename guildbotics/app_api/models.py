@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from guildbotics.app_api.activity_events import ActivityEventType
 from guildbotics.commands.formats import CommandFormat
@@ -13,6 +13,7 @@ from guildbotics.commands.metadata import (
 )
 from guildbotics.editions.simple.github_app_setup import GitHubAppRegistrationInfo
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
+from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 
 
@@ -405,6 +406,9 @@ class TracePresentation(BaseModel):
     message: str = ""
     message_params: dict[str, Any] = Field(default_factory=dict)
     tone: str = "neutral"
+    #: Effort level this record ran at, when it stated one. Diagnostics only:
+    #: activity history is about domain outcomes, not how hard a model thought.
+    effort: str = ""
 
 
 class TraceRecord(BaseModel):
@@ -706,11 +710,41 @@ class CliAgentUsagesResponse(BaseModel):
     usages: list[CliAgentUsage] = Field(default_factory=list)
 
 
+class EffortFieldSpec(BaseModel):
+    """One editable setting a provider accepts inside an effort level.
+
+    The editor renders a control from `type` alone, so it needs no knowledge of
+    what any particular key means to its provider.
+    """
+
+    key: str
+    type: str
+    values: list[str] = Field(default_factory=list)
+    minimum: int | None = None
+    maximum: int | None = None
+
+
 class ModelDefinition(BaseModel):
     path: str
     provider: str
     model_class: str = ""
-    model_id: str = ""
+    #: Settings that always apply, whatever effort was asked for. The effort
+    #: overlay merges on top. ``id`` names the model, so it lives here too
+    #: rather than in a field of its own.
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    #: Effort level -> provider parameters merged into the model's parameters.
+    effort: dict[str, dict] = Field(default_factory=dict)
+
+    @field_validator("effort", mode="before")
+    @classmethod
+    def _validate_effort(cls, value: Any) -> dict[str, dict]:
+        return validate_effort_overlay(value, where="model definition")
+
+    #: What this slot inherits when it states no effort of its own. Sent for
+    #: display and seeding; never written back as the slot's own value.
+    inherited_effort: dict[str, dict] = Field(default_factory=dict)
+    #: The settings this provider accepts, for typed editing.
+    effort_fields: list[EffortFieldSpec] = Field(default_factory=list)
 
 
 class CliAgentDefinition(BaseModel):
@@ -720,6 +754,25 @@ class CliAgentDefinition(BaseModel):
     script: str = ""
     detected: bool = False
     detected_path: str = ""
+    #: Settings that always apply, whatever effort was asked for. The effort
+    #: overlay merges on top, mirroring a model definition's ``parameters``.
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    #: Effort level -> provider-specific AI CLI tool settings.
+    effort: dict[str, dict] = Field(default_factory=dict)
+
+    @field_validator("effort", mode="before")
+    @classmethod
+    def _validate_effort(cls, value: Any) -> dict[str, dict]:
+        return validate_effort_overlay(value, where="AI CLI tool definition")
+
+    #: What this slot inherits when it states no effort of its own.
+    inherited_effort: dict[str, dict] = Field(default_factory=dict)
+    #: The settings this AI CLI tool accepts, for typed editing.
+    effort_fields: list[EffortFieldSpec] = Field(default_factory=list)
+    #: Whether this tool can act on an effort mapping at all. A tool whose
+    #: protocol has nowhere to put these settings says so, so the editor can
+    #: explain instead of collecting configuration that would be dropped.
+    effort_supported: bool = True
 
 
 class BrainAssignment(BaseModel):

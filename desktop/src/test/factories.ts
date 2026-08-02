@@ -61,6 +61,7 @@ export function makeTraceRecord(overrides: Partial<TraceRecord> = {}): TraceReco
         overrides.type ||
         "event",
       message_params: {},
+      effort: "",
       tone: "neutral",
     },
     ...overrides,

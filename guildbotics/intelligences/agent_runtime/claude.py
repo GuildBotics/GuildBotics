@@ -7,6 +7,7 @@ import json
 import re
 from contextlib import suppress
 from dataclasses import replace
+from logging import getLogger
 from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
@@ -17,6 +18,7 @@ from guildbotics.intelligences.agent_runtime.environment import (
     terminate_process_tree,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    SETTINGS_SCOPE_SESSION,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -48,6 +50,10 @@ _READ_ONLY_DISALLOWED_TOOLS = (
     "WebSearch",
     "Task",
 )
+#: The effort-mapping keys Claude Code can act on: the model it runs and the
+#: thinking budget it is allowed to spend.
+_EFFORT_SETTING_KEYS = frozenset({"model", "max_thinking_tokens"})
+_LOGGER = getLogger(__name__)
 _PROCESS_EXIT_GRACE_SECONDS = 2.0
 _PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
 _SESSION_LIMIT_PATTERN = re.compile(
@@ -60,6 +66,13 @@ _SESSION_LIMIT_PATTERN = re.compile(
 
 class ClaudeStreamJsonAdapter:
     name = "claude-stream-json"
+    # Claude Code fixes its model and thinking configuration when the session
+    # starts; a resumed session cannot be reconfigured, so a settings change
+    # rotates the conversation.
+    settings_scope = SETTINGS_SCOPE_SESSION
+
+    def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
+        return _applied_effort_settings(context)
 
     def __init__(
         self,
@@ -104,6 +117,9 @@ class ClaudeStreamJsonAdapter:
         if context.read_only:
             args.extend(("--allowed-tools", *_READ_ONLY_ALLOWED_TOOLS))
             args.extend(("--disallowed-tools", *_READ_ONLY_DISALLOWED_TOOLS))
+        _warn_unusable_effort_settings(context)
+        args.extend(_effort_arguments(context))
+        env.update(_effort_environment(context))
         if conversation.provider_session_id:
             args.extend(("--resume", conversation.provider_session_id))
         try:
@@ -345,6 +361,50 @@ class ClaudeStreamJsonAdapter:
                 details={"missing_capabilities": missing},
             )
         self._capabilities_checked = True
+
+
+def _applied_effort_settings(context: AgentExecutionContext) -> dict[str, Any]:
+    """The effort settings this adapter can really impose, normalized.
+
+    Silent by design: it also backs the session fingerprint, which is computed
+    outside the run path and must not emit a second round of warnings.
+    """
+    settings: dict[str, Any] = {}
+    model = str(context.provider_options.get("model", "") or "")
+    if model:
+        settings["model"] = model
+    budget = context.provider_options.get("max_thinking_tokens")
+    if budget not in (None, ""):
+        with suppress(TypeError, ValueError):
+            settings["max_thinking_tokens"] = max(0, int(str(budget)))
+    return settings
+
+
+def _effort_arguments(context: AgentExecutionContext) -> list[str]:
+    """Translate the turn's effort settings into Claude Code CLI flags."""
+    model = _applied_effort_settings(context).get("model", "")
+    return ["--model", str(model)] if model else []
+
+
+def _effort_environment(context: AgentExecutionContext) -> dict[str, str]:
+    """Translate the thinking budget into the variable Claude Code reads."""
+    budget = _applied_effort_settings(context).get("max_thinking_tokens")
+    return {} if budget is None else {"MAX_THINKING_TOKENS": str(budget)}
+
+
+def _warn_unusable_effort_settings(context: AgentExecutionContext) -> None:
+    """Report requested settings this adapter cannot act on."""
+    unknown = sorted(set(context.provider_options) - _EFFORT_SETTING_KEYS)
+    if unknown:
+        _LOGGER.warning(
+            "Ignoring unsupported Claude Code effort settings: %s", ", ".join(unknown)
+        )
+    budget = context.provider_options.get("max_thinking_tokens")
+    if budget not in (
+        None,
+        "",
+    ) and "max_thinking_tokens" not in _applied_effort_settings(context):
+        _LOGGER.warning("Ignoring non-numeric Claude 'max_thinking_tokens' setting.")
 
 
 def _structured_error(raw: dict[str, Any]) -> AgentRuntimeError | None:

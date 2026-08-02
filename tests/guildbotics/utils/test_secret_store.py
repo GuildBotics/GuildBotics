@@ -172,9 +172,7 @@ class TestBackendResolution:
         self, fake_keyring, tmp_path
     ):
         assert keyring_available()
-        store = resolve_secret_store(
-            tmp_path, tmp_path / ".env", create_default=True
-        )
+        store = resolve_secret_store(tmp_path, tmp_path / ".env", create_default=True)
         assert isinstance(store, KeyringSecretStore)
 
     def test_index_file_pins_keyring_backend(self, fake_keyring, tmp_path):

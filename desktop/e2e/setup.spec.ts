@@ -71,14 +71,20 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("button", { name: "Add member" }).click();
 
   // Enable GitHub after the member draft is complete, then provide the Project
-  // URL and override the lane mapping with custom status names. The backend
-  // cannot reach GitHub in CI, so the status-options fetch reports unavailable
-  // and the lane fields behave as free text; the typed names must still persist.
+  // URL. Both live in the Project section; the GitHub section derives its lane
+  // fields from the URL typed here, and shows only a "not set" notice until it
+  // parses.
   await page.getByRole("button", { name: "Project", exact: true }).click();
   await page.getByRole("textbox", { name: "GitHub integration" }).click();
   await page.getByRole("option", { name: "Use GitHub", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "GitHub Project URL" })
+    .fill("https://github.com/orgs/acme/projects/9");
+
+  // Override the lane mapping with custom status names. The backend cannot
+  // reach GitHub in CI, so the status-options fetch reports unavailable and the
+  // lane fields behave as free text; the typed names must still persist.
   await page.getByRole("button", { name: "GitHub", exact: true }).click();
-  await page.getByLabel("GitHub Project URL").fill("https://github.com/orgs/acme/projects/9");
   await page.getByRole("textbox", { name: "Ready lane" }).fill("Ready");
   await page.getByRole("textbox", { name: "Working lane" }).fill("Doing");
   await page.getByRole("textbox", { name: "Done lane" }).fill("Shipped");
@@ -107,4 +113,45 @@ test("first-run setup happy path writes project.yml and enters the service view"
   expect(projectYaml).toContain("ready: Ready");
   expect(projectYaml).toContain("working: Doing");
   expect(projectYaml).toContain("done: Shipped");
+
+  // Effort overlay: the settings UI builds typed controls from the descriptor
+  // the backend serves for the provider. jsdom can only prove the editor state
+  // changed; that a number survives client -> FastAPI -> YAML as a number needs
+  // this real stack. Branch coverage stays in the unit / component tests.
+  await page.getByRole("link", { name: "Setup" }).click();
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await page.getByRole("button", { name: "LLM / AI CLI tools", exact: true }).click();
+  await page.getByRole("button", { name: "Advanced settings", exact: true }).click();
+
+  // Switch the slot to a provider whose effort setting is an integer, so the
+  // typed control has a number to carry all the way to YAML.
+  await page.getByRole("textbox", { name: "Provider" }).click();
+  await page.getByRole("option", { name: "Google Gemini", exact: true }).click();
+  await page.getByRole("button", { name: "Customize" }).first().click();
+  await page.getByLabel("high thinking_budget").fill("4096");
+  await page.getByLabel("low thinking_budget").fill("0");
+
+  // Autosave is debounced; poll until the backend has rewritten the file. The
+  // read tolerates a not-yet-written file so the poll can keep waiting.
+  const modelFile = join(
+    ctx.workspaceDir,
+    ".guildbotics",
+    "config",
+    "intelligences",
+    "models",
+    "gemini",
+    "default.yml",
+  );
+  const readModelFile = () => {
+    try {
+      return readFileSync(modelFile, "utf-8");
+    } catch {
+      return "";
+    }
+  };
+  await expect.poll(readModelFile, { timeout: 15_000 }).toContain("thinking_budget: 4096");
+  const modelYaml = readModelFile();
+  expect(modelYaml).toContain("thinking_budget: 0");
+  // An integer must not arrive quoted; a provider would reject that.
+  expect(modelYaml).not.toContain("'4096'");
 });

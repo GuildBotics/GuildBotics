@@ -188,7 +188,7 @@ function llmProviders() {
         order: 10,
         api_key_env: "OPENAI_API_KEY",
         model_class: "agno.models.openai.OpenAIChat",
-        model_id: "gpt-5-mini",
+        parameters: { id: "gpt-5-mini" },
       },
       {
         provider: "gemini",
@@ -196,7 +196,7 @@ function llmProviders() {
         order: 20,
         api_key_env: "GOOGLE_API_KEY",
         model_class: "agno.models.google.Gemini",
-        model_id: "gemini-3-flash-preview",
+        parameters: { id: "gemini-3-flash-preview" },
       },
       {
         provider: "anthropic",
@@ -204,7 +204,7 @@ function llmProviders() {
         order: 30,
         api_key_env: "ANTHROPIC_API_KEY",
         model_class: "agno.models.anthropic.Claude",
-        model_id: "claude-haiku-4-5",
+        parameters: { id: "claude-haiku-4-5" },
       },
     ],
   };
@@ -487,7 +487,7 @@ describe("Setup integration (real client + mock server)", () => {
           {
             name: "codex",
             executable: "codex",
-            config_reference: "codex",
+            config_reference: "cli_agents/codex/default.yml",
             detected: true,
             path: "/usr/bin/codex",
           },

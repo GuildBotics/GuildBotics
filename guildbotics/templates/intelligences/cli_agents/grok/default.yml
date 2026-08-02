@@ -1,0 +1,33 @@
+# Effort mapping for the native Grok Build AI CLI tool.
+#
+# Native tools have no configuration file of their own; this file exists solely
+# to translate the provider-neutral effort labels (low / high) into settings the
+# Grok adapter can apply. Do not add `script` or `env` here.
+#
+# `grok agent stdio` accepts these as launch options, so they are fixed for the
+# life of the process: changing one starts a fresh session rather than adjusting
+# the current one.
+#
+# The values below come from Grok itself, not from guesswork. `grok --help` does
+# not enumerate them and its shell completion reports a free-form string
+# (`grok completions zsh` shows `_default` for --reasoning-effort, against a
+# real list for --output-format), so the CLI does not validate them. The
+# authoritative list is the `_x.ai/models/update` notification the agent sends
+# after `session/new`, whose `_meta.reasoningEfforts` lists one entry per
+# supported level. Grok Build 0.2.114 / grok-4.5 reports low, medium and high,
+# with high as its default.
+#
+# `supportsReasoningEffort` is per model, so a different model may accept a
+# different set. Re-check with that notification after switching models.
+effort:
+  low:
+    reasoning_effort: low
+  high:
+    reasoning_effort: high
+
+effort_fields:
+  - key: reasoning_effort
+    type: enum
+    values: [low, medium, high]
+  - key: model
+    type: model_id

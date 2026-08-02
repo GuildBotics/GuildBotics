@@ -6,23 +6,34 @@ import shutil
 import tempfile
 import time
 from contextlib import suppress
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from logging import Logger
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
 from guildbotics.intelligences.agent_runtime.models import (
+    SETTINGS_SCOPE_SESSION,
+    SETTINGS_SCOPE_TURN,
     AgentExecutionContext,
     ConversationRecord,
+    settings_fingerprint,
 )
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
+from guildbotics.intelligences.effort import (
+    ResolvedEffort,
+    effort_diagnostics,
+    effort_settings,
+    resolve_effort,
+    validate_effort_overlay,
+)
 from guildbotics.observability import correlation_fields, span_scope
 from guildbotics.observability.diagnostics_events import (
     record_correlated_event,
@@ -86,6 +97,8 @@ class ExecutableInfo:
         adapter: str = "",
         conversation_scope: str = "none",
         agent_name: str = "",
+        effort: dict[str, dict] | None = None,
+        parameters: dict | None = None,
     ):
         """
         Initialize the executable information.
@@ -93,15 +106,105 @@ class ExecutableInfo:
         Args:
             script (str): The script to execute.
             env (dict): Environment variables to set for the script.
+            adapter (str): Native adapter name, empty for one-shot scripts.
+            conversation_scope (str): How a one-shot script reuses conversations.
+            agent_name (str): Catalog name of the AI CLI tool.
+            effort (dict): Effort level -> provider-specific settings. Only the
+                common ``model`` key is understood by the core; every other key
+                is provider-specific and validated by the adapter.
+            parameters (dict): Settings that always apply, whatever effort was
+                asked for. The effort overlay is merged on top, the same way a
+                model definition's ``parameters`` relate to its ``effort``.
         """
         self.script = script
         self.env = {} if env is None else env
         self.adapter = adapter
         self.conversation_scope = conversation_scope
         self.agent_name = agent_name
+        self.effort = {} if effort is None else effort
+        self.parameters = {} if parameters is None else parameters
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
+
+#: The complete environment contract handed to one-shot script adapters. Nothing
+#: else from the effort mapping becomes an environment variable, so a script
+#: reads a fixed set of names rather than an open-ended provider vocabulary.
+CLI_AGENT_EFFORT_ENV = "GUILDBOTICS_CLI_AGENT_EFFORT"
+CLI_AGENT_MODEL_ENV = "GUILDBOTICS_CLI_AGENT_MODEL"
+CLI_AGENT_EFFORT_OPTIONS_ENV = "GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS"
+
+#: The effort-mapping keys the core gives a name of their own, because every AI
+#: CLI tool GuildBotics ships accepts both. Everything else is passed through as
+#: JSON to the adapter, which owns the rest of the provider vocabulary.
+EFFORT_MODEL_KEY = "model"
+EFFORT_LEVEL_KEY = "effort"
+
+
+@dataclass(frozen=True)
+class EffortDecision:
+    """A resolved effort level together with its provider-specific settings.
+
+    ``provider_options`` is everything the turn hands the tool: the tool's own
+    baseline settings with the level's overlay merged on top. ``overlay`` is the
+    level's own contribution alone — diagnostics are built from it, so an
+    unmapped level reads as ``unsupported`` even when a baseline still supplies
+    settings, exactly as it does on the LLM API path.
+    """
+
+    resolved: ResolvedEffort = field(default_factory=ResolvedEffort)
+    overlay: dict[str, Any] = field(default_factory=dict)
+    provider_options: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def model(self) -> str:
+        return str(self.provider_options.get(EFFORT_MODEL_KEY, "") or "")
+
+    def diagnostics(self) -> dict[str, Any]:
+        return effort_diagnostics(self.resolved, self.overlay, model=self.model)
+
+    @property
+    def level(self) -> str:
+        """The effort value to pass to the tool, or ``""`` to say nothing.
+
+        A stated ``effort`` -- from the tool's own settings or from the level
+        that was applied -- always wins, so a tool with a richer vocabulary than
+        the neutral labels (``xhigh``, ``medium``) can be driven properly. When
+        nothing states one, the neutral level is passed through only if it asks
+        for something; ``default`` deliberately says nothing so the tool keeps
+        its own preference.
+        """
+        stated = str(self.provider_options.get(EFFORT_LEVEL_KEY, "") or "")
+        if stated:
+            return stated
+        return self.resolved.resolved if self.resolved.intervenes else ""
+
+    def script_environment(self) -> dict[str, str]:
+        """Build the one-shot script environment for this decision.
+
+        Everything the settings actually state is exported, whether it came from
+        the tool's own settings or from the effort level. A `default` turn is not
+        a reason to withhold a setting the tool is configured to always use.
+        """
+        environment: dict[str, str] = {}
+        if self.model:
+            environment[CLI_AGENT_MODEL_ENV] = self.model
+        if self.level:
+            environment[CLI_AGENT_EFFORT_ENV] = self.level
+        remainder = {
+            key: value
+            for key, value in self.provider_options.items()
+            if key not in {EFFORT_MODEL_KEY, EFFORT_LEVEL_KEY}
+        }
+        if remainder:
+            environment[CLI_AGENT_EFFORT_OPTIONS_ENV] = json.dumps(
+                remainder, ensure_ascii=False, sort_keys=True
+            )
+        return environment
+
+
+#: "Impose nothing" — the decision a turn carries when no effort was requested.
+NO_EFFORT = EffortDecision()
 
 
 @dataclass(frozen=True)
@@ -489,34 +592,77 @@ def _propagate_cwd_workspace_environment(env: dict[str, str]) -> None:
             env[GUILDBOTICS_ENV_FILE] = str(env_file.resolve())
 
 
+def _cli_agent_definition(person_id: str, definition_path: str) -> dict:
+    """Read a definition, filling absent keys from its tool's own default.
+
+    Slots live at ``cli_agents/<tool>/<slot>.yml`` beside the tool's
+    ``default.yml``, the same shape model definitions use, so a slot states only
+    what it changes and inherits the rest.
+    """
+    from guildbotics.intelligences.cli_agents import cli_agent_default_path
+
+    data = _yaml_dict(
+        get_person_config_path(person_id, f"intelligences/{definition_path}")
+    )
+    tool_default = cli_agent_default_path(_tool_of(definition_path))
+    if tool_default != definition_path:
+        inherited = _yaml_dict(
+            get_person_config_path(person_id, f"intelligences/{tool_default}")
+        )
+        data = {**inherited, **data}
+    return data
+
+
+def _yaml_dict(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    data = load_yaml_file(path)
+    return data if isinstance(data, dict) else {}
+
+
+def _parameters_of(definition: dict) -> dict:
+    parameters = definition.get("parameters")
+    return dict(parameters) if isinstance(parameters, dict) else {}
+
+
+def _tool_of(definition_path: str) -> str:
+    from guildbotics.intelligences.cli_agents import cli_agent_name_from_path
+
+    return cli_agent_name_from_path(definition_path)
+
+
 def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
     if person_id in person_cli_agent_mapping:
         return person_cli_agent_mapping[person_id]
 
     mapping = load_person_slot_mapping(person_id, "intelligences/cli_agent_mapping.yml")
-    from guildbotics.intelligences.cli_agents import native_cli_agent_name
+    from guildbotics.intelligences.cli_agents import is_native_cli_agent
 
     cli_agent_mapping = {}
-    for name, executable_info_file in mapping.items():
-        native_name = native_cli_agent_name(str(executable_info_file))
-        if native_name:
-            cli_agent_mapping[name] = ExecutableInfo(
-                adapter=native_name, agent_name=native_name
+    for slot, definition_path in mapping.items():
+        path = str(definition_path)
+        tool = _tool_of(path)
+        definition = _cli_agent_definition(person_id, path)
+        effort = validate_effort_overlay(
+            definition.get("effort"), where=f"AI CLI tool '{slot}'"
+        )
+        if is_native_cli_agent(tool):
+            cli_agent_mapping[slot] = ExecutableInfo(
+                adapter=tool,
+                agent_name=tool,
+                effort=effort,
+                parameters=_parameters_of(definition),
             )
             continue
-        executable_info_path = get_person_config_path(
-            person_id, f"intelligences/cli_agents/{executable_info_file}"
-        )
-        executable_info = cast(dict, load_yaml_file(executable_info_path))
-        cli_agent_mapping[name] = ExecutableInfo(
-            script=executable_info.get("script", ""),
-            env=executable_info.get("env", {}),
+        cli_agent_mapping[slot] = ExecutableInfo(
+            script=definition.get("script", ""),
+            env=definition.get("env", {}),
             conversation_scope=str(
-                executable_info.get("conversation_scope", "none") or "none"
+                definition.get("conversation_scope", "none") or "none"
             ),
-            agent_name=str(executable_info_file)
-            .removesuffix(".yml")
-            .removesuffix("-cli"),
+            agent_name=tool,
+            effort=effort,
+            parameters=_parameters_of(definition),
         )
     person_cli_agent_mapping[person_id] = cli_agent_mapping
     return cli_agent_mapping
@@ -578,6 +724,7 @@ class CliAgentBrain(Brain):
         template_engine: str = "default",
         response_class: type[BaseModel] | None = None,
         cli_agent: str = "default",
+        effort: str = "",
     ):
         super().__init__(
             person_id=person_id,
@@ -586,6 +733,7 @@ class CliAgentBrain(Brain):
             description=description,
             template_engine=template_engine,
             response_class=response_class,
+            effort=effort,
         )
 
         self.prompt_info = PromptInfo(
@@ -612,11 +760,12 @@ class CliAgentBrain(Brain):
         )
         # The span wraps the whole call (including this brain's own logging) so
         # logs emitted here are attributed to the "cli_agent" span in diagnostics.
+        effort = self._resolve_provider_effort(kwargs)
         with span_scope("cli_agent"):
             started = time.monotonic()
-            self._write_request_io(input, kwargs)
+            self._write_request_io(input, kwargs, effort)
             try:
-                result = await self._execute(input, cwd, kwargs)
+                result = await self._execute(input, cwd, kwargs, effort)
             except Exception:
                 record_span_summary(
                     status="failed",
@@ -655,11 +804,12 @@ class CliAgentBrain(Brain):
         input = self.prompt_info.to_prompt(
             message, kwargs.get("session_state", {}), self.template_engine
         )
+        effort = self._resolve_provider_effort(kwargs)
         with span_scope("cli_agent"):
             started = time.monotonic()
-            self._write_request_io(input, kwargs)
+            self._write_request_io(input, kwargs, effort)
             try:
-                result = await self._execute(input, cwd, kwargs)
+                result = await self._execute(input, cwd, kwargs, effort)
             except Exception:
                 record_span_summary(
                     status="failed",
@@ -678,15 +828,32 @@ class CliAgentBrain(Brain):
             )
         return result
 
+    def _resolve_provider_effort(self, kwargs: dict[str, Any]) -> EffortDecision:
+        """Resolve the effort level and translate it into provider settings."""
+        resolved = resolve_effort(
+            kwargs.get("session_state"), self.effort, logger=self.logger
+        )
+        overlay = effort_settings(
+            self.executable_info.effort, resolved, logger=self.logger
+        )
+        # The tool's own settings always apply; the level only overlays them, so
+        # a slot can name a model without tying it to an effort level.
+        options = {**deepcopy(self.executable_info.parameters), **overlay}
+        return EffortDecision(
+            resolved=resolved, overlay=overlay, provider_options=options
+        )
+
     async def _execute(
         self,
         input: str,
         cwd: Path | str,
         kwargs: dict[str, Any],
+        effort: EffortDecision,
     ) -> CliAgentExecutionResult:
         if self.executable_info.adapter:
-            return await self._execute_native(input, cwd, kwargs)
+            return await self._execute_native(input, cwd, kwargs, effort)
         extra_env = _extra_env(kwargs)
+        extra_env.update(effort.script_environment())
         script_input = _one_shot_input(
             input,
             _agent_execution_context(kwargs),
@@ -696,7 +863,11 @@ class CliAgentBrain(Brain):
         return await self._execute_script(script_input, cwd, extra_env)
 
     async def _execute_native(
-        self, input: str, cwd: Path | str, kwargs: dict[str, Any]
+        self,
+        input: str,
+        cwd: Path | str,
+        kwargs: dict[str, Any],
+        effort: EffortDecision = NO_EFFORT,
     ) -> CliAgentExecutionResult:
         from guildbotics.intelligences.agent_runtime.models import (
             ConversationKey,
@@ -768,7 +939,12 @@ class CliAgentBrain(Brain):
                 event_id=str(configured.get("event_id") or ""),
                 lease_id=lease_metadata.lease_id if lease_metadata else "",
                 delegation_id=lease_metadata.delegation_id if lease_metadata else "",
-                model=str(configured.get("model") or ""),
+                model=effort.model or str(configured.get("model") or ""),
+                # `default` and unspecified state nothing: the turn imposes no
+                # settings, which leaves a resumed session on the ones it
+                # already has instead of rotating it back to provider defaults.
+                effort=(effort.resolved.resolved if effort.resolved.intervenes else ""),
+                provider_options=dict(effort.provider_options),
                 rebuild_context=str(configured.get("rebuild_context") or ""),
                 rebuild_context_complete=_context_is_complete(configured),
                 attempt=_attempt(configured),
@@ -811,11 +987,23 @@ class CliAgentBrain(Brain):
         from guildbotics.intelligences.agent_runtime.store import ConversationStore
 
         store = ConversationStore(context.workspace_data_root)
+        adapter = await get_native_adapter(self.person_id, adapter_name, run_id)
+        # A turn-scoped adapter re-sends its settings on every turn, so a change
+        # never justifies discarding the session. For a session-scoped one the
+        # fingerprint comes from what the adapter will really impose, so a
+        # request it cannot act on does not read as a change.
+        fingerprint = (
+            ""
+            if getattr(adapter, "settings_scope", SETTINGS_SCOPE_SESSION)
+            == SETTINGS_SCOPE_TURN
+            else settings_fingerprint(adapter.applied_settings(context))
+        )
         try:
             conversation = store.resolve(
                 context.conversation_key,
                 context.resume_policy,
                 model=context.model,
+                settings_fingerprint=fingerprint,
             )
         except LookupError as exc:
             return CliAgentExecutionResult(
@@ -824,7 +1012,6 @@ class CliAgentBrain(Brain):
                 returncode=1,
                 error_category="session_unavailable",
             )
-        adapter = await get_native_adapter(self.person_id, adapter_name, run_id)
 
         async def emit(event: Any) -> None:
             record_agent_event(event, context, conversation)
@@ -1087,10 +1274,13 @@ class CliAgentBrain(Brain):
         with suppress(OSError):
             os.remove(file_name)
 
-    def _write_request_io(self, prompt: str, kwargs: dict[str, Any]) -> None:
+    def _write_request_io(
+        self, prompt: str, kwargs: dict[str, Any], effort: EffortDecision
+    ) -> None:
         record_correlated_io(
             io_type="cli_agent.request",
             payload={
+                "effort": effort.diagnostics(),
                 "person_id": self.person_id,
                 "brain": self.name,
                 "cli_agent": self.cli_agent,

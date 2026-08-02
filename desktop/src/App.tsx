@@ -2144,6 +2144,13 @@ function ExecTimeline({
               <Badge color={tracePresentationTone(record.presentation)} variant="light">
                 {tracePresentationLabel(t, record.presentation)}
               </Badge>
+              {record.presentation.effort ? (
+                <Badge color="neutral" variant="outline">
+                  {t("diagnostics.executions.effort", {
+                    level: record.presentation.effort,
+                  })}
+                </Badge>
+              ) : null}
               <span className="exec-timeline-message">
                 {tracePresentationMessage(t, record.presentation)}
               </span>

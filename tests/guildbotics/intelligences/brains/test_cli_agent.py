@@ -24,7 +24,11 @@ class StubProcess:
 
 @pytest.mark.parametrize(
     ("mapping_value", "adapter"),
-    [("codex", "codex"), ("codex-cli.yml", "codex"), ("claude", "claude")],
+    [
+        ("cli_agents/codex/default.yml", "codex"),
+        ("cli_agents/codex/reviewer.yml", "codex"),
+        ("cli_agents/claude/default.yml", "claude"),
+    ],
 )
 def test_cli_agent_mapping_selects_native_adapter_without_script_file(
     monkeypatch, tmp_path, mapping_value, adapter
@@ -87,6 +91,7 @@ async def test_cli_agent_run_passes_cwd_without_mutating_mapping(monkeypatch, tm
     finally:
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)
+
 
 @pytest.mark.asyncio
 async def test_cli_agent_run_inherits_environment_and_overlays_config(
@@ -1042,4 +1047,466 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     assert result.stdout == "answer"
     assert captured["context"].read_only is True
     assert captured["context"].lease_id == ""
+
+
+@pytest.mark.asyncio
+async def test_a_default_effort_turn_states_no_settings(monkeypatch, tmp_path) -> None:
+    """`default` cancels the frontmatter but still imposes nothing downstream.
+
+    Stating the level here would give the turn a non-empty fingerprint, which
+    rotates a session-scoped provider's session -- the opposite of the "keep the
+    session's current settings" meaning `default` carries.
+    """
+    captured: dict = {}
+
+    async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
+        captured["context"] = context
+        return cli_agent.CliAgentExecutionResult(
+            stdout="answer", stderr="", returncode=0
+        )
+
+    monkeypatch.setattr(
+        cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
+    )
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger(), effort="high")
+    brain.executable_info = cli_agent.ExecutableInfo(
+        script="",
+        env={},
+        adapter="claude-stream-json",
+        effort={"high": {"model": "big-model"}},
+    )
+
+    await brain._execute_native(
+        input="hello",
+        cwd=tmp_path,
+        kwargs={
+            "session_state": {
+                "effort": "default",
+                "agent_execution_context": {
+                    "run_id": "run-9",
+                    "work_kind": "troubleshooting",
+                    "workspace_data_root": str(tmp_path),
+                    "read_only": True,
+                },
+            }
+        },
+        effort=brain._resolve_provider_effort({"session_state": {"effort": "default"}}),
+    )
+
+    context = captured["context"]
+    assert context.effort == ""
+    assert context.provider_options == {}
     assert captured["context"].delegation_id == ""
+
+
+# --------------------------------------------------------------------------- #
+# Effort: mapping discovery, provider options and the one-shot env contract
+# --------------------------------------------------------------------------- #
+
+
+def _stub_logger():
+    return type(
+        "L",
+        (),
+        {
+            "debug": lambda *a, **k: None,
+            "info": lambda *a, **k: None,
+            "warning": lambda *a, **k: None,
+            "error": lambda *a, **k: None,
+        },
+    )()
+
+
+def _write_definition(root, relative: str, body: str):
+    path = root / "intelligences" / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+def test_a_native_tool_reads_its_own_definition(monkeypatch, tmp_path) -> None:
+    _write_definition(
+        tmp_path, "cli_agents/codex/default.yml", "effort:\n  high:\n    effort: high\n"
+    )
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"default": "cli_agents/codex/default.yml"},
+    )
+
+    resolved = cli_agent.get_cli_agent_mapping("aiko")
+
+    assert resolved["default"].adapter == "codex"
+    assert resolved["default"].effort == {"high": {"effort": "high"}}
+    cli_agent.person_cli_agent_mapping.clear()
+
+
+def test_two_slots_on_one_tool_keep_their_own_settings(monkeypatch, tmp_path) -> None:
+    """The reason slots exist: two features on one tool, configured apart.
+
+    Before definitions were per-slot, both slots read the same tool file and
+    could not differ at all.
+    """
+    _write_definition(
+        tmp_path,
+        "cli_agents/codex/default.yml",
+        "effort:\n  high:\n    model: strong\n",
+    )
+    _write_definition(
+        tmp_path,
+        "cli_agents/codex/reviewer.yml",
+        "effort:\n  high:\n    model: cheap\n",
+    )
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {
+            "default": "cli_agents/codex/default.yml",
+            "reviewer": "cli_agents/codex/reviewer.yml",
+        },
+    )
+
+    resolved = cli_agent.get_cli_agent_mapping("aiko")
+
+    assert resolved["default"].effort == {"high": {"model": "strong"}}
+    assert resolved["reviewer"].effort == {"high": {"model": "cheap"}}
+    # Both still run on the same adapter.
+    assert {info.adapter for info in resolved.values()} == {"codex"}
+    cli_agent.person_cli_agent_mapping.clear()
+
+
+def test_a_slot_inherits_the_keys_it_does_not_state(monkeypatch, tmp_path) -> None:
+    _write_definition(
+        tmp_path,
+        "cli_agents/copilot/default.yml",
+        "script: run-copilot\nenv:\n  A: '1'\neffort:\n  high:\n    effort: high\n",
+    )
+    _write_definition(
+        tmp_path, "cli_agents/copilot/writer.yml", "effort:\n  high:\n    effort: max\n"
+    )
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"writer": "cli_agents/copilot/writer.yml"},
+    )
+
+    resolved = cli_agent.get_cli_agent_mapping("aiko")
+
+    # Its own effort wins; the script and env come from the tool's default.
+    assert resolved["writer"].effort == {"high": {"effort": "max"}}
+    assert resolved["writer"].script == "run-copilot"
+    assert resolved["writer"].env == {"A": "1"}
+    assert resolved["writer"].agent_name == "copilot"
+    cli_agent.person_cli_agent_mapping.clear()
+
+
+@pytest.mark.parametrize(
+    ("effort_level", "expected"),
+    [
+        (
+            "high",
+            {
+                "GUILDBOTICS_CLI_AGENT_EFFORT": "high",
+                "GUILDBOTICS_CLI_AGENT_MODEL": "big-model",
+                "GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS": '{"verbosity": "high"}',
+            },
+        ),
+        # `default` and unspecified impose nothing, so the script keeps its own
+        # defaults instead of having to recognize a no-op value.
+        ("default", {}),
+        ("", {}),
+    ],
+)
+def test_one_shot_effort_environment_contract(effort_level, expected) -> None:
+    decision = cli_agent.EffortDecision(
+        resolved=cli_agent.ResolvedEffort(
+            requested=effort_level, resolved=effort_level, source="runtime"
+        ),
+        provider_options=(
+            {"model": "big-model", "verbosity": "high"}
+            if effort_level == "high"
+            else {}
+        ),
+    )
+    assert decision.script_environment() == expected
+
+
+def test_one_shot_effort_environment_omits_model_when_unmapped() -> None:
+    decision = cli_agent.EffortDecision(
+        resolved=cli_agent.ResolvedEffort(
+            requested="low", resolved="low", source="runtime"
+        ),
+        provider_options={"reasoning": "minimal"},
+    )
+    assert decision.script_environment() == {
+        "GUILDBOTICS_CLI_AGENT_EFFORT": "low",
+        "GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS": '{"reasoning": "minimal"}',
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_effort_reaches_a_one_shot_script_environment(
+    monkeypatch, tmp_path
+) -> None:
+    """`guildbotics run <command> effort=high` arrives via session_state."""
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(
+            script="echo test",
+            env={},
+            effort={"high": {"model": "big-model", "verbosity": "high"}},
+        )
+    }
+    captured: dict = {}
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
+    ):
+        captured["env"] = env
+        return StubProcess()
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+    try:
+        brain = cli_agent.CliAgentBrain("p1", "x", logger=_stub_logger())
+        await brain.run("hello", cwd=tmp_path, session_state={"effort": "high"})
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert captured["env"]["GUILDBOTICS_CLI_AGENT_EFFORT"] == "high"
+    assert captured["env"]["GUILDBOTICS_CLI_AGENT_MODEL"] == "big-model"
+    assert (
+        captured["env"]["GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS"]
+        == '{"verbosity": "high"}'
+    )
+    assert "GUILDBOTICS_CLI_AGENT_EFFORT" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_frontmatter_effort_reaches_a_one_shot_script_environment(
+    monkeypatch, tmp_path
+) -> None:
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(
+            script="echo test", env={}, effort={"high": {"model": "big-model"}}
+        )
+    }
+
+    async def fake_create_subprocess_shell(
+        script, cwd=None, env=None, stdout=None, stderr=None, **_kwargs
+    ):
+        fake_create_subprocess_shell.env = env
+        return StubProcess()
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+    try:
+        brain = cli_agent.CliAgentBrain("p1", "x", logger=_stub_logger(), effort="high")
+        await brain.run("hello", cwd=tmp_path, session_state={})
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    assert (
+        fake_create_subprocess_shell.env["GUILDBOTICS_CLI_AGENT_MODEL"] == "big-model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_diagnostics_record_effort_keys_not_values(
+    monkeypatch, tmp_path
+) -> None:
+    original = cli_agent.person_cli_agent_mapping.copy()
+    io_records: list[tuple[str, dict]] = []
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["p1"] = {
+        "default": cli_agent.ExecutableInfo(
+            script="echo test", env={}, effort={"high": {"token": "secret-value"}}
+        )
+    }
+
+    async def fake_create_subprocess_shell(*_args, **_kwargs):
+        return StubProcess()
+
+    monkeypatch.setattr(
+        cli_agent.asyncio, "create_subprocess_shell", fake_create_subprocess_shell
+    )
+    monkeypatch.setattr(
+        cli_agent,
+        "record_correlated_io",
+        lambda *, io_type, payload: io_records.append((io_type, payload)),
+    )
+    try:
+        brain = cli_agent.CliAgentBrain("p1", "x", logger=_stub_logger(), effort="high")
+        await brain.run("hello", cwd=tmp_path, session_state={})
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    effort_payload = io_records[0][1]["effort"]
+    assert effort_payload["resolved"] == "high"
+    assert effort_payload["applied_keys"] == ["token"]
+    assert "secret-value" not in str(effort_payload)
+
+
+def test_a_mapping_effort_value_overrides_the_neutral_level() -> None:
+    """A tool with a richer vocabulary than low/high must be drivable.
+
+    Copilot accepts `xhigh`, Antigravity accepts `medium`; passing only the
+    neutral label would put those out of reach.
+    """
+    decision = cli_agent.EffortDecision(
+        resolved=cli_agent.ResolvedEffort(
+            requested="high", resolved="high", source="runtime"
+        ),
+        provider_options={"effort": "xhigh", "model": "gpt-5.4"},
+    )
+
+    environment = decision.script_environment()
+
+    assert environment["GUILDBOTICS_CLI_AGENT_EFFORT"] == "xhigh"
+    assert environment["GUILDBOTICS_CLI_AGENT_MODEL"] == "gpt-5.4"
+    # `effort` and `model` have names of their own, so neither is duplicated
+    # into the catch-all JSON.
+    assert "GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS" not in environment
+
+
+def test_without_a_mapping_the_neutral_level_is_passed_through() -> None:
+    """Every shipped tool accepts low/high, so a mapping stays optional."""
+    decision = cli_agent.EffortDecision(
+        resolved=cli_agent.ResolvedEffort(
+            requested="low", resolved="low", source="runtime"
+        )
+    )
+
+    assert decision.script_environment() == {"GUILDBOTICS_CLI_AGENT_EFFORT": "low"}
+
+
+def test_a_tools_own_settings_apply_whatever_effort_was_asked_for(
+    monkeypatch, tmp_path
+) -> None:
+    """`default` is the common case, so a model must not depend on a level.
+
+    Without a baseline the only place to name a model was inside an effort
+    level, which left every `default` turn -- every ordinary chat reply --
+    unable to state one at all.
+    """
+    _write_definition(
+        tmp_path,
+        "cli_agents/codex/default.yml",
+        "parameters:\n  model: steady\neffort:\n  high:\n    model: stronger\n",
+    )
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"default": "cli_agents/codex/default.yml"},
+    )
+    try:
+        brain = cli_agent.CliAgentBrain("aiko", "x", logger=_stub_logger())
+        models = {
+            requested: brain._resolve_provider_effort(
+                {"session_state": {"effort": requested} if requested else {}}
+            ).model
+            for requested in ("high", "default", "")
+        }
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+
+    assert models == {"high": "stronger", "default": "steady", "": "steady"}
+
+
+def test_diagnostics_reflect_the_level_not_the_baseline(monkeypatch, tmp_path) -> None:
+    """A baseline must not disguise an unmapped level as a supported one.
+
+    The tool still runs with its standing settings, but the *effort decision*
+    contributed nothing — diagnostics have to say so, exactly as the LLM API
+    path does, or an ignored `high` would look applied.
+    """
+    _write_definition(
+        tmp_path,
+        "cli_agents/codex/default.yml",
+        "parameters:\n  model: steady\neffort:\n  low:\n    effort: low\n",
+    )
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"default": "cli_agents/codex/default.yml"},
+    )
+    try:
+        brain = cli_agent.CliAgentBrain("aiko", "x", logger=_stub_logger())
+        unmapped = brain._resolve_provider_effort({"session_state": {"effort": "high"}})
+        mapped = brain._resolve_provider_effort({"session_state": {"effort": "low"}})
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+
+    unmapped_payload = unmapped.diagnostics()
+    assert unmapped_payload["unsupported"] is True
+    assert unmapped_payload["applied_keys"] == []
+    # The tool itself still runs on its standing settings.
+    assert unmapped.provider_options == {"model": "steady"}
+    assert unmapped_payload["model"] == "steady"
+
+    mapped_payload = mapped.diagnostics()
+    assert mapped_payload["unsupported"] is False
+    # Only the level's own contribution counts as applied, not the baseline.
+    assert mapped_payload["applied_keys"] == ["effort"]
+
+
+def test_a_baseline_model_reaches_a_one_shot_script_without_an_effort(
+    monkeypatch, tmp_path
+) -> None:
+    decision = cli_agent.EffortDecision(
+        resolved=cli_agent.ResolvedEffort(), provider_options={"model": "steady"}
+    )
+
+    environment = decision.script_environment()
+
+    assert environment == {"GUILDBOTICS_CLI_AGENT_MODEL": "steady"}
+    # No level was stated, so the script keeps its own effort default.
+    assert "GUILDBOTICS_CLI_AGENT_EFFORT" not in environment
+
+
+def test_a_tools_own_effort_applies_on_a_default_turn() -> None:
+    """A `default` request is not a reason to withhold a standing setting.
+
+    `default` means the caller asks for no particular effort; it does not mean
+    the slot has no configured one. Dropping it here would leave the baseline
+    working for `model` but silently ignored for `effort`.
+    """
+    baseline_only = cli_agent.EffortDecision(
+        resolved=cli_agent.ResolvedEffort(
+            requested="default", resolved="default", source="runtime"
+        ),
+        provider_options={"effort": "high", "model": "steady"},
+    )
+
+    assert baseline_only.script_environment() == {
+        "GUILDBOTICS_CLI_AGENT_EFFORT": "high",
+        "GUILDBOTICS_CLI_AGENT_MODEL": "steady",
+    }
+
+
+def test_a_default_turn_with_nothing_configured_stays_silent() -> None:
+    """Without a standing setting, the tool keeps its own preference."""
+    decision = cli_agent.EffortDecision(
+        resolved=cli_agent.ResolvedEffort(
+            requested="default", resolved="default", source="runtime"
+        )
+    )
+
+    assert decision.script_environment() == {}

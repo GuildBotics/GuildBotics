@@ -18,6 +18,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentEventKind,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
+    SETTINGS_SCOPE_TURN,
     AgentTerminalResult,
     ConversationKey,
     ResumePolicy,
@@ -32,11 +33,15 @@ class _Logger:
 
 class _Adapter:
     name = "codex-app-server"
+    settings_scope = SETTINGS_SCOPE_TURN
 
     def __init__(self) -> None:
         self.fail = False
         self.prompts: list[str] = []
         self.contexts = []
+
+    def applied_settings(self, context):
+        return dict(context.provider_options)
 
     async def run_turn(self, prompt, context, conversation, emit):
         self.prompts.append(prompt)
@@ -954,9 +959,7 @@ async def test_native_chat_same_cursor_same_run_event_uses_continuation(
         "record_agent_event",
         lambda event, *_args: recorded_events.append(event),
     )
-    _seed_chat_record(
-        tmp_path, cursor="100.1", last_run_id="run-A", last_event_id="EA"
-    )
+    _seed_chat_record(tmp_path, cursor="100.1", last_run_id="run-A", last_event_id="EA")
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
     result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
@@ -983,9 +986,7 @@ async def test_native_chat_same_cursor_different_run_is_not_continuation(
         "record_agent_event",
         lambda event, *_args: recorded_events.append(event),
     )
-    _seed_chat_record(
-        tmp_path, cursor="100.1", last_run_id="run-B", last_event_id="EB"
-    )
+    _seed_chat_record(tmp_path, cursor="100.1", last_run_id="run-B", last_event_id="EB")
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
     result = await _run_chat_turn(brain, tmp_path, cursor="100.1")

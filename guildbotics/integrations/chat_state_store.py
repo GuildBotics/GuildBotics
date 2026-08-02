@@ -45,6 +45,10 @@ class ThreadConversationState:
     latest_focus: str = ""
     handoffs: list[ThreadHandoffState] = field(default_factory=list)
     system_notices: list[ThreadSystemNoticeState] = field(default_factory=list)
+    # Highest model effort this thread has been assessed to need. Like every
+    # other field here it is stored per person_id, so it is one member's view of
+    # the thread, not a value shared by everyone taking part in it.
+    effort: str = ""
     backfill_disabled_reason: str = ""
     backfill_error_count: int = 0
     last_backfill_error: str = ""

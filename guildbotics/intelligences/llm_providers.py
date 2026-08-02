@@ -5,6 +5,11 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from guildbotics.intelligences.effort import (
+    EffortField,
+    validate_effort_fields,
+    validate_effort_overlay,
+)
 from guildbotics.utils.fileio import (
     get_intelligence_roots,
     load_yaml_dict,
@@ -27,6 +32,12 @@ class LlmProviderInfo(BaseModel):
     api_key_env: str = ""
     model_class: str = ""
     model_id: str = ""
+    #: The provider's default effort overlay, so a slot that switches provider
+    #: starts from a mapping that fits that provider's parameter shapes.
+    effort: dict[str, dict] = {}
+    #: The settings this provider accepts, so an editor can offer typed
+    #: controls for a slot that has no definition file yet.
+    effort_fields: list[EffortField] = []
 
 
 def _read_provider_default(roots: list[Path], provider: str) -> dict[str, Any]:
@@ -73,6 +84,12 @@ def discover_llm_providers(
                 api_key_env=str(data.get("api_key_env", "")),
                 model_class=str(data.get("model_class", "")),
                 model_id=str(parameters.get("id", "")),
+                effort_fields=validate_effort_fields(
+                    data.get("effort_fields"), where=f"provider '{name}'"
+                ),
+                effort=validate_effort_overlay(
+                    data.get("effort"), where=f"provider '{name}'"
+                ),
             )
         )
     providers.sort(key=lambda provider: (provider.order, provider.provider))

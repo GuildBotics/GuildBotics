@@ -1,0 +1,27 @@
+# Effort mapping for the native Codex AI CLI tool.
+#
+# Native tools have no configuration file of their own; this file exists solely
+# to translate the provider-neutral effort labels (low / high) into the fields
+# Codex accepts on `turn/start`. Do not add `script` or `env` here.
+#
+# `default` is deliberately absent: it means "do not intervene", which for a
+# continued Codex thread keeps the settings the thread already has.
+#
+# Codex validates both values against `model/list`. An id your installation does
+# not offer, or an effort the model does not support, is dropped with a warning
+# instead of failing the run - so set `model` only if you want a specific model
+# for that level.
+effort:
+  low:
+    effort: low
+  high:
+    effort: high
+
+# The settings an editor may offer for each level. `model` is left to a picker
+# because the valid ids depend on the installation, not on this file.
+effort_fields:
+  - key: effort
+    type: enum
+    values: [minimal, low, medium, high]
+  - key: model
+    type: model_id

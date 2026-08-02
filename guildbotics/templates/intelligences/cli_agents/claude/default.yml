@@ -1,0 +1,25 @@
+# Effort mapping for the native Claude Code AI CLI tool.
+#
+# Native tools have no configuration file of their own; this file exists solely
+# to translate the provider-neutral effort labels (low / high) into settings the
+# Claude Code adapter can apply. Do not add `script` or `env` here.
+#
+# `default` is deliberately absent, and is rejected if written: it means "do not
+# intervene", so a mapping for it could never be applied.
+#
+# Claude Code fixes these when the session starts and a resumed session cannot be
+# reconfigured, so changing them starts a fresh session (see `settings_scope`).
+effort:
+  low:
+    max_thinking_tokens: 0
+  high:
+    max_thinking_tokens: 8000
+
+# The settings an editor may offer for each level. `model` is left to a picker
+# because the valid ids depend on the installation, not on this file.
+effort_fields:
+  - key: max_thinking_tokens
+    type: integer
+    minimum: 0
+  - key: model
+    type: model_id

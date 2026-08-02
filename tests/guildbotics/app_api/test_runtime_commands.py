@@ -34,7 +34,10 @@ from guildbotics.app_api.models import (
     TroubleshootingRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.commands.authoring import CommandAuthoringChange, CommandAuthoringResult
+from guildbotics.commands.authoring import (
+    CommandAuthoringChange,
+    CommandAuthoringResult,
+)
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.commands.errors import (
     CommandError,

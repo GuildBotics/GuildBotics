@@ -98,7 +98,7 @@ vi.mock("../api/client", async (importOriginal) => {
           name: "codex",
           label: "OpenAI Codex CLI",
           executable: "codex",
-          config_reference: "codex",
+          config_reference: "cli_agents/codex/default.yml",
           detected: true,
           path: "/usr/local/bin/codex",
         },
@@ -106,7 +106,7 @@ vi.mock("../api/client", async (importOriginal) => {
           name: "claude",
           label: "Claude Code",
           executable: "claude",
-          config_reference: "claude",
+          config_reference: "cli_agents/claude/default.yml",
           detected: false,
           path: "",
         },
@@ -119,7 +119,8 @@ vi.mock("../api/client", async (importOriginal) => {
         order: 10,
         api_key_env: "OPENAI_API_KEY",
         model_class: "OpenAIModel",
-        model_id: "gpt-5-mini",
+        parameters: { id: "gpt-5-mini" },
+        effort: {},
       },
       {
         provider: "gemini",
@@ -127,7 +128,8 @@ vi.mock("../api/client", async (importOriginal) => {
         order: 20,
         api_key_env: "GOOGLE_API_KEY",
         model_class: "GeminiModel",
-        model_id: "gemini-3-flash",
+        parameters: { id: "gemini-3-flash" },
+        effort: {},
       },
       {
         provider: "anthropic",
@@ -135,7 +137,8 @@ vi.mock("../api/client", async (importOriginal) => {
         order: 30,
         api_key_env: "ANTHROPIC_API_KEY",
         model_class: "ClaudeModel",
-        model_id: "claude-haiku",
+        parameters: { id: "claude-haiku" },
+        effort: {},
       },
     ]),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
@@ -162,18 +165,31 @@ vi.mock("../api/client", async (importOriginal) => {
           path: "models/openai.yml",
           provider: "openai",
           model_class: "OpenAIModel",
-          model_id: "gpt-5",
+          parameters: { id: "gpt-5" },
+          effort: {},
+          inherited_effort: { high: { reasoning_effort: "high" } },
+          effort_fields: [
+            {
+              key: "reasoning_effort",
+              type: "enum",
+              values: ["low", "high"],
+              minimum: null,
+              maximum: null,
+            },
+            { key: "id", type: "model_id", values: [], minimum: null, maximum: null },
+          ],
         },
       ],
-      cli_agent_mapping: { default: "codex", codex: "codex" },
+      cli_agent_mapping: { default: "cli_agents/codex/default.yml" },
       cli_agents: [
         {
-          path: "codex",
+          path: "cli_agents/codex/default.yml",
           name: "codex",
           env: {},
           script: "codex",
           detected: true,
           detected_path: "/usr/local/bin/codex",
+          effort: {},
         },
       ],
       brain_mapping: [],
@@ -324,7 +340,7 @@ beforeEach(() => {
         name: "codex",
         label: "OpenAI Codex CLI",
         executable: "codex",
-        config_reference: "codex",
+        config_reference: "cli_agents/codex/default.yml",
         detected: true,
         path: "/usr/local/bin/codex",
       },
@@ -332,7 +348,7 @@ beforeEach(() => {
         name: "claude",
         label: "Claude Code",
         executable: "claude",
-        config_reference: "claude",
+        config_reference: "cli_agents/claude/default.yml",
         detected: false,
         path: "",
       },
@@ -862,7 +878,7 @@ describe("SetupPage", () => {
           name: "codex",
           label: "OpenAI Codex CLI",
           executable: "codex",
-          config_reference: "codex",
+          config_reference: "cli_agents/codex/default.yml",
           detected: true,
           path: "/usr/local/bin/codex",
         },
@@ -1821,18 +1837,23 @@ describe("toIntelligenceUpdatePayload", () => {
         path: "models/openai.yml",
         provider: "openai",
         model_class: "OpenAIModel",
-        model_id: "gpt-5",
+        parameters: { id: "gpt-5" },
+        effort: {},
+        effort_fields: [
+          { key: "id", type: "model_id" as const, values: [], minimum: null, maximum: null },
+        ],
       },
     ],
-    cli_agent_mapping: { default: "codex" },
+    cli_agent_mapping: { default: "cli_agents/codex/default.yml" },
     cli_agents: [
       {
-        path: "codex",
+        path: "cli_agents/codex/default.yml",
         name: "codex" as const,
         env: {},
         script: "codex",
         detected: true,
         detected_path: "/usr/local/bin/codex",
+        effort: {},
       },
     ],
     brain_mapping: [],
@@ -3238,18 +3259,33 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
         path: "models/openai/default.yml",
         provider: "openai",
         model_class: "OpenAIModel",
-        model_id: "gpt-5",
+        parameters: { id: "gpt-5" },
+        effort: {},
+        // The backend always sends these for a known provider: what the slot
+        // inherits, and which settings the provider accepts.
+        inherited_effort: { high: { reasoning_effort: "high" } },
+        effort_fields: [
+          { key: "id", type: "model_id", values: [], minimum: null, maximum: null },
+          {
+            key: "reasoning_effort",
+            type: "enum",
+            values: ["low", "high"],
+            minimum: null,
+            maximum: null,
+          },
+        ],
       },
     ],
-    cli_agent_mapping: { default: "codex" },
+    cli_agent_mapping: { default: "cli_agents/codex/default.yml" },
     cli_agents: [
       {
-        path: "codex",
+        path: "cli_agents/codex/default.yml",
         name: "codex",
         env: {},
         script: "codex",
         detected: true,
         detected_path: "/usr/local/bin/codex",
+        effort: {},
       },
     ],
     brain_mapping: [
@@ -3277,36 +3313,41 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
         path: "models/openai.yml",
         provider: "openai",
         model_class: "OpenAIModel",
-        model_id: "gpt-5",
+        parameters: { id: "gpt-5" },
+        effort: {},
       },
       {
         path: "models/gemini.yml",
         provider: "gemini",
         model_class: "GeminiModel",
-        model_id: "gemini-2.5",
+        parameters: { id: "gemini-2.5" },
+        effort: {},
+        effort_fields: [{ key: "id", type: "model_id", values: [], minimum: null, maximum: null }],
       },
     ],
     cli_agent_mapping: {
-      default: "codex",
-      codex: "codex",
-      claude: "claude",
+      default: "cli_agents/codex/default.yml",
+      codex: "cli_agents/codex/codex.yml",
+      claude: "cli_agents/claude/claude.yml",
     },
     cli_agents: [
       {
-        path: "codex",
+        path: "cli_agents/codex/default.yml",
         name: "codex",
         env: {},
         script: "codex",
         detected: true,
         detected_path: "/usr/local/bin/codex",
+        effort: {},
       },
       {
-        path: "claude",
+        path: "cli_agents/claude/default.yml",
         name: "claude",
         env: {},
         script: "claude",
         detected: true,
         detected_path: "/usr/local/bin/claude",
+        effort: {},
       },
     ],
     brain_mapping: [],
@@ -3348,7 +3389,7 @@ describe("IntelligenceEditor (team default)", () => {
           name: "codex",
           label: "OpenAI Codex CLI",
           executable: "codex",
-          config_reference: "codex",
+          config_reference: "cli_agents/codex/default.yml",
           detected: true,
           path: "/usr/local/bin/codex",
         },
@@ -3368,13 +3409,37 @@ describe("IntelligenceEditor (team default)", () => {
             path: "models/openai/default.yml",
             provider: "openai",
             model_class: "OpenAIModel",
-            model_id: "gpt-5",
+            parameters: { id: "gpt-5" },
+            effort: {},
+            inherited_effort: { high: { reasoning_effort: "high" } },
+            effort_fields: [
+              { key: "id", type: "model_id", values: [], minimum: null, maximum: null },
+              {
+                key: "reasoning_effort",
+                type: "enum",
+                values: ["low", "high"],
+                minimum: null,
+                maximum: null,
+              },
+            ],
           },
           {
             path: "models/openai/custom.yml",
             provider: "openai",
             model_class: "OpenAIModel",
-            model_id: "gpt-5",
+            parameters: { id: "gpt-5" },
+            effort: {},
+            inherited_effort: { high: { reasoning_effort: "high" } },
+            effort_fields: [
+              { key: "id", type: "model_id", values: [], minimum: null, maximum: null },
+              {
+                key: "reasoning_effort",
+                type: "enum",
+                values: ["low", "high"],
+                minimum: null,
+                maximum: null,
+              },
+            ],
           },
         ],
       }),
@@ -3409,13 +3474,58 @@ describe("IntelligenceEditor (team default)", () => {
     expect(body.model_mapping).not.toHaveProperty("custom_slot");
   });
 
+  it("gives a new CLI slot its own definition on the same tool", async () => {
+    // Two slots sharing one definition could never differ, which is the whole
+    // point of having slots.
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    await user.click(
+      await screen.findByRole("button", { name: t("setup.intelligence.addCliSlot") }),
+    );
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+    });
+    const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
+    expect(body.cli_agent_mapping).toMatchObject({
+      default: "cli_agents/codex/default.yml",
+      new_cli_slot: "cli_agents/codex/new_cli_slot.yml",
+    });
+    // Same tool, separate definitions.
+    const paths = body.cli_agents?.map((agent) => agent.path) ?? [];
+    expect(new Set(paths).size).toBe(paths.length);
+  });
+
   it("autosaves a CLI slot rename after focus blur, without losing focus during typing, and holds autosave while focused", async () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(
       teamIntelligenceConfig({
         cli_agent_mapping: {
-          default: "codex",
-          custom_cli: "codex",
+          default: "cli_agents/codex/default.yml",
+          custom_cli: "cli_agents/codex/custom_cli.yml",
         },
+        // The backend returns one definition per referenced path, so a slot
+        // with its own definition on the same tool gets its own entry.
+        cli_agents: [
+          {
+            path: "cli_agents/codex/default.yml",
+            name: "codex",
+            env: {},
+            script: "codex",
+            detected: true,
+            detected_path: "/usr/local/bin/codex",
+            effort: {},
+          },
+          {
+            path: "cli_agents/codex/custom_cli.yml",
+            name: "codex",
+            env: {},
+            script: "codex",
+            detected: true,
+            detected_path: "/usr/local/bin/codex",
+            effort: {},
+          },
+        ],
       }),
     );
 
@@ -3456,7 +3566,7 @@ describe("IntelligenceEditor (team default)", () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const modelId = await screen.findByLabelText(t("setup.intelligence.modelId"));
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
     await user.type(modelId, "gpt-6");
 
@@ -3467,7 +3577,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(body).toMatchObject({ person_id: null, inherit_team_defaults: false });
     expect(body.models?.[0]).toMatchObject({
       path: "models/openai/default.yml",
-      model_id: "gpt-6",
+      parameters: { id: "gpt-6" },
     });
   });
 
@@ -3475,7 +3585,7 @@ describe("IntelligenceEditor (team default)", () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const modelId = await screen.findByLabelText(t("setup.intelligence.modelId"));
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.type(modelId, "X");
     // The debounce is 800ms; right after typing nothing has been persisted yet.
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
@@ -3517,6 +3627,68 @@ describe("IntelligenceEditor (team default)", () => {
     expect(await screen.findByText(t("setup.intelligence.envJsonError"))).toBeInTheDocument();
     await new Promise((resolve) => setTimeout(resolve, 1100));
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+  });
+
+  it("autosaves a typed effort edit through the API", async () => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
+    );
+    await user.click(screen.getByLabelText("low reasoning_effort"));
+    await user.click(await screen.findByRole("option", { name: "low" }));
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+    });
+    const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
+    // Customizing one level keeps the inherited settings of the other, instead
+    // of saving a mapping that silently drops `high`.
+    expect(body.models?.[0].effort).toEqual({
+      high: { reasoning_effort: "high" },
+      low: { reasoning_effort: "low" },
+    });
+  });
+
+  it("blocks autosave while the JSON escape hatch holds malformed text", async () => {
+    // The field withholds onChange while the text is malformed, so without the
+    // validity wiring the pending autosave would still fire and silently
+    // persist the last value that parsed -- not what is on screen.
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
+    );
+    await user.click(screen.getByRole("button", { name: t("setup.intelligence.effort.showJson") }));
+    const jsonField = screen.getByLabelText(t("setup.intelligence.effortJson"));
+    await user.clear(jsonField);
+    await user.click(jsonField);
+    await user.paste('{"high":{"reasoning_effort":"high"}}');
+    await user.paste(" oops");
+
+    expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+  });
+
+  it("reseeds the model effort editor when the slot switches provider", async () => {
+    // The editor seeds its state once per mount. Switching provider replaces
+    // what the slot inherits, so a field that did not remount would keep
+    // showing the previous provider's settings.
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+
+    expect(await screen.findByText(/reasoning_effort = high/)).toBeInTheDocument();
+
+    const providerSelect = await screen.findByRole("textbox", {
+      name: t("setup.intelligence.provider"),
+    });
+    await user.click(providerSelect);
+    await user.click(await screen.findByRole("option", { name: "Anthropic Claude" }));
+
+    expect(screen.queryByText(/reasoning_effort = high/)).not.toBeInTheDocument();
   });
 
   it("renders the AI CLI tool detection badge from detections", async () => {
@@ -3600,7 +3772,7 @@ describe("IntelligenceEditor (team default)", () => {
     vi.mocked(updateIntelligenceConfig).mockRejectedValueOnce(new Error("write blew up"));
     await openTeamIntelligenceAdvanced(user);
 
-    const modelId = await screen.findByLabelText(t("setup.intelligence.modelId"));
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
     await user.type(modelId, "broken-model");
 
@@ -3625,7 +3797,7 @@ describe("IntelligenceEditor (member override)", () => {
           name: "codex",
           label: "OpenAI Codex CLI",
           executable: "codex",
-          config_reference: "codex",
+          config_reference: "cli_agents/codex/default.yml",
           detected: true,
           path: "/usr/local/bin/codex",
         },
@@ -3633,7 +3805,7 @@ describe("IntelligenceEditor (member override)", () => {
           name: "claude",
           label: "Claude Code",
           executable: "claude",
-          config_reference: "claude",
+          config_reference: "cli_agents/claude/default.yml",
           detected: true,
           path: "/usr/local/bin/claude",
         },
@@ -3649,7 +3821,9 @@ describe("IntelligenceEditor (member override)", () => {
 
     // The member editor is the same full advanced editor as the team scope:
     // edit the default model slot's model id.
-    const modelIds = await screen.findAllByLabelText(t("setup.intelligence.modelId"));
+    const modelIds = await screen.findAllByLabelText(
+      t("setup.intelligence.effort.modelAlwaysLabel"),
+    );
     await user.clear(modelIds[0]);
     await user.type(modelIds[0], "gpt-6");
 
@@ -3663,7 +3837,7 @@ describe("IntelligenceEditor (member override)", () => {
     expect(body).toMatchObject({ person_id: "alice", inherit_team_defaults: false });
     // The full editor state (definitions and assignments) is sent so the
     // backend can reduce it to a member diff.
-    expect(body.models?.some((model) => model.model_id === "gpt-6")).toBe(true);
+    expect(body.models?.some((model) => model.parameters?.id === "gpt-6")).toBe(true);
     expect("brain_mapping" in body).toBe(true);
   });
 
@@ -3703,15 +3877,16 @@ describe("IntelligenceEditor (member override)", () => {
     // pick, so the simple card must register its definition itself.
     vi.mocked(getIntelligenceConfig).mockResolvedValue(
       memberIntelligenceConfig({
-        cli_agent_mapping: { default: "codex" },
+        cli_agent_mapping: { default: "cli_agents/codex/default.yml" },
         cli_agents: [
           {
-            path: "codex",
+            path: "cli_agents/codex/default.yml",
             name: "codex",
             env: {},
             script: "codex",
             detected: true,
             detected_path: "/usr/local/bin/codex",
+            effort: {},
           },
         ],
       }),

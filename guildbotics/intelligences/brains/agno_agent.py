@@ -1,14 +1,21 @@
 import time
 from copy import deepcopy
 from logging import Logger
+from pathlib import Path
 from typing import Any, cast
 
 from agno.agent import Agent
 from agno.models.base import Model
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
+from guildbotics.intelligences.effort import (
+    effort_diagnostics,
+    effort_settings,
+    resolve_effort,
+    validate_effort_overlay,
+)
 from guildbotics.observability import span_scope
 from guildbotics.observability.diagnostics_events import (
     record_correlated_io,
@@ -16,6 +23,7 @@ from guildbotics.observability.diagnostics_events import (
 )
 from guildbotics.utils.fileio import (
     get_person_config_path,
+    get_template_path,
     load_person_slot_mapping,
     load_yaml_file,
 )
@@ -44,9 +52,60 @@ class ModelConfig(BaseModel):
     parameters: dict = {}
     rate_limit: RateLimit | None = None
     is_restricted_model: bool = False
+    #: Effort level -> provider parameters shallow-merged into ``parameters``.
+    #: Replacing ``id`` here is allowed, so a level may switch models entirely.
+    effort: dict[str, dict] = Field(default_factory=dict)
 
+    @field_validator("effort", mode="before")
+    @classmethod
+    def _validate_effort(cls, value: Any, info: ValidationInfo) -> dict[str, dict]:
+        return validate_effort_overlay(
+            value, where=f"model '{info.data.get('name', '')}'"
+        )
+
+
+#: `models/<provider>/<slot>.yml`
+MODEL_PATH_PARTS = 3
 
 person_model_mapping: dict[str, dict[str, ModelConfig]] = {}
+
+
+def _inherited_effort(person_id: str, model_file: str) -> dict:
+    """The effort mapping a model definition inherits when it states none.
+
+    Two fallbacks, in order:
+
+    1. the provider's ``default.yml`` -- slots live at
+       ``models/<provider>/<slot>.yml`` and only ``default.yml`` is packaged, so
+       a second slot on the same provider would otherwise have no mapping;
+    2. the packaged definition of the same path -- a workspace file shadows the
+       template wholesale, so a definition written before it had an ``effort:``
+       block would otherwise permanently lose the provider's mapping.
+
+    Stating ``effort: {}`` still means "none": only an absent key inherits.
+    """
+    from guildbotics.intelligences.llm_providers import PROVIDER_DEFAULT_FILENAME
+
+    parts = model_file.split("/")
+    if len(parts) < MODEL_PATH_PARTS:
+        return {}
+    provider_default = f"{'/'.join(parts[:-1])}/{PROVIDER_DEFAULT_FILENAME}"
+    if parts[-1] != PROVIDER_DEFAULT_FILENAME:
+        effort = _effort_of(
+            get_person_config_path(person_id, f"intelligences/{provider_default}")
+        )
+        if effort:
+            return effort
+    # The packaged fallback is the provider's own default definition: only
+    # `default.yml` is packaged, so this slot's own path would find nothing.
+    return _effort_of(get_template_path() / f"intelligences/{provider_default}")
+
+
+def _effort_of(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    data = load_yaml_file(path)
+    return data.get("effort", {}) if isinstance(data, dict) else {}
 
 
 def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
@@ -61,6 +120,8 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
         )
         model = cast(dict, load_yaml_file(model_file_path))
         model["name"] = model_file
+        if model.get("effort") is None:
+            model["effort"] = _inherited_effort(person_id, str(model_file))
         model_mapping[name] = ModelConfig.model_validate(model)
 
     person_model_mapping[person_id] = model_mapping
@@ -77,6 +138,7 @@ class AgnoAgentDefaultBrain(Brain):
         template_engine: str = "default",
         response_class: type[BaseModel] | None = None,
         model: str = "default",
+        effort: str = "",
     ):
         super().__init__(
             person_id=person_id,
@@ -85,6 +147,7 @@ class AgnoAgentDefaultBrain(Brain):
             description=description,
             template_engine=template_engine,
             response_class=response_class,
+            effort=effort,
         )
         model_mapping = get_model_mapping(person_id)
         self.model_config = model_mapping[model]
@@ -106,7 +169,14 @@ class AgnoAgentDefaultBrain(Brain):
 
         kwargs["tool_call_limit"] = kwargs.get("tool_call_limit", 5)
 
+        resolved = resolve_effort(
+            kwargs.get("session_state"), self.effort, logger=self.logger
+        )
+        overlay = effort_settings(
+            self.model_config.effort, resolved, logger=self.logger
+        )
         model_parameters = deepcopy(self.model_config.parameters)
+        model_parameters.update(deepcopy(overlay))
         model = instantiate_class(
             self.model_config.model_class, expected_type=Model, **model_parameters
         )
@@ -127,7 +197,14 @@ class AgnoAgentDefaultBrain(Brain):
         message = self.patch_message(message)
         with span_scope("llm"):
             started = time.monotonic()
-            self._write_request_io(message, description, kwargs)
+            self._write_request_io(
+                message,
+                description,
+                kwargs,
+                effort_diagnostics(
+                    resolved, overlay, model=str(model_parameters.get("id", "") or "")
+                ),
+            )
             try:
                 response = await agent.arun(message)
             except Exception:
@@ -172,10 +249,17 @@ class AgnoAgentDefaultBrain(Brain):
 
         return "Execute exactly as specified in the system message."
 
-    def _write_request_io(self, message: str, description: str, kwargs: dict) -> None:
+    def _write_request_io(
+        self,
+        message: str,
+        description: str,
+        kwargs: dict,
+        effort: dict[str, Any],
+    ) -> None:
         record_correlated_io(
             io_type="llm.request",
             payload={
+                "effort": effort,
                 "person_id": self.person_id,
                 "brain": self.name,
                 "model": self.model_config.name,

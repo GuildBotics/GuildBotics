@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from logging import getLogger
 from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
@@ -20,6 +21,7 @@ from guildbotics.intelligences.agent_runtime.jsonrpc import (
     RpcError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    SETTINGS_SCOPE_TURN,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -42,10 +44,53 @@ _MODERN_APPROVAL_METHODS = frozenset(
 _LEGACY_APPROVAL_METHODS = frozenset({"execCommandApproval", "applyPatchApproval"})
 _UNSUPPORTED_APPROVAL_METHODS = frozenset({"item/permissions/requestApproval"})
 _APPROVAL_POLICY = "never"
+#: The only effort-mapping keys ``turn/start`` accepts. Anything else is a
+#: configuration mistake and is reported rather than silently dropped.
+_TURN_SETTING_KEYS = frozenset({"model", "effort"})
+_LOGGER = getLogger(__name__)
+
+
+def _supported_efforts(entry: dict[str, Any]) -> set[str]:
+    """The reasoning efforts a model entry advertises.
+
+    Each element is an object describing one level
+    (``{"reasoningEffort": "low", "description": ...}``), not a bare string.
+    """
+    raw = entry.get("supportedReasoningEfforts")
+    if not isinstance(raw, list):
+        return set()
+    return {
+        effort
+        for item in raw
+        if isinstance(item, dict) and (effort := str(item.get("reasoningEffort") or ""))
+    }
+
+
+def _default_entry(catalog: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """The model a turn runs on when it names none of its own."""
+    for entry in catalog.values():
+        if entry.get("isDefault"):
+            return entry
+    return None
 
 
 class CodexAppServerAdapter:
     name = "codex-app-server"
+    # ``turn/start`` accepts model and effort on every turn, so a change never
+    # requires a fresh thread.
+    settings_scope = SETTINGS_SCOPE_TURN
+
+    def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
+        """The turn/start fields this adapter recognizes.
+
+        Not used for rotation (this adapter is turn-scoped, so a change costs
+        nothing), but it keeps the contract uniform across adapters.
+        """
+        return {
+            key: value
+            for key, value in context.provider_options.items()
+            if key in _TURN_SETTING_KEYS
+        }
 
     def __init__(
         self,
@@ -55,6 +100,7 @@ class CodexAppServerAdapter:
         policy: AdapterFilesystemPolicy | None = None,
     ) -> None:
         self._executable = executable
+        self._model_catalog: dict[str, dict[str, Any]] = {}
         self._timeout = timeout
         self._transport = LineJsonRpcTransport(
             label="Codex App Server",
@@ -87,6 +133,7 @@ class CodexAppServerAdapter:
             await emitted
         thread_id = await self._resolve_thread(context, conversation)
         self._active_thread_id = thread_id
+        turn_settings = await self._turn_settings(context)
         try:
             response = await self._request(
                 "turn/start",
@@ -100,6 +147,7 @@ class CodexAppServerAdapter:
                         str(context.workspace_data_root),
                         context.read_only,
                     ),
+                    **turn_settings,
                 },
             )
         except RpcError as exc:
@@ -321,6 +369,78 @@ class CodexAppServerAdapter:
                 rotate_session=True,
             )
         return thread_id
+
+    async def _turn_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
+        """Translate the turn's effort decision into ``turn/start`` fields.
+
+        The configured effort mapping is the only source of these values. The
+        provider-neutral label is deliberately not used as a fallback: a level
+        with no mapping is "no intervention" everywhere else, and Codex keeping
+        whatever the last ``turn/start`` carried makes omitting them exactly
+        that.
+        """
+        settings = {
+            key: value
+            for key, value in context.provider_options.items()
+            if key in _TURN_SETTING_KEYS
+        }
+        unknown = sorted(set(context.provider_options) - _TURN_SETTING_KEYS)
+        if unknown:
+            _LOGGER.warning(
+                "Ignoring unsupported Codex effort settings: %s", ", ".join(unknown)
+            )
+        return await self._validated_turn_settings(settings)
+
+    async def _validated_turn_settings(
+        self, settings: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Drop settings the installed Codex reports as unsupported."""
+        if not settings:
+            return {}
+        catalog = await self._models()
+        if not catalog:
+            return settings
+        model_id = str(settings.get("model", "") or "")
+        if model_id and model_id not in catalog:
+            _LOGGER.warning("Codex does not offer model '%s'; ignoring it.", model_id)
+            settings.pop("model")
+            model_id = ""
+        effort = str(settings.get("effort", "") or "")
+        if not effort:
+            return settings
+        # With no model of our own, the turn runs on the thread's default, so
+        # that entry is the one whose efforts have to be checked.
+        entry = catalog.get(model_id) if model_id else _default_entry(catalog)
+        supported = _supported_efforts(entry) if entry is not None else set()
+        if supported and effort not in supported:
+            _LOGGER.warning(
+                "Codex model '%s' does not support reasoning effort '%s'; "
+                "leaving the session's current effort in place.",
+                model_id or "(default)",
+                effort,
+            )
+            settings.pop("effort")
+        return settings
+
+    async def _models(self) -> dict[str, dict[str, Any]]:
+        if self._model_catalog:
+            return self._model_catalog
+        try:
+            response = _dict(await self._request("model/list", {}))
+        except RpcError:
+            # Older Codex builds do not expose the catalog; skip validation.
+            return {}
+        # `model/list` returns a paginated envelope: the entries are under
+        # `data`, alongside `nextCursor`.
+        models = response.get("data")
+        if not isinstance(models, list):
+            return {}
+        self._model_catalog = {
+            identifier: entry
+            for entry in models
+            if isinstance(entry, dict) and (identifier := str(entry.get("id") or ""))
+        }
+        return self._model_catalog
 
     async def _check_account(self) -> None:
         try:

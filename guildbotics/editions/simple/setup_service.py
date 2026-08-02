@@ -12,7 +12,10 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
 from guildbotics.entities.team import Person
-from guildbotics.intelligences.cli_agents import native_cli_agent_name
+from guildbotics.intelligences.cli_agents import (
+    cli_agent_default_path,
+    cli_agent_name_from_path,
+)
 from guildbotics.utils.fileio import (
     get_template_path,
     get_workspace_data_root,
@@ -570,11 +573,13 @@ class SimpleProjectSetupService:
             )
             files.append(CreatedFile(path=native_policy_file, action="create"))
 
+        # Tool definitions live at `cli_agents/<tool>/default.yml`, so the copy
+        # walks one level down rather than the directory root.
         cli_agent_config_src_dir = get_template_path() / "intelligences/cli_agents"
         cli_agent_config_dst_dir = config.config_dir / "intelligences/cli_agents"
-        cli_agent_config_dst_dir.mkdir(parents=True, exist_ok=True)
-        for src_file in cli_agent_config_src_dir.glob("*.yml"):
-            dst_file = cli_agent_config_dst_dir / src_file.name
+        for src_file in sorted(cli_agent_config_src_dir.glob("*/*.yml")):
+            dst_file = cli_agent_config_dst_dir / src_file.parent.name / src_file.name
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
             dst_file.write_text(src_file.read_text())
             files.append(CreatedFile(path=dst_file, action="create"))
 
@@ -785,9 +790,10 @@ class SimpleProjectSetupService:
             mapping["default"] = self._resolve_model_default(mapping, provider)
 
     def _set_default_cli_mapping(self, mapping: dict, agent: str) -> None:
+        # A tool is named by its definition path, the same way a model is, so
+        # the catalog name selected during setup becomes that tool's default.
         if agent:
-            native_name = native_cli_agent_name(agent)
-            mapping["default"] = native_name or mapping.get(agent, f"{agent}-cli.yml")
+            mapping["default"] = cli_agent_default_path(agent)
 
     def _resolve_model_default(self, mapping: dict, provider: str) -> str:
         # Honor an explicit per-provider slot when one exists, otherwise fall back
@@ -809,9 +815,9 @@ class SimpleProjectSetupService:
         return parts[1] if len(parts) > 1 else ""
 
     def _infer_cli_agent(self, mapping: dict) -> str:
-        # Native adapters use their catalog name; one-shot tools point at yaml.
-        name = str(mapping.get("default", "")).removesuffix(".yml")
-        return name.removesuffix("-cli")
+        # The default path is ``cli_agents/<tool>/<slot>.yml``, so the tool is
+        # the directory (matching how the provider is read off a model path).
+        return cli_agent_name_from_path(str(mapping.get("default", "")))
 
 
 class SimplePersonSetupService:

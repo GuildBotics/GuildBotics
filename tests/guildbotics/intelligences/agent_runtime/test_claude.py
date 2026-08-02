@@ -81,7 +81,7 @@ class _StreamProcess:
         return 0
 
 
-def _context(tmp_path: Path) -> AgentExecutionContext:
+def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
     key = ConversationKey("aiko", "claude", "chat", "slack:U:C1:100.1")
     return AgentExecutionContext(
         person_id="aiko",
@@ -89,6 +89,7 @@ def _context(tmp_path: Path) -> AgentExecutionContext:
         cwd=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=key,
+        **overrides,
     )
 
 
@@ -791,3 +792,90 @@ async def adapter_run(monkeypatch, context, events) -> None:
         ConversationRecord(key=context.conversation_key),
         events.append,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Effort: CLI flags, thinking budget, and the session-scoped settings contract
+# --------------------------------------------------------------------------- #
+
+
+async def _run_turn_with(monkeypatch, tmp_path, **context_overrides):
+    """Run one turn and return the (args, env) Claude Code was launched with."""
+    stream = _StreamProcess(
+        [
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-1",
+                "result": "final",
+                "usage": {},
+            }
+        ]
+    )
+    launches: list[tuple[tuple[Any, ...], dict[str, str]]] = []
+
+    async def create_process(*args, **kwargs):
+        launches.append((args, dict(kwargs.get("env") or {})))
+        return _HelpProcess() if args[-1] == "--help" else stream
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = ClaudeStreamJsonAdapter()
+    context = _context(tmp_path, **context_overrides)
+    await adapter.run_turn(
+        "go",
+        context,
+        ConversationRecord(key=context.conversation_key),
+        lambda _event: None,
+    )
+    return launches[1]
+
+
+def test_claude_settings_are_session_scoped_so_a_change_rotates() -> None:
+    assert ClaudeStreamJsonAdapter.settings_scope == "session"
+
+
+@pytest.mark.asyncio
+async def test_claude_effort_model_becomes_a_model_flag(monkeypatch, tmp_path) -> None:
+    args, _ = await _run_turn_with(
+        monkeypatch, tmp_path, effort="high", provider_options={"model": "opus-x"}
+    )
+    assert args[args.index("--model") + 1] == "opus-x"
+
+
+@pytest.mark.asyncio
+async def test_claude_thinking_budget_becomes_an_environment_variable(
+    monkeypatch, tmp_path
+) -> None:
+    _, env = await _run_turn_with(
+        monkeypatch,
+        tmp_path,
+        effort="high",
+        provider_options={"max_thinking_tokens": 8000},
+    )
+    assert env["MAX_THINKING_TOKENS"] == "8000"
+
+
+@pytest.mark.asyncio
+async def test_claude_imposes_nothing_when_no_effort_is_requested(
+    monkeypatch, tmp_path
+) -> None:
+    args, env = await _run_turn_with(monkeypatch, tmp_path)
+    assert "--model" not in args
+    assert "MAX_THINKING_TOKENS" not in env
+
+
+@pytest.mark.asyncio
+async def test_claude_reports_unsupported_effort_settings(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        args, _ = await _run_turn_with(
+            monkeypatch,
+            tmp_path,
+            effort="high",
+            provider_options={"model": "opus-x", "reasoning_effort": "high"},
+        )
+    assert "--reasoning_effort" not in args
+    assert "reasoning_effort" in caplog.text

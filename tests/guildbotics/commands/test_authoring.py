@@ -274,7 +274,9 @@ async def test_second_invalid_proposal_is_rejected(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("language", ["en", "ja"])
-def test_author_prompt_defines_answer_and_reviewed_proposal_contract(language: str) -> None:
+def test_author_prompt_defines_answer_and_reviewed_proposal_contract(
+    language: str,
+) -> None:
     body = AUTHOR_PROMPT.with_suffix(f".{language}.md").read_text(encoding="utf-8")
 
     assert "action: answer" in body

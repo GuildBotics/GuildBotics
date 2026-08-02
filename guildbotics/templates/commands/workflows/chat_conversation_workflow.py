@@ -37,6 +37,12 @@ from guildbotics.integrations.chat_workflow_status import (
     workflow_status_metadata,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.intelligences.effort import (
+    DEFAULT,
+    HIGH,
+    normalize_effort,
+    promote_effort,
+)
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.i18n_tool import t
@@ -270,10 +276,34 @@ async def _handle_event(
         raise RuntimeError("Invoker function is not set.")
 
     current_run_id = retry_context.run_id
+    effort_assessed = False
+
+    async def _resolve_effort_once() -> str:
+        """Assess the thread's effort on the first agent turn only.
+
+        Later completion-retry attempts re-send the same request, so a second
+        assessment would spend a model call to reach the same answer.
+        """
+        nonlocal effort_assessed
+        if effort_assessed:
+            return thread_state.effort
+        effort_assessed = True
+        assessed = await _assess_thread_effort(
+            context=context, thread_state=thread_state, prompt_payload=prompt_payload
+        )
+        if assessed != thread_state.effort:
+            thread_state.effort = assessed
+            # Persisted right away: the assessment describes the thread whatever
+            # the turn ends up doing, including a noop that saves no other state.
+            state_store.save_thread_state(
+                service_name, person_id, channel_id, event.thread_ts, thread_state
+            )
+        return thread_state.effort
 
     async def _invoke_chat_turn(run_id: str, _attempt: int) -> None:
         nonlocal current_run_id
         current_run_id = run_id
+        effort = await _resolve_effort_once()
         logical_attempt = retry_context.attempt_count + _attempt - 1
         execution_context = {
             "run_id": run_id,
@@ -309,6 +339,11 @@ async def _handle_event(
         await invoke(
             "functions/handle_chat_event",
             person_id=person_id,
+            effort=effort,
+            # The thread content is passed as named parameters below, so the
+            # prompt must not also inherit `Context.pipe` (which now holds the
+            # effort assessor's output) as the user's message.
+            message="",
             workflow_contract=t(
                 "commands.workflows.common.workflow_contract",
                 person_id=person_id,
@@ -562,6 +597,71 @@ def _workflow_status_notice_text(
             )
         )
     return t("commands.workflows.chat_conversation_workflow.incomplete_escalation")
+
+
+async def _assess_thread_effort(
+    *,
+    context: Any,
+    thread_state: ThreadConversationState,
+    prompt_payload: dict[str, Any],
+) -> str:
+    """Decide the effort this thread now needs, promoting only.
+
+    Effort never drops inside a thread: a conversation that once needed file
+    work keeps its level, so a follow-up like "and the other file too" is not
+    downgraded to a chat-sized reply. That also makes the call skippable once
+    the thread is already at ``high``.
+    """
+    stored = normalize_effort(thread_state.effort, strict=False)
+    if stored == HIGH:
+        return stored
+    if not _agno_model_is_configured(context):
+        # A CLI-only workspace has no LLM API key for the assessor, so automatic
+        # promotion cannot work there. Warned once per event, not per attempt.
+        _log(
+            context,
+            "warning",
+            "Skipping chat effort assessment: no LLM model is configured "
+            "for this member. Set an effort explicitly to raise it.",
+        )
+        return stored
+    try:
+        assessment = await context.invoke(
+            "functions/assess_effort",
+            # Everything this command reads arrives as a named parameter. Without
+            # an explicit empty message it would inherit `Context.pipe`, feeding
+            # whatever the previous command emitted in as if it were user input.
+            message="",
+            latest_message=json.dumps(
+                prompt_payload["latest_message"], ensure_ascii=False, sort_keys=True
+            ),
+            previous_thread_context=json.dumps(
+                prompt_payload["previous_thread_context"],
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
+    except Exception as exc:  # pragma: no cover - defensive, provider dependent
+        _log(context, "warning", f"Chat effort assessment failed: {exc}")
+        return stored or DEFAULT
+    candidate = getattr(assessment, "effort", "")
+    return promote_effort(stored, candidate) or DEFAULT
+
+
+def _agno_model_is_configured(context: Any) -> bool:
+    """Whether the ``default`` (LLM API) brain has a usable API key."""
+    from guildbotics.intelligences.brains.agno_agent import get_model_mapping
+    from guildbotics.intelligences.llm_providers import provider_env_keys
+    from guildbotics.utils.fileio import get_config_path
+
+    person_id = context.person.person_id
+    try:
+        model_config = get_model_mapping(person_id)["default"]
+        provider = Path(model_config.name).parent.name
+        env_key = provider_env_keys(get_config_path(""), person_id).get(provider, "")
+    except Exception:  # pragma: no cover - a broken mapping is reported elsewhere
+        return False
+    return bool(env_key) and bool(os.environ.get(env_key, "").strip())
 
 
 async def _build_agent_prompt_payload(

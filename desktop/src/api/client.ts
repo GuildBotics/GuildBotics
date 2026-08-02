@@ -316,6 +316,8 @@ export type TracePresentation = {
   message: string;
   message_params: Record<string, unknown>;
   tone: string;
+  // Resolved effort level of this record, "" when it stated none.
+  effort: string;
 };
 
 export type TracesResponse = {
@@ -804,11 +806,33 @@ export type RoleOptionsResponse = {
   roles: RoleOption[];
 };
 
+// Effort level -> provider-specific settings. Values are provider-shaped
+// (string, number, or nested object), so they are kept as-is rather than
+// flattened to strings.
+export type EffortOverlay = Record<string, Record<string, unknown>>;
+
+// One editable setting a provider accepts inside an effort level. The editor
+// renders a control from `type` alone and holds no provider vocabulary itself.
+export type EffortFieldSpec = {
+  key: string;
+  type: "enum" | "integer" | "boolean" | "string" | "model_id";
+  values: string[];
+  minimum: number | null;
+  maximum: number | null;
+};
+
 export type ModelDefinition = {
   path: string;
   provider: string;
   model_class: string;
-  model_id: string;
+  // Settings that always apply, whatever effort was asked for. `id` names the
+  // model, so it is one of these rather than a field of its own.
+  parameters: Record<string, unknown>;
+  effort: EffortOverlay;
+  // What applies while `effort` is empty; shown read-only, never written back.
+  // Server-supplied display metadata, absent on a slot built client-side.
+  inherited_effort?: EffortOverlay;
+  effort_fields?: EffortFieldSpec[];
 };
 
 export type CliAgentDefinition = {
@@ -818,6 +842,14 @@ export type CliAgentDefinition = {
   script: string;
   detected: boolean;
   detected_path: string;
+  // Settings that always apply, whatever effort was asked for.
+  parameters?: Record<string, unknown>;
+  effort: EffortOverlay;
+  inherited_effort?: EffortOverlay;
+  effort_fields?: EffortFieldSpec[];
+  // False when the tool's protocol has nowhere to put these settings, so the
+  // editor explains rather than collecting configuration that would be dropped.
+  effort_supported?: boolean;
 };
 
 export type BrainAssignment = {
@@ -848,6 +880,11 @@ export type LlmProviderInfo = {
   api_key_env: string;
   model_class: string;
   model_id: string;
+  // The provider's default effort overlay, seeded when a slot switches to it.
+  effort: EffortOverlay;
+  // The settings this provider accepts, so a brand-new slot still gets typed
+  // controls instead of falling back to raw JSON.
+  effort_fields: EffortFieldSpec[];
 };
 
 export type IntelligenceConfig = {

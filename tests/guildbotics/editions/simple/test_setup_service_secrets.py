@@ -72,9 +72,7 @@ class TestProjectSecrets:
         assert "sk-secret" not in env_content
         assert "OPENAI_API_KEY" not in env_content
 
-    def test_write_project_without_key_still_pins_backend(
-        self, fake_keyring, tmp_path
-    ):
+    def test_write_project_without_key_still_pins_backend(self, fake_keyring, tmp_path):
         config_dir, env_file = _paths(tmp_path)
 
         SimpleProjectSetupService().write_project(
@@ -115,9 +113,7 @@ class TestProjectSecrets:
         )
         assert "sk-ant-secret" not in env_file.read_text()
 
-    def test_update_project_keeps_env_file_workspace(
-        self, fake_keyring, tmp_path
-    ):
+    def test_update_project_keeps_env_file_workspace(self, fake_keyring, tmp_path):
         # A workspace without a secrets index stays on .env even when a
         # keychain is available; only initial setup pins the backend.
         config_dir, env_file = _paths(tmp_path)

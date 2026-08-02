@@ -292,3 +292,46 @@ def test_reasoning_is_labelled_apart_from_the_reply() -> None:
     assert reasoning.label_key.endswith("assistant_thinking")
     assert reasoning.message == "The user wants a path."
     assert reply.label_key.endswith("agentRuntime.assistant")
+
+
+def _io(io_type: str, payload: dict) -> dict:
+    return {"kind": "io", "type": io_type, "message": "", "payload": payload}
+
+
+def test_a_request_record_surfaces_only_its_resolved_effort_level() -> None:
+    presentation = normalize_trace_presentation(
+        _io(
+            "llm.request",
+            {
+                "prompt": "hello",
+                "effort": {
+                    "requested": "HIGH",
+                    "resolved": "high",
+                    "source": "runtime",
+                    "applied_keys": ["reasoning_effort"],
+                    "unsupported": False,
+                },
+            },
+        )
+    )
+
+    assert presentation.effort == "high"
+
+
+def test_a_record_that_imposed_no_effort_shows_none() -> None:
+    assert (
+        normalize_trace_presentation(_io("llm.request", {"prompt": "x"})).effort == ""
+    )
+    assert (
+        normalize_trace_presentation(
+            _io("cli_agent.request", {"effort": {"resolved": ""}})
+        ).effort
+        == ""
+    )
+
+
+def test_non_io_records_never_claim_an_effort() -> None:
+    presentation = normalize_trace_presentation(
+        _event("command.finished", command="workflows/demo")
+    )
+    assert presentation.effort == ""

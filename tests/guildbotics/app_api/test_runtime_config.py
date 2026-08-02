@@ -741,15 +741,11 @@ def _member(
         person_id=person_id,
         name=name,
         is_active=is_active,
-        roles={
-            role: Role(id=role, summary="", description="") for role in roles or []
-        },
+        roles={role: Role(id=role, summary="", description="") for role in roles or []},
     )
 
 
-def _context_with_members(
-    members: list[Person], default_person_id: str = ""
-) -> object:
+def _context_with_members(members: list[Person], default_person_id: str = "") -> object:
     team = Team(
         project=Project(
             name="GuildBotics", language="ja", default_person_id=default_person_id

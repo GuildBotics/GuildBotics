@@ -69,6 +69,7 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
             or _first_text(payload, "message", "prompt", "stdout")
             or event_type,
             tone="info",
+            effort=_effort_level(payload),
         )
     if kind == "memory":
         action = str(
@@ -383,6 +384,7 @@ def _presentation(
     message_key: str = "",
     params: dict[str, Any] | None = None,
     tone: str = "neutral",
+    effort: str = "",
 ) -> TracePresentation:
     return TracePresentation(
         label_key=label_key,
@@ -391,7 +393,18 @@ def _presentation(
         message=message,
         message_params=params or {},
         tone=tone,
+        effort=effort,
     )
+
+
+def _effort_level(payload: dict[str, Any]) -> str:
+    """The effort a request record adopted, if it stated one.
+
+    Only the resolved level is surfaced. The rest of the recorded effort payload
+    (requested value, applied setting names, unsupported flag) stays in the raw
+    record for anyone reading the details.
+    """
+    return str(_dict(payload.get("effort")).get("resolved") or "")
 
 
 def _event_key(name: str) -> str:

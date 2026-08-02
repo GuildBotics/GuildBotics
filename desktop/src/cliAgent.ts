@@ -9,6 +9,9 @@ import {
   getIntelligenceConfig,
 } from "./api/client";
 
+const CLI_PATH_PARTS = 3;
+const CLI_AGENT_ROOT = "cli_agents";
+
 // Resolve the catalog name of a member's AI CLI tool from an effective
 // intelligence config (member override already falls back to the team default
 // server-side).
@@ -18,7 +21,11 @@ export function cliAgentNameFromConfig(config: IntelligenceConfig | undefined): 
   if (!file) {
     return null;
   }
-  return file.replace(/\.yml$/, "").replace(/-cli$/, "");
+  // A definition path is `cli_agents/<tool>/<slot>.yml`, so the tool is the
+  // directory -- the same rule the backend applies, including the root check,
+  // so a path outside `cli_agents/` never reads as a tool name.
+  const parts = file.split("/");
+  return parts.length >= CLI_PATH_PARTS && parts[0] === CLI_AGENT_ROOT ? parts[1] : null;
 }
 
 // Resolve the human-friendly AI CLI tool label. Labels come from the backend

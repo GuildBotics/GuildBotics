@@ -118,7 +118,7 @@ beforeEach(() => {
     inherited: false,
     model_mapping: {},
     models: [],
-    cli_agent_mapping: { default: "claude-code.yml" },
+    cli_agent_mapping: { default: "cli_agents/claude/default.yml" },
     cli_agents: [],
     brain_mapping: [],
     native_agent_policy: {
@@ -129,10 +129,10 @@ beforeEach(() => {
   vi.mocked(getCliAgentDetections).mockResolvedValue({
     agents: [
       {
-        name: "claude-code",
+        name: "claude",
         label: "Claude Code",
         executable: "claude",
-        config_reference: "claude-code.yml",
+        config_reference: "cli_agents/claude/default.yml",
         detected: true,
         path: "",
       },
@@ -374,7 +374,7 @@ describe("ActivityHistoryPage", () => {
       inherited: false,
       model_mapping: {},
       models: [],
-      cli_agent_mapping: { default: "codex-cli.yml" },
+      cli_agent_mapping: { default: "cli_agents/codex/default.yml" },
       cli_agents: [],
       brain_mapping: [],
       native_agent_policy: {

@@ -681,3 +681,166 @@ async def main(context) -> None:
 ```
 
 Because the scheduler runs a routine with no caller-supplied input, a routine candidate must not require caller-supplied arguments or a message. A command that declares `routine: true` stays listed but is marked ineligible when required arguments remain visible through `inputs.defined_args: auto` or when `inputs.message: required`. With `inputs.defined_args: hidden`, placeholders are supplied internally by the workflow and do not affect routine eligibility.
+
+
+## 9. Specifying model effort
+
+How hard the model should think is expressed with three provider-neutral labels: `low` / `default` / `high`. Translating a label into concrete provider settings is the job of the configuration YAML and the adapters, so a command only ever deals with the label.
+
+### 9.1. How to specify it, and the resolution order
+
+Declare the default in the frontmatter:
+
+```markdown
+---
+brain: agent
+effort: high
+---
+Investigate the whole repository and propose a fix.
+```
+
+To override it at run time, pass it as an ordinary `key=value` parameter (there is no dedicated CLI option):
+
+```shell
+guildbotics run summarize file=README.md cwd=. effort=high
+```
+
+The order is the same for every brain (both the LLM API path and the AI CLI tool path):
+
+1. the runtime value (`effort=<level>`, and the chat workflow's automatic assessment)
+2. the frontmatter `effort:`
+3. unspecified
+
+**A runtime `effort=default` explicitly cancels a frontmatter `effort: high`.** "Unspecified" and "specified as `default`" are not the same thing.
+
+### 9.2. What `default` and unspecified mean
+
+Both mean "do not intervene". On the LLM API path a model is built fresh for every run, so this is the same as running on the model's own defaults.
+
+On the native AI CLI tool path, however, **the session continues**. For a continued session, "do not intervene" means "**keep the settings that session already has**"; returning to the model defaults is not guaranteed. That happens only once the conversation rotates and a new session begins.
+
+Rotation is decided by a fingerprint of the effective settings (resolved level + model + provider-specific settings). Moving between an empty fingerprint (nothing stated) and a non-empty one is "keep", and does not rotate. Only **two differing non-empty** fingerprints rotate the session, with the reason `settings_changed`. An adapter that can re-send its settings on every turn (codex) never rotates for this.
+
+### 9.3. Model definition YAML schema
+
+`intelligences/models/<provider>/*.yml` may carry an optional `effort:` block. The settings for a level are shallow-merged into `parameters`.
+
+```yaml
+model_class: agno.models.openai.OpenAIChat
+parameters:
+  id: gpt-5-mini
+effort:
+  low:
+    reasoning_effort: low
+  high:
+    reasoning_effort: high
+```
+
+- Keys must be `low` or `high`, and every value must be a mapping
+- **`default:` is rejected.** `default` means "do not intervene", so a mapping for it could never be applied. Settings that should always apply belong in `parameters:` instead
+- Because the merge targets `parameters`, replacing `id` lets a level switch models entirely. `parameters:` itself always applies, and AI CLI tool definitions carry the same block
+- Parameter names and types differ per provider: OpenAI uses `reasoning_effort` (string), Anthropic `thinking: {type, budget_tokens}` (nested), Gemini `thinking_budget` (integer)
+
+Slots live at `models/<provider>/<slot>.yml`, but only `default.yml` is packaged. **A slot file with no `effort:` key inherits the `effort:` of its provider's `default.yml`.** To state "no mapping" explicitly, write `effort: {}` (an absent key inherits; an empty mapping means no intervention).
+
+#### `effort_fields:` (optional)
+
+The same file may declare which settings the provider accepts. The desktop settings screen builds typed controls from this declaration alone, and rejects unknown keys or wrong types on save. A provider that declares nothing falls back to editing raw JSON, with no validation.
+
+```yaml
+effort_fields:
+  - key: thinking.type          # dotted paths address nested keys
+    type: enum
+    values: [enabled, disabled]
+  - key: thinking.budget_tokens
+    type: integer
+    minimum: 1024
+  - key: id
+    type: model_id
+```
+
+`type` is one of `enum` / `integer` / `boolean` / `string` / `model_id`. The declaration is provider knowledge; the screen never learns what any key means.
+
+### 9.4. AI CLI tool configuration YAML schema
+
+AI CLI tool definitions use the same two levels as model definitions:
+
+```
+cli_agents/<tool>/default.yml     the tool's own definition (the catalog entry)
+cli_agents/<tool>/<slot>.yml      a slot's own definition
+```
+
+`cli_agent_mapping.yml` points a slot at one of these paths, exactly as the model mapping points at `models/<provider>/<slot>.yml`. A slot definition inherits every key it does not state from its tool's default, so one tool can serve several slots with different models and efforts.
+
+Either file may carry `parameters:` and `effort:`, related exactly as they are in a model definition: `parameters:` **always applies**, and `effort.<level>` overlays it.
+
+```yaml
+parameters:        # applies whatever effort was asked for
+  model: <model>
+effort:            # overlays it for low / high only
+  high:
+    model: <stronger model>
+```
+
+`default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. A native tool's definition (codex / claude / grok) carries only `parameters:` and `effort:` -- never `script` / `env`.
+
+Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes a model and a thinking budget, `grok agent stdio` takes model and reasoning effort as launch options, and the copilot and antigravity scripts translate both into `--model` and `--effort`. You only need to write `effort_fields:` yourself for a tool you added.
+
+```yaml
+# intelligences/cli_agents/codex/default.yml
+effort:
+  low:
+    effort: low
+  high:
+    model: <a stronger model id>
+    effort: high
+```
+
+The keys inside a block are provider-specific. The core understands only the common `model` key, which it uses for the settings fingerprint. Each adapter holds an allowlist of the keys it can act on and warns about the rest rather than dropping them silently.
+
+- codex: sends `model` / `effort` on every `turn/start`. Both are validated against `model/list` (`supportedReasoningEfforts`); an unsupported value is warned about and dropped
+- claude: translates `model` into `--model` and `max_thinking_tokens` into the `MAX_THINKING_TOKENS` environment variable
+- grok: passes `model` / `reasoning_effort` to `grok agent stdio` as launch options. They are fixed for the life of the process, so changing them starts a fresh session; keys outside that pair are warned about and ignored
+
+### 9.5. The environment contract for script-based AI CLI tools
+
+A one-shot script tool receives exactly these three variables — no more; arbitrary mapping keys never become environment variables:
+
+| Variable | Contents |
+|---|---|
+| `GUILDBOTICS_CLI_AGENT_EFFORT` | the mapping's `effort` value, or the resolved level (`low` / `high`) when the mapping states none; unset for `default` and unspecified |
+| `GUILDBOTICS_CLI_AGENT_MODEL` | the mapping's `model` value, when it has one |
+| `GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS` | the remaining mapping values (excluding `model`) as JSON |
+
+Leaving them unset for `default` / unspecified is deliberate: a script needs no special value meaning "do not intervene" — with no variable set it simply keeps its own defaults.
+
+### 9.6. Requesting a level that has no mapping
+
+If `high` is requested but the model definition or tool configuration has no `high` mapping, this is **not an error**: a warning is logged and the run continues without intervention. Providers differ in how far their mappings are filled in, and stopping the run would do more harm than running without the overlay.
+
+The provider-neutral label is never passed through to the provider as a fallback. That holds even for a tool whose own vocabulary happens to match it (Codex accepts `low` / `high` too): the mapping is always the only source of these values. Falling back to the label would make the run intervene precisely when diagnostics recorded it as `unsupported`, so the record and the behaviour would disagree.
+
+### 9.7. Workflow defaults
+
+- **Ticket-driven workflow**: no automatic assessment. `functions/handle_github_ticket` declares `effort: high` in its frontmatter, so the assumption that ticket work is heavy holds out of the box
+- **Chat workflow**: once per incoming event, an LLM (`functions/assess_effort`) answers `default` or `high`. A request that needs work on local files is `high`; an ordinary conversational reply is `default`. `low` is never produced automatically because no criterion for choosing it has been defined (it remains available for explicit configuration)
+
+The chat assessment only ever **promotes**. An assessment below the thread's stored level is not adopted, and a thread already at `high` skips the call entirely. This state is stored per person_id, so it is one member's view of the thread rather than a single value shared across it.
+
+The assessment runs on `brain: default` (the LLM API path) and the assessing command declares `effort: low` for itself. Note that "the `default` slot is cheap" is not guaranteed — a costly model can be configured there.
+
+**In a CLI-only setup (no LLM API key) the automatic assessment does not work.** When no LLM model is configured the call is skipped, one warning is logged, and the stored value is used. To raise the effort in such a setup, state it explicitly in the frontmatter or as a runtime parameter.
+
+### 9.8. Reading it in diagnostics
+
+Each effort decision is recorded in the trace / diagnostics detail. It is not shown in the activity history: effort is diagnostic information, whereas the activity history is about domain outcomes.
+
+Only a safe allowlist is recorded:
+
+- `requested`: the value as supplied
+- `resolved`: the level actually adopted
+- `model`: the effective model id
+- `applied_keys`: the **names** of the parameters the effort level itself applied (never their values, and never the tool's always-applied baseline settings)
+- `unsupported`: whether an explicit request found no mapping
+
+Raw effective parameter values are never recorded, because `api_key`, headers, and client configuration can sit alongside them.

@@ -18,6 +18,7 @@ import {
   MultiSelect,
   NumberInput,
   PasswordInput,
+  Paper,
   Popover,
   Progress,
   Select,
@@ -65,6 +66,8 @@ import {
   type DiagnosticCheck,
   type CliAgentDetection,
   type CliAgentDefinition,
+  type EffortFieldSpec,
+  type EffortOverlay,
   type ConfigStatus,
   type BrainAssignment,
   type IntelligenceConfig,
@@ -128,6 +131,8 @@ import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
+import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
+import { JsonObjectField } from "./JsonObjectField";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -1243,7 +1248,15 @@ function upsertByAgent(
 
 const DEFAULT_LLM_PROVIDER = "openai";
 
-type ProviderDefaults = Record<string, { model_class: string; model_id: string }>;
+type ProviderDefaults = Record<
+  string,
+  {
+    model_class: string;
+    model_id: string;
+    effort: EffortOverlay;
+    effort_fields: EffortFieldSpec[];
+  }
+>;
 
 // Per-provider default model_class/model_id, sourced from the backend provider
 // catalog (`models/<provider>/default.yml`). Keeping it server-side means
@@ -1252,7 +1265,12 @@ function providerDefaultsMap(providers: LlmProviderInfo[]): ProviderDefaults {
   return Object.fromEntries(
     providers.map((entry) => [
       entry.provider,
-      { model_class: entry.model_class, model_id: entry.model_id },
+      {
+        model_class: entry.model_class,
+        model_id: entry.model_id,
+        effort: entry.effort ?? {},
+        effort_fields: entry.effort_fields ?? [],
+      },
     ]),
   );
 }
@@ -1270,6 +1288,26 @@ function slotModelPath(provider: string, slotKey: string): string {
   return `models/${provider}/${slotKey}.yml`;
 }
 
+// AI CLI tool definitions use the same two-level shape as model definitions, so
+// a slot owns its own file and two slots on one tool can differ.
+function slotCliPath(tool: string, slotKey: string): string {
+  return `cli_agents/${tool}/${slotKey}.yml`;
+}
+
+function cliToolFromPath(path: string | undefined): string {
+  const parts = path?.split("/") ?? [];
+  return parts.length >= CLI_PATH_PARTS && parts[0] === "cli_agents" ? parts[1] : "";
+}
+
+// The tool picker lists one entry per tool (its `default.yml`), so a slot with
+// its own definition still has to resolve to that entry to show as selected.
+function cliToolDefaultPath(path: string | undefined): string {
+  const tool = cliToolFromPath(path);
+  return tool ? slotCliPath(tool, "default") : (path ?? "");
+}
+
+const CLI_PATH_PARTS = 3;
+
 function providerDefaultModel(
   provider: string,
   slotKey: string,
@@ -1280,8 +1318,43 @@ function providerDefaultModel(
     path: slotModelPath(provider, slotKey),
     provider,
     model_class: def?.model_class ?? "",
-    model_id: def?.model_id ?? "",
+    parameters: def?.model_id ? { id: def.model_id } : {},
+    // Left empty on purpose: the slot inherits its provider's mapping (the
+    // runtime resolves the same fallback), so switching provider adopts the new
+    // provider's defaults instead of materializing a copy of the old ones.
+    effort: {},
+    inherited_effort: def?.effort ?? {},
+    effort_fields: def?.effort_fields ?? [],
   };
+}
+
+// Assigns a definition to `slotKey`, creating it when new and dropping any
+// definition no slot references -- the AI CLI tool twin of `withSlotModel`.
+function withSlotCliAgent(
+  current: IntelligenceConfig,
+  slotKey: string,
+  path: string,
+  tool: string,
+): IntelligenceConfig {
+  const mapping = { ...current.cli_agent_mapping, [slotKey]: path };
+  const referenced = new Set(Object.values(mapping));
+  const agents = current.cli_agents.filter((agent) => referenced.has(agent.path));
+  if (!agents.some((agent) => agent.path === path)) {
+    const toolDefault = current.cli_agents.find((agent) => agent.path === cliToolDefaultPath(path));
+    agents.push({
+      path,
+      name: tool,
+      env: {},
+      script: "",
+      detected: toolDefault?.detected ?? false,
+      detected_path: toolDefault?.detected_path ?? "",
+      effort: {},
+      inherited_effort: toolDefault?.inherited_effort ?? {},
+      effort_fields: toolDefault?.effort_fields ?? [],
+      effort_supported: toolDefault?.effort_supported ?? true,
+    });
+  }
+  return { ...current, cli_agent_mapping: mapping, cli_agents: agents };
 }
 
 // Assigns `model` to `slotKey` and drops any model definition no longer
@@ -1534,7 +1607,19 @@ function IntelligenceEditor({
   });
   const [draftState, setDraftState] = useState<IntelligenceDraftState | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [envErrors, setEnvErrors] = useState<Record<string, string>>({});
+  // Field id -> the JSON in that editor does not parse. A malformed object must
+  // block saving, not be silently dropped on the way to the backend.
+  const [jsonErrors, setJsonErrors] = useState<Record<string, boolean>>({});
+  const setJsonValidity = useCallback((fieldId: string, valid: boolean) => {
+    setJsonErrors((current) => {
+      if (valid === !current[fieldId]) return current;
+      const next = { ...current };
+      if (valid) delete next[fieldId];
+      else next[fieldId] = true;
+      return next;
+    });
+  }, []);
+  const hasJsonError = Object.keys(jsonErrors).length > 0;
   const mutation = useMutation({
     mutationFn: updateIntelligenceConfig,
     onSuccess: () => {
@@ -1553,10 +1638,10 @@ function IntelligenceEditor({
   const serializedPayload = payload ? JSON.stringify(payload) : "";
   const savedSerialized = activeDraftState?.savedSerialized ?? querySerializedPayload;
   const dirty = Boolean(serializedPayload && savedSerialized !== serializedPayload);
-  const canSave = Boolean(payload && dirty && Object.keys(envErrors).length === 0);
+  const canSave = Boolean(payload && dirty && !hasJsonError);
 
   const saveDraft = useCallback(async () => {
-    if (!payload || !serializedPayload || Object.keys(envErrors).length > 0) {
+    if (!payload || !serializedPayload || hasJsonError) {
       return;
     }
     setSaveState("saving");
@@ -1570,7 +1655,7 @@ function IntelligenceEditor({
       setSaveState("error");
       throw error;
     }
-  }, [draftKey, envErrors, mutation, payload, serializedPayload]);
+  }, [draftKey, hasJsonError, mutation, payload, serializedPayload]);
 
   const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
     setDraftState((current) => {
@@ -1646,6 +1731,7 @@ function IntelligenceEditor({
             script: "",
             detected: false,
             detected_path: "",
+            effort: {},
           });
         }
         return {
@@ -1751,7 +1837,11 @@ function IntelligenceEditor({
       label: agent.name,
     })),
     ...draft.cli_agents
-      .filter((agent) => !detections.some((d) => d.config_reference === agent.path))
+      .filter(
+        (agent) =>
+          agent.path === cliToolDefaultPath(agent.path) &&
+          !detections.some((d) => d.config_reference === agent.path),
+      )
       .map((agent) => ({ value: agent.path, label: agent.name })),
   ];
   const detectedByPath = Object.fromEntries(
@@ -1827,19 +1917,24 @@ function IntelligenceEditor({
     );
   };
 
-  const handleUpdateLlmSlotModelId = (slotKey: string, modelId: string) => {
-    updateDraft((current) => {
-      const currentPath = current.model_mapping[slotKey];
-      const currentDef = current.models.find((m) => m.path === currentPath);
-      const provider =
-        currentDef?.provider || providerFromModelPath(currentPath) || DEFAULT_LLM_PROVIDER;
-      return withSlotModel(current, slotKey, {
-        path: slotModelPath(provider, slotKey),
-        provider,
-        model_class: currentDef?.model_class || providerDefaults[provider]?.model_class || "",
-        model_id: modelId,
-      });
-    });
+  const handleUpdateLlmSlotParameters = (slotKey: string, parameters: Record<string, unknown>) => {
+    updateDraft((current) => ({
+      ...current,
+      models: current.models.map((model) =>
+        model.path === current.model_mapping[slotKey] ? { ...model, parameters } : model,
+      ),
+    }));
+  };
+
+  // The effort overlay is provider-shaped, so it is edited (and replaced) as a
+  // whole object rather than merged key by key.
+  const handleUpdateLlmSlotEffort = (slotKey: string, effort: ModelDefinition["effort"]) => {
+    updateDraft((current) => ({
+      ...current,
+      models: current.models.map((model) =>
+        model.path === current.model_mapping[slotKey] ? { ...model, effort } : model,
+      ),
+    }));
   };
 
   // --- CLI Slot Helpers ---
@@ -1851,13 +1946,8 @@ function IntelligenceEditor({
         baseName = `new_cli_slot_${counter}`;
         counter++;
       }
-      return {
-        ...current,
-        cli_agent_mapping: {
-          ...current.cli_agent_mapping,
-          [baseName]: current.cli_agent_mapping.default,
-        },
-      };
+      const tool = cliToolFromPath(current.cli_agent_mapping.default);
+      return withSlotCliAgent(current, baseName, slotCliPath(tool, baseName), tool);
     });
   };
 
@@ -1909,28 +1999,10 @@ function IntelligenceEditor({
 
   const handleUpdateCliSlotAgentPath = (slotKey: string, agentPath: string) => {
     updateDraft((current) => {
-      const nextCliAgents = [...current.cli_agents];
-      const exists = nextCliAgents.some((a) => a.path === agentPath);
-      if (!exists) {
-        const name = agentPath.replace(".yml", "");
-        nextCliAgents.push({
-          path: agentPath,
-          name: name,
-          env: {},
-          script: "",
-          detected: false,
-          detected_path: "",
-        });
-      }
-
-      return {
-        ...current,
-        cli_agent_mapping: {
-          ...current.cli_agent_mapping,
-          [slotKey]: agentPath,
-        },
-        cli_agents: nextCliAgents,
-      };
+      // The picker offers a tool (its `default.yml`); the slot gets a
+      // definition of its own on that tool.
+      const tool = cliToolFromPath(agentPath);
+      return withSlotCliAgent(current, slotKey, slotCliPath(tool, slotKey), tool);
     });
   };
 
@@ -2164,48 +2236,79 @@ function IntelligenceEditor({
                     if (!modelDef) return null;
 
                     return (
-                      <Group key={slotKey} align="flex-end" gap="xs" wrap="nowrap">
-                        <SlotNameInput
-                          key={slotKey}
-                          label={t("setup.intelligence.slot")}
-                          value={slotKey}
-                          readOnly={isModelSlotLocked(slotKey)}
-                          onRename={handleRenameLlmSlot}
-                          flex={1.5}
-                        />
-                        <Select
-                          label={t("setup.intelligence.provider")}
-                          data={providers.map((provider) => ({
-                            value: provider.provider,
-                            label: provider.label,
-                          }))}
-                          value={modelDef.provider}
-                          onChange={(val) =>
-                            handleUpdateLlmSlotProvider(slotKey, val ?? DEFAULT_LLM_PROVIDER)
-                          }
-                          flex={1.5}
-                        />
-                        <TextInput
-                          label={t("setup.intelligence.modelId")}
-                          value={modelDef.model_id}
-                          onChange={(e) =>
-                            handleUpdateLlmSlotModelId(slotKey, e.currentTarget.value)
-                          }
-                          flex={2}
-                        />
-                        {!isModelSlotLocked(slotKey) ? (
-                          <ActionIcon
-                            color="danger"
-                            variant="subtle"
-                            onClick={() => handleDeleteLlmSlot(slotKey)}
-                            mb="xs"
-                          >
-                            <Trash2 size={16} />
-                          </ActionIcon>
-                        ) : (
-                          <Box w={28} />
-                        )}
-                      </Group>
+                      // One bounded box per slot: without it the rows of two
+                      // slots run together, and the AI CLI tool card (whose
+                      // slots are accordion items) already reads as grouped.
+                      <Paper key={slotKey} withBorder radius="sm" p="sm">
+                        <Stack gap="xs">
+                          <Group align="flex-end" gap="xs" wrap="nowrap">
+                            <SlotNameInput
+                              key={slotKey}
+                              label={t("setup.intelligence.slot")}
+                              value={slotKey}
+                              readOnly={isModelSlotLocked(slotKey)}
+                              onRename={handleRenameLlmSlot}
+                              flex={1}
+                            />
+                            <Select
+                              label={t("setup.intelligence.provider")}
+                              data={providers.map((provider) => ({
+                                value: provider.provider,
+                                label: provider.label,
+                              }))}
+                              value={modelDef.provider}
+                              onChange={(val) =>
+                                handleUpdateLlmSlotProvider(slotKey, val ?? DEFAULT_LLM_PROVIDER)
+                              }
+                              flex={1}
+                            />
+                            {!isModelSlotLocked(slotKey) ? (
+                              <ActionIcon
+                                color="danger"
+                                variant="subtle"
+                                onClick={() => handleDeleteLlmSlot(slotKey)}
+                                mb="xs"
+                              >
+                                <Trash2 size={16} />
+                              </ActionIcon>
+                            ) : (
+                              <Box w={28} />
+                            )}
+                          </Group>
+                          <Group align="flex-end" gap="xs" wrap="nowrap">
+                            <Box flex={1}>
+                              <ToolSettingsField
+                                value={modelDef.parameters ?? {}}
+                                fields={modelDef.effort_fields ?? []}
+                                onChange={(parameters) =>
+                                  handleUpdateLlmSlotParameters(slotKey, parameters)
+                                }
+                              />
+                            </Box>
+                            {/* Keeps this row's columns aligned with the one above,
+                              which reserves the same width for the delete icon. */}
+                            <Box w={28} />
+                          </Group>
+                          {/* Keyed on the path so switching provider reseeds the
+                            editor: the draft's overlay is replaced with the new
+                            provider's defaults, and stale state must not linger. */}
+                          <EffortSettingsField
+                            key={`model-effort:${modelDef.path}`}
+                            onValidityChange={(valid) =>
+                              setJsonValidity(`model-effort:${modelDef.path}`, valid)
+                            }
+                            value={modelDef.effort ?? {}}
+                            inherited={modelDef.inherited_effort ?? {}}
+                            fields={modelDef.effort_fields ?? []}
+                            onChange={(effort) =>
+                              handleUpdateLlmSlotEffort(
+                                slotKey,
+                                effort as ModelDefinition["effort"],
+                              )
+                            }
+                          />
+                        </Stack>
+                      </Paper>
                     );
                   })}
                 </Stack>
@@ -2235,7 +2338,7 @@ function IntelligenceEditor({
                     const agentDef = draft.cli_agents.find((a) => a.path === path);
                     if (!agentDef) return null;
 
-                    const detection = detectedByPath[agentDef.path];
+                    const detection = detectedByPath[cliToolDefaultPath(agentDef.path)];
                     const isDetected = detection?.detected || agentDef.detected;
 
                     return (
@@ -2287,39 +2390,46 @@ function IntelligenceEditor({
                               <Select
                                 label={t("setup.intelligence.cliAgent")}
                                 data={cliFileOptions}
-                                value={path}
+                                // The picker lists tools, so a slot with its
+                                // own definition selects its tool's entry.
+                                value={cliToolDefaultPath(path)}
                                 onChange={(val) =>
                                   handleUpdateCliSlotAgentPath(slotKey, val ?? path)
                                 }
                                 size="xs"
                               />
                             </Group>
-                            <Textarea
+                            <ToolSettingsField
+                              value={agentDef.parameters ?? {}}
+                              fields={agentDef.effort_fields ?? []}
+                              onChange={(parameters) =>
+                                handleUpdateCliAgentDef(agentDef.path, { parameters })
+                              }
+                            />
+                            <JsonObjectField
+                              key={`cli-env:${agentDef.path}`}
+                              onValidityChange={(valid) =>
+                                setJsonValidity(`cli-env:${agentDef.path}`, valid)
+                              }
                               label={t("setup.intelligence.envJson")}
-                              autosize
-                              minRows={2}
-                              value={JSON.stringify(agentDef.env ?? {}, null, 2)}
-                              error={envErrors[agentDef.path]}
-                              onChange={(event) => {
-                                const nextText = event.currentTarget.value;
-                                try {
-                                  const parsed = JSON.parse(nextText || "{}") as unknown;
-                                  if (!isRecord(parsed)) {
-                                    throw new Error("env must be an object");
-                                  }
-                                  setEnvErrors((current) => {
-                                    const next = { ...current };
-                                    delete next[agentDef.path];
-                                    return next;
-                                  });
-                                  handleUpdateCliAgentDef(agentDef.path, { env: parsed });
-                                } catch {
-                                  setEnvErrors((current) => ({
-                                    ...current,
-                                    [agentDef.path]: t("setup.intelligence.envJsonError"),
-                                  }));
-                                }
-                              }}
+                              errorText={t("setup.intelligence.envJsonError")}
+                              value={agentDef.env ?? {}}
+                              onChange={(env) => handleUpdateCliAgentDef(agentDef.path, { env })}
+                            />
+                            <EffortSettingsField
+                              key={`cli-effort:${agentDef.path}`}
+                              onValidityChange={(valid) =>
+                                setJsonValidity(`cli-effort:${agentDef.path}`, valid)
+                              }
+                              value={agentDef.effort ?? {}}
+                              inherited={agentDef.inherited_effort ?? {}}
+                              fields={agentDef.effort_fields ?? []}
+                              supported={agentDef.effort_supported ?? true}
+                              onChange={(effort) =>
+                                handleUpdateCliAgentDef(agentDef.path, {
+                                  effort: effort as CliAgentDefinition["effort"],
+                                })
+                              }
                             />
                             <Textarea
                               label={t("setup.intelligence.script")}

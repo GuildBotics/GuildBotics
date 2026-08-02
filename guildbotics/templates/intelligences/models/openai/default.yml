@@ -3,7 +3,18 @@ order: 10
 api_key_env: OPENAI_API_KEY
 model_class: agno.models.openai.OpenAIChat
 parameters:
-  id: gpt-5-mini
+  id: gpt-5.6-luna
+effort:
+  low:
+    reasoning_effort: low
+  high:
+    reasoning_effort: high
+effort_fields:
+  - key: reasoning_effort
+    type: enum
+    values: [minimal, low, medium, high]
+  - key: id
+    type: model_id
 rate_limit:
   max_requests_per_minute: 20
   max_requests_per_day: 1000

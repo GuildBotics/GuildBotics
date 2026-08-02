@@ -4,6 +4,17 @@ api_key_env: GOOGLE_API_KEY
 model_class: agno.models.google.Gemini
 parameters:
   id: gemini-3.1-flash-lite
+effort:
+  low:
+    thinking_budget: 0
+  high:
+    thinking_budget: 8000
+effort_fields:
+  - key: thinking_budget
+    type: integer
+    minimum: 0
+  - key: id
+    type: model_id
 rate_limit:
   max_requests_per_minute: 5
   max_requests_per_day: 20

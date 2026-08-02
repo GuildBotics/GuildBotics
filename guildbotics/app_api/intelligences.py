@@ -8,23 +8,34 @@ from guildbotics.app_api.models import (
     AdapterNativeAgentPolicySettings,
     BrainAssignment,
     CliAgentDefinition,
+    EffortFieldSpec,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
     NativeAgentPolicySettings,
 )
 from guildbotics.editions.simple import simple_brain_factory
-from guildbotics.editions.simple.setup_service import CreatedFile
+from guildbotics.editions.simple.setup_service import (
+    CreatedFile,
+    SetupServiceError,
+)
 from guildbotics.intelligences.agent_runtime.policy import (
     POLICY_ADAPTERS,
     parse_native_agent_policy,
 )
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.cli_agents import (
+    cli_agent_default_path,
+    cli_agent_name_from_path,
     discover_cli_agents,
-    native_cli_agent_name,
+    is_native_cli_agent,
     resolve_cli_agent_path,
 )
+from guildbotics.intelligences.effort import (
+    describe_overlay_problems,
+    validate_effort_fields,
+)
+from guildbotics.intelligences.llm_providers import PROVIDER_DEFAULT_FILENAME
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
@@ -188,20 +199,34 @@ class IntelligenceConfigService:
                 if model.path.startswith("models/")
             ],
             {model.path: model for model in request.models},
-            self._model_def_yaml,
+            lambda base, model: self._model_def_yaml(
+                base,
+                model,
+                self._described_keys(
+                    self._model_effort_descriptors(
+                        request.config_dir, request.person_id, model.path
+                    ),
+                    f"provider '{self._provider_from_model_path(model.path)}'",
+                ),
+            ),
             files,
         )
         self._reconcile_member_defs(
             request.config_dir,
             target_dir,
             "cli_agents",
-            [
-                f"cli_agents/{agent.path}"
-                for agent in request.cli_agents
-                if not native_cli_agent_name(agent.path)
-            ],
-            {f"cli_agents/{agent.path}": agent for agent in request.cli_agents},
-            self._cli_def_yaml,
+            [self._cli_agent_rel_path(agent) for agent in request.cli_agents],
+            {self._cli_agent_rel_path(agent): agent for agent in request.cli_agents},
+            lambda base, agent: self._cli_def_yaml(
+                base,
+                agent,
+                self._described_keys(
+                    self._cli_effort_descriptors(
+                        request.config_dir, request.person_id, agent.path
+                    ),
+                    f"AI CLI tool '{agent.path}'",
+                ),
+            ),
             files,
         )
         self._reconcile_member_policy(request, team, target_dir, files)
@@ -259,10 +284,15 @@ class IntelligenceConfigService:
         Drops empty values (mirroring ``save_yaml_file`` cleaning) plus empty
         containers, so a definition whose only field is an empty ``parameters``
         map is treated as equal to a missing definition and is not written.
+        ``effort_fields`` is dropped too: it describes what the provider accepts
+        rather than what this scope configured, so its presence in an inherited
+        file must not make an otherwise identical definition look customized.
         """
         if isinstance(data, dict):
             result = {}
             for key, value in data.items():
+                if key == "effort_fields":
+                    continue
                 normalized = self._comparable_def(value)
                 if normalized not in (None, "", {}, []):
                     result[key] = normalized
@@ -306,9 +336,14 @@ class IntelligenceConfigService:
             files.append(CreatedFile(path=policy_file, action="delete"))
 
     def _normalize_cli_mapping(self, mapping: dict[str, str]) -> dict[str, str]:
-        return {
-            key: native_cli_agent_name(value) or value for key, value in mapping.items()
-        }
+        """Pass definition paths through unchanged.
+
+        A slot names a definition by path, exactly as a model slot does, so
+        there is no second spelling to normalize. Rewriting anything else into a
+        path here would make a stale mapping look valid in the editor while the
+        runtime, which does no such rewriting, could not resolve it.
+        """
+        return dict(mapping)
 
     def _write_model_def(
         self,
@@ -320,12 +355,29 @@ class IntelligenceConfigService:
     ) -> None:
         if not model.path.startswith("models/"):
             return
+        provider = self._provider_from_model_path(model.path)
+        descriptors = self._model_effort_descriptors(config_dir, person_id, model.path)
+        self._reject_unusable_effort(
+            model.effort, descriptors, where=f"provider '{provider}'"
+        )
+        # The baseline speaks the same vocabulary, so a typo there is caught the
+        # same way rather than surfacing at run time.
+        self._reject_unusable_effort(
+            {"parameters": model.parameters},
+            descriptors,
+            where=f"provider '{provider}'",
+        )
         model_file = target_dir / model.path
         model_file.parent.mkdir(parents=True, exist_ok=True)
         # Seed from the inherited definition (member -> team -> template) so
         # fields the editor does not surface are preserved on save.
         base = self._read_scoped_yaml(config_dir, person_id, model.path)
-        save_yaml_file(model_file, self._model_def_yaml(base, model))
+        save_yaml_file(
+            model_file,
+            self._model_def_yaml(
+                base, model, self._described_keys(descriptors, f"provider '{provider}'")
+            ),
+        )
         files.append(CreatedFile(path=model_file, action="update"))
 
     def _write_cli_agent_def(
@@ -336,34 +388,94 @@ class IntelligenceConfigService:
         agent: CliAgentDefinition,
         files: list[CreatedFile],
     ) -> None:
-        if native_cli_agent_name(agent.path):
-            return
-        cli_agents_dir = target_dir / "cli_agents"
-        cli_agents_dir.mkdir(parents=True, exist_ok=True)
-        agent_file = cli_agents_dir / agent.path
-        base = self._read_scoped_yaml(config_dir, person_id, f"cli_agents/{agent.path}")
-        save_yaml_file(agent_file, self._cli_def_yaml(base, agent))
+        rel_path = self._cli_agent_rel_path(agent)
+        descriptors = self._cli_effort_descriptors(config_dir, person_id, rel_path)
+        self._reject_unusable_effort(
+            agent.effort, descriptors, where=f"AI CLI tool '{agent.path}'"
+        )
+        # The baseline speaks the same vocabulary, so a typo there is caught the
+        # same way rather than surfacing at run time.
+        self._reject_unusable_effort(
+            {"parameters": agent.parameters},
+            descriptors,
+            where=f"AI CLI tool '{agent.path}'",
+        )
+        agent_file = target_dir / rel_path
+        # A native tool's file is written even for an empty mapping, as an
+        # explicit `effort: {}`. Deleting it instead would fall through to the
+        # packaged template, whose mapping would silently take effect again --
+        # so clearing the field in the editor would not clear anything.
+        agent_file.parent.mkdir(parents=True, exist_ok=True)
+        base = self._read_scoped_yaml(config_dir, person_id, rel_path)
+        save_yaml_file(
+            agent_file,
+            self._cli_def_yaml(
+                base,
+                agent,
+                self._described_keys(descriptors, f"AI CLI tool '{agent.path}'"),
+            ),
+        )
         files.append(CreatedFile(path=agent_file, action="update"))
 
     def _model_def_yaml(
-        self, base: dict[str, Any], model: ModelDefinition
+        self, base: dict[str, Any], model: ModelDefinition, described: set[str]
     ) -> dict[str, Any]:
         data = dict(base)
         data["model_class"] = model.model_class
-        parameters = data.get("parameters", {})
-        if not isinstance(parameters, dict):
-            parameters = {}
-        data["parameters"] = {**parameters, "id": model.model_id}
+        data["parameters"] = self._merged_parameters(base, model.parameters, described)
+        data["effort"] = model.effort
         return data
 
-    def _cli_def_yaml(
-        self, base: dict[str, Any], agent: CliAgentDefinition
+    @staticmethod
+    def _merged_parameters(
+        base: dict[str, Any], requested: dict[str, Any], described: set[str]
     ) -> dict[str, Any]:
+        """Replace the settings the editor manages, keep the ones it never saw.
+
+        A hand-tuned key the provider does not describe (a `temperature`, say)
+        has no control and no descriptor, so a save must carry it through rather
+        than drop it. A described key is authoritative in the request, including
+        by its absence, so clearing a field really clears it.
+        """
+        existing = base.get("parameters", {})
+        if not isinstance(existing, dict):
+            existing = {}
+        preserved = {
+            key: value for key, value in existing.items() if key not in described
+        }
+        return {**preserved, **requested}
+
+    @staticmethod
+    def _described_keys(describing: dict[str, Any], where: str) -> set[str]:
+        """Top-level keys the descriptors claim, so nesting is replaced whole."""
+        return {
+            field.key.split(".")[0]
+            for field in validate_effort_fields(
+                describing.get("effort_fields"), where=where
+            )
+        }
+
+    def _cli_agent_rel_path(self, agent: CliAgentDefinition) -> str:
+        """Where an AI CLI tool's definition lives.
+
+        The path *is* the reference, so there is nothing to normalize.
+        """
+        return agent.path
+
+    def _cli_def_yaml(
+        self, base: dict[str, Any], agent: CliAgentDefinition, described: set[str]
+    ) -> dict[str, Any]:
+        # A native tool is driven by its adapter, so its file may only carry an
+        # effort mapping -- never a script or env block.
+        if is_native_cli_agent(cli_agent_name_from_path(agent.path)):
+            return {"parameters": agent.parameters, "effort": agent.effort}
         # Preserve the inherited script when the request does not carry one. The
         # editor only loads the mapped agent's script, so a newly selected agent
         # would otherwise overwrite a real script with an empty one.
         data = dict(base)
         data["env"] = agent.env
+        data["parameters"] = self._merged_parameters(base, agent.parameters, described)
+        data["effort"] = agent.effort
         if agent.script:
             data["script"] = agent.script
         data.setdefault("script", "")
@@ -380,10 +492,7 @@ class IntelligenceConfigService:
         data = self._read_merged_mapping(config_dir, person_id, file_name)
         mapping = {str(key): str(value) for key, value in data.items()}
         if file_name == "cli_agent_mapping.yml":
-            return {
-                key: native_cli_agent_name(value) or value
-                for key, value in mapping.items()
-            }
+            return self._normalize_cli_mapping(mapping)
         return mapping
 
     def _read_merged_mapping(
@@ -451,12 +560,102 @@ class IntelligenceConfigService:
         parameters = data.get("parameters", {}) if isinstance(data, dict) else {}
         if not isinstance(parameters, dict):
             parameters = {}
+        provider = self._provider_from_model_path(model_path)
+        # What this definition falls back to, mirroring the runtime: the
+        # provider's own default, then the packaged definition of this path. The
+        # second matters because a workspace file shadows the template
+        # wholesale, so a definition saved before effort existed would otherwise
+        # show -- and run with -- nothing at all.
+        provider_default = self._provider_default_yaml(config_dir, person_id, provider)
+        packaged = self._template_yaml(f"models/{provider}/{PROVIDER_DEFAULT_FILENAME}")
+        inherited = provider_default.get("effort") or packaged.get("effort", {})
+        describing = self._model_effort_descriptors(config_dir, person_id, model_path)
         return ModelDefinition(
             path=model_path,
-            provider=self._provider_from_model_path(model_path),
+            provider=provider,
             model_class=str(data.get("model_class", "")) if data else "",
-            model_id=str(parameters.get("id", "")),
+            parameters=parameters,
+            effort=data.get("effort", {}) if data else {},
+            inherited_effort=inherited,
+            effort_fields=self._effort_fields(describing, f"provider '{provider}'"),
         )
+
+    @staticmethod
+    def _declaring(*candidates: dict[str, Any]) -> dict[str, Any]:
+        """The first candidate that declares field descriptors.
+
+        Descriptors say what the provider accepts, so they belong to the
+        provider rather than to whichever scope happens to hold a copy of the
+        file. A saved definition carries only the settings the editor manages,
+        so without falling through to the packaged file a single save would cost
+        that definition its typed editing and its save-time validation.
+        """
+        for candidate in candidates:
+            if candidate.get("effort_fields"):
+                return candidate
+        return {}
+
+    def _model_effort_descriptors(
+        self, config_dir: Path, person_id: str | None, model_path: str
+    ) -> dict[str, Any]:
+        """Where a model definition's field descriptors come from."""
+        provider = self._provider_from_model_path(model_path)
+        return self._declaring(
+            self._provider_default_yaml(config_dir, person_id, provider),
+            # The packaged fallback is the provider's own default definition.
+            # This slot's path would find nothing: only `default.yml` is packaged.
+            self._template_yaml(f"models/{provider}/{PROVIDER_DEFAULT_FILENAME}"),
+        )
+
+    def _cli_tool_default(
+        self, config_dir: Path, person_id: str | None, tool: str
+    ) -> dict[str, Any]:
+        """A tool's own definition, which every slot on it inherits from."""
+        return self._read_scoped_yaml(
+            config_dir, person_id, cli_agent_default_path(tool)
+        )
+
+    def _cli_inherited_effort(
+        self, config_dir: Path, person_id: str | None, tool: str
+    ) -> dict[str, dict]:
+        default_path = cli_agent_default_path(tool)
+        return self._cli_tool_default(config_dir, person_id, tool).get(
+            "effort"
+        ) or self._template_yaml(default_path).get("effort", {})
+
+    def _cli_effort_descriptors(
+        self, config_dir: Path, person_id: str | None, rel_path: str
+    ) -> dict[str, Any]:
+        """Where an AI CLI tool's field descriptors come from."""
+        tool = cli_agent_name_from_path(rel_path)
+        default_path = cli_agent_default_path(tool)
+        return self._declaring(
+            self._read_scoped_yaml(config_dir, person_id, rel_path),
+            self._read_scoped_yaml(config_dir, person_id, default_path),
+            self._template_yaml(default_path),
+        )
+
+    def _provider_default_yaml(
+        self, config_dir: Path, person_id: str | None, provider: str
+    ) -> dict[str, Any]:
+        if not provider:
+            return {}
+        return self._read_scoped_yaml(
+            config_dir, person_id, f"models/{provider}/{PROVIDER_DEFAULT_FILENAME}"
+        )
+
+    @staticmethod
+    def _effort_fields(data: dict[str, Any], where: str) -> list[EffortFieldSpec]:
+        return [
+            EffortFieldSpec(
+                key=field.key,
+                type=field.type,
+                values=list(field.values),
+                minimum=field.minimum,
+                maximum=field.maximum,
+            )
+            for field in validate_effort_fields(data.get("effort_fields"), where=where)
+        ]
 
     def _read_cli_agents(
         self,
@@ -476,25 +675,35 @@ class IntelligenceConfigService:
             if agent_path in seen:
                 continue
             seen.add(agent_path)
-            native_name = native_cli_agent_name(agent_path)
-            native = bool(native_name)
-            if not native and not agent_path.endswith(".yml"):
+            rel_path = agent_path
+            tool = cli_agent_name_from_path(agent_path)
+            if not tool:
                 continue
-            data = (
-                {}
-                if native
-                else self._read_scoped_yaml(
-                    config_dir, person_id, f"cli_agents/{agent_path}"
+            native = is_native_cli_agent(tool)
+            data = self._read_scoped_yaml(config_dir, person_id, rel_path)
+            effort_fields = self._effort_fields(
+                self._cli_effort_descriptors(config_dir, person_id, rel_path),
+                f"AI CLI tool '{agent_path}'",
+            )
+            effort_supported = bool(
+                data.get(
+                    "effort_supported",
+                    self._cli_tool_default(config_dir, person_id, tool).get(
+                        "effort_supported", True
+                    ),
                 )
             )
+            inherited_effort = self._cli_inherited_effort(config_dir, person_id, tool)
+            if native:
+                data = {
+                    "effort": data.get("effort", {}),
+                    "parameters": data.get("parameters", {}),
+                }
             env = data.get("env", {}) if isinstance(data, dict) else {}
             if not isinstance(env, dict):
                 env = {}
-            name = agent_path.removesuffix(".yml")
-            agent_key = native_name or name.removesuffix("-cli")
-            detected_path = resolve_cli_agent_path(
-                executables.get(agent_key, agent_key)
-            )
+            name = tool
+            detected_path = resolve_cli_agent_path(executables.get(tool, tool))
             agents.append(
                 CliAgentDefinition(
                     path=agent_path,
@@ -503,9 +712,39 @@ class IntelligenceConfigService:
                     script=str(data.get("script", "")) if data else "",
                     detected=bool(detected_path),
                     detected_path=detected_path,
+                    effort=data.get("effort", {}) if data else {},
+                    parameters=data.get("parameters", {}) if data else {},
+                    inherited_effort=inherited_effort,
+                    effort_fields=effort_fields,
+                    effort_supported=effort_supported,
                 )
             )
         return agents
+
+    @staticmethod
+    def _reject_unusable_effort(
+        effort: dict[str, dict], describing: dict[str, Any], *, where: str
+    ) -> None:
+        """Refuse an effort overlay the provider could not act on.
+
+        A mistyped key is valid YAML and valid JSON, so nothing else would catch
+        it until the provider rejected the run -- far from the edit that caused
+        it. Providers that describe no fields are left alone, since nothing is
+        known there about which keys are valid.
+        """
+        problems = describe_overlay_problems(
+            effort, validate_effort_fields(describing.get("effort_fields"), where=where)
+        )
+        if problems:
+            raise SetupServiceError(
+                "invalid_effort_settings", f"{where}: {'; '.join(problems)}"
+            )
+
+    def _template_yaml(self, relative_path: str) -> dict[str, Any]:
+        """What a scope inherits when it holds no file of its own."""
+        return self._read_optional_yaml(
+            get_template_path() / "intelligences" / relative_path
+        )
 
     def _read_brain_assignments(
         self, brain_mapping: dict[str, Any]
