@@ -800,7 +800,7 @@ The keys inside a block are provider-specific. The core understands only the com
 
 - codex: sends `model` / `effort` on every `turn/start`. Both are validated against `model/list` (`supportedReasoningEfforts`); an unsupported value is warned about and dropped
 - claude: translates `model` into `--model` and `max_thinking_tokens` into the `MAX_THINKING_TOKENS` environment variable
-- grok: ACP v1 offers no way to apply these settings, so a mapping is warned about and ignored
+- grok: passes `model` / `reasoning_effort` to `grok agent stdio` as launch options. They are fixed for the life of the process, so changing them starts a fresh session; keys outside that pair are warned about and ignored
 
 ### 9.5. The environment contract for script-based AI CLI tools
 

@@ -810,7 +810,7 @@ effort:
 
 - codex: `model` / `effort` を `turn/start` で毎ターン送信。`model/list` の `supportedReasoningEfforts` で検証し、非対応値は警告して落とします
 - claude: `model` を `--model` に、`max_thinking_tokens` を環境変数 `MAX_THINKING_TOKENS` に翻訳します
-- grok: ACP v1 には設定を適用する手段がないため、指定は警告のうえ無視されます
+- grok: `model` / `reasoning_effort` を `grok agent stdio` の起動オプションとして渡します。プロセス起動時に固定されるため、変更時は新しいセッションを開始します。この2つ以外のキーは警告のうえ無視されます
 
 ### 9.5. スクリプト型AI CLIツールの環境変数契約
 
