@@ -84,6 +84,34 @@ class _Process:
             self._result(request_id, {"account": {"type": "chatgpt"}})
         elif method == "account/rateLimits/read":
             self._result(request_id, {"rate_limits": {}})
+        elif method == "model/list":
+            # The real envelope: a paginated `data` array whose entries carry
+            # `supportedReasoningEfforts` as objects, not bare strings.
+            self._result(
+                request_id,
+                {
+                    "data": [
+                        {
+                            "id": "gpt-known",
+                            "isDefault": False,
+                            "supportedReasoningEfforts": [
+                                {"reasoningEffort": "low", "description": "Fast"},
+                                {"reasoningEffort": "high", "description": "Thorough"},
+                            ],
+                            "defaultReasoningEffort": "high",
+                        },
+                        {
+                            "id": "gpt-default",
+                            "isDefault": True,
+                            "supportedReasoningEfforts": [
+                                {"reasoningEffort": "low", "description": "Fast"}
+                            ],
+                            "defaultReasoningEffort": "low",
+                        },
+                    ],
+                    "nextCursor": None,
+                },
+            )
         elif method == "thread/start":
             self._result(request_id, {"thread": {"id": "thread-1"}})
         elif method == "thread/resume":
@@ -186,7 +214,7 @@ class _Process:
         return 0
 
 
-def _context(tmp_path: Path) -> AgentExecutionContext:
+def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
     key = ConversationKey("aiko", "codex", "ticket", "issue-300")
     return AgentExecutionContext(
         person_id="aiko",
@@ -195,6 +223,15 @@ def _context(tmp_path: Path) -> AgentExecutionContext:
         workspace_data_root=tmp_path,
         conversation_key=key,
         resume_policy=ResumePolicy.AUTO,
+        **overrides,
+    )
+
+
+def _turn_start(process: "_Process") -> dict[str, Any]:
+    return next(
+        message["params"]
+        for message in process.messages
+        if message.get("method") == "turn/start"
     )
 
 
@@ -818,3 +855,142 @@ async def test_codex_account_and_rate_limit_accept_snake_case_schema(
         await adapter._check_rate_limits()
     assert rate_error.value.category is AgentRuntimeErrorCategory.RATE_LIMITED
     assert rate_error.value.details["retry_after_at"]
+
+
+# --------------------------------------------------------------------------- #
+# Effort: turn/start settings and model/list validation
+# --------------------------------------------------------------------------- #
+
+
+async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> "_Process":
+    process = _Process()
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = CodexAppServerAdapter(policy=AdapterFilesystemPolicy())
+    context = _context(tmp_path, **context_overrides)
+    conversation = ConversationRecord(
+        key=context.conversation_key, provider_session_id="thread-1"
+    )
+    await adapter.run_turn("go", context, conversation, lambda _event: None)
+    await adapter.close()
+    return process
+
+
+def test_codex_applies_settings_per_turn_so_a_change_needs_no_new_thread() -> None:
+    assert CodexAppServerAdapter.settings_scope == "turn"
+
+
+@pytest.mark.asyncio
+async def test_codex_turn_start_carries_effort_and_model(monkeypatch, tmp_path) -> None:
+    process = await _run_turn_with(
+        monkeypatch,
+        tmp_path,
+        effort="high",
+        provider_options={"model": "gpt-known", "effort": "high"},
+    )
+    params = _turn_start(process)
+    assert params["model"] == "gpt-known"
+    assert params["effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_codex_turn_start_omits_settings_when_nothing_is_imposed(
+    monkeypatch, tmp_path
+) -> None:
+    """Omitting them is how "keep the thread's current settings" is expressed."""
+    process = await _run_turn_with(monkeypatch, tmp_path)
+    params = _turn_start(process)
+    assert "model" not in params
+    assert "effort" not in params
+
+
+@pytest.mark.asyncio
+async def test_codex_does_not_fall_back_to_the_label_when_unmapped(
+    monkeypatch, tmp_path
+) -> None:
+    """An unmapped level is "no intervention" here too, as diagnostics records.
+
+    Using the provider-neutral label as a fallback would make Codex intervene on
+    exactly the runs recorded as `unsupported`, and would send the label
+    `default` -- which is not a Codex effort value -- as if it were one.
+    """
+    process = await _run_turn_with(
+        monkeypatch, tmp_path, effort="high", provider_options={}
+    )
+    params = _turn_start(process)
+    assert "effort" not in params
+    assert "model" not in params
+
+
+@pytest.mark.asyncio
+async def test_codex_drops_an_effort_the_model_does_not_support(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    process = await _run_turn_with(
+        monkeypatch,
+        tmp_path,
+        effort="high",
+        provider_options={"model": "gpt-known", "effort": "extra-high"},
+    )
+    params = _turn_start(process)
+    assert params["model"] == "gpt-known"
+    assert "effort" not in params
+
+
+@pytest.mark.asyncio
+async def test_codex_drops_a_model_the_installation_does_not_offer(
+    monkeypatch, tmp_path
+) -> None:
+    process = await _run_turn_with(
+        monkeypatch,
+        tmp_path,
+        effort="high",
+        # `gpt-default` is the installation's default and supports only `low`,
+        # so once the unknown model is dropped the effort is judged against it.
+        provider_options={"model": "gpt-unavailable", "effort": "low"},
+    )
+    params = _turn_start(process)
+    assert "model" not in params
+    assert params["effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_codex_validates_effort_against_the_default_model_when_none_is_named(
+    monkeypatch, tmp_path
+) -> None:
+    """A mapping with no `model` still runs on a model: the thread's default.
+
+    Skipping validation here would send an effort the default model does not
+    accept, which is exactly the case a mapping without a model produces.
+    """
+    process = await _run_turn_with(
+        monkeypatch, tmp_path, effort="high", provider_options={"effort": "high"}
+    )
+    params = _turn_start(process)
+    assert "effort" not in params
+
+    supported = await _run_turn_with(
+        monkeypatch, tmp_path, effort="low", provider_options={"effort": "low"}
+    )
+    assert _turn_start(supported)["effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_codex_reports_unsupported_effort_settings_instead_of_dropping_them(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        process = await _run_turn_with(
+            monkeypatch,
+            tmp_path,
+            effort="high",
+            provider_options={"effort": "high", "temperature": 0.9},
+        )
+    params = _turn_start(process)
+    assert "temperature" not in params
+    assert "temperature" in caplog.text

@@ -147,7 +147,7 @@ def test_invalid_python_metadata_keeps_main_docstring_description(
     command.write_text(
         "COMMAND_METADATA = dict(name='Report')\n\n"
         "def main(context):\n"
-        '    \"\"\"Fallback description.\"\"\"\n'
+        '    """Fallback description."""\n'
         "    return None\n",
         encoding="utf-8",
     )

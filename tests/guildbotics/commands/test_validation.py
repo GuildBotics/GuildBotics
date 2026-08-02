@@ -97,8 +97,7 @@ def test_generated_markdown_disabled_brain_can_render_context_pipe() -> None:
 
 def test_generated_markdown_rejects_whitespace_padded_disabled_brain() -> None:
     source = (
-        "---\nbrain: ' disabled '\ninputs:\n  message: required\n---\n"
-        "Unused input.\n"
+        "---\nbrain: ' disabled '\ninputs:\n  message: required\n---\nUnused input.\n"
     )
 
     with pytest.raises(CommandValidationError) as exc:

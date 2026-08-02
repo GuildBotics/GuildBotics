@@ -4,6 +4,23 @@ api_key_env: ANTHROPIC_API_KEY
 model_class: agno.models.anthropic.Claude
 parameters:
   id: claude-haiku-4-5
+effort:
+  low:
+    thinking:
+      type: disabled
+  high:
+    thinking:
+      type: enabled
+      budget_tokens: 8000
+effort_fields:
+  - key: thinking.type
+    type: enum
+    values: [enabled, disabled]
+  - key: thinking.budget_tokens
+    type: integer
+    minimum: 1024
+  - key: id
+    type: model_id
 rate_limit:
   max_requests_per_minute: 50
   max_requests_per_day: 5000

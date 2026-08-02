@@ -691,3 +691,166 @@ async def main(context) -> None:
 ```
 
 スケジューラは巡回コマンドを呼び出し側からの入力なしで実行するため、巡回候補は呼び出し側の引数や入力文を要求しない必要があります。`routine: true` を宣言したコマンドは、`inputs.defined_args: auto` によって呼び出し側へ必須引数を表示する場合、または `inputs.message: required` の場合、一覧に残ったまま理由付きで「実行不可」と表示されます。`inputs.defined_args: hidden` の場合、プレースホルダはワークフロー内部から供給されるため、巡回実行の可否には影響しません。
+
+
+## 9. モデルエフォート（effort）の指定
+
+「モデルにどれだけ考えさせるか」を、プロバイダ中立の 3 つのラベル `low` / `default` / `high` で指定できます。ラベルから実際のプロバイダ設定への翻訳は設定 YAML とアダプタが担当するため、コマンド側はラベルだけを扱います。
+
+### 9.1. 指定方法と解決順位
+
+フロントマターで既定値を宣言します。
+
+```markdown
+---
+brain: agent
+effort: high
+---
+リポジトリ全体を調査し、修正方針をまとめてください。
+```
+
+実行時に上書きする場合は、通常の `key=value` パラメータとして渡します（専用の CLI オプションはありません）。
+
+```shell
+guildbotics run summarize file=README.md cwd=. effort=high
+```
+
+解決順位はすべての brain（LLM API 経路・AI CLIツール経路のいずれも）で共通です。
+
+1. 実行時指定（`effort=<level>`、およびチャットワークフローの自動判定結果）
+2. フロントマターの `effort:`
+3. 未指定
+
+**実行時の `effort=default` は、フロントマターの `effort: high` を明示的に打ち消します。**「指定なし」と「`default` 指定」は別物である点に注意してください。
+
+### 9.2. `default` と未指定の意味
+
+`default` と未指定はどちらも「介入しない」を意味します。LLM API 経路では毎回モデルを生成し直すため、これはモデル既定値での実行と同じです。
+
+一方、ネイティブAI CLIツールの経路では**セッションが継続します**。継続中のセッションに対する「介入しない」は「**そのセッションの現在の設定を維持する**」を意味し、モデル既定値へ戻ることは保証されません。既定値に戻るのは、会話がローテーションして新しいセッションが始まったあとです。
+
+セッションのローテーションは、実効設定のフィンガープリント（解決したレベル + モデル + プロバイダ固有設定）で判定します。空（＝何も指定していない）と非空の間の遷移は「維持」であり、ローテーションしません。**非空同士が異なるときだけ**、`settings_changed` としてローテーションします。設定を毎ターン送り直せるアダプタ（codex）は、そもそもローテーションしません。
+
+### 9.3. モデル定義 YAML の schema
+
+`intelligences/models/<provider>/*.yml` に任意の `effort:` ブロックを書けます。各レベルの値は `parameters` へ浅くマージされます。
+
+```yaml
+model_class: agno.models.openai.OpenAIChat
+parameters:
+  id: gpt-5-mini
+effort:
+  low:
+    reasoning_effort: low
+  high:
+    reasoning_effort: high
+```
+
+- キーは `low` / `high` のみ。値は必ずマッピング（オブジェクト）
+- **`default:` は書けません**（エラーになります）。`default` は「介入しない」という意味なので、マッピングを書いても決して適用されないためです。常に効かせたい設定は `parameters:` に直接書いてください
+- `parameters` への浅いマージなので、`id` を差し替えればレベルごとに別モデルを使えます。`parameters:` 自体は常に適用される設定で、AI CLIツール定義も同じ構造を持ちます
+- パラメータ名と型はプロバイダごとに異なります。OpenAI は `reasoning_effort`（文字列）、Anthropic は `thinking: {type, budget_tokens}`（ネスト）、Gemini は `thinking_budget`（整数）です
+
+スロットは `models/<provider>/<スロット名>.yml` に置かれますが、パッケージ同梱テンプレートは `default.yml` だけです。**スロットのファイルに `effort:` キーが無い場合、そのプロバイダの `default.yml` の `effort:` を継承します**。明示的に「マッピング無し」にしたい場合は `effort: {}` と書いてください（キーが無い＝継承、空マッピング＝無介入）。
+
+#### `effort_fields:`（任意）
+
+同じファイルに `effort_fields:` を書くと、そのプロバイダが受け付ける設定を宣言できます。デスクトップの設定画面はこの宣言だけを見て型付きの入力欄を生成し、保存時に未知のキーや型違いを拒否します。宣言が無いプロバイダは JSON 直接編集にフォールバックし、検証も行いません。
+
+```yaml
+effort_fields:
+  - key: thinking.type          # ドット記法でネストしたキーを指す
+    type: enum
+    values: [enabled, disabled]
+  - key: thinking.budget_tokens
+    type: integer
+    minimum: 1024
+  - key: id
+    type: model_id
+```
+
+`type` は `enum` / `integer` / `boolean` / `string` / `model_id` のいずれかです。この宣言はプロバイダ側の知識であり、画面はキーの意味を一切知りません。
+
+### 9.4. AI CLIツール設定 YAML の schema
+
+AI CLIツールの定義はモデル定義と同じ2階層です。
+
+```
+cli_agents/<tool>/default.yml     ツール既定（カタログに載るのはこのファイル）
+cli_agents/<tool>/<スロット名>.yml  スロット専用の定義
+```
+
+`cli_agent_mapping.yml` はスロットからこのパスを指します（`models/<provider>/<スロット名>.yml` を指すのと同じ形）。スロット専用の定義に書かなかったキーはツール既定から継承されるため、同じツールを複数スロットで別々のモデル・エフォートで使い分けられます。
+
+どちらのファイルにも `parameters:` と `effort:` を書けます。モデル定義と同じ関係で、`parameters:` は**常に適用される設定**、`effort.<level>` はその上に重なるレベル別の上書きです。
+
+```yaml
+parameters:        # エフォートに関係なく常に効く
+  model: <モデル>
+effort:            # low / high のときだけ上書き
+  high:
+    model: <強いモデル>
+```
+
+`default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。ネイティブツール（codex / claude / grok）の定義は `parameters:` と `effort:` のみで、`script` / `env` は書けません。
+
+同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は model と思考予算、`grok agent stdio` は起動オプションの model / reasoning effort、スクリプト型の copilot / antigravity は `--model` と `--effort` に翻訳します。独自に追加したツールで型付き編集を使いたい場合のみ、上記の書式で `effort_fields:` を自分で書いてください。
+
+```yaml
+# intelligences/cli_agents/codex/default.yml
+effort:
+  low:
+    effort: low
+  high:
+    model: <強いモデルの ID>
+    effort: high
+```
+
+ブロック内のキーはプロバイダ固有です。コアが解釈するのは共通キー `model` のみで、フィンガープリント計算に使われます。アダプタは自分が扱えるキーの allowlist を持ち、未知のキーは警告ログに出して無視します（黙って捨てません）。
+
+- codex: `model` / `effort` を `turn/start` で毎ターン送信。`model/list` の `supportedReasoningEfforts` で検証し、非対応値は警告して落とします
+- claude: `model` を `--model` に、`max_thinking_tokens` を環境変数 `MAX_THINKING_TOKENS` に翻訳します
+- grok: ACP v1 には設定を適用する手段がないため、指定は警告のうえ無視されます
+
+### 9.5. スクリプト型AI CLIツールの環境変数契約
+
+ワンショットのスクリプト型ツールには、次の 3 変数**だけ**が渡されます（任意のキーが無制限に環境変数化されることはありません）。
+
+| 変数 | 内容 |
+|---|---|
+| `GUILDBOTICS_CLI_AGENT_EFFORT` | mapping の `effort` キー値。mapping が指定していなければ解決したレベル（`low` / `high`）。`default` / 未指定では設定されません |
+| `GUILDBOTICS_CLI_AGENT_MODEL` | mapping の `model` キーの値（あれば） |
+| `GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS` | `model` を除く残りの mapping 値の JSON |
+
+`default` / 未指定でこれらが未設定になるのは意図的です。スクリプト側は「介入しない」を表す特別な値を知る必要がなく、変数がなければ自分の既定動作を続ければ済みます。
+
+### 9.6. mapping が無いレベルを指定した場合
+
+`high` を指定したのにモデル定義やツール設定に `high` の mapping が無い場合、**エラーにはならず、警告ログを出して無介入のまま実行を続けます**。プロバイダごとに mapping の整備状況は異なるため、実行を止める方が害が大きいという判断です。
+
+このとき、プロバイダ中立のラベルがそのままプロバイダへ渡ることはありません。Codex のようにラベルと同じ語彙（`low` / `high`）を持つツールでも同じで、値の供給元は常に mapping だけです。ラベルをフォールバックに使うと、diagnostics が `unsupported` と記録した実行に限って介入が起きることになり、記録と実挙動が食い違います。
+
+### 9.7. ワークフローの既定動作
+
+- **チケット駆動ワークフロー**: 自動判定はしません。`functions/handle_github_ticket` のフロントマターが `effort: high` を宣言しており、チケット対応は基本的に重い処理であるという前提が標準状態で効きます
+- **チャットワークフロー**: 受信イベントごとに 1 回、LLM（`functions/assess_effort`）が `default` / `high` の二値で判定します。ローカルファイルを扱う作業依頼は `high`、通常の会話応答は `default` です。判定基準を定義していないため、`low` は自動判定の出力に含まれません（明示指定用の語彙としては残ります）
+
+チャットの判定は**昇格のみ**です。スレッドの保存値より低い判定は採用されず、すでに `high` のスレッドでは判定呼び出し自体を省略します。この状態は person_id ごとに保存されるため、「Slack スレッド全体で 1 つ」ではなく、そのメンバーから見たスレッドの状態です。
+
+判定は `brain: default`（LLM API 経路）で動き、判定コマンド自身が `effort: low` を宣言しています。ただし「`default` スロット＝安価」は保証されません（高価なモデルを `default` に設定することもできます）。
+
+**AI CLIツールのみの構成（LLM API キーなし）では、この自動判定は動作しません。** LLM モデルが未構成の場合は判定呼び出しをスキップし、警告を 1 回出して保存値のまま続行します。この構成でエフォートを上げたい場合は、フロントマターか実行時パラメータで明示してください。
+
+### 9.8. diagnostics での確認
+
+エフォートの決定は trace / diagnostics の詳細に記録されます（activity history には出ません。エフォートは診断情報であり、activity history の関心事はドメイン上の成果です）。
+
+記録されるのは安全な allowlist に限られます。
+
+- `requested`: 指定された値そのまま
+- `resolved`: 実際に採用したレベル
+- `model`: 実効モデル ID
+- `applied_keys`: エフォートレベル自身が適用したパラメータの**キー名のみ**（値は記録しません。ツールの常時適用設定も含みません）
+- `unsupported`: 明示指定に対して mapping が無かったか
+
+実効パラメータの生値は記録しません。`api_key` や headers、client 設定などが混入し得るためです。

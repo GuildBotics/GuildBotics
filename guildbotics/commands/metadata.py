@@ -33,7 +33,7 @@ _PLACEHOLDER_PATTERNS = (
     re.compile(r"\{\{\s*([A-Za-z_]\w*)\s*\}\}"),
     re.compile(r"(?<![\{$])\{([A-Za-z_]\w*)\}(?!\})"),
 )
-_RESERVED_PLACEHOLDERS = {"context", "now"}
+_RESERVED_PLACEHOLDERS = {"context", "now", "effort"}
 PYTHON_COMMAND_METADATA_NAME = "COMMAND_METADATA"
 
 

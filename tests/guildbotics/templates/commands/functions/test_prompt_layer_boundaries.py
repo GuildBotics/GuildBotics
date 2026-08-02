@@ -112,7 +112,7 @@ def test_ticket_prompt_requires_issue_comment_on_pr_work():
         assert "member github issue comment" in body, language
         assert "PR URL" in body or "PR url" in body, language
         # Verification result should be mentioned
-        assert ("verification" in body.lower() or "確認結果" in body), language
+        assert "verification" in body.lower() or "確認結果" in body, language
 
 
 def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
@@ -123,7 +123,7 @@ def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
         assert "task complete --content-stdin" in body, language
         assert "AgentResponse.message" in body, language
         # Both must appear in a context that says they are NOT substitutes
-        assert ("not a substitute" in body or "代替ではありません" in body), language
+        assert "not a substitute" in body or "代替ではありません" in body, language
 
 
 def test_issue_comment_contract_not_in_chat_prompt():
@@ -134,6 +134,50 @@ def test_issue_comment_contract_not_in_chat_prompt():
         # The chat prompt should not contain the ticket-specific issue
         # comment instruction sentinel phrases.
         assert "task complete --content-stdin" not in body, language
+        assert "not a substitute" not in body and "代替ではありません" not in body, (
+            language
+        )
+
+
+def _frontmatter(name: str, language: str) -> dict:
+    return load_markdown_with_frontmatter(FUNCTIONS_DIR / f"{name}.{language}.md")
+
+
+def test_ticket_work_runs_at_high_effort_by_default():
+    """Ticket work is heavy by default; that decision lives in the frontmatter."""
+    for language in ("en", "ja"):
+        assert _frontmatter("handle_github_ticket", language)["effort"] == "high"
+
+
+def test_chat_work_states_no_frontmatter_effort():
+    """Chat effort is decided per event by the assessor, not fixed up front."""
+    for language in ("en", "ja"):
+        assert "effort" not in _frontmatter("handle_chat_event", language)
+
+
+def test_the_effort_assessor_is_cheap_and_binary_across_languages():
+    for language in ("en", "ja"):
+        frontmatter = _frontmatter("assess_effort", language)
+        # The assessment itself must not be the expensive call it is deciding.
+        assert frontmatter["effort"] == "low"
+        assert frontmatter["brain"] == "default"
         assert (
-            "not a substitute" not in body and "代替ではありません" not in body
-        ), language
+            frontmatter["response_class"]
+            == "guildbotics.intelligences.common.EffortAssessmentResponse"
+        )
+
+
+def test_the_effort_assessor_prompts_share_placeholders_across_languages():
+    english = set(_PLACEHOLDER_RE.findall(_prompt_body("assess_effort", "en")))
+    japanese = set(_PLACEHOLDER_RE.findall(_prompt_body("assess_effort", "ja")))
+    assert english == japanese
+    assert english == {"latest_message", "previous_thread_context"}
+
+
+def test_the_effort_assessor_never_offers_low_as_an_automatic_answer():
+    """`low` has no defined automatic criterion, so it stays manual-only."""
+    for language in ("en", "ja"):
+        body = _prompt_body("assess_effort", language)
+        assert "`high`" in body
+        assert "`default`" in body
+        assert "`low`" not in body

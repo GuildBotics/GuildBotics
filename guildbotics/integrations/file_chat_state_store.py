@@ -20,6 +20,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadMessageState,
     ThreadSystemNoticeState,
 )
+from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.utils.fileio import get_workspace_data_path
 
 
@@ -146,6 +147,9 @@ class FileConversationStateStore(ConversationStateStore):
             ),
             backfill_error_count=_to_non_negative_int(data.get("backfill_error_count")),
             last_backfill_error=str(data.get("last_backfill_error", "") or ""),
+            # A corrupted stored level must not block the thread: it is dropped
+            # so the next assessment simply starts over.
+            effort=normalize_effort(data.get("effort"), strict=False),
         )
 
     def save_thread_state(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -80,6 +80,12 @@ class AgentExecutionContext:
     lease_id: str = ""
     delegation_id: str = ""
     model: str = ""
+    #: Resolved provider-neutral effort level (``low`` / ``high``), or ``""``
+    #: when the turn must not intervene in the session's current settings.
+    effort: str = ""
+    #: Provider-specific settings for that level. Each adapter allowlists the
+    #: keys it understands and warns about the rest instead of ignoring them.
+    provider_options: dict[str, Any] = field(default_factory=dict)
     rebuild_context: str = ""
     rebuild_context_complete: bool = False
     attempt: int = 1
@@ -97,6 +103,25 @@ class AgentExecutionContext:
             raise ValueError("run_id must not be empty.")
 
 
+def settings_fingerprint(applied: Mapping[str, Any]) -> str:
+    """Stable hash of the settings an adapter will actually impose on a session.
+
+    This is deliberately computed from the adapter's own normalized view rather
+    than from the requested effort: a request the adapter cannot act on changes
+    nothing about the session, so it must not read as a change. An empty mapping
+    gives ``""``, which means "keep whatever the session already has" rather
+    than "restore the provider default", and a session-scoped adapter therefore
+    only rotates when two *non-empty* fingerprints differ.
+    """
+    import hashlib
+    import json
+
+    if not applied:
+        return ""
+    payload = json.dumps(dict(applied), ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 @dataclass(slots=True)
 class ConversationRecord:
     key: ConversationKey
@@ -108,6 +133,9 @@ class ConversationRecord:
     last_run_id: str = ""
     provider: str = ""
     model: str = ""
+    #: Fingerprint of the settings last imposed on this session. Only sessions
+    #: whose adapter applies settings per session record one.
+    settings_fingerprint: str = ""
     healthy: bool = True
     turn_count: int = 0
     input_tokens: int = 0
@@ -133,6 +161,9 @@ class ConversationRecord:
         self.output_tokens = 0
         self.context_used_tokens = 0
         self.context_size_tokens = 0
+        # Settings belong to the session that is being discarded; the next turn
+        # re-imposes its own, or leaves the fresh session on provider defaults.
+        self.settings_fingerprint = ""
         self.rotation_reason = reason
 
 
@@ -181,8 +212,26 @@ class AgentRuntimeError(RuntimeError):
 EventSink = Callable[[AgentEvent], Awaitable[None] | None]
 
 
+#: An adapter that can re-send model settings on every turn. Changing effort
+#: mid-conversation costs nothing, so the session is never rotated for it.
+SETTINGS_SCOPE_TURN = "turn"
+#: An adapter whose settings are fixed when the session starts. Changing them
+#: requires a fresh session.
+SETTINGS_SCOPE_SESSION = "session"
+
+
 class AgentAdapter(Protocol):
     name: str
+    #: How far a settings change reaches; see the constants above.
+    settings_scope: str
+
+    def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
+        """The settings this adapter will actually impose for the turn.
+
+        Normalized and filtered to what the adapter can really act on, so a
+        requested setting it must ignore never looks like a session change.
+        """
+        ...
 
     async def run_turn(
         self,

@@ -85,7 +85,9 @@ def test_system_sessions_are_split_and_keep_service_run_id(tmp_path: Path) -> No
     assert second.index_records[0]["attributes"]["service_run_id"] == "service-1"
 
 
-def test_unscoped_records_do_not_implicitly_start_system_session(tmp_path: Path) -> None:
+def test_unscoped_records_do_not_implicitly_start_system_session(
+    tmp_path: Path,
+) -> None:
     store = SessionTranscriptStore(tmp_path / "run/diagnostics.jsonl")
 
     log_route = store.route(

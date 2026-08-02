@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from guildbotics.app_api import intelligences as intelligences_module
+from guildbotics.editions.simple.setup_service import SetupServiceError
 from guildbotics.app_api.intelligences import (
     AGNO_BRAIN_CLASS,
     CLI_BRAIN_CLASS,
@@ -21,7 +22,15 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.intelligences.brains import agno_agent, cli_agent
-from guildbotics.utils.fileio import load_yaml_file, save_yaml_file
+from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
+
+
+def _template_codex_effort() -> dict:
+    """The effort mapping a workspace inherits for the native Codex tool."""
+    data = load_yaml_file(
+        get_template_path() / "intelligences/cli_agents/codex/default.yml"
+    )
+    return dict(data.get("effort", {}))
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -53,11 +62,12 @@ def _write_team_config(config_dir: Path) -> None:
     )
     _write_yaml(
         base / "cli_agent_mapping.yml",
-        {"default": "codex-cli.yml"},
+        {"default": "cli_agents/codex/default.yml"},
     )
+    # A native tool's definition carries only its effort mapping.
     _write_yaml(
-        base / "cli_agents/codex-cli.yml",
-        {"env": {"FOO": "bar"}, "script": "codex exec"},
+        base / "cli_agents/codex/default.yml",
+        {"effort": _template_codex_effort()},
     )
     _write_yaml(
         base / "brain_mapping.yml",
@@ -146,8 +156,8 @@ def test_read_config_member_without_override_is_inherited(tmp_path: Path) -> Non
     assert response.inherited is True
     # Inherited values come from the team scope.
     assert response.model_mapping["default"] == "models/openai/gpt.yml"
-    assert response.cli_agent_mapping["default"] == "codex"
-    assert response.models[0].model_id == "team-model-id"
+    assert response.cli_agent_mapping["default"] == "cli_agents/codex/default.yml"
+    assert response.models[0].parameters.get("id") == "team-model-id"
 
 
 def test_read_config_member_marks_team_owned_slots(tmp_path: Path) -> None:
@@ -196,7 +206,7 @@ def test_read_config_member_with_override_not_inherited(tmp_path: Path) -> None:
     # "openai" slot the member never redefined is still inherited from the team.
     assert response.model_mapping["openai"] == "models/openai/gpt.yml"
     member_model = next(m for m in response.models if m.provider == "anthropic")
-    assert member_model.model_id == "member-model-id"
+    assert member_model.parameters["id"] == "member-model-id"
 
 
 def test_read_config_deduplicates_model_file_reads(
@@ -252,16 +262,19 @@ def test_read_config_handles_malformed_yaml(tmp_path: Path) -> None:
     model = response.models[0]
     assert model.path == "models/openai/gpt.yml"
     assert model.model_class == ""
-    assert model.model_id == ""
+    # A malformed file yields no settings at all, rather than a blank model id.
+    assert model.parameters == {}
 
 
 def test_read_config_cli_agent_env_not_dict_falls_back(tmp_path: Path) -> None:
     base = _team_intelligences(tmp_path)
     _write_yaml(base / "model_mapping.yml", {})
-    _write_yaml(base / "cli_agent_mapping.yml", {"default": "custom-cli.yml"})
+    _write_yaml(
+        base / "cli_agent_mapping.yml", {"default": "cli_agents/custom/default.yml"}
+    )
     # env is a list rather than a dict.
-    (base / "cli_agents").mkdir(parents=True, exist_ok=True)
-    (base / "cli_agents/custom-cli.yml").write_text(
+    (base / "cli_agents/custom").mkdir(parents=True, exist_ok=True)
+    (base / "cli_agents/custom/default.yml").write_text(
         "env:\n  - not-a-dict\nscript: run\n", encoding="utf-8"
     )
     _write_yaml(base / "brain_mapping.yml", {})
@@ -272,7 +285,7 @@ def test_read_config_cli_agent_env_not_dict_falls_back(tmp_path: Path) -> None:
     agent = response.cli_agents[0]
     assert agent.env == {}
     assert agent.script == "run"
-    assert agent.name == "custom-cli"
+    assert agent.name == "custom"
 
 
 def test_read_config_cli_agent_detected_path(
@@ -280,11 +293,13 @@ def test_read_config_cli_agent_detected_path(
 ) -> None:
     base = _team_intelligences(tmp_path)
     _write_yaml(base / "model_mapping.yml", {})
-    _write_yaml(base / "cli_agent_mapping.yml", {"default": "codex"})
+    _write_yaml(
+        base / "cli_agent_mapping.yml", {"default": "cli_agents/codex/default.yml"}
+    )
     _write_yaml(base / "brain_mapping.yml", {})
 
     def fake_resolve_cli_agent_path(executable: str) -> str:
-        # The service strips the "-cli" suffix before resolving.
+        # The tool is the directory in the definition path.
         return "/usr/local/bin/codex" if executable == "codex" else ""
 
     monkeypatch.setattr(
@@ -336,13 +351,13 @@ def _team_update_request(config_dir: Path) -> IntelligenceConfigUpdateRequest:
                 path="models/openai/gpt.yml",
                 provider="openai",
                 model_class="openai.Class",
-                model_id="gpt-test",
+                parameters={"id": "gpt-test"},
             )
         ],
-        cli_agent_mapping={"default": "codex"},
+        cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
         cli_agents=[
             CliAgentDefinition(
-                path="codex",
+                path="cli_agents/codex/default.yml",
                 name="codex",
                 env={},
                 script="",
@@ -372,13 +387,15 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
 
     base = _team_intelligences(tmp_path)
     model_file = base / "models/openai/gpt.yml"
-    cli_file = base / "cli_agents/codex"
+    cli_file = base / "cli_agents/codex/default.yml"
 
     written = {f.path for f in result.files}
     assert (base / "model_mapping.yml") in written
     assert model_file in written
     assert (base / "cli_agent_mapping.yml") in written
-    assert cli_file not in written
+    # A native tool's definition is written too: it carries the effort mapping,
+    # and an absent file would hand control back to the packaged template.
+    assert cli_file in written
     assert (base / "brain_mapping.yml") in written
     assert all(f.action == "update" for f in result.files)
 
@@ -386,11 +403,13 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
     assert load_yaml_file(base / "model_mapping.yml") == {
         "default": "models/openai/gpt.yml"
     }
-    assert load_yaml_file(base / "cli_agent_mapping.yml") == {"default": "codex"}
+    assert load_yaml_file(base / "cli_agent_mapping.yml") == {
+        "default": "cli_agents/codex/default.yml"
+    }
     model_data = load_yaml_file(model_file)
     assert model_data["model_class"] == "openai.Class"
     assert model_data["parameters"]["id"] == "gpt-test"
-    assert not cli_file.exists()
+    assert cli_file.exists()
 
     brain_data = load_yaml_file(base / "brain_mapping.yml")
     assert brain_data["default"] == {
@@ -501,22 +520,22 @@ def test_member_override_writes_only_changed_slots(tmp_path: Path) -> None:
                 path="models/anthropic/claude.yml",
                 provider="anthropic",
                 model_class="member.ModelClass",
-                model_id="member-model-id",
+                parameters={"id": "member-model-id"},
             ),
             ModelDefinition(
                 path="models/openai/gpt.yml",
                 provider="openai",
                 model_class="team.ModelClass",
-                model_id="team-model-id",
+                parameters={"id": "team-model-id"},
             ),
         ],
-        cli_agent_mapping={"default": "codex-cli.yml"},
+        cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
         cli_agents=[
             CliAgentDefinition(
-                path="codex-cli.yml",
+                path="cli_agents/codex/default.yml",
                 name="codex",
-                env={"FOO": "bar"},
-                script="codex exec",
+                # Unchanged from what the member inherits, so no member copy.
+                effort=_template_codex_effort(),
             )
         ],
         brain_mapping=_team_brain_assignments(),
@@ -557,8 +576,11 @@ def test_member_override_writes_changed_brain_assignment_only(tmp_path: Path) ->
     request = IntelligenceConfigUpdateRequest(
         config_dir=tmp_path,
         person_id="alice",
-        model_mapping={"default": "models/openai/gpt.yml", "openai": "models/openai/gpt.yml"},
-        cli_agent_mapping={"default": "codex-cli.yml"},
+        model_mapping={
+            "default": "models/openai/gpt.yml",
+            "openai": "models/openai/gpt.yml",
+        },
+        cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
         brain_mapping=assignments,
     )
     IntelligenceConfigService().update_config(request)
@@ -603,8 +625,11 @@ def test_member_override_prunes_reverted_slot(tmp_path: Path) -> None:
     request = IntelligenceConfigUpdateRequest(
         config_dir=tmp_path,
         person_id="alice",
-        model_mapping={"default": "models/openai/gpt.yml", "openai": "models/openai/gpt.yml"},
-        cli_agent_mapping={"default": "codex-cli.yml"},
+        model_mapping={
+            "default": "models/openai/gpt.yml",
+            "openai": "models/openai/gpt.yml",
+        },
+        cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
         brain_mapping=_team_brain_assignments(),
     )
     IntelligenceConfigService().update_config(request)
@@ -646,10 +671,10 @@ def test_member_override_preserves_unsurfaced_def_fields(tmp_path: Path) -> None
                 path="models/openai/gpt.yml",
                 provider="openai",
                 model_class="team.ModelClass",
-                model_id="team-model-id",
+                parameters={"id": "team-model-id"},
             ),
         ],
-        cli_agent_mapping={"default": "codex-cli.yml"},
+        cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
         brain_mapping=_team_brain_assignments(),
     )
     IntelligenceConfigService().update_config(request)
@@ -729,3 +754,507 @@ def test_inherit_team_defaults_when_no_member_dir(tmp_path: Path) -> None:
     assert not base.exists()
     assert len(result.files) == 1
     assert result.files[0].action == "delete"
+
+
+# --------------------------------------------------------------------------- #
+# Effort
+# --------------------------------------------------------------------------- #
+
+
+def test_read_config_surfaces_the_model_effort_overlay(tmp_path: Path) -> None:
+    _write_team_config(tmp_path)
+    _write_yaml(
+        _team_intelligences(tmp_path) / "models/openai/gpt.yml",
+        {
+            "model_class": "team.ModelClass",
+            "parameters": {"id": "team-model-id"},
+            "effort": {"high": {"reasoning_effort": "high"}},
+        },
+    )
+
+    response = IntelligenceConfigService().read_config(config_dir=tmp_path)
+
+    model = next(m for m in response.models if m.path == "models/openai/gpt.yml")
+    assert model.effort == {"high": {"reasoning_effort": "high"}}
+
+
+def test_read_config_surfaces_a_native_tools_effort_only_definition(
+    tmp_path: Path,
+) -> None:
+    _write_team_config(tmp_path)
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
+        {"effort": {"high": {"effort": "high"}}},
+    )
+
+    response = IntelligenceConfigService().read_config(config_dir=tmp_path)
+
+    agent = next(a for a in response.cli_agents if a.name == "codex")
+    assert agent.effort == {"high": {"effort": "high"}}
+    # A native tool is driven by its adapter; the file can carry nothing else.
+    assert agent.script == ""
+    assert agent.env == {}
+
+
+def test_team_update_writes_the_model_effort_overlay_with_types_intact(
+    tmp_path: Path,
+) -> None:
+    request = _team_update_request(tmp_path).model_copy(
+        update={
+            "models": [
+                ModelDefinition(
+                    # Anthropic's shape is the demanding one: a nested object
+                    # holding both an enum and an integer.
+                    path="models/anthropic/claude.yml",
+                    provider="anthropic",
+                    model_class="anthropic.Class",
+                    parameters={"id": "claude-test"},
+                    effort={
+                        "high": {
+                            "thinking": {"type": "enabled", "budget_tokens": 8000},
+                        },
+                        "low": {"thinking": {"type": "disabled"}},
+                    },
+                )
+            ]
+        }
+    )
+
+    IntelligenceConfigService().update_config(request)
+
+    data = load_yaml_file(_team_intelligences(tmp_path) / "models/anthropic/claude.yml")
+    assert data["effort"]["high"]["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 8000,
+    }
+    assert data["effort"]["low"]["thinking"] == {"type": "disabled"}
+    assert data["parameters"]["id"] == "claude-test"
+
+
+def test_team_update_writes_a_native_tools_effort_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    request = _team_update_request(tmp_path).model_copy(
+        update={
+            "cli_agents": [
+                CliAgentDefinition(
+                    path="cli_agents/codex/default.yml",
+                    name="codex",
+                    env={"IGNORED": "value"},
+                    script="ignored",
+                    effort={"high": {"model": "gpt-strong", "effort": "high"}},
+                )
+            ]
+        }
+    )
+
+    IntelligenceConfigService().update_config(request)
+
+    agent_file = _team_intelligences(tmp_path) / "cli_agents/codex/default.yml"
+    assert load_yaml_file(agent_file) == {
+        "parameters": {},
+        "effort": {"high": {"model": "gpt-strong", "effort": "high"}},
+    }
+
+
+def test_emptying_a_native_effort_keeps_an_explicit_empty_override(
+    tmp_path: Path,
+) -> None:
+    """Clearing the mapping must actually clear it, template included.
+
+    Configuration resolution falls back to the packaged template, which ships a
+    codex effort mapping. Deleting the workspace file would hand control back to
+    that template, so an emptied mapping is stored as an explicit `effort: {}`
+    that shadows it.
+    """
+    agent_file = _team_intelligences(tmp_path) / "cli_agents/codex/default.yml"
+    _write_yaml(agent_file, {"effort": {"high": {"effort": "high"}}})
+
+    IntelligenceConfigService().update_config(_team_update_request(tmp_path))
+
+    assert agent_file.exists()
+    assert load_yaml_file(agent_file) == {"effort": {}, "parameters": {}}
+
+
+def test_an_emptied_native_effort_is_not_refilled_by_the_template(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The runtime resolves the emptied override, not the template's mapping."""
+    from guildbotics.intelligences.brains import cli_agent
+
+    agent_file = _team_intelligences(tmp_path) / "cli_agents/codex/default.yml"
+    _write_yaml(agent_file, {"effort": {"high": {"effort": "high"}}})
+    IntelligenceConfigService().update_config(_team_update_request(tmp_path))
+
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    try:
+        resolved = cli_agent.get_cli_agent_mapping("alice")
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+
+    assert resolved["default"].effort == {}
+
+
+def test_member_override_keeps_only_a_differing_native_effort(tmp_path: Path) -> None:
+    _write_team_config(tmp_path)
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
+        {"effort": {"high": {"effort": "high"}}},
+    )
+    member_file = (
+        _member_intelligences(tmp_path, "alice") / "cli_agents/codex/default.yml"
+    )
+
+    def _request(effort: dict) -> IntelligenceConfigUpdateRequest:
+        return IntelligenceConfigUpdateRequest(
+            config_dir=tmp_path,
+            person_id="alice",
+            model_mapping={"default": "models/openai/gpt.yml"},
+            models=[
+                ModelDefinition(
+                    path="models/openai/gpt.yml",
+                    provider="openai",
+                    model_class="team.ModelClass",
+                    parameters={"id": "team-model-id"},
+                )
+            ],
+            cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
+            cli_agents=[
+                CliAgentDefinition(
+                    path="cli_agents/codex/default.yml",
+                    name="codex",
+                    env={},
+                    script="",
+                    effort=effort,
+                )
+            ],
+            brain_mapping=_team_brain_assignments(),
+        )
+
+    service = IntelligenceConfigService()
+    service.update_config(_request({"high": {"effort": "medium"}}))
+    assert load_yaml_file(member_file) == {
+        "parameters": {},
+        "effort": {"high": {"effort": "medium"}},
+    }
+
+    # Reverting to the inherited mapping prunes the member copy.
+    service.update_config(_request({"high": {"effort": "high"}}))
+    assert not member_file.exists()
+
+
+def test_a_definition_with_an_unknown_effort_level_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ModelDefinition(
+            path="models/openai/gpt.yml",
+            provider="openai",
+            effort={"extreme": {"reasoning_effort": "high"}},
+        )
+    with pytest.raises(ValidationError):
+        CliAgentDefinition(
+            path="cli_agents/codex/default.yml",
+            name="codex",
+            effort={"high": "not-a-mapping"},
+        )
+
+
+def test_a_slot_without_a_template_still_reports_what_it_inherits(
+    tmp_path: Path,
+) -> None:
+    """Only the `default` slot has a packaged template file.
+
+    Every other slot would otherwise show an empty effort and give no hint of
+    what it actually runs with, so the provider's own default supplies the
+    inherited view.
+    """
+    _write_yaml(
+        _team_intelligences(tmp_path) / "model_mapping.yml",
+        {"writer": "models/openai/writer.yml"},
+    )
+    _write_yaml(
+        _team_intelligences(tmp_path) / "models/openai/writer.yml",
+        {"model_class": "openai.Class", "parameters": {"id": "gpt-x"}},
+    )
+
+    config = IntelligenceConfigService().read_config(config_dir=tmp_path)
+    writer = next(m for m in config.models if m.path == "models/openai/writer.yml")
+
+    assert writer.effort == {}
+    assert writer.inherited_effort == {
+        "low": {"reasoning_effort": "low"},
+        "high": {"reasoning_effort": "high"},
+    }
+    assert {field.key for field in writer.effort_fields} == {"reasoning_effort", "id"}
+
+
+def test_saving_a_setting_the_provider_does_not_accept_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A mistyped key is valid YAML; only the descriptor can catch it here."""
+    request = _team_update_request(tmp_path).model_copy(
+        update={
+            "models": [
+                ModelDefinition(
+                    path="models/openai/default.yml",
+                    provider="openai",
+                    model_class="openai.Class",
+                    parameters={"id": "gpt-test"},
+                    effort={"high": {"reasoning_efort": "high"}},
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(SetupServiceError) as error:
+        IntelligenceConfigService().update_config(request)
+
+    assert error.value.code == "invalid_effort_settings"
+    assert "reasoning_efort" in error.value.message
+
+
+def test_a_definition_saved_before_effort_existed_still_offers_typed_editing(
+    tmp_path: Path,
+) -> None:
+    """Descriptors describe the provider, not the scope holding a file copy.
+
+    A workspace definition written before they existed would otherwise drop to
+    raw JSON with no validation, and show nothing to inherit.
+    """
+    _write_yaml(
+        _team_intelligences(tmp_path) / "model_mapping.yml",
+        {"default": "models/openai/default.yml"},
+    )
+    _write_yaml(
+        _team_intelligences(tmp_path) / "models/openai/default.yml",
+        {"model_class": "openai.Class", "parameters": {"id": "gpt-old"}},
+    )
+
+    config = IntelligenceConfigService().read_config(config_dir=tmp_path)
+    model = config.models[0]
+
+    assert {field.key for field in model.effort_fields} == {"reasoning_effort", "id"}
+    assert model.inherited_effort == {
+        "low": {"reasoning_effort": "low"},
+        "high": {"reasoning_effort": "high"},
+    }
+
+
+def test_such_a_definition_still_rejects_a_setting_the_provider_refuses(
+    tmp_path: Path,
+) -> None:
+    """Validation must not quietly switch off for an older workspace."""
+    _write_yaml(
+        _team_intelligences(tmp_path) / "models/openai/default.yml",
+        {"model_class": "openai.Class", "parameters": {"id": "gpt-old"}},
+    )
+    request = _team_update_request(tmp_path).model_copy(
+        update={
+            "models": [
+                ModelDefinition(
+                    path="models/openai/default.yml",
+                    provider="openai",
+                    model_class="openai.Class",
+                    parameters={"id": "gpt-old"},
+                    effort={"high": {"reasoning_efort": "high"}},
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(SetupServiceError) as error:
+        IntelligenceConfigService().update_config(request)
+
+    assert error.value.code == "invalid_effort_settings"
+
+
+def test_a_second_slot_gets_descriptors_even_when_the_provider_default_is_shadowed(
+    tmp_path: Path,
+) -> None:
+    """Only `default.yml` is packaged, so the fallback must target that path.
+
+    A workspace copy of the provider default hides the packaged descriptors;
+    looking for a packaged file at the slot's own path would find nothing and
+    drop the slot to raw JSON with no validation.
+    """
+    _write_yaml(
+        _team_intelligences(tmp_path) / "model_mapping.yml",
+        {"translation": "models/gemini/translation.yml"},
+    )
+    # A provider default saved before descriptors existed.
+    _write_yaml(
+        _team_intelligences(tmp_path) / "models/gemini/default.yml",
+        {"model_class": "google.Class", "parameters": {"id": "gemini-x"}},
+    )
+    _write_yaml(
+        _team_intelligences(tmp_path) / "models/gemini/translation.yml",
+        {"model_class": "google.Class", "parameters": {"id": "gemini-y"}},
+    )
+
+    config = IntelligenceConfigService().read_config(config_dir=tmp_path)
+    translation = next(
+        m for m in config.models if m.path == "models/gemini/translation.yml"
+    )
+
+    assert {field.key for field in translation.effort_fields} == {
+        "thinking_budget",
+        "id",
+    }
+    assert translation.inherited_effort == {
+        "low": {"thinking_budget": 0},
+        "high": {"thinking_budget": 8000},
+    }
+
+
+def test_a_saved_native_tool_keeps_its_typed_editing_and_validation(
+    tmp_path: Path,
+) -> None:
+    """A saved native file carries only `effort:`, shadowing the packaged one.
+
+    Descriptors belong to the tool, not to the scope holding a copy, so a single
+    save must not cost the tool its typed controls or its save-time validation.
+    """
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
+        {"effort": {"high": {"effort": "high"}}},
+    )
+
+    config = IntelligenceConfigService().read_config(config_dir=tmp_path)
+    codex = next(agent for agent in config.cli_agents if agent.name == "codex")
+    assert {field.key for field in codex.effort_fields} == {"effort", "model"}
+
+    request = _team_update_request(tmp_path).model_copy(
+        update={
+            "cli_agents": [
+                CliAgentDefinition(
+                    path="cli_agents/codex/default.yml",
+                    name="codex",
+                    effort={"high": {"efort": "high"}},
+                )
+            ]
+        }
+    )
+    with pytest.raises(SetupServiceError) as error:
+        IntelligenceConfigService().update_config(request)
+    assert error.value.code == "invalid_effort_settings"
+
+
+def test_every_native_tool_declares_the_settings_its_adapter_applies(
+    tmp_path: Path,
+) -> None:
+    """Each native adapter has real knobs, and the editor must expose them.
+
+    codex takes model/effort on `turn/start`, Claude Code takes a model and a
+    thinking budget, and `grok agent stdio` takes model and reasoning effort as
+    launch options. None of them is limited to raw JSON.
+    """
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agent_mapping.yml",
+        {
+            "default": "cli_agents/codex/default.yml",
+            "reviewer": "cli_agents/claude/default.yml",
+            "translator": "cli_agents/grok/default.yml",
+        },
+    )
+
+    agents = {
+        agent.name: agent
+        for agent in IntelligenceConfigService()
+        .read_config(config_dir=tmp_path)
+        .cli_agents
+    }
+
+    assert {f.key for f in agents["codex"].effort_fields} == {"effort", "model"}
+    assert {f.key for f in agents["claude"].effort_fields} == {
+        "max_thinking_tokens",
+        "model",
+    }
+    assert {f.key for f in agents["grok"].effort_fields} == {
+        "reasoning_effort",
+        "model",
+    }
+    assert all(agent.effort_supported for agent in agents.values())
+    # Every native tool ships a working mapping, so `low` and `high` do
+    # something before the user configures anything.
+    for path in ("codex", "claude", "grok"):
+        assert set(agents[path].inherited_effort) == {"low", "high"}, path
+    # Grok's levels come from its own `_x.ai/models/update` catalog.
+    grok_effort = next(
+        f for f in agents["grok"].effort_fields if f.key == "reasoning_effort"
+    )
+    assert grok_effort.type == "enum"
+    assert grok_effort.values == ["low", "medium", "high"]
+
+
+def test_every_shipped_tool_declares_its_own_effort_capability(tmp_path: Path) -> None:
+    """A tool GuildBotics ships must not make the user describe it.
+
+    The scripts are authored here, so what each one acts on is known here too;
+    leaving it undeclared would push raw JSON onto the user for a tool whose
+    only usable key we already decided.
+    """
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agent_mapping.yml",
+        {
+            "default": "cli_agents/codex/default.yml",
+            "reviewer": "cli_agents/claude/default.yml",
+            "translator": "cli_agents/grok/default.yml",
+            "copilot": "cli_agents/copilot/default.yml",
+            "antigravity": "cli_agents/antigravity/default.yml",
+        },
+    )
+
+    agents = {
+        agent.name: agent
+        for agent in IntelligenceConfigService()
+        .read_config(config_dir=tmp_path)
+        .cli_agents
+    }
+
+    # Every shipped tool either describes its settings or says it has none.
+    for path, agent in agents.items():
+        assert agent.effort_fields or not agent.effort_supported, (
+            f"{path} falls back to raw JSON"
+        )
+    # Both shipped scripts expose a real `--effort` flag as well as `--model`.
+    for path in ("copilot", "antigravity"):
+        assert {f.key for f in agents[path].effort_fields} == {"effort", "model"}
+
+
+def test_a_hand_tuned_setting_the_editor_never_shows_survives_a_save(
+    tmp_path: Path,
+) -> None:
+    """Only described settings are the editor's to replace.
+
+    `temperature` has no descriptor and therefore no control, so a save that
+    does not mention it must carry it through instead of dropping it.
+    """
+    base = _team_intelligences(tmp_path)
+    _write_yaml(
+        base / "models/openai/gpt.yml",
+        {
+            "model_class": "old.Class",
+            "parameters": {"id": "old", "temperature": 0.5, "reasoning_effort": "low"},
+        },
+    )
+
+    IntelligenceConfigService().update_config(
+        _team_update_request(tmp_path).model_copy(
+            update={
+                "models": [
+                    ModelDefinition(
+                        path="models/openai/gpt.yml",
+                        provider="openai",
+                        model_class="openai.Class",
+                        parameters={"id": "new"},
+                    )
+                ]
+            }
+        )
+    )
+
+    written = load_yaml_file(base / "models/openai/gpt.yml")["parameters"]
+    assert written["temperature"] == 0.5
+    assert written["id"] == "new"
+    # `reasoning_effort` is described, so its absence from the request clears it.
+    assert "reasoning_effort" not in written

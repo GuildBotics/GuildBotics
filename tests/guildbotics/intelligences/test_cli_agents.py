@@ -2,9 +2,11 @@ from pathlib import Path
 
 from guildbotics.intelligences import cli_agents
 from guildbotics.intelligences.cli_agents import (
+    cli_agent_default_path,
+    cli_agent_name_from_path,
     discover_cli_agents,
     get_cli_agent_search_path,
-    native_cli_agent_name,
+    is_native_cli_agent,
     resolve_cli_agent_path,
     resolve_default_cli_executable,
 )
@@ -12,8 +14,8 @@ from guildbotics.intelligences.cli_agents import (
 CUSTOM_ORDER = 5
 DEFAULT_ORDER = 1000
 TEMPLATE_CLI_AGENT_NAMES = (
-    "antigravity-cli.yml",
-    "copilot-cli.yml",
+    "antigravity/default.yml",
+    "copilot/default.yml",
 )
 
 
@@ -21,10 +23,24 @@ def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
     assert get_cli_agent_search_path("") == ""
 
 
-def test_native_cli_agent_name_normalizes_legacy_mapping_references() -> None:
-    assert native_cli_agent_name("codex") == "codex"
-    assert native_cli_agent_name("claude-cli.yml") == "claude"
-    assert native_cli_agent_name("copilot-cli.yml") == ""
+def test_a_tool_is_identified_by_its_definition_directory() -> None:
+    """One tool, one spelling -- the same rule a model path follows."""
+    assert cli_agent_name_from_path("cli_agents/codex/default.yml") == "codex"
+    assert cli_agent_name_from_path("cli_agents/codex/reviewer.yml") == "codex"
+    assert cli_agent_name_from_path("cli_agents/copilot/default.yml") == "copilot"
+    # Anything that is not a definition path names no tool.
+    assert cli_agent_name_from_path("codex") == ""
+    assert cli_agent_name_from_path("cli_agents/codex.yml") == ""
+
+
+def test_native_tools_are_the_ones_with_a_built_in_adapter() -> None:
+    assert is_native_cli_agent("codex")
+    assert is_native_cli_agent("claude")
+    assert not is_native_cli_agent("copilot")
+
+
+def test_a_tools_default_definition_path_is_derived_from_its_name() -> None:
+    assert cli_agent_default_path("codex") == "cli_agents/codex/default.yml"
 
 
 def test_rate_limit_marker_templates_use_json_serialization() -> None:
@@ -122,10 +138,14 @@ def _write_agent(config_root: Path, name: str, body: str) -> None:
     agent.write_text(body, encoding="utf-8")
 
 
+def _write_tool(config_root: Path, tool: str, body: str) -> None:
+    _write_agent(config_root, f"{tool}/default.yml", body)
+
+
 def test_discover_cli_agents_reads_metadata(tmp_path: Path) -> None:
-    _write_agent(
+    _write_tool(
         tmp_path,
-        "myagent-cli.yml",
+        "myagent",
         "label: My Agent\norder: 5\nexecutable: mybin\nscript: mybin\n",
     )
 
@@ -134,7 +154,7 @@ def test_discover_cli_agents_reads_metadata(tmp_path: Path) -> None:
     assert agents["myagent"].label == "My Agent"
     assert agents["myagent"].order == CUSTOM_ORDER
     assert agents["myagent"].executable == "mybin"
-    assert agents["myagent"].config_reference == "myagent-cli.yml"
+    assert agents["myagent"].config_reference == "cli_agents/myagent/default.yml"
 
 
 def test_discover_cli_agents_always_includes_the_native_tools(
@@ -143,16 +163,16 @@ def test_discover_cli_agents_always_includes_the_native_tools(
     agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
 
     assert agents["codex"].executable == "codex"
-    assert agents["codex"].config_reference == "codex"
+    assert agents["codex"].config_reference == "cli_agents/codex/default.yml"
     assert agents["claude"].executable == "claude"
-    assert agents["claude"].config_reference == "claude"
+    assert agents["claude"].config_reference == "cli_agents/claude/default.yml"
     assert agents["grok"].executable == "grok"
-    assert agents["grok"].config_reference == "grok"
+    assert agents["grok"].config_reference == "cli_agents/grok/default.yml"
     assert agents["grok"].label == "Grok Build"
 
 
 def test_native_names_cannot_be_shadowed_by_a_yaml_tool(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "grok-cli.yml", "label: Impostor\nexecutable: evil\n")
+    _write_tool(tmp_path, "grok", "label: Impostor\nexecutable: evil\n")
 
     agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
 
@@ -161,7 +181,7 @@ def test_native_names_cannot_be_shadowed_by_a_yaml_tool(tmp_path: Path) -> None:
 
 
 def test_discover_cli_agents_defaults_to_name_and_sorts(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "zeta-cli.yml", "script: zeta\n")
+    _write_tool(tmp_path, "zeta", "script: zeta\n")
 
     agents = discover_cli_agents(tmp_path)
     zeta = next(agent for agent in agents if agent.name == "zeta")
@@ -175,9 +195,9 @@ def test_discover_cli_agents_defaults_to_name_and_sorts(tmp_path: Path) -> None:
 
 def test_discover_cli_agents_config_overrides_template(tmp_path: Path) -> None:
     # antigravity ships as a template; a config-scoped file wins.
-    _write_agent(
+    _write_tool(
         tmp_path,
-        "antigravity-cli.yml",
+        "antigravity",
         "label: Custom\norder: 1\nexecutable: custom\nscript: custom\n",
     )
 
@@ -188,7 +208,7 @@ def test_discover_cli_agents_config_overrides_template(tmp_path: Path) -> None:
 
 
 def test_discover_cli_agents_tolerates_malformed_yaml(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "broken-cli.yml", "label: [broken\n")
+    _write_tool(tmp_path, "broken", "label: [broken\n")
 
     agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
 
@@ -203,8 +223,10 @@ def test_resolve_default_cli_executable_returns_declared_executable(
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
     mapping.parent.mkdir(parents=True, exist_ok=True)
-    mapping.write_text("default: antigravity-cli.yml\n", encoding="utf-8")
-    _write_agent(tmp_path, "antigravity-cli.yml", "executable: agy\nscript: agy\n")
+    mapping.write_text(
+        "default: cli_agents/antigravity/default.yml\n", encoding="utf-8"
+    )
+    _write_tool(tmp_path, "antigravity", "executable: agy\nscript: agy\n")
 
     assert resolve_default_cli_executable() == "agy"
 
@@ -215,7 +237,9 @@ def test_resolve_default_cli_executable_uses_template_when_not_overridden(
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
     mapping.parent.mkdir(parents=True, exist_ok=True)
-    mapping.write_text("default: antigravity-cli.yml\n", encoding="utf-8")
+    mapping.write_text(
+        "default: cli_agents/antigravity/default.yml\n", encoding="utf-8"
+    )
 
     # No config-scoped agent file: the shipped template declares ``executable: agy``.
     assert resolve_default_cli_executable() == "agy"
@@ -236,7 +260,7 @@ def test_resolve_default_cli_executable_missing_definition(
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
     mapping.parent.mkdir(parents=True, exist_ok=True)
-    mapping.write_text("default: ghost-cli.yml\n", encoding="utf-8")
+    mapping.write_text("default: cli_agents/ghost/default.yml\n", encoding="utf-8")
 
     # No agent named "ghost" in config or template.
     assert resolve_default_cli_executable() == ""

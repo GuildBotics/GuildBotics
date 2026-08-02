@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from logging import getLogger
 from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
@@ -27,6 +28,7 @@ from guildbotics.intelligences.agent_runtime.jsonrpc import (
     RpcError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    SETTINGS_SCOPE_SESSION,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -122,6 +124,9 @@ _AUTH_CODES = frozenset(
         "not_authenticated",
     }
 )
+#: The launch options this adapter can set on `grok agent stdio`.
+_EFFORT_SETTING_KEYS = frozenset({"model", "reasoning_effort"})
+_LOGGER = getLogger(__name__)
 _MAX_FIELDS = 20
 _MAX_FIELD_NAME = 64
 #: Tool kinds that actually change the workspace. ACP `locations` reports every
@@ -133,6 +138,13 @@ _REJECT_KINDS = ("reject_once", "reject_always")
 
 class GrokAcpAdapter:
     name = "grok-acp"
+    # `grok agent stdio` takes the model and reasoning effort as launch options,
+    # so they are fixed for the life of the process: changing them needs a fresh
+    # session rather than a mid-conversation adjustment.
+    settings_scope = SETTINGS_SCOPE_SESSION
+
+    def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
+        return _applied_effort_settings(context)
 
     def __init__(
         self,
@@ -168,6 +180,7 @@ class GrokAcpAdapter:
         emit: EventSink,
     ) -> AgentTerminalResult:
         await self._ensure_started(context, emit)
+        _warn_unusable_effort_settings(context)
         self._unhandled = {}
         self._tool_kinds = {}
         self._context_used = 0
@@ -301,7 +314,12 @@ class GrokAcpAdapter:
         env, self._gh_config_dir = isolated_agent_environment(cwd)
         env.update(member_command_environment(context))
         env.update(delegation_environment(context.run_id))
-        argv = _launch_argv(self._executable, self._policy, context.read_only)
+        argv = _launch_argv(
+            self._executable,
+            self._policy,
+            context.read_only,
+            _applied_effort_settings(context),
+        )
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -814,8 +832,20 @@ class _AssistantBuffer:
 
 
 def _launch_argv(
-    executable: str, policy: AdapterFilesystemPolicy, read_only: bool
+    executable: str,
+    policy: AdapterFilesystemPolicy,
+    read_only: bool,
+    settings: dict[str, Any] | None = None,
 ) -> tuple[str, ...]:
+    # `grok agent stdio` takes the model and reasoning effort as launch options.
+    # They are process-wide rather than per-turn, which is exactly why this
+    # adapter is session-scoped: changing them starts a fresh session.
+    applied = settings or {}
+    options: list[str] = []
+    if model := str(applied.get("model", "") or ""):
+        options.extend(("--model", model))
+    if effort := str(applied.get("reasoning_effort", "") or ""):
+        options.extend(("--reasoning-effort", effort))
     return (
         executable,
         # Headless runs must never let the CLI update itself mid-session.
@@ -823,9 +853,32 @@ def _launch_argv(
         "--sandbox",
         _sandbox_profile(policy, read_only),
         "--always-approve",
+        *options,
         "agent",
         "stdio",
     )
+
+
+def _applied_effort_settings(context: AgentExecutionContext) -> dict[str, Any]:
+    """The effort settings this adapter can really impose, normalized.
+
+    Silent by design: it also backs the session fingerprint, which is computed
+    outside the run path and must not emit a second round of warnings.
+    """
+    return {
+        key: value
+        for key, value in context.provider_options.items()
+        if key in _EFFORT_SETTING_KEYS and str(value or "")
+    }
+
+
+def _warn_unusable_effort_settings(context: AgentExecutionContext) -> None:
+    """Report requested settings this adapter cannot act on."""
+    unknown = sorted(set(context.provider_options) - _EFFORT_SETTING_KEYS)
+    if unknown:
+        _LOGGER.warning(
+            "Ignoring unsupported Grok effort settings: %s", ", ".join(unknown)
+        )
 
 
 def _sandbox_profile(policy: AdapterFilesystemPolicy, read_only: bool = False) -> str:

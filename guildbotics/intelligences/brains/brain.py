@@ -13,6 +13,7 @@ class Brain(ABC):
         description: str = "",
         template_engine: str = "default",
         response_class: type[BaseModel] | None = None,
+        effort: str = "",
     ):
         """
         Initialize the Intelligence.
@@ -23,6 +24,7 @@ class Brain(ABC):
             description (str): Description of the intelligence.
             template_engine (str): Template engine to use ("default" or "jinja2").
             response_class (Type[BaseModel] | None): Class for the response model.
+            effort (str): Frontmatter effort level; a runtime request overrides it.
         """
         self.person_id = person_id
         self.name = name
@@ -30,6 +32,7 @@ class Brain(ABC):
         self.description = description
         self.template_engine = template_engine
         self.response_class = response_class
+        self.effort = effort
 
     @abstractmethod
     async def run(self, message: str, **kwargs):

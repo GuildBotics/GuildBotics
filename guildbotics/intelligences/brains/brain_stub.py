@@ -18,9 +18,16 @@ class BrainStub(Brain):
         description: str = "",
         template_engine: str = "default",
         response_class: type[BaseModel] | None = None,
+        effort: str = "",
     ):
         super().__init__(
-            person_id, name, logger, description, template_engine, response_class
+            person_id,
+            name,
+            logger,
+            description,
+            template_engine,
+            response_class,
+            effort,
         )
         self.logger.info(f"BrainStub initialized: {self.name}")
 

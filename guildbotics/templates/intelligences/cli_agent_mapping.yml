@@ -1,1 +1,1 @@
-default: codex
+default: cli_agents/codex/default.yml

@@ -184,7 +184,9 @@ async def test_read_codex_usage_probes_app_server(monkeypatch, fake_terminate) -
 
 
 @pytest.mark.asyncio
-async def test_read_codex_usage_raises_on_rpc_error(monkeypatch, fake_terminate) -> None:
+async def test_read_codex_usage_raises_on_rpc_error(
+    monkeypatch, fake_terminate
+) -> None:
     process = _Process(error={"code": -32601, "message": "method not found"})
 
     async def create_process(*_args, **_kwargs):

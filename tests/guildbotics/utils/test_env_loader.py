@@ -66,6 +66,7 @@ def test_load_guildbotics_env_skips_home_keys_when_unset(monkeypatch, tmp_path):
     assert os.environ["WORKSPACE_MARKER"] == "loaded"
     assert os.environ[GUILDBOTICS_ENV_FILE] == str(env_file.resolve())
 
+
 def _keyring_workspace(tmp_path, monkeypatch):
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     config_dir = tmp_path / ".guildbotics" / "config"

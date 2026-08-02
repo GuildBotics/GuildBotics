@@ -240,11 +240,16 @@ async function seedWorkspace() {
 // Using `sh` keeps scenario diagnostics deterministic without a real AI CLI login.
 function seedMockCliAgent() {
   const intelligencesDir = join(configDir, "intelligences");
-  const cliAgentsDir = join(configDir, "intelligences", "cli_agents");
+  // A tool definition lives at `cli_agents/<tool>/default.yml`, the same two
+  // levels a model definition uses.
+  const cliAgentsDir = join(configDir, "intelligences", "cli_agents", "e2e");
   mkdirSync(cliAgentsDir, { recursive: true });
-  writeFileSync(join(intelligencesDir, "cli_agent_mapping.yml"), "default: e2e-cli.yml\n");
   writeFileSync(
-    join(cliAgentsDir, "e2e-cli.yml"),
+    join(intelligencesDir, "cli_agent_mapping.yml"),
+    "default: cli_agents/e2e/default.yml\n",
+  );
+  writeFileSync(
+    join(cliAgentsDir, "default.yml"),
     [
       "label: E2E Mock Agent",
       "order: 999",

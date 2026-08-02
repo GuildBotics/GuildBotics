@@ -51,9 +51,7 @@ def test_stop_force_cancels_in_flight_work_before_sigkill(monkeypatch, tmp_path)
         monkeypatch, tmp_path, dies_after_sigterms=2
     )
     try:
-        result = CliRunner().invoke(
-            cli_main, ["stop", "--force", "--timeout", "0"]
-        )
+        result = CliRunner().invoke(cli_main, ["stop", "--force", "--timeout", "0"])
 
         assert result.exit_code == 0, result.output
         assert signals == [signal.SIGTERM, signal.SIGTERM]
@@ -68,9 +66,7 @@ def test_stop_force_sigkills_as_last_resort(monkeypatch, tmp_path):
         monkeypatch, tmp_path, dies_after_sigterms=None
     )
     try:
-        result = CliRunner().invoke(
-            cli_main, ["stop", "--force", "--timeout", "0"]
-        )
+        result = CliRunner().invoke(cli_main, ["stop", "--force", "--timeout", "0"])
 
         assert result.exit_code == 0, result.output
         assert signals == [signal.SIGTERM, signal.SIGTERM, signal.SIGKILL]

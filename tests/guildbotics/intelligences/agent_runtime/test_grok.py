@@ -23,6 +23,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeErrorCategory,
     ConversationKey,
     ConversationRecord,
+    settings_fingerprint,
     ResumePolicy,
 )
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
@@ -346,6 +347,83 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
         "--always-approve",
         "agent",
         "stdio",
+    )
+
+
+@pytest.mark.asyncio
+async def test_effort_settings_are_passed_as_launch_options(
+    monkeypatch, tmp_path
+) -> None:
+    """`grok agent stdio` takes the model and reasoning effort at launch.
+
+    They are not protocol fields, so they have to reach the process on its argv
+    or they never take effect at all.
+    """
+    peer = _Peer(updates=[_chunk("ok")])
+    launched = _install(monkeypatch, peer)
+    adapter = GrokAcpAdapter()
+
+    await _run(
+        adapter,
+        tmp_path,
+        effort="high",
+        provider_options={"model": "grok-4.5", "reasoning_effort": "high"},
+    )
+
+    argv = launched[0][0]
+    assert "--model" in argv and argv[argv.index("--model") + 1] == "grok-4.5"
+    assert "--reasoning-effort" in argv
+    assert argv[argv.index("--reasoning-effort") + 1] == "high"
+    # The options must precede the subcommand to be parsed as global flags.
+    assert argv.index("--model") < argv.index("agent")
+
+
+@pytest.mark.asyncio
+async def test_a_turn_without_effort_adds_no_launch_options(
+    monkeypatch, tmp_path
+) -> None:
+    peer = _Peer(updates=[_chunk("ok")])
+    launched = _install(monkeypatch, peer)
+
+    await _run(GrokAcpAdapter(), tmp_path)
+
+    argv = launched[0][0]
+    assert "--model" not in argv
+    assert "--reasoning-effort" not in argv
+
+
+@pytest.mark.asyncio
+async def test_unknown_effort_settings_are_reported_not_silently_dropped(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    peer = _Peer(updates=[_chunk("ok")])
+    _install(monkeypatch, peer)
+
+    with caplog.at_level("WARNING"):
+        await _run(
+            GrokAcpAdapter(),
+            tmp_path,
+            effort="high",
+            provider_options={"reasoning_effort": "high", "temperature": 0.9},
+        )
+
+    assert "temperature" in caplog.text
+
+
+def test_only_settings_grok_can_apply_count_as_a_session_change(tmp_path) -> None:
+    """The fingerprint follows what the launch actually carries."""
+    adapter = GrokAcpAdapter()
+    high = _context(tmp_path, effort="high", provider_options={"model": "grok-4.5"})
+    low = _context(tmp_path, effort="low", provider_options={"model": "grok-4.5"})
+    other = _context(tmp_path, effort="low", provider_options={"model": "grok-3"})
+
+    # The neutral label alone changes nothing about the launch, so it is not a
+    # settings change; a different model is.
+    assert settings_fingerprint(adapter.applied_settings(high)) == settings_fingerprint(
+        adapter.applied_settings(low)
+    )
+    assert settings_fingerprint(adapter.applied_settings(low)) != settings_fingerprint(
+        adapter.applied_settings(other)
     )
 
 

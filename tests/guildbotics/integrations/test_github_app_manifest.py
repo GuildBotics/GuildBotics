@@ -21,8 +21,7 @@ def _pem_bytes() -> bytes:
 
 def test_manifest_submission_url_targets_user_or_organization() -> None:
     assert (
-        app_manifest.manifest_submission_url()
-        == "https://github.com/settings/apps/new"
+        app_manifest.manifest_submission_url() == "https://github.com/settings/apps/new"
     )
     assert (
         app_manifest.manifest_submission_url("acme")

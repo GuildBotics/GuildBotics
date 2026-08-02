@@ -233,6 +233,7 @@ def test_trace_detail_returns_ordered_records(tmp_path: Path) -> None:
         "message": "demo",
         "message_params": {},
         "tone": "success",
+        "effort": "",
     }
     assert body["records"][1]["presentation"]["message"] == "working"
 

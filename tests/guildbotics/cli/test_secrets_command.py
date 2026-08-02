@@ -47,9 +47,7 @@ def test_secrets_group_is_registered_on_main_cli(tmp_path, monkeypatch):
 def test_status_reports_default_backend(fake_keyring, tmp_path, monkeypatch):
     workspace = _workspace(tmp_path, monkeypatch)
 
-    result = CliRunner().invoke(
-        secrets, ["--workspace", str(workspace), "status"]
-    )
+    result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "status"])
 
     assert result.exit_code == 0
     assert "backend: env-file (default)" in result.output

@@ -456,6 +456,63 @@ def test_temp_workspace_intelligence_update_writes_files(
     assert (config_dir / "intelligences/brain_mapping.yml").exists()
 
 
+def test_temp_workspace_intelligence_effort_round_trips_through_the_api(
+    client: TestClient, workspace: Path
+) -> None:
+    """Effort survives GET -> PUT -> YAML with its provider-shaped types."""
+    config_dir = workspace / ".guildbotics/config"
+    env_file = workspace / ".env"
+
+    with client:
+        _init_project(client, config_dir, env_file)
+
+        payload = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+        model_path = payload["model_mapping"]["default"]
+        for model in payload["models"]:
+            if model["path"] == model_path:
+                # Provider-shaped: the descriptor for this provider is what
+                # decides which keys are acceptable here.
+                model["effort"] = {
+                    "high": {"reasoning_effort": "high"},
+                    "low": {"reasoning_effort": "minimal"},
+                }
+        for agent in payload["cli_agents"]:
+            agent["effort"] = {"high": {"effort": "high"}}
+
+        update = client.put(
+            "/config/intelligences",
+            headers=AUTH_HEADERS,
+            json={
+                "config_dir": str(config_dir),
+                "model_mapping": payload["model_mapping"],
+                "models": payload["models"],
+                "cli_agent_mapping": payload["cli_agent_mapping"],
+                "cli_agents": payload["cli_agents"],
+                "brain_mapping": payload["brain_mapping"],
+            },
+        )
+        assert update.status_code == HTTP_OK
+
+        reread = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+
+    written = safe_load((config_dir / f"intelligences/{model_path}").read_text())
+    assert written["effort"]["high"] == {"reasoning_effort": "high"}
+    assert written["effort"]["low"] == {"reasoning_effort": "minimal"}
+
+    reread_model = next(m for m in reread["models"] if m["path"] == model_path)
+    assert reread_model["effort"]["low"] == {"reasoning_effort": "minimal"}
+    # The descriptor travels with the definition so the editor can offer typed
+    # controls without knowing anything about this provider.
+    assert {field["key"] for field in reread_model["effort_fields"]} == {
+        "reasoning_effort",
+        "id",
+    }
+    assert all(
+        agent["effort"] == {"high": {"effort": "high"}}
+        for agent in reread["cli_agents"]
+    )
+
+
 def test_temp_workspace_transcript_settings_update_then_status(
     client: TestClient, workspace: Path
 ) -> None:

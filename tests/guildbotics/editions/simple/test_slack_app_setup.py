@@ -94,7 +94,9 @@ async def test_verify_tokens_surfaces_slack_error_codes_per_token():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/auth.test"):
             return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
-        return httpx.Response(200, json={"ok": False, "error": "not_allowed_token_type"})
+        return httpx.Response(
+            200, json={"ok": False, "error": "not_allowed_token_type"}
+        )
 
     result = await slack_app_setup.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)

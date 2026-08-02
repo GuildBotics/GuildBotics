@@ -199,6 +199,59 @@ snapshot once, and a conversation-less one-shot tool receives the snapshot on ev
 invocation. Dispatch-scoped one-shot resumption is an explicit catalog capability, not
 an inference from the shell script.
 
+### Model effort
+
+Effort is the single provider-neutral vocabulary for how hard a model should
+think: `low` / `default` / `high`. `guildbotics/intelligences/effort.py` owns the
+labels, their ordering, and the resolution order every brain shares — the
+runtime channel (`session_state["effort"]`, carrying both a CLI `effort=<level>`
+parameter and a workflow's automatic assessment) beats the command frontmatter,
+which beats nothing at all. Because both sources arrive on one channel, a
+workflow's decision keeps working when a brain slot is switched between the LLM
+API and an AI CLI tool.
+
+Translating a label into concrete settings belongs strictly to the layers that
+hold provider knowledge: the definition YAML of a model or of an AI CLI tool,
+and the native adapters, which each allowlist the keys they can apply. The core
+understands only the common `model` and `effort` keys, which it gives names of
+their own in the one-shot script environment. A level with no mapping is a
+warning, never a failure — mapping coverage differs per provider, and halting a
+run over a missing overlay would cost more than running without it.
+
+Both kinds of definition have the same two layers. `parameters:` always applies,
+whatever effort was asked for, and `effort.<level>` overlays it. `default` is
+rejected as a mapping key, because a mapping for "do not intervene" could never
+be applied; settings that should always hold belong in `parameters:`. Both also
+live at the same two-level path — `models/<provider>/<slot>.yml` and
+`cli_agents/<tool>/<slot>.yml`, beside the `default.yml` that names the provider
+or tool in the catalog — so a slot states only what it changes and inherits the
+rest, and two slots on one tool can differ.
+
+A definition may also declare `effort_fields:`, describing the settings its
+provider accepts (a key, a type, and the permitted values). That declaration is
+the only thing the desktop editor reads to build typed controls and to reject an
+unknown key at save time, so the editor never learns any provider's vocabulary
+and a provider without a declaration simply falls back to editing raw JSON.
+Descriptors resolve from the packaged definition when the workspace copy is
+silent: they describe the provider, not the scope that happens to hold a file.
+
+`default` and unspecified both mean "do not intervene", but for a *continued*
+native session that means "keep the settings this session already has", not
+"restore the provider defaults". Session rotation therefore compares a
+fingerprint of the settings the adapter will really impose — taken from its own
+`applied_settings`, not from the request — so a setting a provider cannot act on
+never reads as a change. An empty fingerprint on either side is a request to
+keep the session, and only two differing non-empty fingerprints rotate it.
+Adapters declare how far a settings change reaches through `settings_scope` —
+`turn` (codex re-sends `model` / `effort` on every `turn/start`, so it never
+rotates) or `session` (claude, grok).
+
+Effort decisions are recorded through a safe allowlist — requested level,
+resolved level, effective model id, the *names* of the applied parameters, and
+an unsupported flag — never the effective parameter values, which can sit
+alongside API keys and headers. They surface in trace / diagnostics detail only;
+the activity history is about domain outcomes.
+
 ## 5. Command Execution Framework
 
 The generic execution substrate used by workflows and custom commands:

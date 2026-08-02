@@ -47,6 +47,25 @@ class ChatReplyIntentResponse(BaseModel):
     confidence: float = Field(..., description="Confidence score between 0 and 1.")
 
 
+class EffortAssessmentResponse(BaseModel):
+    """How much model effort an incoming chat turn deserves.
+
+    Only ``default`` and ``high`` are offered: ``low`` exists in the effort
+    vocabulary for explicit configuration, but no criterion for choosing it
+    automatically has been defined, so the assessor must never return it.
+    """
+
+    effort: Literal["default", "high"] = Field(
+        ...,
+        description=(
+            "'high' when the request asks for work on local files (writing or "
+            "changing code, documents, or configuration); 'default' for ordinary "
+            "conversational replies."
+        ),
+    )
+    reason: str = Field(..., description="Explanation for the assessment.")
+
+
 class ChatThreadContextResponse(BaseModel):
     """Structured thread-level context for chat replies."""
 

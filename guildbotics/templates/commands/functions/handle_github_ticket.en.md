@@ -2,6 +2,7 @@
 name: handle_github_ticket
 brain: agent
 response_class: guildbotics.intelligences.common.AgentResponse
+effort: high
 description: Delegate GitHub issue or pull request work to an AI CLI tool.
 ---
 

@@ -409,6 +409,7 @@ describe("Diagnostics executions tab", () => {
             message: "workflows/demo",
             message_params: {},
             tone: "success",
+            effort: "",
           },
         }),
         makeTraceRecord({
@@ -450,6 +451,75 @@ describe("Diagnostics executions tab", () => {
       const calls = vi.mocked(getMemoryEvents).mock.calls;
       expect(calls[calls.length - 1]?.[0]).toMatchObject({ traceId: undefined });
     });
+  });
+
+  it("shows the effort level only on records that stated one", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-1",
+          source: "manual",
+          person_id: "alice",
+          command: "workflows/demo",
+          workflow: "",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "success",
+          event_count: 1,
+          log_count: 0,
+          error_count: 0,
+          span_count: 0,
+          attributes: {},
+        },
+      ],
+    });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-1",
+      summary: null,
+      records: [
+        makeTraceRecord({
+          kind: "io",
+          type: "llm.request",
+          message: "prompt",
+          timestamp: "2026-06-12T00:00:01Z",
+          presentation: {
+            label_key: "",
+            label_fallback: "llm.request",
+            message_key: "",
+            message: "prompt",
+            message_params: {},
+            tone: "info",
+            effort: "high",
+          },
+        }),
+        makeTraceRecord({
+          kind: "event",
+          type: "command.started",
+          message: "command started",
+          timestamp: "2026-06-12T00:00:00Z",
+          presentation: {
+            label_key: "",
+            label_fallback: "command.started",
+            message_key: "",
+            message: "workflows/demo",
+            message_params: {},
+            tone: "success",
+            effort: "",
+          },
+        }),
+      ],
+    });
+
+    renderApp("/diagnostics?tab=executions");
+    await openTab(user, t("diagnostics.tabs.executions"));
+    await user.click(await screen.findByText("workflows/demo"));
+
+    expect(
+      await screen.findByText(t("diagnostics.executions.effort", { level: "high" })),
+    ).toBeInTheDocument();
+    // Effort is diagnostic detail, so a record without one shows no badge.
+    expect(screen.getAllByText(/effort/i).length).toBe(1);
   });
 
   it("keeps memory records visible when the transcript has expired", async () => {
@@ -851,6 +921,7 @@ describe("Diagnostics executions tab", () => {
             message: "scheduler.running",
             message_params: {},
             tone: "success",
+            effort: "",
           },
         }),
         makeTraceRecord({

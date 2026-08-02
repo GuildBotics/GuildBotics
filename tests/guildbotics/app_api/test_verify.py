@@ -56,9 +56,12 @@ def _write_model_mapping(tmp_path: Path, default: str) -> None:
 def _write_cli_agent(tmp_path: Path, mapping_default: str, script: str) -> None:
     cli_mapping = tmp_path / ".guildbotics/config/intelligences/cli_agent_mapping.yml"
     cli_mapping.parent.mkdir(parents=True, exist_ok=True)
-    cli_mapping.write_text(f"default: {mapping_default}\n")
+    cli_mapping.write_text(f"default: cli_agents/{mapping_default}/default.yml\n")
     cli_agent = (
-        tmp_path / ".guildbotics/config/intelligences/cli_agents" / mapping_default
+        tmp_path
+        / ".guildbotics/config/intelligences/cli_agents"
+        / mapping_default
+        / "default.yml"
     )
     cli_agent.parent.mkdir(parents=True, exist_ok=True)
     cli_agent.write_text(f"script: {script}\n")
@@ -222,7 +225,7 @@ def test_verify_cli_agent_executable_found(
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    _write_cli_agent(tmp_path, "codex-cli.yml", "codex exec")
+    _write_cli_agent(tmp_path, "codex", "codex exec")
     config.env_file.write_text("PATH=/custom/bin\n")
 
     resolved: dict[str, object] = {}
@@ -255,7 +258,7 @@ def test_verify_cli_agent_executable_missing(
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    _write_cli_agent(tmp_path, "codex-cli.yml", "codex exec")
+    _write_cli_agent(tmp_path, "codex", "codex exec")
 
     monkeypatch.setattr(verify_module, "resolve_cli_agent_path", lambda *_a, **_k: "")
 
@@ -302,7 +305,7 @@ def test_verify_github_disabled_skips_credentials(
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    _write_cli_agent(tmp_path, "codex-cli.yml", "codex exec")
+    _write_cli_agent(tmp_path, "codex", "codex exec")
     team = Team(
         project=Project(name="demo"),
         members=[
@@ -346,7 +349,7 @@ def test_verify_github_credentials_present(
     config = _config_status(tmp_path)
     config.env_file.write_text("\n".join(f"{key}=value" for key in env_keys) + "\n")
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    _write_cli_agent(tmp_path, "codex-cli.yml", "codex exec")
+    _write_cli_agent(tmp_path, "codex", "codex exec")
     team = Team(
         project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
         members=[
@@ -386,7 +389,7 @@ def test_verify_accepts_private_key_content_from_keychain(
         "ALICE_GITHUB_PRIVATE_KEY", "pem-content"
     )
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    _write_cli_agent(tmp_path, "codex-cli.yml", "codex exec")
+    _write_cli_agent(tmp_path, "codex", "codex exec")
     team = Team(
         project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
         members=[
@@ -426,7 +429,7 @@ def test_verify_github_credentials_missing(
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    _write_cli_agent(tmp_path, "codex-cli.yml", "codex exec")
+    _write_cli_agent(tmp_path, "codex", "codex exec")
     team = Team(
         project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
         members=[
@@ -455,7 +458,7 @@ def test_verify_human_member_has_no_github_keys(
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    _write_cli_agent(tmp_path, "codex-cli.yml", "codex exec")
+    _write_cli_agent(tmp_path, "codex", "codex exec")
     team = Team(
         project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
         members=[
@@ -509,8 +512,10 @@ def test_verify_checks_env_keys_and_github_credentials(
     model_mapping.parent.mkdir(parents=True, exist_ok=True)
     model_mapping.write_text("default: models/openai/gpt-5-mini.yml\n")
     cli_mapping = tmp_path / ".guildbotics/config/intelligences/cli_agent_mapping.yml"
-    cli_mapping.write_text("default: codex-cli.yml\n")
-    cli_agent = tmp_path / ".guildbotics/config/intelligences/cli_agents/codex-cli.yml"
+    cli_mapping.write_text("default: cli_agents/codex/default.yml\n")
+    cli_agent = (
+        tmp_path / ".guildbotics/config/intelligences/cli_agents/codex/default.yml"
+    )
     cli_agent.parent.mkdir(parents=True, exist_ok=True)
     cli_agent.write_text("script: codex exec\n")
 

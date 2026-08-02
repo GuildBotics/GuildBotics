@@ -1293,7 +1293,7 @@ def test_config_project_endpoints_read_and_update_non_destructively(
     cli_mapping.write_text(
         "\n".join(
             [
-                "default: claude-cli.yml",
+                "default: cli_agents/claude/default.yml",
                 "codex: codex-cli.yml",
                 "antigravity: antigravity-cli.yml",
                 "claude: claude-cli.yml",

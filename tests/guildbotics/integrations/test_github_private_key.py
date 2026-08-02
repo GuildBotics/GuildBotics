@@ -6,7 +6,9 @@ from guildbotics.entities.team import Person
 from guildbotics.integrations.github.github_utils import get_person_private_key_pem
 from guildbotics.utils.secret_store import KeyringSecretStore
 
-PEM_FROM_STORE = "-----BEGIN RSA PRIVATE KEY-----\nstore\n-----END RSA PRIVATE KEY-----\n"
+PEM_FROM_STORE = (
+    "-----BEGIN RSA PRIVATE KEY-----\nstore\n-----END RSA PRIVATE KEY-----\n"
+)
 PEM_FROM_FILE = "-----BEGIN RSA PRIVATE KEY-----\nfile\n-----END RSA PRIVATE KEY-----\n"
 
 
@@ -23,7 +25,9 @@ def _pin_workspace(tmp_path, monkeypatch):
     return config_dir
 
 
-def test_prefers_keychain_content_over_path(fake_keyring, tmp_path, monkeypatch, person):
+def test_prefers_keychain_content_over_path(
+    fake_keyring, tmp_path, monkeypatch, person
+):
     config_dir = _pin_workspace(tmp_path, monkeypatch)
     KeyringSecretStore(config_dir).set("AIKO_GITHUB_PRIVATE_KEY", PEM_FROM_STORE)
     pem_file = tmp_path / "aiko.pem"

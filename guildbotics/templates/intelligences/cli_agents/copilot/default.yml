@@ -2,6 +2,22 @@ label: GitHub Copilot
 order: 40
 executable: copilot
 env:
+effort:
+  low:
+    effort: low
+  high:
+    effort: high
+
+# What this script translates into flags. `effort` values come from
+# `copilot --help`; `model` is left to a picker because the ids depend on the
+# account's entitlements.
+effort_fields:
+  - key: effort
+    type: enum
+    values: [none, minimal, low, medium, high, xhigh, max]
+  - key: model
+    type: model_id
+
 script: |
   res=$(mktemp)
   log=$(mktemp)
@@ -22,8 +38,20 @@ script: |
   status=0
   PROMPT="$(cat "$PROMPT_FILE")"
 
+  # GuildBotics exports the effort as GUILDBOTICS_CLI_AGENT_EFFORT and the
+  # model as GUILDBOTICS_CLI_AGENT_MODEL (both unset for `default`). Any further
+  # mapping keys arrive as JSON in GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS.
+  set --
+  if [ -n "${GUILDBOTICS_CLI_AGENT_MODEL:-}" ]; then
+    set -- --model "$GUILDBOTICS_CLI_AGENT_MODEL"
+  fi
+  if [ -n "${GUILDBOTICS_CLI_AGENT_EFFORT:-}" ]; then
+    set -- "$@" --effort "$GUILDBOTICS_CLI_AGENT_EFFORT"
+  fi
+
   copilot \
     --prompt "$PROMPT" \
+    "$@" \
     --silent \
     --allow-all-tools \
     > "$res" \
