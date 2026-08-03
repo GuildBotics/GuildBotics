@@ -705,10 +705,13 @@ def _step_id(step: dict[str, Any]) -> str:
 def _read_log_tail(path: Path) -> str:
     """The end of ``agy``'s own log, for a failure that has nothing else."""
     try:
-        data = path.read_bytes()
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - _LOG_TAIL_BYTES))
+            data = handle.read(_LOG_TAIL_BYTES)
     except OSError:
         return ""
-    return data[-_LOG_TAIL_BYTES:].decode(errors="replace").strip()
+    return data.decode(errors="replace").strip()
 
 
 def _dict(value: Any) -> dict[str, Any]:

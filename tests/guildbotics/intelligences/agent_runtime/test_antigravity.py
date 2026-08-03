@@ -9,9 +9,11 @@ import pytest
 
 from guildbotics.capabilities.task_runs import RUN_ENV
 from guildbotics.intelligences.agent_runtime.antigravity import (
+    _LOG_TAIL_BYTES,
     _MAX_PROMPT_BYTES,
     AntigravityStreamJsonAdapter,
     _decode_events,
+    _read_log_tail,
     _result_error,
     _usage,
 )
@@ -594,6 +596,17 @@ async def test_missing_capabilities_report_unsupported_version(
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
     assert "--conversation" in excinfo.value.details["missing_capabilities"]
+
+
+def test_log_tail_reads_only_the_end_of_a_large_log(tmp_path: Path) -> None:
+    log = tmp_path / "agy.log"
+    log.write_bytes(b"x" * (_LOG_TAIL_BYTES * 4) + b"the-final-error")
+
+    tail = _read_log_tail(log)
+
+    assert tail.endswith("the-final-error")
+    assert len(tail.encode()) <= _LOG_TAIL_BYTES
+    assert _read_log_tail(tmp_path / "missing.log") == ""
 
 
 def test_decode_events_ignores_steps_with_nothing_to_report() -> None:
