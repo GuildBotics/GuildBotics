@@ -7,14 +7,8 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
-from guildbotics.utils.fileio import (
-    get_config_path,
-    get_intelligence_roots,
-    load_yaml_dict,
-    load_yaml_file,
-)
+from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
-_DEFAULT_ORDER = 1000
 #: Every AI CLI tool lives at ``cli_agents/<tool>/default.yml`` and a slot may
 #: add ``cli_agents/<tool>/<slot>.yml`` beside it -- the same two-level shape
 #: model definitions use, so both sides derive identity from the directory.
@@ -26,7 +20,7 @@ _CLI_AGENT_TOOL_INDEX = 1
 
 
 class CliAgentInfo(BaseModel):
-    """A selectable native or YAML-configured AI CLI tool."""
+    """A selectable AI CLI tool."""
 
     name: str
     label: str = ""
@@ -35,7 +29,10 @@ class CliAgentInfo(BaseModel):
     config_reference: str = ""
 
 
-_NATIVE_AGENTS = (
+#: The complete catalog of selectable AI CLI tools, in display order. Every tool
+#: is driven by a built-in adapter, so supporting a new one means implementing
+#: an adapter here rather than dropping a YAML file into a workspace.
+CLI_AGENTS: tuple[CliAgentInfo, ...] = (
     CliAgentInfo(
         name="codex",
         label="Codex",
@@ -72,7 +69,6 @@ _NATIVE_AGENTS = (
         config_reference=f"{CLI_AGENT_ROOT}/antigravity/{CLI_AGENT_DEFAULT_FILENAME}",
     ),
 )
-_NATIVE_AGENT_NAMES = frozenset(agent.name for agent in _NATIVE_AGENTS)
 
 
 GUI_APP_PATHS = (
@@ -124,64 +120,37 @@ def cli_agent_name_from_path(path: str) -> str:
     return parts[_CLI_AGENT_TOOL_INDEX]
 
 
-def is_native_cli_agent(name: str) -> bool:
-    """Whether this tool is driven by a built-in adapter rather than a script."""
-    return name in _NATIVE_AGENT_NAMES
-
-
 def cli_agent_default_path(name: str) -> str:
     """The definition path of a tool's own default."""
     return f"{CLI_AGENT_ROOT}/{name}/{CLI_AGENT_DEFAULT_FILENAME}"
 
 
-def _read_cli_agent_default(roots: list[Path], name: str) -> dict[str, Any]:
-    for root in roots:
-        data = load_yaml_dict(root / name / CLI_AGENT_DEFAULT_FILENAME)
-        if data:
-            return data
-    return {}
+def require_cli_agent_path(path: str, *, where: str) -> str:
+    """Return the catalog tool a definition path names.
 
+    The catalog is closed: a tool outside ``CLI_AGENTS`` has no adapter and
+    cannot run, so every boundary that accepts a mapping rejects such a path
+    here -- with a message naming the mapping entry -- instead of failing deep
+    inside a turn with an unknown-adapter error.
 
-def discover_cli_agents(
-    config_dir: Path, person_id: str | None = None
-) -> list[CliAgentInfo]:
-    """Discover native and YAML-configured selectable AI CLI tools.
+    Args:
+        path: A definition path such as ``cli_agents/<tool>/<slot>.yml``.
+        where: The mapping entry to name in the error message.
 
-    A tool is any directory holding a ``default.yml`` (member, team, or template
-    scope); the file in the highest-priority scope wins. Only that file names a
-    tool, so the per-slot definitions beside it are never mistaken for tools of
-    their own. This is the only place that enumerates the catalog, so adding a
-    one-shot tool means dropping in ``cli_agents/<name>/default.yml`` with
-    ``label`` / ``order`` / ``executable``.
+    Returns:
+        The tool name the path belongs to.
+
+    Raises:
+        ValueError: If the path does not name a catalog tool.
     """
-    roots = get_intelligence_roots(config_dir, person_id, CLI_AGENT_ROOT)
-    names: set[str] = set()
-    for root in roots:
-        if root.is_dir():
-            for child in root.iterdir():
-                if child.is_dir() and (child / CLI_AGENT_DEFAULT_FILENAME).exists():
-                    names.add(child.name)
-
-    agents: list[CliAgentInfo] = list(_NATIVE_AGENTS)
-    for name in names:
-        if is_native_cli_agent(name):
-            continue
-        data = _read_cli_agent_default(roots, name)
-        try:
-            order = int(data.get("order", _DEFAULT_ORDER))
-        except (TypeError, ValueError):
-            order = _DEFAULT_ORDER
-        agents.append(
-            CliAgentInfo(
-                name=name,
-                label=str(data.get("label", "") or name),
-                order=order,
-                executable=str(data.get("executable", "") or name),
-                config_reference=cli_agent_default_path(name),
-            )
-        )
-    agents.sort(key=lambda agent: (agent.order, agent.name))
-    return agents
+    tool = cli_agent_name_from_path(path)
+    if any(agent.name == tool for agent in CLI_AGENTS):
+        return tool
+    supported = ", ".join(agent.name for agent in CLI_AGENTS)
+    raise ValueError(
+        f"{where}: '{path}' does not name a supported AI CLI tool"
+        f" (supported: {supported})"
+    )
 
 
 def resolve_default_cli_executable() -> str:
@@ -196,7 +165,7 @@ def resolve_default_cli_executable() -> str:
         return ""
 
     default_name = cli_agent_name_from_path(default_file)
-    for agent in discover_cli_agents(get_config_path("")):
+    for agent in CLI_AGENTS:
         if agent.name == default_name:
             return agent.executable
     return ""

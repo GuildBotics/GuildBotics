@@ -34,7 +34,7 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -231,37 +231,11 @@ async function seedWorkspace() {
     roles: ["architect"],
     speaking_style: "concise",
   });
-  seedMockCliAgent();
+  // No AI CLI tool is stubbed: every tool is driven by a built-in adapter that
+  // launches the real binary, so the journeys deliberately stay off the agent
+  // path (the command journey runs a `brain: none` command, and the service
+  // journey starts only the event trigger).
   console.log(`${tag} seeded configured workspace (workspace=${workspaceDir})`);
-}
-
-// Select a dedicated one-shot AI CLI tool in the seeded workspace. Native Codex
-// ignores YAML scripts by design, so the E2E harness must not masquerade as Codex.
-// Using `sh` keeps scenario diagnostics deterministic without a real AI CLI login.
-function seedMockCliAgent() {
-  const intelligencesDir = join(configDir, "intelligences");
-  // A tool definition lives at `cli_agents/<tool>/default.yml`, the same two
-  // levels a model definition uses.
-  const cliAgentsDir = join(configDir, "intelligences", "cli_agents", "e2e");
-  mkdirSync(cliAgentsDir, { recursive: true });
-  writeFileSync(
-    join(intelligencesDir, "cli_agent_mapping.yml"),
-    "default: cli_agents/e2e/default.yml\n",
-  );
-  writeFileSync(
-    join(cliAgentsDir, "default.yml"),
-    [
-      "label: E2E Mock Agent",
-      "order: 999",
-      "executable: sh",
-      "env:",
-      "script: |",
-      "  # Deterministic mock AI CLI tool for E2E.",
-      '  cat "$PROMPT_FILE" > /dev/null 2>&1 || true',
-      '  echo "OK"',
-      "",
-    ].join("\n"),
-  );
 }
 
 function startFrontend() {

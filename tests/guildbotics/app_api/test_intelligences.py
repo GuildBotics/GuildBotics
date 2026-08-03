@@ -266,16 +266,52 @@ def test_read_config_handles_malformed_yaml(tmp_path: Path) -> None:
     assert model.parameters == {}
 
 
-def test_read_config_cli_agent_env_not_dict_falls_back(tmp_path: Path) -> None:
+def test_read_config_rejects_a_mapping_outside_the_catalog(tmp_path: Path) -> None:
+    """A stale mapping fails with a named error, never a phantom tool.
+
+    The catalog is closed, so a slot pointing at an unknown tool would render
+    in the editor as something configurable that the runtime cannot run.
+    """
+    _write_team_config(tmp_path)
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agent_mapping.yml",
+        {"default": "cli_agents/mytool/default.yml"},
+    )
+
+    with pytest.raises(SetupServiceError) as excinfo:
+        IntelligenceConfigService().read_config(config_dir=tmp_path)
+
+    assert excinfo.value.code == "unknown_cli_agent"
+    assert "'default'" in excinfo.value.message
+    assert "cli_agents/mytool/default.yml" in excinfo.value.message
+
+
+def test_update_config_rejects_a_mapping_outside_the_catalog(tmp_path: Path) -> None:
+    _write_team_config(tmp_path)
+
+    with pytest.raises(SetupServiceError) as excinfo:
+        IntelligenceConfigService().update_config(
+            IntelligenceConfigUpdateRequest(
+                config_dir=tmp_path,
+                cli_agent_mapping={"default": "cli_agents/mytool/default.yml"},
+            )
+        )
+
+    assert excinfo.value.code == "unknown_cli_agent"
+    mapping_file = _team_intelligences(tmp_path) / "cli_agent_mapping.yml"
+    assert "mytool" not in mapping_file.read_text(encoding="utf-8")
+
+
+def test_read_config_cli_agent_malformed_definition_falls_back(tmp_path: Path) -> None:
     base = _team_intelligences(tmp_path)
     _write_yaml(base / "model_mapping.yml", {})
     _write_yaml(
-        base / "cli_agent_mapping.yml", {"default": "cli_agents/custom/default.yml"}
+        base / "cli_agent_mapping.yml", {"default": "cli_agents/codex/reviewer.yml"}
     )
-    # env is a list rather than a dict.
-    (base / "cli_agents/custom").mkdir(parents=True, exist_ok=True)
-    (base / "cli_agents/custom/default.yml").write_text(
-        "env:\n  - not-a-dict\nscript: run\n", encoding="utf-8"
+    # The definition is a sequence rather than a mapping.
+    (base / "cli_agents/codex").mkdir(parents=True, exist_ok=True)
+    (base / "cli_agents/codex/reviewer.yml").write_text(
+        "- not-a-mapping\n", encoding="utf-8"
     )
     _write_yaml(base / "brain_mapping.yml", {})
 
@@ -283,9 +319,10 @@ def test_read_config_cli_agent_env_not_dict_falls_back(tmp_path: Path) -> None:
 
     assert len(response.cli_agents) == 1
     agent = response.cli_agents[0]
-    assert agent.env == {}
-    assert agent.script == "run"
-    assert agent.name == "custom"
+    assert agent.name == "codex"
+    # A malformed file yields no settings at all, rather than a broken overlay.
+    assert agent.effort == {}
+    assert agent.parameters == {}
 
 
 def test_read_config_cli_agent_detected_path(
@@ -359,8 +396,6 @@ def _team_update_request(config_dir: Path) -> IntelligenceConfigUpdateRequest:
             CliAgentDefinition(
                 path="cli_agents/codex/default.yml",
                 name="codex",
-                env={},
-                script="",
             )
         ],
         brain_mapping=[
@@ -646,7 +681,7 @@ def test_member_override_preserves_unsurfaced_def_fields(tmp_path: Path) -> None
     """Saving a member override keeps definition fields the editor never shows.
 
     Regression: a blind rmtree + re-seed from the team dropped member-specific
-    values (rate_limit, conversation_scope, ...) on every save.
+    values (rate_limit, ...) on every save.
     """
     _write_team_config(tmp_path)
     base = _member_intelligences(tmp_path, "alice")
@@ -781,7 +816,7 @@ def test_read_config_surfaces_the_model_effort_overlay(tmp_path: Path) -> None:
     assert model.effort == {"high": {"reasoning_effort": "high"}}
 
 
-def test_read_config_surfaces_a_native_tools_effort_only_definition(
+def test_read_config_surfaces_a_tools_effort_only_definition(
     tmp_path: Path,
 ) -> None:
     _write_team_config(tmp_path)
@@ -794,9 +829,6 @@ def test_read_config_surfaces_a_native_tools_effort_only_definition(
 
     agent = next(a for a in response.cli_agents if a.name == "codex")
     assert agent.effort == {"high": {"effort": "high"}}
-    # A native tool is driven by its adapter; the file can carry nothing else.
-    assert agent.script == ""
-    assert agent.env == {}
 
 
 def test_team_update_writes_the_model_effort_overlay_with_types_intact(
@@ -834,7 +866,7 @@ def test_team_update_writes_the_model_effort_overlay_with_types_intact(
     assert data["parameters"]["id"] == "claude-test"
 
 
-def test_team_update_writes_a_native_tools_effort_and_nothing_else(
+def test_team_update_writes_a_tools_effort_and_nothing_else(
     tmp_path: Path,
 ) -> None:
     request = _team_update_request(tmp_path).model_copy(
@@ -843,8 +875,6 @@ def test_team_update_writes_a_native_tools_effort_and_nothing_else(
                 CliAgentDefinition(
                     path="cli_agents/codex/default.yml",
                     name="codex",
-                    env={"IGNORED": "value"},
-                    script="ignored",
                     effort={"high": {"model": "gpt-strong", "effort": "high"}},
                 )
             ]
@@ -927,8 +957,6 @@ def test_member_override_keeps_only_a_differing_native_effort(tmp_path: Path) ->
                 CliAgentDefinition(
                     path="cli_agents/codex/default.yml",
                     name="codex",
-                    env={},
-                    script="",
                     effort=effort,
                 )
             ],

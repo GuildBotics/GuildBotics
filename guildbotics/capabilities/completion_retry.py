@@ -3,14 +3,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-# Env var naming a per-dispatch file a script-driven AI CLI tool uses to pin the
-# agent conversation across retries: the script writes the conversation id it
-# created on the first attempt and resumes that exact conversation on later
-# ones, rather than whatever conversation last ran in the same workspace
-# (possibly a different workflow). Native adapters keep their own session store
-# and ignore it, as may any script that does not support resuming.
-CLI_AGENT_CONVERSATION_FILE_ENV = "GUILDBOTICS_CLI_AGENT_CONVERSATION_FILE"
-
 
 class CompletionRetryExhausted(Exception):
     """Raised when the agent never recorded a terminal completion in the budget."""

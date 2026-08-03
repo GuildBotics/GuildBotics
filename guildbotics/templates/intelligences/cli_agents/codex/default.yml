@@ -2,7 +2,7 @@
 #
 # Native tools have no configuration file of their own; this file exists solely
 # to translate the provider-neutral effort labels (low / high) into the fields
-# Codex accepts on `turn/start`. Do not add `script` or `env` here.
+# Codex accepts on `turn/start`.
 #
 # `default` is deliberately absent: it means "do not intervene", which for a
 # continued Codex thread keeps the settings the thread already has.

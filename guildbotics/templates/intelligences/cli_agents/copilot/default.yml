@@ -2,7 +2,7 @@
 #
 # Native tools have no configuration file of their own; this file exists solely
 # to translate the provider-neutral effort labels (low / high) into settings the
-# Copilot adapter can apply. Do not add `script` or `env` here.
+# Copilot adapter can apply.
 #
 # `default` is deliberately absent, and is rejected if written: it means "do not
 # intervene", which leaves a resumed session on the settings it already has.

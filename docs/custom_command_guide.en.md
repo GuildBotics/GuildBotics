@@ -766,7 +766,7 @@ effort_fields:
 AI CLI tool definitions use the same two levels as model definitions:
 
 ```
-cli_agents/<tool>/default.yml     the tool's own definition (the catalog entry)
+cli_agents/<tool>/default.yml     the tool's own default, which every slot inherits
 cli_agents/<tool>/<slot>.yml      a slot's own definition
 ```
 
@@ -782,9 +782,9 @@ effort:            # overlays it for low / high only
     model: <stronger model>
 ```
 
-`default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. A native tool's definition (codex / claude / grok / copilot / antigravity) carries only `parameters:` and `effort:` -- never `script` / `env`.
+`default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. These two keys are all there is to configure: the tool itself is driven by its built-in adapter. The shipped defaults additionally declare `effort_fields:` -- the typed-editing descriptors of the previous section -- but that is provider knowledge shipped with the tool, not something to configure.
 
-Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes a model and a thinking budget, `grok agent stdio` takes model and reasoning effort as launch options, `copilot --acp` takes them as the `model` and `reasoning_effort` session config options, and `agy --print` takes `--model` or `--effort` on its command line (the two are mutually exclusive, so a slot that sets both keeps the model). You only need to write `effort_fields:` yourself for a tool you added.
+Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes a model and a thinking budget, `grok agent stdio` takes model and reasoning effort as launch options, `copilot --acp` takes them as the `model` and `reasoning_effort` session config options, and `agy --print` takes `--model` or `--effort` on its command line (the two are mutually exclusive, so a slot that sets both keeps the model). Supporting a new AI CLI tool means implementing a native adapter for it in this repository, which is also where its `effort_fields:` are declared -- there is no way to add a tool from a workspace YAML file.
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml
@@ -802,25 +802,13 @@ The keys inside a block are provider-specific. The core understands only the com
 - claude: translates `model` into `--model` and `max_thinking_tokens` into the `MAX_THINKING_TOKENS` environment variable
 - grok: passes `model` / `reasoning_effort` to `grok agent stdio` as launch options. They are fixed for the life of the process, so changing them starts a fresh session; keys outside that pair are warned about and ignored
 
-### 9.5. The environment contract for script-based AI CLI tools
-
-A one-shot script tool receives exactly these three variables — no more; arbitrary mapping keys never become environment variables:
-
-| Variable | Contents |
-|---|---|
-| `GUILDBOTICS_CLI_AGENT_EFFORT` | the mapping's `effort` value, or the resolved level (`low` / `high`) when the mapping states none; unset for `default` and unspecified |
-| `GUILDBOTICS_CLI_AGENT_MODEL` | the mapping's `model` value, when it has one |
-| `GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS` | the remaining mapping values (excluding `model`) as JSON |
-
-Leaving them unset for `default` / unspecified is deliberate: a script needs no special value meaning "do not intervene" — with no variable set it simply keeps its own defaults.
-
-### 9.6. Requesting a level that has no mapping
+### 9.5. Requesting a level that has no mapping
 
 If `high` is requested but the model definition or tool configuration has no `high` mapping, this is **not an error**: a warning is logged and the run continues without intervention. Providers differ in how far their mappings are filled in, and stopping the run would do more harm than running without the overlay.
 
 The provider-neutral label is never passed through to the provider as a fallback. That holds even for a tool whose own vocabulary happens to match it (Codex accepts `low` / `high` too): the mapping is always the only source of these values. Falling back to the label would make the run intervene precisely when diagnostics recorded it as `unsupported`, so the record and the behaviour would disagree.
 
-### 9.7. Workflow defaults
+### 9.6. Workflow defaults
 
 - **Ticket-driven workflow**: no automatic assessment. `functions/handle_github_ticket` declares `effort: high` in its frontmatter, so the assumption that ticket work is heavy holds out of the box
 - **Chat workflow**: once per incoming event, an LLM (`functions/assess_effort`) answers `default` or `high`. A request that needs work on local files is `high`; an ordinary conversational reply is `default`. `low` is never produced automatically because no criterion for choosing it has been defined (it remains available for explicit configuration)
@@ -831,7 +819,7 @@ The assessment runs on `brain: default` (the LLM API path) and the assessing com
 
 **In a CLI-only setup (no LLM API key) the automatic assessment does not work.** When no LLM model is configured the call is skipped, one warning is logged, and the stored value is used. To raise the effort in such a setup, state it explicitly in the frontmatter or as a runtime parameter.
 
-### 9.8. Reading it in diagnostics
+### 9.7. Reading it in diagnostics
 
 Each effort decision is recorded in the trace / diagnostics detail. It is not shown in the activity history: effort is diagnostic information, whereas the activity history is about domain outcomes.
 

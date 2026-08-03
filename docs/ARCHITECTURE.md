@@ -192,12 +192,10 @@ execution resource; its session identity survives process restart. Exact resume 
 falls back to a provider's latest session. See
 `docs/native_agent_runtime.en.md` / `.ja.md` for configuration and operations.
 
-Chat context delivery is capability-aware at the brain boundary. The workflow supplies
-the latest event separately from a bounded thread snapshot. A healthy native session
-receives only the new event, a new or rotated native session receives the earlier
-snapshot once, and a conversation-less one-shot tool receives the snapshot on every
-invocation. Dispatch-scoped one-shot resumption is an explicit catalog capability, not
-an inference from the shell script.
+Chat context delivery is session-aware at the brain boundary. The workflow supplies
+the latest event separately from a bounded thread snapshot. A healthy session
+receives only the new event; a new or rotated session receives the earlier snapshot
+once.
 
 ### Model effort
 
@@ -213,8 +211,8 @@ API and an AI CLI tool.
 Translating a label into concrete settings belongs strictly to the layers that
 hold provider knowledge: the definition YAML of a model or of an AI CLI tool,
 and the native adapters, which each allowlist the keys they can apply. The core
-understands only the common `model` and `effort` keys, which it gives names of
-their own in the one-shot script environment. A level with no mapping is a
+understands only the common `model` key, which feeds the settings fingerprint;
+every other key belongs to the adapter. A level with no mapping is a
 warning, never a failure — mapping coverage differs per provider, and halting a
 run over a missing overlay would cost more than running without it.
 
@@ -384,9 +382,8 @@ Invariants:
 - The effective workspace data root is fixed at the _workspace application boundary_
   (App API `set_workspace()`, CLI/member CLI startup, `run`/`start` initialization) and
   written to `os.environ["GUILDBOTICS_DATA_DIR"]` there — and only there. Workers,
-  workflows, and commands never mutate it mid-run; native agent invocations carry the
-  resolved root and run id in `AgentExecutionContext`. One-shot adapters receive an
-  invocation-scoped environment derived from that context for compatibility.
+  workflows, and commands never mutate it mid-run; agent invocations carry the
+  resolved root and run id in `AgentExecutionContext`.
 - Stores that keep a path (diagnostics store, chat state store) must re-resolve or be
   rebound on workspace switch; App API keeps the process-startup
   `GUILDBOTICS_DATA_DIR` as the inherited fallback so switching workspaces never leaks
@@ -561,11 +558,14 @@ Two Person distinctions matter architecturally:
 ## 12. Extension Points
 
 - **New brain**: implement `Brain`, register via the intelligence mappings
-  (`guildbotics/templates/intelligences/*.yml`). AI CLI tool definitions are cataloged
-  in `intelligences/cli_agents.py`. Codex and Claude are built-in native entries;
-  the sole user-configurable Codex filesystem boundary is declared in
-  `templates/intelligences/native_agent_policy.yml`. Other tools use
-  `templates/intelligences/cli_agents/*.yml` one-shot definitions.
+  (`guildbotics/templates/intelligences/*.yml`).
+- **New AI CLI tool**: implement a native adapter under
+  `intelligences/agent_runtime/`, register it in `agent_runtime/factory.py`, and add
+  its catalog entry to `CLI_AGENTS` in `intelligences/cli_agents.py` with a matching
+  `templates/intelligences/cli_agents/<tool>/default.yml`. There is no YAML-only path:
+  a tool without an adapter cannot run. The user-configurable filesystem boundary, for
+  the adapters that can enforce one, is declared in
+  `templates/intelligences/native_agent_policy.yml`.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
 - **New integration**: implement `TicketManager` / `ChatService` and wire it in the

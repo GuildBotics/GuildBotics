@@ -517,7 +517,7 @@ GuildBotics が保存するローカルデータは、大きく 2 種類あり�
 
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
 - `intelligences/native_agent_policy.yml`: Codex・Grok Build・GitHub Copilot CLI のファイルアクセス範囲（`workspace` または `host`）。新規ワークスペースの setup 時に作成され、デスクトップアプリの **LLM・AI CLIツール → 詳細設定**、または画面を利用できない環境でのファイル直接編集により設定します。ネットワークアクセスと確認を求めない実行方式は GuildBotics の連携内で固定します
-- `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの effort マッピングと、Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI 以外の AI CLI ツールをスクリプト経由で実行するための設定
+- `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの effort マッピング。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
 - `team/members/<person_id>/intelligences/`: Codex・Grok Build・GitHub Copilot CLI の実行権限を含むメンバーごとの任意の上書き。既定ではチーム設定を継承します
 
 設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。

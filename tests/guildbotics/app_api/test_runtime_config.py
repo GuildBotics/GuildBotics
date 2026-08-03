@@ -982,8 +982,8 @@ def test_update_runtime_debug_disables_both_debug_flags(
 # --- detect_cli_agents() ----------------------------------------------------
 
 
-def _cli_infos(*items: tuple[str, str, int, str]) -> list[CliAgentInfo]:
-    return [
+def _cli_infos(*items: tuple[str, str, int, str]) -> tuple[CliAgentInfo, ...]:
+    return tuple(
         CliAgentInfo(
             name=name,
             label=label,
@@ -992,15 +992,15 @@ def _cli_infos(*items: tuple[str, str, int, str]) -> list[CliAgentInfo]:
             config_reference=name if name in {"codex", "claude"} else f"{name}-cli.yml",
         )
         for name, label, order, executable in items
-    ]
+    )
 
 
 def test_detect_cli_agents_resolves_executable_and_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.discover_cli_agents",
-        lambda _config_dir: _cli_infos(
+        "guildbotics.app_api.runtime.CLI_AGENTS",
+        _cli_infos(
             ("codex", "OpenAI Codex CLI", 10, "codex"),
             ("antigravity", "Antigravity CLI", 20, "agy"),
         ),
@@ -1033,8 +1033,8 @@ def test_detect_cli_agents_marks_undetected_when_executable_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.discover_cli_agents",
-        lambda _config_dir: _cli_infos(("codex", "OpenAI Codex CLI", 10, "codex")),
+        "guildbotics.app_api.runtime.CLI_AGENTS",
+        _cli_infos(("codex", "OpenAI Codex CLI", 10, "codex")),
     )
     monkeypatch.setattr(
         "guildbotics.app_api.runtime.resolve_cli_agent_path", lambda _executable: ""
@@ -1050,9 +1050,7 @@ def test_detect_cli_agents_marks_undetected_when_executable_missing(
 def test_detect_cli_agents_returns_empty_for_empty_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.discover_cli_agents", lambda _config_dir: []
-    )
+    monkeypatch.setattr("guildbotics.app_api.runtime.CLI_AGENTS", ())
     runtime = AppRuntime(EventBus())
 
     assert runtime.detect_cli_agents().agents == []

@@ -132,7 +132,6 @@ import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
-import { JsonObjectField } from "./JsonObjectField";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -1344,8 +1343,6 @@ function withSlotCliAgent(
     agents.push({
       path,
       name: tool,
-      env: {},
-      script: "",
       detected: toolDefault?.detected ?? false,
       detected_path: toolDefault?.detected_path ?? "",
       effort: {},
@@ -1727,8 +1724,6 @@ function IntelligenceEditor({
           nextCliAgents.push({
             path: expectedPath,
             name: teamCliAgent,
-            env: {},
-            script: "",
             detected: false,
             detected_path: "",
             effort: {},
@@ -2406,16 +2401,6 @@ function IntelligenceEditor({
                                 handleUpdateCliAgentDef(agentDef.path, { parameters })
                               }
                             />
-                            <JsonObjectField
-                              key={`cli-env:${agentDef.path}`}
-                              onValidityChange={(valid) =>
-                                setJsonValidity(`cli-env:${agentDef.path}`, valid)
-                              }
-                              label={t("setup.intelligence.envJson")}
-                              errorText={t("setup.intelligence.envJsonError")}
-                              value={agentDef.env ?? {}}
-                              onChange={(env) => handleUpdateCliAgentDef(agentDef.path, { env })}
-                            />
                             <EffortSettingsField
                               key={`cli-effort:${agentDef.path}`}
                               onValidityChange={(valid) =>
@@ -2428,17 +2413,6 @@ function IntelligenceEditor({
                               onChange={(effort) =>
                                 handleUpdateCliAgentDef(agentDef.path, {
                                   effort: effort as CliAgentDefinition["effort"],
-                                })
-                              }
-                            />
-                            <Textarea
-                              label={t("setup.intelligence.script")}
-                              autosize
-                              minRows={5}
-                              value={agentDef.script}
-                              onChange={(event) =>
-                                handleUpdateCliAgentDef(agentDef.path, {
-                                  script: event.currentTarget.value,
                                 })
                               }
                             />

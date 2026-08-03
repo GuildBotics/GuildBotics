@@ -564,8 +564,6 @@ const resources = {
           feature: "Feature",
           engine: "Engine",
           target: "Target",
-          envJson: "Environment variables (JSON)",
-          envJsonError: "Enter a JSON object.",
           effort: {
             title: "Effort settings",
             inherited: "Inherited",
@@ -588,7 +586,6 @@ const resources = {
           effortJsonDescription:
             'One block per effort level, e.g. {"high": {"reasoning_effort": "high"}}. Only low and high can be mapped: "default" means no intervention, so a mapping for it is rejected.',
           effortJsonError: "Enter a JSON object keyed by effort level.",
-          script: "Script",
           nativePolicy: "Native AI CLI tool execution permissions",
           nativePolicyDescription: "Choose where each native AI CLI tool can access files.",
           nativeAgents: {
@@ -1785,8 +1782,6 @@ const resources = {
           feature: "機能",
           engine: "エンジン",
           target: "割り当て先",
-          envJson: "環境変数（JSON）",
-          envJsonError: "JSONオブジェクトを入力してください。",
           effort: {
             title: "エフォート設定",
             inherited: "継承中",
@@ -1809,7 +1804,6 @@ const resources = {
           effortJsonDescription:
             'エフォートレベルごとに1ブロックを記述します（例: {"high": {"reasoning_effort": "high"}}）。指定できるのは low と high のみです。"default" は介入しないという意味なので、記述するとエラーになります。',
           effortJsonError: "エフォートレベルをキーとするJSONオブジェクトを入力してください。",
-          script: "スクリプト",
           nativePolicy: "ネイティブAI CLIツールの実行権限",
           nativePolicyDescription:
             "各ネイティブAI CLIツールがアクセスできるファイルの範囲を設定します。",

@@ -1,6 +1,6 @@
-# Effort mapping for the native Antigravity AI CLI tool. A native tool takes
-# its label, order and executable from the built-in catalog, and never runs a
-# `script`, so only the effort mapping belongs here.
+# Effort mapping for the native Antigravity AI CLI tool. A tool takes its
+# label, order and executable from the built-in catalog, so only the effort
+# mapping belongs here.
 #
 # `model` and `effort` are mutually exclusive: every id in `agy models` either
 # carries its tier (`gemini-3.6-flash-low`) or refuses `--effort` altogether

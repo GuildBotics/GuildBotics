@@ -19,6 +19,10 @@ session identity is carried by `--conversation <id>` rather than by a living
 process. Everything else (exact resume, streamed events, token usage, structured
 error classification) works the same way as for the other native tools.
 
+These five are the only AI CLI tools GuildBotics can run. Supporting a new one
+means implementing a native adapter in this repository; there is no way to add an
+unsupported tool by dropping a YAML file into a workspace.
+
 ## Configuration
 
 Select a native provider directly in `intelligences/cli_agent_mapping.yml`:
@@ -32,13 +36,13 @@ copilot: copilot
 antigravity: antigravity
 ```
 
-A native tool still reads its own definition under
+Each tool still reads its own definition under
 `intelligences/cli_agents/<tool>/`: that file carries the `parameters:` and
 `effort:` overlay described in the
 [custom command guide](custom_command_guide.en.md), which is how the
-provider-neutral `low` / `high` levels become provider settings. What such a
-definition must not carry is `script:` and `env:`; those belong to a
-script-driven tool, and a native adapter ignores them.
+provider-neutral `low` / `high` levels become provider settings. Those two keys
+are all there is to configure; the shipped defaults also declare
+`effort_fields:`, the descriptors the settings editor uses for typed editing.
 
 The only user-configurable runtime *boundary* is the per-adapter filesystem
 scope in `intelligences/native_agent_policy.yml`:
@@ -125,9 +129,8 @@ terminal commands only -- its own file-writing tools still reach outside the
 working directory -- so there is no file scope to expose as `filesystem_access`
 without promising something the flag does not keep.
 
-Antigravity runs every turn with `--dangerously-skip-permissions`, matching the
-behavior of the script it replaces, and with `--add-dir <cwd>`. That second flag
-is not optional: without it `agy` resolves every tool, including `run_command`,
+Antigravity runs every turn with `--dangerously-skip-permissions` and with
+`--add-dir <cwd>`. That second flag is not optional: without it `agy` resolves every tool, including `run_command`,
 against its own scratch directory instead of the member's workspace.
 
 **Antigravity cannot enforce a read-only turn at the provider.** None of the
@@ -142,9 +145,8 @@ diagnostics. The other layers still apply: a read-only turn holds no person
 lease, so write-side `guildbotics member` commands fail `validate_delegation`,
 and the credential isolation below removes the tokens a direct `git push` or
 `gh` call would need. What is not blocked is local file modification and
-arbitrary shell execution inside the workspace. This is not a regression -- the
-script path enforced nothing either -- and it is tracked for the day `agy` grows
-a real read-only mode.
+arbitrary shell execution inside the workspace. This is tracked for the day
+`agy` grows a real read-only mode.
 
 Claude Code always runs non-interactively with `bypassPermissions`, preserving the
 previous `--dangerously-skip-permissions` behavior. GuildBotics also passes a
@@ -211,17 +213,11 @@ conversation capability:
   future rotation, but that snapshot is not injected into the healthy session.
 - New or rotated native session: the bounded snapshot before the event and the latest
   event are injected exactly once.
-- A one-shot script with no conversation of its own: the bounded snapshot and latest
-  event are injected on every invocation.
-- A one-shot script that resumes an exact conversation only within one dispatch
-  declares `conversation_scope: dispatch`. Once its saved conversation ID exists, a
-  completion retry receives only a continuation instruction and does not receive the
-  same event again.
 
 If a bounded snapshot cannot be built safely from the live Slack API, only a new or
-rotated session or a non-resuming one-shot invocation uses the `inspect_required`
-fallback. A healthy native resume continues from its provider session and the latest
-event, so that fallback never causes a full-history duplicate. The cursor is persisted
+rotated session uses the `inspect_required` fallback. A healthy native resume
+continues from its provider session and the latest event, so that fallback never
+causes a full-history duplicate. The cursor is persisted
 only after provider terminal success, preserving an unprocessed event after a failed
 turn. A completion retry with the same cursor is delivered as a continuation.
 

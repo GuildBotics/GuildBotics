@@ -25,10 +25,10 @@ from guildbotics.intelligences.agent_runtime.policy import (
 )
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.cli_agents import (
+    CLI_AGENTS,
     cli_agent_default_path,
     cli_agent_name_from_path,
-    discover_cli_agents,
-    is_native_cli_agent,
+    require_cli_agent_path,
     resolve_cli_agent_path,
 )
 from guildbotics.intelligences.effort import (
@@ -156,8 +156,8 @@ class IntelligenceConfigService:
         # every slot the member does not customize. Files are reconciled in place
         # (never a blind rmtree): a definition is rewritten from the member's own
         # file when present, so fields the editor never surfaces -- a hand-tuned
-        # rate_limit or conversation_scope -- survive a save, and definitions that
-        # no longer differ from the team are pruned.
+        # model parameter, say -- survive a save, and definitions that no longer
+        # differ from the team are pruned.
         team = self.read_config(config_dir=request.config_dir, person_id=None)
         requested_cli = self._normalize_cli_mapping(request.cli_agent_mapping)
 
@@ -217,16 +217,7 @@ class IntelligenceConfigService:
             "cli_agents",
             [self._cli_agent_rel_path(agent) for agent in request.cli_agents],
             {self._cli_agent_rel_path(agent): agent for agent in request.cli_agents},
-            lambda base, agent: self._cli_def_yaml(
-                base,
-                agent,
-                self._described_keys(
-                    self._cli_effort_descriptors(
-                        request.config_dir, request.person_id, agent.path
-                    ),
-                    f"AI CLI tool '{agent.path}'",
-                ),
-            ),
+            lambda _base, agent: self._cli_def_yaml(agent),
             files,
         )
         self._reconcile_member_policy(request, team, target_dir, files)
@@ -336,13 +327,21 @@ class IntelligenceConfigService:
             files.append(CreatedFile(path=policy_file, action="delete"))
 
     def _normalize_cli_mapping(self, mapping: dict[str, str]) -> dict[str, str]:
-        """Pass definition paths through unchanged.
+        """Reject any slot that names a tool outside the built-in catalog.
 
         A slot names a definition by path, exactly as a model slot does, so
-        there is no second spelling to normalize. Rewriting anything else into a
-        path here would make a stale mapping look valid in the editor while the
-        runtime, which does no such rewriting, could not resolve it.
+        there is nothing to rewrite -- but the tool the path names must exist:
+        the catalog is closed, and a mapping that survived here would show up
+        in the editor as a configurable tool the runtime cannot run. Both
+        reading and saving funnel through this method, so a stale hand-written
+        mapping fails with a message naming the entry instead of failing deep
+        inside an agent turn.
         """
+        for slot, path in mapping.items():
+            try:
+                require_cli_agent_path(path, where=f"AI CLI tool slot '{slot}'")
+            except ValueError as exc:
+                raise SetupServiceError("unknown_cli_agent", str(exc)) from exc
         return dict(mapping)
 
     def _write_model_def(
@@ -401,21 +400,23 @@ class IntelligenceConfigService:
             where=f"AI CLI tool '{agent.path}'",
         )
         agent_file = target_dir / rel_path
-        # A native tool's file is written even for an empty mapping, as an
-        # explicit `effort: {}`. Deleting it instead would fall through to the
-        # packaged template, whose mapping would silently take effect again --
-        # so clearing the field in the editor would not clear anything.
+        # The file is written even for an empty mapping, as an explicit
+        # `effort: {}`. Deleting it instead would fall through to the packaged
+        # template, whose mapping would silently take effect again -- so
+        # clearing the field in the editor would not clear anything.
         agent_file.parent.mkdir(parents=True, exist_ok=True)
-        base = self._read_scoped_yaml(config_dir, person_id, rel_path)
-        save_yaml_file(
-            agent_file,
-            self._cli_def_yaml(
-                base,
-                agent,
-                self._described_keys(descriptors, f"AI CLI tool '{agent.path}'"),
-            ),
-        )
+        save_yaml_file(agent_file, self._cli_def_yaml(agent))
         files.append(CreatedFile(path=agent_file, action="update"))
+
+    @staticmethod
+    def _cli_def_yaml(agent: CliAgentDefinition) -> dict[str, Any]:
+        """An AI CLI tool's definition file.
+
+        The tool is driven entirely by its adapter, so the only thing its file
+        configures is which settings each effort level imposes. There is nothing
+        else in it to preserve, and the whole file is rewritten.
+        """
+        return {"parameters": agent.parameters, "effort": agent.effort}
 
     def _model_def_yaml(
         self, base: dict[str, Any], model: ModelDefinition, described: set[str]
@@ -461,25 +462,6 @@ class IntelligenceConfigService:
         The path *is* the reference, so there is nothing to normalize.
         """
         return agent.path
-
-    def _cli_def_yaml(
-        self, base: dict[str, Any], agent: CliAgentDefinition, described: set[str]
-    ) -> dict[str, Any]:
-        # A native tool is driven by its adapter, so its file may only carry an
-        # effort mapping -- never a script or env block.
-        if is_native_cli_agent(cli_agent_name_from_path(agent.path)):
-            return {"parameters": agent.parameters, "effort": agent.effort}
-        # Preserve the inherited script when the request does not carry one. The
-        # editor only loads the mapped agent's script, so a newly selected agent
-        # would otherwise overwrite a real script with an empty one.
-        data = dict(base)
-        data["env"] = agent.env
-        data["parameters"] = self._merged_parameters(base, agent.parameters, described)
-        data["effort"] = agent.effort
-        if agent.script:
-            data["script"] = agent.script
-        data.setdefault("script", "")
-        return data
 
     def _scope_dir(self, config_dir: Path, person_id: str | None) -> Path:
         if person_id:
@@ -663,13 +645,9 @@ class IntelligenceConfigService:
         person_id: str | None,
         cli_agent_mapping: dict[str, str],
     ) -> list[CliAgentDefinition]:
-        # The executable to look up on PATH may differ from the tool name (a
-        # native tool declares it in the built-in catalog, a script tool in its
-        # yaml), so resolve it via the discovered catalog.
-        executables = {
-            agent.name: agent.executable
-            for agent in discover_cli_agents(config_dir, person_id)
-        }
+        # The executable to look up on PATH may differ from the tool name
+        # (antigravity runs `agy`), so resolve it via the catalog.
+        executables = {agent.name: agent.executable for agent in CLI_AGENTS}
         agents: list[CliAgentDefinition] = []
         seen: set[str] = set()
         for agent_path in cli_agent_mapping.values():
@@ -677,10 +655,8 @@ class IntelligenceConfigService:
                 continue
             seen.add(agent_path)
             rel_path = agent_path
+            # The mapping was validated on read, so the tool is in the catalog.
             tool = cli_agent_name_from_path(agent_path)
-            if not tool:
-                continue
-            native = is_native_cli_agent(tool)
             data = self._read_scoped_yaml(config_dir, person_id, rel_path)
             effort_fields = self._effort_fields(
                 self._cli_effort_descriptors(config_dir, person_id, rel_path),
@@ -695,22 +671,11 @@ class IntelligenceConfigService:
                 )
             )
             inherited_effort = self._cli_inherited_effort(config_dir, person_id, tool)
-            if native:
-                data = {
-                    "effort": data.get("effort", {}),
-                    "parameters": data.get("parameters", {}),
-                }
-            env = data.get("env", {}) if isinstance(data, dict) else {}
-            if not isinstance(env, dict):
-                env = {}
-            name = tool
-            detected_path = resolve_cli_agent_path(executables.get(tool, tool))
+            detected_path = resolve_cli_agent_path(executables[tool])
             agents.append(
                 CliAgentDefinition(
                     path=agent_path,
-                    name=name,
-                    env=env,
-                    script=str(data.get("script", "")) if data else "",
+                    name=tool,
                     detected=bool(detected_path),
                     detected_path=detected_path,
                     effort=data.get("effort", {}) if data else {},

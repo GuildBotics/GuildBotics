@@ -776,7 +776,7 @@ effort_fields:
 AI CLIツールの定義はモデル定義と同じ2階層です。
 
 ```
-cli_agents/<tool>/default.yml     ツール既定（カタログに載るのはこのファイル）
+cli_agents/<tool>/default.yml     ツール既定（全スロットがここから継承する）
 cli_agents/<tool>/<スロット名>.yml  スロット専用の定義
 ```
 
@@ -792,9 +792,9 @@ effort:            # low / high のときだけ上書き
     model: <強いモデル>
 ```
 
-`default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。ネイティブツール（codex / claude / grok / copilot / antigravity）の定義は `parameters:` と `effort:` のみで、`script` / `env` は書けません。
+`default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。設定として書くのはこの 2 つのキーだけで、ツール自体はビルトインのアダプタが動かします。同梱の既定ファイルはこのほかに `effort_fields:`（前節の型付き編集用の宣言）を持ちますが、これはツールに同梱されるプロバイダ知識であり、利用者が設定する項目ではありません。
 
-同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は model と思考予算、`grok agent stdio` は起動オプションの model / reasoning effort、`copilot --acp` はセッション設定項目 `model` / `reasoning_effort`、`agy --print` はコマンドラインの `--model` または `--effort` に翻訳します（この2つは併用できないため、両方を設定したスロットではモデルを採用します）。独自に追加したツールで型付き編集を使いたい場合のみ、上記の書式で `effort_fields:` を自分で書いてください。
+同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は model と思考予算、`grok agent stdio` は起動オプションの model / reasoning effort、`copilot --acp` はセッション設定項目 `model` / `reasoning_effort`、`agy --print` はコマンドラインの `--model` または `--effort` に翻訳します（この2つは併用できないため、両方を設定したスロットではモデルを採用します）。新しい AI CLI ツールへ対応するには、本リポジトリにネイティブアダプタを実装します。`effort_fields:` もそこで宣言するもので、ワークスペースに YAML を置いてツールを追加する経路はありません。
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml
@@ -812,25 +812,13 @@ effort:
 - claude: `model` を `--model` に、`max_thinking_tokens` を環境変数 `MAX_THINKING_TOKENS` に翻訳します
 - grok: `model` / `reasoning_effort` を `grok agent stdio` の起動オプションとして渡します。プロセス起動時に固定されるため、変更時は新しいセッションを開始します。この2つ以外のキーは警告のうえ無視されます
 
-### 9.5. スクリプト型AI CLIツールの環境変数契約
-
-ワンショットのスクリプト型ツールには、次の 3 変数**だけ**が渡されます（任意のキーが無制限に環境変数化されることはありません）。
-
-| 変数 | 内容 |
-|---|---|
-| `GUILDBOTICS_CLI_AGENT_EFFORT` | mapping の `effort` キー値。mapping が指定していなければ解決したレベル（`low` / `high`）。`default` / 未指定では設定されません |
-| `GUILDBOTICS_CLI_AGENT_MODEL` | mapping の `model` キーの値（あれば） |
-| `GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS` | `model` を除く残りの mapping 値の JSON |
-
-`default` / 未指定でこれらが未設定になるのは意図的です。スクリプト側は「介入しない」を表す特別な値を知る必要がなく、変数がなければ自分の既定動作を続ければ済みます。
-
-### 9.6. mapping が無いレベルを指定した場合
+### 9.5. mapping が無いレベルを指定した場合
 
 `high` を指定したのにモデル定義やツール設定に `high` の mapping が無い場合、**エラーにはならず、警告ログを出して無介入のまま実行を続けます**。プロバイダごとに mapping の整備状況は異なるため、実行を止める方が害が大きいという判断です。
 
 このとき、プロバイダ中立のラベルがそのままプロバイダへ渡ることはありません。Codex のようにラベルと同じ語彙（`low` / `high`）を持つツールでも同じで、値の供給元は常に mapping だけです。ラベルをフォールバックに使うと、diagnostics が `unsupported` と記録した実行に限って介入が起きることになり、記録と実挙動が食い違います。
 
-### 9.7. ワークフローの既定動作
+### 9.6. ワークフローの既定動作
 
 - **チケット駆動ワークフロー**: 自動判定はしません。`functions/handle_github_ticket` のフロントマターが `effort: high` を宣言しており、チケット対応は基本的に重い処理であるという前提が標準状態で効きます
 - **チャットワークフロー**: 受信イベントごとに 1 回、LLM（`functions/assess_effort`）が `default` / `high` の二値で判定します。ローカルファイルを扱う作業依頼は `high`、通常の会話応答は `default` です。判定基準を定義していないため、`low` は自動判定の出力に含まれません（明示指定用の語彙としては残ります）
@@ -841,7 +829,7 @@ effort:
 
 **AI CLIツールのみの構成（LLM API キーなし）では、この自動判定は動作しません。** LLM モデルが未構成の場合は判定呼び出しをスキップし、警告を 1 回出して保存値のまま続行します。この構成でエフォートを上げたい場合は、フロントマターか実行時パラメータで明示してください。
 
-### 9.8. diagnostics での確認
+### 9.7. diagnostics での確認
 
 エフォートの決定は trace / diagnostics の詳細に記録されます（activity history には出ません。エフォートは診断情報であり、activity history の関心事はドメイン上の成果です）。
 

@@ -447,7 +447,7 @@ async def test_native_brain_does_not_contact_provider_when_person_lease_conflict
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
     cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex", agent_name="codex")
+        "default": cli_agent.ExecutableInfo(adapter="codex")
     }
     held = person_lease.PersonExecutionLease("aiko", tmp_path)
     held.acquire(source="routine", command="ticket", work_id="other-work")
@@ -532,7 +532,7 @@ async def test_native_authentication_notification_identifies_member_and_cli(
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
     cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex", agent_name="codex")
+        "default": cli_agent.ExecutableInfo(adapter="codex")
     }
 
     async def get_adapter(*_args):
