@@ -750,8 +750,6 @@ class ModelDefinition(BaseModel):
 class CliAgentDefinition(BaseModel):
     path: str
     name: str
-    env: dict[str, Any] = Field(default_factory=dict)
-    script: str = ""
     detected: bool = False
     detected_path: str = ""
     #: Settings that always apply, whatever effort was asked for. The effort

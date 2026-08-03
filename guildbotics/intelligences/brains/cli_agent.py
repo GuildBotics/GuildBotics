@@ -1,9 +1,6 @@
 import asyncio
 import json
-import os
 import re
-import shutil
-import tempfile
 import time
 from contextlib import suppress
 from copy import deepcopy
@@ -44,7 +41,6 @@ from guildbotics.observability.session_transcripts import (
     standard_stderr_tail,
     transcript_detail,
 )
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import (
     get_person_config_path,
     load_person_slot_mapping,
@@ -52,9 +48,7 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.text_utils import replace_placeholders
-from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
-CLI_AGENT_ERROR_MARKER = "GUILDBOTICS_CLI_AGENT_ERROR_JSON:"
 _HOURS_PER_HALF_DAY = 12
 _MAX_24_HOUR = 23
 _MAX_MINUTE = 59
@@ -85,60 +79,30 @@ _MONTHS = {
 }
 
 
+@dataclass(frozen=True)
 class ExecutableInfo:
-    """
-    Information about an executable script.
+    """The AI CLI tool a brain slot runs, and the settings it runs it with.
+
+    ``adapter`` is the tool's catalog name, which is also the name of the native
+    adapter that drives it. ``effort`` maps an effort level to provider-specific
+    settings; only the common ``model`` key is understood by the core, every
+    other key being validated by the adapter. ``parameters`` are the settings
+    that always apply, whatever effort was asked for, with the effort overlay
+    merged on top -- the same way a model definition's ``parameters`` relate to
+    its ``effort``.
     """
 
-    def __init__(
-        self,
-        script: str = "",
-        env: dict[str, str] | None = None,
-        adapter: str = "",
-        conversation_scope: str = "none",
-        agent_name: str = "",
-        effort: dict[str, dict] | None = None,
-        parameters: dict | None = None,
-    ):
-        """
-        Initialize the executable information.
-
-        Args:
-            script (str): The script to execute.
-            env (dict): Environment variables to set for the script.
-            adapter (str): Native adapter name, empty for one-shot scripts.
-            conversation_scope (str): How a one-shot script reuses conversations.
-            agent_name (str): Catalog name of the AI CLI tool.
-            effort (dict): Effort level -> provider-specific settings. Only the
-                common ``model`` key is understood by the core; every other key
-                is provider-specific and validated by the adapter.
-            parameters (dict): Settings that always apply, whatever effort was
-                asked for. The effort overlay is merged on top, the same way a
-                model definition's ``parameters`` relate to its ``effort``.
-        """
-        self.script = script
-        self.env = {} if env is None else env
-        self.adapter = adapter
-        self.conversation_scope = conversation_scope
-        self.agent_name = agent_name
-        self.effort = {} if effort is None else effort
-        self.parameters = {} if parameters is None else parameters
+    adapter: str = ""
+    effort: dict[str, dict] = field(default_factory=dict)
+    parameters: dict = field(default_factory=dict)
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
 
-#: The complete environment contract handed to one-shot script adapters. Nothing
-#: else from the effort mapping becomes an environment variable, so a script
-#: reads a fixed set of names rather than an open-ended provider vocabulary.
-CLI_AGENT_EFFORT_ENV = "GUILDBOTICS_CLI_AGENT_EFFORT"
-CLI_AGENT_MODEL_ENV = "GUILDBOTICS_CLI_AGENT_MODEL"
-CLI_AGENT_EFFORT_OPTIONS_ENV = "GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS"
-
-#: The effort-mapping keys the core gives a name of their own, because every AI
-#: CLI tool GuildBotics ships accepts both. Everything else is passed through as
-#: JSON to the adapter, which owns the rest of the provider vocabulary.
+#: The one effort-mapping key the core gives a name of its own, because it feeds
+#: the settings fingerprint. Everything else is passed through to the adapter,
+#: which owns the rest of the provider vocabulary.
 EFFORT_MODEL_KEY = "model"
-EFFORT_LEVEL_KEY = "effort"
 
 
 @dataclass(frozen=True)
@@ -162,49 +126,6 @@ class EffortDecision:
 
     def diagnostics(self) -> dict[str, Any]:
         return effort_diagnostics(self.resolved, self.overlay, model=self.model)
-
-    @property
-    def level(self) -> str:
-        """The effort value to pass to the tool, or ``""`` to say nothing.
-
-        A stated ``effort`` -- from the tool's own settings or from the level
-        that was applied -- always wins, so a tool with a richer vocabulary than
-        the neutral labels (``xhigh``, ``medium``) can be driven properly. When
-        nothing states one, the neutral level is passed through only if it asks
-        for something; ``default`` deliberately says nothing so the tool keeps
-        its own preference.
-        """
-        stated = str(self.provider_options.get(EFFORT_LEVEL_KEY, "") or "")
-        if stated:
-            return stated
-        return self.resolved.resolved if self.resolved.intervenes else ""
-
-    def script_environment(self) -> dict[str, str]:
-        """Build the one-shot script environment for this decision.
-
-        Everything the settings actually state is exported, whether it came from
-        the tool's own settings or from the effort level. A `default` turn is not
-        a reason to withhold a setting the tool is configured to always use.
-        """
-        environment: dict[str, str] = {}
-        if self.model:
-            environment[CLI_AGENT_MODEL_ENV] = self.model
-        if self.level:
-            environment[CLI_AGENT_EFFORT_ENV] = self.level
-        remainder = {
-            key: value
-            for key, value in self.provider_options.items()
-            if key not in {EFFORT_MODEL_KEY, EFFORT_LEVEL_KEY}
-        }
-        if remainder:
-            environment[CLI_AGENT_EFFORT_OPTIONS_ENV] = json.dumps(
-                remainder, ensure_ascii=False, sort_keys=True
-            )
-        return environment
-
-
-#: "Impose nothing" — the decision a turn carries when no effort was requested.
-NO_EFFORT = EffortDecision()
 
 
 @dataclass(frozen=True)
@@ -355,71 +276,6 @@ def _parse_retry_time(text: str) -> tuple[int, int] | None:
     return hour, minute
 
 
-def _parse_cli_agent_error_marker(
-    stderr: str, logger: Logger | None = None
-) -> tuple[str, dict[str, str]]:
-    for line in stderr.splitlines():
-        if CLI_AGENT_ERROR_MARKER not in line:
-            continue
-        _, raw = line.split(CLI_AGENT_ERROR_MARKER, 1)
-        try:
-            parsed = json.loads(raw.strip())
-        except json.JSONDecodeError as exc:
-            if logger is not None:
-                with suppress(Exception):
-                    logger.warning("failed to parse AI CLI tool error marker: %s", exc)
-            return "", {}
-        if not isinstance(parsed, dict):
-            return "", {}
-        category = str(parsed.get("category", "") or "")
-        details = {
-            str(key): str(value)
-            for key, value in parsed.items()
-            if str(key) != "category" and value is not None
-        }
-        if category == "rate_limited" and not details.get("retry_after_at"):
-            retry_after_at = normalize_cli_agent_retry_after(
-                details.get("retry_after_text", ""),
-                details.get("retry_after_timezone", ""),
-            )
-            if retry_after_at:
-                details["retry_after_at"] = retry_after_at
-        return category, details
-    return "", {}
-
-
-def _extra_env(kwargs: dict[str, Any]) -> dict[str, str]:
-    """Build the per-invocation environment for one-shot script adapters.
-
-    Workflows pass the provider-neutral execution context; nothing here
-    mutates process-global environment variables.
-    """
-    context = (kwargs.get("session_state") or {}).get("agent_execution_context")
-    if not isinstance(context, dict):
-        return {}
-    from guildbotics.capabilities.completion_retry import (
-        CLI_AGENT_CONVERSATION_FILE_ENV,
-    )
-    from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
-    from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
-
-    run_id = str(context.get("run_id") or "")
-    data_root = str(context.get("workspace_data_root") or "")
-    work_kind = str(context.get("work_kind") or "")
-    result = {
-        GUILDBOTICS_DATA_DIR: data_root,
-        RUN_ENV if work_kind == "chat" else TASK_RUN_ENV: run_id,
-    }
-    participant_labels = str(context.get("participant_labels") or "")
-    if participant_labels:
-        result["GUILDBOTICS_CHAT_PARTICIPANT_LABELS"] = participant_labels
-    if run_id and data_root:
-        conversation_file = Path(data_root) / "task-runs" / f"{run_id}.agy-conversation"
-        conversation_file.parent.mkdir(parents=True, exist_ok=True)
-        result[CLI_AGENT_CONVERSATION_FILE_ENV] = str(conversation_file)
-    return {key: value for key, value in result.items() if value}
-
-
 def _agent_execution_context(kwargs: dict[str, Any]) -> dict[str, Any]:
     raw = (kwargs.get("session_state") or {}).get("agent_execution_context")
     return raw if isinstance(raw, dict) else {}
@@ -556,42 +412,6 @@ def _native_turn_input(
     return input
 
 
-def _one_shot_input(
-    input: str,
-    context: dict[str, Any],
-    *,
-    conversation_scope: str,
-    extra_env: dict[str, str],
-) -> str:
-    from guildbotics.capabilities.completion_retry import (
-        CLI_AGENT_CONVERSATION_FILE_ENV,
-    )
-
-    conversation_file = Path(extra_env.get(CLI_AGENT_CONVERSATION_FILE_ENV, ""))
-    has_exact_session = False
-    if conversation_scope == "dispatch" and _attempt(context) > 1:
-        with suppress(OSError):
-            has_exact_session = bool(
-                conversation_file.read_text(encoding="utf-8").strip()
-            )
-    if has_exact_session:
-        return _continuation_input(input, context)
-    mode = "full" if _context_is_complete(context) else "inspect_required"
-    return _thread_context_input(input, context, mode=mode)
-
-
-def _propagate_cwd_workspace_environment(env: dict[str, str]) -> None:
-    if not env.get(GUILDBOTICS_CONFIG_DIR, "").strip():
-        config_dir = Path.cwd() / ".guildbotics" / "config"
-        if config_dir.exists():
-            env[GUILDBOTICS_CONFIG_DIR] = str(config_dir.resolve())
-
-    if not env.get(GUILDBOTICS_ENV_FILE, "").strip():
-        env_file = Path.cwd() / ".env"
-        if env_file.is_file():
-            env[GUILDBOTICS_ENV_FILE] = str(env_file.resolve())
-
-
 def _cli_agent_definition(person_id: str, definition_path: str) -> dict:
     """Read a definition, filling absent keys from its tool's own default.
 
@@ -636,32 +456,15 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
         return person_cli_agent_mapping[person_id]
 
     mapping = load_person_slot_mapping(person_id, "intelligences/cli_agent_mapping.yml")
-    from guildbotics.intelligences.cli_agents import is_native_cli_agent
-
     cli_agent_mapping = {}
     for slot, definition_path in mapping.items():
         path = str(definition_path)
-        tool = _tool_of(path)
         definition = _cli_agent_definition(person_id, path)
-        effort = validate_effort_overlay(
-            definition.get("effort"), where=f"AI CLI tool '{slot}'"
-        )
-        if is_native_cli_agent(tool):
-            cli_agent_mapping[slot] = ExecutableInfo(
-                adapter=tool,
-                agent_name=tool,
-                effort=effort,
-                parameters=_parameters_of(definition),
-            )
-            continue
         cli_agent_mapping[slot] = ExecutableInfo(
-            script=definition.get("script", ""),
-            env=definition.get("env", {}),
-            conversation_scope=str(
-                definition.get("conversation_scope", "none") or "none"
+            adapter=_tool_of(path),
+            effort=validate_effort_overlay(
+                definition.get("effort"), where=f"AI CLI tool '{slot}'"
             ),
-            agent_name=tool,
-            effort=effort,
             parameters=_parameters_of(definition),
         )
     person_cli_agent_mapping[person_id] = cli_agent_mapping
@@ -849,25 +652,6 @@ class CliAgentBrain(Brain):
         cwd: Path | str,
         kwargs: dict[str, Any],
         effort: EffortDecision,
-    ) -> CliAgentExecutionResult:
-        if self.executable_info.adapter:
-            return await self._execute_native(input, cwd, kwargs, effort)
-        extra_env = _extra_env(kwargs)
-        extra_env.update(effort.script_environment())
-        script_input = _one_shot_input(
-            input,
-            _agent_execution_context(kwargs),
-            conversation_scope=self.executable_info.conversation_scope,
-            extra_env=extra_env,
-        )
-        return await self._execute_script(script_input, cwd, extra_env)
-
-    async def _execute_native(
-        self,
-        input: str,
-        cwd: Path | str,
-        kwargs: dict[str, Any],
-        effort: EffortDecision = NO_EFFORT,
     ) -> CliAgentExecutionResult:
         from guildbotics.intelligences.agent_runtime.models import (
             ConversationKey,
@@ -1113,7 +897,7 @@ class CliAgentBrain(Brain):
         if result.error_category in {"authentication", "rate_limited"}:
             agent_name = (
                 result.error_details.get("cli_agent")
-                or self.executable_info.agent_name
+                or self.executable_info.adapter
                 or self.cli_agent
             )
             if result.error_category == "authentication":
@@ -1147,132 +931,6 @@ class CliAgentBrain(Brain):
             raise RuntimeError(
                 f"AI CLI tool '{self.cli_agent}' produced no response: {detail}"
             )
-
-    async def _execute_script(
-        self,
-        input: str,
-        cwd: Path | str,
-        extra_env: dict[str, str] | None = None,
-    ) -> CliAgentExecutionResult:
-        """
-        Execute the script specified in the coding_agent.run configuration
-        in a subprocess with the configured environment variables.
-
-        Args:
-            input (str): The input to pass to the script.
-
-        Raises:
-            RuntimeError: If the subprocess exits with a non-zero status.
-        """
-        from guildbotics.intelligences.cli_agents import get_cli_agent_search_path
-
-        env = os.environ.copy()
-        env.update(self.executable_info.env)
-        _propagate_cwd_workspace_environment(env)
-        env["PATH"] = get_cli_agent_search_path(env.get("PATH"))
-        gh_config_dir = tempfile.mkdtemp(prefix="guildbotics-gh-config-")
-        self._isolate_github_write_credentials(env, gh_config_dir)
-        # Per-invocation overlay (e.g. the workflow run id) is applied after
-        # credential isolation so callers can scope values to this single
-        # subprocess without mutating the shared process environment.
-        if extra_env:
-            env.update(extra_env)
-            from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
-            from guildbotics.runtime.person_lease import delegation_environment
-
-            run_id = extra_env.get(TASK_RUN_ENV) or extra_env.get(RUN_ENV) or ""
-            if run_id:
-                env.update(delegation_environment(run_id))
-
-        # Create temporary file for the prompt input
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
-            tmp_file.write(input)
-            tmp_file.flush()
-            temp_file_name = tmp_file.name
-        env["PROMPT_FILE"] = temp_file_name
-
-        process: asyncio.subprocess.Process | None = None
-        started = time.monotonic()
-        try:
-            # Launch subprocess in the cloned repository directory
-            process = await asyncio.create_subprocess_shell(
-                self.executable_info.script,
-                cwd=str(cwd),
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-            self.logger.info(
-                f"AI CLI '{self.cli_agent}' started "
-                f"(prompt {len(input.encode('utf-8')) / 1024:.1f}KB)"
-            )
-            stdout, stderr = await process.communicate()
-
-            stderr_output = stderr.decode(errors="replace")
-            response = stdout.decode(errors="replace")
-            duration = time.monotonic() - started
-            self.logger.info(
-                f"AI CLI '{self.cli_agent}' finished rc={process.returncode} "
-                f"in {duration:.1f}s "
-                f"(response {len(response.encode('utf-8')) / 1024:.1f}KB)"
-            )
-
-            if process.returncode != 0:
-                self.logger.error(f"AI CLI tool exited with code {process.returncode}")
-            error_category, error_details = _parse_cli_agent_error_marker(
-                stderr_output, self.logger
-            )
-
-            return CliAgentExecutionResult(
-                stdout=response.strip(),
-                stderr=stderr_output.strip(),
-                returncode=process.returncode or 0,
-                error_category=error_category,
-                error_details=error_details,
-            )
-        finally:
-            # If the await was cancelled (e.g. the service is stopping) before the
-            # agent finished, kill the subprocess so a multi-minute agent turn does
-            # not keep running detached and block a clean shutdown, and reap it so
-            # it does not linger as a zombie.
-            if process is not None and process.returncode is None:
-                from guildbotics.intelligences.agent_runtime.environment import (
-                    terminate_process_tree,
-                )
-
-                with suppress(asyncio.CancelledError, Exception):
-                    await asyncio.shield(terminate_process_tree(process))
-            self.remove_temp_file(temp_file_name)
-            shutil.rmtree(gh_config_dir, ignore_errors=True)
-
-    def _isolate_github_write_credentials(
-        self, env: dict[str, str], gh_config_dir: str
-    ) -> None:
-        for key in [
-            "GH_TOKEN",
-            "GITHUB_TOKEN",
-            "GITHUB_ENTERPRISE_TOKEN",
-            "GH_CONFIG_DIR",
-            "GIT_ASKPASS",
-            "SSH_ASKPASS",
-            "SSH_AUTH_SOCK",
-        ]:
-            env.pop(key, None)
-        env["GH_CONFIG_DIR"] = gh_config_dir
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        env["GIT_CONFIG_GLOBAL"] = os.devnull
-        env["GIT_SSH_COMMAND"] = (
-            "ssh -F /dev/null -o BatchMode=yes "
-            "-o IdentitiesOnly=yes -o IdentityFile=/dev/null"
-        )
-
-    def remove_temp_file(self, file_name: str):
-        """
-        Remove temporary files created during the execution of the AI CLI tool.
-        """
-        with suppress(OSError):
-            os.remove(file_name)
 
     def _write_request_io(
         self, prompt: str, kwargs: dict[str, Any], effort: EffortDecision

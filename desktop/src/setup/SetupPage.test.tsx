@@ -185,8 +185,6 @@ vi.mock("../api/client", async (importOriginal) => {
         {
           path: "cli_agents/codex/default.yml",
           name: "codex",
-          env: {},
-          script: "codex",
           detected: true,
           detected_path: "/usr/local/bin/codex",
           effort: {},
@@ -1850,8 +1848,6 @@ describe("toIntelligenceUpdatePayload", () => {
       {
         path: "cli_agents/codex/default.yml",
         name: "codex" as const,
-        env: {},
-        script: "codex",
         detected: true,
         detected_path: "/usr/local/bin/codex",
         effort: {},
@@ -3283,8 +3279,6 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
       {
         path: "cli_agents/codex/default.yml",
         name: "codex",
-        env: {},
-        script: "codex",
         detected: true,
         detected_path: "/usr/local/bin/codex",
         effort: {},
@@ -3337,8 +3331,6 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
       {
         path: "cli_agents/codex/default.yml",
         name: "codex",
-        env: {},
-        script: "codex",
         detected: true,
         detected_path: "/usr/local/bin/codex",
         effort: {},
@@ -3346,8 +3338,6 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
       {
         path: "cli_agents/claude/default.yml",
         name: "claude",
-        env: {},
-        script: "claude",
         detected: true,
         detected_path: "/usr/local/bin/claude",
         effort: {},
@@ -3513,8 +3503,6 @@ describe("IntelligenceEditor (team default)", () => {
           {
             path: "cli_agents/codex/default.yml",
             name: "codex",
-            env: {},
-            script: "codex",
             detected: true,
             detected_path: "/usr/local/bin/codex",
             effort: {},
@@ -3522,8 +3510,6 @@ describe("IntelligenceEditor (team default)", () => {
           {
             path: "cli_agents/codex/custom_cli.yml",
             name: "codex",
-            env: {},
-            script: "codex",
             detected: true,
             detected_path: "/usr/local/bin/codex",
             effort: {},
@@ -3619,15 +3605,21 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("shows a JSON validation error and blocks autosave for malformed env", async () => {
+  it("shows a JSON validation error and blocks autosave for a malformed effort", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const envInput = await screen.findByLabelText(t("setup.intelligence.envJson"));
-    await user.click(envInput);
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
+    );
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.showJson") }))[0],
+    );
+    const effortInput = await screen.findByLabelText(t("setup.intelligence.effortJson"));
+    await user.click(effortInput);
     await user.paste("{not json");
 
-    expect(await screen.findByText(t("setup.intelligence.envJsonError"))).toBeInTheDocument();
+    expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
     await new Promise((resolve) => setTimeout(resolve, 1100));
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
@@ -3885,8 +3877,6 @@ describe("IntelligenceEditor (member override)", () => {
           {
             path: "cli_agents/codex/default.yml",
             name: "codex",
-            env: {},
-            script: "codex",
             detected: true,
             detected_path: "/usr/local/bin/codex",
             effort: {},

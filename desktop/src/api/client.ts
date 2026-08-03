@@ -838,8 +838,6 @@ export type ModelDefinition = {
 export type CliAgentDefinition = {
   path: string;
   name: string;
-  env: Record<string, unknown>;
-  script: string;
   detected: boolean;
   detected_path: string;
   // Settings that always apply, whatever effort was asked for.

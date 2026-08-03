@@ -15,9 +15,9 @@ Antigravityだけは「1プロセスで複数ターンを実行する」形に�
 なく`--conversation <id>`が担保します。それ以外（厳密な再開、イベントの逐次配信、
 トークン使用量、構造化されたエラー分類）は他のネイティブ連携と同じです。
 
-これら5つ以外のAI CLIツールは、`intelligences/cli_agents/`にあるYAML形式の設定に従って
-スクリプト経由で実行します。これらのツールに会話履歴を渡す方法については、
-[Slackスレッドの文脈を渡す方法](#slackスレッドの文脈を渡す方法)を参照してください。
+GuildBoticsが実行できるAI CLIツールはこの5つだけです。新しいツールへ対応するには、
+本リポジトリにネイティブアダプタを実装します。ワークスペースにYAMLを置いて未対応のツールを
+追加する経路はありません。
 
 ## 設定
 
@@ -32,12 +32,11 @@ copilot: copilot
 antigravity: antigravity
 ```
 
-これら5つのAI CLIツールも、`intelligences/cli_agents/<tool>/`配下の定義ファイル自体は
-読み込みます。このファイルが持つのは`parameters:`と`effort:`のオーバーレイで、
+各AI CLIツールは`intelligences/cli_agents/<tool>/`配下の定義ファイルも読み込みます。
+このファイルが持つのは`parameters:`と`effort:`のオーバーレイで、
 プロバイダ非依存の`low` / `high`をAI CLIツールごとの設定へ翻訳するためのものです
-（書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）。書けないのは
-`script:`と`env:`で、これらはスクリプト経由で実行するツールのための項目であり、
-ネイティブアダプタは読み込みません。
+（書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）。
+定義ファイルに書けるのはこの2つだけです。
 
 ユーザーが変更できる実行時の**境界**は、
 `intelligences/native_agent_policy.yml`でAI CLIツールごとに指定するファイルアクセス範囲だけです。
@@ -116,7 +115,7 @@ Antigravityは`native_agent_policy.yml`の対象外です。`agy --sandbox`が�
 実行だけで、`agy`自身のファイル書き込みツールは作業ディレクトリの外へ到達できます。
 `filesystem_access`として公開すると、実際には守られない範囲を約束することになるためです。
 
-Antigravityは、置き換え対象のスクリプトと同じく毎ターン`--dangerously-skip-permissions`を
+Antigravityは毎ターン`--dangerously-skip-permissions`を
 指定し、あわせて`--add-dir <cwd>`を渡します。後者は省略できません。これが無いと`agy`は
 `run_command`を含むすべてのツールを、メンバーのワークスペースではなく`agy`自身の作業用
 ディレクトリに対して解決します。
@@ -131,11 +130,9 @@ Antigravityは、置き換え対象のスクリプトと同じく毎ターン`--
 他の層の防御はそのまま効きます。読み取り専用のターンはperson leaseを取得しないため、
 書き込み系の`guildbotics member`コマンドは`validate_delegation`で失敗し、後述の認証情報の分離に
 より直接の`git push`や`gh`も認証できません。塞げていないのはワークスペース内のローカル
-ファイル書き換えと任意のシェル実行です。これは後退ではなく（スクリプト経路も担保していません
-でした）、`agy`が本物の読み取り専用モードを備えた時点で見直します。
+ファイル書き換えと任意のシェル実行です。`agy`が本物の読み取り専用モードを備えた時点で見直します。
 
-Claude Codeは、従来の`--dangerously-skip-permissions`と同じく、操作ごとの確認を省略する
-`bypassPermissions`で常に実行します。Bash sandboxはチケット作業やチャットからの依頼に必要な
+Claude Codeは、操作ごとの確認を省略する`bypassPermissions`で常に実行します。Bash sandboxはチケット作業やチャットからの依頼に必要な
 幅広いコマンドと互換性がないため、`sandbox.enabled=false`も明示します。ただし、これらより
 優先されるClaude Codeの管理ポリシーがある場合は、その設定に従います。Claude Codeの
 確認方法とsandboxはワークスペース設定に保存せず、Desktopにも設定項目を表示しません。
@@ -199,16 +196,10 @@ AI CLIツールは、GuildBoticsが検証した`guildbotics member ...`コマン
   送りません。
 - これらのAI CLIツールで新しいセッションを開始するときや、セッションを切り替えたときは、
   最新のイベントより前のSlackスレッドの履歴と最新のイベントを一度だけ送ります。
-- 呼び出しのたびに新しい会話として実行されるAI CLIツールには、最大件数を
-  設けたSlackスレッドの履歴と最新のイベントを毎回送ります。
-- 同じ依頼の再試行中に限って会話を引き継げるAI CLIツールでは、保存済みの会話IDを使って前回の
-  続きから再開します。この場合は続行指示だけを送り、同じイベントや会話履歴を重ねて送りません。
-  この動作を利用する設定では、`conversation_scope: dispatch`を指定します。
 
 Slack APIからスレッドの履歴を安全に取得できない場合は、新しいセッションを開始するとき、
-セッションを切り替えたとき、または会話を引き継がないAI CLIツールを実行するときに限り、
-AI CLIツール自身にSlackスレッドを確認させます。この動作を内部では`inspect_required`
-fallbackと呼びます。
+またはセッションを切り替えたときに限り、AI CLIツール自身にSlackスレッドを確認させます。
+この動作を内部では`inspect_required` fallbackと呼びます。
 
 正常なセッションを引き継ぐ場合は、保存済みのセッションと最新の
 イベントだけを使用します。そのため、`inspect_required` fallbackを理由に、それまでの会話履歴を

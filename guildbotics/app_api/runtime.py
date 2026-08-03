@@ -132,10 +132,7 @@ from guildbotics.intelligences.agent_runtime.usage import (
     CliAgentUsageSnapshot,
     read_codex_usage,
 )
-from guildbotics.intelligences.cli_agents import (
-    discover_cli_agents,
-    resolve_cli_agent_path,
-)
+from guildbotics.intelligences.cli_agents import CLI_AGENTS, resolve_cli_agent_path
 from guildbotics.intelligences.troubleshooting import troubleshoot_turn
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.diagnostics_store import (
@@ -1536,10 +1533,8 @@ class AppRuntime:
             await context.aclose()
 
     def detect_cli_agents(self) -> CliAgentDetectionsResponse:
-        from guildbotics.utils.fileio import get_config_path
-
         agents: list[CliAgentDetection] = []
-        for info in discover_cli_agents(get_config_path("")):
+        for info in CLI_AGENTS:
             path = resolve_cli_agent_path(info.executable)
             agents.append(
                 CliAgentDetection(
@@ -2004,10 +1999,7 @@ def _requirement_satisfied(kind: str, github_enabled: bool) -> bool:
             for env_var in provider_env_keys(get_config_path("")).values()
         )
     if kind == "cli_agent":
-        return any(
-            resolve_cli_agent_path(agent.executable)
-            for agent in discover_cli_agents(get_config_path(""))
-        )
+        return any(resolve_cli_agent_path(agent.executable) for agent in CLI_AGENTS)
     return True
 
 
