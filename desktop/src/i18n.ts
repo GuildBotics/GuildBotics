@@ -594,11 +594,13 @@ const resources = {
           nativeAgents: {
             codex: "Codex",
             grok: "Grok Build",
+            copilot: "GitHub Copilot",
           },
           filesystemAccessFor: "{{agent}} file access",
           sandboxMapping: {
             codex: "Runs Codex with workspace-write or danger-full-access.",
             grok: "Runs grok with --sandbox workspace or --sandbox off.",
+            copilot: "Runs copilot confined to the working directory, or with --allow-all-paths.",
           },
           filesystemOptions: {
             workspace: "Workspace only",
@@ -1814,11 +1816,13 @@ const resources = {
           nativeAgents: {
             codex: "Codex",
             grok: "Grok Build",
+            copilot: "GitHub Copilot",
           },
           filesystemAccessFor: "{{agent}}のファイルアクセス",
           sandboxMapping: {
             codex: "Codexをworkspace-writeまたはdanger-full-accessで実行します。",
             grok: "grokを--sandbox workspaceまたは--sandbox offで実行します。",
+            copilot: "copilotを作業ディレクトリ内に制限して、または--allow-all-pathsで実行します。",
           },
           filesystemOptions: {
             workspace: "ワークスペース内のみ",

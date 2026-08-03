@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 
 from guildbotics.capabilities.task_runs import TASK_RUN_ENV
+from guildbotics.intelligences.agent_runtime.acp import CLIENT_VERSION
 from guildbotics.intelligences.agent_runtime.grok import (
-    CLIENT_VERSION,
     GrokAcpAdapter,
     _launch_argv,
     _sandbox_profile,
@@ -28,6 +28,14 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 
+from acp_fake_peer import (
+    DEFAULT_OPTIONS,
+    AcpPeerBase,
+    install,
+    session_update,
+    text_chunk,
+)
+
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "grok_initialize_0_2_114.json").read_text()
 )
@@ -39,54 +47,8 @@ def _initialize(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
-def _update(session_id: str, update: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "jsonrpc": "2.0",
-        "method": "session/update",
-        "params": {"sessionId": session_id, "update": update},
-    }
-
-
-def _chunk(text: str, message_id: str = "") -> dict[str, Any]:
-    update: dict[str, Any] = {
-        "sessionUpdate": "agent_message_chunk",
-        "content": {"type": "text", "text": text},
-    }
-    if message_id:
-        update["messageId"] = message_id
-    return update
-
-
-# Option ids are chosen by the agent per request; the kind is a separate field.
-DEFAULT_OPTIONS = [
-    {"optionId": "opt-a1", "name": "Allow once", "kind": "allow_once"},
-    {"optionId": "opt-r7", "name": "Reject once", "kind": "reject_once"},
-    {"optionId": "opt-r9", "name": "Always reject", "kind": "reject_always"},
-]
-
-
-class _Writer:
-    def __init__(self, peer: "_Peer") -> None:
-        self.peer = peer
-
-    def write(self, data: bytes) -> None:
-        for line in data.splitlines():
-            if line:
-                self.peer.handle(json.loads(line))
-
-    async def drain(self) -> None:
-        return None
-
-    def close(self) -> None:
-        self.peer.returncode = 0
-        self.peer.stdout.feed_eof()
-        self.peer.stderr.feed_eof()
-
-
-class _Peer:
+class _Peer(AcpPeerBase):
     """A fake ``grok agent stdio`` peer speaking ACP v1 over line JSON-RPC."""
-
-    SESSION_ID = "019fad69-10a7-7931-81a0-1639a139c964"
 
     def __init__(
         self,
@@ -106,13 +68,9 @@ class _Peer:
         usage_channel: str = "_x.ai/session_notification",
         replay_extensions: list[dict[str, Any]] | None = None,
     ) -> None:
-        self.stdout = asyncio.StreamReader(limit=2**16)
-        self.stderr = asyncio.StreamReader()
-        self.stdin = _Writer(self)
-        self.returncode: int | None = None
-        self.messages: list[dict[str, Any]] = []
+        super().__init__()
         self.initialize = initialize if initialize is not None else _initialize()
-        self.updates = updates if updates is not None else [_chunk("hello world")]
+        self.updates = updates if updates is not None else [text_chunk("hello world")]
         self.stop_reason = stop_reason
         self.replay = replay or []
         self.load_error = load_error
@@ -139,7 +97,7 @@ class _Peer:
             # "Invalid params: missing field `version`".
             client_info = message.get("params", {}).get("clientInfo", {})
             if not str(client_info.get("version", "")):
-                self._error(
+                self.send_error(
                     request_id,
                     {
                         "code": -32602,
@@ -148,23 +106,23 @@ class _Peer:
                     },
                 )
                 return
-            self._result(request_id, self.initialize)
+            self.send_result(request_id, self.initialize)
         elif method == "authenticate":
             if self.authenticate_error:
-                self._error(request_id, self.authenticate_error)
+                self.send_error(request_id, self.authenticate_error)
             else:
-                self._result(request_id, {})
+                self.send_result(request_id, {})
         elif method == "session/new":
-            self._result(request_id, {"sessionId": self.SESSION_ID})
+            self.send_result(request_id, {"sessionId": self.SESSION_ID})
             self._emit_noise()
         elif method in {"session/load", "session/resume"}:
             if self.load_error:
-                self._error(request_id, self.load_error)
+                self.send_error(request_id, self.load_error)
                 return
             for update in self.replay:
-                self._feed(_update(self.SESSION_ID, update))
+                self.feed(session_update(self.SESSION_ID, update))
             for update in self.replay_extensions:
-                self._feed(
+                self.feed(
                     {
                         "jsonrpc": "2.0",
                         "method": "_x.ai/session/update",
@@ -172,17 +130,17 @@ class _Peer:
                     }
                 )
             self._emit_noise()
-            self._result(request_id, {})
+            self.send_result(request_id, {})
         elif method == "session/prompt":
             if self.prompt_error:
-                self._error(request_id, self.prompt_error)
+                self.send_error(request_id, self.prompt_error)
                 return
             if self.prompt_delay:
                 # A real turn answers session/prompt only when the work is done.
                 asyncio.get_running_loop().create_task(self._answer_later(request_id))
                 return
             if self.permission_request is not None:
-                self._feed(
+                self.feed(
                     {
                         "jsonrpc": "2.0",
                         "id": 9001,
@@ -195,9 +153,9 @@ class _Peer:
                     }
                 )
             for update in self.updates:
-                self._feed(_update(self.SESSION_ID, update))
+                self.feed(session_update(self.SESSION_ID, update))
             if self.turn_usage is not None:
-                self._feed(
+                self.feed(
                     {
                         "jsonrpc": "2.0",
                         "method": self.usage_channel,
@@ -212,18 +170,18 @@ class _Peer:
                     }
                 )
             self._emit_noise()
-            self._result(request_id, {"stopReason": self.stop_reason})
+            self.send_result(request_id, {"stopReason": self.stop_reason})
 
     async def _answer_later(self, request_id: Any) -> None:
         await asyncio.sleep(self.prompt_delay)
         for update in self.updates:
-            self._feed(_update(self.SESSION_ID, update))
-        self._result(request_id, {"stopReason": self.stop_reason})
+            self.feed(session_update(self.SESSION_ID, update))
+        self.send_result(request_id, {"stopReason": self.stop_reason})
 
     def _emit_noise(self) -> None:
         if not self.noise:
             return
-        self._feed(
+        self.feed(
             {
                 "jsonrpc": "2.0",
                 "method": "_x.ai/announcements/update",
@@ -234,47 +192,19 @@ class _Peer:
                 },
             }
         )
-        self._feed(
+        self.feed(
             {
                 "jsonrpc": "2.0",
                 "method": "_x.ai/settings/update",
                 "params": {"tips": ["Use Ctrl+O to subscribe."]},
             }
         )
-        self._feed(
-            _update(
+        self.feed(
+            session_update(
                 self.SESSION_ID,
                 {"sessionUpdate": "available_commands_update", "availableCommands": []},
             )
         )
-
-    def _result(self, request_id: Any, result: Any) -> None:
-        self._feed({"jsonrpc": "2.0", "id": request_id, "result": result})
-
-    def _error(self, request_id: Any, error: dict[str, Any]) -> None:
-        self._feed({"jsonrpc": "2.0", "id": request_id, "error": error})
-
-    def _feed(self, message: dict[str, Any]) -> None:
-        encoded = (json.dumps(message) + "\n").encode()
-        midpoint = max(1, len(encoded) // 2)
-        self.stdout.feed_data(encoded[:midpoint])
-        self.stdout.feed_data(encoded[midpoint:])
-
-    async def wait(self) -> int:
-        self.returncode = 0
-        return 0
-
-    def sent(self, method: str) -> dict[str, Any]:
-        return next(
-            message for message in self.messages if message.get("method") == method
-        )
-
-    def methods(self) -> list[str]:
-        return [
-            str(message["method"])
-            for message in self.messages
-            if "method" in message and "id" in message
-        ]
 
 
 def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
@@ -288,17 +218,6 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
         resume_policy=ResumePolicy.AUTO,
         **overrides,
     )
-
-
-def _install(monkeypatch: pytest.MonkeyPatch, peer: _Peer) -> list[tuple[Any, ...]]:
-    launched: list[tuple[Any, ...]] = []
-
-    async def create_process(*args: Any, **kwargs: Any) -> _Peer:
-        launched.append((args, kwargs))
-        return peer
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    return launched
 
 
 async def _run(
@@ -322,8 +241,8 @@ async def _run(
 async def test_new_session_streams_chunks_and_reports_the_session_id(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(updates=[_chunk("hello "), _chunk("world")])
-    launched = _install(monkeypatch, peer)
+    peer = _Peer(updates=[text_chunk("hello "), text_chunk("world")])
+    launched = install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
 
     result, events = await _run(adapter, tmp_path)
@@ -359,8 +278,8 @@ async def test_effort_settings_are_passed_as_launch_options(
     They are not protocol fields, so they have to reach the process on its argv
     or they never take effect at all.
     """
-    peer = _Peer(updates=[_chunk("ok")])
-    launched = _install(monkeypatch, peer)
+    peer = _Peer(updates=[text_chunk("ok")])
+    launched = install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
 
     await _run(
@@ -382,8 +301,8 @@ async def test_effort_settings_are_passed_as_launch_options(
 async def test_a_turn_without_effort_adds_no_launch_options(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(updates=[_chunk("ok")])
-    launched = _install(monkeypatch, peer)
+    peer = _Peer(updates=[text_chunk("ok")])
+    launched = install(monkeypatch, peer)
 
     await _run(GrokAcpAdapter(), tmp_path)
 
@@ -396,8 +315,8 @@ async def test_a_turn_without_effort_adds_no_launch_options(
 async def test_unknown_effort_settings_are_reported_not_silently_dropped(
     monkeypatch, tmp_path, caplog
 ) -> None:
-    peer = _Peer(updates=[_chunk("ok")])
-    _install(monkeypatch, peer)
+    peer = _Peer(updates=[text_chunk("ok")])
+    install(monkeypatch, peer)
 
     with caplog.at_level("WARNING"):
         await _run(
@@ -432,7 +351,7 @@ async def test_exact_session_is_loaded_and_never_falls_back_to_latest(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer()
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
@@ -451,7 +370,7 @@ async def test_resume_capability_is_preferred_over_load(monkeypatch, tmp_path) -
     initialize = _initialize()
     initialize["agentCapabilities"]["sessionCapabilities"] = {"resume": True}
     peer = _Peer(initialize=initialize)
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
@@ -470,7 +389,7 @@ async def test_replayed_history_is_counted_but_never_emitted(
 ) -> None:
     peer = _Peer(
         replay=[
-            _chunk("an answer from a previous turn"),
+            text_chunk("an answer from a previous turn"),
             {
                 "sessionUpdate": "tool_call",
                 "toolCallId": "old",
@@ -479,9 +398,9 @@ async def test_replayed_history_is_counted_but_never_emitted(
             },
             {"sessionUpdate": "usage_update", "used": 4_000, "size": 500_000},
         ],
-        updates=[_chunk("fresh answer")],
+        updates=[text_chunk("fresh answer")],
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
@@ -510,7 +429,7 @@ async def test_load_failure_is_session_unavailable_and_rotates(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer(load_error={"code": -32001, "message": "session not found"})
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
@@ -532,8 +451,8 @@ async def test_load_failure_is_session_unavailable_and_rotates(
 async def test_chunks_without_message_ids_are_joined_in_arrival_order(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(updates=[_chunk("one "), _chunk("two "), _chunk("three")])
-    _install(monkeypatch, peer)
+    peer = _Peer(updates=[text_chunk("one "), text_chunk("two "), text_chunk("three")])
+    install(monkeypatch, peer)
 
     result, _events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -546,13 +465,13 @@ async def test_chunks_are_grouped_per_message_id_in_first_seen_order(
 ) -> None:
     peer = _Peer(
         updates=[
-            _chunk("A1 ", "a"),
-            _chunk("B1 ", "b"),
-            _chunk("A2 ", "a"),
-            _chunk("B2", "b"),
+            text_chunk("A1 ", "a"),
+            text_chunk("B1 ", "b"),
+            text_chunk("A2 ", "a"),
+            text_chunk("B2", "b"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     result, _events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -564,7 +483,7 @@ async def test_empty_terminal_output_is_a_protocol_failure(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer(updates=[])
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await _run(GrokAcpAdapter(), tmp_path)
@@ -604,10 +523,10 @@ async def test_tool_calls_are_classified_into_command_and_file_change(
                 "title": "think",
                 "kind": "think",
             },
-            _chunk("done"),
+            text_chunk("done"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -635,10 +554,10 @@ async def test_context_usage_is_absolute_and_cost_stays_out_of_usage(
                 "size": 500_000,
                 "cost": {"amount": "0.42", "currency": "USD"},
             },
-            _chunk("done"),
+            text_chunk("done"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -659,10 +578,10 @@ async def test_malformed_context_usage_is_not_treated_as_a_snapshot(
     peer = _Peer(
         updates=[
             {"sessionUpdate": "usage_update", "used": "many", "size": None},
-            _chunk("done"),
+            text_chunk("done"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -678,10 +597,10 @@ async def test_falling_context_usage_is_detected_as_compaction(
         updates=[
             {"sessionUpdate": "usage_update", "used": 400_000, "size": 500_000},
             {"sessionUpdate": "usage_update", "used": 90_000, "size": 500_000},
-            _chunk("done"),
+            text_chunk("done"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -692,13 +611,13 @@ async def test_falling_context_usage_is_detected_as_compaction(
 
 @pytest.mark.asyncio
 async def test_xai_compaction_extension_is_normalized(monkeypatch, tmp_path) -> None:
-    peer = _Peer(updates=[_chunk("done")])
+    peer = _Peer(updates=[text_chunk("done")])
     original = peer.handle
 
     def handle(message: dict[str, Any]) -> None:
         original(message)
         if message.get("method") == "session/prompt":
-            peer._feed(
+            peer.feed(
                 {
                     "jsonrpc": "2.0",
                     "method": "_x.ai/session_notification",
@@ -714,7 +633,7 @@ async def test_xai_compaction_extension_is_normalized(monkeypatch, tmp_path) -> 
             )
 
     peer.handle = handle  # type: ignore[method-assign]
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -726,13 +645,13 @@ async def test_xai_compaction_extension_is_normalized(monkeypatch, tmp_path) -> 
 async def test_xai_retry_state_reports_a_structured_rate_limit(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(updates=[_chunk("done")])
+    peer = _Peer(updates=[text_chunk("done")])
     original = peer.handle
 
     def handle(message: dict[str, Any]) -> None:
         original(message)
         if message.get("method") == "session/prompt":
-            peer._feed(
+            peer.feed(
                 {
                     "jsonrpc": "2.0",
                     "method": "_x.ai/session_notification",
@@ -752,7 +671,7 @@ async def test_xai_retry_state_reports_a_structured_rate_limit(
             )
 
     peer.handle = handle  # type: ignore[method-assign]
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -765,8 +684,8 @@ async def test_xai_retry_state_reports_a_structured_rate_limit(
 async def test_extension_noise_is_summarized_once_instead_of_per_message(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(noise=True, updates=[_chunk("done")])
-    _install(monkeypatch, peer)
+    peer = _Peer(noise=True, updates=[text_chunk("done")])
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -792,13 +711,13 @@ async def test_extension_noise_is_summarized_once_instead_of_per_message(
 async def test_an_unrecognized_extension_channel_records_names_not_values(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(updates=[_chunk("done")])
+    peer = _Peer(updates=[text_chunk("done")])
     original = peer.handle
 
     def handle(message: dict[str, Any]) -> None:
         original(message)
         if message.get("method") == "session/prompt":
-            peer._feed(
+            peer.feed(
                 {
                     "jsonrpc": "2.0",
                     "method": "_x.ai/quota/update",
@@ -811,7 +730,7 @@ async def test_an_unrecognized_extension_channel_records_names_not_values(
             )
 
     peer.handle = handle  # type: ignore[method-assign]
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -835,9 +754,9 @@ async def test_unknown_standard_update_is_recorded_as_an_event(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer(
-        updates=[{"sessionUpdate": "brand_new_update", "detail": 1}, _chunk("done")]
+        updates=[{"sessionUpdate": "brand_new_update", "detail": 1}, text_chunk("done")]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -863,8 +782,8 @@ async def test_unknown_standard_update_is_recorded_as_an_event(
 async def test_non_end_turn_stop_reasons_fail_and_rotate(
     monkeypatch, tmp_path, stop_reason: str, category: AgentRuntimeErrorCategory
 ) -> None:
-    peer = _Peer(stop_reason=stop_reason, updates=[_chunk("partial answer")])
-    _install(monkeypatch, peer)
+    peer = _Peer(stop_reason=stop_reason, updates=[text_chunk("partial answer")])
+    install(monkeypatch, peer)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await _run(GrokAcpAdapter(), tmp_path)
@@ -878,8 +797,8 @@ async def test_non_end_turn_stop_reasons_fail_and_rotate(
 async def test_partial_output_is_still_recorded_as_events_on_failure(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(stop_reason="max_tokens", updates=[_chunk("partial answer")])
-    _install(monkeypatch, peer)
+    peer = _Peer(stop_reason="max_tokens", updates=[text_chunk("partial answer")])
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     events: list[AgentEvent] = []
     context = _context(tmp_path)
@@ -902,7 +821,7 @@ async def test_partial_output_is_still_recorded_as_events_on_failure(
 @pytest.mark.asyncio
 async def test_non_v1_protocol_is_unsupported(monkeypatch, tmp_path) -> None:
     peer = _Peer(initialize=_initialize(protocolVersion=2))
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await _run(GrokAcpAdapter(), tmp_path)
@@ -918,7 +837,7 @@ async def test_missing_exact_resume_capability_is_unsupported(
     initialize["agentCapabilities"]["loadSession"] = False
     initialize["agentCapabilities"]["sessionCapabilities"] = {}
     peer = _Peer(initialize=initialize)
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await _run(GrokAcpAdapter(), tmp_path)
@@ -932,7 +851,7 @@ async def test_cached_token_is_selected_from_the_advertised_methods(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer()
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -949,7 +868,7 @@ async def test_interactive_only_auth_is_refused_with_login_guidance(
     initialize = _initialize()
     initialize["authMethods"] = [{"id": "grok.com", "name": "Grok"}]
     peer = _Peer(initialize=initialize)
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await _run(GrokAcpAdapter(), tmp_path)
@@ -967,7 +886,7 @@ async def test_api_key_is_used_only_when_advertised(monkeypatch, tmp_path) -> No
     initialize = _initialize()
     initialize["authMethods"] = [{"id": "xai.api_key", "name": "API key"}]
     peer = _Peer(initialize=initialize)
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -981,7 +900,7 @@ async def test_authenticate_failure_is_an_authentication_error(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer(authenticate_error={"code": -32000, "message": "token expired"})
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await _run(GrokAcpAdapter(), tmp_path)
@@ -999,7 +918,7 @@ async def test_structured_rate_limit_error_is_classified(monkeypatch, tmp_path) 
             "data": {"code": "usage_limit_reached", "reset_at": "2026-07-30T00:00:00Z"},
         }
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await _run(GrokAcpAdapter(), tmp_path)
@@ -1013,8 +932,8 @@ async def test_structured_rate_limit_error_is_classified(monkeypatch, tmp_path) 
 
 @pytest.mark.asyncio
 async def test_unexpected_permission_request_is_declined(monkeypatch, tmp_path) -> None:
-    peer = _Peer(permission_request={"title": "rm -rf /"}, updates=[_chunk("done")])
-    _install(monkeypatch, peer)
+    peer = _Peer(permission_request={"title": "rm -rf /"}, updates=[text_chunk("done")])
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1037,13 +956,13 @@ async def test_unexpected_permission_request_is_declined(monkeypatch, tmp_path) 
 async def test_undeclared_client_capabilities_are_refused(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(updates=[_chunk("done")])
+    peer = _Peer(updates=[text_chunk("done")])
     original = peer.handle
 
     def handle(message: dict[str, Any]) -> None:
         original(message)
         if message.get("method") == "session/prompt":
-            peer._feed(
+            peer.feed(
                 {
                     "jsonrpc": "2.0",
                     "id": 8001,
@@ -1053,7 +972,7 @@ async def test_undeclared_client_capabilities_are_refused(
             )
 
     peer.handle = handle  # type: ignore[method-assign]
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1066,7 +985,7 @@ async def test_initialize_declares_no_client_capabilities(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer()
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1081,7 +1000,7 @@ async def test_initialize_declares_no_client_capabilities(
 @pytest.mark.asyncio
 async def test_host_policy_disables_the_sandbox(monkeypatch, tmp_path) -> None:
     peer = _Peer()
-    launched = _install(monkeypatch, peer)
+    launched = install(monkeypatch, peer)
     adapter = GrokAcpAdapter(policy=AdapterFilesystemPolicy(filesystem_access="host"))
 
     await _run(adapter, tmp_path)
@@ -1092,7 +1011,7 @@ async def test_host_policy_disables_the_sandbox(monkeypatch, tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_read_only_turns_keep_the_confined_sandbox(monkeypatch, tmp_path) -> None:
     peer = _Peer()
-    launched = _install(monkeypatch, peer)
+    launched = install(monkeypatch, peer)
     adapter = GrokAcpAdapter(policy=AdapterFilesystemPolicy(filesystem_access="host"))
 
     await _run(adapter, tmp_path, read_only=True)
@@ -1105,7 +1024,7 @@ async def test_write_credentials_are_not_inherited(monkeypatch, tmp_path) -> Non
     monkeypatch.setenv("GH_TOKEN", "ghp-secret")
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
     peer = _Peer()
-    launched = _install(monkeypatch, peer)
+    launched = install(monkeypatch, peer)
 
     await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1119,7 +1038,7 @@ async def test_write_credentials_are_not_inherited(monkeypatch, tmp_path) -> Non
 @pytest.mark.asyncio
 async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) -> None:
     peer = _Peer()
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     terminated: list[Any] = []
 
@@ -1128,7 +1047,7 @@ async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) 
         process.returncode = -15
 
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.grok.terminate_process_tree",
+        "guildbotics.intelligences.agent_runtime.acp.terminate_process_tree",
         terminate,
     )
     adapter._transport._process = peer  # type: ignore[assignment]
@@ -1171,10 +1090,10 @@ async def test_reasoning_chunks_never_reach_the_reply(monkeypatch, tmp_path) -> 
                 "sessionUpdate": "agent_thought_chunk",
                 "content": {"type": "text", "text": "The user wants a short answer."},
             },
-            _chunk("OK"),
+            text_chunk("OK"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1192,7 +1111,7 @@ async def test_turn_completed_usage_is_normalized_from_either_channel(
     monkeypatch, tmp_path, channel: str
 ) -> None:
     peer = _Peer(
-        updates=[_chunk("OK")],
+        updates=[text_chunk("OK")],
         usage_channel=channel,
         turn_usage={
             "inputTokens": 12593,
@@ -1205,7 +1124,7 @@ async def test_turn_completed_usage_is_normalized_from_either_channel(
             "costUsdTicks": 235592000,
         },
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1235,8 +1154,8 @@ async def test_turn_completed_usage_is_normalized_from_either_channel(
 async def test_turn_completed_without_usage_is_not_a_usage_event(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(updates=[_chunk("OK")], turn_usage={})
-    _install(monkeypatch, peer)
+    peer = _Peer(updates=[text_chunk("OK")], turn_usage={})
+    install(monkeypatch, peer)
 
     result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1250,7 +1169,7 @@ async def test_replayed_extension_usage_is_history_not_this_turn(
 ) -> None:
     """session/load replays the previous turn's usage on the extension channel."""
     peer = _Peer(
-        replay=[_chunk("the previous answer")],
+        replay=[text_chunk("the previous answer")],
         replay_extensions=[
             {
                 "sessionUpdate": "turn_completed",
@@ -1258,10 +1177,10 @@ async def test_replayed_extension_usage_is_history_not_this_turn(
                 "usage": {"inputTokens": 999_999, "outputTokens": 111},
             }
         ],
-        updates=[_chunk("fresh")],
+        updates=[text_chunk("fresh")],
         turn_usage={"inputTokens": 12_641, "outputTokens": 19},
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
         provider_session_id=_Peer.SESSION_ID,
@@ -1292,9 +1211,9 @@ async def test_permission_request_without_a_reject_option_is_cancelled(
         permission_options=[
             {"optionId": "opt-a1", "name": "Allow once", "kind": "allow_once"}
         ],
-        updates=[_chunk("done")],
+        updates=[text_chunk("done")],
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1316,9 +1235,9 @@ async def test_reject_once_is_preferred_over_reject_always(
             {"optionId": "opt-r9", "name": "Always reject", "kind": "reject_always"},
             {"optionId": "opt-r7", "name": "Reject once", "kind": "reject_once"},
         ],
-        updates=[_chunk("done")],
+        updates=[text_chunk("done")],
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1347,10 +1266,10 @@ async def test_read_tools_are_not_reported_as_file_changes(
                 "kind": "search",
                 "locations": [{"path": "guildbotics/cli/__init__.py"}],
             },
-            _chunk("done"),
+            text_chunk("done"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1391,10 +1310,10 @@ async def test_partial_tool_updates_keep_the_kind_declared_at_start(
                 "toolCallId": "t1",
                 "status": "completed",
             },
-            _chunk("done"),
+            text_chunk("done"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1413,10 +1332,10 @@ async def test_tool_kinds_do_not_leak_between_turns(monkeypatch, tmp_path) -> No
                 "toolCallId": "t1",
                 "status": "completed",
             },
-            _chunk("done"),
+            text_chunk("done"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     adapter._tool_kinds["t1"] = "edit"
 
@@ -1433,8 +1352,8 @@ async def test_a_long_turn_is_not_cut_off_by_the_request_timeout(
     monkeypatch, tmp_path
 ) -> None:
     """session/prompt answers at turn end, so it must not be request-bounded."""
-    peer = _Peer(updates=[_chunk("finally done")], prompt_delay=0.2)
-    _install(monkeypatch, peer)
+    peer = _Peer(updates=[text_chunk("finally done")], prompt_delay=0.2)
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     # Every other request stays bounded; only the turn itself is open-ended.
     adapter._transport._request_timeout = 0.02
@@ -1449,7 +1368,7 @@ async def test_other_requests_still_honour_the_request_timeout(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer()
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     adapter._transport.start(peer)  # type: ignore[arg-type]
     adapter._transport._request_timeout = 0.02
@@ -1465,8 +1384,8 @@ async def test_other_requests_still_honour_the_request_timeout(
 @pytest.mark.asyncio
 async def test_the_turn_timeout_bounds_a_stalled_prompt(monkeypatch, tmp_path) -> None:
     """The unbounded prompt request is still bounded by the turn deadline."""
-    peer = _Peer(updates=[_chunk("too late")], prompt_delay=5.0)
-    _install(monkeypatch, peer)
+    peer = _Peer(updates=[text_chunk("too late")], prompt_delay=5.0)
+    install(monkeypatch, peer)
     terminated: list[Any] = []
 
     async def terminate(process: Any) -> None:
@@ -1474,7 +1393,7 @@ async def test_the_turn_timeout_bounds_a_stalled_prompt(monkeypatch, tmp_path) -
         process.returncode = -15
 
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.grok.terminate_process_tree",
+        "guildbotics.intelligences.agent_runtime.acp.terminate_process_tree",
         terminate,
     )
     adapter = GrokAcpAdapter(timeout=0.15)
@@ -1499,11 +1418,11 @@ async def test_a_finished_turn_ends_with_the_whole_reply(monkeypatch, tmp_path) 
                 "sessionUpdate": "agent_thought_chunk",
                 "content": {"type": "text", "text": "reasoning"},
             },
-            _chunk("Hel"),
-            _chunk("lo"),
+            text_chunk("Hel"),
+            text_chunk("lo"),
         ]
     )
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     result, events = await _run(GrokAcpAdapter(), tmp_path)
 
@@ -1521,8 +1440,8 @@ async def test_a_finished_turn_ends_with_the_whole_reply(monkeypatch, tmp_path) 
 
 @pytest.mark.asyncio
 async def test_a_failed_turn_emits_no_completed_record(monkeypatch, tmp_path) -> None:
-    peer = _Peer(stop_reason="max_tokens", updates=[_chunk("partial")])
-    _install(monkeypatch, peer)
+    peer = _Peer(stop_reason="max_tokens", updates=[text_chunk("partial")])
+    install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     events: list[AgentEvent] = []
     context = _context(tmp_path)
@@ -1546,7 +1465,7 @@ async def test_resume_advertised_as_false_is_not_used(monkeypatch, tmp_path) -> 
     initialize = _initialize()
     initialize["agentCapabilities"]["sessionCapabilities"] = {"resume": False}
     peer = _Peer(initialize=initialize)
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
         provider_session_id=_Peer.SESSION_ID,
@@ -1568,7 +1487,7 @@ async def test_disabled_resume_without_load_session_is_unsupported(
     initialize["agentCapabilities"]["loadSession"] = False
     initialize["agentCapabilities"]["sessionCapabilities"] = {"resume": False}
     peer = _Peer(initialize=initialize)
-    _install(monkeypatch, peer)
+    install(monkeypatch, peer)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await _run(GrokAcpAdapter(), tmp_path)

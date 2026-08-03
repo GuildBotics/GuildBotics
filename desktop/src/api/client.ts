@@ -865,9 +865,10 @@ export type NativeAgentFilesystemAccess = "workspace" | "host";
 export type NativeAgentPolicySettings = {
   codex: { filesystem_access: NativeAgentFilesystemAccess };
   grok: { filesystem_access: NativeAgentFilesystemAccess };
+  copilot: { filesystem_access: NativeAgentFilesystemAccess };
 };
 
-export const NATIVE_POLICY_ADAPTERS = ["codex", "grok"] as const;
+export const NATIVE_POLICY_ADAPTERS = ["codex", "grok", "copilot"] as const;
 
 export type NativeAgentPolicyAdapter = (typeof NATIVE_POLICY_ADAPTERS)[number];
 

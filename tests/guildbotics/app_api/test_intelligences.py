@@ -428,6 +428,7 @@ def test_team_update_writes_native_agent_policy(tmp_path: Path) -> None:
             "native_agent_policy": NativeAgentPolicySettings(
                 codex=AdapterNativeAgentPolicySettings(filesystem_access="host"),
                 grok=AdapterNativeAgentPolicySettings(filesystem_access="workspace"),
+                copilot=AdapterNativeAgentPolicySettings(filesystem_access="host"),
             )
         }
     )
@@ -439,6 +440,7 @@ def test_team_update_writes_native_agent_policy(tmp_path: Path) -> None:
     assert load_yaml_file(policy_file) == {
         "codex": {"filesystem_access": "host"},
         "grok": {"filesystem_access": "workspace"},
+        "copilot": {"filesystem_access": "host"},
     }
 
 
@@ -613,6 +615,7 @@ def test_member_override_update_writes_native_agent_policy(tmp_path: Path) -> No
     assert stored == {
         "codex": {"filesystem_access": "host"},
         "grok": {"filesystem_access": "host"},
+        "copilot": {"filesystem_access": "workspace"},
     }
 
 
@@ -1216,9 +1219,14 @@ def test_every_shipped_tool_declares_its_own_effort_capability(tmp_path: Path) -
         assert agent.effort_fields or not agent.effort_supported, (
             f"{path} falls back to raw JSON"
         )
-    # Both shipped scripts expose a real `--effort` flag as well as `--model`.
-    for path in ("copilot", "antigravity"):
-        assert {f.key for f in agents[path].effort_fields} == {"effort", "model"}
+    # The one remaining script exposes a real `--effort` flag as well as
+    # `--model`; Copilot is native now and states the session options its
+    # adapter sets instead.
+    assert {f.key for f in agents["antigravity"].effort_fields} == {"effort", "model"}
+    assert {f.key for f in agents["copilot"].effort_fields} == {
+        "reasoning_effort",
+        "model",
+    }
 
 
 def test_a_hand_tuned_setting_the_editor_never_shows_survives_a_save(

@@ -13,10 +13,8 @@ from guildbotics.intelligences.cli_agents import (
 
 CUSTOM_ORDER = 5
 DEFAULT_ORDER = 1000
-TEMPLATE_CLI_AGENT_NAMES = (
-    "antigravity/default.yml",
-    "copilot/default.yml",
-)
+#: The tools still driven by a shell script rather than a native adapter.
+TEMPLATE_CLI_AGENT_NAMES = ("antigravity/default.yml",)
 
 
 def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
@@ -36,7 +34,9 @@ def test_a_tool_is_identified_by_its_definition_directory() -> None:
 def test_native_tools_are_the_ones_with_a_built_in_adapter() -> None:
     assert is_native_cli_agent("codex")
     assert is_native_cli_agent("claude")
-    assert not is_native_cli_agent("copilot")
+    assert is_native_cli_agent("grok")
+    assert is_native_cli_agent("copilot")
+    assert not is_native_cli_agent("antigravity")
 
 
 def test_a_tools_default_definition_path_is_derived_from_its_name() -> None:

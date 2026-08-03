@@ -782,9 +782,9 @@ effort:            # overlays it for low / high only
     model: <stronger model>
 ```
 
-`default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. A native tool's definition (codex / claude / grok) carries only `parameters:` and `effort:` -- never `script` / `env`.
+`default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. A native tool's definition (codex / claude / grok / copilot) carries only `parameters:` and `effort:` -- never `script` / `env`.
 
-Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes a model and a thinking budget, `grok agent stdio` takes model and reasoning effort as launch options, and the copilot and antigravity scripts translate both into `--model` and `--effort`. You only need to write `effort_fields:` yourself for a tool you added.
+Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes a model and a thinking budget, `grok agent stdio` takes model and reasoning effort as launch options, `copilot --acp` takes them as the `model` and `reasoning_effort` session config options, and the antigravity script translates both into `--model` and `--effort`. You only need to write `effort_fields:` yourself for a tool you added.
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml
