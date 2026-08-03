@@ -766,7 +766,7 @@ effort_fields:
 AI CLI tool definitions use the same two levels as model definitions:
 
 ```
-cli_agents/<tool>/default.yml     the tool's own definition (the catalog entry)
+cli_agents/<tool>/default.yml     the tool's own default, which every slot inherits
 cli_agents/<tool>/<slot>.yml      a slot's own definition
 ```
 
@@ -782,7 +782,7 @@ effort:            # overlays it for low / high only
     model: <stronger model>
 ```
 
-`default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. These two keys are all a definition carries: the tool itself is driven by its built-in adapter, so there is nothing else in the file to configure.
+`default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. These two keys are all there is to configure: the tool itself is driven by its built-in adapter. The shipped defaults additionally declare `effort_fields:` -- the typed-editing descriptors of the previous section -- but that is provider knowledge shipped with the tool, not something to configure.
 
 Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes a model and a thinking budget, `grok agent stdio` takes model and reasoning effort as launch options, `copilot --acp` takes them as the `model` and `reasoning_effort` session config options, and `agy --print` takes `--model` or `--effort` on its command line (the two are mutually exclusive, so a slot that sets both keeps the model). Supporting a new AI CLI tool means implementing a native adapter for it in this repository, which is also where its `effort_fields:` are declared -- there is no way to add a tool from a workspace YAML file.
 

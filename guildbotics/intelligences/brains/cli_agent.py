@@ -455,13 +455,16 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
     if person_id in person_cli_agent_mapping:
         return person_cli_agent_mapping[person_id]
 
+    from guildbotics.intelligences.cli_agents import require_cli_agent_path
+
     mapping = load_person_slot_mapping(person_id, "intelligences/cli_agent_mapping.yml")
     cli_agent_mapping = {}
     for slot, definition_path in mapping.items():
         path = str(definition_path)
+        adapter = require_cli_agent_path(path, where=f"AI CLI tool slot '{slot}'")
         definition = _cli_agent_definition(person_id, path)
         cli_agent_mapping[slot] = ExecutableInfo(
-            adapter=_tool_of(path),
+            adapter=adapter,
             effort=validate_effort_overlay(
                 definition.get("effort"), where=f"AI CLI tool '{slot}'"
             ),

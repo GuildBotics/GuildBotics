@@ -28,6 +28,7 @@ from guildbotics.intelligences.cli_agents import (
     CLI_AGENTS,
     cli_agent_default_path,
     cli_agent_name_from_path,
+    require_cli_agent_path,
     resolve_cli_agent_path,
 )
 from guildbotics.intelligences.effort import (
@@ -326,13 +327,21 @@ class IntelligenceConfigService:
             files.append(CreatedFile(path=policy_file, action="delete"))
 
     def _normalize_cli_mapping(self, mapping: dict[str, str]) -> dict[str, str]:
-        """Pass definition paths through unchanged.
+        """Reject any slot that names a tool outside the built-in catalog.
 
         A slot names a definition by path, exactly as a model slot does, so
-        there is no second spelling to normalize. Rewriting anything else into a
-        path here would make a stale mapping look valid in the editor while the
-        runtime, which does no such rewriting, could not resolve it.
+        there is nothing to rewrite -- but the tool the path names must exist:
+        the catalog is closed, and a mapping that survived here would show up
+        in the editor as a configurable tool the runtime cannot run. Both
+        reading and saving funnel through this method, so a stale hand-written
+        mapping fails with a message naming the entry instead of failing deep
+        inside an agent turn.
         """
+        for slot, path in mapping.items():
+            try:
+                require_cli_agent_path(path, where=f"AI CLI tool slot '{slot}'")
+            except ValueError as exc:
+                raise SetupServiceError("unknown_cli_agent", str(exc)) from exc
         return dict(mapping)
 
     def _write_model_def(
@@ -646,9 +655,8 @@ class IntelligenceConfigService:
                 continue
             seen.add(agent_path)
             rel_path = agent_path
+            # The mapping was validated on read, so the tool is in the catalog.
             tool = cli_agent_name_from_path(agent_path)
-            if not tool:
-                continue
             data = self._read_scoped_yaml(config_dir, person_id, rel_path)
             effort_fields = self._effort_fields(
                 self._cli_effort_descriptors(config_dir, person_id, rel_path),
@@ -663,7 +671,7 @@ class IntelligenceConfigService:
                 )
             )
             inherited_effort = self._cli_inherited_effort(config_dir, person_id, tool)
-            detected_path = resolve_cli_agent_path(executables.get(tool, tool))
+            detected_path = resolve_cli_agent_path(executables[tool])
             agents.append(
                 CliAgentDefinition(
                     path=agent_path,

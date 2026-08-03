@@ -125,6 +125,34 @@ def cli_agent_default_path(name: str) -> str:
     return f"{CLI_AGENT_ROOT}/{name}/{CLI_AGENT_DEFAULT_FILENAME}"
 
 
+def require_cli_agent_path(path: str, *, where: str) -> str:
+    """Return the catalog tool a definition path names.
+
+    The catalog is closed: a tool outside ``CLI_AGENTS`` has no adapter and
+    cannot run, so every boundary that accepts a mapping rejects such a path
+    here -- with a message naming the mapping entry -- instead of failing deep
+    inside a turn with an unknown-adapter error.
+
+    Args:
+        path: A definition path such as ``cli_agents/<tool>/<slot>.yml``.
+        where: The mapping entry to name in the error message.
+
+    Returns:
+        The tool name the path belongs to.
+
+    Raises:
+        ValueError: If the path does not name a catalog tool.
+    """
+    tool = cli_agent_name_from_path(path)
+    if any(agent.name == tool for agent in CLI_AGENTS):
+        return tool
+    supported = ", ".join(agent.name for agent in CLI_AGENTS)
+    raise ValueError(
+        f"{where}: '{path}' does not name a supported AI CLI tool"
+        f" (supported: {supported})"
+    )
+
+
 def resolve_default_cli_executable() -> str:
     """Return the executable (binary) of the team's default AI CLI tool."""
     try:

@@ -776,7 +776,7 @@ effort_fields:
 AI CLIツールの定義はモデル定義と同じ2階層です。
 
 ```
-cli_agents/<tool>/default.yml     ツール既定（カタログに載るのはこのファイル）
+cli_agents/<tool>/default.yml     ツール既定（全スロットがここから継承する）
 cli_agents/<tool>/<スロット名>.yml  スロット専用の定義
 ```
 
@@ -792,7 +792,7 @@ effort:            # low / high のときだけ上書き
     model: <強いモデル>
 ```
 
-`default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。定義ファイルが持つのはこの 2 つのキーだけです。ツール自体はビルトインのアダプタが動かすため、ファイルに書ける設定は他にありません。
+`default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。設定として書くのはこの 2 つのキーだけで、ツール自体はビルトインのアダプタが動かします。同梱の既定ファイルはこのほかに `effort_fields:`（前節の型付き編集用の宣言）を持ちますが、これはツールに同梱されるプロバイダ知識であり、利用者が設定する項目ではありません。
 
 同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は model と思考予算、`grok agent stdio` は起動オプションの model / reasoning effort、`copilot --acp` はセッション設定項目 `model` / `reasoning_effort`、`agy --print` はコマンドラインの `--model` または `--effort` に翻訳します（この2つは併用できないため、両方を設定したスロットではモデルを採用します）。新しい AI CLI ツールへ対応するには、本リポジトリにネイティブアダプタを実装します。`effort_fields:` もそこで宣言するもので、ワークスペースに YAML を置いてツールを追加する経路はありません。
 

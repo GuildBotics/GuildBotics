@@ -78,6 +78,21 @@ def test_cli_agent_mapping_selects_the_tools_adapter(
     cli_agent.person_cli_agent_mapping.clear()
 
 
+def test_cli_agent_mapping_rejects_a_tool_outside_the_catalog(monkeypatch) -> None:
+    """A mapping no adapter can run fails at load, naming the slot."""
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"default": "cli_agents/mytool/default.yml"},
+    )
+
+    with pytest.raises(ValueError, match=r"slot 'default'.*mytool"):
+        cli_agent.get_cli_agent_mapping("aiko")
+
+    assert "aiko" not in cli_agent.person_cli_agent_mapping
+
+
 @pytest.mark.asyncio
 async def test_cli_agent_run_returns_the_provider_output(monkeypatch, tmp_path):
     _native_brain(

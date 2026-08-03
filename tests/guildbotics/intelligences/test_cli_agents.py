@@ -1,11 +1,14 @@
 from pathlib import Path
 
+import pytest
+
 from guildbotics.intelligences import cli_agents
 from guildbotics.intelligences.cli_agents import (
     CLI_AGENTS,
     cli_agent_default_path,
     cli_agent_name_from_path,
     get_cli_agent_search_path,
+    require_cli_agent_path,
     resolve_cli_agent_path,
     resolve_default_cli_executable,
 )
@@ -27,6 +30,34 @@ def test_a_tool_is_identified_by_its_definition_directory() -> None:
 
 def test_a_tools_default_definition_path_is_derived_from_its_name() -> None:
     assert cli_agent_default_path("codex") == "cli_agents/codex/default.yml"
+
+
+def test_a_catalog_tools_definition_path_is_accepted() -> None:
+    assert require_cli_agent_path("cli_agents/codex/default.yml", where="x") == "codex"
+    assert require_cli_agent_path("cli_agents/codex/reviewer.yml", where="x") == "codex"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # The catalog is closed: no adapter, no run.
+        "cli_agents/mytool/default.yml",
+        # A path that names no tool at all is just as unrunnable.
+        "codex",
+        "cli_agents/codex.yml",
+    ],
+)
+def test_a_path_outside_the_catalog_is_rejected_with_the_entry_named(
+    path: str,
+) -> None:
+    with pytest.raises(ValueError) as excinfo:
+        require_cli_agent_path(path, where="AI CLI tool slot 'default'")
+
+    message = str(excinfo.value)
+    assert "AI CLI tool slot 'default'" in message
+    assert path in message
+    # The message teaches the fix: it lists every tool that can run.
+    assert "codex, claude, grok, copilot, antigravity" in message
 
 
 def test_every_catalog_tool_ships_a_definition_template() -> None:

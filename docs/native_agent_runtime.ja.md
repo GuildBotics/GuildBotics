@@ -36,7 +36,8 @@ antigravity: antigravity
 このファイルが持つのは`parameters:`と`effort:`のオーバーレイで、
 プロバイダ非依存の`low` / `high`をAI CLIツールごとの設定へ翻訳するためのものです
 （書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）。
-定義ファイルに書けるのはこの2つだけです。
+設定として書くのはこの2つだけです。同梱の既定ファイルはこのほかに、
+設定エディタの型付き編集用の宣言である `effort_fields:` を持ちます。
 
 ユーザーが変更できる実行時の**境界**は、
 `intelligences/native_agent_policy.yml`でAI CLIツールごとに指定するファイルアクセス範囲だけです。

@@ -41,7 +41,8 @@ Each tool still reads its own definition under
 `effort:` overlay described in the
 [custom command guide](custom_command_guide.en.md), which is how the
 provider-neutral `low` / `high` levels become provider settings. Those two keys
-are all a definition carries.
+are all there is to configure; the shipped defaults also declare
+`effort_fields:`, the descriptors the settings editor uses for typed editing.
 
 The only user-configurable runtime *boundary* is the per-adapter filesystem
 scope in `intelligences/native_agent_policy.yml`:

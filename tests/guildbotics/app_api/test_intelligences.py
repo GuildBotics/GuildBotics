@@ -266,6 +266,42 @@ def test_read_config_handles_malformed_yaml(tmp_path: Path) -> None:
     assert model.parameters == {}
 
 
+def test_read_config_rejects_a_mapping_outside_the_catalog(tmp_path: Path) -> None:
+    """A stale mapping fails with a named error, never a phantom tool.
+
+    The catalog is closed, so a slot pointing at an unknown tool would render
+    in the editor as something configurable that the runtime cannot run.
+    """
+    _write_team_config(tmp_path)
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agent_mapping.yml",
+        {"default": "cli_agents/mytool/default.yml"},
+    )
+
+    with pytest.raises(SetupServiceError) as excinfo:
+        IntelligenceConfigService().read_config(config_dir=tmp_path)
+
+    assert excinfo.value.code == "unknown_cli_agent"
+    assert "'default'" in excinfo.value.message
+    assert "cli_agents/mytool/default.yml" in excinfo.value.message
+
+
+def test_update_config_rejects_a_mapping_outside_the_catalog(tmp_path: Path) -> None:
+    _write_team_config(tmp_path)
+
+    with pytest.raises(SetupServiceError) as excinfo:
+        IntelligenceConfigService().update_config(
+            IntelligenceConfigUpdateRequest(
+                config_dir=tmp_path,
+                cli_agent_mapping={"default": "cli_agents/mytool/default.yml"},
+            )
+        )
+
+    assert excinfo.value.code == "unknown_cli_agent"
+    mapping_file = _team_intelligences(tmp_path) / "cli_agent_mapping.yml"
+    assert "mytool" not in mapping_file.read_text(encoding="utf-8")
+
+
 def test_read_config_cli_agent_malformed_definition_falls_back(tmp_path: Path) -> None:
     base = _team_intelligences(tmp_path)
     _write_yaml(base / "model_mapping.yml", {})
