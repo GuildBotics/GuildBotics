@@ -25,9 +25,16 @@ grok: grok
 copilot: copilot
 ```
 
-Native definitions do not use files under `intelligences/cli_agents/`. The only
-user-configurable native runtime boundary is the per-adapter filesystem scope in
-`intelligences/native_agent_policy.yml`:
+A native tool still reads its own definition under
+`intelligences/cli_agents/<tool>/`: that file carries the `parameters:` and
+`effort:` overlay described in the
+[custom command guide](custom_command_guide.en.md), which is how the
+provider-neutral `low` / `high` levels become provider settings. What such a
+definition must not carry is `script:` and `env:`; those belong to a
+script-driven tool, and a native adapter ignores them.
+
+The only user-configurable runtime *boundary* is the per-adapter filesystem
+scope in `intelligences/native_agent_policy.yml`:
 
 ```yaml
 codex:

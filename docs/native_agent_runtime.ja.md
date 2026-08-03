@@ -26,8 +26,14 @@ grok: grok
 copilot: copilot
 ```
 
-これら4つの実行には、`intelligences/cli_agents/`配下のスクリプト設定を
-使用しません。ユーザーが変更できる実行権限は、
+これら4つのAI CLIツールも、`intelligences/cli_agents/<tool>/`配下の定義ファイル自体は
+読み込みます。このファイルが持つのは`parameters:`と`effort:`のオーバーレイで、
+プロバイダ非依存の`low` / `high`をAI CLIツールごとの設定へ翻訳するためのものです
+（書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）。書けないのは
+`script:`と`env:`で、これらはスクリプト経由で実行するツールのための項目であり、
+ネイティブアダプタは読み込みません。
+
+ユーザーが変更できる実行時の**境界**は、
 `intelligences/native_agent_policy.yml`でAI CLIツールごとに指定するファイルアクセス範囲だけです。
 
 ```yaml
