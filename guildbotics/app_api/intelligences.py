@@ -663,8 +663,9 @@ class IntelligenceConfigService:
         person_id: str | None,
         cli_agent_mapping: dict[str, str],
     ) -> list[CliAgentDefinition]:
-        # The executable to look up on PATH is declared in each agent's yaml
-        # (e.g. antigravity -> agy), so resolve it via the discovered catalog.
+        # The executable to look up on PATH may differ from the tool name (a
+        # native tool declares it in the built-in catalog, a script tool in its
+        # yaml), so resolve it via the discovered catalog.
         executables = {
             agent.name: agent.executable
             for agent in discover_cli_agents(config_dir, person_id)

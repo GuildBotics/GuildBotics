@@ -13,8 +13,6 @@ from guildbotics.intelligences.cli_agents import (
 
 CUSTOM_ORDER = 5
 DEFAULT_ORDER = 1000
-#: The tools still driven by a shell script rather than a native adapter.
-TEMPLATE_CLI_AGENT_NAMES = ("antigravity/default.yml",)
 
 
 def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
@@ -36,24 +34,26 @@ def test_native_tools_are_the_ones_with_a_built_in_adapter() -> None:
     assert is_native_cli_agent("claude")
     assert is_native_cli_agent("grok")
     assert is_native_cli_agent("copilot")
-    assert not is_native_cli_agent("antigravity")
+    assert is_native_cli_agent("antigravity")
+    # Anything else is a YAML-configured script tool.
+    assert not is_native_cli_agent("myagent")
 
 
 def test_a_tools_default_definition_path_is_derived_from_its_name() -> None:
     assert cli_agent_default_path("codex") == "cli_agents/codex/default.yml"
 
 
-def test_rate_limit_marker_templates_use_json_serialization() -> None:
+def test_shipped_templates_define_no_scripts() -> None:
+    """Every tool GuildBotics ships is native, so none of them runs a script."""
     template_dir = (
         Path(__file__).parents[3] / "guildbotics/templates/intelligences/cli_agents"
     )
 
-    for name in TEMPLATE_CLI_AGENT_NAMES:
-        script = (template_dir / name).read_text(encoding="utf-8")
-
-        assert "json.dumps(payload" in script
-        assert 'retry_after_text":"$retry_after_text' not in script
-        assert 'retry_after_timezone":"$retry_after_timezone' not in script
+    for default in sorted(template_dir.glob("*/default.yml")):
+        assert is_native_cli_agent(default.parent.name)
+        body = default.read_text(encoding="utf-8")
+        assert "script:" not in body, default
+        assert "executable:" not in body, default
 
 
 def test_cli_agent_search_path_falls_back_for_ambient_empty_path(monkeypatch) -> None:
@@ -142,6 +142,21 @@ def _write_tool(config_root: Path, tool: str, body: str) -> None:
     _write_agent(config_root, f"{tool}/default.yml", body)
 
 
+def _write_agent_for_person(
+    config_root: Path, person_id: str, tool: str, body: str
+) -> None:
+    agent = (
+        config_root
+        / "team/members"
+        / person_id
+        / "intelligences/cli_agents"
+        / tool
+        / "default.yml"
+    )
+    agent.parent.mkdir(parents=True, exist_ok=True)
+    agent.write_text(body, encoding="utf-8")
+
+
 def test_discover_cli_agents_reads_metadata(tmp_path: Path) -> None:
     _write_tool(
         tmp_path,
@@ -193,18 +208,25 @@ def test_discover_cli_agents_defaults_to_name_and_sorts(tmp_path: Path) -> None:
     assert [agent.order for agent in agents] == sorted(agent.order for agent in agents)
 
 
-def test_discover_cli_agents_config_overrides_template(tmp_path: Path) -> None:
-    # antigravity ships as a template; a config-scoped file wins.
+def test_discover_cli_agents_member_scope_overrides_team_scope(tmp_path: Path) -> None:
+    # The same tool defined in both scopes: the member's own file wins.
     _write_tool(
+        tmp_path, "myagent", "label: Team\norder: 9\nexecutable: team\nscript: team\n"
+    )
+    _write_agent_for_person(
         tmp_path,
-        "antigravity",
-        "label: Custom\norder: 1\nexecutable: custom\nscript: custom\n",
+        "aiko",
+        "myagent",
+        "label: Mine\norder: 1\nexecutable: mine\nscript: mine\n",
     )
 
-    agents = {agent.name: agent for agent in discover_cli_agents(tmp_path)}
+    agents = {
+        agent.name: agent for agent in discover_cli_agents(tmp_path, person_id="aiko")
+    }
 
-    assert agents["antigravity"].label == "Custom"
-    assert agents["antigravity"].executable == "custom"
+    assert agents["myagent"].label == "Mine"
+    assert agents["myagent"].executable == "mine"
+    assert agents["myagent"].order == 1
 
 
 def test_discover_cli_agents_tolerates_malformed_yaml(tmp_path: Path) -> None:
@@ -223,15 +245,13 @@ def test_resolve_default_cli_executable_returns_declared_executable(
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
     mapping.parent.mkdir(parents=True, exist_ok=True)
-    mapping.write_text(
-        "default: cli_agents/antigravity/default.yml\n", encoding="utf-8"
-    )
-    _write_tool(tmp_path, "antigravity", "executable: agy\nscript: agy\n")
+    mapping.write_text("default: cli_agents/myagent/default.yml\n", encoding="utf-8")
+    _write_tool(tmp_path, "myagent", "executable: mybin\nscript: mybin\n")
 
-    assert resolve_default_cli_executable() == "agy"
+    assert resolve_default_cli_executable() == "mybin"
 
 
-def test_resolve_default_cli_executable_uses_template_when_not_overridden(
+def test_resolve_default_cli_executable_uses_the_native_catalog(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
@@ -241,7 +261,7 @@ def test_resolve_default_cli_executable_uses_template_when_not_overridden(
         "default: cli_agents/antigravity/default.yml\n", encoding="utf-8"
     )
 
-    # No config-scoped agent file: the shipped template declares ``executable: agy``.
+    # A native tool's binary is named by the built-in catalog, not by its yaml.
     assert resolve_default_cli_executable() == "agy"
 
 

@@ -1,123 +1,22 @@
-label: Antigravity
-order: 30
-executable: agy
-conversation_scope: dispatch
-env:
+# Effort mapping for the native Antigravity AI CLI tool. A native tool takes
+# its label, order and executable from the built-in catalog, and never runs a
+# `script`, so only the effort mapping belongs here.
+#
+# `model` and `effort` are mutually exclusive: every id in `agy models` either
+# carries its tier (`gemini-3.6-flash-low`) or refuses `--effort` altogether
+# (`claude-sonnet-4-6`), and `agy` rejects the pair. Setting both in one slot
+# keeps the model and drops the effort.
 effort:
   low:
     effort: low
   high:
     effort: high
 
-# What this script translates into flags. `effort` values come from
-# `agy --help`; `model` is left to a picker because the ids depend on the
-# account (see `agy models`).
+# `effort` values come from `agy --help`; `model` is left to a picker because
+# the ids depend on the account (see `agy models`).
 effort_fields:
   - key: effort
     type: enum
     values: [low, medium, high]
   - key: model
     type: model_id
-
-script: |
-  res=$(mktemp)
-  log=$(mktemp)
-  agylog=$(mktemp)
-
-  cleanup() {
-    rm -f "$res" "$log" "$agylog"
-  }
-  trap cleanup EXIT HUP INT TERM
-
-  emit_rate_limit_marker() {
-    python3 -c 'import json, sys; payload = {"category": "rate_limited", "retry_after_text": sys.argv[1]}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))' "$1"
-  }
-
-  emit_authentication_marker() {
-    python3 -c 'import json; payload = {"category": "authentication"}; print("GUILDBOTICS_CLI_AGENT_ERROR_JSON: " + json.dumps(payload, separators=(",", ":")))'
-  }
-
-  # Resume this dispatch's own conversation on retries. The workflow points
-  # GUILDBOTICS_CLI_AGENT_CONVERSATION_FILE at a per-run file: if it already holds
-  # an id (a previous attempt of the same dispatch) we resume that exact
-  # conversation; otherwise we start fresh. We never use --continue, which would
-  # resume whatever conversation last ran in this workspace (possibly a different
-  # workflow such as the ticket runner).
-  conv_file="${GUILDBOTICS_CLI_AGENT_CONVERSATION_FILE:-}"
-  set --
-  if [ -n "$conv_file" ] && [ -s "$conv_file" ]; then
-    set -- --conversation "$(cat "$conv_file")"
-  fi
-
-  # GuildBotics exports the effort as GUILDBOTICS_CLI_AGENT_EFFORT and the
-  # model as GUILDBOTICS_CLI_AGENT_MODEL (both unset for `default`). Any further
-  # mapping keys arrive as JSON in GUILDBOTICS_CLI_AGENT_EFFORT_OPTIONS.
-  if [ -n "${GUILDBOTICS_CLI_AGENT_MODEL:-}" ]; then
-    set -- "$@" --model "$GUILDBOTICS_CLI_AGENT_MODEL"
-  fi
-  if [ -n "${GUILDBOTICS_CLI_AGENT_EFFORT:-}" ]; then
-    set -- "$@" --effort "$GUILDBOTICS_CLI_AGENT_EFFORT"
-  fi
-
-  status=0
-
-  agy \
-    --print "$(cat "$PROMPT_FILE")" \
-    "$@" \
-    --print-timeout "${GUILDBOTICS_AGY_PRINT_TIMEOUT:-30m}" \
-    --log-file "$agylog" \
-    --dangerously-skip-permissions \
-    < /dev/null \
-    > "$res" \
-    2> "$log" || status=$?
-
-  # Best-effort capture of the conversation id for the next retry. If it cannot be
-  # found we simply cold-start next time (never fall back to --continue). -h keeps
-  # grep from prefixing the match with the file name (multi-file input).
-  if [ -n "$conv_file" ] && [ ! -s "$conv_file" ]; then
-    cid=$(
-      grep -hoiE \
-        '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' \
-        "$agylog" "$log" 2>/dev/null |
-        head -n1
-    )
-    [ -n "$cid" ] && printf '%s' "$cid" > "$conv_file"
-  fi
-
-  # Antigravity may report quota exhaustion on stdout, stderr, or its log file.
-  # Normalize provider-specific output into the GuildBotics common error marker.
-  if [ "$status" -ne 0 ] && grep -Eqi \
-    'RESOURCE_EXHAUSTED|Individual quota reached' \
-    "$res" "$log" "$agylog"
-  then
-    retry_after_text=$(
-      grep -Ehoi \
-        'Resets in[[:space:]]+[0-9]+h([0-9]+m)?([0-9]+s)?\.?' \
-        "$res" "$log" "$agylog" 2>/dev/null |
-        head -n1 |
-        sed 's/\.$//'
-    )
-
-    cat "$log" >&2
-    cat "$res"
-
-    emit_rate_limit_marker "$retry_after_text" >&2
-
-    exit 75
-  fi
-
-  if [ "$status" -ne 0 ] && grep -Eqi \
-    '401 Unauthorized|UNAUTHENTICATED|invalid_grant|authentication(_error| failed|required)|token (expired|revoked)' \
-    "$res" "$log" "$agylog"
-  then
-    cat "$log" >&2
-    cat "$res"
-    emit_authentication_marker >&2
-    exit 77
-  fi
-
-  cat "$log" >&2
-  cat "$res"
-
-  # Preserve agy's exit code so CliAgentBrain detects a failed run.
-  exit "$status"

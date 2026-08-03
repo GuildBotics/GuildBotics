@@ -792,9 +792,9 @@ effort:            # low / high のときだけ上書き
     model: <強いモデル>
 ```
 
-`default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。ネイティブツール（codex / claude / grok / copilot）の定義は `parameters:` と `effort:` のみで、`script` / `env` は書けません。
+`default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。ネイティブツール（codex / claude / grok / copilot / antigravity）の定義は `parameters:` と `effort:` のみで、`script` / `env` は書けません。
 
-同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は model と思考予算、`grok agent stdio` は起動オプションの model / reasoning effort、`copilot --acp` はセッション設定項目 `model` / `reasoning_effort`、スクリプト型の antigravity は `--model` と `--effort` に翻訳します。独自に追加したツールで型付き編集を使いたい場合のみ、上記の書式で `effort_fields:` を自分で書いてください。
+同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は model と思考予算、`grok agent stdio` は起動オプションの model / reasoning effort、`copilot --acp` はセッション設定項目 `model` / `reasoning_effort`、`agy --print` はコマンドラインの `--model` または `--effort` に翻訳します（この2つは併用できないため、両方を設定したスロットではモデルを採用します）。独自に追加したツールで型付き編集を使いたい場合のみ、上記の書式で `effort_fields:` を自分で書いてください。
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml

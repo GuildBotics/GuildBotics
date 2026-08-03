@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from guildbotics.intelligences.agent_runtime.antigravity import (
+    AntigravityStreamJsonAdapter,
+)
 from guildbotics.intelligences.agent_runtime.claude import ClaudeStreamJsonAdapter
 from guildbotics.intelligences.agent_runtime.codex import CodexAppServerAdapter
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
@@ -23,6 +26,12 @@ from guildbotics.intelligences.agent_runtime.policy import (
         ("grok-acp", GrokAcpAdapter, "grok-acp"),
         ("copilot", CopilotAcpAdapter, "copilot-acp"),
         ("copilot-acp", CopilotAcpAdapter, "copilot-acp"),
+        ("antigravity", AntigravityStreamJsonAdapter, "antigravity-stream-json"),
+        (
+            "antigravity-stream-json",
+            AntigravityStreamJsonAdapter,
+            "antigravity-stream-json",
+        ),
     ],
 )
 def test_aliases_resolve_to_their_adapter(
@@ -57,6 +66,9 @@ def test_each_adapter_only_receives_its_own_policy(monkeypatch) -> None:
     assert codex._policy.filesystem_access == "host"
     assert grok._policy.filesystem_access == "workspace"
     assert copilot._policy.filesystem_access == "host"
+    # Antigravity takes no filesystem policy: `agy --sandbox` only confines
+    # terminal commands, so there is no file scope to hand it.
+    assert not hasattr(create_native_adapter("antigravity", "aiko"), "_policy")
 
 
 def test_unknown_adapter_is_rejected() -> None:
