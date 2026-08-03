@@ -9,7 +9,7 @@ from guildbotics.utils.fileio import get_person_config_path, load_yaml_file
 
 FILESYSTEM_ACCESS = frozenset({"workspace", "host"})
 #: Native adapters that own a filesystem boundary the user can configure.
-POLICY_ADAPTERS = ("codex", "grok")
+POLICY_ADAPTERS = ("codex", "grok", "copilot")
 
 
 class NativeAgentPolicyError(ValueError):
@@ -29,6 +29,7 @@ class NativeAgentPolicy:
 
     codex: AdapterFilesystemPolicy = field(default_factory=AdapterFilesystemPolicy)
     grok: AdapterFilesystemPolicy = field(default_factory=AdapterFilesystemPolicy)
+    copilot: AdapterFilesystemPolicy = field(default_factory=AdapterFilesystemPolicy)
 
     def for_adapter(self, adapter: str) -> AdapterFilesystemPolicy:
         policy = getattr(self, adapter, None)

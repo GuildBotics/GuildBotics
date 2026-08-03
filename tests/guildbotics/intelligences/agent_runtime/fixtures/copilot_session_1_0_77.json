@@ -1,0 +1,72 @@
+{
+  "models": {
+    "availableModels": [
+      { "modelId": "auto", "name": "Auto", "description": "Let Copilot pick the best model" },
+      { "modelId": "gpt-5.4", "name": "GPT-5.4", "description": "GPT-5.4" },
+      { "modelId": "gpt-5-mini", "name": "GPT-5 mini", "description": "GPT-5 mini" }
+    ],
+    "currentModelId": "gpt-5.4"
+  },
+  "modes": {
+    "availableModes": [
+      {
+        "id": "https://agentclientprotocol.com/protocol/session-modes#agent",
+        "name": "Agent",
+        "description": "Default agent mode for conversational interactions"
+      }
+    ],
+    "currentModeId": "https://agentclientprotocol.com/protocol/session-modes#agent"
+  },
+  "configOptions": [
+    {
+      "type": "select",
+      "id": "mode",
+      "name": "Mode",
+      "currentValue": "https://agentclientprotocol.com/protocol/session-modes#agent",
+      "options": [
+        {
+          "value": "https://agentclientprotocol.com/protocol/session-modes#agent",
+          "name": "Agent"
+        }
+      ],
+      "category": "mode"
+    },
+    {
+      "type": "select",
+      "id": "model",
+      "name": "Model",
+      "currentValue": "gpt-5.4",
+      "options": [
+        { "value": "auto", "name": "Auto" },
+        { "value": "gpt-5.4", "name": "GPT-5.4" },
+        { "value": "gpt-5-mini", "name": "GPT-5 mini" }
+      ],
+      "category": "model"
+    },
+    {
+      "type": "select",
+      "id": "reasoning_effort",
+      "name": "Reasoning effort",
+      "currentValue": "medium",
+      "options": [
+        { "value": "none", "name": "none" },
+        { "value": "low", "name": "low" },
+        { "value": "medium", "name": "medium" },
+        { "value": "high", "name": "high" },
+        { "value": "xhigh", "name": "xhigh" }
+      ],
+      "category": "thought_level"
+    },
+    {
+      "type": "select",
+      "id": "allow_all",
+      "name": "Allow all",
+      "currentValue": "off",
+      "options": [
+        { "value": "on", "name": "On" },
+        { "value": "off", "name": "Off" }
+      ],
+      "category": "permissions"
+    }
+  ]
+}

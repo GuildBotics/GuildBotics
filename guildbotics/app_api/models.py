@@ -800,6 +800,9 @@ class NativeAgentPolicySettings(BaseModel):
     grok: AdapterNativeAgentPolicySettings = Field(
         default_factory=AdapterNativeAgentPolicySettings
     )
+    copilot: AdapterNativeAgentPolicySettings = Field(
+        default_factory=AdapterNativeAgentPolicySettings
+    )
 
 
 class LlmProvidersResponse(BaseModel):

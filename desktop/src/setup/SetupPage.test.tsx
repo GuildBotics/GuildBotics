@@ -196,6 +196,7 @@ vi.mock("../api/client", async (importOriginal) => {
       native_agent_policy: {
         codex: { filesystem_access: "workspace" },
         grok: { filesystem_access: "workspace" },
+        copilot: { filesystem_access: "workspace" },
       },
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
@@ -1860,6 +1861,7 @@ describe("toIntelligenceUpdatePayload", () => {
     native_agent_policy: {
       codex: { filesystem_access: "workspace" as const },
       grok: { filesystem_access: "workspace" as const },
+      copilot: { filesystem_access: "workspace" as const },
     },
   };
 
@@ -3294,6 +3296,7 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
     native_agent_policy: {
       codex: { filesystem_access: "workspace" },
       grok: { filesystem_access: "workspace" },
+      copilot: { filesystem_access: "workspace" },
     },
     ...overrides,
   };

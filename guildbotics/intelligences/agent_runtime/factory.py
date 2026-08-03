@@ -2,6 +2,7 @@
 
 from guildbotics.intelligences.agent_runtime.claude import ClaudeStreamJsonAdapter
 from guildbotics.intelligences.agent_runtime.codex import CodexAppServerAdapter
+from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
 from guildbotics.intelligences.agent_runtime.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import AgentAdapter
 from guildbotics.intelligences.agent_runtime.policy import load_native_agent_policy
@@ -13,6 +14,8 @@ NATIVE_ADAPTERS = {
     "claude-stream-json": "claude-stream-json",
     "grok": "grok-acp",
     "grok-acp": "grok-acp",
+    "copilot": "copilot-acp",
+    "copilot-acp": "copilot-acp",
 }
 
 
@@ -26,4 +29,7 @@ def create_native_adapter(name: str, person_id: str) -> AgentAdapter:
     if adapter == "grok-acp":
         policy = load_native_agent_policy(person_id)
         return GrokAcpAdapter(policy=policy.for_adapter("grok"))
+    if adapter == "copilot-acp":
+        policy = load_native_agent_policy(person_id)
+        return CopilotAcpAdapter(policy=policy.for_adapter("copilot"))
     raise ValueError(f"Unknown native agent adapter: {name}")

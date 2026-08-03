@@ -1181,27 +1181,29 @@ def test_two_slots_on_one_tool_keep_their_own_settings(monkeypatch, tmp_path) ->
 def test_a_slot_inherits_the_keys_it_does_not_state(monkeypatch, tmp_path) -> None:
     _write_definition(
         tmp_path,
-        "cli_agents/copilot/default.yml",
-        "script: run-copilot\nenv:\n  A: '1'\neffort:\n  high:\n    effort: high\n",
+        "cli_agents/antigravity/default.yml",
+        "script: run-agy\nenv:\n  A: '1'\neffort:\n  high:\n    effort: high\n",
     )
     _write_definition(
-        tmp_path, "cli_agents/copilot/writer.yml", "effort:\n  high:\n    effort: max\n"
+        tmp_path,
+        "cli_agents/antigravity/writer.yml",
+        "effort:\n  high:\n    effort: max\n",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
-        lambda *_args: {"writer": "cli_agents/copilot/writer.yml"},
+        lambda *_args: {"writer": "cli_agents/antigravity/writer.yml"},
     )
 
     resolved = cli_agent.get_cli_agent_mapping("aiko")
 
     # Its own effort wins; the script and env come from the tool's default.
     assert resolved["writer"].effort == {"high": {"effort": "max"}}
-    assert resolved["writer"].script == "run-copilot"
+    assert resolved["writer"].script == "run-agy"
     assert resolved["writer"].env == {"A": "1"}
-    assert resolved["writer"].agent_name == "copilot"
+    assert resolved["writer"].agent_name == "antigravity"
     cli_agent.person_cli_agent_mapping.clear()
 
 

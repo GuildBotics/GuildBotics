@@ -56,6 +56,14 @@ export default defineConfig({
     // Vitest owns the `src/**` unit/component tests only. The Playwright
     // real-browser journeys under `e2e/**` must never be collected by Vitest.
     exclude: ["node_modules", "dist", ".idea", ".git", ".cache", "e2e/**"],
+    // A component test that drives several Mantine Selects and types into a
+    // field through userEvent costs 1.5-2.8s on a developer machine, and the
+    // suite runs 35 files in parallel on a 4-core CI runner. Vitest's 5s
+    // default leaves no headroom for that difference, so whichever of those
+    // tests loses the race fails while the rest pass. This is the budget for a
+    // hung test, not a target: a test that needs seconds of real waiting is
+    // still a test to fix.
+    testTimeout: 20000,
   },
 });
 

@@ -82,8 +82,13 @@ async def test_real_grok_prompt_then_exact_reload(tmp_path) -> None:
         assert first.provider_session_id
         assert first.usage["input_tokens"] > 0
         assert first.usage["output_tokens"] > 0
+    finally:
+        await adapter.close()
 
-        # The second turn must reload that exact session, not the latest one.
+    # A restarted process is what makes the reload real: the session id on the
+    # conversation is all the next turn has to go on.
+    adapter = GrokAcpAdapter()
+    try:
         conversation.provider_session_id = first.provider_session_id
         second_events: list[AgentEvent] = []
         second = await adapter.run_turn(

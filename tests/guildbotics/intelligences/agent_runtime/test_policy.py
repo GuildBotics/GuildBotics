@@ -34,6 +34,7 @@ def test_one_adapter_setting_does_not_leak_into_another() -> None:
 
     assert policy.for_adapter("codex").filesystem_access == "host"
     assert policy.for_adapter("grok").filesystem_access == "workspace"
+    assert policy.for_adapter("copilot").filesystem_access == "workspace"
 
 
 def test_unknown_adapter_has_no_policy() -> None:
@@ -47,8 +48,11 @@ def test_unknown_adapter_has_no_policy() -> None:
         ([], "YAML mapping"),
         ({"codex": []}, "codex.*mapping"),
         ({"grok": []}, "grok.*mapping"),
+        ({"copilot": []}, "copilot.*mapping"),
         ({"codex": {"filesystem_access": "read-only"}}, "filesystem_access"),
         ({"grok": {"filesystem_access": "off"}}, "filesystem_access"),
+        ({"copilot": {"filesystem_access": "all"}}, "filesystem_access"),
+        ({"copilot": {"allow_all": True}}, "allow_all"),
         ({"codex": {"sandbox": "workspace-write"}}, "sandbox"),
         ({"grok": {"always_approve": True}}, "always_approve"),
         ({"claude": {"permission_mode": "bypassPermissions"}}, "claude"),

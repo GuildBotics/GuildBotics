@@ -1,13 +1,15 @@
-# Codex・Claude Code・Grok Buildのセッション連携
+# Codex・Claude Code・Grok Build・GitHub Copilotのセッション連携
 
-GuildBoticsでCodex、Claude Code、Grok Buildを利用する場合は、Slackスレッドやチケットに
-セッションを対応付け、前回の続きから作業を再開できます。Codexとの連携には
+GuildBoticsでCodex、Claude Code、Grok Build、GitHub Copilotを利用する場合は、Slackスレッドや
+チケットにセッションを対応付け、前回の続きから作業を再開できます。Codexとの連携には
 [Codex App Server](https://developers.openai.com/codex/app-server)を使用し、Claude Codeとの
-連携には公式の`stream-json`入出力と`--resume <session-id>`を使用します。Grok Buildとの連携には
-`grok agent stdio`が提供する[Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/initialization)
-（ACP）v1を使用します。
+連携には公式の`stream-json`入出力と`--resume <session-id>`を使用します。Grok BuildとGitHub
+Copilotとの連携には、それぞれ`grok agent stdio`と`copilot --acp`が提供する
+[Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/initialization)
+（ACP）v1を使用します。ACPを使う2つのAI CLIツールは共通のACPクライアントを共有し、
+AI CLIツールごとの実装は起動コマンド、認証、セッション設定、独自拡張の通知だけです。
 
-AntigravityやGitHub Copilotなど、これら3つ以外のAI CLIツールは、
+Antigravityなど、これら4つ以外のAI CLIツールは、
 `intelligences/cli_agents/`にあるYAML形式の設定に従ってスクリプト経由で実行します。
 これらのツールに会話履歴を渡す方法については、
 [Slackスレッドの文脈を渡す方法](#slackスレッドの文脈を渡す方法)を参照してください。
@@ -21,10 +23,17 @@ default: codex
 codex: codex
 claude: claude
 grok: grok
+copilot: copilot
 ```
 
-これら3つの実行には、`intelligences/cli_agents/`配下のスクリプト設定を
-使用しません。ユーザーが変更できる実行権限は、
+これら4つのAI CLIツールも、`intelligences/cli_agents/<tool>/`配下の定義ファイル自体は
+読み込みます。このファイルが持つのは`parameters:`と`effort:`のオーバーレイで、
+プロバイダ非依存の`low` / `high`をAI CLIツールごとの設定へ翻訳するためのものです
+（書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）。書けないのは
+`script:`と`env:`で、これらはスクリプト経由で実行するツールのための項目であり、
+ネイティブアダプタは読み込みません。
+
+ユーザーが変更できる実行時の**境界**は、
 `intelligences/native_agent_policy.yml`でAI CLIツールごとに指定するファイルアクセス範囲だけです。
 
 ```yaml
@@ -32,6 +41,9 @@ codex:
   filesystem_access: workspace
 
 grok:
+  filesystem_access: workspace
+
+copilot:
   filesystem_access: workspace
 ```
 
@@ -57,6 +69,33 @@ sandboxと併用し、ACPの`session/request_permission`で予期しない確認
 読み替えず`cancelled`を返します。headless実行中にCLIが自動更新されないよう`--no-auto-update`を常に渡し、
 ユーザーの`config.toml`は書き換えません。
 
+GitHub Copilotでは、`workspace`がCopilot自身の既定動作（作業ディレクトリとシステムの一時
+ディレクトリにファイルアクセスを制限）に対応し、`host`ではその検証を無効にする
+`--allow-all-paths`を追加します。ただし読み取り専用のターンでは、メンバーが`host`を設定して
+いても作業ディレクトリ内に制限したまま実行します。読み取り専用のターンはログ・チケット・チャット
+など信頼できない記録を読み取る前提であり、許可されたパス内の読み取りには確認要求が発生せず、
+読み取った内容はそのターンの応答から外部へ出ます。書き込みを拒否するだけではこの経路を塞げない
+ため、アクセス範囲自体を狭めます。起動時のコマンドは
+`copilot --acp --no-auto-update --no-remote-export [--allow-all-paths]`で固定し、任意のCLI
+オプションを設定から注入することはできません。`--no-remote-export`は、メンバーのセッションが
+GitHubのWebやモバイルへ書き出されたり、そこから操作されたりすることを防ぎます。セッションには
+ワークスペースの内容が含まれ、指示はGuildBoticsからのみ受け取るべきだからです。
+
+Copilotの承認方針は起動オプションではなくセッション設定項目のため、ターンごとに指定します。
+通常のターンは`allow_all: on`で実行し、確認要求は発生しません。読み取り専用のターンは
+`allow_all: off`で実行するため、ファイル書き込み・シェル実行・URL取得のたびにCopilotが確認を
+求め、GuildBoticsはそのすべてを拒否して診断記録へ残します。許可されたパス内の読み取りは確認なしで
+実行できるため、読み取り専用のターンは通常どおり調査を行えます。拒否の方法はGrok Buildと同じで、
+要求に含まれる`reject_once`（無ければ`reject_always`）のoption IDを返し、拒否用のoptionが
+提示されない場合は`cancelled`を返します。
+
+モデルと推論の深さ（reasoning effort）もセッション設定項目であり、セッションの作成または再開後に
+`session/set_config_option`で適用します。Copilotは未知の設定項目IDに対してエラーではなく空の
+応答を返すため、Copilotが返す設定項目一覧を読み取り、実際に適用された値を診断記録の設定イベントと
+して残します。要求した値をそのまま記録することはありません。適用されなかった項目は`rejected`として
+記録し、警告を出力します。これらの設定は実行中のセッションへいつでも適用できるため、効きの強さや
+モデルを変更してもセッションを切り替えません。
+
 Claude Codeは、従来の`--dangerously-skip-permissions`と同じく、操作ごとの確認を省略する
 `bypassPermissions`で常に実行します。Bash sandboxはチケット作業やチャットからの依頼に必要な
 幅広いコマンドと互換性がないため、`sandbox.enabled=false`も明示します。ただし、これらより
@@ -73,7 +112,7 @@ Claude Codeは、従来の`--dangerously-skip-permissions`と同じく、操作�
 
 GuildBoticsを起動する前に、使用するAI CLIツールをインストールしてください。その後、
 GuildBoticsのサービスを実行するOSユーザーと同じユーザーで、各ツールの標準的なログイン操作
-（`codex login`、`claude auth login`、または`grok login`）を行います。ログイン情報は各ツール自身の
+（`codex login`、`claude auth login`、`grok login`、または`copilot login`）を行います。ログイン情報は各ツール自身の
 認証情報保存先にだけ保持され、GuildBoticsのセッション情報や診断記録には複製されません。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
@@ -82,6 +121,14 @@ Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保�
 中に自動で開始しません。保存済みの認証がない場合は認証エラーとして停止し、`grok login`
 （または`grok login --device-auth`）の実行を案内します。診断記録に残すのは選択した認証方式の
 識別子だけで、`~/.grok/auth.json`の内容は読み取りません。
+
+GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、その付随情報には「端末で
+`copilot login`を実行する」と記載されています。GuildBoticsはこの方式でACPの`authenticate`を
+呼び、保存済みログインの有無だけを確認します。ログイン済みの環境では即座に応答が返ります。
+対話的なログイン操作をGuildBotics側から開始することはありません。`authenticate`が拒否された
+場合、認証方式が提示されない場合、応答が返らない場合（利用者のいない環境で端末ログインを待って
+いる状態）は、いずれも認証エラーとして停止し、`copilot login`の実行を案内します。診断記録に
+残すのは認証方式の識別子だけで、Copilotの認証情報保存先の内容は読み取りません。
 
 GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ渡しません。
 AI CLIツールは、GuildBoticsが検証した`guildbotics member ...`コマンドを通してのみ、
@@ -107,12 +154,13 @@ AI CLIツールは、GuildBoticsが検証した`guildbotics member ...`コマン
 実行基盤へ渡します。実行基盤は、AI CLIツールがセッションを引き継げる範囲に応じて、
 実際に送る内容を次のように選びます。
 
-- CodexまたはClaude Codeの既存セッションを引き継ぐ場合は、セッション内に保持されている文脈へ
-  最新のイベントだけを追加します。安全に新しいセッションへ切り替えられるよう、ワークフロー側でも
-  Slackスレッドの履歴を更新しますが、引き継ぎ中のセッションへその履歴を重ねて送りません。
-- CodexまたはClaude Codeで新しいセッションを開始するときや、セッションを切り替えたときは、
+- Codex、Claude Code、Grok Build、GitHub Copilotの既存セッションを引き継ぐ場合は、セッション内に
+  保持されている文脈へ最新のイベントだけを追加します。安全に新しいセッションへ切り替えられるよう、
+  ワークフロー側でもSlackスレッドの履歴を更新しますが、引き継ぎ中のセッションへその履歴を重ねて
+  送りません。
+- これらのAI CLIツールで新しいセッションを開始するときや、セッションを切り替えたときは、
   最新のイベントより前のSlackスレッドの履歴と最新のイベントを一度だけ送ります。
-- GitHub Copilotなど、呼び出しのたびに新しい会話として実行されるAI CLIツールには、最大件数を
+- 呼び出しのたびに新しい会話として実行されるAI CLIツールには、最大件数を
   設けたSlackスレッドの履歴と最新のイベントを毎回送ります。
 - Antigravityのように、同じ依頼の再試行中に限って会話を引き継げるAI CLIツールでは、保存済みの
   会話IDを使って前回の続きから再開します。この場合は続行指示だけを送り、同じイベントや会話履歴を
@@ -123,7 +171,7 @@ Slack APIからスレッドの履歴を安全に取得できない場合は、�
 AI CLIツール自身にSlackスレッドを確認させます。この動作を内部では`inspect_required`
 fallbackと呼びます。
 
-CodexまたはClaude Codeの正常なセッションを引き継ぐ場合は、保存済みのセッションと最新の
+正常なセッションを引き継ぐ場合は、保存済みのセッションと最新の
 イベントだけを使用します。そのため、`inspect_required` fallbackを理由に、それまでの会話履歴を
 重複して送ることはありません。
 
@@ -135,8 +183,8 @@ Slackイベントの処理済み位置を示すcursorは、AI CLIツールから
 セッションとの対応付けは、
 `<workspace-data-root>/agent-runtime/conversations/<person>/<adapter>/`へ安全に保存します。
 保存内容には、AI CLIツールのセッションIDとturn ID、cursor、使用量、セッション文脈量、
-セッションの状態、世代、切り替え理由が含まれます。ACPには標準のturn IDがないため、Grok Build
-ではJSON-RPCのリクエストIDをturn IDとして保存せず、空のままにします。AI CLIツールの認証情報と、プロトコルから受信した未加工データは
+セッションの状態、世代、切り替え理由が含まれます。ACPには標準のturn IDがないため、ACPを使う
+AI CLIツールではJSON-RPCのリクエストIDをturn IDとして保存せず、空のままにします。AI CLIツールの認証情報と、プロトコルから受信した未加工データは
 保存しません。
 
 GuildBoticsは、AI CLIツール側の「最新のセッション」や暗黙の会話継続には依存せず、保存した
@@ -182,8 +230,14 @@ ACPの`session/prompt`はターンが終了した時点で応答が返るため�
 `session/cancel`を送ってプロセスグループごと停止します。initializeやsession/loadなど、即座に
 応答が返る要求にはリクエスト単位の締め切りを維持します。
 
-Grok Buildの正確な再開には、`initialize`が提示した機能に応じてACPの`session/resume`または
-`session/load`を使用します。`session/load`はセッション全体の履歴を再送してから応答を返すため、
+実行中のプロセスがすでに開いているセッションは、再度読み込みません。会話はプロセス内に残って
+いるため再送すべき履歴がなく、Copilotはこの場合`already loaded`エラーを返します。再読み込みを
+行うのは、保存済みのセッションIDしか手掛かりがない再起動後のプロセスだけです。どちらの場合も
+そのターンの設定は改めて適用します。
+
+ACPを使うAI CLIツールの正確な再開には、`initialize`が提示した機能に応じてACPの`session/resume`
+または`session/load`を使用します。Grok Build 0.2.114とGitHub Copilot CLI 1.0.77はどちらも
+`sessionCapabilities.resume`を提示しないため、`session/load`を使用します。`session/load`はセッション全体の履歴を再送してから応答を返すため、
 その応答を境界として、再送された履歴を現在のturnのイベント、Slackへの投稿、通常の実行記録から
 除外します。再送された件数だけを診断記録に残します。履歴は標準の`session/update`だけでなく
 xAI独自拡張の経路でも再送され、前回turnの`turn_completed`（トークン使用量）が含まれます。
@@ -232,10 +286,10 @@ cursor、実行権を記録し、同じ作業に属するイベントを対応�
 `unsupported_version`が記録された場合は、使用しているAI CLIツールを更新してください。
 Claude Codeでは`--input-format`、`--output-format`、`stream-json`、`--resume`への対応を確認します。
 CodexではApp Serverの初期化処理を通して、必要な機能に対応しているか確認します。
-Grok Buildでは、ACPの`initialize`が返すプロトコル版数が1であることと、正確な再開に必要な
+ACPを使うAI CLIツールでは、`initialize`が返すプロトコル版数が1であることと、正確な再開に必要な
 `loadSession`または`sessionCapabilities.resume`のいずれかが提示されることを確認します。
-バージョン文字列では判定しないため、ACP v1に対応する新しいGrok Buildはそのまま利用できます。
-動作確認済みの基準バージョンは0.2.114です。
+バージョン文字列では判定しないため、ACP v1に対応する新しい版はそのまま利用できます。
+動作確認済みの基準バージョンは、Grok Build 0.2.114とGitHub Copilot CLI 1.0.77です。
 
 Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データを返した場合にだけ`rate_limited`
 として分類します。標準エラー出力や応答本文の解析は行いません。Codexの
@@ -243,3 +297,11 @@ Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データ�
 （`x.ai/session/usage`は`Method not found`、0.2.114で確認）ため、Grok Buildでは
 週間・5時間枠の利用量メーターを提供しません。Activity Historyでは「使用量情報なし」を通常の
 状態として扱い、利用率0%のような値は生成しません。
+
+GitHub Copilot CLI 1.0.77は、ACP経由でトークン使用量をまったく報告しません。標準の
+`usage_update`も、独自拡張の通知も届きません。そのためGitHub Copilotでは使用量が空のままとなり、
+有効期間・turn数・使用量・`context_limit`による切り替えはこの版では作動しません。標準の
+`usage_update`を処理する実装はあるため、これを送る版では変更なしで機能します。GitHub Copilotの
+利用制限も、RPCエラーの構造化データ（週間上限を示す`user_weekly_rate_limited`など）からのみ
+`rate_limited`として分類し、標準エラー出力や応答本文は解析しません。分類できないエラーは
+プロトコルエラーとして扱い、セッションを切り替えて回復します。

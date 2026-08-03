@@ -1,13 +1,17 @@
 # Native Agent Runtime
 
-GuildBotics uses native protocol adapters for Codex, Claude Code, and Grok Build. Codex
-is driven through [Codex App Server](https://developers.openai.com/codex/app-server);
-Claude Code is driven with its documented `stream-json` input/output and an exact
-`--resume` session id; Grok Build is driven through the
+GuildBotics uses native protocol adapters for Codex, Claude Code, Grok Build, and
+GitHub Copilot. Codex is driven through
+[Codex App Server](https://developers.openai.com/codex/app-server); Claude Code is
+driven with its documented `stream-json` input/output and an exact `--resume` session
+id; Grok Build and GitHub Copilot are driven through the
 [Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/initialization)
-(ACP) v1 that `grok agent stdio` serves over stdin/stdout. Codex and Grok share one
-line-based JSON-RPC transport, which differs only in dialect and reverse-request
-handling. Antigravity and GitHub Copilot remain one-shot YAML script adapters.
+(ACP) v1, which `grok agent stdio` and `copilot --acp` serve over stdin/stdout. The two
+ACP adapters share one ACP client, and that client shares a line-based JSON-RPC
+transport with Codex; only the dialect and reverse-request handling differ. Each
+provider adapter adds just its own launch command, authentication, session
+configuration, and private notification channels. Antigravity remains a one-shot YAML
+script adapter.
 
 ## Configuration
 
@@ -18,17 +22,28 @@ default: codex
 codex: codex
 claude: claude
 grok: grok
+copilot: copilot
 ```
 
-Native definitions do not use files under `intelligences/cli_agents/`. The only
-user-configurable native runtime boundary is the per-adapter filesystem scope in
-`intelligences/native_agent_policy.yml`:
+A native tool still reads its own definition under
+`intelligences/cli_agents/<tool>/`: that file carries the `parameters:` and
+`effort:` overlay described in the
+[custom command guide](custom_command_guide.en.md), which is how the
+provider-neutral `low` / `high` levels become provider settings. What such a
+definition must not carry is `script:` and `env:`; those belong to a
+script-driven tool, and a native adapter ignores them.
+
+The only user-configurable runtime *boundary* is the per-adapter filesystem
+scope in `intelligences/native_agent_policy.yml`:
 
 ```yaml
 codex:
   filesystem_access: workspace
 
 grok:
+  filesystem_access: workspace
+
+copilot:
   filesystem_access: workspace
 ```
 
@@ -57,6 +72,35 @@ sent back as an id. When no rejecting option is offered, the request is answered
 `--no-auto-update` keeps a headless run from updating the CLI mid-session, and
 GuildBotics never rewrites the user's `config.toml`.
 
+For GitHub Copilot, `workspace` is Copilot's own default -- file access is confined to
+the working directory and the system temporary directory -- and `host` adds
+`--allow-all-paths`, which removes that verification. A read-only turn keeps the
+confined scope even for a member configured with `host`: it reads untrusted recorded
+state such as logs, tickets, and chat, reads inside the allowed paths are never asked
+about, and its own reply would carry anything it read back out. Declining its writes
+does not close that path, so the scope itself is narrowed. The launch command is fixed
+as `copilot --acp --no-auto-update --no-remote-export [--allow-all-paths]`; no
+arbitrary CLI flag can be injected from configuration. `--no-remote-export` keeps a member's
+session from being exported to, or steered from, GitHub web and mobile: it carries
+workspace contents and must take its instructions from GuildBotics alone.
+
+Copilot's approval policy is a session configuration option rather than a launch flag,
+so it is set per turn. A normal turn runs with `allow_all: on` and never asks. A
+read-only turn runs with `allow_all: off`, which makes Copilot ask before every write,
+shell command, and URL fetch -- and every one of those requests is declined and
+recorded, while reads inside the allowed paths still run automatically. The decline
+follows the same rule as Grok's: the option id Copilot supplied for `reject_once`
+(falling back to `reject_always`), and `cancelled` when no rejecting option is offered.
+
+The turn's model and reasoning effort are session configuration options too, applied
+with `session/set_config_option` after the session is created or reloaded. Copilot
+acknowledges an unknown option id with an empty result instead of an error, so the
+adapter reads the option list Copilot returns and reports the values the session
+actually ended up with as an `agent_runtime` settings event -- never the requested ones.
+An option Copilot did not apply is listed as rejected and logged as a warning. Because
+these options can be set on any live session, changing effort or model never rotates
+the session.
+
 Claude Code always runs non-interactively with `bypassPermissions`, preserving the
 previous `--dangerously-skip-permissions` behavior. GuildBotics also passes a
 session-level `sandbox.enabled=false` override because the Bash sandbox is not
@@ -73,8 +117,8 @@ unknown values fail validation instead of silently changing the effective bounda
 ## Authentication
 
 Install and authenticate each selected CLI before starting GuildBotics. Use the
-provider's normal interactive login (`codex login`, `claude auth login`, or
-`grok login`) as the same OS user that runs the GuildBotics service. Provider
+provider's normal interactive login (`codex login`, `claude auth login`, `grok login`,
+or `copilot login`) as the same OS user that runs the GuildBotics service. Provider
 credentials stay in the provider's own credential store. GuildBotics does not copy them
 into its conversation store or diagnostics.
 
@@ -84,6 +128,14 @@ advertised. The browser-based `grok.com` flow is never started during a headless
 without a saved login the turn fails as an authentication error that points at
 `grok login` (or `grok login --device-auth`). Only the chosen method id is recorded;
 the contents of `~/.grok/auth.json` are never read.
+
+GitHub Copilot advertises one method, `copilot-login`, whose metadata tells the client
+to run `copilot login` in a terminal. GuildBotics verifies the saved login by calling
+ACP `authenticate` with that method, which a logged-in install answers immediately; it
+never drives the sign-in itself. A rejected `authenticate`, a missing method, or a call
+that does not answer promptly -- the terminal login waiting for a user who is not there
+-- all fail the turn as an authentication error pointing at `copilot login`. Only the
+method id is recorded; the contents of the Copilot credential store are never read.
 
 GitHub, Git, and SSH write credentials are deliberately removed from native
 agent process environments. The agent performs member-side writes only through a
@@ -109,13 +161,13 @@ The chat workflow passes the latest event and a bounded thread snapshot to the r
 as separate values. The runtime selects the effective input based on the AI CLI tool's
 conversation capability:
 
-- Healthy Codex / Claude resume: only the latest event is added to the context already
-  held by the provider session. The workflow may refresh a bounded snapshot for safe
+- Healthy native resume (Codex, Claude, Grok, or Copilot): only the latest event is
+  added to the context already held by the provider session. The workflow may refresh a bounded snapshot for safe
   future rotation, but that snapshot is not injected into the healthy session.
 - New or rotated native session: the bounded snapshot before the event and the latest
   event are injected exactly once.
-- Conversation-less one-shot scripts such as GitHub Copilot: the bounded snapshot and
-  latest event are injected on every invocation.
+- A one-shot script with no conversation of its own: the bounded snapshot and latest
+  event are injected on every invocation.
 - A one-shot script such as Antigravity that resumes an exact conversation only within
   one dispatch declares `conversation_scope: dispatch`. Once its saved conversation ID
   exists, a completion retry receives only a continuation instruction and does not
@@ -132,8 +184,8 @@ Records are atomically stored under
 `<workspace-data-root>/agent-runtime/conversations/<person>/<adapter>/`. They contain
 provider session/turn ids, cursor, usage counters, the absolute session context
 snapshot, health, generation, and rotation reason. They never contain provider
-credentials or raw protocol payloads. ACP has no standard provider turn id, so the Grok
-adapter leaves it empty rather than persisting a transport-local JSON-RPC request id.
+credentials or raw protocol payloads. ACP has no standard provider turn id, so the ACP
+adapters leave it empty rather than persisting a transport-local JSON-RPC request id.
 
 GuildBotics never uses a provider's “latest” or implicit continuation mode. A missing
 or unhealthy session fails exact `resume`; `auto` starts a new generation and rebuilds
@@ -180,8 +232,15 @@ per-request deadline; the turn as a whole is bounded by the turn timeout, which 
 `session/cancel` and stops the process group when it expires. Requests that answer
 immediately, such as initialize and session load, keep their per-request deadline.
 
-Exact Grok resume uses ACP `session/resume` when advertised and `session/load`
-otherwise. `session/load` replays the whole transcript before it answers, so that
+A session the running process still holds open is never reloaded. The conversation
+never left the process, so there is no history to rehydrate, and Copilot answers a
+second load with `already loaded`. Only a restarted process, which has nothing but the
+session id stored on the conversation, performs the reload. The turn's settings are
+still re-applied either way.
+
+Exact ACP resume uses `session/resume` when advertised and `session/load`
+otherwise. Neither Grok Build 0.2.114 nor GitHub Copilot CLI 1.0.77 advertises
+`sessionCapabilities.resume`, so both take the `session/load` path. `session/load` replays the whole transcript before it answers, so that
 response is the boundary: replayed history is excluded from the current turn's events,
 from Slack, and from the normal transcript, and only the replayed count is recorded.
 History replays on the xAI extension channels as well as the standard one and includes
@@ -225,10 +284,11 @@ Diagnostics and `<workspace-data-root>/run/diagnostics.jsonl`.
 
 If startup reports `unsupported_version`, update the provider CLI. Claude capability
 detection requires `--input-format`, `--output-format`, `stream-json`, and `--resume`;
-Codex capability detection occurs through App Server initialization. Grok capability
-detection requires ACP protocol version 1 plus either `loadSession` or
-`sessionCapabilities.resume`. It never gates on the version string, so any newer Grok
-Build that still speaks ACP v1 keeps working. The verified baseline is 0.2.114.
+Codex capability detection occurs through App Server initialization. ACP capability
+detection requires protocol version 1 plus either `loadSession` or
+`sessionCapabilities.resume`. It never gates on the version string, so any newer CLI
+that still speaks ACP v1 keeps working. The verified baselines are Grok Build 0.2.114
+and GitHub Copilot CLI 1.0.77.
 
 Grok rate limits are classified as `rate_limited` only when ACP or an xAI extension
 returns structured data; stderr text and assistant prose are never parsed. No equivalent of Codex
@@ -236,3 +296,13 @@ returns structured data; stderr text and assistant prose are never parsed. No eq
 not found` on 0.2.114), so GuildBotics does not present a weekly or 5-hour usage meter
 for Grok. Activity History treats "no usage
 data" as a normal state and never synthesizes an empty window or a 0% figure.
+
+GitHub Copilot CLI 1.0.77 reports no token usage over ACP at all: neither the standard
+`usage_update` nor a private extension channel carries one. Usage counters therefore
+stay empty for Copilot, and the TTL, turn-count, usage, and `context_limit` rotations
+that depend on them do not arm on that version. The standard handling is implemented,
+so a version that does emit `usage_update` is picked up without a change. Copilot rate
+limits are likewise classified only from structured RPC error data -- its weekly quota
+identifier `user_weekly_rate_limited` among them -- and never from stderr text or
+assistant prose; an error that cannot be classified becomes a protocol failure that
+rotates the session.

@@ -516,9 +516,9 @@ You can change where per-workspace runtime data is stored by setting `GUILDBOTIC
 **LLM / AI CLI tool settings**:
 
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
-- `intelligences/native_agent_policy.yml`: filesystem access scope for Codex and Grok Build (`workspace` or `host`). It is created during setup of a new workspace and configured under **LLM / AI CLI tools → Advanced settings** in the desktop app, or by editing the file directly in environments without a screen. Network access and the no-confirmation execution mode are fixed inside the GuildBotics integration
-- `intelligences/cli_agents/*.yml`: settings for running AI CLI tools other than Codex, Claude Code, and Grok Build through a script
-- `team/members/<person_id>/intelligences/`: optional per-member overrides, including the execution permissions for Codex and Grok Build. By default they inherit the team settings
+- `intelligences/native_agent_policy.yml`: filesystem access scope for Codex, Grok Build, and GitHub Copilot CLI (`workspace` or `host`). It is created during setup of a new workspace and configured under **LLM / AI CLI tools → Advanced settings** in the desktop app, or by editing the file directly in environments without a screen. Network access and the no-confirmation execution mode are fixed inside the GuildBotics integration
+- `intelligences/cli_agents/*.yml`: settings for running AI CLI tools other than Codex, Claude Code, Grok Build, and GitHub Copilot CLI through a script
+- `team/members/<person_id>/intelligences/`: optional per-member overrides, including the execution permissions for Codex, Grok Build, and GitHub Copilot CLI. By default they inherit the team settings
 
 For the available values and security considerations, see [Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).
 
