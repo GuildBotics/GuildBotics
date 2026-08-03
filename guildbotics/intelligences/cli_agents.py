@@ -64,6 +64,13 @@ _NATIVE_AGENTS = (
         executable="copilot",
         config_reference=f"{CLI_AGENT_ROOT}/copilot/{CLI_AGENT_DEFAULT_FILENAME}",
     ),
+    CliAgentInfo(
+        name="antigravity",
+        label="Antigravity",
+        order=50,
+        executable="agy",
+        config_reference=f"{CLI_AGENT_ROOT}/antigravity/{CLI_AGENT_DEFAULT_FILENAME}",
+    ),
 )
 _NATIVE_AGENT_NAMES = frozenset(agent.name for agent in _NATIVE_AGENTS)
 

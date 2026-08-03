@@ -1,7 +1,7 @@
 # Native Agent Runtime
 
-GuildBotics uses native protocol adapters for Codex, Claude Code, Grok Build, and
-GitHub Copilot. Codex is driven through
+GuildBotics uses native protocol adapters for Codex, Claude Code, Grok Build,
+GitHub Copilot, and Antigravity. Codex is driven through
 [Codex App Server](https://developers.openai.com/codex/app-server); Claude Code is
 driven with its documented `stream-json` input/output and an exact `--resume` session
 id; Grok Build and GitHub Copilot are driven through the
@@ -10,8 +10,14 @@ id; Grok Build and GitHub Copilot are driven through the
 ACP adapters share one ACP client, and that client shares a line-based JSON-RPC
 transport with Codex; only the dialect and reverse-request handling differ. Each
 provider adapter adds just its own launch command, authentication, session
-configuration, and private notification channels. Antigravity remains a one-shot YAML
-script adapter.
+configuration, and private notification channels.
+
+Antigravity is the exception to the "one process, many turns" shape. `agy` has no
+resident server mode -- the only programmatic entry point is a single
+`agy --print --output-format stream-json` run -- so one turn is one process, and
+session identity is carried by `--conversation <id>` rather than by a living
+process. Everything else (exact resume, streamed events, token usage, structured
+error classification) works the same way as for the other native tools.
 
 ## Configuration
 
@@ -23,6 +29,7 @@ codex: codex
 claude: claude
 grok: grok
 copilot: copilot
+antigravity: antigravity
 ```
 
 A native tool still reads its own definition under
@@ -101,6 +108,44 @@ An option Copilot did not apply is listed as rejected and logged as a warning. B
 these options can be set on any live session, changing effort or model never rotates
 the session.
 
+Antigravity takes its model and effort as command-line flags on every turn, and a
+resumed conversation honors a changed `--model`, so a settings change never rotates
+the session there either. `--model` and `--effort` are mutually exclusive: every id
+`agy models` offers either carries its tier in the id (`gemini-3.6-flash-low`) or
+rejects `--effort` outright (`claude-sonnet-4-6`), and `agy` refuses the turn when
+both are given. A slot that sets both keeps the model and drops the effort, which is
+recorded on the settings event. A model that `agy models` does not list is dropped
+with a warning; when the catalog cannot be read, validation is skipped rather than
+blocking the turn. Because `agy` reports a model back only when one was named on the
+command line, a turn without `--model` records an empty model rather than guessing
+which account default it ran on.
+
+Antigravity is not part of `native_agent_policy.yml`. `agy --sandbox` restricts
+terminal commands only -- its own file-writing tools still reach outside the
+working directory -- so there is no file scope to expose as `filesystem_access`
+without promising something the flag does not keep.
+
+Antigravity runs every turn with `--dangerously-skip-permissions`, matching the
+behavior of the script it replaces, and with `--add-dir <cwd>`. That second flag
+is not optional: without it `agy` resolves every tool, including `run_command`,
+against its own scratch directory instead of the member's workspace.
+
+**Antigravity cannot enforce a read-only turn at the provider.** None of the
+three mechanisms `agy` 1.1.10 offers works: `--mode plan` still writes while
+`--dangerously-skip-permissions` is in effect, `--sandbox` confines shell
+commands but not the agent's own file tools, and dropping the permission skip
+makes headless mode auto-deny every command and return an empty response, which
+leaves a read-only turn unable to inspect anything. A read-only turn therefore
+runs with the same arguments as a normal one, and every such turn records
+`read_only_enforced: false` on its approval event so the gap stays visible in
+diagnostics. The other layers still apply: a read-only turn holds no person
+lease, so write-side `guildbotics member` commands fail `validate_delegation`,
+and the credential isolation below removes the tokens a direct `git push` or
+`gh` call would need. What is not blocked is local file modification and
+arbitrary shell execution inside the workspace. This is not a regression -- the
+script path enforced nothing either -- and it is tracked for the day `agy` grows
+a real read-only mode.
+
 Claude Code always runs non-interactively with `bypassPermissions`, preserving the
 previous `--dangerously-skip-permissions` behavior. GuildBotics also passes a
 session-level `sandbox.enabled=false` override because the Bash sandbox is not
@@ -161,17 +206,17 @@ The chat workflow passes the latest event and a bounded thread snapshot to the r
 as separate values. The runtime selects the effective input based on the AI CLI tool's
 conversation capability:
 
-- Healthy native resume (Codex, Claude, Grok, or Copilot): only the latest event is
+- Healthy native resume (Codex, Claude, Grok, Copilot, or Antigravity): only the latest event is
   added to the context already held by the provider session. The workflow may refresh a bounded snapshot for safe
   future rotation, but that snapshot is not injected into the healthy session.
 - New or rotated native session: the bounded snapshot before the event and the latest
   event are injected exactly once.
 - A one-shot script with no conversation of its own: the bounded snapshot and latest
   event are injected on every invocation.
-- A one-shot script such as Antigravity that resumes an exact conversation only within
-  one dispatch declares `conversation_scope: dispatch`. Once its saved conversation ID
-  exists, a completion retry receives only a continuation instruction and does not
-  receive the same event again.
+- A one-shot script that resumes an exact conversation only within one dispatch
+  declares `conversation_scope: dispatch`. Once its saved conversation ID exists, a
+  completion retry receives only a continuation instruction and does not receive the
+  same event again.
 
 If a bounded snapshot cannot be built safely from the live Slack API, only a new or
 rotated session or a non-resuming one-shot invocation uses the `inspect_required`
@@ -274,6 +319,14 @@ Authentication and rate limits are classified from structured provider events. C
 uses `system/api_retry`; Codex uses account/rate-limit RPC data. GuildBotics does not
 parse human stderr text for these decisions.
 
+Antigravity is classified from its terminal `result` event: a `status` other than
+`SUCCESS` is a failure, and the accompanying `error` field decides the category.
+`agy` 1.1.10 reports quota and credential failures as prose rather than as a code,
+so that one field is matched against a small anchored pattern set kept in the
+adapter; the recovery time it may carry (`Resets in 1h23m`) is passed through the
+same normalization every other tool uses. A rate limit does not rotate the session;
+authentication, protocol, and process failures do.
+
 When a reset timestamp is available, ticket selection and the chat pending queue defer
 the next attempt until that exact time. They do not consume in-process completion
 retries. Diagnostics use `agent_runtime.*`, `workflow.rate_limited`, and
@@ -287,8 +340,11 @@ detection requires `--input-format`, `--output-format`, `stream-json`, and `--re
 Codex capability detection occurs through App Server initialization. ACP capability
 detection requires protocol version 1 plus either `loadSession` or
 `sessionCapabilities.resume`. It never gates on the version string, so any newer CLI
-that still speaks ACP v1 keeps working. The verified baselines are Grok Build 0.2.114
-and GitHub Copilot CLI 1.0.77.
+that still speaks ACP v1 keeps working. Antigravity capability detection reads
+`agy --help` (which prints to stderr and exits 0) and requires `--print`,
+`--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
+verified baselines are Grok Build 0.2.114, GitHub Copilot CLI 1.0.77, and
+Antigravity 1.1.10.
 
 Grok rate limits are classified as `rate_limited` only when ACP or an xAI extension
 returns structured data; stderr text and assistant prose are never parsed. No equivalent of Codex
@@ -306,3 +362,9 @@ limits are likewise classified only from structured RPC error data -- its weekly
 identifier `user_weekly_rate_limited` among them -- and never from stderr text or
 assistant prose; an error that cannot be classified becomes a protocol failure that
 rotates the session.
+
+Antigravity reports per-turn token counts (`input_tokens`, `output_tokens`,
+`thinking_tokens`, `cache_read_tokens`, `total_tokens`), which are normalized onto
+the same shared keys every other adapter uses. It reports no absolute session
+context size, so context-usage rotation does not arm for Antigravity; only the TTL,
+turn-count, and token-total limits do. This is the same situation as Grok.

@@ -1,7 +1,7 @@
-# Codex・Claude Code・Grok Build・GitHub Copilotのセッション連携
+# Codex・Claude Code・Grok Build・GitHub Copilot・Antigravityのセッション連携
 
-GuildBoticsでCodex、Claude Code、Grok Build、GitHub Copilotを利用する場合は、Slackスレッドや
-チケットにセッションを対応付け、前回の続きから作業を再開できます。Codexとの連携には
+GuildBoticsでCodex、Claude Code、Grok Build、GitHub Copilot、Antigravityを利用する場合は、
+Slackスレッドやチケットにセッションを対応付け、前回の続きから作業を再開できます。Codexとの連携には
 [Codex App Server](https://developers.openai.com/codex/app-server)を使用し、Claude Codeとの
 連携には公式の`stream-json`入出力と`--resume <session-id>`を使用します。Grok BuildとGitHub
 Copilotとの連携には、それぞれ`grok agent stdio`と`copilot --acp`が提供する
@@ -9,9 +9,14 @@ Copilotとの連携には、それぞれ`grok agent stdio`と`copilot --acp`が�
 （ACP）v1を使用します。ACPを使う2つのAI CLIツールは共通のACPクライアントを共有し、
 AI CLIツールごとの実装は起動コマンド、認証、セッション設定、独自拡張の通知だけです。
 
-Antigravityなど、これら4つ以外のAI CLIツールは、
-`intelligences/cli_agents/`にあるYAML形式の設定に従ってスクリプト経由で実行します。
-これらのツールに会話履歴を渡す方法については、
+Antigravityだけは「1プロセスで複数ターンを実行する」形になりません。`agy`には常駐サーバ
+モードがなく、プログラムから使える口は`agy --print --output-format stream-json`の一発実行
+だけです。したがって1ターンが1プロセスであり、セッションの同一性は生きているプロセスでは
+なく`--conversation <id>`が担保します。それ以外（厳密な再開、イベントの逐次配信、
+トークン使用量、構造化されたエラー分類）は他のネイティブ連携と同じです。
+
+これら5つ以外のAI CLIツールは、`intelligences/cli_agents/`にあるYAML形式の設定に従って
+スクリプト経由で実行します。これらのツールに会話履歴を渡す方法については、
 [Slackスレッドの文脈を渡す方法](#slackスレッドの文脈を渡す方法)を参照してください。
 
 ## 設定
@@ -24,9 +29,10 @@ codex: codex
 claude: claude
 grok: grok
 copilot: copilot
+antigravity: antigravity
 ```
 
-これら4つのAI CLIツールも、`intelligences/cli_agents/<tool>/`配下の定義ファイル自体は
+これら5つのAI CLIツールも、`intelligences/cli_agents/<tool>/`配下の定義ファイル自体は
 読み込みます。このファイルが持つのは`parameters:`と`effort:`のオーバーレイで、
 プロバイダ非依存の`low` / `high`をAI CLIツールごとの設定へ翻訳するためのものです
 （書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）。書けないのは
@@ -96,6 +102,38 @@ Copilotの承認方針は起動オプションではなくセッション設定�
 記録し、警告を出力します。これらの設定は実行中のセッションへいつでも適用できるため、効きの強さや
 モデルを変更してもセッションを切り替えません。
 
+Antigravityのモデルと効きの強さは毎ターンのコマンドラインで渡り、再開した会話でも
+`--model`の変更が反映されるため、設定を変えてもセッションを切り替えません。`--model`と
+`--effort`は併用できません。`agy models`が提示するモデルIDは、いずれも効きの強さをID自体に
+含む（`gemini-3.6-flash-low`）か、`--effort`自体を受け付けない（`claude-sonnet-4-6`）ため、
+両方を渡すと`agy`がターンを拒否します。両方を設定したスロットではモデルを採用して効きの強さを
+落とし、その事実を設定イベントへ記録します。`agy models`に無いモデルは警告のうえ落とし、
+カタログを取得できない場合は検証を省略してそのまま実行します。`agy`がモデル名を報告するのは
+コマンドラインで明示した場合だけなので、`--model`を渡さないターンではアカウント既定の
+モデル名を推測せず、空のモデル名を記録します。
+
+Antigravityは`native_agent_policy.yml`の対象外です。`agy --sandbox`が制限するのはターミナル
+実行だけで、`agy`自身のファイル書き込みツールは作業ディレクトリの外へ到達できます。
+`filesystem_access`として公開すると、実際には守られない範囲を約束することになるためです。
+
+Antigravityは、置き換え対象のスクリプトと同じく毎ターン`--dangerously-skip-permissions`を
+指定し、あわせて`--add-dir <cwd>`を渡します。後者は省略できません。これが無いと`agy`は
+`run_command`を含むすべてのツールを、メンバーのワークスペースではなく`agy`自身の作業用
+ディレクトリに対して解決します。
+
+**Antigravityでは、読み取り専用のターンをプロバイダ側で担保できません。** `agy` 1.1.10が
+提供する3つの手段はいずれも成立しませんでした。`--mode plan`は
+`--dangerously-skip-permissions`と併用しても書き込みが通り、`--sandbox`はシェル実行しか
+制限せず`agy`自身のファイルツールには及ばず、権限スキップを外すとheadlessモードがコマンドを
+すべて自動拒否して応答が空になるため、読み取り専用のターンが調査そのものを行えなくなります。
+そのため読み取り専用のターンも通常のターンと同じ引数で実行し、承認イベントに必ず
+`read_only_enforced: false`を記録して、担保していないことを診断記録から確認できるようにします。
+他の層の防御はそのまま効きます。読み取り専用のターンはperson leaseを取得しないため、
+書き込み系の`guildbotics member`コマンドは`validate_delegation`で失敗し、後述の認証情報の分離に
+より直接の`git push`や`gh`も認証できません。塞げていないのはワークスペース内のローカル
+ファイル書き換えと任意のシェル実行です。これは後退ではなく（スクリプト経路も担保していません
+でした）、`agy`が本物の読み取り専用モードを備えた時点で見直します。
+
 Claude Codeは、従来の`--dangerously-skip-permissions`と同じく、操作ごとの確認を省略する
 `bypassPermissions`で常に実行します。Bash sandboxはチケット作業やチャットからの依頼に必要な
 幅広いコマンドと互換性がないため、`sandbox.enabled=false`も明示します。ただし、これらより
@@ -112,7 +150,8 @@ Claude Codeは、従来の`--dangerously-skip-permissions`と同じく、操作�
 
 GuildBoticsを起動する前に、使用するAI CLIツールをインストールしてください。その後、
 GuildBoticsのサービスを実行するOSユーザーと同じユーザーで、各ツールの標準的なログイン操作
-（`codex login`、`claude auth login`、`grok login`、または`copilot login`）を行います。ログイン情報は各ツール自身の
+（`codex login`、`claude auth login`、`grok login`、`copilot login`、または`agy`の
+初回起動時のログイン）を行います。ログイン情報は各ツール自身の
 認証情報保存先にだけ保持され、GuildBoticsのセッション情報や診断記録には複製されません。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
@@ -154,7 +193,7 @@ AI CLIツールは、GuildBoticsが検証した`guildbotics member ...`コマン
 実行基盤へ渡します。実行基盤は、AI CLIツールがセッションを引き継げる範囲に応じて、
 実際に送る内容を次のように選びます。
 
-- Codex、Claude Code、Grok Build、GitHub Copilotの既存セッションを引き継ぐ場合は、セッション内に
+- Codex、Claude Code、Grok Build、GitHub Copilot、Antigravityの既存セッションを引き継ぐ場合は、セッション内に
   保持されている文脈へ最新のイベントだけを追加します。安全に新しいセッションへ切り替えられるよう、
   ワークフロー側でもSlackスレッドの履歴を更新しますが、引き継ぎ中のセッションへその履歴を重ねて
   送りません。
@@ -162,9 +201,9 @@ AI CLIツールは、GuildBoticsが検証した`guildbotics member ...`コマン
   最新のイベントより前のSlackスレッドの履歴と最新のイベントを一度だけ送ります。
 - 呼び出しのたびに新しい会話として実行されるAI CLIツールには、最大件数を
   設けたSlackスレッドの履歴と最新のイベントを毎回送ります。
-- Antigravityのように、同じ依頼の再試行中に限って会話を引き継げるAI CLIツールでは、保存済みの
-  会話IDを使って前回の続きから再開します。この場合は続行指示だけを送り、同じイベントや会話履歴を
-  重ねて送りません。この動作を利用する設定では、`conversation_scope: dispatch`を指定します。
+- 同じ依頼の再試行中に限って会話を引き継げるAI CLIツールでは、保存済みの会話IDを使って前回の
+  続きから再開します。この場合は続行指示だけを送り、同じイベントや会話履歴を重ねて送りません。
+  この動作を利用する設定では、`conversation_scope: dispatch`を指定します。
 
 Slack APIからスレッドの履歴を安全に取得できない場合は、新しいセッションを開始するとき、
 セッションを切り替えたとき、または会話を引き継がないAI CLIツールを実行するときに限り、
@@ -273,6 +312,12 @@ OSのadvisory lockを使った実行権の管理により、スケジューラ�
 Claude Codeでは`system/api_retry`、Codexではアカウント情報やrate limitに関するRPCデータを
 使用します。標準エラー出力に表示される、人間向けのエラーメッセージには依存しません。
 
+Antigravityでは、終端の`result`イベントで判定します。`status`が`SUCCESS`以外なら異常とみなし、
+同じイベントの`error`フィールドで種別を決めます。`agy` 1.1.10は利用制限と認証エラーをコード
+ではなく文章で報告するため、この1フィールドだけをアダプタ内の限定的な正規表現と照合します。
+文章に含まれる復帰時刻（`Resets in 1h23m`）は、他のツールと共通の正規化処理へ渡します。
+利用制限ではセッションを切り替えず、認証・プロトコル・プロセスの失敗では切り替えます。
+
 再開可能な時刻を取得できた場合は、その時刻まで対象チケットの選択と保留中のチャット処理を
 延期します。この待機によって、同じプロセス内で行う完了条件未達時の再試行回数を消費することは
 ありません。
@@ -289,7 +334,10 @@ CodexではApp Serverの初期化処理を通して、必要な機能に対応�
 ACPを使うAI CLIツールでは、`initialize`が返すプロトコル版数が1であることと、正確な再開に必要な
 `loadSession`または`sessionCapabilities.resume`のいずれかが提示されることを確認します。
 バージョン文字列では判定しないため、ACP v1に対応する新しい版はそのまま利用できます。
-動作確認済みの基準バージョンは、Grok Build 0.2.114とGitHub Copilot CLI 1.0.77です。
+Antigravityでは`agy --help`（標準エラー出力へ表示し、終了コード0で終わります）を読み取り、
+`--print`、`--output-format`、`--conversation`、`--model`、`--effort`、`--add-dir`への対応を
+確認します。動作確認済みの基準バージョンは、Grok Build 0.2.114、GitHub Copilot CLI 1.0.77、
+Antigravity 1.1.10です。
 
 Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データを返した場合にだけ`rate_limited`
 として分類します。標準エラー出力や応答本文の解析は行いません。Codexの
@@ -305,3 +353,8 @@ GitHub Copilot CLI 1.0.77は、ACP経由でトークン使用量をまったく�
 利用制限も、RPCエラーの構造化データ（週間上限を示す`user_weekly_rate_limited`など）からのみ
 `rate_limited`として分類し、標準エラー出力や応答本文は解析しません。分類できないエラーは
 プロトコルエラーとして扱い、セッションを切り替えて回復します。
+
+Antigravityはターンごとのトークン使用量（`input_tokens` / `output_tokens` /
+`thinking_tokens` / `cache_read_tokens` / `total_tokens`）を報告するため、共通のトークン項目へ
+正規化して扱います。一方でセッション文脈量の絶対値は報告しないため、文脈使用率による切り替えは
+作動せず、有効期間・turn数・トークン累計の上限だけが機能します。これはGrok Buildと同じ状況です。

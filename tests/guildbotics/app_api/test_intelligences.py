@@ -1192,7 +1192,7 @@ def test_every_native_tool_declares_the_settings_its_adapter_applies(
 def test_every_shipped_tool_declares_its_own_effort_capability(tmp_path: Path) -> None:
     """A tool GuildBotics ships must not make the user describe it.
 
-    The scripts are authored here, so what each one acts on is known here too;
+    The adapters are authored here, so what each one acts on is known here too;
     leaving it undeclared would push raw JSON onto the user for a tool whose
     only usable key we already decided.
     """
@@ -1219,9 +1219,8 @@ def test_every_shipped_tool_declares_its_own_effort_capability(tmp_path: Path) -
         assert agent.effort_fields or not agent.effort_supported, (
             f"{path} falls back to raw JSON"
         )
-    # The one remaining script exposes a real `--effort` flag as well as
-    # `--model`; Copilot is native now and states the session options its
-    # adapter sets instead.
+    # Antigravity exposes a real `--effort` flag as well as `--model`; Copilot
+    # states the session options its adapter sets instead.
     assert {f.key for f in agents["antigravity"].effort_fields} == {"effort", "model"}
     assert {f.key for f in agents["copilot"].effort_fields} == {
         "reasoning_effort",
