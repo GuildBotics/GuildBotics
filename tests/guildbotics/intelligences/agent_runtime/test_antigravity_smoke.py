@@ -97,7 +97,7 @@ async def test_real_antigravity_prompt_then_exact_resume(tmp_path) -> None:
         assert _named(first_events, "settings")["model"] == SMOKE_OPTIONS["model"]
         # `init` reports the model back only because it was named explicitly.
         assert _named(first_events, "initialized")["model"] == SMOKE_OPTIONS["model"]
-        # Usage is what the script path could never report.
+        # Token usage arrives on the stream-json `result` event.
         assert first.usage.get("input_tokens", 0) > 0, first.usage
     finally:
         await adapter.close()

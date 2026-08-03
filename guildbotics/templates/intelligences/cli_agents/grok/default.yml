@@ -2,7 +2,7 @@
 #
 # Native tools have no configuration file of their own; this file exists solely
 # to translate the provider-neutral effort labels (low / high) into settings the
-# Grok adapter can apply. Do not add `script` or `env` here.
+# Grok adapter can apply.
 #
 # `grok agent stdio` accepts these as launch options, so they are fixed for the
 # life of the process: changing one starts a fresh session rather than adjusting
