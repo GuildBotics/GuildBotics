@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { expect, test } from "@playwright/test";
+
+import { readStackContext } from "./stack-context";
 
 // Journey ⑥: critical failure — backend DOWN at app load, then recover.
 //
@@ -17,19 +15,6 @@ import { expect, test } from "@playwright/test";
 // a healthy backend, so the app loads. The 45s real health deadline in the app's
 // waitForHealth is why this journey needs an extended timeout.
 
-const here = dirname(fileURLToPath(import.meta.url));
-
-type StackContext = {
-  controlPort: number;
-  host: string;
-  deferBackend: boolean;
-};
-
-function readDownContext(): StackContext {
-  const raw = readFileSync(join(here, ".stack-context-down.json"), "utf-8");
-  return JSON.parse(raw) as StackContext;
-}
-
 test("shows the backend-down error, then recovers on retry once the backend is up", async ({
   page,
 }) => {
@@ -38,7 +23,7 @@ test("shows the backend-down error, then recovers on retry once the backend is u
   // beyond the default 60s.
   test.setTimeout(150_000);
 
-  const ctx = readDownContext();
+  const ctx = readStackContext("down");
   expect(ctx.deferBackend).toBe(true);
 
   await page.goto("/");

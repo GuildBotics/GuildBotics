@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { expect, test } from "@playwright/test";
+
+import { readStackContext } from "./stack-context";
 
 // Journey ⑤: Diagnostics against the REAL backend.
 //
@@ -21,23 +19,10 @@ import { expect, test } from "@playwright/test";
 //   * reads transcript settings/storage from the real backend and opens the
 //     pinned Global/system transcript.
 
-const here = dirname(fileURLToPath(import.meta.url));
-
-type StackContext = {
-  seeded: boolean;
-  seededWithoutLlmKey: boolean;
-  memberId: string | null;
-};
-
-function readDiagnosticsContext(): StackContext {
-  const raw = readFileSync(join(here, ".stack-context-diagnostics.json"), "utf-8");
-  return JSON.parse(raw) as StackContext;
-}
-
 test("renders readiness badges and reports the missing-key LLM check from scenario diagnostics", async ({
   page,
 }) => {
-  const ctx = readDiagnosticsContext();
+  const ctx = readStackContext("diagnostics");
   expect(ctx.seeded).toBe(true);
   expect(ctx.seededWithoutLlmKey).toBe(true);
 
@@ -102,7 +87,8 @@ test("sends a troubleshooting question through the real backend and reports the 
 
   const request = page.waitForResponse(
     (response) =>
-      response.url().includes("/diagnostics/troubleshoot") && response.request().method() === "POST",
+      response.url().includes("/diagnostics/troubleshoot") &&
+      response.request().method() === "POST",
   );
   await panel.getByLabel("Message to troubleshooting AI").fill("Why did the service fail?");
   await panel.getByRole("button", { name: "Send" }).click();

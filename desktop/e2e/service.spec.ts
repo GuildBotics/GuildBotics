@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { expect, test, type Locator, type Page } from "@playwright/test";
+
+import { readStackContext } from "./stack-context";
 
 // Journey ③: Service Runtime against the REAL backend.
 //
@@ -15,21 +13,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 // events, then stops and observes stopped. It proves that the three source
 // toggles select the runtime units sent to the backend.
 
-const here = dirname(fileURLToPath(import.meta.url));
-
 const RUN_BUTTON = "Run";
 const STOP_BUTTON = "Stop";
-
-type StackContext = {
-  workspaceDir: string;
-  memberId: string | null;
-  seeded: boolean;
-};
-
-function readConfiguredContext(): StackContext {
-  const raw = readFileSync(join(here, ".stack-context-configured.json"), "utf-8");
-  return JSON.parse(raw) as StackContext;
-}
 
 function panel(page: Page, title: string): Locator {
   return page.locator(".service-unit-panel").filter({ hasText: title }).first();
@@ -60,7 +45,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("seeded workspace boots configured and lands on the service screen", () => {
-  const ctx = readConfiguredContext();
+  const ctx = readStackContext("configured");
   expect(ctx.seeded).toBe(true);
   expect(ctx.memberId).toBe("local-agent");
 });

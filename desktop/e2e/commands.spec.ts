@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { expect, test } from "@playwright/test";
+
+import { readStackContext } from "./stack-context";
 
 // Journey ④: Command editor against the REAL backend.
 //
@@ -16,18 +17,6 @@ import { expect, test } from "@playwright/test";
 // A `brain: none` Markdown command is deterministic (no LLM / GitHub), so the
 // rendered body is echoed back as the run output.
 
-const here = dirname(fileURLToPath(import.meta.url));
-
-type StackContext = {
-  memberId: string | null;
-  configDir: string;
-};
-
-function readConfiguredContext(): StackContext {
-  const raw = readFileSync(join(here, ".stack-context-configured.json"), "utf-8");
-  return JSON.parse(raw) as StackContext;
-}
-
 // Every line starts at column 0 on purpose: the editor keeps the previous
 // line's indentation when Enter is typed, so an indented block (such as a
 // nested `inputs:` mapping) would push the closing `---` and the body out of
@@ -36,7 +25,7 @@ function readConfiguredContext(): StackContext {
 const SOURCE = ["---", "name: E2E note", "brain: none", "---", "E2E marker body"].join("\n");
 
 test("creates, edits, saves and runs a shared command", async ({ page }) => {
-  const ctx = readConfiguredContext();
+  const ctx = readStackContext("configured");
 
   await page.goto("/#/commands");
   await expect(page.getByRole("heading", { name: "Edit Command" })).toBeVisible();
