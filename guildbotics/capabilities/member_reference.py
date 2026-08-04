@@ -257,7 +257,9 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "labels, PR links, bodies, comments, review threads) are canonical in that "
     "inspect output.",
     "Edit, then run the relevant tests, linters, and checks before publishing any "
-    "code change.",
+    'code change. When one fails, never stop at "unrelated to this change": '
+    "identify the cause, write the issue draft it deserves, and hand that draft to "
+    "the requester for a decision instead of registering it or fixing it yourself.",
     "Stage with plain git (`git add`), then commit and push through `member git "
     "commit`, `member git push`, or `member git publish`.",
     "When issue work changed code, open or reuse a PR with `member github pr "
