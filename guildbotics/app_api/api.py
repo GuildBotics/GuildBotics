@@ -26,6 +26,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
@@ -205,6 +206,9 @@ def create_app(
     app.state.runtime = app_runtime
     app.state.event_bus = bus
 
+    # Added before CORS so that CORS wraps it: the JSON error it builds travels
+    # back out through the CORS layer and carries its headers.
+    app.add_middleware(_UnhandledErrorMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["tauri://localhost"],
@@ -225,16 +229,6 @@ def create_app(
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(_, exc: AppApiError) -> JSONResponse:
         return _error_response(exc.status_code, exc.code, exc.message, exc.context)
-
-    @app.exception_handler(Exception)
-    async def unexpected_error_handler(_, exc: Exception) -> JSONResponse:
-        logging.getLogger("guildbotics").exception("Unhandled app API error")
-        return _error_response(
-            500,
-            "internal_error",
-            "An unexpected app API error occurred.",
-            {"error_type": type(exc).__name__},
-        )
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(
@@ -1345,6 +1339,50 @@ def _github_app_registration_status(
     registration: GitHubAppRegistration, start_url: str = ""
 ) -> GitHubAppRegistrationStatus:
     return GitHubAppRegistrationStatus(start_url=start_url, **registration.info_dump())
+
+
+class _UnhandledErrorMiddleware:
+    """Answer an unhandled exception with the API's JSON error, inside CORS.
+
+    An ``Exception`` handler registered on the app is served by Starlette's
+    outermost ``ServerErrorMiddleware``, above ``CORSMiddleware``, so its
+    response reaches the browser without CORS headers: the Desktop app can then
+    only report a bare network failure, whatever the backend actually said.
+    Building the error here, below the CORS layer, keeps the reason readable in
+    the UI.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        responded = False
+
+        async def sender(message: Message) -> None:
+            nonlocal responded
+            if message["type"] == "http.response.start":
+                responded = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, sender)
+        except Exception as exc:
+            logging.getLogger("guildbotics").exception("Unhandled app API error")
+            if responded:
+                # The status line is already on the wire; only the server-error
+                # middleware above can decide what a half-sent body becomes.
+                raise
+            response = _error_response(
+                500,
+                "internal_error",
+                "An unexpected app API error occurred.",
+                {"error_type": type(exc).__name__},
+            )
+            await response(scope, receive, sender)
 
 
 def _error_response(

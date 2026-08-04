@@ -465,10 +465,19 @@ class AppRuntime:
                 ),
             ):
                 yield context, trace_id
+        except AppApiError:
+            raise
         except WorkRejectedError as exc:
             raise AppApiError("work_rejected", str(exc), status_code=409) from exc
-        except CommandError as exc:
-            raise AppApiError(failure_code, str(exc), status_code=502) from exc
+        except Exception as exc:
+            # The turn drives a foreign agent: an AI CLI tool that exits
+            # non-zero, a provider that rejects the credential, a response the
+            # prompt cannot use. Every one of them is a failed assistant turn
+            # the panel must be able to explain, so none may reach the client as
+            # an unmapped internal error with nothing to show the user.
+            raise AppApiError(
+                failure_code, str(exc) or type(exc).__name__, status_code=502
+            ) from exc
         finally:
             await context.aclose()
 
