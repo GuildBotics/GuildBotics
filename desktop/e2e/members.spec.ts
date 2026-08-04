@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { expect, test } from "@playwright/test";
+
+import { readStackContext } from "./stack-context";
 
 // Journey ②: add a team member through the UI against the REAL backend.
 //
@@ -13,21 +14,8 @@ import { expect, test } from "@playwright/test";
 // through the real `POST /config/members` wire, then asserts BOTH members render
 // in the reloaded list and that the backend persisted the new member on disk.
 
-const here = dirname(fileURLToPath(import.meta.url));
-
-type StackContext = {
-  configDir: string;
-  memberId: string | null;
-  seeded: boolean;
-};
-
-function readMembersContext(): StackContext {
-  const raw = readFileSync(join(here, ".stack-context-members.json"), "utf-8");
-  return JSON.parse(raw) as StackContext;
-}
-
 test("adds a second member through the UI and persists it to the backend", async ({ page }) => {
-  const ctx = readMembersContext();
+  const ctx = readStackContext("members");
   expect(ctx.seeded).toBe(true);
 
   // The Members section of the configured Settings screen (deep link, mirroring

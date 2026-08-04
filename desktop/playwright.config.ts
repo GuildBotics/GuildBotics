@@ -110,7 +110,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_BACKEND_PORT: String(SETUP_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(SETUP_FRONTEND_PORT),
         GUILDBOTICS_E2E_TOKEN: SETUP_TOKEN,
-        GUILDBOTICS_E2E_CONTEXT_FILE: ".stack-context.json",
       },
     },
     {
@@ -127,7 +126,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_BACKEND_PORT: String(CONFIGURED_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(CONFIGURED_FRONTEND_PORT),
         GUILDBOTICS_E2E_TOKEN: CONFIGURED_TOKEN,
-        GUILDBOTICS_E2E_CONTEXT_FILE: ".stack-context-configured.json",
       },
     },
     {
@@ -144,7 +142,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_BACKEND_PORT: String(MEMBERS_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(MEMBERS_FRONTEND_PORT),
         GUILDBOTICS_E2E_TOKEN: MEMBERS_TOKEN,
-        GUILDBOTICS_E2E_CONTEXT_FILE: ".stack-context-members.json",
       },
     },
     {
@@ -166,7 +163,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_BACKEND_PORT: String(DIAGNOSTICS_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(DIAGNOSTICS_FRONTEND_PORT),
         GUILDBOTICS_E2E_TOKEN: DIAGNOSTICS_TOKEN,
-        GUILDBOTICS_E2E_CONTEXT_FILE: ".stack-context-diagnostics.json",
       },
     },
     {
@@ -187,7 +183,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_FRONTEND_PORT: String(DOWN_FRONTEND_PORT),
         GUILDBOTICS_E2E_CONTROL_PORT: String(DOWN_CONTROL_PORT),
         GUILDBOTICS_E2E_TOKEN: DOWN_TOKEN,
-        GUILDBOTICS_E2E_CONTEXT_FILE: ".stack-context-down.json",
       },
     },
   ],

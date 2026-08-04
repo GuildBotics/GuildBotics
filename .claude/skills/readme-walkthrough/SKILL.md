@@ -11,7 +11,7 @@ Read the target README from top to bottom, perform the documented steps as a bra
 
 - **The README is the test input.** Re-read it fresh at the start of every run and follow its wording literally. Do not "correct" a step from your own knowledge of the codebase — if the documented step does not work as written, that IS a finding.
 - **Never touch the user's real environment.** All runtime state must live in temp directories: run the backend and every `guildbotics` CLI command with a temp workspace, a temp `HOME`, and `GUILDBOTICS_SECRETS_BACKEND=env-file`. Never write to the real `~/.guildbotics`, the OS keychain, or the user's active workspace.
-- **Repository is read-only** during the walkthrough. The only files that may appear inside the repo are the report under `tmp/` and the stack context file the harness writes (`desktop/e2e/.stack-context-readme.json`), which you delete during cleanup. Both paths are gitignored, so neither can be committed by accident. The report lives in `tmp/` because it is a deliverable for the human to open, not an input any agent should later consult as source of truth — AGENTS.md's "do not reference gitignored paths" rule is about what counts as repository truth, and does not forbid writing scratch output there.
+- **Repository is read-only** during the walkthrough. The only file that may appear inside the repo is the report under `tmp/`, which is gitignored and so cannot be committed by accident; the harness writes its stack context file into the OS temp dir, outside the repo. The report lives in `tmp/` because it is a deliverable for the human to open, not an input any agent should later consult as source of truth — AGENTS.md's "do not reference gitignored paths" rule is about what counts as repository truth, and does not forbid writing scratch output there.
 - **Do not run repo-wide quality checks** (ruff / mypy / pytest / npm quality). This is a documentation test, not CI.
 - **The app picks the target README, not an argument.** Start the GUI stack first (step 2) and read the **Display language** the app boots with — it follows the OS locale. Japanese → `README.ja.md` is the primary target; English → `README.md`. **Do not switch the app's display language to match a README**: a Japanese UI is walked against the Japanese README, so that documented labels and actual labels are comparable. Record the observed language and the resulting target at the top of the report.
 - Sections may be scoped: an argument like `quick-start`, `slack`, or a section heading limits the walkthrough to that part. Default is the full README. Scope arguments never change the target language.
@@ -54,11 +54,10 @@ GUILDBOTICS_E2E_STACK=readme \
 GUILDBOTICS_E2E_BACKEND_PORT=8768 \
 GUILDBOTICS_E2E_FRONTEND_PORT=1423 \
 GUILDBOTICS_E2E_TOKEN=readme-walkthrough \
-GUILDBOTICS_E2E_CONTEXT_FILE=.stack-context-readme.json \
 node e2e/start-stack.mjs
 ```
 
-The harness creates a fresh temp workspace and temp HOME on its own and prints the workspace path; read `desktop/e2e/.stack-context-readme.json` for the exact paths and reuse that workspace for the CLI steps. Browse the app at `http://127.0.0.1:1423`. The distinct ports/token/context file keep it from colliding with a real `npm run e2e` or the user's own desktop backend.
+The harness creates a fresh temp workspace and temp HOME on its own and prints both the workspace path and the path of its stack context file (`<OS tmpdir>/guildbotics-e2e/readme.json`, named after the stack); read that file for the exact paths and reuse that workspace for the CLI steps. Browse the app at `http://127.0.0.1:1423`. The distinct stack name, ports, and token keep it from colliding with a real `npm run e2e` or the user's own desktop backend.
 
 **Driving the app** (each of these costs a wasted turn to rediscover):
 
@@ -84,7 +83,7 @@ Section-specific notes:
 - **Service screen**: confirm the three execution sources and their per-source toggles, the patrol interval and consecutive-failure inputs, the run/stop controls, and any streaming or activity view the README claims, all as described. Beware the trap here: first-setup **forces one active member**, and that member inherits whichever real AI CLI tool was detected on PATH — so pressing Run as-is would hand real work to a real agent. To exercise start/stop for real, first neutralize the agent by writing the harness's own mock into the temp workspace (this mirrors `seedMockCliAgent()` in `desktop/e2e/start-stack.mjs`):
 
   ```bash
-  # $WS = workspaceDir from desktop/e2e/.stack-context-readme.json
+  # $WS = workspaceDir from the readme stack context file
   mkdir -p "$WS/.guildbotics/config/intelligences/cli_agents"
   printf 'default: e2e-cli.yml\n' > "$WS/.guildbotics/config/intelligences/cli_agent_mapping.yml"
   printf 'label: E2E Mock Agent\norder: 999\nexecutable: sh\nenv:\nscript: |\n  echo "OK"\n' \
@@ -107,7 +106,7 @@ pkill -f "guildbotics.app_api --host 127.0.0.1 --port 8768"
 pkill -f "vite --host 127.0.0.1 --host 127.0.0.1 --port 1423"
 ```
 
-(The duplicated `--host` in the vite command line is what `start-stack.mjs` actually passes; match it or the pattern misses.) Then confirm both ports are free with `lsof -nP -iTCP:8768 -iTCP:1423 -sTCP:LISTEN`, remove `desktop/e2e/.stack-context-readme.json`, and delete any scratch files that captured secrets (for example an exported `secrets.env`). Temp dirs under the OS tmpdir may be left for the OS to reclaim. Finish with `git status --short` to prove the repo is untouched apart from the report.
+(The duplicated `--host` in the vite command line is what `start-stack.mjs` actually passes; match it or the pattern misses.) Then confirm both ports are free with `lsof -nP -iTCP:8768 -iTCP:1423 -sTCP:LISTEN` (the harness removes its own stack context file on shutdown), and delete any scratch files that captured secrets (for example an exported `secrets.env`). Temp dirs under the OS tmpdir may be left for the OS to reclaim. Finish with `git status --short` to prove the repo is untouched apart from the report.
 
 ### 6. Report
 

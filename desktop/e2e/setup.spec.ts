@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { expect, test } from "@playwright/test";
+
+import { readStackContext } from "./stack-context";
 
 // Journey ①: first-run setup happy path against the REAL backend.
 //
@@ -12,26 +13,10 @@ import { expect, test } from "@playwright/test";
 // transitions to the service screen, and then reads the project.yml the backend
 // wrote on disk to confirm the wire actually persisted the config.
 
-const here = dirname(fileURLToPath(import.meta.url));
-
-type StackContext = {
-  workspaceDir: string;
-  homeDir: string;
-  backendPort: number;
-  frontendPort: number;
-  token: string;
-  host: string;
-};
-
-function readStackContext(): StackContext {
-  const raw = readFileSync(join(here, ".stack-context.json"), "utf-8");
-  return JSON.parse(raw) as StackContext;
-}
-
 test("first-run setup happy path writes project.yml and enters the service view", async ({
   page,
 }) => {
-  const ctx = readStackContext();
+  const ctx = readStackContext("setup");
 
   await page.goto("/");
 

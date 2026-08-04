@@ -24,9 +24,11 @@
 //
 // Each stack owns its OWN temp workspace, HOME, ports, token and stack-context
 // file, so the journeys stay fully isolated and the first-setup spec always sees
-// an empty workspace. The backend cwd is the temp workspace, so `/config/init`
-// writes `<workspace>/.guildbotics/config/...` on disk. HOME is redirected to a
-// second temp dir to keep the run hermetic.
+// an empty workspace. All of them live under the OS temp dir, so a run leaves
+// nothing behind inside the repository even when it is interrupted. The backend
+// cwd is the temp workspace, so `/config/init` writes
+// `<workspace>/.guildbotics/config/...` on disk. HOME is redirected to a second
+// temp dir to keep the run hermetic.
 //
 // Vite runs in the foreground; when Playwright tears the web server down it kills
 // this process group, and the SIGINT/SIGTERM handlers below stop the backend so
@@ -34,7 +36,7 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,7 +62,6 @@ const seedWithoutLlmKey = process.env.GUILDBOTICS_E2E_OFFLINE_LLM === "1";
 // through the control server on GUILDBOTICS_E2E_CONTROL_PORT.
 const deferBackend = process.env.GUILDBOTICS_E2E_DEFER_BACKEND === "1";
 const controlPort = Number(process.env.GUILDBOTICS_E2E_CONTROL_PORT ?? "0");
-const contextFile = process.env.GUILDBOTICS_E2E_CONTEXT_FILE ?? ".stack-context.json";
 const baseUrl = `http://${host}:${backendPort}`;
 const authHeaders = { "X-GuildBotics-Session-Token": token, "Content-Type": "application/json" };
 const tag = `[e2e:${stackName}]`;
@@ -72,9 +73,14 @@ const configDir = join(workspaceDir, ".guildbotics", "config");
 const envFile = join(workspaceDir, ".env");
 
 // Publish the run context so specs can read the on-disk project.yml / seeded ids.
+// It describes this run's live processes only, so it lives beside the temp dirs
+// it points at instead of inside the repo. `e2e/stack-context.ts` mirrors this
+// path derivation on the reader side; the stack name is the only shared input.
+const contextPath = join(tmpdir(), "guildbotics-e2e", `${stackName}.json`);
 const seededMemberId = "local-agent";
+mkdirSync(dirname(contextPath), { recursive: true });
 writeFileSync(
-  join(desktopDir, "e2e", contextFile),
+  contextPath,
   JSON.stringify(
     {
       stackName,
@@ -96,6 +102,7 @@ writeFileSync(
     2,
   ),
 );
+console.log(`${tag} stack context: ${contextPath}`);
 
 const backendEnv = { ...process.env, HOME: homeDir };
 // Force the workspace config layout (`<cwd>/.guildbotics/config`) by removing any
@@ -153,6 +160,10 @@ function shutdown(code) {
     return;
   }
   shuttingDown = true;
+  // Best effort: a SIGKILLed process group skips this, which is why the context
+  // path is derived rather than unique — the next run of the same stack
+  // overwrites the file instead of piling up a new one.
+  rmSync(contextPath, { force: true });
   if (controlServer) {
     controlServer.close();
   }
