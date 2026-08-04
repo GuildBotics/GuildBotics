@@ -245,7 +245,7 @@ async def test_model_wins_over_effort_and_unknown_model_is_dropped(
         provider_options={"model": "gemini-3.6-flash-low", "effort": "high"},
     )
 
-    await _run(adapter, context, events)
+    result = await _run(adapter, context, events)
 
     run_args = calls[-1]
     assert run_args[run_args.index("--model") + 1] == "gemini-3.6-flash-low"
@@ -254,6 +254,21 @@ async def test_model_wins_over_effort_and_unknown_model_is_dropped(
     assert settings.details["model"] == "gemini-3.6-flash-low"
     assert settings.details["effort"] == ""
     assert "effort" in settings.details["rejected"]
+    # Only what the command line really carried counts as effective.
+    assert (result.model, result.effort) == ("gemini-3.6-flash-low", "")
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_names_no_model_reports_none_as_effective(
+    monkeypatch, tmp_path
+) -> None:
+    """``agy`` never names the model it ran on, so an unnamed one stays unknown."""
+    _install(monkeypatch, _StreamProcess(_fixture_lines()))
+    adapter = AntigravityStreamJsonAdapter()
+
+    result = await _run(adapter, _context(tmp_path), [])
+
+    assert (result.model, result.effort) == ("", "")
 
 
 @pytest.mark.asyncio
@@ -268,13 +283,14 @@ async def test_model_missing_from_catalog_is_dropped_and_effort_survives(
         tmp_path, provider_options={"model": "made-up-model", "effort": "high"}
     )
 
-    await _run(adapter, context, events)
+    result = await _run(adapter, context, events)
 
     run_args = calls[-1]
     assert "--model" not in run_args
     assert run_args[run_args.index("--effort") + 1] == "high"
     settings = next(event for event in events if event.name == "settings")
     assert settings.details["rejected"]["model"] == "not offered by `agy models`"
+    assert (result.model, result.effort) == ("", "high")
 
 
 @pytest.mark.asyncio

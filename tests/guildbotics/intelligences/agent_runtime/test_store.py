@@ -278,10 +278,10 @@ def test_a_turn_that_imposes_nothing_has_an_empty_fingerprint() -> None:
 
 
 def test_the_fingerprint_is_stable_and_distinguishes_applied_settings() -> None:
-    base = settings_fingerprint({"model": "m", "max_thinking_tokens": 8000})
+    base = settings_fingerprint({"model": "m", "effort": "high"})
     assert base != ""
-    assert base == settings_fingerprint({"max_thinking_tokens": 8000, "model": "m"})
-    assert base != settings_fingerprint({"model": "m", "max_thinking_tokens": 1000})
+    assert base == settings_fingerprint({"effort": "high", "model": "m"})
+    assert base != settings_fingerprint({"model": "m", "effort": "low"})
     # Model alone still distinguishes two sessions, as it did before effort.
     assert settings_fingerprint({"model": "old"}) != settings_fingerprint(
         {"model": "new"}
@@ -358,3 +358,24 @@ def test_the_fingerprint_survives_a_save_reload_round_trip(tmp_path) -> None:
 
     assert loaded is not None
     assert loaded.settings_fingerprint == "fp-high"
+
+
+def test_effective_settings_survive_a_round_trip_and_die_with_the_session(
+    tmp_path,
+) -> None:
+    """The remembered values describe one session, so rotation discards them."""
+    store = ConversationStore(tmp_path)
+    record = store.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "thread-1"
+    record.effective_model = "gpt-established"
+    record.effective_effort = "high"
+    store.save(record)
+
+    loaded = store.load(_key())
+    assert loaded is not None
+    assert loaded.effective_model == "gpt-established"
+    assert loaded.effective_effort == "high"
+
+    fresh = store.resolve(_key(), ResumePolicy.FRESH)
+    assert fresh.effective_model == ""
+    assert fresh.effective_effort == ""

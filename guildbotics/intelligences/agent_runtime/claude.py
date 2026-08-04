@@ -51,8 +51,10 @@ _READ_ONLY_DISALLOWED_TOOLS = (
     "Task",
 )
 #: The effort-mapping keys Claude Code can act on: the model it runs and the
-#: thinking budget it is allowed to spend.
-_EFFORT_SETTING_KEYS = frozenset({"model", "max_thinking_tokens"})
+#: effort level it runs at.
+_EFFORT_SETTING_KEYS = frozenset({"model", "effort"})
+#: The levels `claude --help` advertises for `--effort`.
+_EFFORT_VALUES = frozenset({"low", "medium", "high", "xhigh", "max"})
 _LOGGER = getLogger(__name__)
 _PROCESS_EXIT_GRACE_SECONDS = 2.0
 _PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
@@ -66,9 +68,9 @@ _SESSION_LIMIT_PATTERN = re.compile(
 
 class ClaudeStreamJsonAdapter:
     name = "claude-stream-json"
-    # Claude Code fixes its model and thinking configuration when the session
-    # starts; a resumed session cannot be reconfigured, so a settings change
-    # rotates the conversation.
+    # Claude Code fixes its model and effort when the session starts; a resumed
+    # session cannot be reconfigured, so a settings change rotates the
+    # conversation.
     settings_scope = SETTINGS_SCOPE_SESSION
 
     def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
@@ -119,7 +121,6 @@ class ClaudeStreamJsonAdapter:
             args.extend(("--disallowed-tools", *_READ_ONLY_DISALLOWED_TOOLS))
         _warn_unusable_effort_settings(context)
         args.extend(_effort_arguments(context))
-        env.update(_effort_environment(context))
         if conversation.provider_session_id:
             args.extend(("--resume", conversation.provider_session_id))
         try:
@@ -148,6 +149,7 @@ class ClaudeStreamJsonAdapter:
         )
         events: list[AgentEvent] = []
         session_id = conversation.provider_session_id
+        reported_model = ""
         terminal_output = ""
         usage: dict[str, int] = {}
         terminal_seen = False
@@ -190,6 +192,7 @@ class ClaudeStreamJsonAdapter:
                     if not isinstance(raw, dict):
                         continue
                     session_id = str(raw.get("session_id", "") or session_id)
+                    reported_model = _reported_model(raw) or reported_model
                     error = _structured_error(raw)
                     if error is not None:
                         if error.category is AgentRuntimeErrorCategory.RATE_LIMITED:
@@ -316,6 +319,10 @@ class ClaudeStreamJsonAdapter:
             usage=usage,
             stderr=stderr.strip(),
             returncode=returncode,
+            model=reported_model,
+            # A turn that imposed nothing left the session on the settings it
+            # already ran with, which the conversation remembers.
+            effort=_applied_effort(context) or conversation.effective_effort,
         )
 
     async def interrupt(self) -> None:
@@ -370,26 +377,41 @@ def _applied_effort_settings(context: AgentExecutionContext) -> dict[str, Any]:
     outside the run path and must not emit a second round of warnings.
     """
     settings: dict[str, Any] = {}
-    model = str(context.provider_options.get("model", "") or "")
-    if model:
+    if model := str(context.provider_options.get("model", "") or "").strip():
         settings["model"] = model
-    budget = context.provider_options.get("max_thinking_tokens")
-    if budget not in (None, ""):
-        with suppress(TypeError, ValueError):
-            settings["max_thinking_tokens"] = max(0, int(str(budget)))
+    effort = str(context.provider_options.get("effort", "") or "").strip().lower()
+    if effort in _EFFORT_VALUES:
+        settings["effort"] = effort
     return settings
+
+
+def _applied_effort(context: AgentExecutionContext) -> str:
+    """The effort level this turn really imposed on the session.
+
+    Claude Code reports no effort of its own, so the only honest value is the
+    level the adapter actually put on the command line, in Claude Code's own
+    vocabulary. A turn that imposes nothing leaves the session on the settings
+    it already has, and must not claim a level it never applied.
+    """
+    return str(_applied_effort_settings(context).get("effort", ""))
+
+
+def _reported_model(raw: dict[str, Any]) -> str:
+    """The model Claude Code names for the session, from its init event."""
+    if raw.get("type") != "system" or raw.get("subtype") != "init":
+        return ""
+    return str(raw.get("model", "") or "")
 
 
 def _effort_arguments(context: AgentExecutionContext) -> list[str]:
     """Translate the turn's effort settings into Claude Code CLI flags."""
-    model = _applied_effort_settings(context).get("model", "")
-    return ["--model", str(model)] if model else []
-
-
-def _effort_environment(context: AgentExecutionContext) -> dict[str, str]:
-    """Translate the thinking budget into the variable Claude Code reads."""
-    budget = _applied_effort_settings(context).get("max_thinking_tokens")
-    return {} if budget is None else {"MAX_THINKING_TOKENS": str(budget)}
+    settings = _applied_effort_settings(context)
+    args: list[str] = []
+    if model := str(settings.get("model", "")):
+        args.extend(("--model", model))
+    if effort := str(settings.get("effort", "")):
+        args.extend(("--effort", effort))
+    return args
 
 
 def _warn_unusable_effort_settings(context: AgentExecutionContext) -> None:
@@ -399,12 +421,9 @@ def _warn_unusable_effort_settings(context: AgentExecutionContext) -> None:
         _LOGGER.warning(
             "Ignoring unsupported Claude Code effort settings: %s", ", ".join(unknown)
         )
-    budget = context.provider_options.get("max_thinking_tokens")
-    if budget not in (
-        None,
-        "",
-    ) and "max_thinking_tokens" not in _applied_effort_settings(context):
-        _LOGGER.warning("Ignoring non-numeric Claude 'max_thinking_tokens' setting.")
+    effort = str(context.provider_options.get("effort", "") or "").strip()
+    if effort and "effort" not in _applied_effort_settings(context):
+        _LOGGER.warning("Ignoring unsupported Claude Code effort '%s'.", effort)
 
 
 def _structured_error(raw: dict[str, Any]) -> AgentRuntimeError | None:

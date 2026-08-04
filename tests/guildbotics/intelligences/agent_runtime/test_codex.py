@@ -862,7 +862,10 @@ async def test_codex_account_and_rate_limit_accept_snake_case_schema(
 # --------------------------------------------------------------------------- #
 
 
-async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> "_Process":
+async def _run_turn_returning(
+    monkeypatch, tmp_path, conversation_overrides=None, **context_overrides
+):
+    """Run one turn and return the fake process together with its result."""
     process = _Process()
 
     async def create_process(*_args, **_kwargs):
@@ -872,10 +875,17 @@ async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> "_Proces
     adapter = CodexAppServerAdapter(policy=AdapterFilesystemPolicy())
     context = _context(tmp_path, **context_overrides)
     conversation = ConversationRecord(
-        key=context.conversation_key, provider_session_id="thread-1"
+        key=context.conversation_key,
+        provider_session_id="thread-1",
+        **(conversation_overrides or {}),
     )
-    await adapter.run_turn("go", context, conversation, lambda _event: None)
+    terminal = await adapter.run_turn("go", context, conversation, lambda _event: None)
     await adapter.close()
+    return process, terminal
+
+
+async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> "_Process":
+    process, _ = await _run_turn_returning(monkeypatch, tmp_path, **context_overrides)
     return process
 
 
@@ -976,6 +986,77 @@ async def test_codex_validates_effort_against_the_default_model_when_none_is_nam
         monkeypatch, tmp_path, effort="low", provider_options={"effort": "low"}
     )
     assert _turn_start(supported)["effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_codex_terminal_result_carries_the_settings_the_turn_ran_with(
+    monkeypatch, tmp_path
+) -> None:
+    _, terminal = await _run_turn_returning(
+        monkeypatch,
+        tmp_path,
+        effort="high",
+        provider_options={"model": "gpt-known", "effort": "high"},
+    )
+    assert (terminal.model, terminal.effort) == ("gpt-known", "high")
+
+
+@pytest.mark.asyncio
+async def test_codex_terminal_result_names_the_catalog_defaults_when_none_imposed(
+    monkeypatch, tmp_path
+) -> None:
+    """A thread that never had settings imposed runs on the catalog defaults:
+    the default model entry and that model's ``defaultReasoningEffort``."""
+    _, terminal = await _run_turn_returning(monkeypatch, tmp_path)
+    assert terminal.model == "gpt-default"
+    assert terminal.effort == "low"
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_thread_keeps_the_settings_the_last_turn_imposed(
+    monkeypatch, tmp_path
+) -> None:
+    """Omitting a setting keeps whatever the last ``turn/start`` carried, so
+    the effective values come from the conversation, not the catalog default."""
+    _, terminal = await _run_turn_returning(
+        monkeypatch,
+        tmp_path,
+        conversation_overrides={
+            "effective_model": "gpt-earlier",
+            "effective_effort": "high",
+        },
+    )
+    assert (terminal.model, terminal.effort) == ("gpt-earlier", "high")
+
+
+@pytest.mark.asyncio
+async def test_an_effort_the_conversation_imposed_beats_the_models_default(
+    monkeypatch, tmp_path
+) -> None:
+    """The catalog default only describes a thread nothing was imposed on."""
+    _, terminal = await _run_turn_returning(
+        monkeypatch,
+        tmp_path,
+        provider_options={"model": "gpt-known"},
+        conversation_overrides={"effective_effort": "low"},
+    )
+    assert (terminal.model, terminal.effort) == ("gpt-known", "low")
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_effort_falls_back_to_the_models_advertised_default(
+    monkeypatch, tmp_path
+) -> None:
+    """An unsupported effort never reaches ``turn/start``, and a conversation
+    that never imposed one runs at the model's own advertised default."""
+    _, terminal = await _run_turn_returning(
+        monkeypatch,
+        tmp_path,
+        effort="high",
+        provider_options={"model": "gpt-known", "effort": "extra-high"},
+    )
+    assert terminal.model == "gpt-known"
+    assert terminal.effort == "high"
 
 
 @pytest.mark.asyncio

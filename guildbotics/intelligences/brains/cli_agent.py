@@ -22,7 +22,11 @@ from guildbotics.intelligences.agent_runtime.models import (
     settings_fingerprint,
 )
 from guildbotics.intelligences.brains.brain import Brain
-from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
+from guildbotics.intelligences.brains.util import (
+    summary_log_line,
+    to_plain_text,
+    to_response_class,
+)
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.effort import (
     ResolvedEffort,
@@ -139,6 +143,10 @@ class CliAgentExecutionResult:
     provider_turn_id: str = ""
     finish_reason: str = ""
     usage: dict[str, int] = field(default_factory=dict)
+    #: What the turn really ran with, as reported by the adapter. Both are empty
+    #: when the provider names neither and the adapter imposed neither.
+    model: str = ""
+    effort: str = ""
 
 
 class CliAgentExecutionError(RuntimeError):
@@ -573,21 +581,14 @@ class CliAgentBrain(Brain):
             try:
                 result = await self._execute(input, cwd, kwargs, effort)
             except Exception:
-                record_span_summary(
-                    status="failed",
-                    model=self.cli_agent,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                    attributes={"agent.kind": "cli_agent"},
-                )
+                self._record_summary(status="failed", started=started)
                 raise
             output: Any = result.stdout
             self._write_response_io(result)
-            record_span_summary(
+            self._record_summary(
                 status="finished" if result.returncode == 0 else "failed",
-                model=self.cli_agent,
-                duration_ms=(time.monotonic() - started) * 1000,
-                usage=result.usage,
-                attributes={"agent.kind": "cli_agent"},
+                started=started,
+                result=result,
             )
             self._raise_if_execution_failed(result)
 
@@ -617,22 +618,51 @@ class CliAgentBrain(Brain):
             try:
                 result = await self._execute(input, cwd, kwargs, effort)
             except Exception:
-                record_span_summary(
-                    status="failed",
-                    model=self.cli_agent,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                    attributes={"agent.kind": "cli_agent"},
-                )
+                self._record_summary(status="failed", started=started)
                 raise
             self._write_response_io(result)
-            record_span_summary(
+            self._record_summary(
                 status="finished" if result.returncode == 0 else "failed",
-                model=self.cli_agent,
-                duration_ms=(time.monotonic() - started) * 1000,
-                usage=result.usage,
-                attributes={"agent.kind": "cli_agent"},
+                started=started,
+                result=result,
             )
         return result
+
+    def _record_summary(
+        self,
+        *,
+        status: str,
+        started: float,
+        result: CliAgentExecutionResult | None = None,
+    ) -> None:
+        """Close the span with what the turn really ran on, and log one line.
+
+        An unknown model stays empty rather than being papered over with the
+        slot name — the span is still attributable through ``agent.slot``, and
+        an invented effective value is worse than an absent one. A run that
+        never reached the provider has no effective values at all.
+        """
+        duration_ms = (time.monotonic() - started) * 1000
+        model = result.model if result else ""
+        effort = result.effort if result else ""
+        record_span_summary(
+            status=status,
+            model=model,
+            effort=effort,
+            duration_ms=duration_ms,
+            usage=result.usage if result else None,
+            attributes={"agent.kind": "cli_agent", "agent.slot": self.cli_agent},
+        )
+        self.logger.info(
+            summary_log_line(
+                "cli_agent",
+                self.cli_agent,
+                status,
+                duration_ms=duration_ms,
+                model=model,
+                effort=effort,
+            )
+        )
 
     def _resolve_provider_effort(self, kwargs: dict[str, Any]) -> EffortDecision:
         """Resolve the effort level and translate it into provider settings."""
@@ -730,7 +760,13 @@ class CliAgentBrain(Brain):
                 # `default` and unspecified state nothing: the turn imposes no
                 # settings, which leaves a resumed session on the ones it
                 # already has instead of rotating it back to provider defaults.
-                effort=(effort.resolved.resolved if effort.resolved.intervenes else ""),
+                # A level whose overlay is empty also imposed nothing of its
+                # own, so it must not be reported as the turn's effort.
+                effort=(
+                    effort.resolved.resolved
+                    if effort.resolved.intervenes and effort.overlay
+                    else ""
+                ),
                 provider_options=dict(effort.provider_options),
                 rebuild_context=str(configured.get("rebuild_context") or ""),
                 rebuild_context_complete=_context_is_complete(configured),
@@ -859,6 +895,10 @@ class CliAgentBrain(Brain):
         conversation.provider_session_id = terminal.provider_session_id
         conversation.provider_turn_id = terminal.provider_turn_id
         conversation.provider = adapter_name
+        # A continued session keeps its settings when a turn states none, so
+        # only a turn that established a value may overwrite what is known.
+        conversation.effective_model = terminal.model or conversation.effective_model
+        conversation.effective_effort = terminal.effort or conversation.effective_effort
         # The cursor is a monotonic watermark of what was fed into the provider
         # session; never let a re-dispatched older event rewind it.
         if not conversation.context_cursor or (
@@ -894,6 +934,8 @@ class CliAgentBrain(Brain):
             provider_turn_id=terminal.provider_turn_id,
             finish_reason=terminal.finish_reason,
             usage=dict(terminal.usage),
+            model=terminal.model,
+            effort=terminal.effort,
         )
 
     def _raise_if_execution_failed(self, result: CliAgentExecutionResult) -> None:

@@ -130,11 +130,12 @@ def record_span_summary(
     *,
     status: str = "finished",
     model: str = "",
+    effort: str = "",
     duration_ms: float | None = None,
     usage: dict[str, Any] | None = None,
     attributes: dict[str, Any] | None = None,
 ) -> None:
-    payload: dict[str, Any] = {"model": model, "usage": usage or {}}
+    payload: dict[str, Any] = {"model": model, "effort": effort, "usage": usage or {}}
     if duration_ms is not None:
         payload["duration_ms"] = round(duration_ms, 3)
     record_correlated_event(

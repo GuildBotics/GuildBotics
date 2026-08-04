@@ -134,6 +134,9 @@ class CodexAppServerAdapter:
         thread_id = await self._resolve_thread(context, conversation)
         self._active_thread_id = thread_id
         turn_settings = await self._turn_settings(context)
+        effective_model, effective_effort = await self._effective_settings(
+            turn_settings, conversation
+        )
         try:
             response = await self._request(
                 "turn/start",
@@ -253,6 +256,8 @@ class CodexAppServerAdapter:
             finish_reason=finish_reason,
             usage=usage,
             stderr=self._transport.stderr_text(),
+            model=effective_model,
+            effort=effective_effort,
         )
 
     async def interrupt(self) -> None:
@@ -390,6 +395,33 @@ class CodexAppServerAdapter:
                 "Ignoring unsupported Codex effort settings: %s", ", ".join(unknown)
             )
         return await self._validated_turn_settings(settings)
+
+    async def _effective_settings(
+        self, settings: dict[str, Any], conversation: ConversationRecord
+    ) -> tuple[str, str]:
+        """The model and effort the turn really runs with.
+
+        ``settings`` has already been validated, so what it still names is what
+        ``turn/start`` carries. A resumed thread keeps whatever the last
+        ``turn/start`` imposed, so an omitted setting falls back to the value
+        the conversation last ran with. A thread that never had one imposed
+        runs on the catalog's advertised defaults: the entry Codex marks as the
+        default model, and the effective model's ``defaultReasoningEffort``.
+        """
+        model = str(settings.get("model", "") or "")
+        effort = str(settings.get("effort", "") or "")
+        if conversation.provider_session_id:
+            model = model or conversation.effective_model
+            effort = effort or conversation.effective_effort
+        catalog = await self._models()
+        if not model:
+            entry = _default_entry(catalog) or {}
+            model = str(entry.get("id", "") or "")
+        if not effort:
+            # An effort this conversation never imposed means every turn ran on
+            # the model's own default, which the catalog names per entry.
+            effort = str(catalog.get(model, {}).get("defaultReasoningEffort", "") or "")
+        return model, effort
 
     async def _validated_turn_settings(
         self, settings: dict[str, Any]

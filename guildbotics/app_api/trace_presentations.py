@@ -237,7 +237,7 @@ def _span_presentation(payload: dict[str, Any], event_type: str) -> TracePresent
     status = event_type.removeprefix("span.")
     model = _first_text(payload, "model")
     duration = payload.get("duration_ms")
-    parts = [model]
+    parts = [model, _first_text(payload, "effort")]
     if isinstance(duration, int | float):
         parts.append(_format_duration(float(duration)))
     message = " · ".join(part for part in parts if part)

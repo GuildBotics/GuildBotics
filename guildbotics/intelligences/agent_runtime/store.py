@@ -112,6 +112,8 @@ class ConversationStore:
             provider=_text(payload.get("provider")),
             model=_text(payload.get("model")),
             settings_fingerprint=_text(payload.get("settings_fingerprint")),
+            effective_model=_text(payload.get("effective_model")),
+            effective_effort=_text(payload.get("effective_effort")),
             healthy=bool(payload.get("healthy", True)),
             turn_count=_integer(payload.get("turn_count")),
             input_tokens=_integer(payload.get("input_tokens")),

@@ -1175,9 +1175,9 @@ def test_every_native_tool_declares_the_settings_its_adapter_applies(
 ) -> None:
     """Each native adapter has real knobs, and the editor must expose them.
 
-    codex takes model/effort on `turn/start`, Claude Code takes a model and a
-    thinking budget, and `grok agent stdio` takes model and reasoning effort as
-    launch options. None of them is limited to raw JSON.
+    codex takes model/effort on `turn/start`, Claude Code takes a model and an
+    effort level as launch flags, and `grok agent stdio` takes model and
+    reasoning effort as launch options. None of them is limited to raw JSON.
     """
     _write_yaml(
         _team_intelligences(tmp_path) / "cli_agent_mapping.yml",
@@ -1196,10 +1196,7 @@ def test_every_native_tool_declares_the_settings_its_adapter_applies(
     }
 
     assert {f.key for f in agents["codex"].effort_fields} == {"effort", "model"}
-    assert {f.key for f in agents["claude"].effort_fields} == {
-        "max_thinking_tokens",
-        "model",
-    }
+    assert {f.key for f in agents["claude"].effort_fields} == {"effort", "model"}
     assert {f.key for f in agents["grok"].effort_fields} == {
         "reasoning_effort",
         "model",

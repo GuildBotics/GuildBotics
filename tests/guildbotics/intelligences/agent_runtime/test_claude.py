@@ -795,7 +795,7 @@ async def adapter_run(monkeypatch, context, events) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Effort: CLI flags, thinking budget, and the session-scoped settings contract
+# Effort: CLI flags, level validation, and the session-scoped settings contract
 # --------------------------------------------------------------------------- #
 
 
@@ -830,6 +830,100 @@ async def _run_turn_with(monkeypatch, tmp_path, **context_overrides):
     return launches[1]
 
 
+async def _terminal_of(
+    monkeypatch,
+    tmp_path,
+    *,
+    init_model: str,
+    conversation: ConversationRecord | None = None,
+    **context_overrides,
+):
+    """Run one turn whose init event names ``init_model``, and return its result."""
+    stream = _StreamProcess(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "session-1",
+                "model": init_model,
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-1",
+                "result": "final",
+                "usage": {},
+            },
+        ]
+    )
+
+    async def create_process(*args, **kwargs):
+        return _HelpProcess() if args[-1] == "--help" else stream
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = ClaudeStreamJsonAdapter()
+    context = _context(tmp_path, **context_overrides)
+    return await adapter.run_turn(
+        "go",
+        context,
+        conversation or ConversationRecord(key=context.conversation_key),
+        lambda _event: None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_claude_terminal_result_carries_the_model_the_session_reported(
+    monkeypatch, tmp_path
+) -> None:
+    terminal = await _terminal_of(
+        monkeypatch,
+        tmp_path,
+        init_model="claude-sonnet-5",
+        effort="high",
+        provider_options={"model": "opus-x", "effort": "xhigh"},
+    )
+    # The provider's own report wins over the requested model: they differ
+    # exactly when the request was an alias or was overridden.
+    assert terminal.model == "claude-sonnet-5"
+    # Claude Code names no effort, so the honest value is the level the adapter
+    # imposed, in Claude Code's own vocabulary rather than the neutral label.
+    assert terminal.effort == "xhigh"
+
+
+@pytest.mark.asyncio
+async def test_claude_terminal_result_claims_no_effort_when_it_imposed_none(
+    monkeypatch, tmp_path
+) -> None:
+    """A turn that imposes nothing leaves the session as it was, so it reports
+    no effort of its own -- Claude Code never names one."""
+    terminal = await _terminal_of(
+        monkeypatch, tmp_path, init_model="claude-sonnet-5", effort="high"
+    )
+    assert terminal.model == "claude-sonnet-5"
+    assert terminal.effort == ""
+
+
+@pytest.mark.asyncio
+async def test_a_continued_session_keeps_reporting_the_effort_it_runs_under(
+    monkeypatch, tmp_path
+) -> None:
+    """Imposing nothing keeps the session's settings, so the effort the session
+    was established with is still the effective one."""
+    context_key_source = _context(tmp_path)
+    conversation = ConversationRecord(
+        key=context_key_source.conversation_key,
+        provider_session_id="session-1",
+        effective_effort="high",
+    )
+    terminal = await _terminal_of(
+        monkeypatch,
+        tmp_path,
+        init_model="claude-sonnet-5",
+        conversation=conversation,
+    )
+    assert terminal.effort == "high"
+
+
 def test_claude_settings_are_session_scoped_so_a_change_rotates() -> None:
     assert ClaudeStreamJsonAdapter.settings_scope == "session"
 
@@ -843,16 +937,37 @@ async def test_claude_effort_model_becomes_a_model_flag(monkeypatch, tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_claude_thinking_budget_becomes_an_environment_variable(
+async def test_claude_effort_level_becomes_an_effort_flag(
     monkeypatch, tmp_path
 ) -> None:
-    _, env = await _run_turn_with(
+    args, env = await _run_turn_with(
         monkeypatch,
         tmp_path,
         effort="high",
-        provider_options={"max_thinking_tokens": 8000},
+        provider_options={"effort": "high"},
     )
-    assert env["MAX_THINKING_TOKENS"] == "8000"
+    assert args[args.index("--effort") + 1] == "high"
+    # The level travels on the command line only; the old thinking-budget
+    # variable is gone.
+    assert "MAX_THINKING_TOKENS" not in env
+
+
+@pytest.mark.asyncio
+async def test_claude_drops_an_effort_level_it_does_not_offer(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """An unknown level is warned about and dropped, so the turn still runs."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        args, _ = await _run_turn_with(
+            monkeypatch,
+            tmp_path,
+            effort="high",
+            provider_options={"effort": "extreme"},
+        )
+    assert "--effort" not in args
+    assert "extreme" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -861,7 +976,23 @@ async def test_claude_imposes_nothing_when_no_effort_is_requested(
 ) -> None:
     args, env = await _run_turn_with(monkeypatch, tmp_path)
     assert "--model" not in args
+    assert "--effort" not in args
     assert "MAX_THINKING_TOKENS" not in env
+
+
+@pytest.mark.asyncio
+async def test_claude_reports_no_effort_when_it_only_imposed_a_model(
+    monkeypatch, tmp_path
+) -> None:
+    """A model-only mapping changes no effort, so none may be claimed."""
+    terminal = await _terminal_of(
+        monkeypatch,
+        tmp_path,
+        init_model="claude-sonnet-5",
+        effort="high",
+        provider_options={"model": "opus-x"},
+    )
+    assert terminal.effort == ""
 
 
 @pytest.mark.asyncio

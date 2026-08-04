@@ -247,8 +247,28 @@ rotates) or `session` (claude, grok).
 Effort decisions are recorded through a safe allowlist — requested level,
 resolved level, effective model id, the *names* of the applied parameters, and
 an unsupported flag — never the effective parameter values, which can sit
-alongside API keys and headers. They surface in trace / diagnostics detail only;
-the activity history is about domain outcomes.
+alongside API keys and headers. The effective model id and the effort level are
+the two deliberate exceptions to "names only": both are values, and both are
+written. They surface in trace / diagnostics detail only; the activity history is
+about domain outcomes.
+
+What a turn *really* ran on is decided by the layer that holds the provider
+knowledge and is carried out on the normal result path: each adapter fills
+`AgentTerminalResult.model` / `.effort` with the value its provider reported
+(claude's `system/init` model, copilot's confirmed session options, grok's
+`initialize` `modelState`) or with the one it imposed itself (codex's validated
+`turn/start` settings and the catalog's advertised default model and
+`defaultReasoningEffort`, claude's and grok's `--effort` / `--reasoning-effort`
+launch flags, `agy`'s command line), and the brain passes
+them to `record_span_summary()` and logs one line per span. A continued session
+keeps its settings when a turn imposes none, so the conversation record
+remembers the last established values (`effective_model` / `effective_effort`,
+cleared on rotation) and a claude turn that imposed no effort, or a codex turn
+that omitted a setting on a resumed thread, reports what the session still runs
+under. A provider that reports nothing and was given nothing leaves both empty
+rather than inventing an effective value; the span's model then stays empty
+too, while the `agent.slot` / `model.slot` attribute always names the slot so
+traces stay searchable whatever model the slot resolved to.
 
 ## 5. Command Execution Framework
 

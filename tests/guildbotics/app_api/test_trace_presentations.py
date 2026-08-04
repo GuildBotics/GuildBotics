@@ -90,10 +90,21 @@ def test_agent_and_span_payloads_are_normalized_in_app_api() -> None:
             payload={"model": "claude-code", "duration_ms": 24_100},
         )
     )
+    with_effort = normalize_trace_presentation(
+        _event(
+            "span.finished",
+            payload={
+                "model": "claude-sonnet-5",
+                "effort": "high",
+                "duration_ms": 24_100,
+            },
+        )
+    )
 
     assert assistant.label_key.endswith("assistant_partial")
     assert assistant.message == "Hello"
     assert span.message == "claude-code · 24.1s"
+    assert with_effort.message == "claude-sonnet-5 · high · 24.1s"
 
 
 def test_workflow_and_dispatch_events_have_meaningful_summaries() -> None:
