@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { expect, test } from "@playwright/test";
 
 import { readStackContext } from "./stack-context";
@@ -72,11 +74,15 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
 test("sends a troubleshooting question through the real backend and reports the failure", async ({
   page,
 }) => {
-  // The diagnostics stack has no LLM API key, so the assistant turn reaches the
-  // real FastAPI endpoint and fails at the agent step. That is exactly the wire
-  // this journey exists to prove: client.ts -> /diagnostics/troubleshoot ->
-  // AppRuntime -> error mapping -> the panel's error alert. Answer quality and
-  // the branch matrix are covered by the unit / component tests.
+  // `functions/troubleshoot` is a `brain: agent` command, so the assistant turn
+  // reaches the real FastAPI endpoint and launches the member's AI CLI tool —
+  // which the harness has shadowed with a stub that fails immediately. That is
+  // exactly the wire this journey exists to prove: client.ts ->
+  // /diagnostics/troubleshoot -> AppRuntime -> error mapping -> the panel's
+  // error alert. Answer quality and the branch matrix are covered by the unit /
+  // component tests.
+  const ctx = readStackContext("diagnostics");
+
   await page.goto("/#/diagnostics?tab=executions");
   await page.getByRole("button", { name: "Ask AI" }).click();
 
@@ -95,7 +101,9 @@ test("sends a troubleshooting question through the real backend and reports the 
 
   const response = await request;
   expect(response.status()).toBeGreaterThanOrEqual(400);
-  await expect(panel.getByText("The troubleshooting AI could not answer")).toBeVisible({
-    timeout: 60_000,
-  });
+  await expect(panel.getByText("The troubleshooting AI could not answer")).toBeVisible();
+
+  // The turn stopped at the stub: the failure came from the harness, not from a
+  // real — possibly logged-in — binary on the machine running the suite.
+  expect(readFileSync(ctx.cliStubLog, "utf-8")).toMatch(/^codex\b/m);
 });
