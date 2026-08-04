@@ -36,7 +36,7 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +66,15 @@ const baseUrl = `http://${host}:${backendPort}`;
 const authHeaders = { "X-GuildBotics-Session-Token": token, "Content-Type": "application/json" };
 const tag = `[e2e:${stackName}]`;
 
+// The stack name is interpolated into every path below, one of which is removed
+// on shutdown. Keep it to an allowlist so a typo such as `../x` cannot write —
+// and later delete — something outside the temp directory.
+if (!/^[a-z][a-z0-9-]*$/.test(stackName)) {
+  throw new Error(
+    `${tag} GUILDBOTICS_E2E_STACK must match /^[a-z][a-z0-9-]*$/, got "${stackName}"`,
+  );
+}
+
 // Isolated, repeatable run dirs.
 const workspaceDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-ws-`));
 const homeDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-home-`));
@@ -76,9 +85,17 @@ const envFile = join(workspaceDir, ".env");
 // It describes this run's live processes only, so it lives beside the temp dirs
 // it points at instead of inside the repo. `e2e/stack-context.ts` mirrors this
 // path derivation on the reader side; the stack name is the only shared input.
-const contextPath = join(tmpdir(), "guildbotics-e2e", `${stackName}.json`);
+// The context carries this run's Local API session token, and on Linux the temp
+// dir is shared between local users, so both the directory and the file must be
+// user-private. `mkdirSync` / `writeFileSync` apply `mode` only when they
+// create, hence the explicit chmod for a directory left by an earlier run and
+// the removal of any stale file before writing.
+const contextDir = join(tmpdir(), "guildbotics-e2e");
+const contextPath = join(contextDir, `${stackName}.json`);
 const seededMemberId = "local-agent";
-mkdirSync(dirname(contextPath), { recursive: true });
+mkdirSync(contextDir, { recursive: true, mode: 0o700 });
+chmodSync(contextDir, 0o700);
+rmSync(contextPath, { force: true });
 writeFileSync(
   contextPath,
   JSON.stringify(
@@ -101,6 +118,7 @@ writeFileSync(
     null,
     2,
   ),
+  { mode: 0o600 },
 );
 console.log(`${tag} stack context: ${contextPath}`);
 

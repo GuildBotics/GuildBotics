@@ -84,6 +84,7 @@ Section-specific notes:
 
   ```bash
   # $WS = workspaceDir from the readme stack context file
+  mkdir -p "$WS/.guildbotics/config/commands"
   printf '#!/bin/sh\nsleep 60\n' > "$WS/.guildbotics/config/commands/sleepy.sh"
   ```
 
