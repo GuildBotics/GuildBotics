@@ -99,9 +99,19 @@ test("sends a troubleshooting question through the real backend and reports the 
   await panel.getByLabel("Message to troubleshooting AI").fill("Why did the service fail?");
   await panel.getByRole("button", { name: "Send" }).click();
 
+  // The wire contract this journey proves: the stub's non-zero exit comes back
+  // as the typed 502 (not an unmapped 500, not a CORS-blocked "Failed to
+  // fetch"), and the panel shows the backend's reason for the failure, not
+  // just a generic failure title. The exact wording is owned by the CLI agent
+  // adapter, so the assertion pins the error type and echoes the response
+  // message into the panel instead of hard-coding adapter prose.
   const response = await request;
-  expect(response.status()).toBeGreaterThanOrEqual(400);
+  expect(response.status()).toBe(502);
+  const body = await response.json();
+  expect(body.code).toBe("troubleshooting_failed");
+  expect(body.message).toContain("exited with code 1");
   await expect(panel.getByText("The troubleshooting AI could not answer")).toBeVisible();
+  await expect(panel.getByText(body.message)).toBeVisible();
 
   // The turn stopped at the stub: the failure came from the harness, not from a
   // real — possibly logged-in — binary on the machine running the suite.

@@ -967,14 +967,13 @@ class CliAgentBrain(Brain):
                 result=result,
             )
         if result.returncode != 0:
-            detail = result.stderr or result.stdout or "no output"
-            raise RuntimeError(
-                f"AI CLI tool '{self.cli_agent}' exited with code {result.returncode}: {detail}"
-            )
+            raise CliAgentExecutionError(cli_agent=self.cli_agent, result=result)
         if not result.stdout:
             detail = result.stderr or "no output"
-            raise RuntimeError(
-                f"AI CLI tool '{self.cli_agent}' produced no response: {detail}"
+            raise CliAgentExecutionError(
+                cli_agent=self.cli_agent,
+                result=result,
+                message=f"AI CLI tool '{self.cli_agent}' produced no response: {detail}",
             )
 
     def _write_request_io(

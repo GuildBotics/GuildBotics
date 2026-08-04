@@ -38,6 +38,10 @@ from guildbotics.commands.authoring import (
     CommandAuthoringChange,
     CommandAuthoringResult,
 )
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+)
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.commands.errors import (
     CommandError,
@@ -2082,7 +2086,12 @@ async def test_troubleshoot_maps_cli_agent_failure_to_bad_gateway(
     runtime = _troubleshooting_runtime(monkeypatch, set())
 
     async def fail(*_: Any, **__: Any) -> Any:
-        raise RuntimeError("AI CLI tool 'default' exited with code 1: not logged in")
+        raise CliAgentExecutionError(
+            cli_agent="default",
+            result=CliAgentExecutionResult(
+                stdout="", stderr="not logged in", returncode=1
+            ),
+        )
 
     monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
 
@@ -2096,6 +2105,27 @@ async def test_troubleshoot_maps_cli_agent_failure_to_bad_gateway(
     assert caught.value.status_code == 502
     assert caught.value.code == "troubleshooting_failed"
     assert "not logged in" in caught.value.message
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_lets_unexpected_defects_stay_internal_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A defect inside the turn must not be dressed up as an agent failure."""
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, set())
+
+    async def fail(*_: Any, **__: Any) -> Any:
+        raise TypeError("'NoneType' object is not subscriptable")
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
+
+    with pytest.raises(TypeError):
+        await runtime.troubleshoot(
+            TroubleshootingRequest(
+                conversation_id="conv-1", message="Why?", person="bot"
+            )
+        )
 
 
 @pytest.mark.asyncio
