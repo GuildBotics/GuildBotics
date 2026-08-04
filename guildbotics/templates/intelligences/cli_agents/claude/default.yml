@@ -11,15 +11,16 @@
 # reconfigured, so changing them starts a fresh session (see `settings_scope`).
 effort:
   low:
-    max_thinking_tokens: 0
+    effort: low
   high:
-    max_thinking_tokens: 8000
+    effort: high
 
-# The settings an editor may offer for each level. `model` is left to a picker
+# The settings an editor may offer for each level. `effort` values are the
+# levels `claude --help` advertises for `--effort`; `model` is left to a picker
 # because the valid ids depend on the installation, not on this file.
 effort_fields:
-  - key: max_thinking_tokens
-    type: integer
-    minimum: 0
+  - key: effort
+    type: enum
+    values: [low, medium, high, xhigh, max]
   - key: model
     type: model_id

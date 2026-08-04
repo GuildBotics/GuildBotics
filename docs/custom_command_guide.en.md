@@ -799,7 +799,7 @@ effort:
 The keys inside a block are provider-specific. The core understands only the common `model` key, which it uses for the settings fingerprint. Each adapter holds an allowlist of the keys it can act on and warns about the rest rather than dropping them silently.
 
 - codex: sends `model` / `effort` on every `turn/start`. Both are validated against `model/list` (`supportedReasoningEfforts`); an unsupported value is warned about and dropped
-- claude: translates `model` into `--model` and `max_thinking_tokens` into the `MAX_THINKING_TOKENS` environment variable
+- claude: translates `model` / `effort` into the `--model` / `--effort` launch flags. They are fixed when the session starts, so changing them starts a fresh session; an effort outside `low` / `medium` / `high` / `xhigh` / `max` is warned about and dropped
 - grok: passes `model` / `reasoning_effort` to `grok agent stdio` as launch options. They are fixed for the life of the process, so changing them starts a fresh session; keys outside that pair are warned about and ignored
 
 ### 9.5. Requesting a level that has no mapping

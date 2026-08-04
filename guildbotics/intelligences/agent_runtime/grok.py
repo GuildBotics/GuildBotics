@@ -105,6 +105,24 @@ class GrokAcpAdapter(AcpAdapterBase):
             "sandbox": _sandbox_profile(self._policy, context.read_only),
         }
 
+    def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
+        # Grok Build names the model the process is fixed to in its
+        # `initialize` response (`_meta.modelState.currentModelId`, observed on
+        # 0.2.114), which also covers a launch that imposed none and ran on the
+        # account default. The reasoning effort is reported nowhere, so only a
+        # launch option that imposed it is known.
+        applied = self.applied_settings(context)
+        reported = str(
+            as_dict(
+                as_dict(self._initialize_result.get("_meta")).get("modelState")
+            ).get("currentModelId", "")
+            or ""
+        )
+        return (
+            reported or str(applied.get("model", "") or ""),
+            str(applied.get("reasoning_effort", "") or ""),
+        )
+
     def _agent_version_of(self, result: dict[str, Any]) -> str:
         # Grok Build reports its version privately rather than in `agentInfo`.
         return str(as_dict(result.get("_meta")).get("agentVersion", ""))

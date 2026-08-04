@@ -147,6 +147,10 @@ class AcpAdapterBase:
         self._gh_config_dir = ""
         self._capabilities: dict[str, Any] = {}
         self._agent_version = ""
+        #: The running process's full `initialize` response. Some providers
+        #: report state here that arrives nowhere else, such as the model the
+        #: process is currently fixed to.
+        self._initialize_result: dict[str, Any] = {}
         self._auth_method = ""
         self._active_session_id = ""
         #: The command the running process was started with. A turn whose launch
@@ -267,6 +271,7 @@ class AcpAdapterBase:
         if self._context_size > 0:
             usage["context_used_tokens"] = self._context_used
             usage["context_size_tokens"] = self._context_size
+        effective_model, effective_effort = self._effective_settings(context)
         return AgentTerminalResult(
             output=output,
             events=tuple(events),
@@ -277,6 +282,8 @@ class AcpAdapterBase:
             finish_reason="completed",
             usage=usage,
             stderr=self._transport.stderr_text(),
+            model=effective_model,
+            effort=effective_effort,
         )
 
     async def interrupt(self) -> None:
@@ -394,6 +401,7 @@ class AcpAdapterBase:
                 "Agent Client Protocol v1.",
                 details={"protocol_version": result.get("protocolVersion")},
             )
+        self._initialize_result = result
         self._capabilities = as_dict(result.get("agentCapabilities"))
         self._agent_version = self._agent_version_of(result)
         if not self._capabilities.get("loadSession") and not self._supports_resume:
@@ -881,6 +889,16 @@ class AcpAdapterBase:
         events returned describe what the session ended up running with.
         """
         return []
+
+    def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
+        """The model and effort the finished turn really ran with.
+
+        ACP itself defines no place for them: one provider reports the values
+        back from its session configuration, another is fixed to what its launch
+        command imposed. A provider that can establish neither reports nothing,
+        because an invented effective value is worse than an absent one.
+        """
+        return "", ""
 
     def _decode_extension(
         self, update: dict[str, Any], session_id: str

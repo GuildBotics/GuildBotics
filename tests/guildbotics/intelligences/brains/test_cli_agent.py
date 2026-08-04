@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from guildbotics.intelligences.brains import cli_agent
@@ -251,7 +253,11 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
     _native_brain(
         monkeypatch,
         cli_agent.CliAgentExecutionResult(
-            stdout="done", stderr=multibyte_stderr, returncode=0
+            stdout="done",
+            stderr=multibyte_stderr,
+            returncode=0,
+            model="claude-sonnet-5",
+            effort="high",
         ),
     )
     monkeypatch.setattr(
@@ -287,6 +293,103 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
     assert io_records[1][1]["stderr"] != multibyte_stderr
     assert io_records[1][1]["stderr_truncated"] is True
     assert span_records[0]["status"] == "finished"
+    # The span names what the turn really ran with, and keeps the slot name on
+    # an attribute so traces stay searchable by slot.
+    assert span_records[0]["model"] == "claude-sonnet-5"
+    assert span_records[0]["effort"] == "high"
+    assert span_records[0]["attributes"] == {
+        "agent.kind": "cli_agent",
+        "agent.slot": "default",
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_model_stays_empty_in_the_span(monkeypatch, tmp_path, caplog):
+    """The slot name lives on ``agent.slot``; it must not pose as the model."""
+    span_records: list[dict] = []
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
+    )
+    monkeypatch.setattr(
+        cli_agent,
+        "record_span_summary",
+        lambda **kwargs: span_records.append(kwargs),
+    )
+
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=logging.getLogger("test"))
+    with caplog.at_level(logging.INFO, logger="test"):
+        await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
+
+    assert span_records[0]["model"] == ""
+    assert span_records[0]["effort"] == ""
+    assert span_records[0]["attributes"]["agent.slot"] == "default"
+    # The log line states only what is known, so an unknown model is absent
+    # rather than reported as the slot name.
+    assert "cli_agent 'default' finished:" in caplog.text
+    assert "model=" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_records_a_failed_span_without_effective_values(
+    monkeypatch, tmp_path
+):
+    span_records: list[dict] = []
+
+    async def failing_turn(self, *, input, **_kwargs):
+        raise RuntimeError("provider is unreachable")
+
+    monkeypatch.setattr(cli_agent.CliAgentBrain, "_execute_native_turn", failing_turn)
+    monkeypatch.setitem(
+        cli_agent.person_cli_agent_mapping,
+        "p1",
+        {"default": cli_agent.ExecutableInfo(adapter="claude")},
+    )
+    monkeypatch.setattr(
+        cli_agent,
+        "record_span_summary",
+        lambda **kwargs: span_records.append(kwargs),
+    )
+
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+    with pytest.raises(RuntimeError):
+        await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
+
+    assert span_records[0]["status"] == "failed"
+    assert span_records[0]["model"] == ""
+    assert span_records[0]["effort"] == ""
+    assert span_records[0]["attributes"]["agent.slot"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_execution_details_carry_the_effective_model_and_effort(
+    monkeypatch, tmp_path
+):
+    span_records: list[dict] = []
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(
+            stdout="done",
+            stderr="",
+            returncode=0,
+            model="gpt-5-codex",
+            effort="low",
+        ),
+    )
+    monkeypatch.setattr(
+        cli_agent,
+        "record_span_summary",
+        lambda **kwargs: span_records.append(kwargs),
+    )
+
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+    result = await brain.run_with_execution_details(
+        "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
+    )
+
+    assert (result.model, result.effort) == ("gpt-5-codex", "low")
+    assert span_records[0]["model"] == "gpt-5-codex"
+    assert span_records[0]["effort"] == "low"
 
 
 @pytest.mark.asyncio
@@ -432,6 +535,53 @@ async def test_a_default_effort_turn_states_no_settings(monkeypatch, tmp_path) -
     assert context.effort == ""
     assert context.provider_options == {}
     assert captured["context"].delegation_id == ""
+
+
+@pytest.mark.asyncio
+async def test_an_unmapped_effort_level_is_not_claimed_as_the_turns_effort(
+    monkeypatch, tmp_path
+) -> None:
+    """A level with an empty overlay imposed nothing of its own.
+
+    The baseline settings still apply, but attributing them to the level would
+    let the turn report an effort it never translated into provider settings.
+    """
+    captured: dict = {}
+
+    async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
+        captured["context"] = context
+        return cli_agent.CliAgentExecutionResult(
+            stdout="answer", stderr="", returncode=0
+        )
+
+    monkeypatch.setattr(
+        cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
+    )
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger(), effort="high")
+    brain.executable_info = cli_agent.ExecutableInfo(
+        adapter="claude-stream-json",
+        parameters={"model": "base-model"},
+    )
+
+    await brain._execute(
+        input="hello",
+        cwd=tmp_path,
+        kwargs={
+            "session_state": {
+                "agent_execution_context": {
+                    "run_id": "run-9",
+                    "work_kind": "troubleshooting",
+                    "workspace_data_root": str(tmp_path),
+                    "read_only": True,
+                },
+            }
+        },
+        effort=brain._resolve_provider_effort({"session_state": {}}),
+    )
+
+    context = captured["context"]
+    assert context.effort == ""
+    assert context.provider_options == {"model": "base-model"}
 
 
 # --------------------------------------------------------------------------- #

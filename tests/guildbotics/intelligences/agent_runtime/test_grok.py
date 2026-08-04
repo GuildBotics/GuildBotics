@@ -312,6 +312,59 @@ async def test_a_turn_without_effort_adds_no_launch_options(
 
 
 @pytest.mark.asyncio
+async def test_terminal_result_carries_the_launch_settings_as_effective(
+    monkeypatch, tmp_path
+) -> None:
+    """The process is fixed to its launch options, so those are what it ran on."""
+    peer = _Peer(updates=[text_chunk("ok")])
+    install(monkeypatch, peer)
+
+    result, _ = await _run(
+        GrokAcpAdapter(),
+        tmp_path,
+        effort="high",
+        provider_options={"model": "grok-4.5", "reasoning_effort": "high"},
+    )
+
+    assert (result.model, result.effort) == ("grok-4.5", "high")
+
+
+@pytest.mark.asyncio
+async def test_the_initialize_reported_model_covers_a_turn_that_imposed_none(
+    monkeypatch, tmp_path
+) -> None:
+    """Grok names the process's current model in `initialize` `_meta.modelState`
+    (observed on 0.2.114), so even a turn on the account default knows its
+    model. The reasoning effort is reported nowhere and stays empty."""
+    peer = _Peer(updates=[text_chunk("ok")])
+    install(monkeypatch, peer)
+
+    result, _ = await _run(GrokAcpAdapter(), tmp_path)
+
+    assert (result.model, result.effort) == ("grok-4.5", "")
+
+
+@pytest.mark.asyncio
+async def test_launch_options_stand_in_when_initialize_names_no_model(
+    monkeypatch, tmp_path
+) -> None:
+    peer = _Peer(
+        initialize=_initialize(_meta={"agentVersion": "0.2.114"}),
+        updates=[text_chunk("ok")],
+    )
+    install(monkeypatch, peer)
+
+    result, _ = await _run(
+        GrokAcpAdapter(),
+        tmp_path,
+        effort="high",
+        provider_options={"model": "grok-code", "reasoning_effort": "low"},
+    )
+
+    assert (result.model, result.effort) == ("grok-code", "low")
+
+
+@pytest.mark.asyncio
 async def test_unknown_effort_settings_are_reported_not_silently_dropped(
     monkeypatch, tmp_path, caplog
 ) -> None:

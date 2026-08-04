@@ -66,6 +66,9 @@ class CopilotAcpAdapter(AcpAdapterBase):
         policy: AdapterFilesystemPolicy | None = None,
     ) -> None:
         super().__init__(executable=executable, timeout=timeout, policy=policy)
+        #: The setting values Copilot reported back for the live session, never
+        #: the ones that were requested.
+        self._confirmed: dict[str, str] = {}
 
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
         return (
@@ -132,6 +135,14 @@ class CopilotAcpAdapter(AcpAdapterBase):
         # contents of the Copilot auth store are never read.
         self._auth_method = _LOGIN_METHOD
 
+    def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
+        # Copilot answers every configuration change with the session's own
+        # option list, so a requested value it never confirmed is not effective.
+        return (
+            self._confirmed.get("model", ""),
+            self._confirmed.get("reasoning_effort", ""),
+        )
+
     async def _configure_session(
         self, session_id: str, context: AgentExecutionContext, result: dict[str, Any]
     ) -> list[AgentEvent]:
@@ -184,6 +195,7 @@ class CopilotAcpAdapter(AcpAdapterBase):
                 "Copilot did not apply the requested session settings: %s",
                 ", ".join(rejected),
             )
+        self._confirmed = {key: current.get(key, "") for key in _SETTING_KEYS}
         return [
             AgentEvent(
                 AgentEventKind.PROCESS,

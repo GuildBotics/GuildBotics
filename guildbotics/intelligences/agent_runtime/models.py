@@ -136,6 +136,12 @@ class ConversationRecord:
     #: Fingerprint of the settings last imposed on this session. Only sessions
     #: whose adapter applies settings per session record one.
     settings_fingerprint: str = ""
+    #: What the session is known to really run with: the last non-empty
+    #: effective values a finished turn reported. A continued session keeps its
+    #: settings when a turn imposes none, so these let such a turn report what
+    #: the session still runs under instead of claiming nothing.
+    effective_model: str = ""
+    effective_effort: str = ""
     healthy: bool = True
     turn_count: int = 0
     input_tokens: int = 0
@@ -164,6 +170,8 @@ class ConversationRecord:
         # Settings belong to the session that is being discarded; the next turn
         # re-imposes its own, or leaves the fresh session on provider defaults.
         self.settings_fingerprint = ""
+        self.effective_model = ""
+        self.effective_effort = ""
         self.rotation_reason = reason
 
 
@@ -192,6 +200,14 @@ class AgentTerminalResult:
     usage: dict[str, int] = field(default_factory=dict)
     stderr: str = ""
     returncode: int = 0
+    #: The model the turn really ran on: the one the provider reported, or the
+    #: one the adapter itself imposed. Empty when neither is known, because an
+    #: invented effective value is worse than an absent one.
+    model: str = ""
+    #: The effort the turn really ran under, in the provider's own vocabulary
+    #: when it reports one and in the provider-neutral one when the adapter
+    #: imposed it. Empty when nothing was applied or reported.
+    effort: str = ""
 
 
 class AgentRuntimeError(RuntimeError):

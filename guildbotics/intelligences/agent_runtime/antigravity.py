@@ -329,6 +329,11 @@ class AntigravityStreamJsonAdapter:
             usage=usage,
             stderr=stderr.strip(),
             returncode=returncode,
+            # `agy` never names the model it ran on, so the only effective value
+            # is the one this turn put on the command line. A turn that named
+            # none leaves both empty rather than guessing the account default.
+            model=str(settings.get("model", "")),
+            effort=str(settings.get("effort", "")),
         )
 
     async def interrupt(self) -> None:

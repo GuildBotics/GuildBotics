@@ -19,7 +19,7 @@ async def test_agno_agent_records_request_response_and_span(
         "default": agno_agent.ModelConfig(
             name="models/test.yml",
             model_class="tests.FakeModel",
-            parameters={},
+            parameters={"id": "test-model-5"},
         )
     }
 
@@ -53,7 +53,7 @@ async def test_agno_agent_records_request_response_and_span(
         brain = agno_agent.AgnoAgentDefaultBrain(
             "p1",
             "functions/reply",
-            logger=type("L", (), {})(),
+            logger=logging.getLogger("test"),
             description="System prompt",
         )
         output = await brain.run("hello", session_state={"topic": "style"})
@@ -71,7 +71,11 @@ async def test_agno_agent_records_request_response_and_span(
     assert io_records[0][1]["session_state"] == {"topic": "style"}
     assert io_records[1][1]["content"] == "reply"
     assert span_records[0].get("status", "finished") == "finished"
-    assert span_records[0]["model"] == "models/test.yml"
+    # The span names the model the request was really made with, and keeps the
+    # slot definition name on an attribute so traces stay searchable by slot.
+    assert span_records[0]["model"] == "test-model-5"
+    assert span_records[0]["effort"] == ""
+    assert span_records[0]["attributes"] == {"model.slot": "models/test.yml"}
 
 
 def _model_config(**overrides) -> "agno_agent.ModelConfig":
@@ -89,8 +93,13 @@ async def _run_with_effort(
     model_config,
     frontmatter_effort: str = "",
     session_state: dict | None = None,
+    span_records: list[dict] | None = None,
 ) -> tuple[dict, list[tuple[str, dict]]]:
-    """Run the brain and return the model parameters it instantiated."""
+    """Run the brain and return the model parameters it instantiated.
+
+    Callers that care about the span summary pass ``span_records`` to collect
+    the arguments every ``record_span_summary`` call was made with.
+    """
     original = agno_agent.person_model_mapping.copy()
     io_records: list[tuple[str, dict]] = []
     captured: dict = {}
@@ -114,7 +123,10 @@ async def _run_with_effort(
         "record_correlated_io",
         lambda *, io_type, payload: io_records.append((io_type, payload)),
     )
-    monkeypatch.setattr(agno_agent, "record_span_summary", lambda **kwargs: None)
+    spans = span_records if span_records is not None else []
+    monkeypatch.setattr(
+        agno_agent, "record_span_summary", lambda **kwargs: spans.append(kwargs)
+    )
     monkeypatch.setattr(agno_agent, "instantiate_class", fake_instantiate)
     monkeypatch.setattr(agno_agent, "Agent", FakeAgent)
 
@@ -153,6 +165,57 @@ async def test_effort_overlay_may_replace_the_model_id(monkeypatch) -> None:
     )
     assert parameters["id"] == "stronger-model"
     assert io_records[0][1]["effort"]["model"] == "stronger-model"
+
+
+@pytest.mark.asyncio
+async def test_span_summary_reports_the_model_the_overlay_switched_to(
+    monkeypatch,
+) -> None:
+    config = _model_config(effort={"high": {"id": "stronger-model"}})
+    spans: list[dict] = []
+    await _run_with_effort(
+        monkeypatch,
+        model_config=config,
+        frontmatter_effort="high",
+        span_records=spans,
+    )
+    assert spans[0]["model"] == "stronger-model"
+    assert spans[0]["effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_span_summary_reports_no_effort_when_the_level_is_unmapped(
+    monkeypatch,
+) -> None:
+    """An unmapped level changes nothing, so the span must not claim it ran."""
+    spans: list[dict] = []
+    await _run_with_effort(
+        monkeypatch,
+        model_config=_model_config(effort={}),
+        frontmatter_effort="high",
+        span_records=spans,
+    )
+    assert spans[0]["model"] == "base-model"
+    assert spans[0]["effort"] == ""
+
+
+@pytest.mark.asyncio
+async def test_span_model_stays_empty_when_the_definition_names_no_id(
+    monkeypatch,
+) -> None:
+    """A request without an id runs on the provider default, which is unknown.
+
+    The slot name must not stand in for it; the span stays attributable through
+    ``model.slot``."""
+    spans: list[dict] = []
+    config = agno_agent.ModelConfig(
+        name="models/test.yml",
+        model_class="tests.FakeModel",
+        parameters={"temperature": 0.2},
+    )
+    await _run_with_effort(monkeypatch, model_config=config, span_records=spans)
+    assert spans[0]["model"] == ""
+    assert spans[0]["attributes"] == {"model.slot": "models/test.yml"}
 
 
 @pytest.mark.asyncio

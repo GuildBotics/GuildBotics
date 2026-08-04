@@ -9,7 +9,11 @@ from agno.models.base import Model
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from guildbotics.intelligences.brains.brain import Brain
-from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
+from guildbotics.intelligences.brains.util import (
+    summary_log_line,
+    to_plain_text,
+    to_response_class,
+)
 from guildbotics.intelligences.effort import (
     effort_diagnostics,
     effort_settings,
@@ -195,30 +199,31 @@ class AgnoAgentDefaultBrain(Brain):
                 self.model_config.rate_limit.max_requests_per_minute,
             )
         message = self.patch_message(message)
+        # The request is made with this id, so it is the effective model whether
+        # or not the call succeeds. The effort level is effective only when it
+        # actually contributed settings.
+        model_id = str(model_parameters.get("id", "") or "")
+        applied_effort = resolved.resolved if overlay else ""
         with span_scope("llm"):
             started = time.monotonic()
             self._write_request_io(
                 message,
                 description,
                 kwargs,
-                effort_diagnostics(
-                    resolved, overlay, model=str(model_parameters.get("id", "") or "")
-                ),
+                effort_diagnostics(resolved, overlay, model=model_id),
             )
             try:
                 response = await agent.arun(message)
             except Exception:
-                record_span_summary(
-                    status="failed",
-                    model=self.model_config.name,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                )
+                self._record_summary("failed", started, model_id, applied_effort)
                 raise
             content = response.content
             self._write_response_io(content)
-            record_span_summary(
-                model=self.model_config.name,
-                duration_ms=(time.monotonic() - started) * 1000,
+            self._record_summary(
+                "finished",
+                started,
+                model_id,
+                applied_effort,
                 usage=_response_usage(response),
             )
         if self.response_class and (
@@ -228,6 +233,40 @@ class AgnoAgentDefaultBrain(Brain):
             content = to_response_class(str(content), self.response_class)
 
         return content
+
+    def _record_summary(
+        self,
+        status: str,
+        started: float,
+        model: str,
+        effort: str,
+        usage: dict[str, Any] | None = None,
+    ) -> None:
+        """Close the span with the model the request was really made with.
+
+        A definition that names no model id of its own leaves the span's model
+        empty — the request ran on the provider's default, which is unknown —
+        while ``model.slot`` still names the slot so traces stay searchable.
+        """
+        duration_ms = (time.monotonic() - started) * 1000
+        record_span_summary(
+            status=status,
+            model=model,
+            effort=effort,
+            duration_ms=duration_ms,
+            usage=usage,
+            attributes={"model.slot": self.model_config.name},
+        )
+        self.logger.info(
+            summary_log_line(
+                "llm",
+                self.model_config.name,
+                status,
+                duration_ms=duration_ms,
+                model=model,
+                effort=effort,
+            )
+        )
 
     def patch_message(self, message: str) -> str:
         """

@@ -39,6 +39,8 @@ class _Adapter:
         self.fail = False
         self.prompts: list[str] = []
         self.contexts = []
+        self.model = ""
+        self.effort = ""
 
     def applied_settings(self, context):
         return dict(context.provider_options)
@@ -68,6 +70,8 @@ class _Adapter:
             provider_session_id="thread-1",
             provider_turn_id="turn-1",
             usage={"input_tokens": 2, "output_tokens": 1},
+            model=self.model,
+            effort=self.effort,
         )
 
 
@@ -377,6 +381,59 @@ async def test_native_brain_persists_cursor_only_after_terminal_success(
     assert persisted is not None
     assert persisted.context_cursor == "cursor-1"
     assert persisted.healthy is False
+
+
+@pytest.mark.asyncio
+async def test_native_brain_remembers_the_sessions_effective_settings(
+    monkeypatch, tmp_path
+) -> None:
+    """A turn that reports no values keeps what the session is known to run on."""
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["aiko"] = {
+        "default": cli_agent.ExecutableInfo(adapter="codex")
+    }
+    adapter = _Adapter()
+    adapter.model = "gpt-established"
+    adapter.effort = "high"
+
+    async def get_adapter(*_args):
+        return adapter
+
+    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
+    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    state = {
+        "agent_execution_context": {
+            "run_id": "run-1",
+            "workspace_data_root": str(tmp_path),
+            "work_kind": "ticket",
+            "work_identity": "issue-363",
+            "resume_policy": "auto",
+        }
+    }
+    try:
+        first = await brain.run_with_execution_details(
+            "first", cwd=tmp_path, session_state=state
+        )
+        adapter.model = ""
+        adapter.effort = ""
+        second = await brain.run_with_execution_details(
+            "second", cwd=tmp_path, session_state=state
+        )
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    key = ConversationKey("aiko", "codex", "ticket", "issue-363")
+    persisted = ConversationStore(tmp_path).load(key)
+    assert (first.model, first.effort) == ("gpt-established", "high")
+    # The second turn itself reported nothing ...
+    assert (second.model, second.effort) == ("", "")
+    # ... but the conversation still knows what the session runs on.
+    assert persisted is not None
+    assert persisted.effective_model == "gpt-established"
+    assert persisted.effective_effort == "high"
 
 
 @pytest.mark.asyncio

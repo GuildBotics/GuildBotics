@@ -809,7 +809,7 @@ effort:
 ブロック内のキーはプロバイダ固有です。コアが解釈するのは共通キー `model` のみで、フィンガープリント計算に使われます。アダプタは自分が扱えるキーの allowlist を持ち、未知のキーは警告ログに出して無視します（黙って捨てません）。
 
 - codex: `model` / `effort` を `turn/start` で毎ターン送信。`model/list` の `supportedReasoningEfforts` で検証し、非対応値は警告して落とします
-- claude: `model` を `--model` に、`max_thinking_tokens` を環境変数 `MAX_THINKING_TOKENS` に翻訳します
+- claude: `model` / `effort` を起動フラグ `--model` / `--effort` に翻訳します。セッション開始時に固定されるため、変更時は新しいセッションを開始します。`low` / `medium` / `high` / `xhigh` / `max` 以外の effort は警告のうえ落とします
 - grok: `model` / `reasoning_effort` を `grok agent stdio` の起動オプションとして渡します。プロセス起動時に固定されるため、変更時は新しいセッションを開始します。この2つ以外のキーは警告のうえ無視されます
 
 ### 9.5. mapping が無いレベルを指定した場合

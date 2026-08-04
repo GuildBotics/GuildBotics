@@ -458,6 +458,24 @@ async def test_an_effective_value_is_reported_not_the_requested_one(
     assert settings.details["model"] == "gpt-5-mini"
     assert settings.details["reasoning_effort"] == "medium"
     assert settings.details["rejected"] == ["reasoning_effort"]
+    # The turn result has to agree: the session kept its own effort.
+    assert (_result.model, _result.effort) == ("gpt-5-mini", "medium")
+
+
+@pytest.mark.asyncio
+async def test_the_terminal_result_carries_the_confirmed_session_settings(
+    monkeypatch, tmp_path
+) -> None:
+    peer = _Peer()
+    install(monkeypatch, peer)
+
+    result, _events = await _run(
+        CopilotAcpAdapter(),
+        tmp_path,
+        provider_options={"model": "gpt-5-mini", "reasoning_effort": "low"},
+    )
+
+    assert (result.model, result.effort) == ("gpt-5-mini", "low")
 
 
 @pytest.mark.asyncio
