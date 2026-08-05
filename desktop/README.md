@@ -101,7 +101,7 @@ cd desktop
 npm run e2e
 ```
 
-`npm run e2e` は backend（temp workspace）と Vite を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。
+`npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ backend（temp workspace）と Vite を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
 
 | spec                      | journey                                                                                                                                                                                       |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -116,7 +116,7 @@ npm run e2e
 
 - レポート / 成果物は `desktop/playwright-report/` と `desktop/test-results/`（いずれも `.gitignore` 済み）。
 - 各スタックの backend は temp workspace / temp HOME に加えて、AI CLIツール（`codex` など）を即失敗するスタブで置き換えた bin ディレクトリを PATH 先頭に持ちます。`brain: agent` の journey（⑤のトラブルシューティングAI）でも実バイナリは起動しません。
-- E2E は `npm run quality` と通常 push CI には含めず、専用ジョブ（workflow_dispatch / nightly）で回す方針（テスト戦略の全体は `AGENTS.md`「テスト実装の考え方」参照）。
+- E2E は通常 push CI には含めません。`.github/workflows/desktop-e2e.yml` の専用 workflow が、関連ファイルを変更する pull request、手動実行、nightly で実行します。pull request と手動実行では head/base を別ジョブで検証するため、同一 workflow 上で結果を比較できます。手動実行では `head_ref` と `base_ref` に branch、tag、または commit SHA を指定します（テスト戦略の全体は `AGENTS.md`「テスト実装の考え方」参照）。
 - 接続先 host / ポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。
 - Tauri ネイティブ（packaged app / sidecar 起動 / file picker）の smoke は別ティアで、実 macOS または Linux + Tauri runtime が必要（§2〜§3 のビルド手順を参照）。
 

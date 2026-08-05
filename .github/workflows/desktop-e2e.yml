@@ -1,0 +1,123 @@
+name: Desktop E2E
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-e2e.yml"
+      - "desktop/**"
+      - "guildbotics/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+    inputs:
+      head_ref:
+        description: "Head ref or commit to verify"
+        required: true
+        default: "main"
+      base_ref:
+        description: "Base ref or commit to compare"
+        required: true
+        default: "main"
+  schedule:
+    - cron: "17 18 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-e2e-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    name: Playwright (${{ matrix.revision }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: ${{ github.event_name == 'schedule' && fromJSON('["main"]') || fromJSON('["head", "base"]') }}
+    env:
+      UV_LOCKED: "1"
+    steps:
+      - name: Resolve revision
+        id: revision
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MATRIX_REVISION: ${{ matrix.revision }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          INPUT_HEAD_REF: ${{ inputs.head_ref }}
+          INPUT_BASE_REF: ${{ inputs.base_ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if [ "$MATRIX_REVISION" = "head" ]; then
+              ref="$PR_HEAD_SHA"
+              repository="$PR_HEAD_REPOSITORY"
+            else
+              ref="$PR_BASE_SHA"
+              repository="$GITHUB_REPOSITORY"
+            fi
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$MATRIX_REVISION" = "head" ]; then
+              ref="$INPUT_HEAD_REF"
+            else
+              ref="$INPUT_BASE_REF"
+            fi
+          else
+            ref="$EVENT_SHA"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [ -n "${repository:-}" ]; then
+            echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          else
+            echo "repository=$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout ${{ matrix.revision }} revision
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.revision.outputs.repository }}
+          ref: ${{ steps.revision.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync Python dependencies
+        run: uv sync --extra test --extra dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: desktop
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E
+        working-directory: desktop
+        run: npm run e2e
+
+      - name: Upload Playwright diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            desktop/playwright-report
+            desktop/test-results
+          if-no-files-found: ignore
+          retention-days: 14
