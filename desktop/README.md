@@ -115,6 +115,7 @@ npm run e2e
 補足:
 
 - レポート / 成果物は `desktop/playwright-report/` と `desktop/test-results/`（いずれも `.gitignore` 済み）。
+- 各スタックの backend は temp workspace / temp HOME に加えて、AI CLIツール（`codex` など）を即失敗するスタブで置き換えた bin ディレクトリを PATH 先頭に持ちます。`brain: agent` の journey（⑤のトラブルシューティングAI）でも実バイナリは起動しません。
 - E2E は `npm run quality` と通常 push CI には含めず、専用ジョブ（workflow_dispatch / nightly）で回す方針（テスト戦略の全体は `AGENTS.md`「テスト実装の考え方」参照）。
 - 接続先 host / ポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。
 - Tauri ネイティブ（packaged app / sidecar 起動 / file picker）の smoke は別ティアで、実 macOS または Linux + Tauri runtime が必要（§2〜§3 のビルド手順を参照）。

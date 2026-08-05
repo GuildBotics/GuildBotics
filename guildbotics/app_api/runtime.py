@@ -132,6 +132,7 @@ from guildbotics.intelligences.agent_runtime.usage import (
     CliAgentUsageSnapshot,
     read_codex_usage,
 )
+from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, resolve_cli_agent_path
 from guildbotics.intelligences.troubleshooting import troubleshoot_turn
 from guildbotics.observability import new_id, trace_scope
@@ -465,9 +466,17 @@ class AppRuntime:
                 ),
             ):
                 yield context, trace_id
+        except AppApiError:
+            raise
         except WorkRejectedError as exc:
             raise AppApiError("work_rejected", str(exc), status_code=409) from exc
-        except CommandError as exc:
+        except (CommandError, CliAgentExecutionError) as exc:
+            # The turn drives a foreign agent: an AI CLI tool that exits
+            # non-zero, a provider that rejects the credential, a response the
+            # prompt cannot use. Every one of them is a failed assistant turn
+            # the panel must be able to explain with the tool's own reason.
+            # Anything else is a defect, not an agent failure: it stays a
+            # generic 500 so internal wording never reaches the client.
             raise AppApiError(failure_code, str(exc), status_code=502) from exc
         finally:
             await context.aclose()

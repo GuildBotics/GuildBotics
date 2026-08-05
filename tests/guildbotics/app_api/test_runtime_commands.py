@@ -38,6 +38,10 @@ from guildbotics.commands.authoring import (
     CommandAuthoringChange,
     CommandAuthoringResult,
 )
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+)
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.commands.errors import (
     CommandError,
@@ -2071,6 +2075,83 @@ async def test_troubleshoot_maps_assistant_failure_to_bad_gateway(
 
     assert caught.value.status_code == 502
     assert caught.value.code == "troubleshooting_failed"
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_maps_cli_agent_failure_to_bad_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An AI CLI tool that exits non-zero must reach the panel as its own reason."""
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, set())
+
+    async def fail(*_: Any, **__: Any) -> Any:
+        raise CliAgentExecutionError(
+            cli_agent="default",
+            result=CliAgentExecutionResult(
+                stdout="", stderr="not logged in", returncode=1
+            ),
+        )
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
+
+    with pytest.raises(AppApiError) as caught:
+        await runtime.troubleshoot(
+            TroubleshootingRequest(
+                conversation_id="conv-1", message="Why?", person="bot"
+            )
+        )
+
+    assert caught.value.status_code == 502
+    assert caught.value.code == "troubleshooting_failed"
+    assert "not logged in" in caught.value.message
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_lets_unexpected_defects_stay_internal_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A defect inside the turn must not be dressed up as an agent failure."""
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, set())
+
+    async def fail(*_: Any, **__: Any) -> Any:
+        raise TypeError("'NoneType' object is not subscriptable")
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
+
+    with pytest.raises(TypeError):
+        await runtime.troubleshoot(
+            TroubleshootingRequest(
+                conversation_id="conv-1", message="Why?", person="bot"
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_keeps_the_app_api_error_a_turn_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An already-typed failure keeps its code and status instead of becoming 502."""
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _troubleshooting_runtime(monkeypatch, set())
+
+    async def fail(*_: Any, **__: Any) -> Any:
+        raise AppApiError(
+            "person_not_found", "Person 'bot' not found.", status_code=400
+        )
+
+    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
+
+    with pytest.raises(AppApiError) as caught:
+        await runtime.troubleshoot(
+            TroubleshootingRequest(
+                conversation_id="conv-1", message="Why?", person="bot"
+            )
+        )
+
+    assert caught.value.status_code == 400
+    assert caught.value.code == "person_not_found"
 
 
 @pytest.mark.asyncio

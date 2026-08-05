@@ -28,17 +28,18 @@
 // nothing behind inside the repository even when it is interrupted. The backend
 // cwd is the temp workspace, so `/config/init` writes
 // `<workspace>/.guildbotics/config/...` on disk. HOME is redirected to a second
-// temp dir to keep the run hermetic.
+// temp dir, and the backend's PATH starts with a stub bin dir, to keep the run
+// hermetic.
 //
 // Vite runs in the foreground; when Playwright tears the web server down it kills
 // this process group, and the SIGINT/SIGTERM handlers below stop the backend so
 // no orphan uvicorn survives.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -81,6 +82,46 @@ const homeDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-home-`)
 const configDir = join(workspaceDir, ".guildbotics", "config");
 const envFile = join(workspaceDir, ".env");
 
+// The catalog of AI CLI tools lives on the Python side; read it from there so a
+// newly supported tool is shadowed below without a second list to keep in sync.
+function cliAgentExecutables() {
+  const source = [
+    "import json",
+    "from guildbotics.intelligences.cli_agents import CLI_AGENTS",
+    "print(json.dumps([agent.executable for agent in CLI_AGENTS]))",
+  ].join("; ");
+  return JSON.parse(
+    execFileSync("uv", ["run", "--project", repoRoot, "python", "-c", source], {
+      encoding: "utf-8",
+    }),
+  );
+}
+
+// Shadow every AI CLI tool with a stub that records the call and fails at once,
+// and put the stub dir at the FRONT of the backend's PATH. A journey that
+// reaches the agent path — `brain: agent`, as `functions/troubleshoot` does —
+// would otherwise launch whatever real binary the developer has installed: a
+// live, billed agent turn on a logged-in machine, a test-timeout on a logged-out
+// one, and an instant miss on CI where nothing is installed at all. Shadowing
+// keeps that wiring under test while the run stays hermetic and fast, and the
+// log lets a spec prove the real binary was never reached.
+const cliStubDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-bin-`));
+const cliStubLog = join(cliStubDir, "invocations.log");
+writeFileSync(cliStubLog, "", { mode: 0o600 });
+for (const executable of cliAgentExecutables()) {
+  writeFileSync(
+    join(cliStubDir, executable),
+    [
+      "#!/bin/sh",
+      `echo "${executable} $*" >> "${cliStubLog}"`,
+      `echo "e2e: '${executable}' is stubbed; this stack never runs a real AI CLI tool" >&2`,
+      "exit 1",
+      "",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+}
+
 // Publish the run context so specs can read the on-disk project.yml / seeded ids.
 // It describes this run's live processes only, so it lives beside the temp dirs
 // it points at instead of inside the repo. `e2e/stack-context.ts` mirrors this
@@ -105,6 +146,7 @@ writeFileSync(
       homeDir,
       configDir,
       envFile,
+      cliStubLog,
       backendPort,
       frontendPort,
       controlPort,
@@ -123,6 +165,9 @@ writeFileSync(
 console.log(`${tag} stack context: ${contextPath}`);
 
 const backendEnv = { ...process.env, HOME: homeDir };
+// `get_cli_agent_search_path` appends the usual install locations after PATH, so
+// the stubs only win by being first.
+backendEnv.PATH = [cliStubDir, backendEnv.PATH].filter(Boolean).join(delimiter);
 // Force the workspace config layout (`<cwd>/.guildbotics/config`) by removing any
 // inherited override; this yields config-status `primary_config_location=workspace`.
 delete backendEnv.GUILDBOTICS_CONFIG_DIR;
@@ -260,10 +305,10 @@ async function seedWorkspace() {
     roles: ["architect"],
     speaking_style: "concise",
   });
-  // No AI CLI tool is stubbed: every tool is driven by a built-in adapter that
-  // launches the real binary, so the journeys deliberately stay off the agent
-  // path (the command journey runs a `brain: none` command, and the service
-  // journey starts only the event trigger).
+  // The seeded `cli_agent` resolves to the stub in `cliStubDir`, so a journey
+  // that does reach the agent path fails fast instead of driving the real
+  // binary. The command journey (`brain: none`) and the service journey (event
+  // trigger only) stay off that path to begin with.
   console.log(`${tag} seeded configured workspace (workspace=${workspaceDir})`);
 }
 

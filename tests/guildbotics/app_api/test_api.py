@@ -2342,6 +2342,26 @@ def test_unexpected_error_maps_to_internal_error(tmp_path: Path) -> None:
     }
 
 
+def test_unexpected_error_response_carries_cors_headers(tmp_path: Path) -> None:
+    """Without them the browser hides the body and the app shows a bare failure."""
+
+    class BoomStub(RuntimeStub):
+        def get_team_summary(self) -> TeamSummary:
+            raise RuntimeError("boom")
+
+    client = TestClient(
+        create_app(session_token="secret", runtime=BoomStub(tmp_path)),
+        raise_server_exceptions=False,
+    )
+
+    response = client.get(
+        "/team", headers={**AUTH_HEADERS, "Origin": "http://localhost:1420"}
+    )
+
+    assert response.status_code == HTTP_INTERNAL_SERVER_ERROR
+    assert response.headers["access-control-allow-origin"] == "http://localhost:1420"
+
+
 # --- config / workspace --------------------------------------------------
 
 
