@@ -41,10 +41,19 @@ import {
   type ActivityHistoryResponse,
   type ActivityHistorySession,
   type CliAgentUsage,
+  type RuntimeActiveWork,
   getActivityHistory,
+  getSchedulerStatus,
+  getTraceDetail,
   memberAvatarUrl,
 } from "../api/client";
 import { useMemberCliAgentLabel, useMemberCliAgentUsage } from "../cliAgent";
+import {
+  latestPresentation,
+  tracePresentationLabel,
+  tracePresentationMessage,
+  tracePresentationTone,
+} from "../tracePresentation";
 import { traceStatusColor } from "../traceStatus";
 
 // Statuses from the workflow-completion / dispatch-lifecycle layers
@@ -79,6 +88,8 @@ const ACTIVITY_LIMIT = 1000;
 const ACTIVITY_BLOCK_MINUTES = 60;
 const EVENT_STACK_WINDOW_MS = 60 * 1000;
 const EVENT_STACK_GAP_PX = 18;
+/** How often the member status line re-reads the trace of work that is still running. */
+const ACTIVE_WORK_POLL_MS = 1000;
 
 // Week-view row height mirrors the stacked-bar geometry of `.activity-week-day`
 // in styles.css: each bar is WEEK_BLOCK_HEIGHT_PX tall, bars are separated by
@@ -243,6 +254,18 @@ function ActivityChart({
   matches: ActivityHistoryMatchState;
 }) {
   const { t } = useTranslation();
+  const runtime = useQuery({
+    queryKey: ["scheduler"],
+    queryFn: getSchedulerStatus,
+    refetchInterval: 5000,
+  });
+  const activeWorkByMember = new Map<string, RuntimeActiveWork>();
+  for (const work of runtime.data?.active_works ?? []) {
+    const current = activeWorkByMember.get(work.person_id);
+    if (!current || work.started_at > current.started_at) {
+      activeWorkByMember.set(work.person_id, work);
+    }
+  }
   const sessionsByMember = groupBy(data.sessions, (session) => session.person_id);
   const eventsByMember = groupBy(
     data.events.filter((event) => event.person_id),
@@ -296,6 +319,7 @@ function ActivityChart({
           avatar={member.person_id.substring(0, 2).toUpperCase()}
           sessions={sessionsByMember.get(member.person_id) ?? []}
           events={eventsByMember.get(member.person_id) ?? []}
+          activeWork={activeWorkByMember.get(member.person_id) ?? null}
           range={range}
           view={view}
           now={now}
@@ -319,6 +343,7 @@ function ActivityTimelineRow({
   now,
   matches,
   member,
+  activeWork = null,
   team = false,
 }: {
   label: string;
@@ -330,6 +355,7 @@ function ActivityTimelineRow({
   now: Date | null;
   matches: ActivityHistoryMatchState;
   member?: ActivityHistoryMember;
+  activeWork?: RuntimeActiveWork | null;
   team?: boolean;
 }) {
   const { t } = useTranslation();
@@ -381,6 +407,7 @@ function ActivityTimelineRow({
             </span>
           ) : null}
           {usage ? <MemberUsageMeters usage={usage} /> : null}
+          {activeWork ? <MemberActiveWorkStatus work={activeWork} /> : null}
         </div>
       </div>
       <div className="activity-timeline-cell" style={{ minHeight: rowMinHeight }}>
@@ -446,6 +473,38 @@ function MemberCliAgentRole({ member }: { member: ActivityHistoryMember }) {
     return null;
   }
   return <span className="activity-member-role">{label}</span>;
+}
+
+// Live status under the member name: the newest presentation record of the
+// trace behind the member's currently running work, mirroring the quick-run
+// window's bottom status line. Falls back to the command name until the trace
+// writes its first record. Links to the trace in the diagnostics executions
+// view, the same deep link system alerts use.
+function MemberActiveWorkStatus({ work }: { work: RuntimeActiveWork }) {
+  const { t } = useTranslation();
+  const trace = useQuery({
+    queryKey: ["activity-active-trace", work.id],
+    queryFn: () => getTraceDetail(work.id),
+    refetchInterval: ACTIVE_WORK_POLL_MS,
+    retry: false,
+  });
+  const presentation = latestPresentation(trace.data?.records ?? []);
+  const message =
+    (presentation && tracePresentationMessage(t, presentation)) ||
+    (presentation && tracePresentationLabel(t, presentation)) ||
+    work.command;
+  const tone = presentation ? tracePresentationTone(presentation) : "neutral";
+  return (
+    <Link
+      className={`activity-member-current activity-member-current-${tone}`}
+      aria-label={t("activity.nowRunning")}
+      title={message}
+      to={`/diagnostics?tab=executions&trace_id=${encodeURIComponent(work.id)}`}
+    >
+      <span className="activity-member-current-dot" aria-hidden="true" />
+      <span className="activity-member-current-message">{message}</span>
+    </Link>
+  );
 }
 
 function TimelineGrid({ view, range }: { view: ActivityView; range: { start: Date; end: Date } }) {
@@ -529,7 +588,6 @@ function ActivityBlockBar({
   const right = positionInRange(end, range);
   const width = Math.max(0, right - left);
   const stateClass = searchStateClass(searchActive, matched);
-  const visibleTitle = activityBlockVisibleTitle(block.title);
   // Rate limiting takes visual priority (it already has its own affordance);
   // otherwise the strongest completion/dispatch status alert on the block
   // gets its own tinted state so retry-scheduled/abandoned/incomplete
@@ -563,7 +621,7 @@ function ActivityBlockBar({
           {block.rate_limit || block.status_alert ? (
             <CircleAlert className="activity-session-alert-icon" size={13} aria-hidden="true" />
           ) : null}
-          <span>{visibleTitle}</span>
+          <span>{block.title}</span>
         </button>
       </HoverCard.Target>
       <HoverCard.Dropdown className="activity-hover-card">
@@ -1155,15 +1213,6 @@ function activeRateLimitForSessions(
     },
     null,
   );
-}
-
-function activityBlockVisibleTitle(title: string): string {
-  const trimmed = title.trim();
-  const withoutPullRequestPrefix = trimmed.replace(
-    /^(?:PR|Pull Request)\s*#\d+\s*[:\-–—]?\s*/i,
-    "",
-  );
-  return withoutPullRequestPrefix || trimmed;
 }
 
 export function sessionsTimeSpan(sessions: ActivityHistorySession[]): {

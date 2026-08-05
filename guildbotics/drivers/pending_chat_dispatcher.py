@@ -163,12 +163,13 @@ class PendingChatDispatcher:
             "event_listener",
             person_id=person.person_id,
             command=self._workflow_command,
-        ):
+        ) as trace:
             try:
                 with self._execution.track_work(
                     source="event_queue",
                     person_id=person.person_id,
                     command=self._workflow_command,
+                    work_id=trace.trace_id,
                 ):
                     # Consume a retry attempt only once the work is accepted, so a
                     # dispatch rejected while the runtime drains does not burn the

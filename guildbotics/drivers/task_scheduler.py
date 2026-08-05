@@ -241,13 +241,14 @@ class TaskScheduler:
                     person_id=person.person_id,
                     command=scheduled_task.command,
                     attributes={"service_run_id": self.service_run_id},
-                ):
+                ) as trace:
                     ok = self._run_work(
                         loop,
                         person,
                         "scheduled",
                         scheduled_task.command,
                         run_command(context, scheduled_task.command, "scheduled"),
+                        work_id=trace.trace_id,
                     )
                 consecutive_errors, should_stop = self._update_consecutive_errors(
                     ok,
@@ -287,28 +288,25 @@ class TaskScheduler:
             routine_command_index += 1
 
         if routine_command and not self._stop_event.is_set():
-            if routine_command == "workflows/ticket_driven_workflow":
+            with trace_scope(
+                "routine",
+                person_id=person.person_id,
+                command=routine_command,
+                attributes={"service_run_id": self.service_run_id},
+            ) as trace:
+                coro = (
+                    self._run_routine_ticket_workflow(context, person, routine_command)
+                    if routine_command == "workflows/ticket_driven_workflow"
+                    else run_command(context, routine_command, "routine")
+                )
                 ok = self._run_work(
                     loop,
                     person,
                     "routine",
                     routine_command,
-                    self._run_routine_ticket_workflow(context, person, routine_command),
+                    coro,
+                    work_id=trace.trace_id,
                 )
-            else:
-                with trace_scope(
-                    "routine",
-                    person_id=person.person_id,
-                    command=routine_command,
-                    attributes={"service_run_id": self.service_run_id},
-                ):
-                    ok = self._run_work(
-                        loop,
-                        person,
-                        "routine",
-                        routine_command,
-                        run_command(context, routine_command, "routine"),
-                    )
             next_routine_time = datetime.datetime.now() + datetime.timedelta(
                 minutes=self.routine_interval_minutes
             )
@@ -369,13 +367,7 @@ class TaskScheduler:
             dispatcher = WorkflowDispatcher(context, service_run_id=self.service_run_id)
             await dispatcher.dispatch(invocation, person)
 
-        with trace_scope(
-            "routine",
-            person_id=person.person_id,
-            command=command,
-            attributes={"service_run_id": self.service_run_id},
-        ):
-            return await run_with_logging(context, command, "routine", _action)
+        return await run_with_logging(context, command, "routine", _action)
 
     def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep in small steps so the stop event can interrupt waits."""
@@ -398,12 +390,15 @@ class TaskScheduler:
         source: WorkSource,
         command: str,
         coro: Coroutine,
+        *,
+        work_id: str | None = None,
     ) -> Any:
         try:
             with self._execution.track_work(
                 source=source,
                 person_id=person.person_id,
                 command=command,
+                work_id=work_id,
                 cancel=self._cancel_event.set,
             ):
                 return self._run(loop, coro)

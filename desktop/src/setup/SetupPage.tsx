@@ -1705,6 +1705,7 @@ function IntelligenceEditor({
         providerDefaultModel(teamLlmApiType, "default", providerDefaults),
       ),
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the basic setting only; a draft dep would clobber advanced edits before the draft->prop sync runs
   }, [teamLlmApiType, personId]);
 
   useEffect(() => {
@@ -1739,6 +1740,7 @@ function IntelligenceEditor({
         };
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the basic setting only; a draft dep would clobber advanced edits before the draft->prop sync runs
   }, [teamCliAgent, personId, detections]);
 
   // Sync advanced settings (draftState) -> basic settings (props callback)
@@ -1759,6 +1761,7 @@ function IntelligenceEditor({
         onTeamLlmApiTypeChange(provider);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the default slot path only; the ref guard makes broader deps pure re-run noise
   }, [draft?.model_mapping?.default, teamLlmApiType, onTeamLlmApiTypeChange, personId]);
 
   const prevDefaultCliPathRef = useRef<string | null>(null);
@@ -1783,6 +1786,7 @@ function IntelligenceEditor({
         onTeamCliAgentChange(agentName);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the default slot path only; the ref guard makes broader deps pure re-run noise
   }, [draft?.cli_agent_mapping?.default, teamCliAgent, onTeamCliAgentChange, personId, detections]);
 
   if (!enabled) {

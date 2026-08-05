@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { CommandOption, RuntimeEvent, TraceRecord } from "../api/client";
+import type { CommandOption, RuntimeEvent } from "../api/client";
 import {
   canRunUnattended,
   initialCommand,
-  latestPresentation,
   loadLastCommand,
   pendingRunTraceId,
   resolveRunner,
@@ -187,28 +186,5 @@ describe("pendingRunTraceId", () => {
     expect(pendingRunTraceId(startedEvent({ type: "command.finished" }), pending)).toBeNull();
     expect(pendingRunTraceId(startedEvent({ trace_id: null }), pending)).toBeNull();
     expect(pendingRunTraceId(startedEvent(), null)).toBeNull();
-  });
-});
-
-describe("latestPresentation", () => {
-  function record(message: string): TraceRecord {
-    return {
-      presentation: {
-        label_key: "",
-        label_fallback: "Event",
-        message_key: "",
-        message,
-        message_params: {},
-        tone: "info",
-      },
-    } as TraceRecord;
-  }
-
-  it("takes the newest record", () => {
-    expect(latestPresentation([record("first"), record("last")])?.message).toBe("last");
-  });
-
-  it("has nothing to show for a trace without records", () => {
-    expect(latestPresentation([])).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import pytest
 
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
+from guildbotics.observability import current_trace
 
 EXPECTED_ROUTINE_CALL_COUNT = 2
 
@@ -139,6 +140,75 @@ def test_task_scheduler_measures_routine_interval_after_routine_finishes(
 
     assert first_finished_at is not None
     assert calls[1] >= first_finished_at + dt.timedelta(minutes=3)
+
+
+def test_routine_work_is_tracked_under_its_trace_id(monkeypatch) -> None:
+    person = _Person(["routine"])
+    scheduler = TaskScheduler(_Context(person), routine_interval_minutes=3)
+    seen: list[tuple[str | None, list[str]]] = []
+
+    async def fake_run_command(context, command, task_type) -> bool:
+        trace = current_trace()
+        works = scheduler._execution.snapshot()
+        seen.append((trace.trace_id if trace else None, [work.id for work in works]))
+        scheduler.shutdown()
+        return True
+
+    monkeypatch.setattr(task_scheduler, "run_command", fake_run_command)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+
+    scheduler._process_tasks_list(person, [])
+
+    trace_id, work_ids = seen[0]
+    assert trace_id is not None
+    assert work_ids == [trace_id]
+
+
+def test_routine_ticket_workflow_runs_under_caller_trace(monkeypatch) -> None:
+    person = _Person(["workflows/ticket_driven_workflow"])
+    scheduler = TaskScheduler(_Context(person), routine_interval_minutes=3)
+    seen: list[tuple[str | None, list[str]]] = []
+
+    async def fake_ticket_workflow(context, person, command) -> bool:
+        trace = current_trace()
+        works = scheduler._execution.snapshot()
+        seen.append((trace.trace_id if trace else None, [work.id for work in works]))
+        scheduler.shutdown()
+        return True
+
+    monkeypatch.setattr(
+        scheduler, "_run_routine_ticket_workflow", fake_ticket_workflow
+    )
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+
+    scheduler._process_tasks_list(person, [])
+
+    trace_id, work_ids = seen[0]
+    assert trace_id is not None
+    assert work_ids == [trace_id]
+
+
+def test_scheduled_work_is_tracked_under_its_trace_id(monkeypatch) -> None:
+    person = _Person()
+    scheduler = TaskScheduler(_Context(person))
+    seen: list[tuple[str | None, list[str]]] = []
+
+    async def fake_run_command(context, command, task_type) -> bool:
+        trace = current_trace()
+        works = scheduler._execution.snapshot()
+        seen.append((trace.trace_id if trace else None, [work.id for work in works]))
+        scheduler.shutdown()
+        return True
+
+    monkeypatch.setattr(task_scheduler, "run_command", fake_run_command)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+    scheduled = SimpleNamespace(command="sched", should_run=lambda now: True)
+
+    scheduler._process_tasks_list(person, [scheduled])
+
+    trace_id, work_ids = seen[0]
+    assert trace_id is not None
+    assert work_ids == [trace_id]
 
 
 @pytest.mark.asyncio
