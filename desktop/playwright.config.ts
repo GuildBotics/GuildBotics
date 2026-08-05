@@ -18,8 +18,9 @@ import { defineConfig, devices } from "@playwright/test";
 //   * "down"        — frontend booted against a NOT-yet-serving backend; the
 //                     spec brings the real backend up on demand via a control
 //                     server (critical-failure journey ⑥, `failure.spec.ts`).
-// Each stack owns its own backend port, frontend port, token and on-disk
-// workspace, so the journeys never share state.
+// Each stack owns its own backend port, frontend port and on-disk workspace, so
+// the journeys never share state. The harness mints the Local API token per run
+// and publishes it through the stack context file.
 
 const HOST = process.env.GUILDBOTICS_E2E_HOST ?? "127.0.0.1";
 
@@ -48,12 +49,6 @@ const CONFIGURED_BASE_URL = `http://${HOST}:${CONFIGURED_FRONTEND_PORT}`;
 const MEMBERS_BASE_URL = `http://${HOST}:${MEMBERS_FRONTEND_PORT}`;
 const DIAGNOSTICS_BASE_URL = `http://${HOST}:${DIAGNOSTICS_FRONTEND_PORT}`;
 const DOWN_BASE_URL = `http://${HOST}:${DOWN_FRONTEND_PORT}`;
-
-const SETUP_TOKEN = "e2e-token-setup";
-const CONFIGURED_TOKEN = "e2e-token-configured";
-const MEMBERS_TOKEN = "e2e-token-members";
-const DIAGNOSTICS_TOKEN = "e2e-token-diagnostics";
-const DOWN_TOKEN = "e2e-token-down";
 
 export default defineConfig({
   testDir: "e2e",
@@ -109,7 +104,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_HOST: HOST,
         GUILDBOTICS_E2E_BACKEND_PORT: String(SETUP_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(SETUP_FRONTEND_PORT),
-        GUILDBOTICS_E2E_TOKEN: SETUP_TOKEN,
       },
     },
     {
@@ -125,7 +119,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_HOST: HOST,
         GUILDBOTICS_E2E_BACKEND_PORT: String(CONFIGURED_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(CONFIGURED_FRONTEND_PORT),
-        GUILDBOTICS_E2E_TOKEN: CONFIGURED_TOKEN,
       },
     },
     {
@@ -141,7 +134,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_HOST: HOST,
         GUILDBOTICS_E2E_BACKEND_PORT: String(MEMBERS_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(MEMBERS_FRONTEND_PORT),
-        GUILDBOTICS_E2E_TOKEN: MEMBERS_TOKEN,
       },
     },
     {
@@ -162,7 +154,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_HOST: HOST,
         GUILDBOTICS_E2E_BACKEND_PORT: String(DIAGNOSTICS_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(DIAGNOSTICS_FRONTEND_PORT),
-        GUILDBOTICS_E2E_TOKEN: DIAGNOSTICS_TOKEN,
       },
     },
     {
@@ -182,7 +173,6 @@ export default defineConfig({
         GUILDBOTICS_E2E_BACKEND_PORT: String(DOWN_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(DOWN_FRONTEND_PORT),
         GUILDBOTICS_E2E_CONTROL_PORT: String(DOWN_CONTROL_PORT),
-        GUILDBOTICS_E2E_TOKEN: DOWN_TOKEN,
       },
     },
   ],

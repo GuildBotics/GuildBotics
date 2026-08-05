@@ -35,7 +35,7 @@ DESKTOP_TARGET=x86_64-unknown-linux-gnu scripts/desktop-build-all.sh
 ### 開発モード起動
 
 ```bash
-# Local API backend のみ（既定: http://127.0.0.1:8765 / token: dev-token）
+# Local API backend のみ（既定: http://127.0.0.1:8765）
 scripts/desktop-dev-backend.sh
 
 # ブラウザ preview 用 frontend（backend は別途起動しておく）
@@ -45,17 +45,21 @@ scripts/desktop-dev-frontend.sh
 scripts/desktop-dev-tauri.sh
 ```
 
-ブラウザ preview で使う backend の接続先は必要に応じて変更できます。
+> **ブラウザ preview は単一ユーザーのホストでのみ使ってください。** Vite は Local API の session token を配信物へ埋め込むため、同一ホストの別ユーザーや別ページから読み取られる可能性が構造的に残ります（token をランダム化してもこの前提は変わりません）。共有ホストでは `scripts/desktop-dev-tauri.sh`（Tauri webview）を使ってください。
+
+backend の session token はコマンドライン引数では渡さず、`GUILDBOTICS_APP_API_TOKEN` 環境変数だけで受け取ります（未設定で起動するとエラー終了します）。`desktop-dev-backend.sh` は未設定なら起動ごとにランダムな token を生成し、`$TMPDIR/guildbotics-dev/<port>.token`（ディレクトリ 0700 / ファイル 0600、終了時に削除）へ書き出します。`desktop-dev-frontend.sh` は同じファイルから読み取るため、通常は token を意識する必要はありません。
+
+両ターミナルへ同じ値を export すれば、ファイル経由の受け渡しを使わずに固定できます。接続先ポートを変える場合も同様です。
 
 ```bash
 GUILDBOTICS_APP_API_PORT=8877 \
-GUILDBOTICS_APP_API_TOKEN=local-token \
 scripts/desktop-dev-backend.sh
 
 GUILDBOTICS_APP_API_PORT=8877 \
-GUILDBOTICS_APP_API_TOKEN=local-token \
 scripts/desktop-dev-frontend.sh
 ```
+
+backend が CORS で受け付けるブラウザ origin は起動側が指定します。`desktop-dev-backend.sh` の既定は Vite dev server の `http://localhost:1420,http://127.0.0.1:1420` で、`GUILDBOTICS_APP_API_ALLOWED_ORIGINS`（カンマ区切り）で上書きできます。Tauri の `tauri://localhost` は常に許可されます。
 
 `desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。
 
@@ -118,6 +122,8 @@ npm run e2e
 - 各スタックの backend は temp workspace / temp HOME に加えて、AI CLIツール（`codex` など）を即失敗するスタブで置き換えた bin ディレクトリを PATH 先頭に持ちます。`brain: agent` の journey（⑤のトラブルシューティングAI）でも実バイナリは起動しません。
 - E2E は通常 push CI には含めません。`.github/workflows/desktop-e2e.yml` の専用 workflow が、関連ファイルを変更する pull request、手動実行、nightly で実行します。pull request と手動実行では head/base を別ジョブで検証するため、同一 workflow 上で結果を比較できます。手動実行では `head_ref` と `base_ref` に branch、tag、または commit SHA を指定します（テスト戦略の全体は `AGENTS.md`「テスト実装の考え方」参照）。
 - 接続先 host / ポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。
+- 各スタックの Local API token は harness が起動ごとにランダム生成し、stack context file（`<OS tmpdir>/guildbotics-e2e/<stack>.json`、0600）経由で spec へ渡します。CORS は各スタックの Vite origin だけを許可します。
+- `npm run e2e` も browser preview と同じ前提で、**単一ユーザーのホストでのみ実行してください**（Vite が token を配信物へ埋め込むため）。
 - Tauri ネイティブ（packaged app / sidecar 起動 / file picker）の smoke は別ティアで、実 macOS または Linux + Tauri runtime が必要（§2〜§3 のビルド手順を参照）。
 
 ---
@@ -196,8 +202,9 @@ scripts/desktop-build-backend.sh
 > **動作確認（任意）**: 配置前に sidecar 単体を起動して health を確認できます。
 >
 > ```bash
-> dist/guildbotics-app-api --host 127.0.0.1 --port 8765 --token dev-token &
-> curl -H "X-GuildBotics-Session-Token: dev-token" http://127.0.0.1:8765/health
+> TOKEN="$(openssl rand -hex 32)"
+> GUILDBOTICS_APP_API_TOKEN="$TOKEN" dist/guildbotics-app-api --host 127.0.0.1 --port 8765 &
+> curl -H "X-GuildBotics-Session-Token: $TOKEN" http://127.0.0.1:8765/health
 > # => {"status":"ok"}
 > ```
 

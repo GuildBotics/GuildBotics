@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+from typing import Any
 
+import pytest
+
+from guildbotics.app_api import server
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.app_api.server import _restore_active_workspace
+from guildbotics.app_api.server import (
+    ALLOWED_ORIGINS_ENV,
+    TOKEN_ENV,
+    _read_allowed_origins,
+    _restore_active_workspace,
+)
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.workspace_state import (
@@ -84,6 +94,101 @@ def test_restored_runtime_keeps_original_data_override_across_switches(
     runtime.set_workspace(other)
 
     assert os.environ[GUILDBOTICS_DATA_DIR] == str(inherited_data)
+
+
+@pytest.fixture
+def captured_launch(monkeypatch, tmp_path: Path) -> dict[str, Any]:
+    """Run ``main`` without binding a port, capturing what it hands the app."""
+    captured: dict[str, Any] = {}
+
+    def fake_create_app(**kwargs: Any) -> str:
+        captured["create_app"] = kwargs
+        return "app"
+
+    def fake_run(app: str, **kwargs: Any) -> None:
+        captured["uvicorn"] = {"app": app, **kwargs}
+
+    monkeypatch.setattr(server, "create_app", fake_create_app)
+    monkeypatch.setattr(server.uvicorn, "run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["guildbotics-app-api"])
+    monkeypatch.chdir(tmp_path)
+    for key in (ALLOWED_ORIGINS_ENV, "GUILDBOTICS_APP_API_PARENT_PID"):
+        monkeypatch.delenv(key, raising=False)
+    return captured
+
+
+def test_main_fails_when_session_token_env_is_missing(
+    monkeypatch, captured_launch: dict[str, Any]
+) -> None:
+    monkeypatch.delenv(TOKEN_ENV, raising=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        server.main()
+
+    assert TOKEN_ENV in str(excinfo.value)
+    assert captured_launch == {}
+
+
+def test_main_passes_env_session_token_and_origins_to_create_app(
+    monkeypatch, captured_launch: dict[str, Any]
+) -> None:
+    monkeypatch.setenv(TOKEN_ENV, "env-token")
+    monkeypatch.setenv(ALLOWED_ORIGINS_ENV, "http://127.0.0.1:1421")
+
+    server.main()
+
+    assert captured_launch["create_app"]["session_token"] == "env-token"
+    assert captured_launch["create_app"]["allowed_origins"] == ["http://127.0.0.1:1421"]
+    assert captured_launch["uvicorn"]["port"] == 8765
+
+
+def test_main_does_not_print_the_session_token(
+    monkeypatch, captured_launch: dict[str, Any], capsys
+) -> None:
+    """A printed token leaks into terminal scrollback, logs and screenshots."""
+    monkeypatch.setenv(TOKEN_ENV, "env-token")
+
+    server.main()
+
+    captured = capsys.readouterr()
+    assert "env-token" not in captured.out
+    assert "env-token" not in captured.err
+
+
+def test_main_consumes_the_session_token_env(
+    monkeypatch, captured_launch: dict[str, Any]
+) -> None:
+    """AI CLI agents inherit a copy of os.environ; the token must not linger."""
+    monkeypatch.setenv(TOKEN_ENV, "env-token")
+
+    server.main()
+
+    assert TOKEN_ENV not in os.environ
+    assert captured_launch["create_app"]["session_token"] == "env-token"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, []),
+        ("", []),
+        ("   ", []),
+        ("http://127.0.0.1:1421", ["http://127.0.0.1:1421"]),
+        (
+            " http://localhost:1420 , http://127.0.0.1:1420 ,",
+            ["http://localhost:1420", "http://127.0.0.1:1420"],
+        ),
+    ],
+)
+def test_read_allowed_origins_parses_the_env_list(
+    monkeypatch, raw: str | None, expected: list[str]
+) -> None:
+    if raw is None:
+        monkeypatch.delenv(ALLOWED_ORIGINS_ENV, raising=False)
+    else:
+        monkeypatch.setenv(ALLOWED_ORIGINS_ENV, raw)
+
+    assert _read_allowed_origins() == expected
 
 
 def test_restore_active_workspace_keeps_startup_cwd_when_unconfigured(

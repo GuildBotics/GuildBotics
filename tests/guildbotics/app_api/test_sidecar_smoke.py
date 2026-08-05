@@ -76,7 +76,9 @@ def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
     base_url = f"http://127.0.0.1:{port}"
     # Fully hermetic: redirect HOME to the tmp tree and drop any inherited config
     # overrides so the subprocess never reads or writes the real ~/.guildbotics.
-    env = {**os.environ, "HOME": str(home)}
+    # The session token is only accepted through the environment, matching how
+    # every launcher (Tauri sidecar, dev scripts, e2e harness) hands it over.
+    env = {**os.environ, "HOME": str(home), "GUILDBOTICS_APP_API_TOKEN": TOKEN}
     for key in (
         "GUILDBOTICS_CONFIG_DIR",
         "GUILDBOTICS_TRANSCRIPT_DETAIL",
@@ -92,8 +94,6 @@ def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
             "127.0.0.1",
             "--port",
             str(port),
-            "--token",
-            TOKEN,
         ],
         cwd=str(startup_dir),
         env=env,

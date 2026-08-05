@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
 from yaml import safe_load
 
-from guildbotics.app_api.api import create_app
+from guildbotics.app_api.api import TAURI_ORIGIN, TOKEN_HEADER, create_app
 from guildbotics.app_api.command_input_files import (
     COMMAND_INPUT_DIRECTORY_NAME,
     CommandInputFileStore,
@@ -2350,7 +2350,11 @@ def test_unexpected_error_response_carries_cors_headers(tmp_path: Path) -> None:
             raise RuntimeError("boom")
 
     client = TestClient(
-        create_app(session_token="secret", runtime=BoomStub(tmp_path)),
+        create_app(
+            session_token="secret",
+            allowed_origins=["http://localhost:1420"],
+            runtime=BoomStub(tmp_path),
+        ),
         raise_server_exceptions=False,
     )
 
@@ -2360,6 +2364,58 @@ def test_unexpected_error_response_carries_cors_headers(tmp_path: Path) -> None:
 
     assert response.status_code == HTTP_INTERNAL_SERVER_ERROR
     assert response.headers["access-control-allow-origin"] == "http://localhost:1420"
+
+
+def _preflight(client: TestClient, origin: str):
+    return client.options(
+        "/team",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": TOKEN_HEADER,
+        },
+    )
+
+
+def test_preflight_rejects_an_unlisted_localhost_origin(tmp_path: Path) -> None:
+    """Any page on the host used to pass; only the launcher's origins may now."""
+    client = TestClient(
+        create_app(
+            session_token="secret",
+            allowed_origins=["http://127.0.0.1:1420"],
+            runtime=RuntimeStub(tmp_path),
+        )
+    )
+
+    response = _preflight(client, "http://localhost:9999")
+
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_preflight_allows_the_tauri_origin_without_configuration(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    )
+
+    response = _preflight(client, TAURI_ORIGIN)
+
+    assert response.headers["access-control-allow-origin"] == TAURI_ORIGIN
+
+
+def test_preflight_allows_an_origin_injected_by_the_launcher(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            session_token="secret",
+            allowed_origins=["http://127.0.0.1:1421"],
+            runtime=RuntimeStub(tmp_path),
+        )
+    )
+
+    response = _preflight(client, "http://127.0.0.1:1421")
+
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:1421"
 
 
 # --- config / workspace --------------------------------------------------

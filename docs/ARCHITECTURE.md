@@ -501,7 +501,14 @@ a monorepo on purpose.
 - **Local API boundary**: the GUI never reimplements the Python engine. It launches the
   bundled backend (`python -m guildbotics.app_api`, FastAPI) and talks to it on
   `127.0.0.1` via REST + WebSocket. Every request requires the per-process
-  `X-GuildBotics-Session-Token`; `/health` is the liveness probe.
+  `X-GuildBotics-Session-Token`; `/health` is the liveness probe. The launcher mints
+  that token and hands it over through `GUILDBOTICS_APP_API_TOKEN` — never argv, which
+  `ps` exposes to every other user on the host — and the server refuses to start
+  without it, consuming the variable on startup so the AI CLI agents it spawns from a
+  copy of its environment never inherit the token. Browser origins are equally
+  launcher-supplied: CORS allows the Tauri origin plus whatever
+  `GUILDBOTICS_APP_API_ALLOWED_ORIGINS` lists, so a page on an arbitrary localhost
+  port cannot reach the API.
 - **Runtime lifecycle**: the sidecar manages member workers / event listeners inside
   its own process and reports states to the UI. Desktop and CLI `guildbotics start`
   use the same machine-wide `service.lock`, so only one background service can own

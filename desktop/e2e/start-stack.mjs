@@ -36,6 +36,7 @@
 // no orphan uvicorn survives.
 
 import { execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +53,10 @@ const stackName = process.env.GUILDBOTICS_E2E_STACK ?? "setup";
 const host = process.env.GUILDBOTICS_E2E_HOST ?? "127.0.0.1";
 const backendPort = Number(process.env.GUILDBOTICS_E2E_BACKEND_PORT ?? "8766");
 const frontendPort = Number(process.env.GUILDBOTICS_E2E_FRONTEND_PORT ?? "1421");
-const token = process.env.GUILDBOTICS_E2E_TOKEN ?? "e2e-token";
+// Minted per run rather than configured: a token that lives in a tracked file
+// is a standing credential for anyone else on the host. Specs read this run's
+// value from the stack context file below.
+const token = randomUUID();
 const shouldSeed = process.env.GUILDBOTICS_E2E_SEED === "1";
 // Seed with an empty OpenAI API key so the diagnostics journey can verify the
 // missing-key short-circuit WITHOUT firing a live LLM call. Keeps `npm run e2e`
@@ -64,6 +68,7 @@ const seedWithoutLlmKey = process.env.GUILDBOTICS_E2E_OFFLINE_LLM === "1";
 const deferBackend = process.env.GUILDBOTICS_E2E_DEFER_BACKEND === "1";
 const controlPort = Number(process.env.GUILDBOTICS_E2E_CONTROL_PORT ?? "0");
 const baseUrl = `http://${host}:${backendPort}`;
+const frontendOrigin = `http://${host}:${frontendPort}`;
 const authHeaders = { "X-GuildBotics-Session-Token": token, "Content-Type": "application/json" };
 const tag = `[e2e:${stackName}]`;
 
@@ -164,7 +169,15 @@ writeFileSync(
 );
 console.log(`${tag} stack context: ${contextPath}`);
 
-const backendEnv = { ...process.env, HOME: homeDir };
+const backendEnv = {
+  ...process.env,
+  HOME: homeDir,
+  // Handed over through the environment so the token stays out of `ps`, and the
+  // CORS allowlist names this stack's Vite origin explicitly — the backend
+  // accepts no other browser origin.
+  GUILDBOTICS_APP_API_TOKEN: token,
+  GUILDBOTICS_APP_API_ALLOWED_ORIGINS: frontendOrigin,
+};
 // `get_cli_agent_search_path` appends the usual install locations after PATH, so
 // the stubs only win by being first.
 backendEnv.PATH = [cliStubDir, backendEnv.PATH].filter(Boolean).join(delimiter);
@@ -202,8 +215,6 @@ function spawnBackend() {
       host,
       "--port",
       String(backendPort),
-      "--token",
-      token,
     ],
     { cwd: workspaceDir, env: backendEnv, stdio: "inherit" },
   );

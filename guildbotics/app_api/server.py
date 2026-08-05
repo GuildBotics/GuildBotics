@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import secrets
 import threading
 import time
 from pathlib import Path
@@ -15,6 +14,9 @@ from guildbotics.utils.workspace_state import (
     apply_workspace_environment,
     read_active_workspace,
 )
+
+TOKEN_ENV = "GUILDBOTICS_APP_API_TOKEN"
+ALLOWED_ORIGINS_ENV = "GUILDBOTICS_APP_API_ALLOWED_ORIGINS"
 
 
 def _parent_is_alive(parent_pid: int) -> bool:
@@ -76,22 +78,51 @@ def _restore_active_workspace(*, inherited_data_dir: str | None = None) -> Path:
     return state.workspace
 
 
+def _read_session_token() -> str:
+    """Consume the session token the launcher put in the environment.
+
+    The token is never accepted on the command line and never printed: argv is
+    world-readable through ``ps`` on a shared host, and a printed token spreads
+    into logs and screenshots. It is popped rather than read because this
+    process spawns AI CLI agents from a copy of ``os.environ``: a leftover
+    token would hand every agent write access to the Local API. Every launcher
+    in this repository mints its own token, so a missing one is a wiring bug
+    rather than something to paper over with a generated value.
+    """
+    token = os.environ.pop(TOKEN_ENV, "").strip()
+    if not token:
+        raise SystemExit(
+            f"{TOKEN_ENV} must be set to the session token for the local app API."
+        )
+    return token
+
+
+def _read_allowed_origins() -> list[str]:
+    """Return the extra browser origins allowed by CORS, as set by the launcher.
+
+    Only the launcher knows which port the browser preview is served from, so
+    the allowlist is injected instead of being guessed by the server.
+    """
+    raw = os.getenv(ALLOWED_ORIGINS_ENV, "")
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the GuildBotics local app API.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--token", default=os.getenv("GUILDBOTICS_APP_API_TOKEN"))
     args = parser.parse_args()
 
+    token = _read_session_token()
+    allowed_origins = _read_allowed_origins()
     _start_parent_watchdog()
     inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
     _restore_active_workspace(inherited_data_dir=inherited_data_dir)
 
-    token = args.token or secrets.token_urlsafe(32)
-    print(f"GUILDBOTICS_APP_API_TOKEN={token}", flush=True)
     uvicorn.run(
         create_app(
             session_token=token,
+            allowed_origins=allowed_origins,
             restore_workspace_environment=True,
             inherited_data_dir=inherited_data_dir,
         ),
