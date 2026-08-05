@@ -1476,6 +1476,12 @@ pre {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .activity-member-current-dot {
+    animation: none;
+  }
+}
+
 .activity-member-usage {
   display: flex;
   flex-direction: column;
