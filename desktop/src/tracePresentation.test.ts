@@ -1,9 +1,10 @@
 import type { TFunction } from "i18next";
 import { describe, expect, it } from "vitest";
 
-import type { TracePresentation } from "./api/client";
+import type { TracePresentation, TraceRecord } from "./api/client";
 import i18n from "./i18n";
 import {
+  latestPresentation,
   tracePresentationLabel,
   tracePresentationMessage,
   tracePresentationTone,
@@ -66,5 +67,19 @@ describe("trace presentation", () => {
     expect(tracePresentationLabel(t(), value)).toBe("CUSTOM");
     expect(tracePresentationMessage(t(), value)).toBe("custom detail");
     expect(tracePresentationTone(value)).toBe("neutral");
+  });
+});
+
+describe("latestPresentation", () => {
+  function record(message: string): TraceRecord {
+    return { presentation: presentation({ message }) } as TraceRecord;
+  }
+
+  it("takes the newest record", () => {
+    expect(latestPresentation([record("first"), record("last")])?.message).toBe("last");
+  });
+
+  it("has nothing to show for a trace without records", () => {
+    expect(latestPresentation([])).toBeNull();
   });
 });

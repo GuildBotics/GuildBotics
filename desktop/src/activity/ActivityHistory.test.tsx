@@ -23,8 +23,16 @@ import {
   getCliAgentDetections,
   getCliAgentUsage,
   getIntelligenceConfig,
+  getSchedulerStatus,
+  getTraceDetail,
 } from "../api/client";
-import type { ActivityHistoryResponse } from "../api/client";
+import type {
+  ActivityHistoryResponse,
+  RuntimeActiveWork,
+  RuntimeStatus,
+  RuntimeUnitStatus,
+  TraceRecord,
+} from "../api/client";
 import i18n from "../i18n";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -35,6 +43,8 @@ vi.mock("../api/client", async (importOriginal) => {
     getCliAgentDetections: vi.fn(),
     getCliAgentUsage: vi.fn(),
     getIntelligenceConfig: vi.fn(),
+    getSchedulerStatus: vi.fn(),
+    getTraceDetail: vi.fn(),
     memberAvatarUrl: (personId: string) => `http://avatar.test/${personId}`,
   };
 });
@@ -108,6 +118,77 @@ const ACTIVITY_FIXTURE: ActivityHistoryResponse = {
   unsupported_event_sources: [],
 };
 
+function runtimeUnitStatus(): RuntimeUnitStatus {
+  return {
+    target: "scheduler",
+    state: "running",
+    running: true,
+    started_at: null,
+    stopped_at: null,
+    error: null,
+    max_consecutive_errors: null,
+    routine_interval_minutes: null,
+    active_member_count: null,
+    worker_count: null,
+    scheduled_source_enabled: null,
+    routine_source_enabled: null,
+    event_queue_source_enabled: null,
+    subscription_count: null,
+    listener_count: null,
+    cycle_count: null,
+    cycle_failure_count: null,
+    events_drained_count: null,
+    events_auth_failed_count: null,
+    events_auth_failed_persons: [],
+  };
+}
+
+function runtimeStatus(activeWorks: RuntimeActiveWork[]): RuntimeStatus {
+  return {
+    scheduler: runtimeUnitStatus(),
+    events: { ...runtimeUnitStatus(), target: "events" },
+    active_works: activeWorks,
+  };
+}
+
+const ACTIVE_WORK: RuntimeActiveWork = {
+  id: "trace-live",
+  source: "routine",
+  person_id: "alice",
+  command: "workflows/ticket_driven_workflow",
+  started_at: "2026-07-01T11:58:00Z",
+};
+
+function liveTraceRecord(message: string): TraceRecord {
+  return {
+    kind: "event",
+    timestamp: "2026-07-01T11:59:00Z",
+    trace_id: "trace-live",
+    span_id: null,
+    parent_id: null,
+    call_id: null,
+    span: "",
+    source: "routine",
+    person_id: "alice",
+    command: "workflows/ticket_driven_workflow",
+    workflow: "",
+    type: "command.progress",
+    level: "info",
+    message,
+    attributes: {},
+    payload: {},
+    presentation: {
+      label_key: "",
+      label_fallback: "Running",
+      message_key: "",
+      message,
+      message_params: {},
+      tone: "info",
+      effort: "",
+    },
+  };
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(new Date("2026-07-01T12:00:00Z"));
@@ -140,6 +221,12 @@ beforeEach(() => {
     ],
   });
   vi.mocked(getCliAgentUsage).mockResolvedValue({ usages: [] });
+  vi.mocked(getSchedulerStatus).mockResolvedValue(runtimeStatus([]));
+  vi.mocked(getTraceDetail).mockResolvedValue({
+    trace_id: "trace-live",
+    summary: null,
+    records: [],
+  });
 });
 
 afterEach(() => {
@@ -214,6 +301,56 @@ describe("ActivityHistoryPage", () => {
     // The member role is no longer rendered.
     expect(screen.queryByText("developer")).toBe(null);
     expect(screen.queryByText("designer")).toBe(null);
+  });
+
+  it("shows the member's running work as a link to its trace in diagnostics", async () => {
+    vi.mocked(getSchedulerStatus).mockResolvedValue(runtimeStatus([ACTIVE_WORK]));
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-live",
+      summary: null,
+      records: [liveTraceRecord("first step"), liveTraceRecord("reviewing the pull request")],
+    });
+    renderActivity();
+
+    const status = await screen.findByRole("link", { name: "Current work" });
+    expect(status).toHaveTextContent("reviewing the pull request");
+    expect(status).toHaveAttribute("href", "/diagnostics?tab=executions&trace_id=trace-live");
+    expect(getTraceDetail).toHaveBeenCalledWith("trace-live");
+  });
+
+  it("falls back to the running command name until the trace reports records", async () => {
+    vi.mocked(getSchedulerStatus).mockResolvedValue(runtimeStatus([ACTIVE_WORK]));
+    renderActivity();
+
+    const status = await screen.findByRole("link", { name: "Current work" });
+    expect(status).toHaveTextContent("workflows/ticket_driven_workflow");
+  });
+
+  it("shows no running-work status for idle members", async () => {
+    renderActivity();
+
+    await screen.findByText("Alice");
+    expect(screen.queryByRole("link", { name: "Current work" })).toBe(null);
+  });
+
+  it("keeps the full session title on the bar, including a PR prefix", async () => {
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      events: [],
+      sessions: [
+        {
+          ...ACTIVITY_FIXTURE.sessions[0],
+          title: "PR #385 のレビュー指摘 2 件へ対応し、修正を push する",
+        },
+      ],
+    });
+    renderActivity();
+
+    expect(
+      await screen.findByRole("button", {
+        name: "PR #385 のレビュー指摘 2 件へ対応し、修正を push する",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("dims nonmatching activity and highlights matching activity by query", async () => {

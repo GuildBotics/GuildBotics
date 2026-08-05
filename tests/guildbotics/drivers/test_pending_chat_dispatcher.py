@@ -118,6 +118,42 @@ async def test_dispatcher_runs_workflow_and_clears_pending(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_dispatcher_tracks_work_under_its_trace_id(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    execution = ExecutionCoordinator()
+    seen: list[tuple[str | None, list[str]]] = []
+
+    class _Runner:
+        def __init__(self, context, command, args):
+            pass
+
+        async def run(self):
+            trace = current_trace()
+            works = execution.snapshot()
+            seen.append((trace.trace_id if trace else None, [w.id for w in works]))
+            return "ok"
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _Runner
+    )
+
+    context = _FakeContext()
+    person = Person(person_id="alice", name="A", is_active=True)
+    dispatcher = PendingChatDispatcher(
+        context,  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=execution,
+    )
+
+    await dispatcher.process_person(person)
+
+    trace_id, work_ids = seen[0]
+    assert trace_id is not None
+    assert work_ids == [trace_id]
+
+
+@pytest.mark.asyncio
 async def test_dispatcher_uses_env_for_initial_retry_budget(monkeypatch, tmp_path):
     monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "10")
     store = FileConversationStateStore(base_dir=tmp_path)

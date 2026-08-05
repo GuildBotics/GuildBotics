@@ -1422,6 +1422,60 @@ pre {
   white-space: nowrap;
 }
 
+.activity-member-current {
+  align-items: center;
+  color: var(--color-text-subtle);
+  display: inline-flex;
+  font-size: 10px;
+  gap: 5px;
+  line-height: 1.2;
+  margin-top: 4px;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.activity-member-current:hover .activity-member-current-message {
+  color: var(--color-text-main);
+  text-decoration: underline;
+}
+
+.activity-member-current-dot {
+  animation: activity-member-current-pulse 1.6s ease-in-out infinite;
+  background: var(--color-brand);
+  border-radius: 50%;
+  flex-shrink: 0;
+  height: 6px;
+  width: 6px;
+}
+
+.activity-member-current-warning .activity-member-current-dot {
+  background: var(--color-warning);
+}
+
+.activity-member-current-danger .activity-member-current-dot {
+  background: var(--color-danger);
+}
+
+.activity-member-current-success .activity-member-current-dot {
+  background: var(--color-success);
+}
+
+.activity-member-current-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes activity-member-current-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
 .activity-member-usage {
   display: flex;
   flex-direction: column;

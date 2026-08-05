@@ -35,6 +35,7 @@ import {
   releaseClipboardImage,
 } from "../hotkeys/hotkeyRuntime";
 import {
+  latestPresentation,
   tracePresentationLabel,
   tracePresentationMessage,
   tracePresentationTone,
@@ -45,7 +46,6 @@ import {
   CLIPBOARD_POLL_MS,
   IDLE_RUN_MS,
   initialCommand,
-  latestPresentation,
   loadLastCommand,
   loadLastPerson,
   loadWatchClipboard,

@@ -4,13 +4,7 @@
 // — the one thing that separates a dedicated hotkey from the generic window —
 // is directly testable.
 
-import type {
-  CommandOption,
-  RuntimeEvent,
-  TeamSummary,
-  TracePresentation,
-  TraceRecord,
-} from "../api/client";
+import type { CommandOption, RuntimeEvent, TeamSummary } from "../api/client";
 import { hasMissingRequiredArgument } from "../commands/commandEditorState";
 
 type TeamMember = TeamSummary["members"][number];
@@ -158,11 +152,6 @@ export function pendingRunTraceId(event: RuntimeEvent, pending: PendingRun | nul
     return null;
   }
   return event.trace_id;
-}
-
-/** Newest record of a trace — what a one-line status shows. Records arrive oldest first. */
-export function latestPresentation(records: TraceRecord[]): TracePresentation | null {
-  return records.length > 0 ? records[records.length - 1].presentation : null;
 }
 
 /**
