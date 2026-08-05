@@ -1,8 +1,10 @@
 import contextlib
 import logging
+import os
 
 import pytest
 
+from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
 from guildbotics.utils.import_utils import ClassResolver
@@ -24,6 +26,31 @@ def _force_env_file_secret_backend(monkeypatch):
 def _isolate_workspace_data(monkeypatch, tmp_path):
     """Keep runtime files created by tests inside each test's temporary tree."""
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "workspace-data"))
+
+
+@pytest.fixture(autouse=True)
+def _ignore_ambient_workflow_run(monkeypatch):
+    """Keep tests off the workflow execution path of the member CLI guard.
+
+    When the suite itself runs inside a GuildBotics workflow / member run,
+    these variables are inherited from the environment. Tests that verify
+    the workflow path set them explicitly via ``monkeypatch.setenv``.
+    """
+    monkeypatch.delenv(TASK_RUN_ENV, raising=False)
+    monkeypatch.delenv(RUN_ENV, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _ignore_ambient_slack_tokens(monkeypatch):
+    """Keep tests off real Slack tokens configured on the development machine.
+
+    Secret resolution prefers real environment variables, so ambient global or
+    ``<PERSON>_``-prefixed ``SLACK_BOT_TOKEN`` / ``SLACK_APP_TOKEN`` values
+    would win over the values tests stage in ``.env`` files or mocks.
+    """
+    for name in list(os.environ):
+        if name.endswith(("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")):
+            monkeypatch.delenv(name)
 
 
 @pytest.fixture
