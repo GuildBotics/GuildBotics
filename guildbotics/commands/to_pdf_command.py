@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import sys
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +16,13 @@ from guildbotics.commands.models import CommandOutcome
 _HOMEBREW_PREFIX_ENV = "HOMEBREW_PREFIX"
 _DEFAULT_HOMEBREW_PREFIX = "/opt/homebrew"
 _DYLD_LIBRARY_PATH_ENV = "DYLD_LIBRARY_PATH"
+_WEASYPRINT_MODULE = "weasyprint"
+
+# Serializes the environment override below. ``os.environ`` is process-global
+# while the task scheduler runs one worker thread per active member, so two
+# concurrent conversions would otherwise save and restore overlapping values
+# and leave the Homebrew path behind.
+_library_path_lock = threading.Lock()
 
 
 @contextmanager
@@ -30,25 +38,34 @@ def _homebrew_library_path() -> Iterator[None]:
 
     Prepending Homebrew's library directory resolves both cases while keeping
     the default directories as fallbacks. The variable is restored on exit so
-    that it is not inherited by subprocesses.
+    that it is not inherited by subprocesses, and the whole save/override/
+    restore cycle is held under a process-wide lock so that concurrent member
+    workers cannot interleave it. Once WeasyPrint is loaded the override is
+    skipped entirely, which keeps the window down to the first conversion in
+    the process.
     """
     lib_dir = Path(
         os.environ.get(_HOMEBREW_PREFIX_ENV, _DEFAULT_HOMEBREW_PREFIX), "lib"
     )
-    if sys.platform != "darwin" or not lib_dir.is_dir():
+    if (
+        sys.platform != "darwin"
+        or _WEASYPRINT_MODULE in sys.modules
+        or not lib_dir.is_dir()
+    ):
         yield
         return
 
-    previous = os.environ.get(_DYLD_LIBRARY_PATH_ENV)
-    entries = [previous, str(lib_dir)] if previous else [str(lib_dir)]
-    os.environ[_DYLD_LIBRARY_PATH_ENV] = os.pathsep.join(entries)
-    try:
-        yield
-    finally:
-        if previous is None:
-            os.environ.pop(_DYLD_LIBRARY_PATH_ENV, None)
-        else:
-            os.environ[_DYLD_LIBRARY_PATH_ENV] = previous
+    with _library_path_lock:
+        previous = os.environ.get(_DYLD_LIBRARY_PATH_ENV)
+        entries = [previous, str(lib_dir)] if previous else [str(lib_dir)]
+        os.environ[_DYLD_LIBRARY_PATH_ENV] = os.pathsep.join(entries)
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop(_DYLD_LIBRARY_PATH_ENV, None)
+            else:
+                os.environ[_DYLD_LIBRARY_PATH_ENV] = previous
 
 
 class ToPdfCommand(DocumentConversionCommand):
