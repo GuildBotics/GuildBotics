@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import base64
 import builtins
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandSpec
-from guildbotics.commands.to_pdf_command import ToPdfCommand
+from guildbotics.commands.to_pdf_command import (
+    ToPdfCommand,
+    _homebrew_library_path,
+)
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from tests.guildbotics.runtime.test_context import (
@@ -131,6 +136,66 @@ async def test_to_pdf_raises_command_error_when_weasyprint_unavailable(
 
     with pytest.raises(CommandError, match="WeasyPrint native dependencies"):
         await command.run()
+
+
+def _use_homebrew_prefix(
+    monkeypatch: pytest.MonkeyPatch, prefix: Path, platform: str = "darwin"
+) -> None:
+    """Point the Homebrew lookup at a temporary prefix on a chosen platform."""
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(prefix))
+    monkeypatch.delenv("DYLD_LIBRARY_PATH", raising=False)
+
+
+def test_homebrew_library_path_prepends_library_dir_on_macos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """macOS does not search Homebrew's prefix, so to_pdf has to add it."""
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _use_homebrew_prefix(monkeypatch, tmp_path)
+
+    with _homebrew_library_path():
+        assert os.environ["DYLD_LIBRARY_PATH"] == str(lib_dir)
+
+    assert "DYLD_LIBRARY_PATH" not in os.environ
+
+
+def test_homebrew_library_path_keeps_an_explicit_setting_ahead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An explicitly configured search path keeps priority and is restored."""
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _use_homebrew_prefix(monkeypatch, tmp_path)
+    monkeypatch.setenv("DYLD_LIBRARY_PATH", "/custom/lib")
+
+    with _homebrew_library_path():
+        assert os.environ["DYLD_LIBRARY_PATH"] == f"/custom/lib{os.pathsep}{lib_dir}"
+
+    assert os.environ["DYLD_LIBRARY_PATH"] == "/custom/lib"
+
+
+@pytest.mark.parametrize(
+    ("platform", "create_lib_dir"),
+    [("linux", True), ("darwin", False)],
+    ids=["other-platform", "no-homebrew-prefix"],
+)
+def test_homebrew_library_path_is_a_no_op_when_not_applicable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    create_lib_dir: bool,
+):
+    """Only macOS with a Homebrew prefix present needs the override."""
+    if create_lib_dir:
+        (tmp_path / "lib").mkdir()
+    _use_homebrew_prefix(monkeypatch, tmp_path, platform=platform)
+
+    with _homebrew_library_path():
+        assert "DYLD_LIBRARY_PATH" not in os.environ
+
+    assert "DYLD_LIBRARY_PATH" not in os.environ
 
 
 @pytest.mark.asyncio

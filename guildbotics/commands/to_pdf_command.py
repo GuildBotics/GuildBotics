@@ -1,12 +1,54 @@
 from __future__ import annotations
 
 import base64
+import os
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import ClassVar
 
 from guildbotics.commands.document_conversion_command import DocumentConversionCommand
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
+
+_HOMEBREW_PREFIX_ENV = "HOMEBREW_PREFIX"
+_DEFAULT_HOMEBREW_PREFIX = "/opt/homebrew"
+_DYLD_LIBRARY_PATH_ENV = "DYLD_LIBRARY_PATH"
+
+
+@contextmanager
+def _homebrew_library_path() -> Iterator[None]:
+    """Make Homebrew's native libraries discoverable on macOS.
+
+    WeasyPrint loads libraries such as ``gobject-2.0`` through
+    ``ctypes.util.find_library``, which on macOS only searches ``~/lib``,
+    ``/usr/local/lib``, ``/lib`` and ``/usr/lib``. Homebrew's Apple Silicon
+    prefix is not among them, so the import fails even when the libraries are
+    installed. A leftover Intel Homebrew tree makes it worse: its x86_64
+    libraries in ``/usr/local/lib`` are found first and then fail to load.
+
+    Prepending Homebrew's library directory resolves both cases while keeping
+    the default directories as fallbacks. The variable is restored on exit so
+    that it is not inherited by subprocesses.
+    """
+    lib_dir = Path(
+        os.environ.get(_HOMEBREW_PREFIX_ENV, _DEFAULT_HOMEBREW_PREFIX), "lib"
+    )
+    if sys.platform != "darwin" or not lib_dir.is_dir():
+        yield
+        return
+
+    previous = os.environ.get(_DYLD_LIBRARY_PATH_ENV)
+    entries = [previous, str(lib_dir)] if previous else [str(lib_dir)]
+    os.environ[_DYLD_LIBRARY_PATH_ENV] = os.pathsep.join(entries)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(_DYLD_LIBRARY_PATH_ENV, None)
+        else:
+            os.environ[_DYLD_LIBRARY_PATH_ENV] = previous
 
 
 class ToPdfCommand(DocumentConversionCommand):
@@ -23,7 +65,8 @@ class ToPdfCommand(DocumentConversionCommand):
 
     async def run(self) -> CommandOutcome:
         try:
-            from weasyprint import HTML  # type: ignore
+            with _homebrew_library_path():
+                from weasyprint import HTML  # type: ignore
         except (ImportError, OSError) as exc:
             raise CommandError(
                 "PDF conversion requires WeasyPrint native dependencies."
