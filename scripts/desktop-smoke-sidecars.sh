@@ -7,9 +7,12 @@ DESKTOP_TARGET="${DESKTOP_TARGET:-$("$SCRIPT_DIR/desktop-target.sh")}"
 SIDECAR_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-app-api-${DESKTOP_TARGET}"
 CLI_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-cli-${DESKTOP_TARGET}"
 PORT="${GUILDBOTICS_SIDECAR_SMOKE_PORT:-8765}"
-TOKEN="${GUILDBOTICS_SIDECAR_SMOKE_TOKEN:-ci-smoke-token}"
 
-"$SIDECAR_PATH" --host 127.0.0.1 --port "$PORT" --token "$TOKEN" &
+# shellcheck source=scripts/desktop-token.sh
+source "$SCRIPT_DIR/desktop-token.sh"
+TOKEN="${GUILDBOTICS_SIDECAR_SMOKE_TOKEN:-$(guildbotics_random_token)}"
+
+GUILDBOTICS_APP_API_TOKEN="$TOKEN" "$SIDECAR_PATH" --host 127.0.0.1 --port "$PORT" &
 SIDECAR_PID=$!
 trap 'kill "$SIDECAR_PID" 2>/dev/null || true' EXIT
 

@@ -696,7 +696,7 @@ pub fn run() {
                 .shell()
                 .sidecar("guildbotics-app-api")
                 .and_then(|command| {
-                    command
+                    let command = command
                         // The sidecar is a PyInstaller one-file binary whose worker can
                         // outlive a killed bootloader. Hand it our PID so it can exit on
                         // its own if this app ever dies without a clean teardown.
@@ -704,14 +704,19 @@ pub fn run() {
                             "GUILDBOTICS_APP_API_PARENT_PID",
                             std::process::id().to_string(),
                         )
-                        .args([
-                            "--host",
-                            "127.0.0.1",
-                            "--port",
-                            &port_arg,
-                            "--token",
-                            &token,
-                        ])
+                        // Handed over through the environment, never argv: on a
+                        // shared host `ps` exposes another user's command line.
+                        .env("GUILDBOTICS_APP_API_TOKEN", &token);
+                    // In `tauri dev` the webview is served from the Vite dev server
+                    // (`build.devUrl` in tauri.conf.json), so API requests carry that
+                    // origin instead of tauri://localhost.
+                    #[cfg(debug_assertions)]
+                    let command = command.env(
+                        "GUILDBOTICS_APP_API_ALLOWED_ORIGINS",
+                        "http://127.0.0.1:1420",
+                    );
+                    command
+                        .args(["--host", "127.0.0.1", "--port", &port_arg])
                         .spawn()
                 });
             let child = match spawn_result {

@@ -53,11 +53,10 @@ Do NOT seed: the README's Initial Setup section is itself under test, so the app
 GUILDBOTICS_E2E_STACK=readme \
 GUILDBOTICS_E2E_BACKEND_PORT=8768 \
 GUILDBOTICS_E2E_FRONTEND_PORT=1423 \
-GUILDBOTICS_E2E_TOKEN=readme-walkthrough \
 node e2e/start-stack.mjs
 ```
 
-The harness creates a fresh temp workspace and temp HOME on its own and prints both the workspace path and the path of its stack context file (`<OS tmpdir>/guildbotics-e2e/readme.json`, named after the stack); read that file for the exact paths and reuse that workspace for the CLI steps. Browse the app at `http://127.0.0.1:1423`. The distinct stack name, ports, and token keep it from colliding with a real `npm run e2e` or the user's own desktop backend.
+The harness creates a fresh temp workspace and temp HOME on its own and prints both the workspace path and the path of its stack context file (`<OS tmpdir>/guildbotics-e2e/readme.json`, named after the stack); read that file for the exact paths, the run's Local API token, and reuse that workspace for the CLI steps. Browse the app at `http://127.0.0.1:1423`. The distinct stack name and ports keep it from colliding with a real `npm run e2e` or the user's own desktop backend.
 
 **Driving the app** (each of these costs a wasted turn to rediscover):
 
