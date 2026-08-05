@@ -18,7 +18,11 @@ export async function verifyChromium(launcher = chromium) {
       { cause: error },
     );
   } finally {
-    await browser?.close();
+    try {
+      await browser?.close();
+    } catch {
+      // The preflight verdict is already decided; cleanup must not mask it.
+    }
   }
 }
 

@@ -24,6 +24,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: desktop-e2e-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   e2e:
     name: Playwright (${{ matrix.revision }})
@@ -32,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        revision: ${{ github.event_name == 'schedule' && fromJSON('["head"]') || fromJSON('["head", "base"]') }}
+        revision: ${{ github.event_name == 'schedule' && fromJSON('["main"]') || fromJSON('["head", "base"]') }}
     env:
       UV_LOCKED: "1"
     steps:
@@ -42,6 +46,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           MATRIX_REVISION: ${{ matrix.revision }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           INPUT_HEAD_REF: ${{ inputs.head_ref }}
           INPUT_BASE_REF: ${{ inputs.base_ref }}
@@ -50,8 +55,10 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ]; then
             if [ "$MATRIX_REVISION" = "head" ]; then
               ref="$PR_HEAD_SHA"
+              repository="$PR_HEAD_REPOSITORY"
             else
               ref="$PR_BASE_SHA"
+              repository="$GITHUB_REPOSITORY"
             fi
           elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             if [ "$MATRIX_REVISION" = "head" ]; then
@@ -63,10 +70,16 @@ jobs:
             ref="$EVENT_SHA"
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [ -n "${repository:-}" ]; then
+            echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          else
+            echo "repository=$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout ${{ matrix.revision }} revision
         uses: actions/checkout@v4
         with:
+          repository: ${{ steps.revision.outputs.repository }}
           ref: ${{ steps.revision.outputs.ref }}
           fetch-depth: 0
 

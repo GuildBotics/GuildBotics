@@ -49,3 +49,26 @@ test("reports a Chromium launch failure as infrastructure", async () => {
       error.message.includes("bootstrap service registration denied"),
   );
 });
+
+test("preserves the infrastructure failure when Chromium cleanup also fails", async () => {
+  const launcher = {
+    async launch() {
+      return {
+        async newPage() {
+          throw new Error("page creation denied");
+        },
+        async close() {
+          throw new Error("browser cleanup failed");
+        },
+      };
+    },
+  };
+
+  await assert.rejects(
+    verifyChromium(launcher),
+    (error) =>
+      error.message.includes("E2E infrastructure failure") &&
+      error.message.includes("page creation denied") &&
+      !error.message.includes("browser cleanup failed"),
+  );
+});
