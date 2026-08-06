@@ -1140,13 +1140,18 @@ async def test_failed_status_comment_before_the_assignment_does_not_suppress():
     assert task.trigger_reason == "ready_lane"
 
 
-@pytest.mark.asyncio
-async def test_failed_status_comment_after_the_assignment_still_suppresses():
+def _manager_with_unhandled_review(status_comment_at: str) -> "_Manager":
+    """A PR review waiting on the member, plus a failed status comment.
+
+    The review keeps the ticket selectable on its own, so whether the ticket is
+    returned depends only on the workflow-status suppression — unlike the ready
+    and working lanes, where the member's own last comment blocks it anyway.
+    """
     manager = _Manager(
         items=[
             _item(
                 number=1,
-                status="Todo",
+                status="In Progress",
                 assignee=None,
                 agent="⚙aiko",
                 agent_updated_at="2026-01-05T00:00:00Z",
@@ -1158,13 +1163,33 @@ async def test_failed_status_comment_after_the_assignment_still_suppresses():
                 {
                     "user": "aiko-gh",
                     "body": _status_comment("failed"),
-                    "created_at": "2026-01-06T00:00:00Z",
+                    "created_at": status_comment_at,
                 }
             ],
         ),
     )
+    manager.related_pulls = [_pull()]
+    manager.review_threads = [
+        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
+    ]
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_failed_status_comment_after_the_assignment_still_suppresses():
+    manager = _manager_with_unhandled_review("2026-01-06T00:00:00Z")
 
     assert await manager.get_task_to_work_on() is None
+
+
+@pytest.mark.asyncio
+async def test_failed_status_comment_before_the_assignment_leaves_review_actionable():
+    manager = _manager_with_unhandled_review("2026-01-03T00:00:00Z")
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "pull_request_review"
 
 
 @pytest.mark.asyncio
@@ -1216,3 +1241,36 @@ async def test_mention_after_the_assignment_overrides_my_own_last_comment():
 
     assert task is not None
     assert task.trigger_reason == "ready_lane"
+
+
+@pytest.mark.asyncio
+async def test_latest_assignment_wins_when_both_paths_assign_this_member():
+    """Assignee and Agent field are both valid ways to ask; the newest asks."""
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="In Progress",
+                assigned_events=[
+                    {"login": "aiko-gh", "created_at": "2026-01-05T00:00:00Z"}
+                ],
+                agent="⚙aiko",
+                agent_updated_at="2026-01-07T00:00:00Z",
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-gh",
+                    "body": "Done, opened the PR.",
+                    "created_at": "2026-01-06T00:00:00Z",
+                }
+            ],
+        ),
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "working_lane"

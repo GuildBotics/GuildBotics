@@ -496,8 +496,8 @@ class GitHubTicketManager(TicketManager):
         for _field_name, field_info in self.custom_fields.items():
             data_type = field_info["dataType"]
             if data_type == "SINGLE_SELECT":
-                # updatedAt dates the Agent assignment, which bounds the
-                # comments _comments_since_assignment() treats as evidence.
+                # updatedAt is requested for every single-select field; only
+                # the Agent field's value is read, to date the assignment.
                 custom_field_fragments.append(
                     """
                 ... on ProjectV2ItemFieldSingleSelectValue {
@@ -939,8 +939,9 @@ class GitHubTicketManager(TicketManager):
         as the issue's author or a reviewer — and must not suppress the run.
 
         The whole history is kept on the task for the agent to read; this
-        narrower view only drives the selection decision. When the assignment
-        time is unknown, every comment is kept so behaviour stays unchanged.
+        narrower view only drives the selection decision. When no assignment
+        path reports a time, every comment is kept: an unknown request time
+        must never be a reason to discard evidence and redo finished work.
         """
         since = _parse_timestamp(assigned_at)
         if since is None:
@@ -998,30 +999,23 @@ class GitHubTicketManager(TicketManager):
             if not issue:
                 continue
             assignees = issue.get("assignees", {}).get("nodes", [])
-            is_assigned = False
-            assignee: str | None = None
-            assigned_at = ""
+            # Assignees and the Agent field are independent ways to assign this
+            # member, and both can be set at once. Each active one carries its
+            # own request time, so the most recent of them is the live request.
+            by_assignee = not is_proxy_agent(self.person) and any(
+                a.get("login") == self._username_lower for a in assignees
+            )
+            agent_field = GitHubTicketManager.FIELD_AGENT
+            by_agent_field = field_values.get(agent_field) == self._mention_token
+            is_assigned = by_assignee or by_agent_field
+            assignee = self.person.person_id if is_assigned else None
 
-            # Check assignees
-            if not is_proxy_agent(self.person) and assignees:
-                for a in assignees:
-                    if a.get("login") == self._username_lower:
-                        is_assigned = True
-                        assignee = self.person.person_id
-                        assigned_at = self._latest_assigned_event_time(issue)
-                        break
-
-            # Check custom fields if not assigned via assignees
-            if not is_assigned:
-                for field_name, value in field_values.items():
-                    if (
-                        field_name == GitHubTicketManager.FIELD_AGENT
-                        and value == self._mention_token
-                    ):
-                        is_assigned = True
-                        assignee = self.person.person_id
-                        assigned_at = field_updated_at.get(field_name, "")
-                        break
+            assignment_times = []
+            if by_assignee:
+                assignment_times.append(self._latest_assigned_event_time(issue))
+            if by_agent_field:
+                assignment_times.append(field_updated_at.get(agent_field, ""))
+            assigned_at = max((time for time in assignment_times if time), default="")
 
             task = self._issue_to_task(issue, status, assignee)
             tasks.append(task)
