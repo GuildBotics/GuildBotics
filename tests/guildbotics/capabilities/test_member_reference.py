@@ -101,6 +101,21 @@ def test_reference_states_cross_cutting_rules():
     assert "Never display, infer, store, or copy secrets" in text
 
 
+def test_reference_states_which_github_writes_stay_human_decisions():
+    text = capability_reference_text()
+    # Opening/closing issues, priority, and assignees are decisions the member
+    # must not take on its own; the reference is where a member learns that.
+    assert "--human-approved" in text
+    assert "never on the member's own judgment" in text
+    assert "Priority is a human triage decision" in text
+    assert (
+        "do not express urgency by adding a label or setting a project or issue field"
+        in (text)
+    )
+    assert "Assignees are read-only on purpose" in text
+    assert "the labels the target repository already defines" in text
+
+
 def test_reference_standardizes_free_form_input_and_quoted_heredocs():
     text = capability_reference_text()
     assert "--content-stdin" in text

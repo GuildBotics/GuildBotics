@@ -35,6 +35,8 @@ class FakeClient:
         self.patches = []
         self.patch_payloads = {}
         self.patch_status_codes = {}
+        self.deletes = []
+        self.delete_status_codes = {}
         self.graphql_payloads = []
 
     async def get(self, endpoint, params=None, headers=None):
@@ -76,6 +78,10 @@ class FakeClient:
             ),
             status_code=self.patch_status_codes.get(endpoint, 200),
         )
+
+    async def delete(self, endpoint, headers=None):
+        self.deletes.append((endpoint, headers))
+        return FakeResponse([], status_code=self.delete_status_codes.get(endpoint, 200))
 
 
 def _service(person_type="proxy_agent"):
@@ -711,13 +717,16 @@ async def test_issue_create_creates_real_issue_and_adds_project_item():
     )
     service._client = fake
 
-    result = await service.issue_create("repo", "Follow-up", "Body", True)
+    result = await service.issue_create(
+        "repo", "Follow-up", "Body", True, human_approved=True
+    )
 
     assert result == {
         "issue_number": 43,
         "issue_title": "Follow-up",
         "repo": "owner/repo",
         "issue_url": "https://github.com/owner/repo/issues/43",
+        "labels": [],
         "project_item_id": "PROJECT_ITEM_node",
     }
     assert fake.posts[0] == (
@@ -777,6 +786,11 @@ async def test_issue_update_patches_only_body_and_returns_updated_issue():
     assert result == {
         "issue_number": 42,
         "issue_url": "https://github.com/owner/repo/issues/42",
+        "repo": "owner/repo",
+        "title": "Original title",
+        "state": "open",
+        "state_changed": False,
+        "labels": [],
         "body": "Updated body",
     }
     assert fake.patches == [
@@ -804,6 +818,301 @@ async def test_issue_update_normalizes_null_response_body(requested_body):
     assert fake.patches == [
         ("/repos/owner/repo/issues/42", {"body": requested_body}, None)
     ]
+
+
+@pytest.mark.asyncio
+async def test_issue_create_without_human_approval_is_refused_before_any_call():
+    service = _service()
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError) as error:
+        await service.issue_create("repo", "Follow-up", "Body", False)
+
+    assert "requires a human instruction or approval" in str(error.value)
+    assert fake.posts == []
+
+
+@pytest.mark.asyncio
+async def test_issue_create_sends_repository_labels_with_their_defined_casing():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/labels"] = [
+        {"name": "priority: high"},
+        {"name": "CLI"},
+    ]
+    fake.post_payloads["/repos/owner/repo/issues"] = {
+        "number": 43,
+        "html_url": "https://github.com/owner/repo/issues/43",
+        "labels": [{"name": "priority: high"}, {"name": "CLI"}],
+    }
+    service._client = fake
+
+    result = await service.issue_create(
+        "repo",
+        "Follow-up",
+        "Body",
+        False,
+        labels=["Priority: High", "cli"],
+        human_approved=True,
+    )
+
+    assert fake.posts[0] == (
+        "/repos/owner/repo/issues",
+        {"title": "Follow-up", "body": "Body", "labels": ["priority: high", "CLI"]},
+        None,
+    )
+    assert result["labels"] == ["priority: high", "CLI"]
+
+
+@pytest.mark.asyncio
+async def test_issue_create_rejects_a_label_the_repository_does_not_define():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/labels"] = [{"name": "cli"}]
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError) as error:
+        await service.issue_create(
+            "repo",
+            "Follow-up",
+            "Body",
+            False,
+            labels=["priority: high"],
+            human_approved=True,
+        )
+
+    message = str(error.value)
+    assert "'priority: high' is not defined in owner/repo" in message
+    assert "Defined labels: cli" in message
+    assert fake.posts == []
+
+
+@pytest.mark.asyncio
+async def test_issue_update_closes_the_issue_with_its_state_reason():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {"state": "open"}
+    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "title": "Original title",
+        "state": "closed",
+        "body": "Body",
+        "labels": [{"name": "cli"}],
+    }
+    service._client = fake
+
+    result = await service.issue_update(
+        "https://github.com/owner/repo/issues/42",
+        state="closed",
+        state_reason="not_planned",
+        human_approved=True,
+    )
+
+    assert fake.patches == [
+        (
+            "/repos/owner/repo/issues/42",
+            {"state": "closed", "state_reason": "not_planned"},
+            None,
+        )
+    ]
+    assert result["state"] == "closed"
+    assert result["state_changed"] is True
+    assert result["repo"] == "owner/repo"
+    assert result["labels"] == ["cli"]
+
+
+@pytest.mark.asyncio
+async def test_issue_update_reports_a_re_close_as_an_unchanged_state():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {"state": "closed"}
+    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "title": "Original title",
+        "state": "closed",
+        "body": "Body",
+        "labels": [],
+    }
+    service._client = fake
+
+    result = await service.issue_update(
+        "https://github.com/owner/repo/issues/42",
+        state="closed",
+        human_approved=True,
+    )
+
+    assert result["state"] == "closed"
+    assert result["state_changed"] is False
+
+
+@pytest.mark.parametrize("state", ["closed", "open"])
+@pytest.mark.asyncio
+async def test_issue_update_state_change_without_human_approval_is_refused(state):
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError) as error:
+        await service.issue_update(
+            "https://github.com/owner/repo/issues/42", state=state
+        )
+
+    assert f"Changing the issue state to '{state}'" in str(error.value)
+    assert fake.patches == []
+
+
+@pytest.mark.asyncio
+async def test_issue_update_removing_a_label_skips_the_repository_label_lookup():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "title": "Original title",
+        "state": "open",
+        "body": "Body",
+        "labels": [{"name": "cli"}],
+    }
+    service._client = fake
+
+    result = await service.issue_update(
+        "https://github.com/owner/repo/issues/42", remove_labels=["docs"]
+    )
+
+    # Nothing is validated against the repository vocabulary when only
+    # removing, so the paginated label listing is never fetched; the one GET
+    # reads the issue back for the result.
+    assert [endpoint for endpoint, _params, _headers in fake.gets] == [
+        "/repos/owner/repo/issues/42"
+    ]
+    assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
+    assert fake.patches == []
+    assert result["labels"] == ["cli"]
+
+
+@pytest.mark.asyncio
+async def test_issue_update_changes_labels_through_the_dedicated_label_endpoints():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/labels"] = [
+        {"name": "priority: high"},
+        {"name": "cli"},
+        {"name": "docs"},
+    ]
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "title": "Original title",
+        "state": "open",
+        "body": "Body",
+        "labels": [{"name": "cli"}, {"name": "priority: high"}],
+    }
+    service._client = fake
+
+    result = await service.issue_update(
+        "https://github.com/owner/repo/issues/42",
+        add_labels=["Priority: High"],
+        remove_labels=["docs"],
+    )
+
+    # Add and remove touch only the named labels, so labels a human sets
+    # concurrently survive; the full label set is never PATCHed.
+    assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
+    assert fake.posts == [
+        ("/repos/owner/repo/issues/42/labels", {"labels": ["priority: high"]}, None)
+    ]
+    assert fake.patches == []
+    assert result["labels"] == ["cli", "priority: high"]
+
+
+@pytest.mark.asyncio
+async def test_issue_update_tolerates_removing_a_label_the_issue_does_not_carry():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    endpoint = "/repos/owner/repo/issues/42/labels/priority%3A%20high"
+    fake.delete_status_codes[endpoint] = 404
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "title": "Original title",
+        "state": "open",
+        "body": "Body",
+        "labels": [],
+    }
+    service._client = fake
+
+    result = await service.issue_update(
+        "https://github.com/owner/repo/issues/42", remove_labels=["priority: high"]
+    )
+
+    assert fake.deletes == [(endpoint, None)]
+    assert result["labels"] == []
+
+
+@pytest.mark.asyncio
+async def test_issue_update_rejects_a_label_the_repository_does_not_define():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/labels"] = [{"name": "cli"}]
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError) as error:
+        await service.issue_update(
+            "https://github.com/owner/repo/issues/42", add_labels=["blocker"]
+        )
+
+    assert "Ask a human to add the label" in str(error.value)
+    assert fake.patches == []
+
+
+@pytest.mark.asyncio
+async def test_issue_update_without_any_requested_change_is_refused():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError) as error:
+        await service.issue_update("https://github.com/owner/repo/issues/42")
+
+    assert "at least one of body, title, labels, or state" in str(error.value)
+    assert fake.patches == []
+
+
+@pytest.mark.asyncio
+async def test_pr_update_replaces_the_title_without_touching_the_body():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
+        "number": 7,
+        "html_url": "https://github.com/owner/repo/pull/7",
+        "title": "New title",
+        "body": "Untouched body",
+    }
+    service._client = fake
+
+    result = await service.pr_update(
+        "https://github.com/owner/repo/pull/7", title="New title"
+    )
+
+    assert fake.patches == [("/repos/owner/repo/pulls/7", {"title": "New title"}, None)]
+    assert result["title"] == "New title"
+    assert result["body"] == "Untouched body"
+
+
+@pytest.mark.asyncio
+async def test_pr_update_without_any_requested_change_is_refused():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError) as error:
+        await service.pr_update("https://github.com/owner/repo/pull/7")
+
+    assert "pr update needs a body or a title." in str(error.value)
+    assert fake.patches == []
 
 
 @pytest.mark.parametrize(
@@ -991,6 +1300,7 @@ async def test_pr_update_patches_only_body_and_returns_updated_pr():
     assert result == {
         "pr_number": 7,
         "pr_url": "https://github.com/owner/repo/pull/7",
+        "title": "Original title",
         "body": "Updated body",
     }
     assert fake.patches == [

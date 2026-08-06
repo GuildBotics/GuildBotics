@@ -6,6 +6,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from guildbotics.capabilities import member_activity_events
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.member_reference import command_summaries
 from guildbotics.capabilities.task_runs import TaskRunStore
@@ -952,8 +953,12 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
                 "issue_url": issue_url,
             }
 
-        async def issue_create(self, repo, title, body, add_to_project):
-            calls.append(("create", repo, title, body, add_to_project))
+        async def issue_create(
+            self, repo, title, body, add_to_project, labels, human_approved
+        ):
+            calls.append(
+                ("create", repo, title, body, add_to_project, labels, human_approved)
+            )
             return {
                 "issue_number": 2,
                 "issue_title": title,
@@ -1006,7 +1011,10 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
             "owner/repo",
             "--title",
             "Issue title",
+            "--label",
+            "priority: high",
             "--no-add-to-project",
+            "--human-approved",
             "--content-stdin",
         ],
         input="Issue body\n",
@@ -1020,7 +1028,15 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
             "https://github.com/owner/repo/issues/1",
             "Comment body\n",
         ),
-        ("create", "owner/repo", "Issue title", "Issue body\n", False),
+        (
+            "create",
+            "owner/repo",
+            "Issue title",
+            "Issue body\n",
+            False,
+            ["priority: high"],
+            True,
+        ),
     ]
     assert [call[0] for call in activity_calls] == ["comment", "create"]
     assert all(call[1] is person for call in activity_calls)
@@ -1045,7 +1061,9 @@ def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
         async def issue_comment(self, _issue_url, _body):
             raise member_module.MemberCapabilityError("GitHub API failed")
 
-        async def issue_create(self, _repo, _title, _body, _add_to_project):
+        async def issue_create(
+            self, _repo, _title, _body, _add_to_project, _labels, _human_approved
+        ):
             raise member_module.MemberCapabilityError("GitHub API failed")
 
         async def aclose(self):
@@ -1090,13 +1108,16 @@ def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
             "owner/repo",
             "--title",
             "Issue title",
+            "--human-approved",
             "--content-stdin",
         ],
         input="Issue body\n",
     )
 
     assert comment.exit_code != 0
+    assert "GitHub API failed" in comment.output
     assert create.exit_code != 0
+    assert "GitHub API failed" in create.output
     assert activity_calls == []
 
 
@@ -1799,7 +1820,7 @@ def test_member_github_pr_create_rejects_missing_content_source():
     assert "Missing option '--content-stdin'" in result.output
 
 
-def test_member_github_pr_update_rejects_missing_content_source():
+def test_member_github_pr_update_rejects_update_without_any_change():
     result = CliRunner().invoke(
         member_module.member,
         [
@@ -1815,7 +1836,7 @@ def test_member_github_pr_update_rejects_missing_content_source():
     )
 
     assert result.exit_code != 0
-    assert "Missing option '--content-stdin'" in result.output
+    assert "pr update needs --content-stdin or --title." in result.output
 
 
 def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypatch):
@@ -1830,8 +1851,8 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypat
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body):
-            calls.update({"pr_url": pr_url, "body": body})
+        async def pr_update(self, pr_url, body, title):
+            calls.update({"pr_url": pr_url, "body": body, "title": title})
             return {"pr_number": 7, "pr_url": pr_url, "body": body}
 
         async def aclose(self):
@@ -1861,6 +1882,7 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypat
     assert calls == {
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "## Summary\n\nUpdated body\n",
+        "title": None,
         "closed": True,
     }
 
@@ -1882,8 +1904,8 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body):
-            calls.update({"pr_url": pr_url, "body": body})
+        async def pr_update(self, pr_url, body, title):
+            calls.update({"pr_url": pr_url, "body": body, "title": title})
             return {
                 "pr_number": 7,
                 "pr_url": pr_url,
@@ -1918,13 +1940,14 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
     assert calls == {
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "",
+        "title": None,
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "pr_update"
 
 
-def test_member_github_issue_update_rejects_missing_content_source():
+def test_member_github_issue_update_rejects_update_without_any_change():
     result = CliRunner().invoke(
         member_module.member,
         [
@@ -1940,7 +1963,179 @@ def test_member_github_issue_update_rejects_missing_content_source():
     )
 
     assert result.exit_code != 0
-    assert "Missing option '--content-stdin'" in result.output
+    assert "issue update needs --content-stdin" in result.output
+
+
+@pytest.mark.parametrize(
+    ("command", "url_option"),
+    [
+        (["github", "issue", "update"], "https://github.com/owner/repo/issues/42"),
+        (["github", "pr", "update"], "https://github.com/owner/repo/pull/7"),
+    ],
+)
+def test_member_github_update_rejects_an_empty_title(command, url_option):
+    result = CliRunner().invoke(
+        member_module.member,
+        [*command, "--person", "aiko", "--url", url_option, "--title", "   "],
+    )
+
+    assert result.exit_code != 0
+    assert "title must not be empty." in result.output
+
+
+def test_member_github_issue_update_rejects_state_reason_without_close():
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/42",
+            "--state",
+            "open",
+            "--state-reason",
+            "completed",
+            "--human-approved",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--state-reason requires --state closed." in result.output
+
+
+def test_member_github_issue_edit_on_a_closed_issue_records_no_close_activity(
+    monkeypatch,
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    recorded = []
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def issue_update(self, issue_url, **_kwargs):
+            # An already-closed issue reports state "closed" for any edit; the
+            # capability marks the state as unchanged.
+            return {
+                "issue_number": 42,
+                "issue_url": issue_url,
+                "repo": "owner/repo",
+                "title": "Capability gap",
+                "state": "closed",
+                "state_changed": False,
+                "labels": [],
+                "body": "Updated body",
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda identifier: (FakeContext(person), person),
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    monkeypatch.setattr(
+        member_activity_events,
+        "record_correlated_event",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/42",
+            "--content-stdin",
+        ],
+        input="Updated body",
+    )
+
+    assert result.exit_code == 0
+    assert recorded == []
+
+
+def test_member_github_issue_close_passes_approval_and_records_activity(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    calls = {}
+    activity_calls = []
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def issue_update(self, issue_url, **kwargs):
+            calls.update({"issue_url": issue_url, **kwargs})
+            return {
+                "issue_number": 42,
+                "issue_url": issue_url,
+                "repo": "owner/repo",
+                "title": "Capability gap",
+                "state": "closed",
+                "state_changed": True,
+                "labels": ["cli"],
+                "body": "Body",
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda identifier: (FakeContext(person), person),
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    monkeypatch.setattr(
+        member_module,
+        "record_member_issue_close_event",
+        lambda member, payload: activity_calls.append((member, payload)),
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/42",
+            "--state",
+            "closed",
+            "--state-reason",
+            "completed",
+            "--add-label",
+            "cli",
+            "--human-approved",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "issue_url": "https://github.com/owner/repo/issues/42",
+        "body": None,
+        "title": None,
+        "add_labels": ["cli"],
+        "remove_labels": [],
+        "state": "closed",
+        "state_reason": "completed",
+        "human_approved": True,
+        "closed": True,
+    }
+    assert activity_calls[0][0] is person
+    assert activity_calls[0][1]["state"] == "closed"
+    assert activity_calls[0][1]["state_changed"] is True
 
 
 def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
@@ -1955,9 +2150,14 @@ def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkey
         def __init__(self, *_args):
             pass
 
-        async def issue_update(self, issue_url, body):
-            calls.update({"issue_url": issue_url, "body": body})
-            return {"issue_number": 42, "issue_url": issue_url, "body": body}
+        async def issue_update(self, issue_url, **kwargs):
+            calls.update({"issue_url": issue_url, **kwargs})
+            return {
+                "issue_number": 42,
+                "issue_url": issue_url,
+                "body": kwargs["body"],
+                "state": "open",
+            }
 
         async def aclose(self):
             calls["closed"] = True
@@ -1986,6 +2186,12 @@ def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkey
     assert calls == {
         "issue_url": "https://github.com/owner/repo/issues/42",
         "body": "## Summary\n\nUpdated body\n",
+        "title": None,
+        "add_labels": [],
+        "remove_labels": [],
+        "state": None,
+        "state_reason": None,
+        "human_approved": False,
         "closed": True,
     }
 
@@ -2007,12 +2213,13 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def issue_update(self, issue_url, body):
-            calls.update({"issue_url": issue_url, "body": body})
+        async def issue_update(self, issue_url, **kwargs):
+            calls.update({"issue_url": issue_url, **kwargs})
             return {
                 "issue_number": 42,
                 "issue_url": issue_url,
-                "body": body,
+                "body": kwargs["body"],
+                "state": "open",
             }
 
         async def aclose(self):
@@ -2043,6 +2250,12 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
     assert calls == {
         "issue_url": "https://github.com/owner/repo/issues/42",
         "body": "",
+        "title": None,
+        "add_labels": [],
+        "remove_labels": [],
+        "state": None,
+        "state_reason": None,
+        "human_approved": False,
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""

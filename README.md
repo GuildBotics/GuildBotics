@@ -497,10 +497,9 @@ You can change where per-workspace runtime data is stored by setting `GUILDBOTIC
 - `name`: project name
 - `description`: short project description used as agent context
 - `language`: project language
-- `repositories`: repository definitions
 - `services.ticket_manager`: GitHub Projects settings
 - `services.ticket_manager.lane_map`: maps the ready / working / done lanes to GitHub Project status names. Set this when your Project uses its own status names
-- `services.code_hosting_service`: GitHub repository settings
+- `services.code_hosting_service`: code hosting service settings (the GitHub owner used for repository operations)
 
 **Member settings** (`team/members/<person_id>/person.yml`):
 

@@ -13,6 +13,7 @@ from uuid import uuid4
 import click
 
 from guildbotics.capabilities.member_activity_events import (
+    record_member_issue_close_event,
     record_member_issue_comment_event,
     record_member_issue_create_event,
     record_member_pr_create_event,
@@ -102,6 +103,16 @@ _required_content_stdin_option = click.option(
     required=True,
     expose_value=False,
     help="Read the command's entire free-form content from standard input.",
+)
+_optional_content_stdin_option = click.option(
+    "--content-stdin",
+    is_flag=True,
+    help="Read the replacement body from standard input.",
+)
+_human_approved_option = click.option(
+    "--human-approved",
+    is_flag=True,
+    help="Confirm that a human instructed or approved this change.",
 )
 
 
@@ -1474,22 +1485,33 @@ async def _issue_comment(person: str, issue_url: str, body: str) -> dict[str, An
 @click.option("--title", required=True, help="Issue title.")
 @_required_content_stdin_option
 @click.option(
+    "--label",
+    "labels",
+    multiple=True,
+    help="Label already defined in the repository. Repeat for several labels.",
+)
+@click.option(
     "--add-to-project/--no-add-to-project",
     default=True,
     help="Add the created issue to the configured project board.",
 )
+@_human_approved_option
 @_json_format_option
 def issue_create(
     person: str,
     repo: str,
     title: str,
+    labels: tuple[str, ...],
     add_to_project: bool,
+    human_approved: bool,
     output_format: str,
 ) -> None:
     title = _validate_title(title)
     body = _read_stdin("issue body")
     _run(
-        _issue_create(person, repo, title, body, add_to_project),
+        _issue_create(
+            person, repo, title, body, add_to_project, list(labels), human_approved
+        ),
         output_format=output_format,
     )
 
@@ -1500,11 +1522,15 @@ async def _issue_create(
     title: str,
     body: str,
     add_to_project: bool,
+    labels: list[str],
+    human_approved: bool,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        result = await service.issue_create(repo, title, body, add_to_project)
+        result = await service.issue_create(
+            repo, title, body, add_to_project, labels, human_approved
+        )
         TaskRunStore().append_evidence(current_task_run_id(), "issue_create", result)
         record_member_issue_create_event(member_person, result)
         return result
@@ -1515,26 +1541,94 @@ async def _issue_create(
 @issue.command(name="update")
 @_person_option
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
-@_required_content_stdin_option
+@_optional_content_stdin_option
+@click.option("--title", default=None, help="Replace the issue title.")
+@click.option(
+    "--add-label",
+    "add_labels",
+    multiple=True,
+    help="Add a label already defined in the repository. Repeat for several labels.",
+)
+@click.option(
+    "--remove-label",
+    "remove_labels",
+    multiple=True,
+    help="Remove a label from the issue. Repeat for several labels.",
+)
+@click.option(
+    "--state",
+    type=click.Choice(["open", "closed"]),
+    help="Close or reopen the issue; requires --human-approved.",
+)
+@click.option(
+    "--state-reason",
+    type=click.Choice(["completed", "not_planned"]),
+    help="Why the issue is closed; requires --state closed.",
+)
+@_human_approved_option
 @_json_format_option
 def issue_update(
     person: str,
     issue_url: str,
+    content_stdin: bool,
+    title: str | None,
+    add_labels: tuple[str, ...],
+    remove_labels: tuple[str, ...],
+    state: str | None,
+    state_reason: str | None,
+    human_approved: bool,
     output_format: str,
 ) -> None:
-    body = _read_stdin("issue body", allow_empty=True)
+    if state_reason and state != "closed":
+        raise click.UsageError("--state-reason requires --state closed.")
+    if not (content_stdin or title is not None or add_labels or remove_labels or state):
+        raise click.UsageError(
+            "issue update needs --content-stdin, --title, --add-label, "
+            "--remove-label, or --state."
+        )
+    body = _read_stdin("issue body", allow_empty=True) if content_stdin else None
     _run(
-        _issue_update(person, issue_url, body),
+        _issue_update(
+            person=person,
+            issue_url=issue_url,
+            body=body,
+            title=_validate_title(title) if title is not None else None,
+            add_labels=list(add_labels),
+            remove_labels=list(remove_labels),
+            state=state,
+            state_reason=state_reason,
+            human_approved=human_approved,
+        ),
         output_format=output_format,
     )
 
 
-async def _issue_update(person: str, issue_url: str, body: str) -> dict[str, Any]:
+async def _issue_update(
+    person: str,
+    issue_url: str,
+    body: str | None,
+    title: str | None,
+    add_labels: list[str],
+    remove_labels: list[str],
+    state: str | None,
+    state_reason: str | None,
+    human_approved: bool,
+) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        result = await service.issue_update(issue_url, body)
+        result = await service.issue_update(
+            issue_url,
+            body=body,
+            title=title,
+            add_labels=add_labels,
+            remove_labels=remove_labels,
+            state=state,
+            state_reason=state_reason,
+            human_approved=human_approved,
+        )
         TaskRunStore().append_evidence(current_task_run_id(), "issue_update", result)
+        record_member_issue_close_event(member_person, result)
         return result
     finally:
         await service.aclose()
@@ -1651,25 +1745,34 @@ async def _pr_create(
 @pr.command(name="update")
 @_person_option
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
-@_required_content_stdin_option
+@_optional_content_stdin_option
+@click.option("--title", default=None, help="Replace the pull request title.")
 @_json_format_option
 def pr_update(
     person: str,
     pr_url: str,
+    content_stdin: bool,
+    title: str | None,
     output_format: str,
 ) -> None:
-    body = _read_stdin("pull request body", allow_empty=True)
+    if not (content_stdin or title is not None):
+        raise click.UsageError("pr update needs --content-stdin or --title.")
+    body = _read_stdin("pull request body", allow_empty=True) if content_stdin else None
     _run(
-        _pr_update(person, pr_url, body),
+        _pr_update(
+            person, pr_url, body, _validate_title(title) if title is not None else None
+        ),
         output_format=output_format,
     )
 
 
-async def _pr_update(person: str, pr_url: str, body: str) -> dict[str, Any]:
+async def _pr_update(
+    person: str, pr_url: str, body: str | None, title: str | None
+) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        result = await service.pr_update(pr_url, body)
+        result = await service.pr_update(pr_url, body=body, title=title)
         TaskRunStore().append_evidence(current_task_run_id(), "pr_update", result)
         return result
     finally:

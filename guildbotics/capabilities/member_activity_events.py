@@ -79,6 +79,45 @@ def record_member_issue_create_event(
     )
 
 
+def record_member_issue_close_event(
+    member_person: Person, payload: dict[str, Any]
+) -> None:
+    """Record an issue close as member activity.
+
+    Only a transition into the closed state is recorded: ``state_changed`` in
+    the capability result separates a real close from an edit to, or a
+    re-close of, an already-closed issue.
+
+    Only closing is recorded. Reopening is a correction that the work following
+    it makes visible again, and the activity history has no reopen event kind
+    it could be shown as.
+    """
+    if str(payload.get("state") or "") != "closed" or not payload.get("state_changed"):
+        return
+    number = payload.get("issue_number")
+    repo = str(payload.get("repo") or "")
+    url = str(payload.get("issue_url") or "")
+    _record_member_domain_event(
+        member_person,
+        "github.issue",
+        {
+            "action": "closed",
+            "issue": {
+                "number": number,
+                "title": str(payload.get("title") or "").strip(),
+                "html_url": url,
+            },
+        },
+        {
+            "github.action": "closed",
+            "github.kind": "issue",
+            "github.number": number,
+            "github.repo": repo,
+            "github.url": url,
+        },
+    )
+
+
 def record_member_issue_comment_event(
     member_person: Person, payload: dict[str, Any]
 ) -> None:

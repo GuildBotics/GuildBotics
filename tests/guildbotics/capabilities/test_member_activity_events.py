@@ -48,6 +48,89 @@ def test_record_member_issue_create_event_builds_github_domain_payload(
     }
 
 
+def test_record_member_issue_close_event_reports_the_close_as_activity(
+    monkeypatch,
+) -> None:
+    recorded: dict[str, Any] = {}
+    monkeypatch.setattr(
+        member_activity_events,
+        "record_correlated_event",
+        lambda **kwargs: recorded.update(kwargs),
+    )
+
+    member_activity_events.record_member_issue_close_event(
+        Person(person_id="aiko", name="Aiko"),
+        {
+            "issue_number": 376,
+            "title": "  Capability gap  ",
+            "state": "closed",
+            "state_changed": True,
+            "repo": "owner/repo",
+            "issue_url": "https://github.com/owner/repo/issues/376",
+        },
+    )
+
+    assert recorded["event_type"] == "github.issue"
+    assert recorded["payload"] == {
+        "action": "closed",
+        "issue": {
+            "number": 376,
+            "title": "Capability gap",
+            "html_url": "https://github.com/owner/repo/issues/376",
+        },
+    }
+    assert recorded["attributes"]["github.action"] == "closed"
+    assert recorded["person_id"] == "aiko"
+
+
+def test_record_member_issue_close_event_ignores_updates_that_keep_the_issue_open(
+    monkeypatch,
+) -> None:
+    recorded: dict[str, Any] = {}
+    monkeypatch.setattr(
+        member_activity_events,
+        "record_correlated_event",
+        lambda **kwargs: recorded.update(kwargs),
+    )
+
+    member_activity_events.record_member_issue_close_event(
+        Person(person_id="aiko", name="Aiko"),
+        {
+            "issue_number": 376,
+            "state": "open",
+            "state_changed": True,
+            "repo": "owner/repo",
+            "issue_url": "https://github.com/owner/repo/issues/376",
+        },
+    )
+
+    assert recorded == {}
+
+
+def test_record_member_issue_close_event_ignores_a_close_that_changed_nothing(
+    monkeypatch,
+) -> None:
+    recorded: dict[str, Any] = {}
+    monkeypatch.setattr(
+        member_activity_events,
+        "record_correlated_event",
+        lambda **kwargs: recorded.update(kwargs),
+    )
+
+    member_activity_events.record_member_issue_close_event(
+        Person(person_id="aiko", name="Aiko"),
+        {
+            "issue_number": 376,
+            "state": "closed",
+            "state_changed": False,
+            "repo": "owner/repo",
+            "issue_url": "https://github.com/owner/repo/issues/376",
+        },
+    )
+
+    assert recorded == {}
+
+
 def test_record_member_issue_comment_event_keeps_comment_diagnostics_url(
     monkeypatch,
 ) -> None:

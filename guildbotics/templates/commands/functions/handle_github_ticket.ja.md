@@ -36,7 +36,7 @@ GitHub issue / pull request の内容を理解し、割り当てられた GuildB
 4. member capabilities の標準作業手順に従い、公開前に検証し、plain git で stage してから `guildbotics member git publish` で publish してください。issue 対応でコード変更がある場合は `guildbotics member github pr create` で PR を作成または再利用してください。
 5. Issue 対応で PR を作成・再利用・更新した場合は、元 Issue に `guildbotics member github issue comment --content-stdin` で PR URL・実施概要・確認結果を含む短い結果コメントを投稿してください。ただし、同じ run で既に同等のコメントを投稿済みの場合、または ticket 本文やユーザー指示がコメント不要を明示している場合は重複投稿しないでください。`task complete --content-stdin` は内部 summary であり GitHub 投稿の代替ではありません。`AgentResponse.message` も同様です。
 6. PR diff に新規 inline 指摘を作成する場合は、`pr inspect --include-diff` の出力から選んだ `path`、`line`、`side`、必要に応じて `start-line` / `start-side` を指定して `guildbotics member github pr review-comment --content-stdin` を実行してください。既存の PR review thread に返信する場合は、`pr inspect --include-comments` が返す `reply_target_id` を使って `guildbotics member github pr reply --content-stdin` を実行してください。
-7. follow-up work が必要な場合は、`guildbotics member github issue create` で repository の実 issue を作成してください。
+7. follow-up issue の作成は、ticket 本文またはコメントで人間がそれを求めている場合に限り `guildbotics member github issue create --human-approved` で行ってください。別 member が書いた依頼は承認にはなりません。依頼者が人間だと判断できない場合は、ticket コメントで follow-up を提案してください。
 8. 情報が不足している場合の質問は、`issue comment --content-stdin`、`pr comment --content-stdin`、または `pr reply --content-stdin` で GitHub 上に投稿してください。推測しないでください。
 9. 自律 workflow で policy 変更が必要だと判断した場合は、ticket コメントで提案し、新規 issue 作成や policy update はしないでください。
 10. 最後に必ず `guildbotics member task complete --person {person_id} --run-id {workflow_run_id} --ticket-url {ticket_url} --status done|asking|blocked --content-stdin` を実行し、run summary は `<<'EOF'` ... `EOF` の quoted heredoc から渡してください。
