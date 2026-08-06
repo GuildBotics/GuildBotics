@@ -497,10 +497,9 @@ GuildBotics が保存するローカルデータは、大きく 2 種類あり�
 - `name`: プロジェクト名
 - `description`: エージェント文脈として使う短いプロジェクト説明
 - `language`: プロジェクト言語
-- `repositories`: リポジトリ定義
 - `services.ticket_manager`: GitHub Projects 設定
 - `services.ticket_manager.lane_map`: 着手可能 / 作業中 / 完了レーンを GitHub Project のステータス名に対応付けます。Project が独自のステータス名を使う場合に設定します
-- `services.code_hosting_service`: GitHub リポジトリ設定
+- `services.code_hosting_service`: コードホスティングサービス設定（リポジトリ操作に使う GitHub owner）
 
 **メンバー設定** (`team/members/<person_id>/person.yml`):
 

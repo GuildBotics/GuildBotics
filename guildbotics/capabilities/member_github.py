@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from httpx import AsyncClient
 
@@ -176,14 +178,21 @@ class MemberGitHubCapabilityService:
         return result
 
     async def issue_create(
-        self, repo: str, title: str, body: str, add_to_project: bool
+        self,
+        repo: str,
+        title: str,
+        body: str,
+        add_to_project: bool,
+        labels: Sequence[str] = (),
+        human_approved: bool = False,
     ) -> dict[str, Any]:
+        _require_human_approval(human_approved, "Creating an issue")
         owner, repo_name = self.parse_repo(repo)
+        payload: dict[str, Any] = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = await self._defined_labels(owner, repo_name, labels)
         client = await self._get_client()
-        resp = await client.post(
-            f"/repos/{owner}/{repo_name}/issues",
-            json={"title": title, "body": body},
-        )
+        resp = await client.post(f"/repos/{owner}/{repo_name}/issues", json=payload)
         _raise_for_status(resp)
         issue = resp.json()
         project_item_id = None
@@ -195,24 +204,150 @@ class MemberGitHubCapabilityService:
             "repo": f"{owner}/{repo_name}",
             "issue_url": issue.get("html_url")
             or f"{self.web_base_url()}/{owner}/{repo_name}/issues/{issue.get('number')}",
+            "labels": _label_names(issue),
             "project_item_id": project_item_id,
         }
 
-    async def issue_update(self, url: str, body: str) -> dict[str, Any]:
+    async def issue_update(
+        self,
+        url: str,
+        body: str | None = None,
+        title: str | None = None,
+        add_labels: Sequence[str] = (),
+        remove_labels: Sequence[str] = (),
+        state: str | None = None,
+        state_reason: str | None = None,
+        human_approved: bool = False,
+    ) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="issue")
-        client = await self._get_client()
-        resp = await client.patch(
-            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}",
-            json={"body": body},
+        if state is not None:
+            _require_human_approval(
+                human_approved, f"Changing the issue state to '{state}'"
+            )
+        add_labels = _cleaned_labels(add_labels)
+        remove_labels = _cleaned_labels(remove_labels)
+        payload: dict[str, Any] = {}
+        if body is not None:
+            payload["body"] = body
+        if title is not None:
+            payload["title"] = title
+        if state is not None:
+            payload["state"] = state
+            if state_reason is not None:
+                payload["state_reason"] = state_reason
+        if not payload and not (add_labels or remove_labels):
+            raise MemberCapabilityError(
+                "issue update needs at least one of body, title, labels, or state."
+            )
+        # Label additions are validated up front so an undefined label aborts
+        # before any write; the label endpoints are called only after the field
+        # PATCH succeeded so a failed PATCH leaves the labels untouched.
+        additions = await self._defined_labels(
+            resource.owner, resource.repo, add_labels
         )
-        _raise_for_status(resp)
+        state_changed = False
+        if state is not None:
+            state_changed = await self._issue_state(resource) != state
+        client = await self._get_client()
+        issue_endpoint = (
+            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}"
+        )
+        if payload:
+            resp = await client.patch(issue_endpoint, json=payload)
+            _raise_for_status(resp)
+        await self._apply_label_changes(resource, additions, remove_labels)
+        if additions or remove_labels or not payload:
+            resp = await client.get(issue_endpoint)
+            _raise_for_status(resp)
         issue = resp.json()
         response_body = issue.get("body")
         return {
             "issue_number": issue.get("number", resource.number),
             "issue_url": issue.get("html_url", url),
+            "repo": resource.full_repo,
+            "title": issue.get("title", ""),
+            "state": issue.get("state", ""),
+            "state_changed": state_changed,
+            "labels": _label_names(issue),
             "body": "" if response_body is None else response_body,
         }
+
+    async def _issue_state(self, resource: GitHubResource) -> str:
+        client = await self._get_client()
+        resp = await client.get(
+            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}"
+        )
+        _raise_for_status(resp)
+        return str(resp.json().get("state", ""))
+
+    async def _apply_label_changes(
+        self,
+        resource: GitHubResource,
+        additions: Sequence[str],
+        remove_labels: Sequence[str],
+    ) -> None:
+        """Apply label changes through the dedicated label endpoints.
+
+        The add and remove endpoints mutate only the named labels, so labels a
+        human sets concurrently survive; a PATCH of the full label set would
+        overwrite them. Removing a label the issue no longer carries is a
+        no-op, and a label both removed and added ends up on the issue.
+        ``additions`` must already be resolved through ``_defined_labels``.
+        """
+        client = await self._get_client()
+        labels_endpoint = (
+            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/labels"
+        )
+        for name in remove_labels:
+            resp = await client.delete(f"{labels_endpoint}/{quote(name, safe='')}")
+            if resp.status_code != HTTPStatus.NOT_FOUND:
+                _raise_for_status(resp)
+        if additions:
+            resp = await client.post(labels_endpoint, json={"labels": list(additions)})
+            _raise_for_status(resp)
+
+    async def _defined_labels(
+        self, owner: str, repo: str, labels: Sequence[str]
+    ) -> list[str]:
+        """Map requested labels onto the labels the repository already defines.
+
+        Labels are a shared vocabulary, so a member picks from the repository's
+        own set and proposes a missing label to a human rather than creating
+        one as a side effect of an issue write.
+        """
+        if not labels:
+            return []
+        defined = await self._repository_labels(owner, repo)
+        by_name = {name.casefold(): name for name in defined}
+        resolved: list[str] = []
+        for label in labels:
+            canonical = by_name.get(label.strip().casefold())
+            if canonical is None:
+                raise MemberCapabilityError(
+                    f"Label '{label}' is not defined in {owner}/{repo}. "
+                    f"Defined labels: {', '.join(defined) or '(none)'}. "
+                    "Ask a human to add the label instead of introducing a new one."
+                )
+            if canonical not in resolved:
+                resolved.append(canonical)
+        return resolved
+
+    async def _repository_labels(self, owner: str, repo: str) -> list[str]:
+        client = await self._get_client()
+        names: list[str] = []
+        page = 1
+        while True:
+            resp = await client.get(
+                f"/repos/{owner}/{repo}/labels",
+                params={"per_page": GITHUB_PAGE_SIZE, "page": page},
+            )
+            _raise_for_status(resp)
+            page_items = _as_list(resp.json())
+            names.extend(str(item.get("name", "")) for item in page_items)
+            if len(page_items) < GITHUB_PAGE_SIZE:
+                break
+            page += 1
+        return [name for name in names if name]
 
     async def pr_inspect(
         self, url: str, include_comments: bool, include_diff: bool = False
@@ -294,12 +429,21 @@ class MemberGitHubCapabilityService:
             "base": base_branch,
         }
 
-    async def pr_update(self, url: str, body: str) -> dict[str, Any]:
+    async def pr_update(
+        self, url: str, body: str | None = None, title: str | None = None
+    ) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
+        payload: dict[str, Any] = {}
+        if body is not None:
+            payload["body"] = body
+        if title is not None:
+            payload["title"] = title
+        if not payload:
+            raise MemberCapabilityError("pr update needs a body or a title.")
         client = await self._get_client()
         resp = await client.patch(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}",
-            json={"body": body},
+            json=payload,
         )
         _raise_for_status(resp)
         pr = resp.json()
@@ -307,6 +451,7 @@ class MemberGitHubCapabilityService:
         return {
             "pr_number": pr.get("number", resource.number),
             "pr_url": pr.get("html_url", url),
+            "title": pr.get("title", ""),
             "body": "" if response_body is None else response_body,
         }
 
@@ -888,6 +1033,28 @@ def _as_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
     return []
+
+
+def _label_names(issue: dict[str, Any]) -> list[str]:
+    return [str(item.get("name", "")) for item in _as_list(issue.get("labels"))]
+
+
+def _cleaned_labels(labels: Sequence[str]) -> list[str]:
+    return [name for name in (label.strip() for label in labels) if name]
+
+
+def _require_human_approval(human_approved: bool, action: str) -> None:
+    """Guard the writes that stay a human decision.
+
+    Opening and closing issues shape the team's backlog, so the member may only
+    perform them on a human's instruction or approval. The flag is the member's
+    attestation that such an instruction exists in the originating conversation.
+    """
+    if not human_approved:
+        raise MemberCapabilityError(
+            f"{action} requires a human instruction or approval. "
+            "Ask the human first, then re-run with --human-approved."
+        )
 
 
 def _raise_for_status(resp: Any) -> None:

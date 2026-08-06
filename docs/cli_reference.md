@@ -47,16 +47,16 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, and reaction capabilities. |
 | [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
 | [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
-| [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue. |
+| [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue a human asked for. |
 | [`guildbotics member github issue inspect`](#guildbotics-member-github-issue-inspect) | Read an issue and its comments. |
-| [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Replace an issue body; an empty stdin removes the body. |
+| [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Change an issue's body, title, labels, or state; an empty stdin removes the body. |
 | [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
 | [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including review threads and diff comment coordinates. |
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
-| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Replace a PR body; an empty stdin removes the body. |
+| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title; an empty stdin removes the body. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
 | [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue or review comment. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
@@ -620,9 +620,9 @@ guildbotics member github issue [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
-| [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue. |
+| [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue a human asked for. |
 | [`guildbotics member github issue inspect`](#guildbotics-member-github-issue-inspect) | Read an issue and its comments. |
-| [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Replace an issue body; an empty stdin removes the body. |
+| [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Change an issue's body, title, labels, or state; an empty stdin removes the body. |
 
 ## `guildbotics member github issue comment`
 
@@ -642,7 +642,7 @@ guildbotics member github issue comment [OPTIONS]
 
 ## `guildbotics member github issue create`
 
-Open a follow-up issue.
+Open a follow-up issue a human asked for.
 
 ```text
 guildbotics member github issue create [OPTIONS]
@@ -654,7 +654,9 @@ guildbotics member github issue create [OPTIONS]
 | `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
 | `--title TEXT` | Issue title. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
+| `--label TEXT` | Label already defined in the repository. Repeat for several labels. |
 | `--add-to-project / --no-add-to-project` | Add the created issue to the configured project board. [default: add-to-project] |
+| `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -675,7 +677,7 @@ guildbotics member github issue inspect [OPTIONS]
 
 ## `guildbotics member github issue update`
 
-Replace an issue body; an empty stdin removes the body.
+Change an issue's body, title, labels, or state; an empty stdin removes the body.
 
 ```text
 guildbotics member github issue update [OPTIONS]
@@ -685,7 +687,13 @@ guildbotics member github issue update [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Issue URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
+| `--content-stdin` | Read the replacement body from standard input. |
+| `--title TEXT` | Replace the issue title. |
+| `--add-label TEXT` | Add a label already defined in the repository. Repeat for several labels. |
+| `--remove-label TEXT` | Remove a label from the issue. Repeat for several labels. |
+| `--state [open\|closed]` | Close or reopen the issue; requires --human-approved. |
+| `--state-reason [completed\|not_planned]` | Why the issue is closed; requires --state closed. |
+| `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -708,7 +716,7 @@ guildbotics member github pr [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including review threads and diff comment coordinates. |
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
-| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Replace a PR body; an empty stdin removes the body. |
+| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title; an empty stdin removes the body. |
 
 ## `guildbotics member github pr comment`
 
@@ -804,7 +812,7 @@ guildbotics member github pr review-comment [OPTIONS]
 
 ## `guildbotics member github pr update`
 
-Replace a PR body; an empty stdin removes the body.
+Change a PR's body or title; an empty stdin removes the body.
 
 ```text
 guildbotics member github pr update [OPTIONS]
@@ -814,7 +822,8 @@ guildbotics member github pr update [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. [required] |
+| `--content-stdin` | Read the replacement body from standard input. |
+| `--title TEXT` | Replace the pull request title. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

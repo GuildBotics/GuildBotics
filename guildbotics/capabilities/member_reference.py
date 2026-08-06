@@ -96,14 +96,17 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member github issue create --person <person> --repo <owner/repo> "
-                "--title <title> --content-stdin "
-                "[--add-to-project|--no-add-to-project]",
-                "Open a follow-up issue.",
+                "--title <title> --content-stdin [--label <name> ...] "
+                "[--add-to-project|--no-add-to-project] --human-approved",
+                "Open a follow-up issue a human asked for.",
             ),
             (
                 "guildbotics member github issue update --person <person> --url <issue_url> "
-                "--content-stdin",
-                "Replace an issue body; an empty stdin removes the body.",
+                "[--content-stdin] [--title <title>] [--add-label <name> ...] "
+                "[--remove-label <name> ...] "
+                "[--state open|closed [--state-reason completed|not_planned] --human-approved]",
+                "Change an issue's body, title, labels, or state; an empty stdin "
+                "removes the body.",
             ),
             (
                 "guildbotics member github pr inspect --person <person> --url <pr_url> "
@@ -118,8 +121,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member github pr update --person <person> --url <pr_url> "
-                "--content-stdin",
-                "Replace a PR body; an empty stdin removes the body.",
+                "[--content-stdin] [--title <title>]",
+                "Change a PR's body or title; an empty stdin removes the body.",
             ),
             (
                 "guildbotics member github pr comment --person <person> --url <pr_url> --content-stdin",
@@ -281,6 +284,22 @@ _CROSS_CUTTING_RULES: list[str] = [
     "Publishing writes go through these `guildbotics member ...` commands: commits, pushes, PRs, "
     "issue/PR comments, and Slack posts/reactions. Never use gh, raw GitHub/Slack tokens or APIs, "
     "raw `git commit` / `git push`, or raw Slack HTTP calls for those.",
+    "Opening an issue and closing or reopening one stay human decisions. Pass "
+    "`--human-approved` only when a human in the originating conversation asked for or "
+    "approved that specific issue, never on the member's own judgment and never because "
+    "another member asked for it.",
+    "Labels come from the labels the target repository already defines; `issue create "
+    "--label` and `issue update --add-label` reject anything else. When the defined "
+    "labels do not cover what the issue needs, propose the new label to a human instead "
+    "of inventing one or writing the distinction into the body.",
+    "Priority is a human triage decision, so the member proposes it and never records it: "
+    "do not express urgency by adding a label or setting a project or issue field for it. "
+    "Say what the member thinks the priority should be, and why, in the issue comment, PR "
+    "comment, or thread where the work was requested, and leave the recording to a human.",
+    "What the inspect commands read maps to writes like this: `issue update` writes body, "
+    "title, labels, and state, and `pr update` writes body and title. Assignees are "
+    "read-only on purpose, because who takes an issue is assigned by a human on the "
+    "project board; PR state, draft, and base are read-only for the same reason.",
     "Pass every free-form write body, message, reason, or run summary through `--content-stdin`; "
     "use a quoted heredoc such as `--content-stdin <<'EOF'` ... `EOF` so `$`, backticks, and "
     "`$()` remain literal. Titles are single-line `--title` values and are never framed into stdin.",
