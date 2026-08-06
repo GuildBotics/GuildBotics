@@ -127,22 +127,32 @@ def _item(
     assignee: str | None = "aiko-gh",
     body: str = "",
     agent: str | None = None,
+    agent_updated_at: str | None = None,
+    assigned_events: list[dict[str, str]] | None = None,
     created_at: str = "2026-01-01T00:00:00Z",
     extra_field_values: list[dict[str, Any]] | None = None,
 ) -> dict:
     field_values = [{"field": {"name": "Status"}, "name": status}]
     if agent:
-        field_values.append(
-            {
-                "field": {
-                    "id": "agent-field",
-                    "name": GitHubTicketManager.FIELD_AGENT,
-                },
-                "name": agent,
-            }
-        )
+        agent_value: dict[str, Any] = {
+            "field": {
+                "id": "agent-field",
+                "name": GitHubTicketManager.FIELD_AGENT,
+            },
+            "name": agent,
+        }
+        if agent_updated_at:
+            agent_value["updatedAt"] = agent_updated_at
+        field_values.append(agent_value)
     field_values.extend(extra_field_values or [])
     assignees = [{"login": assignee}] if assignee else []
+    timeline_nodes = [
+        {
+            "createdAt": event["created_at"],
+            "assignee": {"login": event["login"]},
+        }
+        for event in assigned_events or []
+    ]
     return {
         "fieldValues": {"nodes": field_values},
         "content": {
@@ -152,6 +162,7 @@ def _item(
             "body": body,
             "createdAt": created_at,
             "assignees": {"nodes": assignees},
+            "timelineItems": {"nodes": timeline_nodes},
             "repository": {"name": "repo", "owner": {"login": "GuildBotics"}},
         },
     }
@@ -162,7 +173,7 @@ def _comments(number: int, comments: list[dict[str, str]]) -> dict[str, Any]:
         f"/repos/GuildBotics/repo/issues/{number}/comments": [
             {
                 "body": comment["body"],
-                "created_at": f"2026-01-01T00:0{index}:00Z",
+                "created_at": comment.get("created_at", f"2026-01-01T00:0{index}:00Z"),
                 "user": {"login": comment["user"]},
             }
             for index, comment in enumerate(comments)
@@ -887,3 +898,321 @@ async def test_sync_agent_field_adds_missing_option_preserving_existing():
     ]
     assert state["exists"] is True
     assert state["missing"] == []
+
+
+def _status_comment(reason: str) -> str:
+    from guildbotics.integrations.workflow_status_comment import (
+        WORKFLOW_STATUS_CODE_BLOCK,
+    )
+
+    return (
+        f"```{WORKFLOW_STATUS_CODE_BLOCK}\n"
+        '{"kind": "workflow_error", "routing": "suppress", '
+        f'"reason": "{reason}", "person_id": "aiko"}}\n'
+        "```\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ready_ticket_is_selected_when_my_comment_predates_the_assignment():
+    """Reproduces issue #392.
+
+    The member commented as the issue's author days before a human assigned
+    them. That earlier comment says nothing about the assigned work, so it must
+    not suppress the run.
+    """
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-05T00:00:00Z",
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-gh",
+                    "body": "I filed this and refined the body.",
+                    "created_at": "2026-01-03T00:00:00Z",
+                }
+            ],
+        ),
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "ready_lane"
+    # The agent still sees the full history even though it was excluded above.
+    assert [comment.content for comment in task.comments] == [
+        "I filed this and refined the body."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ready_ticket_is_skipped_when_my_comment_follows_the_assignment():
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-05T00:00:00Z",
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-gh",
+                    "body": "Done, opened the PR.",
+                    "created_at": "2026-01-06T00:00:00Z",
+                }
+            ],
+        ),
+    )
+
+    assert await manager.get_task_to_work_on() is None
+
+
+@pytest.mark.asyncio
+async def test_reassignment_makes_an_earlier_finished_ticket_actionable_again():
+    """Re-assigning is how a human asks for the work to resume."""
+    finished_comment = {
+        "user": "aiko-gh",
+        "body": "Done, opened the PR.",
+        "created_at": "2026-01-06T00:00:00Z",
+    }
+    responses = _comments(1, [finished_comment])
+
+    before = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="In Progress",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-05T00:00:00Z",
+            )
+        ],
+        responses=responses,
+    )
+    assert await before.get_task_to_work_on() is None
+
+    after = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="In Progress",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-07T00:00:00Z",
+            )
+        ],
+        responses=responses,
+    )
+
+    task = await after.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "working_lane"
+
+
+@pytest.mark.asyncio
+async def test_assignee_assignment_time_comes_from_the_assigned_event():
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assigned_events=[
+                    {"login": "aiko-gh", "created_at": "2026-01-05T00:00:00Z"}
+                ],
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-gh",
+                    "body": "Reviewed this for someone else.",
+                    "created_at": "2026-01-03T00:00:00Z",
+                }
+            ],
+        ),
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "ready_lane"
+
+
+@pytest.mark.asyncio
+async def test_assigned_event_for_another_user_does_not_date_my_assignment():
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assigned_events=[
+                    {"login": "someone-else", "created_at": "2026-01-05T00:00:00Z"}
+                ],
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-gh",
+                    "body": "Done.",
+                    "created_at": "2026-01-03T00:00:00Z",
+                }
+            ],
+        ),
+    )
+
+    assert await manager.get_task_to_work_on() is None
+
+
+@pytest.mark.asyncio
+async def test_working_ticket_with_only_pre_assignment_comments_is_working_lane():
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="In Progress",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-05T00:00:00Z",
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "reviewer",
+                    "body": "Old discussion",
+                    "created_at": "2026-01-03T00:00:00Z",
+                }
+            ],
+        ),
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "working_lane"
+
+
+@pytest.mark.asyncio
+async def test_failed_status_comment_before_the_assignment_does_not_suppress():
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-05T00:00:00Z",
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-gh",
+                    "body": _status_comment("failed"),
+                    "created_at": "2026-01-03T00:00:00Z",
+                }
+            ],
+        ),
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "ready_lane"
+
+
+@pytest.mark.asyncio
+async def test_failed_status_comment_after_the_assignment_still_suppresses():
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-05T00:00:00Z",
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-gh",
+                    "body": _status_comment("failed"),
+                    "created_at": "2026-01-06T00:00:00Z",
+                }
+            ],
+        ),
+    )
+
+    assert await manager.get_task_to_work_on() is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_assignment_time_keeps_every_comment():
+    """Without an assignment time nothing can be excluded, so the brake holds."""
+    manager = _Manager(
+        items=[_item(number=1, status="In Progress")],
+        responses=_comments(1, [{"user": "aiko-gh", "body": "Done"}]),
+    )
+
+    assert await manager.get_task_to_work_on() is None
+
+
+@pytest.mark.asyncio
+async def test_mention_after_the_assignment_overrides_my_own_last_comment():
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-05T00:00:00Z",
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "human",
+                    "body": "⚙aiko please take another look",
+                    "created_at": "2026-01-06T00:00:00Z",
+                },
+                {
+                    "user": "aiko-gh",
+                    "body": "Looking now.",
+                    "created_at": "2026-01-07T00:00:00Z",
+                },
+                {
+                    "user": "human",
+                    "body": "⚙aiko one more thing",
+                    "created_at": "2026-01-08T00:00:00Z",
+                },
+            ],
+        ),
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "ready_lane"
