@@ -326,8 +326,39 @@ class MemberGitWorkspaceService:
             for commit in commits_ahead
         ]
         with _git_auth_environment(repo, token):
-            origin.push(branch)
+            _push_branch(origin, branch)
         return True, commits
+
+
+def _push_branch(origin: git.Remote, branch: str) -> None:
+    """Push a branch and fail when the remote does not accept it.
+
+    ``Remote.push`` reports a rejection on the returned ``PushInfoList``
+    instead of raising, so an unchecked call reports a refused push as a
+    success. Both that flagged rejection and a hard git failure become the
+    member capability error the CLI turns into a non-zero exit.
+
+    Args:
+        origin: Remote the branch is pushed to.
+        branch: Local branch name to push.
+
+    Raises:
+        MemberCapabilityError: If the remote did not accept the push.
+    """
+    cause: BaseException | None
+    try:
+        results = origin.push(branch)
+    except GitCommandError as exc:
+        cause, reason = exc, str(exc)
+    else:
+        cause = results.error
+        reason = "; ".join(
+            str(info.summary).strip() for info in results if info.flags & info.ERROR
+        ) or str(cause or "")
+    if reason:
+        raise MemberCapabilityError(
+            f"Failed to push '{branch}' to origin: {reason}"
+        ) from cause
 
 
 def _commit_summary(commit: git.Commit, url: str) -> dict[str, str]:
