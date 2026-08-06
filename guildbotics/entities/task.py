@@ -28,9 +28,7 @@ class Task(BaseModel):
         comments (list[Message]): Comments associated with the task.
         status (str): The current status of the task (default is "new").
         owner (str | None): The owner of the task.
-        priority (Optional[int]): The priority level for this assignment.
         created_at (Optional[datetime]): The date and time when the task was created.
-        due_date (Optional[datetime]): The date and time when the task is due.
         repository (Optional[str]): The git repository associated with the task.
     """
 
@@ -52,14 +50,8 @@ class Task(BaseModel):
         default=NEW, description='The current status of the task (default is "new").'
     )
     owner: str | None = Field(default=None, description="The owner of the task.")
-    priority: int | None = Field(
-        default=None, description="The priority level for this assignment."
-    )
     created_at: datetime.datetime | None = Field(
         default=None, description="The date and time when the task was created."
-    )
-    due_date: datetime.datetime | None = Field(
-        default=None, description="The date and time when the task is due."
     )
     repository: str | None = Field(
         default=None, description="The git repository associated with the task."
@@ -87,16 +79,13 @@ class Task(BaseModel):
 
     def __lt__(self, other: "Task") -> bool:
         """
-        Compare two tasks based on priority, due date, and creation date.
+        Compare two tasks based on creation date, oldest first.
+
         Args:
             other (Task): The other task to compare against.
         Returns:
             bool: True if this task is less than the other task, False otherwise.
         """
-        p1 = self.priority or 9999
-        p2 = other.priority or 9999
-        if p1 != p2:
-            return p1 < p2
 
         def parse(dt: datetime.datetime | None) -> datetime.datetime:
             """Convert datetime to UTC-aware for consistent comparison."""
@@ -109,10 +98,7 @@ class Task(BaseModel):
             # Normalize any timezone-aware datetime to UTC
             return dt.astimezone(datetime.UTC)
 
-        d1, d2 = parse(self.due_date), parse(other.due_date)
-        c1, c2 = parse(self.created_at), parse(other.created_at)
-
-        return (p1, d1, c1) < (p2, d2, c2)
+        return parse(self.created_at) < parse(other.created_at)
 
 
 _DEFAULT_RANGES = [

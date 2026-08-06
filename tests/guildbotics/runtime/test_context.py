@@ -72,10 +72,6 @@ class DummyTicketManager(TicketManager):
         """No-op get URL."""
         return ""
 
-    async def update_ticket(self, task: Task) -> None:
-        """No-op update ticket."""
-        return None
-
 
 class DummyIntegrationFactory(IntegrationFactory):
     """IntegrationFactory stub capturing calls and returning DummyTicketManager."""
