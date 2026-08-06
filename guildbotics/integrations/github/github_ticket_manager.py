@@ -1,4 +1,6 @@
 import re
+from collections.abc import Sequence
+from datetime import datetime
 from logging import Logger
 from typing import Any, ClassVar, cast
 
@@ -494,6 +496,8 @@ class GitHubTicketManager(TicketManager):
         for _field_name, field_info in self.custom_fields.items():
             data_type = field_info["dataType"]
             if data_type == "SINGLE_SELECT":
+                # updatedAt is requested for every single-select field; only
+                # the Agent field's value is read, to date the assignment.
                 custom_field_fragments.append(
                     """
                 ... on ProjectV2ItemFieldSingleSelectValue {
@@ -502,6 +506,7 @@ class GitHubTicketManager(TicketManager):
                         ... on ProjectV2SingleSelectField { id name }
                     }
                     name
+                    updatedAt
                 }
                 """
                 )
@@ -573,6 +578,14 @@ class GitHubTicketManager(TicketManager):
                           body
                           createdAt
                           assignees(first:10) {{ nodes {{ id login name }} }}
+                          timelineItems(last: 10, itemTypes: [ASSIGNED_EVENT]) {{
+                            nodes {{
+                              ... on AssignedEvent {{
+                                createdAt
+                                assignee {{ ... on User {{ login }} }}
+                              }}
+                            }}
+                          }}
                           labels(first:10)    {{ nodes {{ name }} }}
                           repository {{
                             name
@@ -665,7 +678,7 @@ class GitHubTicketManager(TicketManager):
 
     async def _load_issue_comments(
         self, client: AsyncClient, task: Task, issue_number: int
-    ) -> tuple[list[Message], bool]:
+    ) -> list[Message]:
         comments_resp = await client.get(
             f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
         )
@@ -673,7 +686,6 @@ class GitHubTicketManager(TicketManager):
         comments_data.sort(key=lambda c: c.get("created_at") or "")
 
         comments = []
-        mention_pending = self._text_mentions_me(task.description)
         for c in comments_data:
             author_type = get_author_type(self.person, c["user"]["login"], c["body"])
             author = (
@@ -688,12 +700,22 @@ class GitHubTicketManager(TicketManager):
                     timestamp=c["created_at"],
                 )
             )
-            if self._text_mentions_me(c.get("body"), ignore_signature=True):
-                mention_pending = True
-            if author_type == Message.ASSISTANT:
-                mention_pending = False
 
-        return comments, mention_pending
+        return comments
+
+    def _pending_mention(self, description: str, comments: Sequence[Message]) -> bool:
+        """Return True when a mention of this member is still unanswered.
+
+        A mention in the description or in any comment marks the member as
+        summoned; the member's own next comment answers it.
+        """
+        pending = self._text_mentions_me(description)
+        for comment in comments:
+            if self._text_mentions_me(comment.content, ignore_signature=True):
+                pending = True
+            if comment.author_type == Message.ASSISTANT:
+                pending = False
+        return pending
 
     def _parse_pull_request_url(self, url: str) -> tuple[str, str, int] | None:
         match = re.search(r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
@@ -888,6 +910,49 @@ class GitHubTicketManager(TicketManager):
             return False
         return not await self._comment_has_my_reaction(last_comment)
 
+    def _latest_assigned_event_time(self, issue: dict[str, Any]) -> str:
+        """Return when this member was last added to the issue's assignees.
+
+        Reads the ``ASSIGNED_EVENT`` timeline items already fetched by
+        :meth:`get_all_tickets`, so no extra request is made. Returns an empty
+        string when GitHub reports no such event (for example an assignment
+        older than the fetched window), which leaves the assignment time
+        unknown.
+        """
+        events = (issue.get("timelineItems") or {}).get("nodes") or []
+        times = [
+            str(event.get("createdAt") or "")
+            for event in events
+            if str((event.get("assignee") or {}).get("login") or "").lower()
+            == self._username_lower
+        ]
+        return max(times, default="")
+
+    def _comments_since_assignment(
+        self, comments: Sequence[Message], assigned_at: str
+    ) -> list[Message]:
+        """Return the comments that count as evidence about the assigned work.
+
+        Being assigned is how a human asks this member to act, so only what was
+        said from that point on can show whether the member has already acted.
+        Comments the member wrote earlier were written in another capacity —
+        as the issue's author or a reviewer — and must not suppress the run.
+
+        The whole history is kept on the task for the agent to read; this
+        narrower view only drives the selection decision. When no assignment
+        path reports a time, every comment is kept: an unknown request time
+        must never be a reason to discard evidence and redo finished work.
+        """
+        since = _parse_timestamp(assigned_at)
+        if since is None:
+            return list(comments)
+        return [
+            comment
+            for comment in comments
+            if (timestamp := _parse_timestamp(comment.timestamp)) is None
+            or timestamp >= since
+        ]
+
     def _build_project_tasks(
         self, all_items: list[dict]
     ) -> tuple[list[Task], dict[str, dict[str, Any]]]:
@@ -896,6 +961,7 @@ class GitHubTicketManager(TicketManager):
         for it in all_items:
             status: str | None = None
             field_values = {}
+            field_updated_at: dict[str, str] = {}
 
             for fv in it["fieldValues"]["nodes"]:
                 field = fv.get("field", {})
@@ -916,6 +982,9 @@ class GitHubTicketManager(TicketManager):
                     if custom_field_name:
                         if "name" in fv:  # SINGLE_SELECT
                             field_values[custom_field_name] = fv["name"]
+                            field_updated_at[custom_field_name] = (
+                                fv.get("updatedAt") or ""
+                            )
                         elif "number" in fv:  # NUMBER
                             field_values[custom_field_name] = fv["number"]
                         elif "date" in fv:  # DATE
@@ -930,27 +999,23 @@ class GitHubTicketManager(TicketManager):
             if not issue:
                 continue
             assignees = issue.get("assignees", {}).get("nodes", [])
-            is_assigned = False
-            assignee: str | None = None
+            # Assignees and the Agent field are independent ways to assign this
+            # member, and both can be set at once. Each active one carries its
+            # own request time, so the most recent of them is the live request.
+            by_assignee = not is_proxy_agent(self.person) and any(
+                a.get("login") == self._username_lower for a in assignees
+            )
+            agent_field = GitHubTicketManager.FIELD_AGENT
+            by_agent_field = field_values.get(agent_field) == self._mention_token
+            is_assigned = by_assignee or by_agent_field
+            assignee = self.person.person_id if is_assigned else None
 
-            # Check assignees
-            if not is_proxy_agent(self.person) and assignees:
-                for a in assignees:
-                    if a.get("login") == self._username_lower:
-                        is_assigned = True
-                        assignee = self.person.person_id
-                        break
-
-            # Check custom fields if not assigned via assignees
-            if not is_assigned:
-                for field_name, value in field_values.items():
-                    if (
-                        field_name == GitHubTicketManager.FIELD_AGENT
-                        and value == self._mention_token
-                    ):
-                        is_assigned = True
-                        assignee = self.person.person_id
-                        break
+            assignment_times = []
+            if by_assignee:
+                assignment_times.append(self._latest_assigned_event_time(issue))
+            if by_agent_field:
+                assignment_times.append(field_updated_at.get(agent_field, ""))
+            assigned_at = max((time for time in assignment_times if time), default="")
 
             task = self._issue_to_task(issue, status, assignee)
             tasks.append(task)
@@ -958,6 +1023,7 @@ class GitHubTicketManager(TicketManager):
             task_metadata[task.id] = {
                 "issue_number": issue["number"],
                 "assigned": is_assigned,
+                "assigned_at": assigned_at,
             }
 
         tasks = sorted(tasks)
@@ -990,16 +1056,21 @@ class GitHubTicketManager(TicketManager):
             return None
 
         client = await self.login()
-        comments, mention_pending = await self._load_issue_comments(
-            client, task, issue_number
-        )
+        comments = await self._load_issue_comments(client, task, issue_number)
         task.comments = sorted(comments, key=lambda m: m.timestamp)
+        # The agent still receives the whole history on the task; only the
+        # decision below is limited to what was said after the assignment.
+        since_assignment = self._comments_since_assignment(
+            task.comments, str(metadata.get("assigned_at") or "")
+        )
+        mention_pending = self._pending_mention(task.description, since_assignment)
         last_comment_is_mine = (
-            bool(task.comments) and task.comments[-1].author_type == Message.ASSISTANT
+            bool(since_assignment)
+            and since_assignment[-1].author_type == Message.ASSISTANT
         )
 
         if task.status == Task.READY:
-            if _latest_workflow_status_suppresses_selection(task.comments):
+            if _latest_workflow_status_suppresses_selection(since_assignment):
                 return None
             if last_comment_is_mine and not mention_pending:
                 return None
@@ -1014,7 +1085,7 @@ class GitHubTicketManager(TicketManager):
             if pull.get("state") != "open":
                 return None
 
-        if _latest_workflow_status_suppresses_selection(task.comments):
+        if _latest_workflow_status_suppresses_selection(since_assignment):
             return None
 
         if pull:
@@ -1024,10 +1095,10 @@ class GitHubTicketManager(TicketManager):
                 return task
             return None
 
-        if task.comments and task.comments[-1].author_type != Message.ASSISTANT:
+        if since_assignment and not last_comment_is_mine:
             task.trigger_reason = "issue_comment"
             return task
-        if not task.comments:
+        if not since_assignment:
             task.trigger_reason = "issue_mention" if mention_pending else "working_lane"
             return task
         return None
@@ -1352,8 +1423,19 @@ class GitHubTicketManager(TicketManager):
             await self._get_custom_fields()
 
 
+def _parse_timestamp(value: str) -> datetime | None:
+    """Parse a GitHub ISO 8601 timestamp, or None when it is absent or invalid."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else None
+
+
 def _latest_workflow_status_suppresses_selection(
-    comments: list[Message],
+    comments: Sequence[Message],
 ) -> bool:
     """Return True if the latest comment is an assistant workflow status that
     should prevent ticket selection (rate_limited or failed)."""
