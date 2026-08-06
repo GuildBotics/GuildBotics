@@ -224,6 +224,8 @@ class MemberGitHubCapabilityService:
             _require_human_approval(
                 human_approved, f"Changing the issue state to '{state}'"
             )
+        add_labels = _cleaned_labels(add_labels)
+        remove_labels = _cleaned_labels(remove_labels)
         payload: dict[str, Any] = {}
         if body is not None:
             payload["body"] = body
@@ -237,19 +239,26 @@ class MemberGitHubCapabilityService:
             raise MemberCapabilityError(
                 "issue update needs at least one of body, title, labels, or state."
             )
+        # Label additions are validated up front so an undefined label aborts
+        # before any write; the label endpoints are called only after the field
+        # PATCH succeeded so a failed PATCH leaves the labels untouched.
+        additions = await self._defined_labels(
+            resource.owner, resource.repo, add_labels
+        )
         state_changed = False
         if state is not None:
             state_changed = await self._issue_state(resource) != state
-        await self._apply_label_changes(resource, add_labels, remove_labels)
         client = await self._get_client()
         issue_endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}"
         )
         if payload:
             resp = await client.patch(issue_endpoint, json=payload)
-        else:
+            _raise_for_status(resp)
+        await self._apply_label_changes(resource, additions, remove_labels)
+        if additions or remove_labels or not payload:
             resp = await client.get(issue_endpoint)
-        _raise_for_status(resp)
+            _raise_for_status(resp)
         issue = resp.json()
         response_body = issue.get("body")
         return {
@@ -274,7 +283,7 @@ class MemberGitHubCapabilityService:
     async def _apply_label_changes(
         self,
         resource: GitHubResource,
-        add_labels: Sequence[str],
+        additions: Sequence[str],
         remove_labels: Sequence[str],
     ) -> None:
         """Apply label changes through the dedicated label endpoints.
@@ -283,10 +292,8 @@ class MemberGitHubCapabilityService:
         human sets concurrently survive; a PATCH of the full label set would
         overwrite them. Removing a label the issue no longer carries is a
         no-op, and a label both removed and added ends up on the issue.
+        ``additions`` must already be resolved through ``_defined_labels``.
         """
-        additions = await self._defined_labels(
-            resource.owner, resource.repo, add_labels
-        )
         client = await self._get_client()
         labels_endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/labels"
@@ -296,7 +303,7 @@ class MemberGitHubCapabilityService:
             if resp.status_code != HTTPStatus.NOT_FOUND:
                 _raise_for_status(resp)
         if additions:
-            resp = await client.post(labels_endpoint, json={"labels": additions})
+            resp = await client.post(labels_endpoint, json={"labels": list(additions)})
             _raise_for_status(resp)
 
     async def _defined_labels(
@@ -1030,6 +1037,10 @@ def _as_list(value: Any) -> list[dict[str, Any]]:
 
 def _label_names(issue: dict[str, Any]) -> list[str]:
     return [str(item.get("name", "")) for item in _as_list(issue.get("labels"))]
+
+
+def _cleaned_labels(labels: Sequence[str]) -> list[str]:
+    return [name for name in (label.strip() for label in labels) if name]
 
 
 def _require_human_approval(human_approved: bool, action: str) -> None:

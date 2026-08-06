@@ -38,13 +38,16 @@ class FakeClient:
         self.deletes = []
         self.delete_status_codes = {}
         self.graphql_payloads = []
+        self.history = []
 
     async def get(self, endpoint, params=None, headers=None):
         self.gets.append((endpoint, params, headers))
+        self.history.append(("get", endpoint))
         return FakeResponse(self.get_payloads.get(endpoint, []))
 
     async def post(self, endpoint, json=None, headers=None):
         self.posts.append((endpoint, json, headers))
+        self.history.append(("post", endpoint))
         if endpoint == "/graphql":
             payload = self.graphql_payloads.pop(0) if self.graphql_payloads else {}
             return FakeResponse(payload)
@@ -63,6 +66,7 @@ class FakeClient:
 
     async def patch(self, endpoint, json=None, headers=None):
         self.patches.append((endpoint, json, headers))
+        self.history.append(("patch", endpoint))
         return FakeResponse(
             self.patch_payloads.get(
                 endpoint,
@@ -81,6 +85,7 @@ class FakeClient:
 
     async def delete(self, endpoint, headers=None):
         self.deletes.append((endpoint, headers))
+        self.history.append(("delete", endpoint))
         return FakeResponse([], status_code=self.delete_status_codes.get(endpoint, 200))
 
 
@@ -1026,6 +1031,102 @@ async def test_issue_update_changes_labels_through_the_dedicated_label_endpoints
     ]
     assert fake.patches == []
     assert result["labels"] == ["cli", "priority: high"]
+
+
+@pytest.mark.asyncio
+async def test_issue_update_patches_fields_before_labels_and_refetches_the_result():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/labels"] = [{"name": "cli"}]
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "title": "New title",
+        "state": "open",
+        "body": "Body",
+        "labels": [{"name": "cli"}],
+    }
+    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "title": "New title",
+        "state": "open",
+        "body": "Body",
+        "labels": [],
+    }
+    service._client = fake
+
+    result = await service.issue_update(
+        "https://github.com/owner/repo/issues/42",
+        title="New title",
+        add_labels=["cli"],
+    )
+
+    # The field PATCH runs before the label writes, and the result is
+    # re-fetched afterwards so it reflects the applied label changes.
+    assert fake.history == [
+        ("get", "/repos/owner/repo/labels"),
+        ("patch", "/repos/owner/repo/issues/42"),
+        ("post", "/repos/owner/repo/issues/42/labels"),
+        ("get", "/repos/owner/repo/issues/42"),
+    ]
+    assert result["labels"] == ["cli"]
+
+
+@pytest.mark.asyncio
+async def test_issue_update_leaves_labels_untouched_when_the_field_patch_fails():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/labels"] = [{"name": "cli"}]
+    fake.patch_status_codes["/repos/owner/repo/issues/42"] = HTTP_BAD_REQUEST
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="status 400"):
+        await service.issue_update(
+            "https://github.com/owner/repo/issues/42",
+            body="Body",
+            add_labels=["cli"],
+            remove_labels=["docs"],
+        )
+
+    assert fake.deletes == []
+    assert fake.posts == []
+
+
+@pytest.mark.asyncio
+async def test_issue_update_trims_label_names_and_skips_empty_ones():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "title": "Original title",
+        "state": "open",
+        "body": "Body",
+        "labels": [],
+    }
+    service._client = fake
+
+    await service.issue_update(
+        "https://github.com/owner/repo/issues/42", remove_labels=["  docs  ", ""]
+    )
+
+    assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
+
+
+@pytest.mark.asyncio
+async def test_issue_update_with_only_blank_labels_is_refused():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError) as error:
+        await service.issue_update(
+            "https://github.com/owner/repo/issues/42", remove_labels=["   "]
+        )
+
+    assert "at least one of body, title, labels, or state" in str(error.value)
+    assert fake.deletes == []
 
 
 @pytest.mark.asyncio
