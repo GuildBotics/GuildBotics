@@ -74,13 +74,3 @@ class TicketManager(ABC):
             str: The URL for the task.
         """
         pass
-
-    @abstractmethod
-    async def update_ticket(self, task: Task) -> None:
-        """
-        Update an existing ticket with the latest information from the task.
-
-        Args:
-            task (Task): The task representing the ticket to update.
-        """
-        pass

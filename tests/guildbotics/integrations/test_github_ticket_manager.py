@@ -127,6 +127,8 @@ def _item(
     assignee: str | None = "aiko-gh",
     body: str = "",
     agent: str | None = None,
+    created_at: str = "2026-01-01T00:00:00Z",
+    extra_field_values: list[dict[str, Any]] | None = None,
 ) -> dict:
     field_values = [{"field": {"name": "Status"}, "name": status}]
     if agent:
@@ -139,6 +141,7 @@ def _item(
                 "name": agent,
             }
         )
+    field_values.extend(extra_field_values or [])
     assignees = [{"login": assignee}] if assignee else []
     return {
         "fieldValues": {"nodes": field_values},
@@ -147,7 +150,7 @@ def _item(
             "number": number,
             "title": f"issue {number}",
             "body": body,
-            "createdAt": "2026-01-01T00:00:00Z",
+            "createdAt": created_at,
             "assignees": {"nodes": assignees},
             "repository": {"name": "repo", "owner": {"login": "GuildBotics"}},
         },
@@ -216,6 +219,50 @@ async def test_default_todo_assigned_ticket_is_selected():
     assert task.status == Task.READY
     assert task.assignee == "aiko"
     assert task.trigger_reason == "ready_lane"
+
+
+@pytest.mark.asyncio
+async def test_single_select_priority_field_does_not_break_ticket_retrieval():
+    """A board carrying a single-select ``Priority`` field is simply ignored."""
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                extra_field_values=[
+                    {
+                        "field": {"id": "priority-field", "name": "Priority"},
+                        "name": "P1",
+                    }
+                ],
+            )
+        ]
+    )
+    manager.custom_fields["Priority"] = {
+        "id": "priority-field",
+        "name": "Priority",
+        "dataType": "SINGLE_SELECT",
+        "options": {},
+    }
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.status == Task.READY
+
+
+def test_project_tasks_are_ordered_by_creation_date():
+    manager = _Manager(
+        items=[
+            _item(number=1, status="Todo", created_at="2026-01-03T00:00:00Z"),
+            _item(number=2, status="Todo", created_at="2026-01-01T00:00:00Z"),
+            _item(number=3, status="Todo", created_at="2026-01-02T00:00:00Z"),
+        ]
+    )
+
+    tasks, _ = manager._build_project_tasks(manager.items)
+
+    assert [task.number for task in tasks] == [2, 3, 1]
 
 
 @pytest.mark.asyncio

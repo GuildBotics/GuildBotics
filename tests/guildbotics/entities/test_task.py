@@ -11,8 +11,6 @@ from guildbotics.entities import Task
 
 def make_task(
     *,
-    priority: int | None = None,
-    due_date: dt.datetime | None = None,
     created_at: dt.datetime | None = None,
 ) -> Task:
     return Task(
@@ -20,58 +18,42 @@ def make_task(
         title="title",
         description="desc",
         workflow="wf",
-        priority=priority,
-        due_date=due_date,
         created_at=created_at,
     )
 
 
-def test_lt_compares_priority_first():
-    a = make_task(priority=1)
-    b = make_task(priority=2)
+def test_lt_orders_older_created_at_first():
+    a = make_task(created_at=dt.datetime(2025, 1, 1, 0, 0, tzinfo=dt.UTC))
+    b = make_task(created_at=dt.datetime(2025, 1, 2, 0, 0, tzinfo=dt.UTC))
     assert a < b
     assert not (b < a)
 
 
-def test_lt_missing_priority_treated_as_lowest_priority():
-    a = make_task(priority=None)
-    b = make_task(priority=5)
-    assert b < a
-    assert not (a < b)
-
-
-def test_lt_compares_due_date_with_tz_normalization():
-    # Same priority, different due_date (naive treated as UTC)
-    p = 1
-    d1 = dt.datetime(2025, 1, 1, 12, 0)  # naive -> UTC
-    d2 = dt.datetime(2025, 1, 1, 12, 30, tzinfo=dt.UTC)
-    a = make_task(priority=p, due_date=d1)
-    b = make_task(priority=p, due_date=d2)
+def test_lt_treats_naive_created_at_as_utc():
+    a = make_task(created_at=dt.datetime(2025, 1, 1, 12, 0))  # naive -> UTC
+    b = make_task(created_at=dt.datetime(2025, 1, 1, 12, 30, tzinfo=dt.UTC))
     assert a < b
 
 
-def test_lt_compares_due_date_with_mixed_timezones():
+def test_lt_normalizes_mixed_timezones():
     # JST vs UTC; 12:00+09:00 == 03:00Z < 03:30Z
-    p = 1
-    d1 = dt.datetime(2025, 1, 1, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=9)))
-    d2 = dt.datetime(2025, 1, 1, 3, 30, tzinfo=dt.UTC)
-    a = make_task(priority=p, due_date=d1)
-    b = make_task(priority=p, due_date=d2)
+    a = make_task(
+        created_at=dt.datetime(
+            2025, 1, 1, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=9))
+        )
+    )
+    b = make_task(created_at=dt.datetime(2025, 1, 1, 3, 30, tzinfo=dt.UTC))
     assert a < b
 
 
-def test_lt_due_date_none_considered_last():
-    p = 1
-    a = make_task(priority=p, due_date=dt.datetime(2025, 1, 1, 0, 0, tzinfo=dt.UTC))
-    b = make_task(priority=p, due_date=None)
+def test_lt_created_at_none_considered_last():
+    a = make_task(created_at=dt.datetime(2025, 1, 1, 0, 0, tzinfo=dt.UTC))
+    b = make_task(created_at=None)
     assert a < b
+    assert not (b < a)
 
 
-def test_lt_uses_created_at_as_tiebreaker():
-    p = 1
-    due = dt.datetime(2025, 1, 1, 0, 0, tzinfo=dt.UTC)
-    c1 = dt.datetime(2024, 12, 31, 23, 55)  # naive -> UTC
-    c2 = dt.datetime(2024, 12, 31, 23, 59, tzinfo=dt.UTC)
-    a = make_task(priority=p, due_date=due, created_at=c1)
-    b = make_task(priority=p, due_date=due, created_at=c2)
-    assert a < b
+def test_task_has_no_priority_or_due_date_fields():
+    """Ordering inputs are limited to the fields the board actually fills in."""
+    assert "priority" not in Task.model_fields
+    assert "due_date" not in Task.model_fields

@@ -30,8 +30,6 @@ class GitHubTicketManager(TicketManager):
     """GitHub Projects V2 ticket manager using GraphQL and REST APIs."""
 
     FIELD_AGENT: ClassVar[str] = "Agent"
-    FIELD_DUE_DATE: ClassVar[str] = "Due Date"
-    FIELD_PRIORITY: ClassVar[str] = "Priority"
     LANE_READY: ClassVar[str] = "ready"
     LANE_DONE: ClassVar[str] = "done"
     LANE_WORKING: ClassVar[str] = "working"
@@ -456,14 +454,10 @@ class GitHubTicketManager(TicketManager):
             raise ValueError("Task repository is required for issue operations.")
         return f"/repos/{self.owner}/{repo}/issues"
 
-    def _to_task_field(self, name: str) -> str:
-        return name.lower().replace(" ", "_")  # e.g., "Due Date" -> "due_date"
-
     def _issue_to_task(
         self,
         issue: dict,
         status: str,
-        field_values: dict,
         assignee: str | None,
     ) -> Task:
         """
@@ -472,34 +466,22 @@ class GitHubTicketManager(TicketManager):
         Args:
             issue (dict): The issue JSON payload.
             status (str): The current status.
-            field_values (dict): Custom field values.
             assignee (str | None): The assignee of the task.
 
         Returns:
             Task: The converted Task object.
         """
-        data = {
-            "id": issue["id"],
-            "number": issue.get("number"),
-            "url": issue.get("url"),
-            "title": issue["title"],
-            "description": issue.get("body", "") or "",
-            "status": status,
-            "created_at": issue["createdAt"],
-            "repository": f"{issue['repository']['name']}",
-            "assignee": assignee,
-        }
-
-        # Extract custom field values
-        for field_name, value in field_values.items():
-            if field_name == GitHubTicketManager.FIELD_DUE_DATE and value:
-                data[self._to_task_field(GitHubTicketManager.FIELD_DUE_DATE)] = value
-            elif field_name == GitHubTicketManager.FIELD_PRIORITY and value is not None:
-                data[self._to_task_field(GitHubTicketManager.FIELD_PRIORITY)] = int(
-                    value
-                )
-
-        return Task(**data)
+        return Task(
+            id=issue["id"],
+            number=issue.get("number"),
+            url=issue.get("url"),
+            title=issue["title"],
+            description=issue.get("body", "") or "",
+            status=status,
+            created_at=issue["createdAt"],
+            repository=issue["repository"]["name"],
+            assignee=assignee,
+        )
 
     async def get_all_tickets(self) -> list[dict]:
         """Retrieve all tickets from the GitHub Projects V2 board."""
@@ -970,7 +952,7 @@ class GitHubTicketManager(TicketManager):
                         assignee = self.person.person_id
                         break
 
-            task = self._issue_to_task(issue, status, field_values, assignee)
+            task = self._issue_to_task(issue, status, assignee)
             tasks.append(task)
             assert task.id, "Task ID must be set"
             task_metadata[task.id] = {
@@ -1198,29 +1180,6 @@ class GitHubTicketManager(TicketManager):
             url = f"https://github.com/{self.owner}/{task.repository}/issues/{issue_id}"
         return f"[{task.title}]({url})" if markdown else url
 
-    async def update_ticket(self, task: Task) -> None:
-        """
-        Update an existing ticket's custom fields.
-
-        Args:
-            task (Task): The Task to update.
-        """
-        await self.ensure_custom_fields()
-
-        # Get project item ID
-        assert task.id, "Task ID must be set before updating"
-        item_id = await self._get_project_item_id(task.id)
-
-        # Update custom field values
-        field_values = {}
-        for field_name in self._custom_field_definitions:
-            value = await self._get_field_value_for_task(task, field_name)
-            if value:
-                field_values[field_name] = value
-
-        if field_values:
-            await self._set_multiple_custom_field_values(item_id, field_values)
-
     async def _get_custom_fields(self) -> dict[str, dict[str, Any]]:
         """
         Get all custom fields for the project.
@@ -1391,81 +1350,6 @@ class GitHubTicketManager(TicketManager):
             # Clear cache and re-fetch
             self.custom_fields = {}
             await self._get_custom_fields()
-
-    async def _get_field_value_for_task(self, task: Task, field_name: str) -> Any:
-        """
-        Get the appropriate field value for a task based on field type.
-
-        Args:
-            task: The task object.
-            field_name: The field name.
-
-        Returns:
-            The field value formatted for GraphQL.
-        """
-        if field_name == GitHubTicketManager.FIELD_DUE_DATE:
-            if task.due_date:
-                return {"date": task.due_date.isoformat().split("T")[0]}
-
-        elif (
-            field_name == GitHubTicketManager.FIELD_PRIORITY
-            and task.priority is not None
-        ):
-            return {"number": float(task.priority)}
-
-        return None
-
-    async def _set_multiple_custom_field_values(
-        self, item_id: str, field_values: dict[str, Any]
-    ) -> None:
-        """
-        Set multiple custom field values for a project item in a single GraphQL request.
-
-        Args:
-            item_id: The project item ID.
-            field_values: Dictionary mapping field names to their values.
-        """
-        if not field_values:
-            return
-
-        proj_id = await self._project_node()
-
-        # Build multiple mutations in a single request
-        mutations = []
-        variables = {"proj": proj_id, "item": item_id}
-
-        for i, (field_name, value) in enumerate(field_values.items()):
-            if value is None:
-                continue
-
-            field_id = self.custom_fields[field_name]["id"]
-            mutation_name = f"update{i}"
-            variables[f"field{i}"] = field_id
-            variables[f"value{i}"] = value
-
-            mutations.append(
-                f"""
-            {mutation_name}: updateProjectV2ItemFieldValue(input: {{
-                projectId: $proj,
-                itemId: $item,
-                fieldId: $field{i},
-                value: $value{i}
-            }}) {{
-                projectV2Item {{ id }}
-            }}
-            """
-            )
-
-        if not mutations:
-            return
-
-        query = f"""
-        mutation($proj:ID!, $item:ID!, {", ".join(f"$field{i}:ID!, $value{i}:ProjectV2FieldValue!" for i in range(len(mutations)))}) {{
-            {"".join(mutations)}
-        }}
-        """
-
-        await self._graphql(query, variables)
 
 
 def _latest_workflow_status_suppresses_selection(
