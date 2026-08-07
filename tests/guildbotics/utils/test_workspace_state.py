@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     active_workspace_file,
@@ -67,6 +67,7 @@ def test_apply_workspace_environment_sets_config_and_env(monkeypatch, tmp_path):
     assert os.environ[GUILDBOTICS_DATA_DIR] == str(
         workspace.resolve() / ".guildbotics" / "data"
     )
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
 
 
 def test_apply_workspace_for_cli_uses_active_when_no_primary_source(

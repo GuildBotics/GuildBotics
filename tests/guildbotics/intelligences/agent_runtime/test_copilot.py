@@ -214,6 +214,7 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
+        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=key,
         resume_policy=ResumePolicy.AUTO,

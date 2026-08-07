@@ -31,7 +31,7 @@ from guildbotics.entities import Person, Project, Role, Team
 from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     active_workspace_file,
@@ -623,13 +623,17 @@ def test_get_context_does_not_reapply_workspace_data_root(
     _write_project(workspace / ".guildbotics" / "config")
     env_file = workspace / ".env"
     env_file.write_text(
-        "GUILDBOTICS_DATA_DIR=data-a\nWORKSPACE_MARKER=a\n",
+        "GUILDBOTICS_DATA_DIR=data-a\n"
+        "GUILDBOTICS_WORKSPACE_ROOT=wrong-root\n"
+        "WORKSPACE_MARKER=a\n",
         encoding="utf-8",
     )
     runtime.set_workspace(workspace)
     data_root = os.environ[GUILDBOTICS_DATA_DIR]
     env_file.write_text(
-        "GUILDBOTICS_DATA_DIR=data-b\nWORKSPACE_MARKER=b\n",
+        "GUILDBOTICS_DATA_DIR=data-b\n"
+        "GUILDBOTICS_WORKSPACE_ROOT=still-wrong\n"
+        "WORKSPACE_MARKER=b\n",
         encoding="utf-8",
     )
 
@@ -644,6 +648,7 @@ def test_get_context_does_not_reapply_workspace_data_root(
     runtime._get_context()
 
     assert os.environ[GUILDBOTICS_DATA_DIR] == data_root
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
     assert os.environ["WORKSPACE_MARKER"] == "b"
 
 

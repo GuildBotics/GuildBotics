@@ -26,7 +26,16 @@ from guildbotics.intelligences.agent_runtime.models import (
     settings_fingerprint,
     ResumePolicy,
 )
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MemberCapabilityBroker,
+)
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
+from guildbotics.runtime.person_lease import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+)
 
 from acp_fake_peer import (
     DEFAULT_OPTIONS,
@@ -39,6 +48,14 @@ from acp_fake_peer import (
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "grok_initialize_0_2_114.json").read_text()
 )
+
+
+@pytest.fixture(autouse=True)
+def _member_broker_without_socket(monkeypatch) -> None:
+    async def start(broker: MemberCapabilityBroker) -> None:
+        broker._url = "http://127.0.0.1:43123/mcp"
+
+    monkeypatch.setattr(MemberCapabilityBroker, "_start", start)
 
 
 def _initialize(**overrides: Any) -> dict[str, Any]:
@@ -213,6 +230,7 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
+        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=key,
         resume_policy=ResumePolicy.AUTO,
@@ -253,6 +271,15 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
     assert result.finish_reason == "completed"
     assert peer.methods()[:3] == ["initialize", "authenticate", "session/new"]
     assert peer.sent("session/new")["params"]["cwd"] == str(tmp_path)
+    server = peer.sent("session/new")["params"]["mcpServers"][0]
+    assert server["type"] == "http"
+    assert server["name"] == "guildbotics-member"
+    assert server["url"] == "http://127.0.0.1:43123/mcp"
+    assert server["headers"][0]["name"] == "Authorization"
+    assert server["headers"][0]["value"].startswith("Bearer ")
+    prompt = peer.sent("session/prompt")["params"]["prompt"][0]["text"]
+    assert "Use it for every" in prompt
+    assert "never run those commands" in prompt
     assert any(
         event.kind is AgentEventKind.PROCESS and event.name == "started"
         for event in events
@@ -901,6 +928,47 @@ async def test_missing_exact_resume_capability_is_unsupported(
 
 
 @pytest.mark.asyncio
+async def test_missing_http_mcp_capability_is_unsupported(
+    monkeypatch, tmp_path
+) -> None:
+    initialize = _initialize()
+    initialize["agentCapabilities"]["mcpCapabilities"]["http"] = False
+    peer = _Peer(initialize=initialize)
+    install(monkeypatch, peer)
+    adapter = GrokAcpAdapter()
+
+    try:
+        with pytest.raises(AgentRuntimeError) as excinfo:
+            await _run(adapter, tmp_path)
+    finally:
+        await adapter.close()
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
+    assert excinfo.value.details["agent_version"] == "0.2.114"
+
+
+@pytest.mark.asyncio
+async def test_member_broker_start_failure_is_a_process_error(
+    monkeypatch, tmp_path
+) -> None:
+    async def fail_to_start(_broker: MemberCapabilityBroker) -> None:
+        raise OSError("bind failed")
+
+    monkeypatch.setattr(MemberCapabilityBroker, "_start", fail_to_start)
+    peer = _Peer()
+    install(monkeypatch, peer)
+    adapter = GrokAcpAdapter()
+
+    try:
+        with pytest.raises(AgentRuntimeError) as excinfo:
+            await _run(adapter, tmp_path)
+    finally:
+        await adapter.close()
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
+
+
+@pytest.mark.asyncio
 async def test_cached_token_is_selected_from_the_advertised_methods(
     monkeypatch, tmp_path
 ) -> None:
@@ -979,6 +1047,62 @@ async def test_structured_rate_limit_error_is_classified(monkeypatch, tmp_path) 
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.RATE_LIMITED
     assert excinfo.value.details["retry_after_at"] == "2026-07-30T00:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_bare_protocol_error_after_rate_limit_notice_is_rate_limited(
+    monkeypatch, tmp_path
+) -> None:
+    # Grok Build reports the rate limit through the xAI retry-state extension
+    # and then fails the turn with a code-only RPC error that carries no
+    # structured data of its own.
+    peer = _Peer(prompt_error={"code": -32003, "message": "Internal error"})
+    original = peer.handle
+
+    def handle(message: dict[str, Any]) -> None:
+        if message.get("method") == "session/prompt":
+            peer.feed(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "_x.ai/session_notification",
+                    "params": {
+                        "sessionId": _Peer.SESSION_ID,
+                        "update": {
+                            "sessionUpdate": "retry_state",
+                            "retryState": {
+                                "is_rate_limited": True,
+                                "exhausted": False,
+                                "error_type": "rate_limit",
+                            },
+                        },
+                    },
+                }
+            )
+        original(message)
+
+    peer.handle = handle  # type: ignore[method-assign]
+    install(monkeypatch, peer)
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await _run(GrokAcpAdapter(), tmp_path)
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.RATE_LIMITED
+    assert excinfo.value.details["error_type"] == "rate_limit"
+    assert excinfo.value.details["provider_code"] == -32003
+
+
+@pytest.mark.asyncio
+async def test_bare_protocol_error_without_rate_limit_notice_stays_protocol(
+    monkeypatch, tmp_path
+) -> None:
+    peer = _Peer(prompt_error={"code": -32003, "message": "Internal error"})
+    install(monkeypatch, peer)
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await _run(GrokAcpAdapter(), tmp_path)
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.PROTOCOL
+    assert excinfo.value.details["provider_code"] == -32003
 
 
 # --- permissions, sandbox and isolation -------------------------------------
@@ -1085,7 +1209,11 @@ async def test_write_credentials_are_not_inherited(monkeypatch, tmp_path) -> Non
     env = launched[0][1]["env"]
     assert "GH_TOKEN" not in env
     assert "SSH_AUTH_SOCK" not in env
-    assert env[TASK_RUN_ENV] == "run-1"
+    assert TASK_RUN_ENV not in env
+    assert LEASE_ID_ENV not in env
+    assert DELEGATION_ID_ENV not in env
+    assert LEASE_PERSON_ENV not in env
+    assert LEASE_RUN_ENV not in env
     assert launched[0][1]["start_new_session"] is True
 
 

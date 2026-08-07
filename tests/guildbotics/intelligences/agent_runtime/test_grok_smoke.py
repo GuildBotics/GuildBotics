@@ -42,6 +42,7 @@ def _context(tmp_path) -> AgentExecutionContext:
         person_id="smoke",
         run_id="smoke-run",
         cwd=tmp_path,
+        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("smoke", "grok", "manual", "smoke"),
         resume_policy=ResumePolicy.AUTO,

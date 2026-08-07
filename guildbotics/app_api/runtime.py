@@ -156,6 +156,7 @@ from guildbotics.utils.env_loader import (
 )
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
+    GUILDBOTICS_WORKSPACE_ROOT,
     apply_workspace_data_root,
     get_machine_state_root,
     get_person_config_path,
@@ -174,6 +175,7 @@ from guildbotics.utils.workspace_state import (
 
 WORKSPACE_DOTENV_PROTECTED_KEYS = {
     GUILDBOTICS_DATA_DIR,
+    GUILDBOTICS_WORKSPACE_ROOT,
     *HOME_ENV_PROTECTED_KEYS,
 }
 MIN_MEMORY_DOCUMENT_PATH_PARTS = 2
