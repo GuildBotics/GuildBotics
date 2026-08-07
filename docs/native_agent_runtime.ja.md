@@ -313,8 +313,10 @@ OSのadvisory lockを使った実行権の管理により、スケジューラ�
 ## 利用制限・認証エラーと診断記録
 
 認証切れと利用制限（rate limit）は、AI CLIツールが出力する構造化データを使って判定します。
-Claude Codeでは`system/api_retry`、Codexではアカウント情報やrate limitに関するRPCデータを
-使用します。標準エラー出力に表示される、人間向けのエラーメッセージには依存しません。
+Claude Codeでは`rate_limit_event`を使用し、そのepoch形式`resetsAt`を正確な`retry_after_at`
+として採用します（`system/api_retry`のリトライ遅延より優先）。Codexではアカウント情報や
+rate limitに関するRPCデータを使用します。標準エラー出力に表示される、人間向けの
+エラーメッセージには依存しません。
 
 Antigravityでは、終端の`result`イベントで判定します。`status`が`SUCCESS`以外なら異常とみなし、
 同じイベントの`error`フィールドで種別を決めます。`agy` 1.1.10は利用制限と認証エラーをコード
