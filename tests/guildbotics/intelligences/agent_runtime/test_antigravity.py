@@ -82,9 +82,7 @@ class _StreamProcess:
         self.pid = 0
         for message in lines:
             raw = (
-                message
-                if isinstance(message, bytes)
-                else json.dumps(message).encode()
+                message if isinstance(message, bytes) else json.dumps(message).encode()
             )
             encoded = raw + b"\n"
             # Split each line so readline() has to stitch chunks back together.
@@ -151,7 +149,9 @@ async def _run(
     return await adapter.run_turn(
         prompt,
         context,
-        ConversationRecord(key=context.conversation_key, provider_session_id=session_id),
+        ConversationRecord(
+            key=context.conversation_key, provider_session_id=session_id
+        ),
         events.append,
     )
 
@@ -189,9 +189,7 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
         "Reading the file",
         " and wrote the result.",
     ]
-    command_events = [
-        event for event in events if event.kind is AgentEventKind.COMMAND
-    ]
+    command_events = [event for event in events if event.kind is AgentEventKind.COMMAND]
     assert [(event.name, event.item_id, event.command) for event in command_events] == [
         ("started", "step-5", "echo shell-ok"),
         ("completed", "step-5", "echo shell-ok"),
@@ -209,7 +207,8 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     tool_events = [
         event
         for event in events
-        if event.kind is AgentEventKind.TOOL and event.details.get("tool") == "view_file"
+        if event.kind is AgentEventKind.TOOL
+        and event.details.get("tool") == "view_file"
     ]
     assert [event.name for event in tool_events] == ["started", "completed"]
     initialized = next(event for event in events if event.name == "initialized")
@@ -305,9 +304,7 @@ async def test_unreadable_model_catalog_skips_validation(monkeypatch, tmp_path) 
     )
     adapter = AntigravityStreamJsonAdapter()
 
-    await _run(
-        adapter, _context(tmp_path, provider_options={"model": "unlisted"}), []
-    )
+    await _run(adapter, _context(tmp_path, provider_options={"model": "unlisted"}), [])
 
     run_args = calls[-1]
     assert run_args[run_args.index("--model") + 1] == "unlisted"

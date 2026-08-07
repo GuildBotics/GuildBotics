@@ -252,7 +252,7 @@ CI (`.github/workflows/ci.yml`) で使われている手順:
 ```bash
 uv sync --extra test --extra dev
 uv run --no-sync python scripts/generate-cli-reference.py --check
-uv run --no-sync ruff format --check guildbotics
+uv run --no-sync ruff format --check guildbotics tests
 uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
@@ -319,8 +319,8 @@ desktop packaging / Tauri 変更時の確認:
 
 エージェント作業時の品質確認:
 
-- 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で Ruff 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、packaging smoke など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
-- Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics` を実行）
+- 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で `ruff check` 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、packaging smoke など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
+- Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。`ruff format --check` の対象は `guildbotics` と `tests`、`ruff check` / `mypy` / `pylint` の対象は `guildbotics` のみ。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics tests` を実行）
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
 - 対象範囲（リポジトリ直下、`docs/`、`desktop/`、`skills/`）の Markdown を変更したら、上記の `lychee` コマンドを実行する
 - 最低限の確認コマンドは上記「開発時の基本コマンド（CI 準拠）」と同じ（`pytest` は関連範囲に絞ってよい）
