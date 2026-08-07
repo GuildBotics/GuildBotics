@@ -205,6 +205,8 @@ def _cli_agent_usage_model(snapshot: CliAgentUsageSnapshot) -> CliAgentUsage:
                 used_percent=window.used_percent,
                 resets_at=window.resets_at,
                 window_minutes=window.window_minutes,
+                label=window.label,
+                detail=window.detail,
             )
             for window in snapshot.windows
         ],

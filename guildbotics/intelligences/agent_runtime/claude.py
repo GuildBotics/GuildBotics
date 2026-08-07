@@ -7,6 +7,7 @@ import json
 import re
 from contextlib import suppress
 from dataclasses import replace
+from datetime import UTC, datetime
 from logging import getLogger
 from typing import Any
 
@@ -193,10 +194,13 @@ class ClaudeStreamJsonAdapter:
                         continue
                     session_id = str(raw.get("session_id", "") or session_id)
                     reported_model = _reported_model(raw) or reported_model
-                    error = _structured_error(raw)
+                    error = _structured_error(raw) or _rate_limit_event_error(raw)
                     if error is not None:
                         if error.category is AgentRuntimeErrorCategory.RATE_LIMITED:
-                            retry_error = error
+                            # An error naming the exact reset instant wins over
+                            # one that only knows the CLI's next retry delay.
+                            if retry_error is None or "retry_after_at" in error.details:
+                                retry_error = error
                         else:
                             raise error
                     for decoded in _decode_events(raw, session_id):
@@ -458,6 +462,62 @@ def _structured_error(raw: dict[str, Any]) -> AgentRuntimeError | None:
     return None
 
 
+#: ``rate_limit_info`` fields worth carrying into details, snake_cased.
+_RATE_LIMIT_INFO_KEYS = (
+    ("rateLimitType", "rate_limit_type"),
+    ("utilization", "utilization"),
+    ("overageStatus", "overage_status"),
+    ("isUsingOverage", "is_using_overage"),
+)
+
+
+def _rate_limit_info(raw: dict[str, Any]) -> dict[str, Any]:
+    if raw.get("type") != "rate_limit_event":
+        return {}
+    info = raw.get("rate_limit_info")
+    return info if isinstance(info, dict) else {}
+
+
+def _rate_limit_event_details(info: dict[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {"status": str(info.get("status", "") or "")}
+    for source, target in _RATE_LIMIT_INFO_KEYS:
+        if source in info:
+            details[target] = info[source]
+    if resets_at := _epoch_to_iso(info.get("resetsAt")):
+        details["retry_after_at"] = resets_at
+    return details
+
+
+def _rate_limit_event_error(raw: dict[str, Any]) -> AgentRuntimeError | None:
+    """Normalize a non-allowed unified rate-limit signal to the shared error.
+
+    Claude Code derives ``rate_limit_event`` from the API's unified rate-limit
+    response headers at the start of every turn.  A non-allowed status names
+    the binding window and its exact reset instant, which downstream retry
+    scheduling prefers over the parsed human text of the terminal message.
+    """
+    info = _rate_limit_info(raw)
+    status = str(info.get("status", "") or "")
+    if not status or status == "allowed":
+        return None
+    return AgentRuntimeError(
+        AgentRuntimeErrorCategory.RATE_LIMITED,
+        "Claude Code rate limit is active.",
+        details=_rate_limit_event_details(info),
+        rotate_session=False,
+    )
+
+
+def _epoch_to_iso(raw: Any) -> str:
+    try:
+        epoch = int(raw or 0)
+    except (TypeError, ValueError):
+        return ""
+    if epoch <= 0:
+        return ""
+    return datetime.fromtimestamp(epoch, UTC).isoformat()
+
+
 def _session_limit_error(message: str) -> AgentRuntimeError | None:
     """Normalize Claude Code's terminal subscription-limit result."""
     match = _SESSION_LIMIT_PATTERN.fullmatch(message)
@@ -501,6 +561,20 @@ def _decode_events(raw: dict[str, Any], session_id: str) -> list[AgentEvent]:
                 },
             )
         )
+    # Every turn opens with an allowed rate_limit_event; only the ones that
+    # carry information beyond "still fine" — a utilization reading or a
+    # non-allowed status — earn a diagnostics record.
+    if info := _rate_limit_info(raw):
+        status = str(info.get("status", "") or "")
+        if status != "allowed" or "utilization" in info:
+            events.append(
+                AgentEvent(
+                    AgentEventKind.TURN,
+                    "rate_limit_status",
+                    provider_session_id=session_id,
+                    details=_rate_limit_event_details(info),
+                )
+            )
     if event_type == "stream_event":
         event: dict[str, Any] = (
             raw["event"] if isinstance(raw.get("event"), dict) else {}

@@ -4,8 +4,10 @@ Reads the current rate-limit windows (used percent and reset time) from the
 tool's own structured interface.  Codex exposes them through the
 ``account/rateLimits/read`` method of ``codex app-server``; Grok exposes the
 billing period and account gate through the ``_x.ai/billing`` and
-``_x.ai/auth/check_subscription`` extension requests of ``grok agent stdio``.
-Tools without a structured usage interface simply have no snapshot.
+``_x.ai/auth/check_subscription`` extension requests of ``grok agent stdio``;
+Claude Code prints its usage panel headlessly (and without an LLM turn)
+through ``claude -p /usage``.  Tools without a structured usage interface
+simply have no snapshot.
 
 The window parsing is shared with the Codex adapter's pre-turn rate-limit
 check so both interpret the provider schema identically.
@@ -15,10 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
@@ -37,13 +41,19 @@ class CliAgentUsageWindow:
     """One rate-limit window (e.g. the 5-hour or weekly budget).
 
     ``used_percent`` is ``None`` for providers that report only the window's
-    reset time (e.g. Grok's weekly subscription period).
+    reset time (e.g. Grok's weekly subscription period).  ``label`` is a
+    human-readable qualifier beyond the window duration (e.g. a per-model
+    budget's model name).  A ``detail`` window is supplementary: it still
+    counts toward the limit state, but the frontend shows it only in the
+    expanded usage detail, not as its own meter.
     """
 
     window: str
     used_percent: float | None = None
     resets_at: str = ""
     window_minutes: int | None = None
+    label: str = ""
+    detail: bool = False
 
 
 @dataclass(frozen=True)
@@ -216,6 +226,117 @@ def _minutes_between(start_iso: str, end_iso: str) -> int | None:
     return minutes if minutes > 0 else None
 
 
+#: One usage line of the ``/usage`` panel, e.g.
+#: ``Current session: 24% used · resets Aug 8 at 11:10am (Asia/Tokyo)``.
+_CLAUDE_USAGE_LINE = re.compile(
+    r"^(?P<name>[^:\n]+):\s+(?P<percent>\d+(?:\.\d+)?)% used"
+    r"(?:\s+·\s+resets\s+(?P<reset>[^\n]+?))?\s*$",
+    re.MULTILINE,
+)
+_CLAUDE_WEEK_MODEL = re.compile(r"^Current week \((?P<model>[^)]+)\)$")
+#: ``Aug 8 at 11:10am (Asia/Tokyo)`` / ``Aug 8 at 10am (Asia/Tokyo)``.
+_CLAUDE_RESET = re.compile(
+    r"^(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2})\s+at\s+"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?(?P<ampm>am|pm)"
+    r"(?:\s+\((?P<tz>[^)]+)\))?$"
+)
+_CLAUDE_SESSION_MINUTES = 300
+_CLAUDE_WEEK_MINUTES = 10_080
+
+
+def parse_claude_usage(
+    result: Any, now: datetime | None = None
+) -> CliAgentUsageSnapshot:
+    """Build a usage snapshot from the ``claude -p /usage`` result text.
+
+    The panel is text, so parsing is tolerant: only lines shaped like
+    ``<name>: <n>% used[ · resets <time>]`` become windows, and a reset time
+    that cannot be interpreted is dropped rather than guessed.  The session
+    and all-models weekly budgets are the summary meters; per-model weekly
+    budgets (and any unrecognized budget line) become ``detail`` windows.
+    """
+    text = result if isinstance(result, str) else ""
+    windows: list[CliAgentUsageWindow] = []
+    for match in _CLAUDE_USAGE_LINE.finditer(text):
+        name = match.group("name").strip()
+        used_percent = float(match.group("percent"))
+        resets_at = _parse_claude_reset(match.group("reset") or "", now)
+        if name == "Current session":
+            windows.append(
+                CliAgentUsageWindow(
+                    window="session",
+                    used_percent=used_percent,
+                    resets_at=resets_at,
+                    window_minutes=_CLAUDE_SESSION_MINUTES,
+                )
+            )
+            continue
+        if name == "Current week (all models)":
+            windows.append(
+                CliAgentUsageWindow(
+                    window="week",
+                    used_percent=used_percent,
+                    resets_at=resets_at,
+                    window_minutes=_CLAUDE_WEEK_MINUTES,
+                )
+            )
+            continue
+        model = _CLAUDE_WEEK_MODEL.match(name)
+        windows.append(
+            CliAgentUsageWindow(
+                window=re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_"),
+                used_percent=used_percent,
+                resets_at=resets_at,
+                window_minutes=_CLAUDE_WEEK_MINUTES if model else None,
+                label=model.group("model") if model else name,
+                detail=True,
+            )
+        )
+    return CliAgentUsageSnapshot(
+        agent="claude",
+        windows=windows,
+        limit_reached=any(
+            (window.used_percent or 0.0) >= LIMIT_REACHED_PERCENT for window in windows
+        ),
+        checked_at=datetime.now(UTC).isoformat(),
+    )
+
+
+def _parse_claude_reset(raw: str, now: datetime | None = None) -> str:
+    """Interpret a ``/usage`` reset phrase as an ISO timestamp, or ``""``.
+
+    The phrase carries no year, so the nearest future occurrence wins; a
+    missing or unknown timezone makes the instant ambiguous, so the reset is
+    dropped instead of guessed.
+    """
+    match = _CLAUDE_RESET.match(raw.strip())
+    if match is None or not match.group("tz"):
+        return ""
+    try:
+        zone = ZoneInfo(match.group("tz"))
+        month = datetime.strptime(match.group("month")[:3], "%b").month
+    except (KeyError, ValueError):
+        return ""
+    hour = int(match.group("hour")) % 12
+    if match.group("ampm") == "pm":
+        hour += 12
+    current = now.astimezone(zone) if now else datetime.now(zone)
+    try:
+        reset = datetime(
+            current.year,
+            month,
+            int(match.group("day")),
+            hour,
+            int(match.group("minute") or 0),
+            tzinfo=zone,
+        )
+    except ValueError:
+        return ""
+    if reset < current - timedelta(days=1):
+        reset = reset.replace(year=current.year + 1)
+    return reset.isoformat()
+
+
 async def read_codex_usage(
     executable: str = "codex", timeout: float = 20.0
 ) -> CliAgentUsageSnapshot:
@@ -322,6 +443,53 @@ async def read_grok_usage(
     return parse_grok_billing(billing, subscription)
 
 
+async def read_claude_usage(
+    executable: str = "claude", timeout: float = 30.0
+) -> CliAgentUsageSnapshot:
+    """Probe ``claude -p /usage`` for the current account usage.
+
+    The ``/usage`` slash command runs headlessly without an LLM turn, so the
+    probe consumes no plan quota.  Raises :class:`CliAgentUsageError` when the
+    tool cannot be started, does not answer in time, or reports no usage
+    lines (e.g. API-key auth, where the plan panel does not exist).
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            "-p",
+            "/usage",
+            "--output-format",
+            "json",
+            # The probe must not pile a resumable session onto disk per poll.
+            "--no-session-persistence",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+            limit=STREAM_READ_LIMIT,
+        )
+    except OSError as exc:
+        raise CliAgentUsageError(f"Could not start Claude Code: {exc}") from exc
+    try:
+        async with asyncio.timeout(timeout):
+            stdout, _ = await process.communicate()
+    except TimeoutError as exc:
+        raise CliAgentUsageError("Claude Code did not answer in time.") from exc
+    finally:
+        await terminate_process_tree(process)
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise CliAgentUsageError("Claude Code printed no usage JSON.") from exc
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or payload.get("is_error"):
+        raise CliAgentUsageError(f"Claude Code /usage failed: {result}")
+    snapshot = parse_claude_usage(result)
+    if not snapshot.windows:
+        raise CliAgentUsageError("Claude Code reported no usage windows.")
+    return snapshot
+
+
 async def _probe_request(
     process: asyncio.subprocess.Process,
     request_id: int,
@@ -364,6 +532,7 @@ def _probe_send(process: asyncio.subprocess.Process, message: dict[str, Any]) ->
 CLI_AGENT_USAGE_READERS: dict[
     str, Callable[[str], Awaitable[CliAgentUsageSnapshot]]
 ] = {
+    "claude": read_claude_usage,
     "codex": read_codex_usage,
     "grok": read_grok_usage,
 }

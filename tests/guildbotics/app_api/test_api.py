@@ -1118,6 +1118,13 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
         lambda: CliAgentDetectionsResponse(
             agents=[
                 {
+                    "name": "copilot",
+                    "executable": "copilot",
+                    "config_reference": "copilot",
+                    "detected": True,
+                    "path": "/usr/local/bin/copilot",
+                },
+                {
                     "name": "claude",
                     "executable": "claude",
                     "config_reference": "claude",
@@ -1143,6 +1150,24 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     )
     probed: list[str] = []
 
+    async def fake_read_claude(executable: str, timeout: float = 30.0):
+        probed.append(executable)
+        return CliAgentUsageSnapshot(
+            agent="claude",
+            windows=[
+                UsageWindow(window="session", used_percent=24.0, window_minutes=300),
+                UsageWindow(
+                    window="current_week_fable",
+                    used_percent=59.0,
+                    window_minutes=10_080,
+                    label="Fable",
+                    detail=True,
+                ),
+            ],
+            limit_reached=False,
+            checked_at="2026-07-18T00:00:00+00:00",
+        )
+
     async def fake_read_codex(executable: str, timeout: float = 20.0):
         probed.append(executable)
         return CliAgentUsageSnapshot(
@@ -1167,21 +1192,31 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
             checked_at="2026-07-18T00:00:00+00:00",
         )
 
+    monkeypatch.setitem(
+        usage_module.CLI_AGENT_USAGE_READERS, "claude", fake_read_claude
+    )
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", fake_read_codex)
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "grok", fake_read_grok)
 
     first = await runtime.get_cli_agent_usage()
     second = await runtime.get_cli_agent_usage()
 
-    # Claude has no structured usage interface, so only Codex and Grok are
-    # probed, and the second call is served from the TTL cache without a new
-    # probe.
-    assert probed == ["/usr/local/bin/codex", "/usr/local/bin/grok"]
-    assert first.usages[0].agent == "codex"
-    assert first.usages[0].windows[0].used_percent == 12.0
-    assert first.usages[1].agent == "grok"
-    assert first.usages[1].windows[0].used_percent is None
-    assert first.usages[1].windows[0].resets_at == "2026-07-24T00:00:00+00:00"
+    # Copilot has no structured usage interface, so only the registry's tools
+    # are probed, and the second call is served from the TTL cache without a
+    # new probe.
+    assert probed == [
+        "/usr/local/bin/claude",
+        "/usr/local/bin/codex",
+        "/usr/local/bin/grok",
+    ]
+    assert first.usages[0].agent == "claude"
+    assert first.usages[0].windows[1].label == "Fable"
+    assert first.usages[0].windows[1].detail is True
+    assert first.usages[1].agent == "codex"
+    assert first.usages[1].windows[0].used_percent == 12.0
+    assert first.usages[2].agent == "grok"
+    assert first.usages[2].windows[0].used_percent is None
+    assert first.usages[2].windows[0].resets_at == "2026-07-24T00:00:00+00:00"
     assert second == first
 
 

@@ -1130,19 +1130,30 @@ export function usageWindowLabel(window: CliAgentUsage["windows"][number]): stri
   return "";
 }
 
+// The window's display name: the duration ("5h", "1w") plus the provider's
+// qualifier when one exists (e.g. a per-model budget's model name).
+function usageWindowName(window: CliAgentUsage["windows"][number]): string {
+  return [usageWindowLabel(window), window.label].filter(Boolean).join(" ");
+}
+
 function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
   if (usage.windows.length === 0) {
     return null;
   }
-  return (
+  // Detail windows stay out of the meters to keep the member cell compact;
+  // they appear in the hover detail instead. A provider that marks every
+  // window as detail still gets meters, so the usage never vanishes.
+  const summaryWindows = usage.windows.filter((window) => !window.detail);
+  const meterWindows = summaryWindows.length > 0 ? summaryWindows : usage.windows;
+  const meters = (
     <div className="activity-member-usage">
-      {usage.windows.map((window, index) => {
+      {meterWindows.map((window, index) => {
         // A provider may report only the window's reset time (e.g. Grok's
         // weekly subscription period): the row then drops the meter bar and
         // shows the reset alone.
         const hasPercent = window.used_percent != null;
         const percent = Math.max(0, Math.min(100, Math.round(window.used_percent ?? 0)));
-        const label = usageWindowLabel(window);
+        const label = usageWindowName(window);
         const labelPrefix = label ? `${label} ` : "";
         const reset = window.resets_at ? formatCompactReset(window.resets_at) : "";
         if (!hasPercent && !reset) {
@@ -1177,6 +1188,36 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
               {hasPercent ? `${percent}%${reset ? ` · ${reset}` : ""}` : reset}
             </span>
           </span>
+        );
+      })}
+    </div>
+  );
+  if (meterWindows.length === usage.windows.length) {
+    return meters;
+  }
+  return (
+    <HoverCard openDelay={150} closeDelay={80} withinPortal>
+      <HoverCard.Target>{meters}</HoverCard.Target>
+      <HoverCard.Dropdown className="activity-hover-card">
+        <MemberUsageDetail usage={usage} />
+      </HoverCard.Dropdown>
+    </HoverCard>
+  );
+}
+
+// The hover detail lists every window — including the detail-flagged ones the
+// meters omit — with full reset timestamps.
+function MemberUsageDetail({ usage }: { usage: CliAgentUsage }) {
+  return (
+    <div className="activity-member-usage-detail">
+      {usage.windows.map((window, index) => {
+        const percent = window.used_percent != null ? `${Math.round(window.used_percent)}%` : "";
+        const reset = window.resets_at ? formatShortTimestamp(window.resets_at) : "";
+        return (
+          <div key={`${window.window}-${index}`} className="activity-member-usage-detail-row">
+            <span className="activity-member-usage-detail-name">{usageWindowName(window)}</span>
+            <span>{[percent, reset].filter(Boolean).join(" · ")}</span>
+          </div>
         );
       })}
     </div>

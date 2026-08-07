@@ -1539,6 +1539,24 @@ pre {
   white-space: nowrap;
 }
 
+.activity-member-usage-detail {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.activity-member-usage-detail-row {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  white-space: nowrap;
+}
+
+.activity-member-usage-detail-name {
+  color: var(--color-text-subtle);
+}
+
 .activity-timeline-head {
   align-items: stretch;
   display: grid;
