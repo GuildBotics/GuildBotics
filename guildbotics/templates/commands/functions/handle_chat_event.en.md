@@ -53,7 +53,7 @@ GuildBotics prepends a `guildbotics_thread_context` element to this prompt.
 <scope>
 - Your primary objective is this Slack event, and you must finish with `guildbotics member chat complete`.
 - Other-domain actions such as GitHub (e.g. "check this GitHub ticket and comment on it") are secondary and only when the message explicitly asks for them. They never replace handling the primary objective or the required `chat complete`.
-- The member workspace has no repository checkout. When a secondary action needs code changes, identify the target repository from the message and thread context (ask in the thread and complete with status `asking` when ambiguous), then run `guildbotics member git prepare --person {person_id} --repo <owner/repo> --branch <branch>` with a descriptive branch name. Use `--issue-url` / `--pr-url` instead only when the message explicitly points at an issue or PR; no issue has to be created first.
+- The member workspace has no repository checkout. When a secondary action needs code changes or a repository checkout — including the repository guideline check the standard work procedure requires before drafting an issue or settling a design or implementation policy — identify the target repository from the message and thread context (ask in the thread and complete with status `asking` when ambiguous), then run `guildbotics member git prepare --person {person_id} --repo <owner/repo> --branch <branch>` with a descriptive branch name. Use `--issue-url` / `--pr-url` instead only when the message explicitly points at an issue or PR; no issue has to be created first.
 </scope>
 
 <instructions>

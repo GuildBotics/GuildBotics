@@ -259,6 +259,15 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "commands before acting. Fields owned by GitHub or Slack (state, assignees, "
     "labels, PR links, bodies, comments, review threads) are canonical in that "
     "inspect output.",
+    "Ground repository judgments in the repository's own guidelines: before "
+    "drafting or creating an issue for a repository, or settling a design or "
+    "implementation policy for one, read its agent and contributor guidelines "
+    "(AGENTS.md, CLAUDE.md, CONTRIBUTING, or equivalents) and align the outcome "
+    "with them. The version on the origin default branch is canonical: with an "
+    "existing checkout, run `git fetch origin` and read `git show "
+    "origin/<default-branch>:<file>` instead of trusting possibly stale "
+    "working-tree files; without one, create a checkout first with `member git "
+    "prepare` (its output reports the default branch).",
     "Edit, then run the relevant tests, linters, and checks before publishing any "
     'code change. When one fails, never stop at "unrelated to this change": '
     "identify the cause, write the issue draft it deserves, and hand that draft to "
