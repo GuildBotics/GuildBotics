@@ -73,7 +73,7 @@ is declined. These fixed settings are not exposed as user choices.
 
 For Grok Build, `workspace` maps to `--sandbox workspace` and `host` maps to
 `--sandbox off`. The launch command is fixed as
-`grok --no-auto-update --sandbox <profile> --always-approve agent stdio`; no arbitrary
+`grok --no-auto-update --sandbox <profile> agent --always-approve stdio`; no arbitrary
 CLI flag can be injected from configuration. `--always-approve` is always paired with a
 sandbox, and an unexpected ACP `session/request_permission` is declined and recorded.
 The decline uses the option id the agent supplied for its `reject_once` option (falling
