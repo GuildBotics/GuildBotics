@@ -6,12 +6,16 @@ from typing import Any
 
 import pytest
 
+from datetime import UTC, datetime
+
 from guildbotics.intelligences.agent_runtime import usage as usage_module
 from guildbotics.intelligences.agent_runtime.usage import (
     CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
+    parse_claude_usage,
     parse_codex_rate_limits,
     parse_grok_billing,
+    read_claude_usage,
     read_codex_usage,
     read_grok_usage,
 )
@@ -176,6 +180,79 @@ def test_parse_grok_billing_marks_limit_on_gate_or_exhausted_credits() -> None:
 def test_parse_grok_billing_tolerates_empty_and_malformed_input() -> None:
     for billing, subscription in ((None, None), ({}, {}), ({"config": "bad"}, "bad")):
         snapshot = parse_grok_billing(billing, subscription)
+        assert snapshot.windows == []
+        assert not snapshot.limit_reached
+
+
+# Verbatim shape of the `claude -p /usage` result text on 2.1.224; the trailing
+# contribution section must not produce windows.
+_CLAUDE_USAGE_TEXT = """\
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 24% used · resets Aug 8 at 11:10am (Asia/Tokyo)
+Current week (all models): 56% used · resets Aug 8 at 10am (Asia/Tokyo)
+Current week (Fable): 59% used · resets Aug 8 at 10am (Asia/Tokyo)
+
+What's contributing to your limits usage?
+Last 24h · 313 requests · 7 sessions
+  51% of your usage was at >150k context
+"""
+
+_CLAUDE_NOW = datetime(2026, 8, 7, 22, 0, 0, tzinfo=UTC)
+
+
+def test_parse_claude_usage_reads_session_and_weekly_windows() -> None:
+    snapshot = parse_claude_usage(_CLAUDE_USAGE_TEXT, now=_CLAUDE_NOW)
+
+    assert snapshot.agent == "claude"
+    assert not snapshot.limit_reached
+    assert [
+        (window.window, window.used_percent, window.label, window.detail)
+        for window in snapshot.windows
+    ] == [
+        ("session", 24.0, "", False),
+        ("week", 56.0, "", False),
+        ("current_week_fable", 59.0, "Fable", True),
+    ]
+    session, week, fable = snapshot.windows
+    assert session.resets_at == "2026-08-08T11:10:00+09:00"
+    assert session.window_minutes == 300
+    assert week.resets_at == "2026-08-08T10:00:00+09:00"
+    assert week.window_minutes == 10_080
+    assert fable.window_minutes == 10_080
+    assert snapshot.checked_at
+
+
+def test_parse_claude_usage_marks_limit_at_full_window() -> None:
+    snapshot = parse_claude_usage(
+        "Current session: 100% used · resets Aug 8 at 11:10am (Asia/Tokyo)",
+        now=_CLAUDE_NOW,
+    )
+    assert snapshot.limit_reached
+
+
+def test_parse_claude_usage_drops_unusable_reset_times() -> None:
+    # A missing timezone or an unknown one makes the instant ambiguous, and a
+    # malformed phrase must not survive as a bogus timestamp.
+    for reset in ("Aug 8 at 11:10am", "Aug 8 at 11:10am (Mars/Olympus)", "tomorrow"):
+        snapshot = parse_claude_usage(
+            f"Current session: 10% used · resets {reset}", now=_CLAUDE_NOW
+        )
+        assert snapshot.windows[0].resets_at == ""
+        assert snapshot.windows[0].used_percent == 10.0
+
+
+def test_parse_claude_usage_rolls_reset_into_next_year() -> None:
+    snapshot = parse_claude_usage(
+        "Current week (all models): 12% used · resets Jan 2 at 12am (UTC)",
+        now=datetime(2026, 12, 30, 12, 0, 0, tzinfo=UTC),
+    )
+    assert snapshot.windows[0].resets_at == "2027-01-02T00:00:00+00:00"
+
+
+def test_parse_claude_usage_tolerates_empty_and_malformed_input() -> None:
+    for raw in ("", "no usage here", None, {"unexpected": "shape"}):
+        snapshot = parse_claude_usage(raw, now=_CLAUDE_NOW)
         assert snapshot.windows == []
         assert not snapshot.limit_reached
 
@@ -396,8 +473,76 @@ async def test_read_grok_usage_raises_without_saved_login(
     assert fake_terminate == [process]
 
 
-def test_usage_reader_registry_covers_codex_and_grok() -> None:
+class _ClaudeProcess:
+    """Fake ``claude -p /usage`` returning one JSON document on stdout."""
+
+    def __init__(self, payload: Any):
+        self.payload = payload
+        self.returncode: int | None = None
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        self.returncode = 0
+        raw = (
+            self.payload
+            if isinstance(self.payload, bytes)
+            else json.dumps(self.payload).encode()
+        )
+        return raw, b""
+
+
+@pytest.mark.asyncio
+async def test_read_claude_usage_probes_print_mode(monkeypatch, fake_terminate) -> None:
+    process = _ClaudeProcess(
+        {"is_error": False, "num_turns": 0, "result": _CLAUDE_USAGE_TEXT}
+    )
+
+    async def create_process(*args, **_kwargs):
+        assert args == (
+            "claude-bin",
+            "-p",
+            "/usage",
+            "--output-format",
+            "json",
+            "--no-session-persistence",
+        )
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_claude_usage("claude-bin")
+
+    assert snapshot.agent == "claude"
+    assert snapshot.windows[0].used_percent == 24.0
+    assert [window.detail for window in snapshot.windows] == [False, False, True]
+    assert fake_terminate == [process]
+
+
+@pytest.mark.asyncio
+async def test_read_claude_usage_raises_on_error_or_empty_panel(
+    monkeypatch, fake_terminate
+) -> None:
+    # An error result, a panel without usage lines (e.g. API-key auth), and
+    # non-JSON output must all surface as CliAgentUsageError.
+    for payload in (
+        {"is_error": True, "result": "Not available"},
+        {"is_error": False, "result": "No usage panel"},
+        b"claude exploded",
+    ):
+        process = _ClaudeProcess(payload)
+
+        async def create_process(*_args, **_kwargs):
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+        with pytest.raises(CliAgentUsageError):
+            await read_claude_usage("claude-bin")
+        assert fake_terminate[-1] is process
+
+
+def test_usage_reader_registry_covers_supported_tools() -> None:
     assert CLI_AGENT_USAGE_READERS == {
+        "claude": read_claude_usage,
         "codex": read_codex_usage,
         "grok": read_grok_usage,
     }

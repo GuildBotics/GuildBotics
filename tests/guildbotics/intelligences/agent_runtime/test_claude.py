@@ -305,6 +305,48 @@ def test_claude_compaction_event_is_provider_neutral() -> None:
     assert events[0].details["compact_metadata"]["trigger"] == "auto"
 
 
+def test_claude_rate_limit_event_diagnostics_are_selective() -> None:
+    # The allowed event that opens every turn is noise unless it carries a
+    # utilization reading; any non-allowed status is always recorded.
+    allowed = {
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "allowed",
+            "resetsAt": 1_786_155_000,
+            "rateLimitType": "five_hour",
+        },
+    }
+    assert _decode_events(allowed, "session-1") == []
+
+    with_utilization = {
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "allowed",
+            "resetsAt": 1_786_155_000,
+            "rateLimitType": "five_hour",
+            "utilization": 56,
+        },
+    }
+    events = _decode_events(with_utilization, "session-1")
+    assert len(events) == 1
+    assert events[0].kind is AgentEventKind.TURN
+    assert events[0].name == "rate_limit_status"
+    assert events[0].details["utilization"] == 56
+    assert events[0].details["rate_limit_type"] == "five_hour"
+    assert events[0].details["retry_after_at"] == "2026-08-08T02:10:00+00:00"
+
+    rejected = {
+        "type": "rate_limit_event",
+        "rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day"},
+    }
+    events = _decode_events(rejected, "session-1")
+    assert len(events) == 1
+    assert events[0].details["status"] == "rejected"
+    assert "retry_after_at" not in events[0].details
+
+    assert _decode_events({"type": "rate_limit_event"}, "session-1") == []
+
+
 def test_claude_file_tool_is_normalized() -> None:
     events = _decode_events(
         {
@@ -452,6 +494,100 @@ async def test_claude_terminal_error_after_rate_limit_preserves_session(
     assert excinfo.value.category is AgentRuntimeErrorCategory.RATE_LIMITED
     assert excinfo.value.details["retry_after_seconds"] == 2.5
     assert excinfo.value.rotate_session is False
+
+
+@pytest.mark.asyncio
+async def test_claude_rejected_rate_limit_event_names_the_exact_reset(
+    monkeypatch, tmp_path
+) -> None:
+    # The rejected unified rate-limit event carries an epoch reset instant;
+    # it must win over the api_retry error that only knows a retry delay,
+    # regardless of arrival order.
+    stream = _StreamProcess(
+        [
+            {"type": "system", "subtype": "init", "session_id": "session-1"},
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {
+                    "status": "rejected",
+                    "resetsAt": 1_786_155_000,
+                    "rateLimitType": "five_hour",
+                },
+                "session_id": "session-1",
+            },
+            {
+                "type": "system",
+                "subtype": "api_retry",
+                "error": "rate_limit",
+                "attempt": 1,
+                "max_retries": 1,
+                "retry_delay_ms": 2500,
+            },
+            {
+                "type": "result",
+                "subtype": "error_during_execution",
+                "session_id": "session-1",
+                "result": "rate limited",
+                "is_error": True,
+            },
+        ]
+    )
+
+    async def create_process(*args, **_kwargs):
+        return _HelpProcess() if args[-1] == "--help" else stream
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await ClaudeStreamJsonAdapter().run_turn(
+            "hello",
+            _context(tmp_path),
+            ConversationRecord(key=_context(tmp_path).conversation_key),
+            lambda _event: None,
+        )
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.RATE_LIMITED
+    assert excinfo.value.details["retry_after_at"] == "2026-08-08T02:10:00+00:00"
+    assert excinfo.value.details["rate_limit_type"] == "five_hour"
+    assert excinfo.value.rotate_session is False
+
+
+@pytest.mark.asyncio
+async def test_claude_rejected_rate_limit_event_is_harmless_on_success(
+    monkeypatch, tmp_path
+) -> None:
+    # A rejection the CLI recovers from (e.g. overage kicks in) must not fail
+    # the turn; the stored error is only raised on a terminal error.
+    stream = _StreamProcess(
+        [
+            {"type": "system", "subtype": "init", "session_id": "session-1"},
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {"status": "rejected", "resetsAt": 1_786_155_000},
+                "session_id": "session-1",
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-1",
+                "result": "recovered",
+            },
+        ]
+    )
+
+    async def create_process(*args, **_kwargs):
+        return _HelpProcess() if args[-1] == "--help" else stream
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    result = await ClaudeStreamJsonAdapter().run_turn(
+        "hello",
+        _context(tmp_path),
+        ConversationRecord(key=_context(tmp_path).conversation_key),
+        lambda _event: None,
+    )
+
+    assert result.output == "recovered"
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,7 @@ import {
 } from "../api/client";
 import type {
   ActivityHistoryResponse,
+  CliAgentUsageWindow,
   RuntimeActiveWork,
   RuntimeStatus,
   RuntimeUnitStatus,
@@ -500,12 +501,7 @@ describe("ActivityHistoryPage", () => {
   function mockMemberUsage(
     agent: string,
     usage: {
-      windows: {
-        window: string;
-        used_percent: number | null;
-        resets_at: string;
-        window_minutes: number | null;
-      }[];
+      windows: (Partial<CliAgentUsageWindow> & Pick<CliAgentUsageWindow, "window">)[];
       limit_reached: boolean;
     },
   ) {
@@ -525,7 +521,21 @@ describe("ActivityHistoryPage", () => {
       },
     });
     vi.mocked(getCliAgentUsage).mockResolvedValue({
-      usages: [{ agent, checked_at: "2026-07-01T11:59:00Z", ...usage }],
+      usages: [
+        {
+          agent,
+          checked_at: "2026-07-01T11:59:00Z",
+          limit_reached: usage.limit_reached,
+          windows: usage.windows.map((window) => ({
+            used_percent: null,
+            resets_at: "",
+            window_minutes: null,
+            label: "",
+            detail: false,
+            ...window,
+          })),
+        },
+      ],
     });
   }
 
@@ -628,6 +638,49 @@ describe("ActivityHistoryPage", () => {
     );
     expect(memberRateLimit).not.toBe(null);
     expect(memberRateLimit).toHaveTextContent(localeShortDateTime("2026-07-01T13:17:00Z"));
+  });
+
+  it("keeps detail windows out of the meters and shows them on hover", async () => {
+    // Claude reports per-model weekly budgets as detail windows: the member
+    // cell shows only the summary meters, and hovering reveals every window.
+    mockMemberUsage("claude", {
+      windows: [
+        {
+          window: "session",
+          used_percent: 24,
+          resets_at: "2026-07-01T14:00:00Z",
+          window_minutes: 300,
+        },
+        {
+          window: "week",
+          used_percent: 56,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+        },
+        {
+          window: "current_week_fable",
+          used_percent: 59,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+          label: "Fable",
+          detail: true,
+        },
+      ],
+      limit_reached: false,
+    });
+    renderActivity();
+
+    expect(await screen.findByRole("meter", { name: "5h 24%" })).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "1w 56%" })).toBeInTheDocument();
+    expect(screen.queryByRole("meter", { name: "1w Fable 59%" })).toBe(null);
+    expect(screen.queryByText("1w Fable")).toBe(null);
+
+    const user = userEvent.setup();
+    await user.hover(screen.getByRole("meter", { name: "5h 24%" }));
+    expect(await screen.findByText("1w Fable")).toBeInTheDocument();
+    expect(
+      screen.getByText("1w Fable").closest(".activity-member-usage-detail-row"),
+    ).toHaveTextContent("59%");
   });
 
   it("shows a percentless window as its reset time without a meter", async () => {

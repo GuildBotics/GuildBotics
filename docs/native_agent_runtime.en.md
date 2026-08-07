@@ -326,8 +326,10 @@ owned process, preventing detached or zombie agent processes.
 ## Rate limits and diagnostics
 
 Authentication and rate limits are classified from structured provider events. Claude
-uses `system/api_retry`; Codex uses account/rate-limit RPC data. GuildBotics does not
-parse human stderr text for these decisions.
+uses `rate_limit_event` (whose epoch `resetsAt` becomes the exact `retry_after_at`
+and takes precedence over the retry delay of `system/api_retry`); Codex uses
+account/rate-limit RPC data. GuildBotics does not parse human stderr text for these
+decisions.
 
 Antigravity is classified from its terminal `result` event: a `status` other than
 `SUCCESS` is a failure, and the accompanying `error` field decides the category.

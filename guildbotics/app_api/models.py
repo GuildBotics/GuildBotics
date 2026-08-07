@@ -698,6 +698,12 @@ class CliAgentUsageWindow(BaseModel):
     used_percent: float | None = None
     resets_at: str = ""
     window_minutes: int | None = None
+    # Human-readable qualifier beyond the duration (e.g. a per-model budget's
+    # model name).
+    label: str = ""
+    # Supplementary window: counts toward the limit state but is shown only in
+    # the expanded usage detail, not as its own meter.
+    detail: bool = False
 
 
 class CliAgentUsage(BaseModel):
