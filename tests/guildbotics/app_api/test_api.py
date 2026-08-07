@@ -1102,9 +1102,10 @@ def test_cli_agent_usage_endpoint_uses_runtime(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_app_runtime_cli_agent_usage_probes_detected_codex(
+async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from guildbotics.intelligences.agent_runtime import usage as usage_module
     from guildbotics.intelligences.agent_runtime.usage import (
         CliAgentUsageSnapshot,
         CliAgentUsageWindow as UsageWindow,
@@ -1130,12 +1131,19 @@ async def test_app_runtime_cli_agent_usage_probes_detected_codex(
                     "detected": True,
                     "path": "/usr/local/bin/codex",
                 },
+                {
+                    "name": "grok",
+                    "executable": "grok",
+                    "config_reference": "grok",
+                    "detected": True,
+                    "path": "/usr/local/bin/grok",
+                },
             ]
         ),
     )
     probed: list[str] = []
 
-    async def fake_read(executable: str, timeout: float = 20.0):
+    async def fake_read_codex(executable: str, timeout: float = 20.0):
         probed.append(executable)
         return CliAgentUsageSnapshot(
             agent="codex",
@@ -1144,16 +1152,36 @@ async def test_app_runtime_cli_agent_usage_probes_detected_codex(
             checked_at="2026-07-18T00:00:00+00:00",
         )
 
-    monkeypatch.setattr("guildbotics.app_api.runtime.read_codex_usage", fake_read)
+    async def fake_read_grok(executable: str, timeout: float = 20.0):
+        probed.append(executable)
+        return CliAgentUsageSnapshot(
+            agent="grok",
+            windows=[
+                UsageWindow(
+                    window="subscription",
+                    resets_at="2026-07-24T00:00:00+00:00",
+                    window_minutes=10_080,
+                )
+            ],
+            limit_reached=False,
+            checked_at="2026-07-18T00:00:00+00:00",
+        )
+
+    monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", fake_read_codex)
+    monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "grok", fake_read_grok)
 
     first = await runtime.get_cli_agent_usage()
     second = await runtime.get_cli_agent_usage()
 
-    # Claude has no structured usage interface, so only Codex is probed, and
-    # the second call is served from the TTL cache without a new probe.
-    assert probed == ["/usr/local/bin/codex"]
+    # Claude has no structured usage interface, so only Codex and Grok are
+    # probed, and the second call is served from the TTL cache without a new
+    # probe.
+    assert probed == ["/usr/local/bin/codex", "/usr/local/bin/grok"]
     assert first.usages[0].agent == "codex"
     assert first.usages[0].windows[0].used_percent == 12.0
+    assert first.usages[1].agent == "grok"
+    assert first.usages[1].windows[0].used_percent is None
+    assert first.usages[1].windows[0].resets_at == "2026-07-24T00:00:00+00:00"
     assert second == first
 
 
@@ -1183,7 +1211,9 @@ async def test_app_runtime_cli_agent_usage_degrades_on_probe_failure(
     async def failing_read(executable: str, timeout: float = 20.0):
         raise CliAgentUsageError("not logged in")
 
-    monkeypatch.setattr("guildbotics.app_api.runtime.read_codex_usage", failing_read)
+    from guildbotics.intelligences.agent_runtime import usage as usage_module
+
+    monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", failing_read)
 
     response = await runtime.get_cli_agent_usage()
 

@@ -128,9 +128,9 @@ from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.intelligences.agent_runtime.usage import (
+    CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
     CliAgentUsageSnapshot,
-    read_codex_usage,
 )
 from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, resolve_cli_agent_path
@@ -1564,8 +1564,9 @@ class AppRuntime:
     ) -> CliAgentUsagesResponse:
         """Return account usage per AI CLI tool, cached for a short TTL.
 
-        Only tools with a structured usage interface (currently Codex) appear
-        in the response; the frontend shows nothing for the rest.
+        Only tools with a structured usage interface (the readers in
+        ``CLI_AGENT_USAGE_READERS``) appear in the response; the frontend
+        shows nothing for the rest.
         """
         async with self._cli_agent_usage_lock:
             now = time.monotonic()
@@ -1578,10 +1579,11 @@ class AppRuntime:
                 return cached[1]
             usages: list[CliAgentUsage] = []
             for agent in self.detect_cli_agents().agents:
-                if agent.name != "codex" or not agent.detected:
+                reader = CLI_AGENT_USAGE_READERS.get(agent.name)
+                if reader is None or not agent.detected:
                     continue
                 try:
-                    snapshot = await read_codex_usage(agent.path or agent.executable)
+                    snapshot = await reader(agent.path or agent.executable)
                 except CliAgentUsageError as exc:
                     logging.getLogger("guildbotics.app_api.cli_agent_usage").warning(
                         "Could not read %s usage: %s", agent.name, exc

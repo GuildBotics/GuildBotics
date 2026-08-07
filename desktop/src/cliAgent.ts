@@ -64,7 +64,7 @@ export function useMemberCliAgentLabel(personId: string, enabled: boolean): stri
 const USAGE_REFRESH_MS = 5 * 60 * 1000;
 
 // Current account usage of the member's AI CLI tool, or null while loading and
-// for tools without a structured usage interface (only Codex exposes one).
+// for tools without a structured usage interface (Codex and Grok expose one).
 // The usage endpoint reports machine-wide usage per tool, so all members on
 // the same tool share one query.
 export function useMemberCliAgentUsage(personId: string, enabled: boolean): CliAgentUsage | null {
