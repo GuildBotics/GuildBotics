@@ -51,7 +51,7 @@ jobs:
         run: uv run --no-sync python scripts/generate-cli-reference.py --check
 
       - name: Run Ruff format
-        run: uv run --no-sync ruff format --check guildbotics
+        run: uv run --no-sync ruff format --check guildbotics tests
 
       - name: Run Ruff
         run: uv run --no-sync ruff check guildbotics

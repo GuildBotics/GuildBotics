@@ -176,9 +176,7 @@ def test_routine_ticket_workflow_runs_under_caller_trace(monkeypatch) -> None:
         scheduler.shutdown()
         return True
 
-    monkeypatch.setattr(
-        scheduler, "_run_routine_ticket_workflow", fake_ticket_workflow
-    )
+    monkeypatch.setattr(scheduler, "_run_routine_ticket_workflow", fake_ticket_workflow)
     monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
 
     scheduler._process_tasks_list(person, [])

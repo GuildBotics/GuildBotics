@@ -147,7 +147,9 @@ async def test_cli_agent_run_raises_when_the_tool_fails(monkeypatch, tmp_path):
 async def test_cli_agent_run_raises_when_response_is_empty(monkeypatch, tmp_path):
     _native_brain(
         monkeypatch,
-        cli_agent.CliAgentExecutionResult(stdout="", stderr="usage error", returncode=0),
+        cli_agent.CliAgentExecutionResult(
+            stdout="", stderr="usage error", returncode=0
+        ),
     )
 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
@@ -685,9 +687,7 @@ async def test_runtime_effort_reaches_the_adapter_settings(monkeypatch, tmp_path
 
     async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
         captured["context"] = context
-        return cli_agent.CliAgentExecutionResult(
-            stdout="done", stderr="", returncode=0
-        )
+        return cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0)
 
     monkeypatch.setattr(
         cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
@@ -722,9 +722,7 @@ async def test_frontmatter_effort_reaches_the_adapter_settings(monkeypatch, tmp_
 
     async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
         captured["context"] = context
-        return cli_agent.CliAgentExecutionResult(
-            stdout="done", stderr="", returncode=0
-        )
+        return cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0)
 
     monkeypatch.setattr(
         cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
