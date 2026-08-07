@@ -69,7 +69,8 @@ ticket workflow, the chat workflow, and interactive skill sessions:
 ```
 workflow (orchestration)
   -> AI CLI agent (judgment)
-     -> guildbotics member ... CLI (external side-effect boundary)
+     -> trusted member transport
+        -> guildbotics member ... CLI (external side-effect boundary)
 ```
 
 - **Workflow** (`guildbotics/templates/commands/workflows/*`): selects the work item,
@@ -82,6 +83,14 @@ workflow (orchestration)
 - **CLI agent**: reads the ticket/thread, investigates, edits, and decides. It never
   receives GitHub/Slack tokens and never calls provider APIs directly; every external
   write goes through `guildbotics member ...`.
+- **Trusted member transport**: interactive agents invoke the member CLI directly.
+  A sandboxed Grok session instead receives one authenticated localhost MCP tool that
+  can invoke only the fixed member CLI for the active person, workspace, and turn. The
+  broker, not Grok, holds the short-lived execution delegation and a separately
+  rotated per-turn grant, and terminates any outstanding member command when the turn
+  ends. The broker keeps the selected GuildBotics workspace root (used by the member
+  CLI for config resolution) separate from the agent's isolated working directory and
+  the independently overridable workspace data root.
 - **Member capability** (`guildbotics/capabilities/*` + `guildbotics/cli/member.py`):
   the boundary for member actions decided by the AI agent — the only path through
   which the agent's provider operations run and the only layer that resolves the
@@ -399,6 +408,9 @@ Invariants:
   frontend neither persists nor restores workspace state from browser storage.
 - `GUILDBOTICS_CONFIG_DIR` selects the _config source_ only; it is not a workspace or
   data root.
+- The workspace application boundary also publishes the selected runtime workspace as
+  `GUILDBOTICS_WORKSPACE_ROOT`. Agent execution copies that resolved value into
+  `AgentExecutionContext`; it is never reconstructed from `GUILDBOTICS_DATA_DIR`.
 - The effective workspace data root is fixed at the _workspace application boundary_
   (App API `set_workspace()`, CLI/member CLI startup, `run`/`start` initialization) and
   written to `os.environ["GUILDBOTICS_DATA_DIR"]` there — and only there. Workers,

@@ -185,9 +185,23 @@ that does not answer promptly -- the terminal login waiting for a user who is no
 method id is recorded; the contents of the Copilot credential store are never read.
 
 GitHub, Git, and SSH write credentials are deliberately removed from native
-agent process environments. The agent performs member-side writes only through a
-validated `guildbotics member ...` command. Those nested commands inherit a short-lived
-execution delegation identity, not a provider token.
+agent process environments. Grok receives a per-adapter HTTP MCP endpoint bound to
+`127.0.0.1` and an unguessable bearer grant. Its single `guildbotics_member` tool accepts
+only tokenized arguments for the fixed `guildbotics member` entrypoint; it cannot choose
+an executable, invoke a shell, override the workspace, or act as another person. The
+endpoint runs in the GuildBotics process outside Grok's sandbox, is usable only while a
+turn is active, requires a second grant rotated on every turn, and is stopped with the
+adapter. The Grok process never receives the
+member execution lease or delegation identity.
+
+The broker launches the member CLI as a separate trusted process, where OS Keychain and
+other SecretStore backends remain available. It supplies the active turn's short-lived
+lease only to that process. The CLI's `--workspace` always names the selected
+GuildBotics workspace root, while the child process cwd remains the member's isolated
+working directory; the workspace data root may be overridden independently. A read-only
+turn supplies no delegation, so the existing member CLI guard rejects every
+write-capable command. Other native adapters continue to use the same validated member
+capability boundary through their native command path.
 
 ## Exact conversation identity and resume
 
@@ -335,15 +349,20 @@ If startup reports `unsupported_version`, update the provider CLI. Claude capabi
 detection requires `--input-format`, `--output-format`, `stream-json`, and `--resume`;
 Codex capability detection occurs through App Server initialization. ACP capability
 detection requires protocol version 1 plus either `loadSession` or
-`sessionCapabilities.resume`. It never gates on the version string, so any newer CLI
-that still speaks ACP v1 keeps working. Antigravity capability detection reads
+`sessionCapabilities.resume`; Grok additionally requires HTTP MCP support for its
+trusted member capability transport. It never gates on the version string, so any newer
+CLI that still exposes those capabilities keeps working. Antigravity capability detection reads
 `agy --help` (which prints to stderr and exits 0) and requires `--print`,
 `--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
-verified baselines are Grok Build 0.2.114, GitHub Copilot CLI 1.0.77, and
+verified baselines are Grok Build 0.2.118, GitHub Copilot CLI 1.0.77, and
 Antigravity 1.1.10.
 
 Grok rate limits are classified as `rate_limited` only when ACP or an xAI extension
-returns structured data; stderr text and assistant prose are never parsed. No equivalent of Codex
+returns structured data; stderr text and assistant prose are never parsed. The xAI
+retry-state notice counts as that structured data for the whole turn: when Grok Build
+reports `is_rate_limited` and then ends the turn with a code-only RPC error, the
+failure is classified `rate_limited`, which routes the workflow into its rate-limit
+deferral instead of retrying the agent. No equivalent of Codex
 `account/rateLimits/read` is exposed over ACP (`x.ai/session/usage` answers `Method
 not found` on 0.2.114), so GuildBotics does not present a weekly or 5-hour usage meter
 for Grok. Activity History treats "no usage

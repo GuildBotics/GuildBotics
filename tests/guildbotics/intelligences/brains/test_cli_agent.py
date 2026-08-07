@@ -3,6 +3,7 @@ import logging
 import pytest
 
 from guildbotics.intelligences.brains import cli_agent
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 
 
 def _test_logger():
@@ -457,6 +458,9 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     monkeypatch.setattr(
         cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
     )
+    workspace_root = tmp_path / "workspace"
+    isolated_cwd = tmp_path / "data" / "workspaces" / "p1"
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace_root))
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
     brain.executable_info = cli_agent.ExecutableInfo(adapter="claude-stream-json")
 
@@ -467,7 +471,7 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     try:
         result = await brain._execute(
             input="why did it fail?",
-            cwd=tmp_path,
+            cwd=isolated_cwd,
             kwargs={
                 "session_state": {
                     "agent_execution_context": {
@@ -487,6 +491,8 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     assert result.stdout == "answer"
     assert captured["context"].read_only is True
     assert captured["context"].lease_id == ""
+    assert captured["context"].cwd == isolated_cwd
+    assert captured["context"].workspace_root == workspace_root
 
 
 @pytest.mark.asyncio

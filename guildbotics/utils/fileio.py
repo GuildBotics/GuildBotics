@@ -7,6 +7,7 @@ from dotenv import dotenv_values
 
 CONFIG_PATH = ".guildbotics/config"
 GUILDBOTICS_DATA_DIR = "GUILDBOTICS_DATA_DIR"
+GUILDBOTICS_WORKSPACE_ROOT = "GUILDBOTICS_WORKSPACE_ROOT"
 
 
 def find_package_subdir(subpath: Path) -> Path:
@@ -59,6 +60,12 @@ def get_workspace_data_root(workspace_root: Path | None = None) -> Path:
     return root.expanduser().resolve(strict=False) / ".guildbotics" / "data"
 
 
+def get_workspace_root() -> Path:
+    """Return the runtime workspace selected before command cwd isolation."""
+    root = os.getenv(GUILDBOTICS_WORKSPACE_ROOT, "").strip()
+    return Path(root or Path.cwd()).expanduser().resolve(strict=False)
+
+
 def get_workspace_data_path(
     *parts: str,
     workspace_root: Path | None = None,
@@ -73,6 +80,9 @@ def apply_workspace_data_root(
     inherited_data_dir: str | None = None,
 ) -> Path:
     """Resolve and publish the effective workspace data root."""
+    os.environ[GUILDBOTICS_WORKSPACE_ROOT] = str(
+        workspace_root.expanduser().resolve(strict=False)
+    )
     data_root = resolve_workspace_data_root(
         workspace_root,
         env_file,

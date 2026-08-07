@@ -760,6 +760,7 @@ def test_member_command_environment_carries_only_execution_metadata(tmp_path) ->
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
+        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "codex", "chat", "slack:bot:C1:100.1"),
         participant_labels='{"U1":"aiko"}',
@@ -791,6 +792,7 @@ def test_agent_diagnostics_redact_credentials_and_keep_correlation(
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
+        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=key,
         context_cursor="cursor-1",
@@ -842,6 +844,7 @@ def test_agent_diagnostics_skips_assistant_deltas(monkeypatch, tmp_path) -> None
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
+        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=key,
     )

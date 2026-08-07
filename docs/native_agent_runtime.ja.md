@@ -168,9 +168,21 @@ GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、�
 残すのは認証方式の識別子だけで、Copilotの認証情報保存先の内容は読み取りません。
 
 GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ渡しません。
-AI CLIツールは、GuildBoticsが検証した`guildbotics member ...`コマンドを通してのみ、
-メンバーとして書き込み操作を行います。そのコマンドから呼び出される子コマンドが引き継ぐのは、
-有効期間の短い実行委任用の識別情報であり、AI CLIツールの認証トークンではありません。
+Grokには、`127.0.0.1`にbindしたadapter専用のHTTP MCP endpointと、推測困難なbearer grantを
+渡します。唯一の`guildbotics_member` toolが受け取るのは、固定された
+`guildbotics member` entrypointのtoken化済み引数だけです。実行ファイルやshellを選ぶこと、
+workspaceを上書きすること、別personとして動くことはできません。endpointはGrokのsandbox外にある
+GuildBotics processで動作し、turn実行中だけ利用でき、毎turn更新する第2のgrantも要求し、
+adapterとともに停止します。Grok processへmember execution leaseやdelegation identityを
+渡すことはありません。
+
+brokerはmember CLIを別のtrusted processとして起動するため、OS KeychainなどのSecretStore backendを
+そのまま利用できます。有効期間の短いleaseは、そのCLI processだけへ渡します。CLIの
+`--workspace`には常に選択中のGuildBotics workspace rootを指定し、child processのcwdはmemberの
+隔離作業ディレクトリのまま維持します。workspace data rootはこれらと独立して上書きできます。
+read-only turnではdelegationを渡さないため、既存のmember CLI guardが書き込み可能なcommandを
+すべて拒否します。その他のnative adapterも、それぞれのnative command経路から同じ検証済み
+member capability境界を使用します。
 
 ## Slackスレッド・チケットとセッションの対応付け
 
@@ -325,14 +337,18 @@ Claude Codeでは`--input-format`、`--output-format`、`stream-json`、`--resum
 CodexではApp Serverの初期化処理を通して、必要な機能に対応しているか確認します。
 ACPを使うAI CLIツールでは、`initialize`が返すプロトコル版数が1であることと、正確な再開に必要な
 `loadSession`または`sessionCapabilities.resume`のいずれかが提示されることを確認します。
-バージョン文字列では判定しないため、ACP v1に対応する新しい版はそのまま利用できます。
+Grokではさらに、trusted member capability transportに必要なHTTP MCP対応も確認します。
+バージョン文字列では判定しないため、これらのcapabilityを提示する新しい版はそのまま利用できます。
 Antigravityでは`agy --help`（標準エラー出力へ表示し、終了コード0で終わります）を読み取り、
 `--print`、`--output-format`、`--conversation`、`--model`、`--effort`、`--add-dir`への対応を
-確認します。動作確認済みの基準バージョンは、Grok Build 0.2.114、GitHub Copilot CLI 1.0.77、
+確認します。動作確認済みの基準バージョンは、Grok Build 0.2.118、GitHub Copilot CLI 1.0.77、
 Antigravity 1.1.10です。
 
 Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データを返した場合にだけ`rate_limited`
-として分類します。標準エラー出力や応答本文の解析は行いません。Codexの
+として分類します。標準エラー出力や応答本文の解析は行いません。xAIのretry-state通知は
+そのturn全体の構造化データとして扱います。Grok Buildが`is_rate_limited`を通知した後に
+コードだけのRPCエラーでturnを終えた場合、その失敗は`rate_limited`として分類され、
+エージェントの再試行ではなくworkflowのrate-limit退避へ進みます。Codexの
 `account/rateLimits/read`に相当する利用量取得手段はACP経由では公開されていない
 （`x.ai/session/usage`は`Method not found`、0.2.114で確認）ため、Grok Buildでは
 週間・5時間枠の利用量メーターを提供しません。Activity Historyでは「使用量情報なし」を通常の

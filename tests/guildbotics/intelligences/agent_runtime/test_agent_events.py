@@ -34,6 +34,7 @@ def _record(event: AgentEvent, recorded: list[dict[str, Any]]) -> dict[str, Any]
         person_id="aiko",
         run_id="run-1",
         cwd=Path("."),
+        workspace_root=Path("."),
         workspace_data_root=Path("."),
         conversation_key=key,
     )

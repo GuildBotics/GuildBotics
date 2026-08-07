@@ -8,7 +8,7 @@ from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
 from guildbotics.utils.import_utils import ClassResolver
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.secret_store import ENV_FILE_BACKEND, SECRETS_BACKEND_ENV
 
 
@@ -25,6 +25,7 @@ def _force_env_file_secret_backend(monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolate_workspace_data(monkeypatch, tmp_path):
     """Keep runtime files created by tests inside each test's temporary tree."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "workspace-data"))
 
 

@@ -267,6 +267,7 @@ def _context(**overrides) -> AgentExecutionContext:
         "person_id": "aiko",
         "run_id": "run-1",
         "cwd": Path("/tmp"),
+        "workspace_root": Path("/tmp"),
         "workspace_data_root": Path("/tmp"),
         "conversation_key": _key(),
     }

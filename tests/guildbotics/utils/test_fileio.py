@@ -4,13 +4,16 @@ import pytest
 
 from guildbotics.utils.fileio import (
     GUILDBOTICS_DATA_DIR,
+    GUILDBOTICS_WORKSPACE_ROOT,
     _clean_data,
+    apply_workspace_data_root,
     find_package_subdir,
     get_config_path,
     get_machine_state_path,
     get_machine_state_root,
     get_primary_config_path,
     get_workspace_data_root,
+    get_workspace_root,
     load_markdown_with_frontmatter,
     load_person_slot_mapping,
     load_yaml_file,
@@ -226,6 +229,19 @@ def test_get_workspace_data_root_defaults_to_workspace_root(tmp_path, monkeypatc
     assert get_workspace_data_root(workspace) == (
         workspace / ".guildbotics" / "data"
     ).resolve(strict=False)
+
+
+def test_applied_workspace_root_is_independent_of_overridden_data_root(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    data_root = tmp_path / "external-data"
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+
+    assert apply_workspace_data_root(
+        workspace, inherited_data_dir=str(data_root)
+    ) == data_root.resolve(strict=False)
+    assert get_workspace_root() == workspace.resolve(strict=False)
 
 
 def test_clean_data_removes_none_and_empty_keys():

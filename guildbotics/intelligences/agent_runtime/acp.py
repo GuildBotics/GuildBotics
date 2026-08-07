@@ -164,6 +164,10 @@ class AcpAdapterBase:
         self._tool_kinds: dict[str, str] = {}
         self._context_used = 0
         self._context_size = 0
+        #: The structured rate-limit notice the current turn received, if any.
+        #: Providers may end a rate-limited turn with a bare protocol error, so
+        #: the notice is what classifies that terminal failure.
+        self._turn_rate_limit: dict[str, Any] = {}
 
     def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
         """The settings this adapter can really impose, normalized.
@@ -186,11 +190,25 @@ class AcpAdapterBase:
         emit: EventSink,
     ) -> AgentTerminalResult:
         await self._ensure_started(context, emit)
+        try:
+            await self._prepare_turn(context)
+            return await self._run_active_turn(prompt, context, conversation, emit)
+        finally:
+            await self._finish_turn(context)
+
+    async def _run_active_turn(
+        self,
+        prompt: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        emit: EventSink,
+    ) -> AgentTerminalResult:
         self._warn_unusable_settings(context)
         self._unhandled = {}
         self._tool_kinds = {}
         self._context_used = 0
         self._context_size = 0
+        self._turn_rate_limit = {}
         await _publish(
             emit,
             AgentEvent(
@@ -215,7 +233,9 @@ class AcpAdapterBase:
                 "session/prompt",
                 {
                     "sessionId": session_id,
-                    "prompt": [{"type": "text", "text": prompt}],
+                    "prompt": [
+                        {"type": "text", "text": self._turn_prompt(prompt, context)}
+                    ],
                 },
                 # ACP answers session/prompt only when the turn ends, so a
                 # per-request deadline would cut real work short. The whole turn
@@ -324,8 +344,7 @@ class AcpAdapterBase:
             await self.close()
         cwd = context.cwd
         env, self._gh_config_dir = isolated_agent_environment(cwd)
-        env.update(member_command_environment(context))
-        env.update(delegation_environment(context.run_id))
+        env.update(self._agent_member_environment(context))
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -431,7 +450,10 @@ class AcpAdapterBase:
                 result = as_dict(
                     await self._transport.request(
                         "session/new",
-                        {"cwd": str(context.cwd), "mcpServers": []},
+                        {
+                            "cwd": str(context.cwd),
+                            "mcpServers": self._mcp_servers(context),
+                        },
                     )
                 )
             except RpcError as exc:
@@ -462,7 +484,7 @@ class AcpAdapterBase:
                     {
                         "sessionId": session_id,
                         "cwd": str(context.cwd),
-                        "mcpServers": [],
+                        "mcpServers": self._mcp_servers(context),
                     },
                 )
             )
@@ -522,6 +544,8 @@ class AcpAdapterBase:
                     chunks.add(event.item_id, event.message)
                 if event.usage:
                     usage.update(event.usage)
+                if event.kind is AgentEventKind.FAILED and event.name == "rate_limited":
+                    self._turn_rate_limit = dict(event.details)
 
         next_message = asyncio.create_task(self._transport.next_notification())
         try:
@@ -858,6 +882,16 @@ class AcpAdapterBase:
                 "required ACP method.",
                 details=details,
             )
+        if self._turn_rate_limit:
+            # The provider ended the turn with a bare protocol error after
+            # sending a structured rate-limit notice; the notice is the real
+            # classification, and it is what routes the workflow into its
+            # rate-limit deferral instead of blind retries.
+            return AgentRuntimeError(
+                AgentRuntimeErrorCategory.RATE_LIMITED,
+                f"{self.agent_label} account rate limit is active.",
+                details={**self._turn_rate_limit, **details},
+            )
         return AgentRuntimeError(
             AgentRuntimeErrorCategory.PROTOCOL,
             f"{self.product_label} returned a protocol error.",
@@ -866,6 +900,29 @@ class AcpAdapterBase:
         )
 
     # --- provider hooks ------------------------------------------------------
+
+    async def _prepare_turn(self, context: AgentExecutionContext) -> None:
+        """Start provider-specific services needed while this turn is active."""
+
+    async def _finish_turn(self, context: AgentExecutionContext) -> None:
+        """Revoke provider-specific services after this turn finishes."""
+
+    def _agent_member_environment(
+        self, context: AgentExecutionContext
+    ) -> dict[str, str]:
+        """Metadata a provider process may pass to a nested member CLI."""
+        return {
+            **member_command_environment(context),
+            **delegation_environment(context.run_id),
+        }
+
+    def _mcp_servers(self, context: AgentExecutionContext) -> list[dict[str, Any]]:
+        """ACP MCP descriptors attached to a new or reloaded session."""
+        return []
+
+    def _turn_prompt(self, prompt: str, context: AgentExecutionContext) -> str:
+        """Add provider-specific execution instructions to the turn prompt."""
+        return prompt
 
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
         """The command line that starts this provider's ACP server."""
