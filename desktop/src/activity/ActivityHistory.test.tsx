@@ -497,22 +497,25 @@ describe("ActivityHistoryPage", () => {
     expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
   });
 
-  function mockCodexMember(usage: {
-    windows: {
-      window: string;
-      used_percent: number;
-      resets_at: string;
-      window_minutes: number | null;
-    }[];
-    limit_reached: boolean;
-  }) {
+  function mockMemberUsage(
+    agent: string,
+    usage: {
+      windows: {
+        window: string;
+        used_percent: number | null;
+        resets_at: string;
+        window_minutes: number | null;
+      }[];
+      limit_reached: boolean;
+    },
+  ) {
     vi.mocked(getIntelligenceConfig).mockResolvedValue({
       config_dir: "",
       person_id: "alice",
       inherited: false,
       model_mapping: {},
       models: [],
-      cli_agent_mapping: { default: "cli_agents/codex/default.yml" },
+      cli_agent_mapping: { default: `cli_agents/${agent}/default.yml` },
       cli_agents: [],
       brain_mapping: [],
       native_agent_policy: {
@@ -522,9 +525,12 @@ describe("ActivityHistoryPage", () => {
       },
     });
     vi.mocked(getCliAgentUsage).mockResolvedValue({
-      usages: [{ agent: "codex", checked_at: "2026-07-01T11:59:00Z", ...usage }],
+      usages: [{ agent, checked_at: "2026-07-01T11:59:00Z", ...usage }],
     });
   }
+
+  const mockCodexMember = (usage: Parameters<typeof mockMemberUsage>[1]) =>
+    mockMemberUsage("codex", usage);
 
   it("shows usage meters for members whose AI CLI tool reports usage", async () => {
     mockCodexMember({
@@ -622,6 +628,55 @@ describe("ActivityHistoryPage", () => {
     );
     expect(memberRateLimit).not.toBe(null);
     expect(memberRateLimit).toHaveTextContent(localeShortDateTime("2026-07-01T13:17:00Z"));
+  });
+
+  it("shows a percentless window as its reset time without a meter", async () => {
+    // Grok reports no used percent for the subscription quota, only the
+    // weekly period's reset time.
+    mockMemberUsage("grok", {
+      windows: [
+        {
+          window: "subscription",
+          used_percent: null,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+        },
+      ],
+      limit_reached: false,
+    });
+    renderActivity();
+
+    const row = await screen.findByText("1w");
+    expect(row.closest(".activity-member-usage-row")).toHaveTextContent(
+      localeShortDate("2026-07-04T09:00:00Z"),
+    );
+    expect(screen.queryByRole("meter")).toBe(null);
+    expect(row.closest(".activity-member-usage-row")).toHaveAttribute(
+      "title",
+      expect.stringContaining(localeShortDateTime("2026-07-04T09:00:00Z")),
+    );
+    expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
+  });
+
+  it("shows the member badge from a percentless window when the limit is reached", async () => {
+    mockMemberUsage("grok", {
+      windows: [
+        {
+          window: "subscription",
+          used_percent: null,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+        },
+      ],
+      limit_reached: true,
+    });
+    renderActivity();
+
+    const memberRateLimit = (await screen.findByText("Rate limited")).closest(
+      ".activity-member-rate-limit",
+    );
+    expect(memberRateLimit).not.toBe(null);
+    expect(memberRateLimit).toHaveTextContent(localeShortDateTime("2026-07-04T09:00:00Z"));
   });
 
   it.each([

@@ -1104,7 +1104,7 @@ export function rateLimitFromUsage(
     return null;
   }
   const exhausted = usage.windows.filter(
-    (window) => window.used_percent >= 100 && window.resets_at,
+    (window) => (window.used_percent ?? 0) >= 100 && window.resets_at,
   );
   const candidates = exhausted.length
     ? exhausted
@@ -1137,35 +1137,44 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
   return (
     <div className="activity-member-usage">
       {usage.windows.map((window, index) => {
-        const percent = Math.max(0, Math.min(100, Math.round(window.used_percent)));
+        // A provider may report only the window's reset time (e.g. Grok's
+        // weekly subscription period): the row then drops the meter bar and
+        // shows the reset alone.
+        const hasPercent = window.used_percent != null;
+        const percent = Math.max(0, Math.min(100, Math.round(window.used_percent ?? 0)));
         const label = usageWindowLabel(window);
         const labelPrefix = label ? `${label} ` : "";
         const reset = window.resets_at ? formatCompactReset(window.resets_at) : "";
-        const level =
-          window.used_percent >= 100 ? "danger" : window.used_percent >= 80 ? "warning" : "";
+        if (!hasPercent && !reset) {
+          return null;
+        }
+        const level = !hasPercent ? "" : percent >= 100 ? "danger" : percent >= 80 ? "warning" : "";
+        const summary = hasPercent ? `${labelPrefix}${percent}%` : labelPrefix.trim();
         return (
           <span
             key={`${window.window}-${index}`}
             className={`activity-member-usage-row${level ? ` activity-member-usage-${level}` : ""}`}
             title={
               window.resets_at
-                ? `${labelPrefix}${percent}% · ${formatShortTimestamp(window.resets_at)}`
-                : `${labelPrefix}${percent}%`
+                ? `${summary}${summary ? " · " : ""}${formatShortTimestamp(window.resets_at)}`
+                : summary
             }
           >
             {label ? <span className="activity-member-usage-window">{label}</span> : null}
-            <span
-              className="activity-member-usage-bar"
-              role="meter"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent}
-              aria-label={`${labelPrefix}${percent}%`}
-            >
-              <span className="activity-member-usage-fill" style={{ width: `${percent}%` }} />
-            </span>
+            {hasPercent ? (
+              <span
+                className="activity-member-usage-bar"
+                role="meter"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                aria-label={`${labelPrefix}${percent}%`}
+              >
+                <span className="activity-member-usage-fill" style={{ width: `${percent}%` }} />
+              </span>
+            ) : null}
             <span className="activity-member-usage-value">
-              {percent}%{reset ? ` · ${reset}` : ""}
+              {hasPercent ? `${percent}%${reset ? ` · ${reset}` : ""}` : reset}
             </span>
           </span>
         );

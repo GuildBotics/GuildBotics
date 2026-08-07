@@ -694,7 +694,8 @@ class CliAgentDetectionsResponse(BaseModel):
 
 class CliAgentUsageWindow(BaseModel):
     window: str
-    used_percent: float
+    # None for providers that report only the window's reset time.
+    used_percent: float | None = None
     resets_at: str = ""
     window_minutes: int | None = None
 

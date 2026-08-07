@@ -224,7 +224,8 @@ export type CliAgentDetectionsResponse = {
 
 export type CliAgentUsageWindow = {
   window: string;
-  used_percent: number;
+  // null for providers that report only the window's reset time.
+  used_percent: number | null;
   resets_at: string;
   window_minutes: number | null;
 };

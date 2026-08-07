@@ -8,9 +8,12 @@ import pytest
 
 from guildbotics.intelligences.agent_runtime import usage as usage_module
 from guildbotics.intelligences.agent_runtime.usage import (
+    CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
     parse_codex_rate_limits,
+    parse_grok_billing,
     read_codex_usage,
+    read_grok_usage,
 )
 
 
@@ -96,6 +99,83 @@ def test_parse_codex_rate_limits_drops_unparseable_reset_values() -> None:
 def test_parse_codex_rate_limits_tolerates_empty_and_malformed_input() -> None:
     for raw in ({}, {"rate_limits": {}}, {"rateLimitsByLimitId": {"x": "bad"}}, None):
         snapshot = parse_codex_rate_limits(raw)
+        assert snapshot.windows == []
+        assert not snapshot.limit_reached
+
+
+_GROK_BILLING = {
+    "config": {
+        "currentPeriod": {
+            "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-08-07T07:37:18.756767+00:00",
+            "end": "2026-08-14T07:37:18.756767+00:00",
+        },
+        "onDemandCap": {"val": 0},
+        "onDemandUsed": {"val": 0},
+        "prepaidBalance": {"val": 0},
+        "isUnifiedBillingUser": True,
+        "billingPeriodStart": "2026-08-07T07:37:18.756767+00:00",
+        "billingPeriodEnd": "2026-08-14T07:37:18.756767+00:00",
+    },
+    "subscription_tier": "SuperGrok Lite",
+}
+
+
+def test_parse_grok_billing_reads_percentless_subscription_window() -> None:
+    snapshot = parse_grok_billing(
+        _GROK_BILLING, {"authenticated": True, "meta": {"gate": None}}
+    )
+
+    assert snapshot.agent == "grok"
+    assert not snapshot.limit_reached
+    assert len(snapshot.windows) == 1
+    window = snapshot.windows[0]
+    assert window.window == "subscription"
+    assert window.used_percent is None
+    assert window.resets_at == "2026-08-14T07:37:18.756767+00:00"
+    assert window.window_minutes == 10_080
+    assert snapshot.checked_at
+
+
+def test_parse_grok_billing_reports_on_demand_credit_percent() -> None:
+    billing = {
+        "config": {
+            **_GROK_BILLING["config"],
+            "onDemandCap": {"val": 200},
+            "onDemandUsed": {"val": 51},
+        }
+    }
+    snapshot = parse_grok_billing(billing, {})
+
+    on_demand = snapshot.windows[1]
+    assert on_demand.window == "on_demand"
+    assert on_demand.used_percent == 25.5
+    assert not snapshot.limit_reached
+
+
+def test_parse_grok_billing_marks_limit_on_gate_or_exhausted_credits() -> None:
+    gated = parse_grok_billing(
+        _GROK_BILLING,
+        {"authenticated": True, "meta": {"gate": {"reason": "usage_limit"}}},
+    )
+    assert gated.limit_reached
+
+    exhausted = parse_grok_billing(
+        {
+            "config": {
+                **_GROK_BILLING["config"],
+                "onDemandCap": {"val": 100},
+                "onDemandUsed": {"val": 100},
+            }
+        },
+        {},
+    )
+    assert exhausted.limit_reached
+
+
+def test_parse_grok_billing_tolerates_empty_and_malformed_input() -> None:
+    for billing, subscription in ((None, None), ({}, {}), ({"config": "bad"}, "bad")):
+        snapshot = parse_grok_billing(billing, subscription)
         assert snapshot.windows == []
         assert not snapshot.limit_reached
 
@@ -225,3 +305,99 @@ async def test_read_codex_usage_raises_when_start_fails(monkeypatch) -> None:
 
     with pytest.raises(CliAgentUsageError):
         await read_codex_usage("codex-bin")
+
+
+class _GrokProcess:
+    """Fake ``grok agent stdio`` speaking just enough ACP for the probe."""
+
+    def __init__(self, auth_error: Any = None):
+        self.stdout = asyncio.StreamReader()
+        self.stdin = _Writer(self)
+        self.returncode: int | None = None
+        self.messages: list[dict[str, Any]] = []
+        self.auth_error = auth_error
+
+    def handle(self, message: dict[str, Any]) -> None:
+        self.messages.append(message)
+        if "method" not in message or "id" not in message:
+            return
+        request_id = message["id"]
+        method = message["method"]
+        if method == "initialize":
+            # Grok interleaves private notifications with responses; the
+            # probe must skip them.
+            self._feed(
+                {"jsonrpc": "2.0", "method": "_x.ai/settings/update", "params": {}}
+            )
+            self._feed(
+                {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": 1}}
+            )
+        elif method == "authenticate":
+            if self.auth_error is not None:
+                self._feed(
+                    {"jsonrpc": "2.0", "id": request_id, "error": self.auth_error}
+                )
+            else:
+                self._feed({"jsonrpc": "2.0", "id": request_id, "result": {}})
+        elif method == "_x.ai/billing":
+            self._feed({"jsonrpc": "2.0", "id": request_id, "result": _GROK_BILLING})
+        elif method == "_x.ai/auth/check_subscription":
+            self._feed(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"authenticated": True, "meta": {"gate": None}},
+                }
+            )
+
+    def _feed(self, message: dict[str, Any]) -> None:
+        self.stdout.feed_data(json.dumps(message).encode() + b"\n")
+
+
+@pytest.mark.asyncio
+async def test_read_grok_usage_probes_agent_stdio(monkeypatch, fake_terminate) -> None:
+    process = _GrokProcess()
+
+    async def create_process(*args, **_kwargs):
+        assert args == ("grok-bin", "--no-auto-update", "agent", "stdio")
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_grok_usage("grok-bin")
+
+    assert [message.get("method") for message in process.messages] == [
+        "initialize",
+        "authenticate",
+        "_x.ai/billing",
+        "_x.ai/auth/check_subscription",
+    ]
+    assert process.messages[1]["params"] == {"methodId": "cached_token"}
+    assert snapshot.agent == "grok"
+    assert snapshot.windows[0].used_percent is None
+    assert snapshot.windows[0].resets_at == "2026-08-14T07:37:18.756767+00:00"
+    assert not snapshot.limit_reached
+    assert fake_terminate == [process]
+
+
+@pytest.mark.asyncio
+async def test_read_grok_usage_raises_without_saved_login(
+    monkeypatch, fake_terminate
+) -> None:
+    process = _GrokProcess(auth_error={"code": -32000, "message": "not logged in"})
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError):
+        await read_grok_usage("grok-bin")
+    assert fake_terminate == [process]
+
+
+def test_usage_reader_registry_covers_codex_and_grok() -> None:
+    assert CLI_AGENT_USAGE_READERS == {
+        "codex": read_codex_usage,
+        "grok": read_grok_usage,
+    }
