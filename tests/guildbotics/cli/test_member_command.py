@@ -1494,6 +1494,45 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
     ]
 
 
+def test_member_git_push_rejected_by_remote_exits_non_zero(monkeypatch, tmp_path):
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    def fake_resolve_member_context(identifier):
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def push(self, repo_path, workspace_mode, cwd):
+            raise member_module.MemberCapabilityError(
+                "Failed to push 'ticket/371' to origin: "
+                "[rejected] (fetch first, non-fast-forward)"
+            )
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        ["git", "push", "--person", "aiko", "--repo-path", str(repo_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "Failed to push 'ticket/371' to origin" in result.output
+    assert "non-fast-forward" in result.output
+    assert '"status": "pushed"' not in result.output
+    # A refused push is not activity: no push event is recorded for it.
+    assert _domain_event_records("type") == []
+
+
 def test_member_git_publish_current_mode_rejects_workflow_task_run(
     monkeypatch, tmp_path
 ):

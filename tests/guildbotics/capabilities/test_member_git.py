@@ -154,6 +154,86 @@ async def test_push_pushes_existing_commit(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_push_without_local_commits_reports_up_to_date(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    _workspace_repo(tmp_path, workspace)
+
+    result = await service.push(workspace / "repo")
+
+    assert result.pushed is False
+    assert result.status == "up_to_date"
+    assert result.commits == []
+
+
+@pytest.mark.asyncio
+async def test_push_rejected_by_remote_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    # A second clone advances the remote first, so the member's push is the
+    # non-fast-forward the remote refuses.
+    other_path = tmp_path / "other"
+    other = git.Repo.clone_from(str(tmp_path / "remote.git"), other_path, branch="main")
+    with other.config_writer() as writer:
+        writer.set_value("user", "name", "Other")
+        writer.set_value("user", "email", "other@example.com")
+    (other_path / "README.md").write_text("initial\nremote\n", encoding="utf-8")
+    other.git.add(A=True)
+    remote_sha = other.index.commit("remote commit").hexsha
+    other.git.push("origin", "main")
+    (repo_path / "README.md").write_text("initial\nlocal\n", encoding="utf-8")
+    repo.git.add(A=True)
+    local_sha = repo.index.commit("local commit").hexsha
+
+    with pytest.raises(MemberCapabilityError) as excinfo:
+        await service.push(repo_path)
+
+    message = str(excinfo.value)
+    assert "Failed to push 'main' to origin" in message
+    assert "non-fast-forward" in message
+    remote_repo = git.Repo(tmp_path / "remote.git")
+    assert remote_repo.commit("main").hexsha == remote_sha
+    assert remote_repo.commit("main").hexsha != local_sha
+
+
+@pytest.mark.asyncio
+async def test_push_failing_hard_raises_with_git_error_as_cause(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    (repo_path / "README.md").write_text("initial\nlocal\n", encoding="utf-8")
+    repo.git.add(A=True)
+    local_sha = repo.index.commit("local commit").hexsha
+    # git can fail before it reports any ref status, and then Remote.push raises
+    # instead of returning a PushInfoList carrying the rejection.
+    failure = git.GitCommandError(
+        ["git", "push", "origin", "main"], 128, b"fatal: remote hung up unexpectedly"
+    )
+
+    def fail_push(self, *args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(git.Remote, "push", fail_push)
+
+    with pytest.raises(MemberCapabilityError) as excinfo:
+        await service.push(repo_path)
+
+    message = str(excinfo.value)
+    assert "Failed to push 'main' to origin" in message
+    assert "remote hung up unexpectedly" in message
+    assert excinfo.value.__cause__ is failure
+    remote_repo = git.Repo(tmp_path / "remote.git")
+    assert remote_repo.commit("main").hexsha != local_sha
+
+
+@pytest.mark.asyncio
 async def test_prepare_pull_request_review_clones_fork_head_repo(monkeypatch, tmp_path):
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     service.workspace_root = tmp_path / "workspace" / "aiko"
