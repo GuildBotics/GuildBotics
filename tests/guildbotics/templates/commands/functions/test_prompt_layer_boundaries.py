@@ -74,6 +74,10 @@ def test_prompts_do_not_restate_member_reference_contracts():
         "neutral_documents",
         "machine_outputs",
         "memory record --pr",
+        # The guideline-check contract (origin default branch is canonical,
+        # read via git fetch/show) lives in the member reference only.
+        "git fetch origin",
+        "git show origin",
     )
     bodies = {
         (name, language): _prompt_body(name, language)
@@ -181,3 +185,29 @@ def test_the_effort_assessor_never_offers_low_as_an_automatic_answer():
         assert "`high`" in body
         assert "`default`" in body
         assert "`low`" not in body
+
+
+def test_the_effort_assessor_grades_repository_judgments_as_high():
+    """Issue drafting and design-policy decisions for a repository are `high`
+    (issue #381): they must be grounded in the repository's guidelines, which
+    is workspace work even without code changes."""
+    english = _prompt_body("assess_effort", "en")
+    japanese = _prompt_body("assess_effort", "ja")
+    assert "issue to be drafted or created" in english
+    assert "policy decision" in english
+    assert "guidelines" in english
+    assert "issue の起票・作成" in japanese
+    assert "方針の判断" in japanese
+    assert "ガイドライン" in japanese
+
+
+def test_chat_prompt_extends_checkout_to_repository_guideline_checks():
+    """The chat workspace has no checkout, so the prompt must route guideline
+    checks (issue #381) through `git prepare` — while the contract itself
+    (origin default branch is canonical) stays in the member reference."""
+    english = _prompt_body("handle_chat_event", "en")
+    japanese = _prompt_body("handle_chat_event", "ja")
+    assert "repository guideline check" in english
+    assert "standard work procedure" in english
+    assert "repository ガイドライン確認" in japanese
+    assert "標準作業手順" in japanese

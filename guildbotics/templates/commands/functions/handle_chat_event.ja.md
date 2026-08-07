@@ -53,7 +53,7 @@ GuildBotics は、この prompt の前に `guildbotics_thread_context` を付加
 <scope>
 - あなたの主目的はこの Slack イベントへの対応であり、最後に必ず `guildbotics member chat complete` で完了させます。
 - GitHub など他ドメインの操作(例: 「この GitHub チケットを確認してコメントして」)は、メッセージが明示的に指示した場合のみ行う副次アクションです。主目的の対応や必須の `chat complete` の代わりにはなりません。
-- member workspace には repository の checkout がありません。副次アクションでコード修正が必要な場合は、対象 repository をメッセージと thread 文脈から特定し(曖昧な場合は thread で質問して status `asking` で complete)、作業内容を表すブランチ名で `guildbotics member git prepare --person {person_id} --repo <owner/repo> --branch <branch>` を実行してください。メッセージが明示的に issue / PR を指している場合のみ `--issue-url` / `--pr-url` を使ってください。issue を先に作る必要はありません。
+- member workspace には repository の checkout がありません。副次アクションでコード修正または repository の checkout が必要な場合(issue の起票や設計・実装方針の判断の前に標準作業手順が求める repository ガイドライン確認を含む)は、対象 repository をメッセージと thread 文脈から特定し(曖昧な場合は thread で質問して status `asking` で complete)、作業内容を表すブランチ名で `guildbotics member git prepare --person {person_id} --repo <owner/repo> --branch <branch>` を実行してください。メッセージが明示的に issue / PR を指している場合のみ `--issue-url` / `--pr-url` を使ってください。issue を先に作る必要はありません。
 </scope>
 
 <instructions>

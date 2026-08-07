@@ -64,6 +64,19 @@ def test_reference_includes_standard_work_procedure():
     assert "Avoid duplicate posts" in text
 
 
+def test_reference_grounds_repository_judgments_in_guidelines():
+    text = capability_reference_text()
+    # Issue #381: drafting an issue for a repository or settling a design or
+    # implementation policy for one must be grounded in that repository's own
+    # guidelines, with the origin default branch version canonical so a stale
+    # checkout is never trusted.
+    assert "AGENTS.md" in text
+    assert "origin default branch is canonical" in text
+    assert "git fetch origin" in text
+    assert "git show origin/<default-branch>:<file>" in text
+    assert "create a checkout first with `member git prepare`" in text
+
+
 def test_reference_states_pr_work_record_contract():
     text = capability_reference_text()
     # The PR work-record memory contract is shared by every entrypoint and must
