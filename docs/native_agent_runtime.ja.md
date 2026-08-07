@@ -66,7 +66,7 @@ copilot:
 届いた場合は拒否します。ネットワークアクセスと確認方法はユーザー設定として公開しません。
 
 Grok Buildでは、`workspace`が`--sandbox workspace`、`host`が`--sandbox off`に対応します。
-起動時のコマンドは`grok --no-auto-update --sandbox <profile> --always-approve agent stdio`で
+起動時のコマンドは`grok --no-auto-update --sandbox <profile> agent --always-approve stdio`で
 固定し、任意のCLIオプションを設定から注入することはできません。`--always-approve`は必ず
 sandboxと併用し、ACPの`session/request_permission`で予期しない確認要求が届いた場合は拒否して
 診断記録へ残します。拒否の際は、要求に含まれる`options`から`reject_once`（無ければ

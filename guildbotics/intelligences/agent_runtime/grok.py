@@ -1,6 +1,6 @@
 """Grok Build Agent Client Protocol (ACP) adapter.
 
-Verified against Grok Build 0.2.114 (``grok agent stdio``): ACP protocol
+Verified against Grok Build 0.2.118 (``grok agent stdio``): ACP protocol
 version 1, ``loadSession: true`` with no ``sessionCapabilities.resume``, and
 the ``cached_token`` / ``grok.com`` authentication methods. The adapter gates on
 those advertised capabilities rather than on the version string, so a newer
@@ -207,9 +207,11 @@ def _launch_argv(
         "--no-auto-update",
         "--sandbox",
         _sandbox_profile(policy, read_only),
+        "agent",
+        # These are `grok agent` options. The root parser accepts the same
+        # spellings, but does not propagate always-approve to ACP sessions.
         "--always-approve",
         *options,
-        "agent",
         "stdio",
     )
 

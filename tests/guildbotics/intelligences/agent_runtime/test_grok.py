@@ -263,8 +263,8 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
         "--no-auto-update",
         "--sandbox",
         "workspace",
-        "--always-approve",
         "agent",
+        "--always-approve",
         "stdio",
     )
 
@@ -293,8 +293,9 @@ async def test_effort_settings_are_passed_as_launch_options(
     assert "--model" in argv and argv[argv.index("--model") + 1] == "grok-4.5"
     assert "--reasoning-effort" in argv
     assert argv[argv.index("--reasoning-effort") + 1] == "high"
-    # The options must precede the subcommand to be parsed as global flags.
-    assert argv.index("--model") < argv.index("agent")
+    # These are agent options; passing them through the root parser does not
+    # reliably apply them to the ACP session.
+    assert argv.index("agent") < argv.index("--model") < argv.index("stdio")
 
 
 @pytest.mark.asyncio
@@ -1123,13 +1124,12 @@ def test_sandbox_profile_maps_the_public_policy_values() -> None:
     )
 
 
-def test_launch_argv_places_global_flags_before_the_subcommand() -> None:
+def test_launch_argv_places_options_in_their_parser_scopes() -> None:
     argv = _launch_argv("grok", AdapterFilesystemPolicy("workspace"), False)
 
-    assert argv[-2:] == ("agent", "stdio")
     assert argv.index("--no-auto-update") < argv.index("agent")
     assert argv.index("--sandbox") < argv.index("agent")
-    assert argv.index("--always-approve") < argv.index("agent")
+    assert argv.index("agent") < argv.index("--always-approve") < argv.index("stdio")
 
 
 # --- observed 0.2.114 behaviour ---------------------------------------------
