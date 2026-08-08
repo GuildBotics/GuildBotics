@@ -6,6 +6,31 @@ from guildbotics.capabilities import member_activity_events
 from guildbotics.entities.team import Person
 
 
+def test_record_member_pr_create_event_records_github_number_as_string(
+    monkeypatch,
+) -> None:
+    recorded: dict[str, Any] = {}
+    monkeypatch.setattr(
+        member_activity_events,
+        "record_correlated_event",
+        lambda **kwargs: recorded.update(kwargs),
+    )
+
+    member_activity_events.record_member_pr_create_event(
+        Person(person_id="aiko", name="Aiko"),
+        "owner/repo",
+        "  Fix trace ticket chip  ",
+        {
+            "created": True,
+            "pr_number": 403,
+            "pr_url": "https://github.com/owner/repo/pull/403",
+        },
+    )
+
+    assert recorded["payload"]["pull_request"]["number"] == 403
+    assert recorded["attributes"]["github.number"] == "403"
+
+
 def test_record_member_issue_create_event_builds_github_domain_payload(
     monkeypatch,
 ) -> None:
@@ -39,7 +64,7 @@ def test_record_member_issue_create_event_builds_github_domain_payload(
         "attributes": {
             "github.action": "opened",
             "github.kind": "issue",
-            "github.number": 290,
+            "github.number": "290",
             "github.repo": "owner/repo",
             "github.url": "https://github.com/owner/repo/issues/290",
         },
@@ -80,6 +105,7 @@ def test_record_member_issue_close_event_reports_the_close_as_activity(
         },
     }
     assert recorded["attributes"]["github.action"] == "closed"
+    assert recorded["attributes"]["github.number"] == "376"
     assert recorded["person_id"] == "aiko"
 
 
@@ -167,7 +193,7 @@ def test_record_member_issue_comment_event_keeps_comment_diagnostics_url(
     assert recorded["attributes"] == {
         "github.action": "commented",
         "github.kind": "issue",
-        "github.number": 42,
+        "github.number": "42",
         "github.repo": "owner/repo",
         "github.url": "https://github.com/owner/repo/issues/42",
     }
