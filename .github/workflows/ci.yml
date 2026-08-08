@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Check internal Markdown links
         uses: lycheeverse/lychee-action@v2
@@ -36,6 +38,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Setup uv

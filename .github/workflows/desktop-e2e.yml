@@ -79,6 +79,7 @@ jobs:
       - name: Checkout ${{ matrix.revision }} revision
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: ${{ steps.revision.outputs.repository }}
           ref: ${{ steps.revision.outputs.ref }}
           fetch-depth: 0

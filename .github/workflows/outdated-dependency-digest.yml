@@ -21,8 +21,6 @@ jobs:
   digest:
     runs-on: ubuntu-latest
     steps:
-      # npm ci below runs dependency lifecycle scripts, so the job token is not
-      # left behind for them to read. Nothing here pushes back to the remote.
       - name: Checkout
         uses: actions/checkout@v7
         with:

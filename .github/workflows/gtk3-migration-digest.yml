@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # generate-lockfile only resolves, so the GTK system libraries the desktop
       # crate needs to build are not required here.
