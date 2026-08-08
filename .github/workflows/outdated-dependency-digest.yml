@@ -21,16 +21,20 @@ jobs:
   digest:
     runs-on: ubuntu-latest
     steps:
+      # npm ci below runs dependency lifecycle scripts, so the job token is not
+      # left behind for them to read. Nothing here pushes back to the remote.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.12"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 

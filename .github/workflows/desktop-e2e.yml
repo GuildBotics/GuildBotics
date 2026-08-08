@@ -77,14 +77,14 @@ jobs:
           fi
 
       - name: Checkout ${{ matrix.revision }} revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ steps.revision.outputs.repository }}
           ref: ${{ steps.revision.outputs.ref }}
           fetch-depth: 0
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -93,7 +93,7 @@ jobs:
         run: uv sync --extra test --extra dev
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload Playwright diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-${{ matrix.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
