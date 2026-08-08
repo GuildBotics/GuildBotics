@@ -13,7 +13,8 @@ on:
 permissions:
   contents: read
   issues: write
-  security-events: read
+  # Dependabot alerts need their own key; security-events covers only code scanning.
+  vulnerability-alerts: read
 
 concurrency:
   group: dependabot-alert-digest
