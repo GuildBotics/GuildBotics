@@ -1,0 +1,48 @@
+name: Outdated Dependency Digest
+
+on:
+  schedule:
+    - cron: "0 22 1 * *" # The 2nd of each month, 07:00 JST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Render the digest without creating or updating the issue"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: outdated-dependency-digest
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # npm outdated reports the installed version, so the tree has to exist.
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      - name: Reconcile tracking issue with outdated dependencies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/outdated_dependency_digest.py
+          --repo "$GITHUB_REPOSITORY"
+          ${{ inputs.dry_run && '--dry-run' || '' }}

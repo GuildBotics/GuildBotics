@@ -6,31 +6,26 @@ for this repository: a bare version bump without the accompanying test and
 behaviour fixes is not a reviewable change. This script instead reflects the
 open alerts into one tracking issue, so the work enters the normal ticket flow.
 
-The issue is identified by ``MARKER_PREFIX`` in its body rather than by a label,
-because label creation is a human decision in this repository. The same marker
-carries the alert numbers of the previous run, which is how a newly appeared
-alert is told apart from one that was already reported.
-
-Reads and writes go through the ``gh`` CLI, which is preinstalled on GitHub
-runners and supplies authentication and pagination.
+Issue lifecycle and marker handling live in tracking_issue.py, which this script
+shares with the outdated dependency digest.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
-import os
-import re
-import subprocess
 import sys
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+import tracking_issue
+
 MARKER_PREFIX = "<!-- dependabot-alert-digest"
-MARKER_PATTERN = re.compile(rf"{re.escape(MARKER_PREFIX)} alerts=([\d,]*) -->")
 ISSUE_TITLE = "Dependabot の未解決脆弱性アラート"
 WORKFLOW_PATH = ".github/workflows/dependabot-alert-digest.yml"
+CLOSE_COMMENT = (
+    "未解決の Dependabot アラートが無くなったため、この issue をクローズします。"
+)
 
 SEVERITIES = ("critical", "high", "medium", "low")
 UNKNOWN_SEVERITY_RANK = len(SEVERITIES)
@@ -56,14 +51,6 @@ def sort_alerts(alerts: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-def extract_alert_numbers(body: str) -> set[int]:
-    """Return the alert numbers recorded in a previously generated issue body."""
-    match = MARKER_PATTERN.search(body)
-    if match is None or not match.group(1):
-        return set()
-    return {int(number) for number in match.group(1).split(",")}
-
-
 def _cell(value: str | None) -> str:
     """Render a table cell as inline code, or as an em dash when absent."""
     return f"`{value}`" if value else "—"
@@ -72,15 +59,13 @@ def _cell(value: str | None) -> str:
 def render_body(alerts: Sequence[dict[str, Any]], generated_at: datetime) -> str:
     """Render the tracking issue body for the given open alerts."""
     ordered = sort_alerts(alerts)
-    numbers = ",".join(str(alert["number"]) for alert in ordered)
     counts = " / ".join(
-        f"{severity} {sum(1 for a in ordered if a['security_vulnerability']['severity'] == severity)}"
+        f"{severity} "
+        f"{sum(1 for a in ordered if a['security_vulnerability']['severity'] == severity)}"
         for severity in SEVERITIES
     )
 
     lines = [
-        f"{MARKER_PREFIX} alerts={numbers} -->",
-        "",
         "Dependabot が検出した未解決の脆弱性アラートです。",
         "このリポジトリでは自動修正 PR (Dependabot security updates) を無効にしているため、",
         "バージョン更新・テスト修正・動作確認をまとめてこの issue で対応します。",
@@ -95,7 +80,6 @@ def render_body(alerts: Sequence[dict[str, Any]], generated_at: datetime) -> str
         vulnerability = alert["security_vulnerability"]
         package = alert["dependency"]["package"]
         patched = (vulnerability.get("first_patched_version") or {}).get("identifier")
-        ghsa_id = alert["security_advisory"]["ghsa_id"]
         lines.append(
             "| {severity} | `{ecosystem}` / `{name}` | {vulnerable} | {patched} "
             "| [{ghsa_id}]({url}) | {manifest} |".format(
@@ -104,7 +88,7 @@ def render_body(alerts: Sequence[dict[str, Any]], generated_at: datetime) -> str
                 name=package["name"],
                 vulnerable=_cell(vulnerability.get("vulnerable_version_range")),
                 patched=_cell(patched),
-                ghsa_id=ghsa_id,
+                ghsa_id=alert["security_advisory"]["ghsa_id"],
                 url=alert["html_url"],
                 manifest=_cell(alert["dependency"].get("manifest_path")),
             )
@@ -126,12 +110,11 @@ def render_body(alerts: Sequence[dict[str, Any]], generated_at: datetime) -> str
 
 
 def render_new_alert_comment(
-    alerts: Sequence[dict[str, Any]], new_numbers: set[int]
+    alerts: Sequence[dict[str, Any]], new_ids: set[str]
 ) -> str:
     """Render the comment posted when alerts appear that were not reported yet."""
-    added = [alert for alert in sort_alerts(alerts) if alert["number"] in new_numbers]
-    lines = [f"新しい脆弱性アラートを {len(added)} 件検出しました。"]
-    lines.append("")
+    added = [a for a in sort_alerts(alerts) if str(a["number"]) in new_ids]
+    lines = [f"新しい脆弱性アラートを {len(added)} 件検出しました。", ""]
     for alert in added:
         vulnerability = alert["security_vulnerability"]
         package = alert["dependency"]["package"]
@@ -144,21 +127,9 @@ def render_new_alert_comment(
     return "\n".join(lines) + "\n"
 
 
-def _gh(args: Sequence[str], stdin: str | None = None) -> str:
-    """Run a gh subcommand and return its stdout."""
-    result = subprocess.run(
-        ["gh", *args],
-        input=stdin,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout
-
-
 def fetch_open_alerts(repo: str) -> list[dict[str, Any]]:
     """Fetch every open Dependabot alert for the repository."""
-    raw = _gh(
+    raw = tracking_issue.gh(
         [
             "api",
             "--paginate",
@@ -168,131 +139,25 @@ def fetch_open_alerts(repo: str) -> list[dict[str, Any]]:
     return json.loads(raw)
 
 
-def find_digest_issue(repo: str) -> dict[str, Any] | None:
-    """Return the open tracking issue produced by this script, if any."""
-    raw = _gh(
-        [
-            "issue",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "open",
-            "--limit",
-            "200",
-            "--json",
-            "number,body",
-        ]
-    )
-    for issue in json.loads(raw):
-        if MARKER_PREFIX in (issue.get("body") or ""):
-            return issue
-    return None
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Reconcile the tracking issue with the current open Dependabot alerts."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--repo",
-        default=os.environ.get("GITHUB_REPOSITORY"),
-        help="Target repository as owner/name (default: $GITHUB_REPOSITORY).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the rendered digest and the planned action without writing.",
-    )
+    parser = tracking_issue.common_parser(__doc__ or "")
     args = parser.parse_args(argv)
-
     if not args.repo:
         parser.error("--repo is required when $GITHUB_REPOSITORY is unset.")
 
     alerts = fetch_open_alerts(args.repo)
-    issue = find_digest_issue(args.repo)
-    print(
-        f"open alerts: {len(alerts)}; tracking issue: {issue['number'] if issue else 'none'}"
+    ordered = sort_alerts(alerts)
+    return tracking_issue.reconcile(
+        args.repo,
+        prefix=MARKER_PREFIX,
+        title=ISSUE_TITLE,
+        body=render_body(ordered, datetime.now(UTC)),
+        item_ids=[str(alert["number"]) for alert in ordered],
+        close_comment=CLOSE_COMMENT,
+        on_new_items=lambda new_ids: render_new_alert_comment(ordered, new_ids),
+        dry_run=args.dry_run,
     )
-
-    if not alerts:
-        if issue is None:
-            print("nothing to do: no open alerts and no tracking issue.")
-            return 0
-        print(f"action: close issue #{issue['number']}")
-        if not args.dry_run:
-            _gh(
-                [
-                    "issue",
-                    "close",
-                    str(issue["number"]),
-                    "--repo",
-                    args.repo,
-                    "--reason",
-                    "completed",
-                    "--comment",
-                    "未解決の Dependabot アラートが無くなったため、この issue をクローズします。",
-                ]
-            )
-        return 0
-
-    body = render_body(alerts, datetime.now(UTC))
-    if args.dry_run:
-        print("--- issue body ---")
-        print(body, end="")
-        print("--- end ---")
-
-    if issue is None:
-        print("action: create issue")
-        if not args.dry_run:
-            url = _gh(
-                [
-                    "issue",
-                    "create",
-                    "--repo",
-                    args.repo,
-                    "--title",
-                    ISSUE_TITLE,
-                    "--body-file",
-                    "-",
-                ],
-                stdin=body,
-            ).strip()
-            print(f"created: {url}")
-        return 0
-
-    new_numbers = {alert["number"] for alert in alerts} - extract_alert_numbers(
-        issue.get("body") or ""
-    )
-    print(f"action: update issue #{issue['number']}; new alerts: {len(new_numbers)}")
-    if args.dry_run:
-        return 0
-
-    _gh(
-        [
-            "issue",
-            "edit",
-            str(issue["number"]),
-            "--repo",
-            args.repo,
-            "--body-file",
-            "-",
-        ],
-        stdin=body,
-    )
-    if new_numbers:
-        _gh(
-            [
-                "issue",
-                "comment",
-                str(issue["number"]),
-                "--repo",
-                args.repo,
-                "--body-file",
-                "-",
-            ],
-            stdin=render_new_alert_comment(alerts, new_numbers),
-        )
-    return 0
 
 
 if __name__ == "__main__":

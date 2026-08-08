@@ -1,31 +1,14 @@
-"""Tests for the Dependabot alert digest rendering and reconciliation logic.
+"""Tests for the Dependabot alert digest rendering.
 
-The script lives under scripts/ rather than in the package, so it is loaded the
-same way tests/guildbotics/cli/test_cli_reference.py loads its generator.
+Issue lifecycle and marker handling are covered by test_tracking_issue.py.
 """
 
 from __future__ import annotations
 
-import importlib.util
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "scripts" / "dependabot_alert_digest.py"
-
-
-def _load_script():
-    spec = importlib.util.spec_from_file_location(
-        "dependabot_alert_digest", SCRIPT_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-digest = _load_script()
+import dependabot_alert_digest as digest
 
 GENERATED_AT = datetime(2026, 8, 8, 22, 0, 0, tzinfo=UTC)
 
@@ -79,19 +62,6 @@ def test_sort_alerts_orders_by_severity_then_package_then_number() -> None:
     assert [a["number"] for a in digest.sort_alerts(alerts)] == [2, 1, 4, 5, 3]
 
 
-def test_extract_alert_numbers_round_trips_through_the_rendered_body() -> None:
-    alerts = [make_alert(7), make_alert(11, severity="critical")]
-
-    body = digest.render_body(alerts, GENERATED_AT)
-
-    assert digest.extract_alert_numbers(body) == {7, 11}
-
-
-def test_extract_alert_numbers_returns_empty_for_bodies_without_a_marker() -> None:
-    assert digest.extract_alert_numbers("hand written issue body") == set()
-    assert digest.extract_alert_numbers(f"{digest.MARKER_PREFIX} alerts= -->") == set()
-
-
 def test_render_body_reports_counts_and_one_row_per_alert() -> None:
     alerts = [
         make_alert(1, severity="critical", name="agno"),
@@ -143,7 +113,7 @@ def test_render_new_alert_comment_lists_only_the_newly_seen_alerts() -> None:
         make_alert(3, name="weasyprint"),
     ]
 
-    comment = digest.render_new_alert_comment(alerts, {2, 3})
+    comment = digest.render_new_alert_comment(alerts, {"2", "3"})
 
     assert comment.startswith("新しい脆弱性アラートを 2 件検出しました。")
     assert "`pillow`" in comment
