@@ -1,0 +1,34 @@
+name: Dependabot Alert Digest
+
+on:
+  schedule:
+    - cron: "0 22 * * 0" # Every Monday 07:00 JST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Render the digest without creating or updating the issue"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  security-events: read
+
+concurrency:
+  group: dependabot-alert-digest
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconcile tracking issue with open alerts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/dependabot_alert_digest.py
+          --repo "$GITHUB_REPOSITORY"
+          ${{ inputs.dry_run && '--dry-run' || '' }}
