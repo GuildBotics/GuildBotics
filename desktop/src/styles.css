@@ -1378,8 +1378,12 @@ pre {
   color: var(--color-brand);
 }
 
+/* Fill the member cell so the column width never depends on the intrinsic
+   width of the widest child: the usage meters keep the same width whatever
+   the current-work status line below them says. */
 .activity-member-info {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   min-width: 0;
 }
