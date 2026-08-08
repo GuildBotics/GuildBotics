@@ -58,7 +58,7 @@ class GitHubActivityEventPoller:
                 attributes={
                     "github.action": "closed",
                     "github.kind": event["kind"],
-                    "github.number": event["number"],
+                    "github.number": str(event["number"]),
                     "github.url": event["url"],
                     "github.repo": event["repo"],
                     "github.activity_id": event["activity_id"],

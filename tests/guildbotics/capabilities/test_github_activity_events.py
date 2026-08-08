@@ -190,3 +190,4 @@ async def test_poller_records_each_closed_project_item_once(monkeypatch, tmp_pat
         records[0]["attributes"]["github.activity_id"]
         == "pull_request:acme/demo:7:merged"
     )
+    assert records[0]["attributes"]["github.number"] == "7"
