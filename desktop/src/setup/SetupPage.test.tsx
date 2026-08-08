@@ -268,6 +268,7 @@ vi.mock("../api/client", async (importOriginal) => {
         events_drained_count: null,
         events_auth_failed_count: null,
         events_auth_failed_persons: [],
+        member_routines: [],
       },
       events: {
         target: "events",
@@ -291,6 +292,7 @@ vi.mock("../api/client", async (importOriginal) => {
         events_drained_count: null,
         events_auth_failed_count: null,
         events_auth_failed_persons: [],
+        member_routines: [],
       },
       active_works: [],
     })),

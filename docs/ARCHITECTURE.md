@@ -459,6 +459,9 @@ export` / `import`.
   command, one scheduler cycle, one incoming chat event — under a single `trace_id`,
   with spans for LLM / AI CLI tool calls and `call_id` correlation.
   Trace attributes carry structured search keys (e.g. `github.url`, `github.number`).
+  Idle ticket patrols (a routine cycle whose selector finds no actionable ticket) open
+  no trace and leave no records; liveness is exposed instead as a per-member patrol
+  heartbeat (`member_routines`) in the scheduler's runtime status.
 - **Persistence**: `run/diagnostics.jsonl` is a small searchable index containing session
   pointers, execution boundaries, span summaries, and domain events. Complete events, logs,
   spans, and request/response I/O are stored as one JSONL transcript per execution or system

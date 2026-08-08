@@ -365,6 +365,7 @@ describe("Service Runtime screen", () => {
           running: true,
           events_auth_failed_count: 1,
           events_auth_failed_persons: ["yuki"],
+          member_routines: [],
         }),
       }),
     );
@@ -742,6 +743,7 @@ function runtimeUnit(
     events_drained_count: 0,
     events_auth_failed_count: 0,
     events_auth_failed_persons: [],
+    member_routines: [],
     ...overrides,
   };
 }

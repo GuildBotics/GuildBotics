@@ -503,6 +503,50 @@ def test_events_metadata_reflects_summary(context_factory: Any) -> None:
         _stop_quietly(service)
 
 
+def test_scheduler_metadata_coerces_member_routines(context_factory: Any) -> None:
+    service, _bus = _make_service(context_factory)
+    try:
+        service.start(
+            SchedulerStartRequest(
+                sources={"scheduled": True, "routine": True, "event_queue": False}
+            )
+        )
+        FakeScheduler.instances[0].summary["member_routines"] = [
+            {
+                "person_id": "alice",
+                "last_routine_at": "2026-08-08T19:49:00+09:00",
+                "next_routine_at": "2026-08-08T19:59:00+09:00",
+            }
+        ]
+        routines = service.get_status().scheduler.member_routines
+        assert [entry.person_id for entry in routines] == ["alice"]
+        assert routines[0].last_routine_at == "2026-08-08T19:49:00+09:00"
+        assert routines[0].next_routine_at == "2026-08-08T19:59:00+09:00"
+    finally:
+        _stop_quietly(service)
+
+
+def test_stop_clears_member_routines(context_factory: Any) -> None:
+    service, _bus = _make_service(context_factory)
+    service.start(
+        SchedulerStartRequest(
+            sources={"scheduled": True, "routine": True, "event_queue": False}
+        )
+    )
+    FakeScheduler.instances[0].summary["member_routines"] = [
+        {
+            "person_id": "alice",
+            "last_routine_at": "2026-08-08T19:49:00+09:00",
+            "next_routine_at": "2026-08-08T19:59:00+09:00",
+        }
+    ]
+    assert service.get_status().scheduler.member_routines
+
+    status = service.stop()
+
+    assert status.scheduler.member_routines == []
+
+
 def test_get_status_refreshes_scheduler_cycle_metadata(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory)
     try:

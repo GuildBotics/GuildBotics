@@ -553,6 +553,14 @@ class RuntimeActiveWork(BaseModel):
     started_at: str
 
 
+class RuntimeMemberRoutine(BaseModel):
+    """Patrol heartbeat for one member: when the routine slot last ran and is next due."""
+
+    person_id: str
+    last_routine_at: str
+    next_routine_at: str
+
+
 class RuntimeUnitStatus(BaseModel):
     target: Literal["scheduler", "events"]
     state: Literal["starting", "running", "stopping", "stopped", "failed"]
@@ -574,6 +582,7 @@ class RuntimeUnitStatus(BaseModel):
     events_drained_count: int | None = None
     events_auth_failed_count: int | None = None
     events_auth_failed_persons: list[str] = Field(default_factory=list)
+    member_routines: list[RuntimeMemberRoutine] = Field(default_factory=list)
 
 
 class RuntimeStatus(BaseModel):

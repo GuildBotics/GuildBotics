@@ -141,6 +141,7 @@ function runtimeUnitStatus(): RuntimeUnitStatus {
     events_drained_count: null,
     events_auth_failed_count: null,
     events_auth_failed_persons: [],
+    member_routines: [],
   };
 }
 
@@ -158,6 +159,12 @@ const ACTIVE_WORK: RuntimeActiveWork = {
   person_id: "alice",
   command: "workflows/ticket_driven_workflow",
   started_at: "2026-07-01T11:58:00Z",
+};
+
+const ALICE_ROUTINE = {
+  person_id: "alice",
+  last_routine_at: "2026-07-01T11:49:00Z",
+  next_routine_at: "2026-07-01T11:59:00Z",
 };
 
 function liveTraceRecord(message: string): TraceRecord {
@@ -332,6 +339,37 @@ describe("ActivityHistoryPage", () => {
 
     await screen.findByText("Alice");
     expect(screen.queryByRole("link", { name: "Current work" })).toBe(null);
+  });
+
+  it("shows the patrol heartbeat for idle members while the scheduler runs", async () => {
+    const status = runtimeStatus([]);
+    status.scheduler.member_routines = [ALICE_ROUTINE];
+    vi.mocked(getSchedulerStatus).mockResolvedValue(status);
+    renderActivity();
+
+    expect(await screen.findByText(/Last patrol/)).toBeInTheDocument();
+  });
+
+  it("prefers the running-work status over the patrol heartbeat", async () => {
+    const status = runtimeStatus([ACTIVE_WORK]);
+    status.scheduler.member_routines = [ALICE_ROUTINE];
+    vi.mocked(getSchedulerStatus).mockResolvedValue(status);
+    renderActivity();
+
+    await screen.findByRole("link", { name: "Current work" });
+    expect(screen.queryByText(/Last patrol/)).toBe(null);
+  });
+
+  it("hides the patrol heartbeat when the scheduler is stopped", async () => {
+    const status = runtimeStatus([]);
+    status.scheduler.state = "stopped";
+    status.scheduler.running = false;
+    status.scheduler.member_routines = [ALICE_ROUTINE];
+    vi.mocked(getSchedulerStatus).mockResolvedValue(status);
+    renderActivity();
+
+    await screen.findByText("Alice");
+    expect(screen.queryByText(/Last patrol/)).toBe(null);
   });
 
   it("keeps the full session title on the bar, including a PR prefix", async () => {

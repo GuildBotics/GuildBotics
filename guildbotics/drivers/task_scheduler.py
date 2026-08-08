@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import threading
 import time
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 from typing import Any
 
@@ -14,7 +14,7 @@ from guildbotics.drivers.execution import (
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
-from guildbotics.observability import trace_scope
+from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
 
@@ -59,6 +59,11 @@ class TaskScheduler:
             p: p.get_scheduled_commands() for p in context.team.members
         }
         self._execution = execution_coordinator or ExecutionCoordinator()
+        # Per-member patrol heartbeat: when each member's routine slot last ran
+        # and when it is next due. Read by GUI status displays, so guard the
+        # dict against concurrent worker-thread updates.
+        self._member_routines: dict[str, dict[str, str]] = {}
+        self._member_routines_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._cancel_event = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -134,6 +139,11 @@ class TaskScheduler:
             1 for person in self.context.team.members if person.is_active
         )
         worker_count = sum(1 for thread in self._threads if thread.is_alive())
+        with self._member_routines_lock:
+            member_routines = sorted(
+                (dict(entry) for entry in self._member_routines.values()),
+                key=lambda entry: entry["person_id"],
+            )
         return {
             "active_member_count": active_member_count,
             "worker_count": worker_count,
@@ -141,6 +151,7 @@ class TaskScheduler:
             "scheduled_source_enabled": self.scheduled_source_enabled,
             "routine_source_enabled": self.routine_source_enabled,
             "event_queue_source_enabled": self.event_queue_source_enabled,
+            "member_routines": member_routines,
         }
 
     def _process_tasks_list(
@@ -288,28 +299,41 @@ class TaskScheduler:
             routine_command_index += 1
 
         if routine_command and not self._stop_event.is_set():
-            with trace_scope(
-                "routine",
-                person_id=person.person_id,
-                command=routine_command,
-                attributes={"service_run_id": self.service_run_id},
-            ) as trace:
-                coro = (
-                    self._run_routine_ticket_workflow(context, person, routine_command)
-                    if routine_command == "workflows/ticket_driven_workflow"
-                    else run_command(context, routine_command, "routine")
-                )
+            if routine_command == "workflows/ticket_driven_workflow":
+                # The ticket patrol opens its trace lazily (only when it
+                # dispatches work or fails), so the work id doubles as the
+                # trace id it will use.
+                work_id = new_id()
                 ok = self._run_work(
                     loop,
                     person,
                     "routine",
                     routine_command,
-                    coro,
-                    work_id=trace.trace_id,
+                    self._run_routine_ticket_workflow(
+                        context, person, routine_command, work_id
+                    ),
+                    work_id=work_id,
                 )
-            next_routine_time = datetime.datetime.now() + datetime.timedelta(
+            else:
+                with trace_scope(
+                    "routine",
+                    person_id=person.person_id,
+                    command=routine_command,
+                    attributes={"service_run_id": self.service_run_id},
+                ) as trace:
+                    ok = self._run_work(
+                        loop,
+                        person,
+                        "routine",
+                        routine_command,
+                        run_command(context, routine_command, "routine"),
+                        work_id=trace.trace_id,
+                    )
+            now = datetime.datetime.now()
+            next_routine_time = now + datetime.timedelta(
                 minutes=self.routine_interval_minutes
             )
+            self._record_member_routine(person, last=now, next_at=next_routine_time)
             consecutive_errors, should_stop = self._update_consecutive_errors(
                 ok,
                 source="routine",
@@ -344,30 +368,62 @@ class TaskScheduler:
             },
         )
 
+    def _record_member_routine(
+        self, person: Person, *, last: datetime.datetime, next_at: datetime.datetime
+    ) -> None:
+        with self._member_routines_lock:
+            self._member_routines[person.person_id] = {
+                "person_id": person.person_id,
+                "last_routine_at": last.astimezone().isoformat(),
+                "next_routine_at": next_at.astimezone().isoformat(),
+            }
+
     async def _run_routine_ticket_workflow(
-        self, context: Context, person: Person, command: str
+        self, context: Context, person: Person, command: str, work_id: str
     ) -> bool:
-        """Run routine ticket workflow via selector and dispatcher."""
+        """Run the routine ticket workflow via selector and dispatcher.
+
+        Ticket selection runs outside any trace so an idle patrol (no
+        actionable ticket) leaves no diagnostics records; a trace is opened
+        only when a ticket is dispatched or the selection itself fails.
+        """
         from guildbotics.drivers.ticket_selector import TicketSelector
         from guildbotics.drivers.utils import run_with_logging
         from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
-        from guildbotics.observability import span_scope
 
-        async def _action() -> None:
-            with span_scope("routine_select"):
-                selector = TicketSelector(context)
-                invocation = await selector.select(person)
+        async def _traced(action: Callable[[], Awaitable[None]]) -> bool:
+            with trace_scope(
+                "routine",
+                person_id=person.person_id,
+                command=command,
+                attributes={"service_run_id": self.service_run_id},
+                trace_id=work_id,
+            ):
+                return await run_with_logging(context, command, "routine", action)
 
-            if invocation is None:
-                context.logger.info(
-                    f"No active ticket task found for person '{person.person_id}'."
-                )
-                return
+        try:
+            invocation = await TicketSelector(context).select(person)
+        except Exception as exc:
+            # Bind outside the except block: Python unbinds `exc` when the
+            # block exits, but the closure runs inside run_with_logging.
+            failure = exc
 
+            async def _reraise() -> None:
+                raise failure
+
+            return await _traced(_reraise)
+
+        if invocation is None:
+            context.logger.debug(
+                f"No active ticket task found for person '{person.person_id}'."
+            )
+            return True
+
+        async def _dispatch() -> None:
             dispatcher = WorkflowDispatcher(context, service_run_id=self.service_run_id)
             await dispatcher.dispatch(invocation, person)
 
-        return await run_with_logging(context, command, "routine", _action)
+        return await _traced(_dispatch)
 
     def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep in small steps so the stop event can interrupt waits."""

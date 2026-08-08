@@ -42,6 +42,7 @@ import {
   type ActivityHistorySession,
   type CliAgentUsage,
   type RuntimeActiveWork,
+  type RuntimeMemberRoutine,
   getActivityHistory,
   getSchedulerStatus,
   getTraceDetail,
@@ -266,6 +267,14 @@ function ActivityChart({
       activeWorkByMember.set(work.person_id, work);
     }
   }
+  // The patrol heartbeat is live scheduler state: once the scheduler stops,
+  // "next patrol" would be a lie, so the whole line disappears with it.
+  const routineByMember = new Map<string, RuntimeMemberRoutine>();
+  if (runtime.data?.scheduler.running) {
+    for (const routine of runtime.data.scheduler.member_routines ?? []) {
+      routineByMember.set(routine.person_id, routine);
+    }
+  }
   const sessionsByMember = groupBy(data.sessions, (session) => session.person_id);
   const eventsByMember = groupBy(
     data.events.filter((event) => event.person_id),
@@ -320,6 +329,7 @@ function ActivityChart({
           sessions={sessionsByMember.get(member.person_id) ?? []}
           events={eventsByMember.get(member.person_id) ?? []}
           activeWork={activeWorkByMember.get(member.person_id) ?? null}
+          routine={routineByMember.get(member.person_id) ?? null}
           range={range}
           view={view}
           now={now}
@@ -344,6 +354,7 @@ function ActivityTimelineRow({
   matches,
   member,
   activeWork = null,
+  routine = null,
   team = false,
 }: {
   label: string;
@@ -356,6 +367,7 @@ function ActivityTimelineRow({
   matches: ActivityHistoryMatchState;
   member?: ActivityHistoryMember;
   activeWork?: RuntimeActiveWork | null;
+  routine?: RuntimeMemberRoutine | null;
   team?: boolean;
 }) {
   const { t } = useTranslation();
@@ -407,7 +419,11 @@ function ActivityTimelineRow({
             </span>
           ) : null}
           {usage ? <MemberUsageMeters usage={usage} /> : null}
-          {activeWork ? <MemberActiveWorkStatus work={activeWork} /> : null}
+          {activeWork ? (
+            <MemberActiveWorkStatus work={activeWork} />
+          ) : routine ? (
+            <MemberRoutineStatus routine={routine} />
+          ) : null}
         </div>
       </div>
       <div className="activity-timeline-cell" style={{ minHeight: rowMinHeight }}>
@@ -504,6 +520,20 @@ function MemberActiveWorkStatus({ work }: { work: RuntimeActiveWork }) {
       <span className="activity-member-current-dot" aria-hidden="true" />
       <span className="activity-member-current-message">{message}</span>
     </Link>
+  );
+}
+
+// Idle heartbeat in the same slot as MemberActiveWorkStatus: while no work is
+// running it answers "is the patrol alive", so an empty timeline still reads
+// as a healthy scheduler. Idle patrols leave no diagnostics records, so this
+// live scheduler state is the only place that tells the user patrols are
+// happening.
+function MemberRoutineStatus({ routine }: { routine: RuntimeMemberRoutine }) {
+  const { t } = useTranslation();
+  return (
+    <span className="activity-member-routine">
+      {t("activity.patrol", { last: formatTime(routine.last_routine_at) })}
+    </span>
   );
 }
 
