@@ -168,6 +168,12 @@ GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、�
 残すのは認証方式の識別子だけで、Copilotの認証情報保存先の内容は読み取りません。
 
 GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ渡しません。
+親プロセスのrun識別子とexecution delegationも同様に取り除きます。有効なdelegationは単なる
+識別ラベルではなくそのまま使えるgrantであるため、継承させると、providerのプロセスがmember CLIを
+直接呼び出し、自身のtransportが敷いている境界を迂回できてしまいます。この情報を正当に運ぶ
+adapterとbrokerは、実行contextと保持中のleaseから明示的に再注入するため、経路ごとに与えるべき
+権限だけが渡ります。
+
 Grokには、`127.0.0.1`にbindしたadapter専用のHTTP MCP endpointと、推測困難なbearer grantを
 渡します。唯一の`guildbotics_member` toolが受け取るのは、固定された
 `guildbotics member` entrypointのtoken化済み引数だけです。実行ファイルやshellを選ぶこと、

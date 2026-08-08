@@ -28,6 +28,13 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
+from guildbotics.runtime.person_lease import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+    PersonExecutionLease,
+)
 
 
 class _Writer:
@@ -290,6 +297,43 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
     assert any(
         event.name == "decision" and event.approval == "decline" for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_codex_delegation_comes_from_the_held_lease_not_the_parent_env(
+    monkeypatch, tmp_path
+) -> None:
+    for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
+        monkeypatch.setenv(key, "stale-parent-value")
+    process = _Process()
+    launched: list[dict[str, Any]] = []
+
+    async def create_process(*_args, **kwargs):
+        launched.append(kwargs["env"])
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    lease = PersonExecutionLease("aiko", tmp_path)
+    metadata = lease.acquire(source="routine", command="ticket", work_id="issue-300")
+    adapter = CodexAppServerAdapter(policy=AdapterFilesystemPolicy())
+    context = _context(tmp_path)
+    events: list[AgentEvent] = []
+    try:
+        await adapter.run_turn(
+            "continue",
+            context,
+            ConversationRecord(key=context.conversation_key),
+            events.append,
+        )
+        await adapter.close()
+    finally:
+        lease.release()
+
+    env = launched[0]
+    assert env[LEASE_ID_ENV] == metadata.lease_id
+    assert env[DELEGATION_ID_ENV] == metadata.delegation_id
+    assert env[LEASE_PERSON_ENV] == "aiko"
+    assert env[LEASE_RUN_ENV] == "run-1"
 
 
 @pytest.mark.asyncio
