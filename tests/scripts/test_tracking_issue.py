@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import Any
 
 import pytest
@@ -64,6 +65,49 @@ def reconcile(**overrides: Any) -> int:
     }
     kwargs.update(overrides)
     return tracking_issue.reconcile("o/r", **kwargs)
+
+
+def test_gh_returns_stdout_when_the_command_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, stdout="[]\n", stderr="")
+
+    monkeypatch.setattr(tracking_issue.subprocess, "run", fake_run)
+
+    assert tracking_issue.gh(["api", "/repos/o/r"]) == "[]\n"
+
+
+def test_gh_failure_reports_the_command_and_the_stderr_of_gh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gh puts API errors such as a missing permission only on stderr."""
+
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args, 1, stdout="", stderr="HTTP 403: Resource not accessible\n"
+        )
+
+    monkeypatch.setattr(tracking_issue.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError) as error:
+        tracking_issue.gh(["api", "/repos/o/r/dependabot/alerts"])
+
+    message = str(error.value)
+    assert "gh api /repos/o/r/dependabot/alerts" in message
+    assert "HTTP 403: Resource not accessible" in message
+
+
+def test_gh_failure_without_stderr_still_reports_the_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(args, 2, stdout="", stderr="")
+
+    monkeypatch.setattr(tracking_issue.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="status 2: \\(no stderr\\)"):
+        tracking_issue.gh(["issue", "list"])
 
 
 def test_marker_round_trips_through_the_rendered_body() -> None:

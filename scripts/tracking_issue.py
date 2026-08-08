@@ -27,14 +27,24 @@ from typing import Any
 
 
 def gh(args: Sequence[str], stdin: str | None = None) -> str:
-    """Run a gh subcommand and return its stdout."""
+    """Run a gh subcommand and return its stdout.
+
+    Raises:
+        RuntimeError: The command failed. gh reports API errors such as a
+            missing token permission only on stderr, so the message carries it;
+            a bare CalledProcessError would hide the reason for the failure.
+    """
     result = subprocess.run(
         ["gh", *args],
         input=stdin,
         capture_output=True,
         text=True,
-        check=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"`gh {' '.join(args)}` failed with status {result.returncode}: "
+            f"{result.stderr.strip() or '(no stderr)'}"
+        )
     return result.stdout
 
 
