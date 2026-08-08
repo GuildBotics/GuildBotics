@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Center, Loader, Stack, Text, Title } from "@mantine/core";
-import { HashRouter } from "react-router-dom";
+import { HashRouter } from "react-router";
 import { useTranslation } from "react-i18next";
 
 import { App } from "./App";

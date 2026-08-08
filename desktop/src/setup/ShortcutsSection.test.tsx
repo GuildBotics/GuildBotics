@@ -25,7 +25,7 @@ const t = i18n.getFixedT("en");
 function renderSection() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <QueryClientProvider client={queryClient}>
         <ShortcutsSection />
       </QueryClientProvider>

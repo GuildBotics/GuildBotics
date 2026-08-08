@@ -44,7 +44,7 @@ function ControlledInput({ initial = "" }: { initial?: string }) {
 
 function renderInput(initial = "") {
   return render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <ControlledInput initial={initial} />
     </MantineProvider>,
   );

@@ -6,6 +6,7 @@
   "ignore": [
     "dist/**",
     "node_modules/**",
+    "package-lock.json",
     "src-tauri/**",
     "src/**/*.test.ts",
     "src/**/*.test.tsx",

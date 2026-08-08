@@ -2,7 +2,7 @@ import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { TFunction } from "i18next";
-import { HashRouter } from "react-router-dom";
+import { HashRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -799,9 +799,9 @@ function renderApp() {
     defaultOptions: { queries: { retry: false } },
   });
   return render(
-    <MantineProvider theme={theme}>
+    <MantineProvider theme={theme} env="test">
       <QueryClientProvider client={queryClient}>
-        <HashRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <HashRouter>
           <App />
         </HashRouter>
       </QueryClientProvider>

@@ -12,7 +12,7 @@ const t = i18n.getFixedT("en");
 function renderInput(props: Partial<React.ComponentProps<typeof HotkeyInput>> = {}) {
   const onChange = props.onChange ?? vi.fn();
   render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <HotkeyInput value="" isMac {...props} onChange={onChange} />
     </MantineProvider>,
   );

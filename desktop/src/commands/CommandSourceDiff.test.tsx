@@ -39,7 +39,7 @@ describe("buildCommandSourceDiff", () => {
 describe("CommandSourceDiff", () => {
   it("renders a labelled, scrollable update diff", () => {
     const { container } = render(
-      <MantineProvider>
+      <MantineProvider env="test">
         <CommandSourceDiff before="old\n" after="new\n" path="/commands/translate.md" />
       </MantineProvider>,
     );

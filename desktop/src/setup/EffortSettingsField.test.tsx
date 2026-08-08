@@ -47,7 +47,7 @@ function Harness({
 }) {
   const [value, setValue] = useState<EffortOverlay>(initial);
   return (
-    <MantineProvider>
+    <MantineProvider env="test">
       <EffortSettingsField
         value={value}
         inherited={inherited}
@@ -228,7 +228,7 @@ describe("ToolSettingsField", () => {
   function BaselineHarness({ onChange }: { onChange: (value: Record<string, unknown>) => void }) {
     const [value, setValue] = useState<Record<string, unknown>>({});
     return (
-      <MantineProvider>
+      <MantineProvider env="test">
         <ToolSettingsField
           value={value}
           fields={MODEL_FIELD}

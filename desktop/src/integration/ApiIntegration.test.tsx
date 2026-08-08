@@ -3,7 +3,7 @@ import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../App";
@@ -308,7 +308,7 @@ function renderApp(server: MockServer, path: string) {
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider theme={theme}>
+    <MantineProvider theme={theme} env="test">
       <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[path]}>
@@ -326,13 +326,10 @@ function renderSetup(server: MockServer, path: string) {
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider theme={theme}>
+    <MantineProvider theme={theme} env="test">
       <Notifications />
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter
-          future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
-          initialEntries={[path]}
-        >
+        <MemoryRouter initialEntries={[path]}>
           <SetupPage />
         </MemoryRouter>
       </QueryClientProvider>
@@ -507,7 +504,7 @@ describe("Setup integration (real client + mock server)", () => {
 
     await user.type(screen.getByLabelText("Project description"), "Demo project");
     // The GitHub use/don't decision now lives in the Project section.
-    await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
+    await user.click(await screen.findByRole("combobox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
     await user.click(

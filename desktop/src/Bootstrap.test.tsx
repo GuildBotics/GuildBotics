@@ -24,7 +24,7 @@ const getBootstrapLogMock = vi.mocked(getBootstrapLog);
 
 function renderBootstrap() {
   return render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <Bootstrap />
     </MantineProvider>,
   );

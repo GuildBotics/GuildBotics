@@ -129,7 +129,7 @@ let publish: ((event: RuntimeEvent) => void) | undefined;
 function renderWindow() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <QueryClientProvider client={queryClient}>
         <QuickRun
           subscribe={(handler) => {
@@ -332,12 +332,14 @@ describe("QuickRun", () => {
     renderWindow();
 
     await fire({ command: null, text: "" });
-    expect(await screen.findByRole("textbox", { name: t("quickRun.command") })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("combobox", { name: t("quickRun.command") }),
+    ).toBeInTheDocument();
 
     await fire({ command: "review", text: "" });
     await waitFor(() =>
       expect(
-        screen.queryByRole("textbox", { name: t("quickRun.command") }),
+        screen.queryByRole("combobox", { name: t("quickRun.command") }),
       ).not.toBeInTheDocument(),
     );
     expect(screen.getByText("Review")).toBeInTheDocument();
@@ -404,7 +406,7 @@ describe("QuickRun", () => {
 
     await fire({ command: null, text: "" });
 
-    expect(await screen.findByRole("textbox", { name: t("quickRun.command") })).toHaveValue(
+    expect(await screen.findByRole("combobox", { name: t("quickRun.command") })).toHaveValue(
       "Review",
     );
   });
@@ -414,7 +416,7 @@ describe("QuickRun", () => {
     renderWindow();
     await fire({ command: null, text: "" });
 
-    await user.click(await screen.findByRole("textbox", { name: t("quickRun.command") }));
+    await user.click(await screen.findByRole("combobox", { name: t("quickRun.command") }));
     await user.click(await screen.findByRole("option", { name: "Review" }));
 
     expect(runCommand).not.toHaveBeenCalled();

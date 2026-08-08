@@ -2,7 +2,7 @@ import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
@@ -212,7 +212,7 @@ describe("Diagnostics settings tab", () => {
       await screen.findByText(t("diagnostics.transcripts.standardDescription")),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("textbox", { name: t("diagnostics.transcripts.detail") }));
+    await user.click(screen.getByRole("combobox", { name: t("diagnostics.transcripts.detail") }));
     await user.click(screen.getByRole("option", { name: t("diagnostics.transcripts.full") }));
 
     expect(
@@ -253,7 +253,9 @@ describe("Diagnostics memory tab", () => {
 
     const memoryToolbar = document.querySelector(".memory-toolbar")!;
     await user.click(
-      within(memoryToolbar as HTMLElement).getByLabelText(t("diagnostics.memory.person")),
+      within(memoryToolbar as HTMLElement).getByRole("combobox", {
+        name: t("diagnostics.memory.person"),
+      }),
     );
     expect(await screen.findByRole("option", { name: "Alice (alice)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Bob (bob)" })).toBeInTheDocument();
@@ -263,7 +265,9 @@ describe("Diagnostics memory tab", () => {
     await user.click(screen.getByRole("option", { name: "Alice (alice)" }));
 
     await user.click(
-      within(memoryToolbar as HTMLElement).getByLabelText(t("diagnostics.memory.action")),
+      within(memoryToolbar as HTMLElement).getByRole("combobox", {
+        name: t("diagnostics.memory.action"),
+      }),
     );
     await user.click(
       await screen.findByRole("option", { name: t("diagnostics.memory.actions.touch") }),
@@ -1025,7 +1029,7 @@ function renderApp(initialPath = "/diagnostics") {
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider theme={theme}>
+    <MantineProvider theme={theme} env="test">
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[initialPath]}>
           <App />

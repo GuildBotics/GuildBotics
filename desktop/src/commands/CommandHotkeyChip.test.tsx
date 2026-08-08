@@ -27,7 +27,7 @@ const t = i18n.getFixedT("en");
 function renderChip(command: string | null = "greet") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <QueryClientProvider client={queryClient}>
         <CommandHotkeyChip command={command} />
       </QueryClientProvider>

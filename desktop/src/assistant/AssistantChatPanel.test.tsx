@@ -1,7 +1,7 @@
 import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
 import { AssistantChatPanel, type AssistantChatPanelProps } from "./AssistantChatPanel";
@@ -22,7 +22,7 @@ function renderPanel(overrides: Partial<AssistantChatPanelProps> = {}) {
   };
   render(
     <MemoryRouter>
-      <MantineProvider>
+      <MantineProvider env="test">
         <AssistantChatPanel {...props} />
       </MantineProvider>
     </MemoryRouter>,
@@ -75,7 +75,7 @@ describe("AssistantChatPanel", () => {
     const onSubmit = vi.fn();
     const panel = (error: string | null) => (
       <MemoryRouter>
-        <MantineProvider>
+        <MantineProvider env="test">
           <AssistantChatPanel
             namespace="diagnostics.troubleshooting"
             messages={[]}
@@ -133,7 +133,7 @@ describe("AssistantChatPanel", () => {
     const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
     const panel = (messages: AssistantChatPanelProps["messages"]) => (
       <MemoryRouter>
-        <MantineProvider>
+        <MantineProvider env="test">
           <AssistantChatPanel
             namespace="commands.authoring"
             messages={messages}

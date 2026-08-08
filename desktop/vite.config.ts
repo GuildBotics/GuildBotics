@@ -7,41 +7,17 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   build: {
-    rollupOptions: {
+    rolldownOptions: {
       // `quick.html` is the hotkey-triggered quick run window.
       input: {
-        main: resolve(__dirname, "index.html"),
-        quick: resolve(__dirname, "quick.html"),
+        main: resolve(import.meta.dirname, "index.html"),
+        quick: resolve(import.meta.dirname, "quick.html"),
       },
       output: {
-        manualChunks(id) {
-          if (!id.includes("node_modules")) {
-            return undefined;
-          }
-          const packageName = getPackageName(id);
-          if (!packageName) {
-            return "vendor";
-          }
-          if (packageName.startsWith("@mantine/") || packageName === "mantine-form-zod-resolver") {
-            return "vendor-mantine";
-          }
-          if (["react", "react-dom", "scheduler"].includes(packageName)) {
-            return "vendor-react";
-          }
-          if (packageName.startsWith("@tanstack/")) {
-            return "vendor-query";
-          }
-          if (packageName === "i18next" || packageName === "react-i18next") {
-            return "vendor-i18n";
-          }
-          if (packageName === "lucide-react") {
-            return "vendor-icons";
-          }
-          if (packageName.startsWith("@tauri-apps/")) {
-            return "vendor-tauri";
-          }
-          return "vendor";
-        },
+        // A single group whose `name` decides per module: returning `null`
+        // leaves the module to Rolldown's automatic splitting, and every
+        // distinct name it returns becomes its own chunk.
+        codeSplitting: { groups: [{ name: vendorChunkName }] },
       },
     },
   },
@@ -66,6 +42,35 @@ export default defineConfig({
     testTimeout: 20000,
   },
 });
+
+function vendorChunkName(id: string): string | null {
+  if (!id.includes("node_modules")) {
+    return null;
+  }
+  const packageName = getPackageName(id);
+  if (!packageName) {
+    return "vendor";
+  }
+  if (packageName.startsWith("@mantine/")) {
+    return "vendor-mantine";
+  }
+  if (["react", "react-dom", "scheduler"].includes(packageName)) {
+    return "vendor-react";
+  }
+  if (packageName.startsWith("@tanstack/")) {
+    return "vendor-query";
+  }
+  if (packageName === "i18next" || packageName === "react-i18next") {
+    return "vendor-i18n";
+  }
+  if (packageName === "lucide-react") {
+    return "vendor-icons";
+  }
+  if (packageName.startsWith("@tauri-apps/")) {
+    return "vendor-tauri";
+  }
+  return "vendor";
+}
 
 function getPackageName(id: string): string | null {
   const nodeModulesPath = id.split("node_modules/").pop();

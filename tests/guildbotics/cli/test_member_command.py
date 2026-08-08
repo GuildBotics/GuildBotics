@@ -1405,7 +1405,7 @@ def test_member_git_commit_rejects_removed_message_options(tmp_path):
     )
 
     assert result.exit_code != 0
-    assert f"No such option: {removed_option}" in result.output
+    assert f"No such option '{removed_option}'" in result.output
 
 
 def test_member_git_push_current_mode_uses_current_workspace_service(

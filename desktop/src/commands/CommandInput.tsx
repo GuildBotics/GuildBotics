@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { uploadCommandInputFile } from "../api/client";
 
 type CommandInputProps = Omit<TextareaProps, "onChange" | "value"> & {
-  inputRef?: RefObject<HTMLTextAreaElement>;
+  inputRef?: RefObject<HTMLTextAreaElement | null>;
   value: string;
   onChange: (value: string) => void;
 };

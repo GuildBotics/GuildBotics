@@ -1,9 +1,9 @@
 import { MantineProvider, createTheme } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -666,9 +666,9 @@ describe("SetupPage", () => {
     await screen.findByRole("heading", { name: "First setup" });
 
     // The GitHub use/don't decision lives in the Project section (default).
-    // The control is a Mantine Select; its hidden listbox shares the accessible
-    // label, so target the input via its textbox role.
-    const decision = await screen.findByRole("textbox", { name: "GitHub integration" });
+    // The control is a Mantine Select; its listbox shares the accessible
+    // label, so target the input via its combobox role.
+    const decision = await screen.findByRole("combobox", { name: "GitHub integration" });
     await user.click(decision);
     await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
 
@@ -682,7 +682,7 @@ describe("SetupPage", () => {
     // Switch the decision off from the Project section: the URL field
     // disappears and the GitHub section shows the disabled hint instead.
     await user.click(screen.getByRole("button", { name: "Project" }));
-    await user.click(screen.getByRole("textbox", { name: "GitHub integration" }));
+    await user.click(screen.getByRole("combobox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     expect(screen.queryByLabelText(t("setup.github.projectUrl"))).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "GitHub" }));
@@ -704,7 +704,7 @@ describe("SetupPage", () => {
     await screen.findByRole("heading", { name: "First setup" });
 
     // Enable GitHub and enter the Project URL, both in the Project section.
-    const decision = await screen.findByRole("textbox", { name: "GitHub integration" });
+    const decision = await screen.findByRole("combobox", { name: "GitHub integration" });
     await user.click(decision);
     await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
     const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
@@ -713,7 +713,7 @@ describe("SetupPage", () => {
     // The GitHub section reads the URL from the Project section and fetches
     // the lane options for it on open.
     await user.click(screen.getByRole("button", { name: "GitHub" }));
-    const readyInput = await screen.findByRole("textbox", { name: t("setup.github.laneReady") });
+    const readyInput = await screen.findByRole("combobox", { name: t("setup.github.laneReady") });
     expect(readyInput).toHaveValue("Todo");
     // Opening the lane Select shows every fetched option, with no filtering by
     // the current value ("Todo").
@@ -750,7 +750,7 @@ describe("SetupPage", () => {
 
     // No blur is performed: opening the section with a pre-filled Project URL
     // must fetch the lane options on mount, so the strict Select is populated.
-    const readyInput = await screen.findByRole("textbox", { name: t("setup.github.laneReady") });
+    const readyInput = await screen.findByRole("combobox", { name: t("setup.github.laneReady") });
     await user.click(readyInput);
     expect(await screen.findByRole("option", { name: "Backlog" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Done" })).toBeInTheDocument();
@@ -825,7 +825,7 @@ describe("SetupPage", () => {
     await user.click(screen.getByRole("button", { name: "GitHub" }));
 
     // Options load for the configured URL.
-    await screen.findByRole("textbox", { name: t("setup.github.laneReady") });
+    await screen.findByRole("combobox", { name: t("setup.github.laneReady") });
     expect(screen.getByText(t("setup.github.laneMappingHint"))).toBeInTheDocument();
 
     // Corrupting the URL in the Project section must drop the stale options:
@@ -856,7 +856,7 @@ describe("SetupPage", () => {
     // fill in the required project description and make the GitHub decision
     // (which now lives in the Project section).
     await user.type(screen.getByLabelText("Project description"), "Demo project");
-    await user.click(screen.getByRole("textbox", { name: "GitHub integration" }));
+    await user.click(screen.getByRole("combobox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     const nextButton = screen.getByRole("button", { name: t("setup.status.next") });
     await waitFor(() => expect(nextButton).toBeEnabled());
@@ -896,7 +896,7 @@ describe("SetupPage", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
     await user.type(screen.getByLabelText("Project description"), "Demo project");
     // The GitHub decision now lives in the Project section.
-    await user.click(await screen.findByRole("textbox", { name: "GitHub integration" }));
+    await user.click(await screen.findByRole("combobox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
     await user.click(
@@ -1039,13 +1039,10 @@ function renderSetupPage(path: string) {
     defaultOptions: { queries: { retry: false } },
   });
   return render(
-    <MantineProvider theme={theme}>
+    <MantineProvider theme={theme} env="test">
       <Notifications />
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter
-          future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
-          initialEntries={[path]}
-        >
+        <MemoryRouter initialEntries={[path]}>
           <SetupPage />
         </MemoryRouter>
       </QueryClientProvider>
@@ -2542,7 +2539,11 @@ describe("MembersSection", () => {
     await screen.findByDisplayValue("general");
     await screen.findByDisplayValue("random");
 
-    const policyInputs = screen.getAllByLabelText(t("setup.members.slackParticipationPolicy"));
+    // Mantine 9 labels the Select listbox as well as its input, so query by
+    // the combobox role to get the inputs alone.
+    const policyInputs = screen.getAllByRole("combobox", {
+      name: t("setup.members.slackParticipationPolicy"),
+    });
     expect(policyInputs[0]).toHaveValue("Join when needed");
     expect(policyInputs[1]).toHaveValue("Join actively");
 
@@ -2574,8 +2575,8 @@ describe("MembersSection", () => {
     // Delete button performs the deletion.
     await user.click(await screen.findByRole("button", { name: t("setup.members.deleteButton") }));
     expect(await screen.findByText(t("setup.members.deleteConfirmTitle"))).toBeInTheDocument();
-    const confirmButtons = screen.getAllByRole("button", { name: t("setup.members.deleteButton") });
-    await user.click(confirmButtons[confirmButtons.length - 1]);
+    const modal = screen.getByRole("dialog");
+    await user.click(within(modal).getByRole("button", { name: t("setup.members.deleteButton") }));
 
     await waitFor(() => expect(deleteMemberConfig).toHaveBeenCalledTimes(1));
     expect(vi.mocked(deleteMemberConfig).mock.calls[0]).toEqual([
@@ -2763,7 +2764,7 @@ describe("MembersSection", () => {
     expect(screen.getByText(t("setup.members.activeHumanHint"))).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
-    const accountType = await screen.findByRole("textbox", {
+    const accountType = await screen.findByRole("combobox", {
       name: t("setup.members.githubAccountType"),
     });
     expect(accountType).toBeDisabled();
@@ -2957,7 +2958,7 @@ async function selectBasicMemberType(
   user: ReturnType<typeof userEvent.setup>,
   optionLabel: string,
 ) {
-  await user.click(await screen.findByRole("textbox", { name: t("setup.members.type") }));
+  await user.click(await screen.findByRole("combobox", { name: t("setup.members.type") }));
   await user.click(await screen.findByRole("option", { name: optionLabel }));
 }
 
@@ -2968,7 +2969,7 @@ async function selectGitHubAccountType(
   optionLabel: string,
 ) {
   await user.click(
-    await screen.findByRole("textbox", { name: t("setup.members.githubAccountType") }),
+    await screen.findByRole("combobox", { name: t("setup.members.githubAccountType") }),
   );
   await user.click(await screen.findByRole("option", { name: optionLabel }));
 }
@@ -3167,7 +3168,7 @@ describe("PatrolSettingsEditor", () => {
     await user.click(screen.getByRole("button", { name: t("setup.members.patrol.addSchedule") }));
     // Switch the schedule's command to the catalog "report" command, which
     // exposes positional and keyword argument inputs.
-    await user.click(await screen.findByRole("textbox", { name: t("commands.command") }));
+    await user.click(await screen.findByRole("combobox", { name: t("commands.command") }));
     await user.click(await screen.findByRole("option", { name: /Report \(report\)/ }));
 
     await user.type(await screen.findByLabelText("target *"), "weekly report");
@@ -3588,7 +3589,7 @@ describe("IntelligenceEditor (team default)", () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const engineSelect = await screen.findByRole("textbox", {
+    const engineSelect = await screen.findByRole("combobox", {
       name: t("setup.intelligence.engine"),
     });
     await user.click(engineSelect);
@@ -3677,7 +3678,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     expect(await screen.findByText(/reasoning_effort = high/)).toBeInTheDocument();
 
-    const providerSelect = await screen.findByRole("textbox", {
+    const providerSelect = await screen.findByRole("combobox", {
       name: t("setup.intelligence.provider"),
     });
     await user.click(providerSelect);
@@ -3699,7 +3700,7 @@ describe("IntelligenceEditor (team default)", () => {
     await openTeamIntelligenceAdvanced(user);
 
     await user.click(
-      await screen.findByRole("textbox", {
+      await screen.findByRole("combobox", {
         name: t("setup.intelligence.filesystemAccessFor", {
           agent: t("setup.intelligence.nativeAgents.grok"),
         }),
@@ -3725,7 +3726,7 @@ describe("IntelligenceEditor (team default)", () => {
     await openTeamIntelligenceAdvanced(user);
 
     await user.click(
-      await screen.findByRole("textbox", {
+      await screen.findByRole("combobox", {
         name: t("setup.intelligence.filesystemAccessFor", {
           agent: t("setup.intelligence.nativeAgents.codex"),
         }),
@@ -3922,7 +3923,7 @@ describe("IntelligenceEditor (member override)", () => {
     await openMemberIntelligenceAdvanced(user);
 
     await user.click(
-      await screen.findByRole("textbox", {
+      await screen.findByRole("combobox", {
         name: t("setup.intelligence.filesystemAccessFor", {
           agent: t("setup.intelligence.nativeAgents.grok"),
         }),

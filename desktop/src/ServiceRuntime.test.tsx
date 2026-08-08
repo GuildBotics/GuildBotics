@@ -2,7 +2,7 @@ import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -525,7 +525,7 @@ describe("App routing and layout", () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
 
-    await user.click(screen.getByRole("textbox", { name: t("app.language.label") }));
+    await user.click(screen.getByRole("combobox", { name: t("app.language.label") }));
     await user.click(await screen.findByText(t("app.language.japanese")));
 
     await waitFor(() => expect(changeSpy).toHaveBeenCalledWith("ja"));
@@ -659,7 +659,7 @@ function renderApp(initialPath: string) {
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider theme={theme}>
+    <MantineProvider theme={theme} env="test">
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[initialPath]}>
           <App />
