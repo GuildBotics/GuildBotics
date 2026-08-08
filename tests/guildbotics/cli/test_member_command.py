@@ -1724,7 +1724,7 @@ def test_member_github_pr_create_passes_base(monkeypatch):
             "attributes": {
                 "github.action": "opened",
                 "github.kind": "pull_request",
-                "github.number": 1,
+                "github.number": "1",
                 "github.repo": "owner/repo",
                 "github.url": "https://github.com/owner/repo/pull/1",
             },

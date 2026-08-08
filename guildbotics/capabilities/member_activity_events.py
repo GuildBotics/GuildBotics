@@ -44,7 +44,7 @@ def record_member_pr_create_event(
         {
             "github.action": "opened",
             "github.kind": "pull_request",
-            "github.number": number,
+            "github.number": str(number),
             "github.repo": repo,
             "github.url": url,
         },
@@ -72,7 +72,7 @@ def record_member_issue_create_event(
         {
             "github.action": "opened",
             "github.kind": "issue",
-            "github.number": number,
+            "github.number": str(number),
             "github.repo": repo,
             "github.url": url,
         },
@@ -111,7 +111,7 @@ def record_member_issue_close_event(
         {
             "github.action": "closed",
             "github.kind": "issue",
-            "github.number": number,
+            "github.number": str(number),
             "github.repo": repo,
             "github.url": url,
         },
@@ -142,7 +142,7 @@ def record_member_issue_comment_event(
         {
             "github.action": "commented",
             "github.kind": "issue",
-            "github.number": number,
+            "github.number": str(number),
             "github.repo": repo,
             "github.url": issue_url,
         },
