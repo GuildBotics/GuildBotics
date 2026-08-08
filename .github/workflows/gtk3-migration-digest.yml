@@ -1,0 +1,35 @@
+name: GTK3 Migration Digest
+
+on:
+  schedule:
+    - cron: "0 22 2 * *" # The 3rd of each month, 07:00 JST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Render the digest without creating or updating the issue"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: gtk3-migration-digest
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # generate-lockfile only resolves, so the GTK system libraries the desktop
+      # crate needs to build are not required here.
+      - name: Reconcile tracking issue with the state of the glib pin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/gtk3_migration_digest.py
+          --repo "$GITHUB_REPOSITORY"
+          ${{ inputs.dry_run && '--dry-run' || '' }}
