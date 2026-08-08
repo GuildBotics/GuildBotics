@@ -209,7 +209,11 @@ class _RuntimeLifecycle:
 
     def _update_metadata_locked(self, values: dict[str, Any]) -> None:
         if values:
-            self._status = self._status.model_copy(update=values)
+            # Validate instead of model_copy so plain dicts coming from a
+            # runtime's get_status_summary() coerce into nested models.
+            self._status = RuntimeUnitStatus.model_validate(
+                {**self._status.model_dump(), **values}
+            )
 
     def _refresh_locked(self) -> None:
         return
@@ -326,7 +330,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
                     running=True,
                     error="Scheduler did not stop before timeout.",
                 ).model_copy()
-            self._update_metadata_locked({"worker_count": 0})
+            self._update_metadata_locked({"worker_count": 0, "member_routines": []})
             self._scheduler = None
             self._thread = None
             if self._status.state != "stopped":
@@ -356,7 +360,7 @@ class SchedulerLifecycle(_RuntimeLifecycle):
             and not self._thread.is_alive()
             and (self._status.state != "failed" or self._status.running)
         ):
-            self._update_metadata_locked({"worker_count": 0})
+            self._update_metadata_locked({"worker_count": 0, "member_routines": []})
             self._scheduler = None
             self._thread = None
             if self._status.state != "stopped":

@@ -61,6 +61,12 @@ export type TeamSummary = {
   default_person_id: string;
 };
 
+export type RuntimeMemberRoutine = {
+  person_id: string;
+  last_routine_at: string;
+  next_routine_at: string;
+};
+
 export type RuntimeUnitStatus = {
   target: "scheduler" | "events";
   state: "starting" | "running" | "stopping" | "stopped" | "failed";
@@ -82,6 +88,7 @@ export type RuntimeUnitStatus = {
   events_drained_count: number | null;
   events_auth_failed_count: number | null;
   events_auth_failed_persons: string[];
+  member_routines: RuntimeMemberRoutine[];
 };
 
 export type RuntimeActiveWork = {

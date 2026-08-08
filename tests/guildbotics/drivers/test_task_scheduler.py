@@ -164,15 +164,17 @@ def test_routine_work_is_tracked_under_its_trace_id(monkeypatch) -> None:
     assert work_ids == [trace_id]
 
 
-def test_routine_ticket_workflow_runs_under_caller_trace(monkeypatch) -> None:
+def test_routine_ticket_workflow_runs_without_caller_trace(monkeypatch) -> None:
     person = _Person(["workflows/ticket_driven_workflow"])
     scheduler = TaskScheduler(_Context(person), routine_interval_minutes=3)
-    seen: list[tuple[str | None, list[str]]] = []
+    seen: list[tuple[str | None, str, list[str]]] = []
 
-    async def fake_ticket_workflow(context, person, command) -> bool:
+    async def fake_ticket_workflow(context, person, command, work_id) -> bool:
         trace = current_trace()
         works = scheduler._execution.snapshot()
-        seen.append((trace.trace_id if trace else None, [work.id for work in works]))
+        seen.append(
+            (trace.trace_id if trace else None, work_id, [work.id for work in works])
+        )
         scheduler.shutdown()
         return True
 
@@ -181,9 +183,141 @@ def test_routine_ticket_workflow_runs_under_caller_trace(monkeypatch) -> None:
 
     scheduler._process_tasks_list(person, [])
 
-    trace_id, work_ids = seen[0]
-    assert trace_id is not None
-    assert work_ids == [trace_id]
+    trace_id, work_id, work_ids = seen[0]
+    # The caller must not pre-open a trace: an idle patrol leaves no
+    # diagnostics records, so the workflow opens its own trace (as work_id)
+    # only when it actually dispatches work or fails.
+    assert trace_id is None
+    assert work_ids == [work_id]
+
+
+@pytest.mark.asyncio
+async def test_ticket_workflow_idle_patrol_leaves_no_trace_records(monkeypatch) -> None:
+    from guildbotics.drivers import ticket_selector
+    from guildbotics.drivers import utils as driver_utils
+
+    scheduler = TaskScheduler(_Context(_Person()))
+
+    async def fake_select(self, person):
+        return None
+
+    async def forbidden_run_with_logging(*args, **kwargs):
+        raise AssertionError("an idle patrol must not create trace records")
+
+    monkeypatch.setattr(ticket_selector.TicketSelector, "select", fake_select)
+    monkeypatch.setattr(driver_utils, "run_with_logging", forbidden_run_with_logging)
+
+    ok = await scheduler._run_routine_ticket_workflow(
+        _Context(_Person()), _Person(), "workflows/ticket_driven_workflow", "work-1"
+    )
+
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_ticket_workflow_dispatches_under_trace_with_work_id(monkeypatch) -> None:
+    from guildbotics.drivers import ticket_selector, workflow_dispatcher
+    from guildbotics.drivers import utils as driver_utils
+
+    scheduler = TaskScheduler(_Context(_Person()))
+    invocation = object()
+    dispatched: list[tuple[str | None, object]] = []
+
+    async def fake_select(self, person):
+        return invocation
+
+    class FakeDispatcher:
+        def __init__(self, context, service_run_id=None):
+            pass
+
+        async def dispatch(self, inv, person):
+            trace = current_trace()
+            dispatched.append((trace.trace_id if trace else None, inv))
+
+    async def fake_run_with_logging(context, command, task_type, action):
+        await action()
+        return True
+
+    monkeypatch.setattr(ticket_selector.TicketSelector, "select", fake_select)
+    monkeypatch.setattr(workflow_dispatcher, "WorkflowDispatcher", FakeDispatcher)
+    monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
+
+    ok = await scheduler._run_routine_ticket_workflow(
+        _Context(_Person()), _Person(), "workflows/ticket_driven_workflow", "work-1"
+    )
+
+    assert ok is True
+    assert dispatched == [("work-1", invocation)]
+
+
+@pytest.mark.asyncio
+async def test_ticket_workflow_selection_failure_is_recorded_under_trace(
+    monkeypatch,
+) -> None:
+    from guildbotics.drivers import ticket_selector
+    from guildbotics.drivers import utils as driver_utils
+
+    scheduler = TaskScheduler(_Context(_Person()))
+    failure = RuntimeError("boom")
+    recorded: list[tuple[str | None, BaseException | None]] = []
+
+    async def fake_select(self, person):
+        raise failure
+
+    async def fake_run_with_logging(context, command, task_type, action):
+        trace = current_trace()
+        try:
+            await action()
+        except Exception as exc:
+            recorded.append((trace.trace_id if trace else None, exc))
+            return False
+        recorded.append((trace.trace_id if trace else None, None))
+        return True
+
+    monkeypatch.setattr(ticket_selector.TicketSelector, "select", fake_select)
+    monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
+
+    ok = await scheduler._run_routine_ticket_workflow(
+        _Context(_Person()), _Person(), "workflows/ticket_driven_workflow", "work-err"
+    )
+
+    assert ok is False
+    assert recorded == [("work-err", failure)]
+
+
+def test_routine_run_updates_member_routine_heartbeat(monkeypatch) -> None:
+    class FakeDateTime(dt.datetime):
+        current = dt.datetime(2026, 1, 1, 9, 0, 0)
+
+        @classmethod
+        def now(cls, tz: dt.tzinfo | None = None) -> dt.datetime:
+            if tz is None:
+                return cls.current
+            return cls.current.replace(tzinfo=tz)
+
+    person = _Person(["routine"])
+    scheduler = TaskScheduler(_Context(person), routine_interval_minutes=3)
+
+    async def fake_run_command(context, command, task_type) -> bool:
+        scheduler.shutdown()
+        return True
+
+    def fake_sleep(seconds: float) -> None:
+        FakeDateTime.current += dt.timedelta(seconds=seconds)
+
+    monkeypatch.setattr(task_scheduler.datetime, "datetime", FakeDateTime)
+    monkeypatch.setattr(task_scheduler, "run_command", fake_run_command)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", fake_sleep)
+
+    assert scheduler.get_status_summary()["member_routines"] == []
+
+    scheduler._process_tasks_list(person, [])
+
+    routines = scheduler.get_status_summary()["member_routines"]
+    assert [entry["person_id"] for entry in routines] == ["alice"]
+    last = dt.datetime.fromisoformat(routines[0]["last_routine_at"])
+    next_at = dt.datetime.fromisoformat(routines[0]["next_routine_at"])
+    assert next_at - last == dt.timedelta(minutes=3)
 
 
 def test_scheduled_work_is_tracked_under_its_trace_id(monkeypatch) -> None:

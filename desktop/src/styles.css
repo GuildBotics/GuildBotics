@@ -1470,6 +1470,21 @@ pre {
   white-space: nowrap;
 }
 
+/* Idle patrol heartbeat: quieter than the running-work status so active
+   members visually stand out over idle ones. */
+.activity-member-routine {
+  color: var(--color-text-subtle);
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1.2;
+  margin-top: 4px;
+  min-width: 0;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @keyframes activity-member-current-pulse {
   0%,
   100% {
