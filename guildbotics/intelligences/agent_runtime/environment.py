@@ -13,11 +13,39 @@ from pathlib import Path
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
 from guildbotics.intelligences.cli_agents import get_cli_agent_search_path
+from guildbotics.runtime.person_lease import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+)
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
+
+#: Ambient parent values an AI CLI process must never inherit: the direct
+#: write credentials, and the execution metadata that authorises a nested
+#: member CLI call. A live lease is a usable grant, so inheriting it lets the
+#: provider process bypass the boundary its own transport was given. Paths that
+#: legitimately carry that metadata re-inject it from the execution context
+#: right after this builder runs.
+_STRIPPED_PARENT_ENV = (
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GH_CONFIG_DIR",
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "SSH_AUTH_SOCK",
+    RUN_ENV,
+    TASK_RUN_ENV,
+    LEASE_ID_ENV,
+    DELEGATION_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+)
 
 # asyncio's default 64 KiB StreamReader limit aborts readline() on single-line
 # JSON payloads such as replayed tool results or aggregated command output.
@@ -25,7 +53,7 @@ STREAM_READ_LIMIT = 10 * 1024 * 1024
 
 
 def isolated_agent_environment(cwd: Path) -> tuple[dict[str, str], str]:
-    """Return an AI CLI environment with GitHub/Git/SSH write credentials removed."""
+    """Return an AI CLI environment with inherited credentials and grants removed."""
     env = os.environ.copy()
     env["PATH"] = get_cli_agent_search_path(env.get("PATH"))
     if not env.get(GUILDBOTICS_CONFIG_DIR, "").strip():
@@ -37,15 +65,7 @@ def isolated_agent_environment(cwd: Path) -> tuple[dict[str, str], str]:
         if env_file.is_file():
             env[GUILDBOTICS_ENV_FILE] = str(env_file.resolve())
     gh_config_dir = tempfile.mkdtemp(prefix="guildbotics-gh-config-")
-    for key in (
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "GITHUB_ENTERPRISE_TOKEN",
-        "GH_CONFIG_DIR",
-        "GIT_ASKPASS",
-        "SSH_ASKPASS",
-        "SSH_AUTH_SOCK",
-    ):
+    for key in _STRIPPED_PARENT_ENV:
         env.pop(key, None)
     env["GH_CONFIG_DIR"] = gh_config_dir
     env["GIT_TERMINAL_PROMPT"] = "0"

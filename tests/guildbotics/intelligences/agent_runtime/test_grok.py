@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.task_runs import TASK_RUN_ENV
+from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.acp import CLIENT_VERSION
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
@@ -43,6 +43,17 @@ from acp_fake_peer import (
     install,
     session_update,
     text_chunk,
+)
+
+#: Run identity and delegation grant the parent process holds while a workflow
+#: runs. Grok receives none of them; only the authenticated broker does.
+_AMBIENT_EXECUTION_ENV = (
+    RUN_ENV,
+    TASK_RUN_ENV,
+    LEASE_ID_ENV,
+    DELEGATION_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
 )
 
 FIXTURE = json.loads(
@@ -1201,6 +1212,10 @@ async def test_read_only_turns_keep_the_confined_sandbox(monkeypatch, tmp_path) 
 async def test_write_credentials_are_not_inherited(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("GH_TOKEN", "ghp-secret")
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    # Set, not deleted: the parent of a workflow run really does carry these,
+    # so asserting their absence only proves isolation when they start present.
+    for key in _AMBIENT_EXECUTION_ENV:
+        monkeypatch.setenv(key, "stale-parent-value")
     peer = _Peer()
     launched = install(monkeypatch, peer)
 
@@ -1209,11 +1224,7 @@ async def test_write_credentials_are_not_inherited(monkeypatch, tmp_path) -> Non
     env = launched[0][1]["env"]
     assert "GH_TOKEN" not in env
     assert "SSH_AUTH_SOCK" not in env
-    assert TASK_RUN_ENV not in env
-    assert LEASE_ID_ENV not in env
-    assert DELEGATION_ID_ENV not in env
-    assert LEASE_PERSON_ENV not in env
-    assert LEASE_RUN_ENV not in env
+    assert all(key not in env for key in _AMBIENT_EXECUTION_ENV)
     assert launched[0][1]["start_new_session"] is True
 
 

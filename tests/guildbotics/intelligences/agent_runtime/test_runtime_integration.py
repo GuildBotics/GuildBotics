@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime import diagnostics, registry
 from guildbotics.intelligences.agent_runtime.environment import (
     isolated_agent_environment,
@@ -25,6 +26,12 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
 from guildbotics.intelligences.brains import cli_agent
+from guildbotics.runtime.person_lease import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+)
 
 
 class _Logger:
@@ -721,29 +728,26 @@ async def test_registry_keeps_only_one_native_process_per_person(monkeypatch) ->
 def test_native_environment_removes_direct_write_credentials(
     monkeypatch, tmp_path
 ) -> None:
-    for key in (
+    stripped = (
         "GH_TOKEN",
         "GITHUB_TOKEN",
         "GITHUB_ENTERPRISE_TOKEN",
         "GIT_ASKPASS",
         "SSH_ASKPASS",
         "SSH_AUTH_SOCK",
-    ):
+        RUN_ENV,
+        TASK_RUN_ENV,
+        LEASE_ID_ENV,
+        DELEGATION_ID_ENV,
+        LEASE_PERSON_ENV,
+        LEASE_RUN_ENV,
+    )
+    for key in stripped:
         monkeypatch.setenv(key, "secret")
 
     env, gh_config_dir = isolated_agent_environment(tmp_path)
     try:
-        assert all(
-            key not in env
-            for key in (
-                "GH_TOKEN",
-                "GITHUB_TOKEN",
-                "GITHUB_ENTERPRISE_TOKEN",
-                "GIT_ASKPASS",
-                "SSH_ASKPASS",
-                "SSH_AUTH_SOCK",
-            )
-        )
+        assert all(key not in env for key in stripped)
         assert env["GIT_TERMINAL_PROMPT"] == "0"
         assert env["GIT_CONFIG_GLOBAL"] == os.devnull
         assert "IdentityFile=/dev/null" in env["GIT_SSH_COMMAND"]

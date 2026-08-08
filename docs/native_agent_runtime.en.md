@@ -185,7 +185,14 @@ that does not answer promptly -- the terminal login waiting for a user who is no
 method id is recorded; the contents of the Copilot credential store are never read.
 
 GitHub, Git, and SSH write credentials are deliberately removed from native
-agent process environments. Grok receives a per-adapter HTTP MCP endpoint bound to
+agent process environments, together with the parent process's run identity and
+execution delegation. A live delegation is a usable grant rather than a label, so
+inheriting one would let a provider process call the member CLI directly and bypass
+the boundary its own transport enforces. The adapters and the broker that legitimately
+carry that metadata re-inject it from the execution context and the held lease, so each
+path grants exactly what it is entitled to.
+
+Grok receives a per-adapter HTTP MCP endpoint bound to
 `127.0.0.1` and an unguessable bearer grant. Its single `guildbotics_member` tool accepts
 only tokenized arguments for the fixed `guildbotics member` entrypoint; it cannot choose
 an executable, invoke a shell, override the workspace, or act as another person. The
