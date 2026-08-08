@@ -30,7 +30,7 @@ import {
   CheckCircle2,
   Copy,
   ExternalLink,
-  History,
+  RotateCcwClock,
   Play,
   RotateCcw,
   Search,
@@ -52,7 +52,7 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from "react-router";
 
 import { ActivityHistoryPage } from "./activity/ActivityHistory";
 import { CommandsPage } from "./commands/CommandsPage";
@@ -166,7 +166,7 @@ export function App() {
         <nav className="nav">
           {configured ? (
             <GuardedNavLink className="nav-item" to="/activity">
-              <History size={18} /> {t("app.nav.activity")}
+              <RotateCcwClock size={18} /> {t("app.nav.activity")}
             </GuardedNavLink>
           ) : null}
           <GuardedNavLink className="nav-item" to="/service">

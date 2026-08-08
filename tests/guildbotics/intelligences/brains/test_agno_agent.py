@@ -1,8 +1,11 @@
+import inspect
 import logging
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from agno.agent import Agent
+from pydantic import BaseModel, ValidationError
 
 from guildbotics.intelligences.brains import agno_agent
 
@@ -76,6 +79,109 @@ async def test_agno_agent_records_request_response_and_span(
     assert span_records[0]["model"] == "test-model-5"
     assert span_records[0]["effort"] == ""
     assert span_records[0]["attributes"] == {"model.slot": "models/test.yml"}
+
+
+@pytest.mark.asyncio
+async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> None:
+    """Every other test fakes ``Agent``, so a renamed agno parameter slips through.
+
+    The brain builds the kwargs by name, so binding them against the real
+    signature is what catches an upgrade that renames one of them.
+    """
+
+    class Reply(BaseModel):
+        text: str = ""
+
+    captured: dict = {}
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def arun(self, message: str):
+            return type("R", (), {"content": "reply"})()
+
+    original = agno_agent.person_model_mapping.copy()
+    agno_agent.person_model_mapping.clear()
+    agno_agent.person_model_mapping["p1"] = {"default": _model_config()}
+    monkeypatch.setattr(agno_agent, "record_correlated_io", lambda **kwargs: None)
+    monkeypatch.setattr(agno_agent, "record_span_summary", lambda **kwargs: None)
+    monkeypatch.setattr(
+        agno_agent, "instantiate_class", lambda *args, **kwargs: object()
+    )
+    monkeypatch.setattr(agno_agent, "Agent", FakeAgent)
+
+    try:
+        brain = agno_agent.AgnoAgentDefaultBrain(
+            "p1",
+            "functions/reply",
+            logger=logging.getLogger("test"),
+            description="System prompt",
+            response_class=Reply,
+        )
+        await brain.run("hello", session_state={"topic": "style"})
+    finally:
+        agno_agent.person_model_mapping.clear()
+        agno_agent.person_model_mapping.update(original)
+
+    # The structured-output model reaches agno under its own parameter name.
+    assert captured["output_schema"] is Reply
+    assert "response_model" not in captured
+    inspect.signature(Agent.__init__).bind_partial(None, **captured)
+
+
+@pytest.mark.asyncio
+async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
+    """agno deep-copies the session state on every run, so it must be copyable.
+
+    ``functions.to_dict`` puts the live ``Context`` into the session state for
+    GuildBotics' own placeholder substitution. That handle owns open HTTP
+    clients, which ``deepcopy`` cannot copy, and its repr is meaningless to a
+    model — so the brain has to keep it out of what it hands to agno.
+    """
+
+    class Uncopyable:
+        """Stands in for a Context holding a live client."""
+
+        def __deepcopy__(self, memo):
+            raise TypeError("cannot pickle '_thread.RLock' object")
+
+    captured: dict = {}
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def arun(self, message: str):
+            return type("R", (), {"content": "reply"})()
+
+    original = agno_agent.person_model_mapping.copy()
+    agno_agent.person_model_mapping.clear()
+    agno_agent.person_model_mapping["p1"] = {"default": _model_config()}
+    monkeypatch.setattr(agno_agent, "record_correlated_io", lambda **kwargs: None)
+    monkeypatch.setattr(agno_agent, "record_span_summary", lambda **kwargs: None)
+    monkeypatch.setattr(
+        agno_agent, "instantiate_class", lambda *args, **kwargs: object()
+    )
+    monkeypatch.setattr(agno_agent, "Agent", FakeAgent)
+
+    try:
+        brain = agno_agent.AgnoAgentDefaultBrain(
+            "p1", "functions/reply", logger=logging.getLogger("test")
+        )
+        await brain.run(
+            "hello", session_state={"context": Uncopyable(), "topic": "style"}
+        )
+    finally:
+        agno_agent.person_model_mapping.clear()
+        agno_agent.person_model_mapping.update(original)
+
+    assert captured["session_state"] == {"topic": "style"}
+    # What agno receives has to survive the copy it makes on every run.
+    deepcopy(captured["session_state"])
+    # The dedicated dump-the-state-into-the-prompt option is not agno 1.x's
+    # placeholder substitution; `resolve_in_context` (on by default) is.
+    assert "add_session_state_to_context" not in captured
 
 
 def _model_config(**overrides) -> "agno_agent.ModelConfig":

@@ -75,7 +75,6 @@ def to_dict[TBaseModel: BaseModel](
         if "today" not in params:
             params["today"] = now.strftime("%Y-%m-%d")
         kwargs["session_state"] = params
-        kwargs["add_state_in_messages"] = True
     if cwd:
         kwargs["cwd"] = cwd
     if response_model:

@@ -63,7 +63,7 @@ const installedRegistration: GitHubAppRegistrationStatus = {
 
 function renderPanel(onApplied = vi.fn(), defaultOrganization = "") {
   render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <GitHubAppRegistrationPanel
         defaultAppName="my-bot"
         defaultOrganization={defaultOrganization}
@@ -83,13 +83,13 @@ function renderSwitchablePanel() {
     pollIntervalMs: 20,
   };
   const { rerender } = render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <GitHubAppRegistrationPanel {...props} defaultAppName="my-bot" memberKey="edit:my-bot" />
     </MantineProvider>,
   );
   return () =>
     rerender(
-      <MantineProvider>
+      <MantineProvider env="test">
         <GitHubAppRegistrationPanel
           {...props}
           defaultAppName="other-bot"

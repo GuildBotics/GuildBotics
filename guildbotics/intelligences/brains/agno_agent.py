@@ -168,8 +168,9 @@ class AgnoAgentDefaultBrain(Brain):
             message = to_plain_text(description, message, response_class)
         else:
             kwargs["description"] = description
-            if "response_model" not in kwargs and self.response_class:
-                kwargs["response_model"] = self.response_class
+            output_schema = kwargs.pop("response_model", None) or self.response_class
+            if output_schema:
+                kwargs["output_schema"] = output_schema
 
         kwargs["tool_call_limit"] = kwargs.get("tool_call_limit", 5)
 
@@ -187,6 +188,7 @@ class AgnoAgentDefaultBrain(Brain):
         kwargs["model"] = model
         if "cwd" in kwargs:
             kwargs.pop("cwd")
+        kwargs["session_state"] = _agent_session_state(kwargs.get("session_state"))
 
         agent = Agent(**kwargs)
 
@@ -310,7 +312,6 @@ class AgnoAgentDefaultBrain(Brain):
                 "description": description,
                 "message": message,
                 "session_state": kwargs.get("session_state", {}),
-                "add_state_in_messages": kwargs.get("add_state_in_messages", False),
             },
         )
 
@@ -326,10 +327,34 @@ class AgnoAgentDefaultBrain(Brain):
         )
 
 
+#: Session state entries the agent must not receive. ``context`` is the live
+#: runtime handle: it owns open HTTP clients, so agno's per-run
+#: ``deepcopy(session_state)`` raises on it, and its repr means nothing to a
+#: model. Everything else is prompt data agno resolves placeholders from.
+_RUNTIME_ONLY_SESSION_KEYS = frozenset({"context"})
+
+
+def _agent_session_state(session_state: object) -> dict[str, Any]:
+    """The prompt-facing part of the session state, safe to hand to agno."""
+    if not isinstance(session_state, dict):
+        return {}
+    return {
+        key: value
+        for key, value in session_state.items()
+        if key not in _RUNTIME_ONLY_SESSION_KEYS
+    }
+
+
 def _response_usage(response: object) -> dict[str, Any]:
+    """Token counters of a run, as a plain dict.
+
+    ``RunOutput.metrics`` is a dataclass that drops zero and empty entries in
+    ``to_dict()``, so the span only carries counters the provider reported.
+    """
     metrics = getattr(response, "metrics", None)
-    if isinstance(metrics, BaseModel):
-        return cast(dict[str, Any], metrics.model_dump())
+    to_dict = getattr(metrics, "to_dict", None)
+    if callable(to_dict):
+        return {str(key): value for key, value in to_dict().items()}
     if isinstance(metrics, dict):
         return {str(key): value for key, value in metrics.items()}
     return {}

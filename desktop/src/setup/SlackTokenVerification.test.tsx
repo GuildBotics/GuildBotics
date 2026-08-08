@@ -68,13 +68,13 @@ function appTokenLine(overrides: Partial<SlackTokenVerifyResponse> = {}): string
 
 function renderPanel(botToken = "xoxb-1", appToken = "xapp-1", personId = "alice") {
   const { rerender } = render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <SlackTokenVerificationPanel botToken={botToken} appToken={appToken} personId={personId} />
     </MantineProvider>,
   );
   return (nextBotToken: string, nextAppToken: string) =>
     rerender(
-      <MantineProvider>
+      <MantineProvider env="test">
         <SlackTokenVerificationPanel
           botToken={nextBotToken}
           appToken={nextAppToken}
@@ -303,7 +303,7 @@ describe("SlackTokenVerificationPanel", () => {
   it("sends the channels currently in the form", async () => {
     const user = userEvent.setup();
     render(
-      <MantineProvider>
+      <MantineProvider env="test">
         <SlackTokenVerificationPanel
           botToken="xoxb-1"
           appToken="xapp-1"

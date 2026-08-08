@@ -17,7 +17,7 @@ function Harness({
 }) {
   const [value, setValue] = useState<Record<string, unknown>>(initial);
   return (
-    <MantineProvider>
+    <MantineProvider env="test">
       <JsonObjectField
         label="Settings"
         errorText="Enter a JSON object."

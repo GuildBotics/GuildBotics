@@ -36,7 +36,7 @@ import {
 } from "@mantine/core";
 import { useForm, type UseFormReturnType } from "@mantine/form";
 import { notifications } from "@mantine/notifications";
-import { zodResolver } from "mantine-form-zod-resolver";
+import { schemaResolver } from "@mantine/form";
 import {
   Check,
   CheckCircle2,
@@ -59,7 +59,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 
 import {
   type CommandOption,
@@ -381,7 +381,7 @@ export function SetupPage() {
   );
   const form = useForm<ProjectFormValues>({
     initialValues,
-    validate: zodResolver(validationSchema),
+    validate: schemaResolver(validationSchema, { sync: true }),
   });
   const appliedInitialValues = useRef("");
   const serializedInitialValues = useMemo(() => JSON.stringify(initialValues), [initialValues]);

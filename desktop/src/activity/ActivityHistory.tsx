@@ -15,7 +15,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import {
   CheckCircle2,
   ChevronLeft,
@@ -29,7 +29,7 @@ import {
   GitCommitHorizontal,
   GitMerge,
   GitPullRequest,
-  History,
+  RotateCcwClock,
   Search,
   Upload,
 } from "lucide-react";
@@ -302,7 +302,7 @@ function ActivityChart({
       {view === "day" ? (
         <ActivityTimelineRow
           label={t("activity.events")}
-          avatar={<History size={15} />}
+          avatar={<RotateCcwClock size={15} />}
           sessions={[]}
           events={sharedEvents}
           range={range}

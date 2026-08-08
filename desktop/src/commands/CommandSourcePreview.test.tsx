@@ -8,7 +8,7 @@ import { CommandSourcePreview } from "./CommandSourcePreview";
 describe("CommandSourcePreview", () => {
   it("renders source in a focusable scroll region", () => {
     render(
-      <MantineProvider>
+      <MantineProvider env="test">
         <CommandSourcePreview
           path="/commands/functions/prepare-translation-input.py"
           source={'first\nsecond\nprint("a long line")\n'}

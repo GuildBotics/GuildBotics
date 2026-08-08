@@ -2,7 +2,7 @@ import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -199,7 +199,7 @@ async function renderPage() {
   const { CommandsPage } = await import("./commands/CommandsPage");
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={["/commands"]}>
           <CommandsPage />
@@ -262,7 +262,7 @@ describe("Command editor screen", () => {
     const bar = container.querySelector<HTMLElement>(".command-bar");
     expect(bar).not.toBeNull();
     const inBar = within(bar as HTMLElement);
-    expect(inBar.getByRole("textbox", { name: t("commands.editSelectLabel") })).toHaveValue(
+    expect(inBar.getByRole("combobox", { name: t("commands.editSelectLabel") })).toHaveValue(
       "Greet (greet)",
     );
     expect(inBar.getByText(t("commands.saveState.clean"))).toBeInTheDocument();
@@ -306,7 +306,7 @@ describe("Command editor screen", () => {
 
     // The restored selection wins over the default first file.
     await waitFor(() =>
-      expect(screen.getByRole("textbox", { name: t("commands.editSelectLabel") })).toHaveValue(
+      expect(screen.getByRole("combobox", { name: t("commands.editSelectLabel") })).toHaveValue(
         "Other (other)",
       ),
     );
@@ -581,7 +581,7 @@ describe("Command editor screen", () => {
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
     expect(await screen.findByText("Agent unavailable")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("textbox", { name: t("commands.editSelectLabel") }));
+    await user.click(screen.getByRole("combobox", { name: t("commands.editSelectLabel") }));
     await user.click(await screen.findByText("Other (other)"));
 
     // The failure belonged to the previous command's conversation.
@@ -659,7 +659,7 @@ describe("Command editor screen", () => {
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
     await user.type(editor, "X");
 
-    await user.click(screen.getByRole("textbox", { name: t("commands.editSelectLabel") }));
+    await user.click(screen.getByRole("combobox", { name: t("commands.editSelectLabel") }));
     await user.click(await screen.findByText("Other (other)"));
 
     expect(

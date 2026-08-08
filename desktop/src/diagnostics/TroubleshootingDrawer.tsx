@@ -91,13 +91,11 @@ export function TroubleshootingDrawer({
       conversation.appendAssistant(request.conversationId, request.targetKey, {
         content: response.message,
         traceId: response.trace_id,
-        references: response.trace_ids.map(
-          (traceId): AssistantReference => ({
-            traceId,
-            label: traceLabel(traceId),
-            to: `/diagnostics?tab=executions&trace_id=${encodeURIComponent(traceId)}&assist=1`,
-          }),
-        ),
+        references: response.trace_ids.map((traceId): AssistantReference => ({
+          traceId,
+          label: traceLabel(traceId),
+          to: `/diagnostics?tab=executions&trace_id=${encodeURIComponent(traceId)}&assist=1`,
+        })),
       });
     },
   });

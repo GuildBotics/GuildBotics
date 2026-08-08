@@ -7,7 +7,7 @@ import { CommandEditor } from "./CommandEditor";
 
 function renderEditor(format: CommandFileFormat) {
   return render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <CommandEditor
         value={"---\nname: X\n---\nbody"}
         format={format}

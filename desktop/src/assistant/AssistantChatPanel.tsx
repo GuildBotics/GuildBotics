@@ -2,7 +2,7 @@ import { Alert, Button, Group, ScrollArea, Stack, Text, Textarea, Title } from "
 import { Send, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 
 /** i18n key prefix. Every namespace defines the same leaf keys. */
 export type AssistantChatNamespace = "commands.authoring" | "diagnostics.troubleshooting";

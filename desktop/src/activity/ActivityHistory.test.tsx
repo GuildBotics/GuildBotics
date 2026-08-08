@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 
 import {
   ActivityHistoryPage,
@@ -246,7 +246,7 @@ describe("ActivityHistoryPage", () => {
     expect(
       await screen.findByRole("button", { name: "Improve activity history event context" }),
     ).toBeInTheDocument();
-    expect(document.querySelector(".lucide-history")).toBeInTheDocument();
+    expect(document.querySelector(".lucide-rotate-ccw-clock")).toBeInTheDocument();
     expect(getActivityHistory).toHaveBeenCalledWith(expect.objectContaining({ refresh: true }));
   });
 
@@ -1194,7 +1194,7 @@ function renderActivity() {
     defaultRadius: "md",
   });
   return render(
-    <MantineProvider theme={theme}>
+    <MantineProvider theme={theme} env="test">
       <QueryClientProvider client={queryClient}>
         <MemoryRouter>
           <ActivityHistoryPage />

@@ -37,3 +37,13 @@ Object.defineProperty(window, "ResizeObserver", {
 if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
+
+// jsdom implements no CSS Font Loading API, so `document.fonts` is undefined.
+// Mantine's autosizing Textarea subscribes to it to re-measure once webfonts
+// finish loading, and every component test that renders one throws without it.
+if (!document.fonts) {
+  Object.defineProperty(document, "fonts", {
+    writable: true,
+    value: { addEventListener: () => {}, removeEventListener: () => {} },
+  });
+}

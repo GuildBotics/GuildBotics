@@ -32,13 +32,13 @@ const registration: SlackAppRegistrationStatus = {
 
 function renderPanel(defaultAppName = "alice", memberKey = "edit:alice") {
   const { rerender } = render(
-    <MantineProvider>
+    <MantineProvider env="test">
       <SlackAppRegistrationPanel defaultAppName={defaultAppName} memberKey={memberKey} />
     </MantineProvider>,
   );
   return (nextAppName: string, nextMemberKey: string) =>
     rerender(
-      <MantineProvider>
+      <MantineProvider env="test">
         <SlackAppRegistrationPanel defaultAppName={nextAppName} memberKey={nextMemberKey} />
       </MantineProvider>,
     );

@@ -10,7 +10,7 @@ describe("MemberSelector", () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(
-      <MantineProvider>
+      <MantineProvider env="test">
         <MemberSelector
           ariaLabel="Choose member"
           member={null}
@@ -28,7 +28,7 @@ describe("MemberSelector", () => {
 
   it("is disabled only when there are no selectable members", () => {
     render(
-      <MantineProvider>
+      <MantineProvider env="test">
         <MemberSelector ariaLabel="Choose member" member={null} members={[]} onChange={vi.fn()} />
       </MantineProvider>,
     );
