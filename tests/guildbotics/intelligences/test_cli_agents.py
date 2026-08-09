@@ -97,7 +97,7 @@ def test_cli_agent_search_path_adds_gui_app_fallbacks() -> None:
     path = get_cli_agent_search_path("/usr/bin:/bin")
 
     entries = path.split(":")
-    assert entries[:2] == ["/usr/bin", "/bin"]
+    assert entries[1:3] == ["/usr/bin", "/bin"]
     assert "/opt/homebrew/bin" in entries
     assert "/usr/local/bin" in entries
 
@@ -117,7 +117,7 @@ def test_cli_agent_search_path_includes_user_bin_dirs(monkeypatch) -> None:
 
     entries = get_cli_agent_search_path("/usr/bin").split(":")
 
-    assert "/home/tester/.guildbotics/bin" in entries
+    assert entries[0] == "/home/tester/.guildbotics/bin"
     assert "/home/tester/.local/bin" in entries
     assert "/home/tester/bin" in entries
     assert "/home/tester/.cargo/bin" in entries
@@ -145,6 +145,24 @@ def test_resolve_cli_agent_path_checks_managed_guildbotics_bin(
     monkeypatch.setattr(cli_agents.Path, "home", lambda: tmp_path)
 
     assert resolve_cli_agent_path("codex", "/usr/bin") == str(executable)
+
+
+def test_managed_bin_wins_over_same_named_path_command(
+    tmp_path: Path, monkeypatch
+) -> None:
+    managed_bin = tmp_path / ".guildbotics/bin"
+    managed_bin.mkdir(parents=True)
+    managed = managed_bin / "guildbotics"
+    managed.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    managed.chmod(0o755)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "guildbotics"
+    fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setattr(cli_agents.Path, "home", lambda: tmp_path)
+
+    assert resolve_cli_agent_path("guildbotics", str(fake_bin)) == str(managed)
 
 
 def test_resolve_cli_agent_path_returns_empty_when_missing(

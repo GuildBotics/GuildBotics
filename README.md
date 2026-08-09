@@ -51,8 +51,8 @@ You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GU
 
 ### What You Need
 
-- **OS**: Linux (verified on Ubuntu 24.04) or macOS (verified on Sequoia)
-  - The desktop app supports macOS Apple Silicon (arm64) and Linux x86_64
+- **OS**: Linux (verified on Ubuntu 24.04), macOS (verified on Sequoia), or Windows 11
+  - The desktop app targets macOS Apple Silicon (arm64), Linux x86_64, and Windows x86_64
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: used to build GuildBotics and install the CLI
 - **An LLM API key** (obtain one of the following in advance):
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
@@ -69,12 +69,12 @@ With Codex, Claude Code, Grok Build, GitHub Copilot CLI, or Antigravity CLI, a m
 
 ### Installation
 
-There is no general-purpose installer for the desktop app yet. Clone the repository and build it locally. In addition to uv, the build requires **Node.js 24 or later** and **Rust (rustup) stable 1.88 or later** (plus the WebKitGTK 4.1 development package on Linux). For prerequisites and build / install steps, see [desktop/README.md](desktop/README.md) (the "1. 前提ツール" section lists the required tools).
+There is no general-purpose installer for the desktop app yet. Clone the repository and build it locally. In addition to uv, the build requires **Node.js 24 or later** and **Rust (rustup) stable 1.88 or later** (plus the WebKitGTK 4.1 development package on Linux). For macOS/Linux prerequisites and build steps, see [desktop/README.md](desktop/README.md). For the Windows native setup, NSIS build, and smoke checklist, see [Building GuildBotics Desktop on Windows](docs/windows_desktop_build.en.md).
 
 On first launch, the desktop app installs the following:
 
-- `~/.guildbotics/bin/guildbotics`: the managed GuildBotics CLI used by AI CLI tools and skills
-- `~/.local/bin/guildbotics`: a small shim that forwards to the CLI above. It is only written when missing or when it is an existing managed shim
+- `~/.guildbotics/bin/guildbotics` on macOS/Linux, or `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` on Windows: the managed GuildBotics CLI used by AI CLI tools and skills
+- `~/.local/bin/guildbotics` on macOS/Linux: a small shim that forwards to the CLI above. On Windows the NSIS installer instead adds the managed bin directory to the user PATH and removes only its own entry during uninstall
 - The GuildBotics skill under the user skill directory of each detected Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI. Skills you created or edited are never overwritten
 
 In environments without the desktop app (headless servers and the like), install the CLI on its own with `uv tool install guildbotics` (→ [Run on a Server](#run-on-a-server)).
@@ -529,7 +529,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 
 | Symptom | What to check first |
 | --- | --- |
-| `guildbotics` command not found | Run `~/.guildbotics/bin/guildbotics` with its absolute path. Also check that `~/.local/bin` is on your PATH |
+| `guildbotics` command not found | On macOS/Linux, run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. On Windows, open a new shell after installation and check `%USERPROFILE%\.guildbotics\bin` in the user PATH |
 | Not sure which workspace is in use | Check and change it under **Setup → Project** in the desktop app. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
 | A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** in the desktop app |
 | Cannot write to GitHub | Check the member's PAT scopes (`repo` + `project`) or the GitHub App permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this |

@@ -496,6 +496,8 @@ commands:
 ## 6. Using shell scripts
 In addition to writing inline under the `script` key as above, you can also implement an external shell script and invoke it as a command.
 
+Shell commands require Bash. They are not supported by the native Windows command path; use a Python command for portable logic, or run the workflow in an environment where Bash is explicitly available.
+
 For example, create `current-time.sh`:
 
 ```bash

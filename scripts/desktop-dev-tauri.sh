@@ -9,7 +9,7 @@ REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT/desktop"
 
 if [[ ! -d node_modules ]]; then
-  npm install
+  npm ci
 fi
 
 exec npm run tauri dev

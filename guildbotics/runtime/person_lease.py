@@ -18,6 +18,7 @@ from guildbotics.runtime.advisory_lock import open_lock_file as _open_lock_file
 from guildbotics.runtime.advisory_lock import unlock_file as _unlock
 from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.processes import pid_exists
 from guildbotics.utils.safe_path import safe_path_component
 
 LEASE_ID_ENV = "GUILDBOTICS_EXECUTION_LEASE_ID"
@@ -245,13 +246,7 @@ def validate_delegation(
 def _pid_exists(pid: int) -> bool:
     if pid == os.getpid():
         return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return pid_exists(pid)
 
 
 def _read_metadata(path: Path) -> PersonLeaseMetadata | None:

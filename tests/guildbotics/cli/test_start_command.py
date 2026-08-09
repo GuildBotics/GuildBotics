@@ -109,6 +109,9 @@ def _patch_start_dependencies(monkeypatch, tmp_path: Path):
         "guildbotics.cli._service_lock_path", lambda: tmp_path / "service.lock"
     )
     monkeypatch.setattr(
+        "guildbotics.cli._stop_request_path", lambda: tmp_path / "stop-request.json"
+    )
+    monkeypatch.setattr(
         "guildbotics.cli.signal.signal",
         lambda sig, handler: handlers.__setitem__(sig, handler),
     )
@@ -252,7 +255,7 @@ def test_start_only_events_waits_for_listener_when_scheduler_has_no_workers(
         return inst
 
     def _sleep(_seconds):
-        handlers[__import__("signal").SIGTERM](__import__("signal").SIGTERM, None)
+        handlers[signal.SIGINT](signal.SIGINT, None)
 
     monkeypatch.setattr("guildbotics.cli.EventListenerRunner", _events_factory)
     monkeypatch.setattr("guildbotics.cli.time.sleep", _sleep)
@@ -286,8 +289,8 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
 
     def _scheduler_start_and_signal():
         created["scheduler"].start_called += 1
-        # Simulate SIGTERM while start command is running.
-        handlers[__import__("signal").SIGTERM](__import__("signal").SIGTERM, None)
+        # Simulate Ctrl+C while start command is running.
+        handlers[signal.SIGINT](signal.SIGINT, None)
 
     # Patch after factory created by command invocation.
     # We intercept via side effect on created instance inside custom factory wrapper.
@@ -352,8 +355,8 @@ def test_start_second_signal_cancels_in_flight_work(monkeypatch, tmp_path):
             # Two signals arrive while the scheduler runs. The handler must stay
             # non-blocking, so the second one is delivered and escalates to a
             # cancel instead of being swallowed by a blocking graceful join.
-            handlers[signal.SIGTERM](signal.SIGTERM, None)
-            handlers[signal.SIGTERM](signal.SIGTERM, None)
+            handlers[signal.SIGINT](signal.SIGINT, None)
+            handlers[signal.SIGINT](signal.SIGINT, None)
 
         inst.start = _start
         return inst

@@ -6,6 +6,10 @@ REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 DESKTOP_TARGET="${DESKTOP_TARGET:-$("$SCRIPT_DIR/desktop-target.sh")}"
 SIDECAR_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-app-api-${DESKTOP_TARGET}"
 CLI_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-cli-${DESKTOP_TARGET}"
+if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
+  SIDECAR_PATH="${SIDECAR_PATH}.exe"
+  CLI_PATH="${CLI_PATH}.exe"
+fi
 PORT="${GUILDBOTICS_SIDECAR_SMOKE_PORT:-8765}"
 
 # shellcheck source=scripts/desktop-token.sh

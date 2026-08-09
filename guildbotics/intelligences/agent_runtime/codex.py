@@ -9,6 +9,7 @@ from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
+    create_agent_subprocess,
     isolated_agent_environment,
     member_command_environment,
     remove_isolated_config,
@@ -301,7 +302,7 @@ class CodexAppServerAdapter:
         env.update(member_command_environment(context))
         env.update(delegation_environment(context.run_id))
         try:
-            process = await asyncio.create_subprocess_exec(
+            process = await create_agent_subprocess(
                 self._executable,
                 "app-server",
                 cwd=str(cwd),

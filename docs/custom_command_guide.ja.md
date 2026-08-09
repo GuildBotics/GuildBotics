@@ -504,6 +504,8 @@ commands:
 ## 6. シェルスクリプトの利用
 シェルスクリプトは、上記のように script キーを使って直接記述する方法の他に、外部のシェルスクリプトファイルとして記述してコマンドとして呼び出すことが可能です。
 
+shell command の実行には Bash が必要です。Windows native の command path ではサポートしないため、portable なロジックには Python command を使うか、Bash を明示的に利用できる環境で workflow を実行してください。
+
 例えば、`current-time.sh` というファイルを作成し、次のように記述します。
 
 ```bash

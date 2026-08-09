@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
+    create_agent_subprocess,
     terminate_process_tree,
 )
 
@@ -347,7 +348,7 @@ async def read_codex_usage(
     API-key providers).
     """
     try:
-        process = await asyncio.create_subprocess_exec(
+        process = await create_agent_subprocess(
             executable,
             "app-server",
             stdin=asyncio.subprocess.PIPE,
@@ -394,7 +395,7 @@ async def read_grok_usage(
     login, or does not answer in time.
     """
     try:
-        process = await asyncio.create_subprocess_exec(
+        process = await create_agent_subprocess(
             executable,
             # The probe must never let the CLI update itself.
             "--no-auto-update",
@@ -454,7 +455,7 @@ async def read_claude_usage(
     lines (e.g. API-key auth, where the plan panel does not exist).
     """
     try:
-        process = await asyncio.create_subprocess_exec(
+        process = await create_agent_subprocess(
             executable,
             "-p",
             "/usage",

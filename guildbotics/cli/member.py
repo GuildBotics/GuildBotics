@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Callable
 from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
@@ -97,18 +98,57 @@ _workspace_mode_option = click.option(
         "repository currently open in an interactive coding session."
     ),
 )
-_required_content_stdin_option = click.option(
-    "--content-stdin",
-    is_flag=True,
-    required=True,
-    expose_value=False,
-    help="Read the command's entire free-form content from standard input.",
-)
-_optional_content_stdin_option = click.option(
-    "--content-stdin",
-    is_flag=True,
-    help="Read the replacement body from standard input.",
-)
+_CONTENT_META_KEY = "guildbotics.member.content"
+
+
+def _content_option(
+    *, required: bool
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def decorate(callback: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(callback)
+        def wrapped(
+            *args: Any,
+            content_stdin: bool,
+            content_file: Path | None,
+            **kwargs: Any,
+        ) -> Any:
+            if content_stdin and content_file is not None:
+                raise click.UsageError(t("cli.member.content.exclusive"))
+            selected = content_stdin or content_file is not None
+            if required and not selected:
+                raise click.UsageError(t("cli.member.content.required"))
+
+            context = click.get_current_context()
+            if selected:
+                context.meta[_CONTENT_META_KEY] = _read_content_source(content_file)
+            if not required:
+                kwargs["content_stdin"] = selected
+            try:
+                return callback(*args, **kwargs)
+            finally:
+                context.meta.pop(_CONTENT_META_KEY, None)
+
+        with_file = click.option(
+            "--content-file",
+            type=click.Path(
+                path_type=Path,
+                exists=True,
+                dir_okay=False,
+                readable=True,
+            ),
+            help=t("cli.member.content.file_help"),
+        )(wrapped)
+        return click.option(
+            "--content-stdin",
+            is_flag=True,
+            help=t("cli.member.content.stdin_help"),
+        )(with_file)
+
+    return decorate
+
+
+_required_content_stdin_option = _content_option(required=True)
+_optional_content_stdin_option = _content_option(required=False)
 _human_approved_option = click.option(
     "--human-approved",
     is_flag=True,
@@ -504,11 +544,7 @@ async def _memory_get(person: str, doc_id: str, scope: str | None) -> dict[str, 
     type=click.Choice(["note", "policy"]),
     help="Change the document kind; 'policy' requires --policy-approved.",
 )
-@click.option(
-    "--content-stdin",
-    is_flag=True,
-    help="Read the entire document body from standard input.",
-)
+@_optional_content_stdin_option
 @click.option(
     "--policy-approved",
     is_flag=True,
@@ -1583,7 +1619,7 @@ def issue_update(
         raise click.UsageError("--state-reason requires --state closed.")
     if not (content_stdin or title is not None or add_labels or remove_labels or state):
         raise click.UsageError(
-            "issue update needs --content-stdin, --title, --add-label, "
+            "issue update needs --content-stdin/--content-file, --title, --add-label, "
             "--remove-label, or --state."
         )
     body = _read_stdin("issue body", allow_empty=True) if content_stdin else None
@@ -1756,7 +1792,9 @@ def pr_update(
     output_format: str,
 ) -> None:
     if not (content_stdin or title is not None):
-        raise click.UsageError("pr update needs --content-stdin or --title.")
+        raise click.UsageError(
+            "pr update needs --content-stdin/--content-file or --title."
+        )
     body = _read_stdin("pull request body", allow_empty=True) if content_stdin else None
     _run(
         _pr_update(
@@ -2056,12 +2094,32 @@ def _resolve(person: str):
 
 
 def _read_stdin(label: str, *, allow_empty: bool = False) -> str:
-    text = click.get_text_stream("stdin").read()
+    context = click.get_current_context(silent=True)
+    text = (
+        context.meta[_CONTENT_META_KEY]
+        if context is not None and _CONTENT_META_KEY in context.meta
+        else click.get_text_stream("stdin").read()
+    )
     if text.strip():
         return text
     if allow_empty:
         return ""
     raise click.ClickException(f"{label} must not be empty.")
+
+
+def _read_content_source(content_file: Path | None) -> str:
+    if content_file is None:
+        return click.get_text_stream("stdin").read()
+    try:
+        return content_file.read_text(encoding="utf-8")
+    except UnicodeError as exc:
+        raise click.ClickException(
+            t("cli.member.content.file_not_utf8", path=content_file)
+        ) from exc
+    except OSError as exc:
+        raise click.ClickException(
+            t("cli.member.content.file_read_failed", path=content_file, error=exc)
+        ) from exc
 
 
 def _read_optional_stdin(content_stdin: bool, label: str) -> str | None:

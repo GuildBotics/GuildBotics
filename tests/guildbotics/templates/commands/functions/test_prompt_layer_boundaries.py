@@ -14,6 +14,7 @@ into individual prompts, and the en/ja prompt variants must not drift apart.
 import re
 from pathlib import Path
 
+from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 
 FUNCTIONS_DIR = Path("guildbotics/templates/commands/functions")
@@ -120,11 +121,11 @@ def test_ticket_prompt_requires_issue_comment_on_pr_work():
 
 
 def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
-    """task complete --content-stdin and AgentResponse.message must be called
+    """task complete --content-file and AgentResponse.message must be called
     out as NOT substitutes for GitHub comments, in both en and ja."""
     for language in ("en", "ja"):
         body = _prompt_body("handle_github_ticket", language)
-        assert "task complete --content-stdin" in body, language
+        assert "task complete --content-file" in body, language
         assert "AgentResponse.message" in body, language
         # Both must appear in a context that says they are NOT substitutes
         assert "not a substitute" in body or "代替ではありません" in body, language
@@ -137,10 +138,46 @@ def test_issue_comment_contract_not_in_chat_prompt():
         body = _prompt_body("handle_chat_event", language)
         # The chat prompt should not contain the ticket-specific issue
         # comment instruction sentinel phrases.
-        assert "task complete --content-stdin" not in body, language
+        assert "task complete --content-file" not in body, language
         assert "not a substitute" not in body and "代替ではありません" not in body, (
             language
         )
+
+
+def test_member_prompt_layers_use_shell_neutral_content_files():
+    bodies = [
+        capability_reference_text(),
+        load_markdown_with_frontmatter(SKILL_PATH)["body"],
+        *[
+            _prompt_body(name, language)
+            for name in WORKFLOW_PROMPTS
+            for language in ("en", "ja")
+        ],
+    ]
+    for body in bodies:
+        assert "--content-stdin" not in body
+        assert "<<'EOF'" not in body
+        assert "--content-file" in body
+
+    reference = bodies[0]
+    assert "UTF-8" in reference
+    assert "relative name with no spaces" in reference
+    assert "delete it immediately" in reference
+
+
+def test_interactive_skill_preserves_posix_path_and_documents_windows_bare_cli():
+    body = load_markdown_with_frontmatter(SKILL_PATH)["body"]
+    assert '"$HOME/.guildbotics/bin/guildbotics" member context' in body
+    assert "On Windows" in body
+    assert "guildbotics member context --person <person_id>" in body
+
+
+def test_interactive_skill_stages_before_creating_commit_content_file():
+    body = load_markdown_with_frontmatter(SKILL_PATH)["body"]
+    assert (
+        "stage the intended repository changes before creating the content file" in body
+    )
+    assert "Never stage the content file." in body
 
 
 def _frontmatter(name: str, language: str) -> dict:

@@ -26,6 +26,7 @@ from uvicorn import Config, Server
 
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
+    create_agent_subprocess,
     member_command_environment,
     terminate_process_tree,
 )
@@ -176,7 +177,7 @@ class MemberCapabilityBroker:
                 *arguments,
             )
             env = _member_environment(context)
-            process = await asyncio.create_subprocess_exec(
+            process = await create_agent_subprocess(
                 *argv,
                 cwd=str(context.cwd),
                 env=env,

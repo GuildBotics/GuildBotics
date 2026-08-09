@@ -18,6 +18,7 @@ case "$(uname -s):$(uname -m)" in
   Darwin:x86_64) printf '%s\n' 'x86_64-apple-darwin' ;;
   Linux:x86_64) printf '%s\n' 'x86_64-unknown-linux-gnu' ;;
   Linux:aarch64 | Linux:arm64) printf '%s\n' 'aarch64-unknown-linux-gnu' ;;
+  MINGW64_NT*:x86_64 | MSYS_NT*:x86_64) printf '%s\n' 'x86_64-pc-windows-msvc' ;;
   *)
     echo 'Could not determine the desktop target. Set DESKTOP_TARGET explicitly.' >&2
     exit 1

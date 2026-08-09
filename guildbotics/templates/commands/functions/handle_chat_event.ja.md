@@ -65,12 +65,12 @@ GuildBotics は、この prompt の前に `guildbotics_thread_context` を付加
 6. member context の `roles` に含まれる常設 role の観点で新しい価値を足せる場合だけ reply してください。既に同じ観点が出ている、単なる同意・感謝・了解で足りる、自分の role 外で確信が低い、他 member の発言へ毎回補足するだけになる場合は reaction-only または no-op を強く優先してください。
 7. `social` では本文返信をさらに控えめにしてください。その member の character または role が自然に呼ばれている時だけ短く reply し、それ以外は no-op または軽い reaction を優先してください。
 8. 自分の role 外の観点が必要な場合は、`handoff_candidates` で該当 role を持つ member を探し、必要な観点と理由を短く述べて `mention` 値(例: `@person_id`)で話を振ってください。`previous_thread_context.handoffs` を考慮し、強い理由がない限り同じ thread で同じ member / role を繰り返し呼ばないでください。
-9. 本文返信が自然なら `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --content-stdin` を実行し、本文全体を stdin から渡してください。`$`、backtick、`$()` を展開させないよう、`<<'EOF'` ... `EOF` の quoted heredoc を使ってください。
+9. 本文返信が自然なら `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --content-file <file>` を実行し、本文全体を member capabilities の一時ファイル契約に従って渡してください。
 10. channel への通常投稿が必要な場合だけ `guildbotics member chat post` を使ってください。incoming thread への通常応答は原則 reply を使ってください。
 11. reaction-only が自然なら `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support` を実行してください。
-12. 投稿も reaction も不要なら `guildbotics member chat noop --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --content-stdin` を実行し、理由を stdin から渡してください。`<<'EOF'` ... `EOF` の quoted heredoc を使ってください。
+12. 投稿も reaction も不要なら `guildbotics member chat noop --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --content-file <file>` を実行し、理由を member capabilities の一時ファイル契約に従って渡してください。
 13. 追加情報が必要な場合は、まずこの thread への reply として質問を投稿してから、status `asking` で complete してください。
 14. 自律 workflow で policy 変更が必要だと判断した場合は、Slack thread へ reply/post で提案し、直接 update しないでください。
-15. 最後に必ず `guildbotics member chat complete --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --content-stdin` を実行し、run summary を stdin から渡してください。`<<'EOF'` ... `EOF` の quoted heredoc を使ってください。
+15. 最後に必ず `guildbotics member chat complete --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --content-file <file>` を実行し、run summary を member capabilities の一時ファイル契約に従って渡してください。
 16. 応答は AgentResponse の単一 JSON オブジェクトだけにしてください。例: `{"status":"done","message":"Slack thread へ返信しました。"}` / `{"status":"done","message":"対応不要として記録しました。"}` / `{"status":"asking","message":"Slack thread へ確認質問を投稿しました。"}`
 </instructions>

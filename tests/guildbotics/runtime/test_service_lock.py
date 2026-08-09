@@ -27,6 +27,7 @@ def test_service_lock_is_exclusive_and_records_owner(tmp_path) -> None:
         assert json.loads(path.read_text(encoding="utf-8")) == {
             "owner": "cli",
             "pid": metadata.pid,
+            "service_instance_id": metadata.service_instance_id,
             "started_at": metadata.started_at,
             "workspace": str((tmp_path / "workspace").resolve()),
         }
@@ -84,6 +85,26 @@ def test_service_lock_retries_one_transient_conflict(monkeypatch, tmp_path) -> N
     try:
         assert metadata.owner == "cli"
         assert attempts == 1
+    finally:
+        service_lock.release()
+
+
+def test_service_lock_runs_cleanup_after_lock_before_metadata_publish(tmp_path) -> None:
+    path = tmp_path / "service.lock"
+    request_path = tmp_path / "stop-request.json"
+    request_path.write_text("stale", encoding="utf-8")
+    service_lock = ServiceLock(path)
+
+    metadata = service_lock.acquire(
+        owner="cli",
+        workspace=tmp_path,
+        before_publish=lambda: request_path.unlink(),
+    )
+    try:
+        assert not request_path.exists()
+        assert json.loads(path.read_text(encoding="utf-8"))["service_instance_id"] == (
+            metadata.service_instance_id
+        )
     finally:
         service_lock.release()
 

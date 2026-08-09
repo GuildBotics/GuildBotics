@@ -6,6 +6,12 @@ REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 DESKTOP_TARGET="${DESKTOP_TARGET:-$("$SCRIPT_DIR/desktop-target.sh")}"
 SIDECAR_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-app-api-${DESKTOP_TARGET}"
 CLI_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-cli-${DESKTOP_TARGET}"
+BUILD_BUNDLES=()
+if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
+  SIDECAR_PATH="${SIDECAR_PATH}.exe"
+  CLI_PATH="${CLI_PATH}.exe"
+  BUILD_BUNDLES=(--bundles nsis)
+fi
 
 if [[ ! -x "$SIDECAR_PATH" ]]; then
   echo "Missing executable backend sidecar: $SIDECAR_PATH" >&2
@@ -21,5 +27,5 @@ fi
 
 cd "$REPO_ROOT/desktop"
 
-npm install
-npm run tauri build -- --target "$DESKTOP_TARGET"
+npm ci
+npm run tauri build -- --target "$DESKTOP_TARGET" "${BUILD_BUNDLES[@]}"
