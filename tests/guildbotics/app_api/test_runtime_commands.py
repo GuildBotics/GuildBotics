@@ -1515,6 +1515,7 @@ def test_start_scheduler_maps_service_lock_conflict_to_http_conflict(
     runtime = AppRuntime(EventBus())
     metadata = ServiceLockMetadata(
         pid=4242,
+        service_instance_id="service-1",
         owner="cli",
         workspace="/tmp/other-workspace",
         started_at="2026-07-12T10:00:00+09:00",
