@@ -310,9 +310,11 @@ _CROSS_CUTTING_RULES: list[str] = [
     "read-only on purpose, because who takes an issue is assigned by a human on the "
     "project board; PR state, draft, and base are read-only for the same reason.",
     "Pass every free-form write body, message, reason, or run summary through "
-    "`--content-file <file>`. Create the file as UTF-8 under an unquoted relative name with no "
-    "spaces, preserve `$`, backticks, and other content literally, and delete it immediately after "
-    "the command. Titles are single-line `--title` values and never belong in the content file.",
+    "`--content-file <file>`. Create the UTF-8 file in the OS temporary directory, outside "
+    "the repository and worktree, and use a unique file name. Write the exact content with a "
+    "file-editing capability instead of an inline shell literal, pass the path as one argv value, "
+    "and delete the file even when the command fails. Titles are single-line `--title` values "
+    "and never belong in the content file.",
     "Local-only git is the opposite: run `git add` and `git switch -c` yourself as plain git. "
     "`member git commit` / `publish` commit only what you staged and apply the member name/email "
     "to that one commit without changing the repository git config.",

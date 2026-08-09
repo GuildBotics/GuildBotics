@@ -55,13 +55,12 @@ Treat the user's currently open repository as the shared pair-programming worksp
 - Do not switch branches, reset, clean, or pull automatically. If the current branch or repository does not match the work, stop and ask the user before making git workspace changes.
 - Stage with plain git; create branches with plain git (`git switch -c <branch>`) when the user asks. The member git commands only add the member identity and credential.
 - Always pass `--workspace-mode current` to `member git commit`, `member git push`, and `member git publish`.
-- Before a command that writes free-form content, create an unquoted relative file name with no spaces (for example `guildbotics-content.txt`), write the exact content as UTF-8, pass it with `--content-file`, and delete it immediately after the command.
-- For `member git commit` and `member git publish`, stage the intended repository changes before creating the content file. Never stage the content file. The examples below assume it is created after `git add` and before the member command.
+- Before a command that writes free-form content, create a UTF-8 file in the OS temporary directory, outside the repository and worktree, using a unique file name. Write the exact content with a file-editing capability instead of an inline shell literal, pass the path as one argument to `--content-file`, and delete the file even when the command fails. Never create or stage this file inside the repository.
 - On macOS/Linux, use:
 
 ```bash
 git add -A   # or: git add <paths> to stage only part of your changes
-"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --content-file guildbotics-content.txt --workspace-mode current
+"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --content-file "<temporary_content_file>" --workspace-mode current
 "$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current
 ```
 
@@ -69,7 +68,7 @@ git add -A   # or: git add <paths> to stage only part of your changes
 
 ```text
 git add -A
-guildbotics member git commit --person <person_id> --repo-path <current_repo_path> --content-file guildbotics-content.txt --workspace-mode current
+guildbotics member git commit --person <person_id> --repo-path <current_repo_path> --content-file "<temporary_content_file>" --workspace-mode current
 guildbotics member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current
 ```
 

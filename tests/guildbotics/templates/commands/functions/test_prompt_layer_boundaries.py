@@ -161,8 +161,9 @@ def test_member_prompt_layers_use_shell_neutral_content_files():
 
     reference = bodies[0]
     assert "UTF-8" in reference
-    assert "relative name with no spaces" in reference
-    assert "delete it immediately" in reference
+    assert "OS temporary directory" in reference
+    assert "outside the repository and worktree" in reference
+    assert "even when the command fails" in reference
 
 
 def test_interactive_skill_preserves_posix_path_and_documents_windows_bare_cli():
@@ -172,12 +173,14 @@ def test_interactive_skill_preserves_posix_path_and_documents_windows_bare_cli()
     assert "guildbotics member context --person <person_id>" in body
 
 
-def test_interactive_skill_stages_before_creating_commit_content_file():
+def test_interactive_skill_keeps_content_files_outside_the_worktree():
     body = load_markdown_with_frontmatter(SKILL_PATH)["body"]
-    assert (
-        "stage the intended repository changes before creating the content file" in body
-    )
-    assert "Never stage the content file." in body
+    assert "OS temporary directory" in body
+    assert "outside the repository and worktree" in body
+    assert "unique file name" in body
+    assert "even when the command fails" in body
+    assert body.count("<temporary_content_file>") == 2
+    assert "guildbotics-content.txt" not in body
 
 
 def _frontmatter(name: str, language: str) -> dict:
