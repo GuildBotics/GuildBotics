@@ -6,11 +6,11 @@ REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 DESKTOP_TARGET="${DESKTOP_TARGET:-$("$SCRIPT_DIR/desktop-target.sh")}"
 SIDECAR_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-app-api-${DESKTOP_TARGET}"
 CLI_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-cli-${DESKTOP_TARGET}"
-BUILD_BUNDLES=()
+BUILD_ARGS=(--target "$DESKTOP_TARGET")
 if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
   SIDECAR_PATH="${SIDECAR_PATH}.exe"
   CLI_PATH="${CLI_PATH}.exe"
-  BUILD_BUNDLES=(--bundles nsis)
+  BUILD_ARGS+=(--bundles nsis)
 fi
 
 if [[ ! -x "$SIDECAR_PATH" ]]; then
@@ -28,4 +28,4 @@ fi
 cd "$REPO_ROOT/desktop"
 
 npm ci
-npm run tauri build -- --target "$DESKTOP_TARGET" "${BUILD_BUNDLES[@]}"
+npm run tauri build -- "${BUILD_ARGS[@]}"

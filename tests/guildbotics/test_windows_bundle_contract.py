@@ -44,4 +44,7 @@ def test_windows_scripts_use_exe_sidecars_and_real_dev_binaries() -> None:
         assert "*-pc-windows-msvc" in script
     assert 'SOURCE_SUFFIX=".exe"' in build_backend
     assert '"$SCRIPT_DIR/desktop-build-backend.sh"' in dev
-    assert "--bundles nsis" in frontend
+    assert 'BUILD_ARGS=(--target "$DESKTOP_TARGET")' in frontend
+    assert "BUILD_ARGS+=(--bundles nsis)" in frontend
+    assert '"${BUILD_ARGS[@]}"' in frontend
+    assert "BUILD_BUNDLES=()" not in frontend

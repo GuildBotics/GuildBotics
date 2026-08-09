@@ -238,9 +238,10 @@ def _run_cli_background_service_session(
         path=request_path,
     )
 
-    # Signals are reserved for foreground Ctrl+C. Background stop requests use
-    # the cross-platform service-control file watched above.
+    # Signals support foreground interrupts and external process supervisors.
+    # GuildBotics stop requests use the cross-platform control file above.
     signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
 
     try:
         watcher.start()

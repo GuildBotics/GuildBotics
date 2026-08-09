@@ -181,6 +181,15 @@ def test_start_only_scheduler(monkeypatch, tmp_path):
     assert created["scheduler"].event_queue_source_enabled is False
 
 
+def test_start_registers_sigterm_for_graceful_shutdown(monkeypatch, tmp_path):
+    _created, handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
+
+    result = CliRunner().invoke(cli_main, ["start", "--only", "scheduler"])
+
+    assert result.exit_code == 0, result.output
+    assert handlers[signal.SIGTERM] is handlers[signal.SIGINT]
+
+
 def test_start_rejects_when_desktop_holds_service_lock(monkeypatch, tmp_path):
     created, _handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
     holder = ServiceLock(tmp_path / "service.lock")
