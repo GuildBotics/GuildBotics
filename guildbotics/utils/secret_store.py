@@ -30,7 +30,6 @@ from guildbotics.utils.fileio import load_yaml_dict, save_yaml_file
 from guildbotics.utils.keychain import (
     Keychain,
     SecretStoreError,
-    SecretValueTooLargeError,
     system_keychain,
 )
 
@@ -202,16 +201,21 @@ class KeyringSecretStore(SecretStore):
     def set_many(self, values: dict[str, str]) -> None:
         index = self._read_index()
         service = self._service(index)
+        written_keys: list[str] = []
         try:
             for key, value in values.items():
                 self._keychain.validate_password(key, value)
             for key, value in values.items():
                 self._keychain.set_password(service, key, value)
-        except (SecretStoreError, SecretValueTooLargeError):
-            raise
+                written_keys.append(key)
         except Exception as exc:
+            if written_keys:
+                index["keys"].extend(written_keys)
+                self._write_index(index)
+            if isinstance(exc, SecretStoreError):
+                raise
             raise SecretStoreError(str(exc)) from exc
-        index["keys"].extend(values)
+        index["keys"].extend(written_keys)
         self._write_index(index)
 
     def delete(self, key: str) -> None:
