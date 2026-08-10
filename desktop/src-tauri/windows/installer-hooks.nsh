@@ -8,6 +8,8 @@
 !macro GUILDBOTICS_DEFINE_PATH_FUNCTIONS PREFIX LABEL
 Function ${PREFIX}GuildBoticsNormalizePath
   Exch $0
+  Push $1
+  Push $2
   ExpandEnvStrings $0 "$0"
 
   guildbotics_trim_trailing_slash_${LABEL}:
@@ -20,6 +22,8 @@ Function ${PREFIX}GuildBoticsNormalizePath
     Goto guildbotics_trim_trailing_slash_${LABEL}
 
   guildbotics_normalize_done_${LABEL}:
+    Pop $2
+    Pop $1
     Exch $0
 FunctionEnd
 

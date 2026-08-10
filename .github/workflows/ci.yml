@@ -23,7 +23,7 @@ jobs:
             --no-progress
             --scheme file
             --include-fragments
-            --exclude-path 'desktop/node_modules'
+            --exclude-path 'desktop[\\/]node_modules'
             './*.md'
             './docs/**/*.md'
             './desktop/**/*.md'

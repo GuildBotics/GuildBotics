@@ -79,6 +79,7 @@ def test_service_lock_path_uses_machine_state_root(monkeypatch, tmp_path):
 
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "workspace-data"))
 
     assert _service_lock_path() == home / ".guildbotics/data/run/service.lock"

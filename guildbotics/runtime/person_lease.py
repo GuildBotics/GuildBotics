@@ -15,7 +15,9 @@ from uuid import uuid4
 
 from guildbotics.runtime.advisory_lock import lock_file_nonblocking as _lock_nonblocking
 from guildbotics.runtime.advisory_lock import open_lock_file as _open_lock_file
+from guildbotics.runtime.advisory_lock import read_lock_data as _read_lock_data
 from guildbotics.runtime.advisory_lock import unlock_file as _unlock
+from guildbotics.runtime.advisory_lock import write_lock_data as _write_lock_data
 from guildbotics.utils.fileio import get_workspace_data_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.processes import pid_exists
@@ -116,10 +118,9 @@ class PersonExecutionLease:
                     if attempt == 0:
                         time.sleep(0.01)
                         continue
+                    metadata = _read_metadata(handle)
                     handle.close()
-                    raise PersonLeaseUnavailableError(
-                        _read_metadata(self.path)
-                    ) from exc
+                    raise PersonLeaseUnavailableError(metadata) from exc
             self._file = handle
             self._metadata = PersonLeaseMetadata(
                 pid=os.getpid(),
@@ -177,11 +178,7 @@ class PersonExecutionLease:
         if handle is None:
             raise RuntimeError("Person execution lease is not held.")
         payload = json.dumps(asdict(self.metadata), ensure_ascii=False, sort_keys=True)
-        handle.seek(0)
-        handle.write(f"{payload}\n")
-        handle.truncate()
-        handle.flush()
-        os.fsync(handle.fileno())
+        _write_lock_data(handle, f"{payload}\n")
 
 
 def current_person_lease() -> PersonExecutionLease | None:
@@ -224,7 +221,7 @@ def validate_delegation(
         try:
             _lock_nonblocking(handle)
         except BlockingIOError:
-            metadata = _read_metadata(path)
+            metadata = _read_metadata(handle)
             if metadata is None:
                 return None
             expected = (person_id, lease_id, delegation_id, run_id)
@@ -249,10 +246,8 @@ def _pid_exists(pid: int) -> bool:
     return pid_exists(pid)
 
 
-def _read_metadata(path: Path) -> PersonLeaseMetadata | None:
+def _read_metadata(handle: IO[str]) -> PersonLeaseMetadata | None:
     try:
-        return PersonLeaseMetadata.from_dict(
-            json.loads(path.read_text(encoding="utf-8"))
-        )
+        return PersonLeaseMetadata.from_dict(json.loads(_read_lock_data(handle)))
     except (OSError, ValueError):
         return None

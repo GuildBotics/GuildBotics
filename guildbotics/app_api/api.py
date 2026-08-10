@@ -122,10 +122,11 @@ from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.fileio import get_template_path, load_yaml_file
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
-# Origin the packaged desktop webview serves the app from. Browser-preview
-# origins are not fixed, so the launcher injects them through
-# ``create_app(allowed_origins=...)`` instead of being matched by a pattern.
-TAURI_ORIGIN = "tauri://localhost"
+# Origins the packaged desktop webview serves the app from. Windows uses the
+# HTTP workaround origin while the other desktop platforms use the Tauri
+# scheme. Browser-preview origins are not fixed, so the launcher injects them
+# through ``create_app(allowed_origins=...)`` instead of matching a pattern.
+TAURI_ORIGINS = ["tauri://localhost", "http://tauri.localhost"]
 
 logger = logging.getLogger("guildbotics.app_api")
 
@@ -216,7 +217,7 @@ def create_app(
     app.add_middleware(_UnhandledErrorMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[TAURI_ORIGIN, *(allowed_origins or [])],
+        allow_origins=[*TAURI_ORIGINS, *(allowed_origins or [])],
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=[TOKEN_HEADER, "Content-Type"],

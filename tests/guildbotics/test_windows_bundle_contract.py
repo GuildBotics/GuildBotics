@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -17,6 +18,14 @@ def test_windows_tauri_overlay_builds_only_nsis_with_installer_hooks() -> None:
     assert (ROOT / "desktop/src-tauri" / hook).is_file()
 
 
+def test_release_desktop_uses_the_windows_gui_subsystem() -> None:
+    main = (ROOT / "desktop/src-tauri/src/main.rs").read_text(encoding="utf-8")
+
+    assert main.startswith(
+        '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]\n'
+    )
+
+
 def test_nsis_hook_owns_only_the_path_entry_it_adds() -> None:
     hook = (ROOT / "desktop/src-tauri/windows/installer-hooks.nsh").read_text(
         encoding="utf-8"
@@ -30,6 +39,28 @@ def test_nsis_hook_owns_only_the_path_entry_it_adds() -> None:
     assert "GuildBoticsRemoveOwnedPathEntry" in hook
     assert "DeleteRegValue" in hook
     assert "WM_SETTINGCHANGE" in hook
+
+
+def test_nsis_path_normalizer_preserves_caller_registers() -> None:
+    hook = (ROOT / "desktop/src-tauri/windows/installer-hooks.nsh").read_text(
+        encoding="utf-8"
+    )
+
+    match = re.search(
+        r"Function \$\{PREFIX\}GuildBoticsNormalizePath\n(?P<body>.*?)\nFunctionEnd",
+        hook,
+        re.DOTALL,
+    )
+    assert match is not None
+    lines = match.group("body").splitlines()
+
+    assert lines[:4] == [
+        "  Exch $0",
+        "  Push $1",
+        "  Push $2",
+        '  ExpandEnvStrings $0 "$0"',
+    ]
+    assert lines[-3:] == ["    Pop $2", "    Pop $1", "    Exch $0"]
 
 
 def test_windows_scripts_use_exe_sidecars_and_real_dev_binaries() -> None:
@@ -48,3 +79,13 @@ def test_windows_scripts_use_exe_sidecars_and_real_dev_binaries() -> None:
     assert "BUILD_ARGS+=(--bundles nsis)" in frontend
     assert '"${BUILD_ARGS[@]}"' in frontend
     assert "BUILD_BUNDLES=()" not in frontend
+    assert 'SMOKE_HOME="$(mktemp -d)"' in smoke
+    assert "USERPROFILE" in smoke
+
+
+def test_rust_tests_disable_packaged_sidecars_only_for_cargo_test() -> None:
+    script = (ROOT / "scripts/desktop-test-rust.sh").read_text(encoding="utf-8")
+
+    assert "TAURI_CONFIG=" in script
+    assert '"externalBin":[]' in script
+    assert 'cargo test "$@"' in script

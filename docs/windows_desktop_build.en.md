@@ -40,12 +40,11 @@ uv run --no-sync python -m pytest \
   tests/guildbotics/cli/test_member_command.py \
   tests/guildbotics/intelligences/agent_runtime/test_environment.py
 
-cd desktop/src-tauri
-cargo test
-cd ../..
+scripts/desktop-test-rust.sh
 ```
 
 These tests must run natively on Windows. In particular, confirm that the GuildBotics process can create a nested Job Object, assign a suspended AI CLI process to it, and resume the process.
+The Rust test wrapper clears Tauri's `externalBin` only for tests, so it works before the PyInstaller sidecars are built. Package builds still use the normal Tauri configuration and continue to require both sidecars.
 
 ## Build
 
@@ -77,7 +76,7 @@ Open a new cmd, PowerShell, or Git Bash session before testing bare `guildbotics
 
 - Install with the generated NSIS installer and launch the app without an extra console window.
 - Complete setup and create a workspace; verify the expected files are written.
-- Save a secret and confirm it is stored in Windows Credential Manager.
+- Save a secret and confirm it is stored in Windows Credential Manager. GuildBotics stores credential blobs as UTF-8 so PEM private keys remain within the 2,560-byte Credential Manager limit.
 - Confirm `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` exists and bare `guildbotics` resolves to it in new cmd, PowerShell, and Git Bash sessions.
 - Start and stop the scheduler; verify duplicate start is rejected and the file-based graceful stop leaves no process behind.
 - Run a command and confirm activity streaming in Desktop.
@@ -91,3 +90,5 @@ Native `.sh` custom commands still require Bash and are not supported by the nat
 ## Moving an existing setup
 
 Use `guildbotics secrets export` on the source machine and transfer the result through a secure channel, then run `guildbotics secrets import` on Windows. Copy the workspace directory when configuration and memory documents are needed; those documents are under `<workspace>/.guildbotics/data/documents`.
+
+Windows builds predating the UTF-8 credential adapter used Python keyring's UTF-16 blob format. Those development credentials are in a different Credential Manager namespace and are not read by current builds; import the export file again after upgrading.

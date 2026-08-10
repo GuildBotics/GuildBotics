@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import signal
 import tempfile
 from contextlib import suppress
 from pathlib import Path
@@ -28,6 +27,7 @@ from guildbotics.runtime.person_lease import (
 )
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.processes import terminate_posix_process_group
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
@@ -121,12 +121,12 @@ async def terminate_process_tree(
         # hold inherited pipes or continue working in its process group.
         if os.name == "posix" and pid:
             with suppress(ProcessLookupError):
-                os.killpg(pid, signal.SIGTERM)
+                terminate_posix_process_group(pid)
         await process.wait()
         return
     if os.name == "posix" and pid:
         with suppress(ProcessLookupError):
-            os.killpg(pid, signal.SIGTERM)
+            terminate_posix_process_group(pid)
     else:
         with suppress(ProcessLookupError):
             process.terminate()
@@ -137,7 +137,7 @@ async def terminate_process_tree(
         pass
     if os.name == "posix" and pid:
         with suppress(ProcessLookupError):
-            os.killpg(pid, signal.SIGKILL)
+            terminate_posix_process_group(pid, force=True)
     else:
         with suppress(ProcessLookupError):
             process.kill()

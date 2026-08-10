@@ -15,7 +15,9 @@ from guildbotics.runtime.advisory_lock import (
     lock_file_nonblocking as _lock_file_nonblocking,
 )
 from guildbotics.runtime.advisory_lock import open_lock_file as _open_lock_file
+from guildbotics.runtime.advisory_lock import read_lock_data as _read_lock_data
 from guildbotics.runtime.advisory_lock import unlock_file as _unlock_file
+from guildbotics.runtime.advisory_lock import write_lock_data as _write_lock_data
 from guildbotics.utils.fileio import get_machine_state_path
 
 ServiceOwner = Literal["cli", "desktop"]
@@ -115,8 +117,9 @@ class ServiceLock:
                 if attempt == 0:
                     time.sleep(LOCK_RETRY_SECONDS)
                     continue
+                metadata = _read_metadata(lock_file)
                 lock_file.close()
-                raise ServiceLockUnavailableError(_read_metadata(self.path)) from exc
+                raise ServiceLockUnavailableError(metadata) from exc
 
         if before_publish is not None:
             try:
@@ -135,11 +138,7 @@ class ServiceLock:
         )
         try:
             payload = json.dumps(asdict(metadata), ensure_ascii=False, sort_keys=True)
-            lock_file.seek(0)
-            lock_file.write(f"{payload}\n")
-            lock_file.truncate()
-            lock_file.flush()
-            os.fsync(lock_file.fileno())
+            _write_lock_data(lock_file, f"{payload}\n")
         except Exception:
             _unlock_file(lock_file)
             lock_file.close()
@@ -171,17 +170,15 @@ def inspect_service_lock(path: Path | None = None) -> ServiceLockStatus:
         try:
             _lock_file_nonblocking(lock_file)
         except BlockingIOError:
-            return ServiceLockStatus(locked=True, metadata=_read_metadata(lock_path))
+            return ServiceLockStatus(locked=True, metadata=_read_metadata(lock_file))
         _unlock_file(lock_file)
         return ServiceLockStatus(locked=False)
     finally:
         lock_file.close()
 
 
-def _read_metadata(path: Path) -> ServiceLockMetadata | None:
+def _read_metadata(handle: IO[str]) -> ServiceLockMetadata | None:
     try:
-        return ServiceLockMetadata.from_dict(
-            json.loads(path.read_text(encoding="utf-8"))
-        )
+        return ServiceLockMetadata.from_dict(json.loads(_read_lock_data(handle)))
     except (OSError, ValueError):
         return None

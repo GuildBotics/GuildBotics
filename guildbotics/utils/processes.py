@@ -12,6 +12,7 @@ _WINDOWS = os.name == "nt"
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ERROR_ACCESS_DENIED = 5
+_STILL_ACTIVE = 259
 
 
 def _windows_kernel32() -> Any:
@@ -37,6 +38,17 @@ def _close_windows_handle(handle: int) -> None:
     close_handle(handle)
 
 
+def _windows_process_is_active(handle: int) -> bool:
+    exit_code = ctypes.c_ulong()
+    get_exit_code = _windows_kernel32().GetExitCodeProcess
+    get_exit_code.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    get_exit_code.restype = ctypes.c_int
+    if not get_exit_code(handle, ctypes.byref(exit_code)):
+        error = _windows_last_error()
+        raise OSError(error, "GetExitCodeProcess failed")
+    return exit_code.value == _STILL_ACTIVE
+
+
 def pid_exists(pid: int) -> bool:
     """Return whether ``pid`` exists without altering the target process."""
     if pid <= 0:
@@ -44,8 +56,10 @@ def pid_exists(pid: int) -> bool:
     if _WINDOWS:
         handle = _open_windows_process(_PROCESS_QUERY_LIMITED_INFORMATION, pid)
         if handle:
-            _close_windows_handle(handle)
-            return True
+            try:
+                return _windows_process_is_active(handle)
+            finally:
+                _close_windows_handle(handle)
         return _windows_last_error() == _ERROR_ACCESS_DENIED
 
     try:
@@ -53,6 +67,12 @@ def pid_exists(pid: int) -> bool:
     except OSError as exc:
         return exc.errno == errno.EPERM
     return True
+
+
+def terminate_posix_process_group(pid: int, *, force: bool = False) -> None:
+    """Send the requested termination signal to a POSIX process group."""
+    signal_name = "SIGKILL" if force else "SIGTERM"
+    vars(os)["killpg"](pid, vars(signal)[signal_name])
 
 
 def force_terminate_pid(pid: int) -> None:
@@ -72,4 +92,4 @@ def force_terminate_pid(pid: int) -> None:
         finally:
             _close_windows_handle(handle)
         return
-    os.kill(pid, signal.SIGKILL)
+    os.kill(pid, vars(signal)["SIGKILL"])

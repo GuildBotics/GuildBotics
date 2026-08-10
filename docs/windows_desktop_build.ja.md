@@ -40,12 +40,11 @@ uv run --no-sync python -m pytest \
   tests/guildbotics/cli/test_member_command.py \
   tests/guildbotics/intelligences/agent_runtime/test_environment.py
 
-cd desktop/src-tauri
-cargo test
-cd ../..
+scripts/desktop-test-rust.sh
 ```
 
 これらは Windows 上で native 実行してください。特に、GuildBotics process が nested Job Object を作成でき、suspended 状態の AI CLI process を所属させてから resume できることを確認します。
+Rust test wrapper はテスト時だけ Tauri の `externalBin` を空にするため、PyInstaller sidecar を build する前でも実行できます。実際の package build では通常の Tauri config が使われ、sidecar は引き続き必須です。
 
 ## build
 
@@ -77,7 +76,7 @@ bare `guildbotics` を確認するときは、新しい cmd、PowerShell、Git B
 
 - 生成した NSIS installer で install し、余分な console window を出さずに app が起動する。
 - setup wizard を完了して workspace を作成し、期待する実 file が書かれる。
-- secret を保存し、Windows 資格情報マネージャーへ格納される。
+- secret を保存し、Windows 資格情報マネージャーへ格納される。GuildBotics は credential blob を UTF-8 で保存するため、PEM 秘密鍵でも資格情報マネージャーの 2,560 byte 上限を有効に利用できる。
 - `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` が存在し、新しい cmd / PowerShell / Git Bash で bare `guildbotics` がそこへ解決される。
 - scheduler を start / stop し、二重起動が拒否され、停止要求 file 経由の graceful stop 後に process が残らない。
 - command を実行し、Desktop の activity stream に表示される。
@@ -91,3 +90,5 @@ native Windows command path では `.sh` custom command をサポートしませ
 ## 既存環境からの移行
 
 移行元で `guildbotics secrets export` を実行し、安全な経路で出力を移した後、Windows で `guildbotics secrets import` を実行します。設定と memory document が必要なら workspace directory をコピーしてください。memory document は `<workspace>/.guildbotics/data/documents` にあります。
+
+UTF-8 credential adapter 導入前の Windows build は、Python keyring の UTF-16 blob 形式を使っていました。開発中に保存した旧 credential は現在の build とは別の資格情報マネージャー名前空間にあり、読み込まれません。upgrade 後に export file をもう一度 import してください。

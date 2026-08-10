@@ -267,8 +267,10 @@ def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
+    data_root = tmp_path / "data"
+    monkeypatch.setattr(member_module, "get_workspace_data_root", lambda: data_root)
     key = ConversationKey("aiko", "codex", "ticket", "issue-300")
-    store = ConversationStore(tmp_path / "data")
+    store = ConversationStore(data_root)
     record = store.resolve(key, ResumePolicy.AUTO)
     record.provider_session_id = "thread-1"
     store.save(record)
@@ -276,6 +278,8 @@ def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_
     result = CliRunner().invoke(
         member_module.member,
         [
+            "--workspace",
+            str(tmp_path),
             "agent",
             "conversation",
             "reset",
@@ -609,6 +613,7 @@ def test_member_context_markdown_highlights_communication_style(monkeypatch):
 
 def test_member_context_uses_active_workspace(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     workspace = tmp_path / "workspace"
@@ -643,6 +648,7 @@ def test_member_context_workspace_option_overrides_active_workspace(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     active_workspace = tmp_path / "active"
@@ -735,6 +741,7 @@ def test_member_active_workspace_without_env_does_not_load_cwd_env(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)

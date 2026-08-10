@@ -19,9 +19,14 @@ def _clear_workspace_data_dir(monkeypatch) -> None:
     monkeypatch.delenv(GUILDBOTICS_DATA_DIR, raising=False)
 
 
+def _set_home(monkeypatch, path) -> None:
+    monkeypatch.setenv("HOME", str(path))
+    monkeypatch.setenv("USERPROFILE", str(path))
+
+
 def test_write_and_read_active_workspace(monkeypatch, tmp_path):
     _clear_workspace_data_dir(monkeypatch)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
     workspace = tmp_path / "project"
     workspace.mkdir()
 
@@ -39,7 +44,7 @@ def test_write_and_read_active_workspace(monkeypatch, tmp_path):
 def test_active_workspace_file_uses_machine_state_root(monkeypatch, tmp_path):
     home = tmp_path / "home"
     data_dir = tmp_path / "custom-data"
-    monkeypatch.setenv("HOME", str(home))
+    _set_home(monkeypatch, home)
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(data_dir))
 
     assert active_workspace_file() == (
@@ -51,7 +56,7 @@ def test_apply_workspace_environment_sets_config_and_env(monkeypatch, tmp_path):
     # Sandbox HOME so write_active_workspace targets the temp dir instead of the
     # real ~/.guildbotics/data/active-workspace.json (writing there would clobber
     # the developer's active workspace when the suite runs).
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     _clear_workspace_data_dir(monkeypatch)
@@ -73,7 +78,7 @@ def test_apply_workspace_environment_sets_config_and_env(monkeypatch, tmp_path):
 def test_apply_workspace_for_cli_uses_active_when_no_primary_source(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     _clear_workspace_data_dir(monkeypatch)
@@ -93,7 +98,7 @@ def test_apply_workspace_for_cli_uses_active_when_no_primary_source(
 
 
 def test_apply_workspace_for_cli_keeps_existing_primary_source(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
     _clear_workspace_data_dir(monkeypatch)
     existing = tmp_path / "explicit-config"
     monkeypatch.setenv(GUILDBOTICS_CONFIG_DIR, str(existing))
@@ -112,7 +117,7 @@ def test_apply_workspace_for_cli_keeps_existing_primary_source(monkeypatch, tmp_
 
 def test_apply_workspace_for_cli_prefers_workspace_env_data_dir(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
     monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "inherited-data"))
     workspace = tmp_path / "project"
     workspace.mkdir()
@@ -132,7 +137,7 @@ def test_apply_workspace_for_cli_prefers_workspace_env_data_dir(monkeypatch, tmp
 def test_workspace_status_payload_reports_missing_active_workspace(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
 
     payload = workspace_status_payload()
 
@@ -140,3 +145,23 @@ def test_workspace_status_payload_reports_missing_active_workspace(
         "configured": False,
         "state_file": str(active_workspace_file()),
     }
+
+
+def test_read_active_workspace_ignores_an_inaccessible_target(
+    monkeypatch, tmp_path
+) -> None:
+    _set_home(monkeypatch, tmp_path / "home")
+    target = tmp_path / "inaccessible"
+    path = active_workspace_file()
+    path.parent.mkdir(parents=True)
+    path.write_text(f'{{"workspace": "{target.as_posix()}"}}', encoding="utf-8")
+    original_is_dir = type(target).is_dir
+
+    def is_dir(candidate):
+        if candidate == target:
+            raise PermissionError(str(candidate))
+        return original_is_dir(candidate)
+
+    monkeypatch.setattr(type(target), "is_dir", is_dir)
+
+    assert read_active_workspace() is None

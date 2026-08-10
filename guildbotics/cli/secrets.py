@@ -5,6 +5,8 @@ from pathlib import Path
 import click
 
 from guildbotics.utils.env_loader import workspace_config_dir
+from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.keychain import SecretStoreError, SecretValueTooLargeError
 from guildbotics.utils.secret_store import (
     KEYRING_BACKEND,
     SecretStore,
@@ -78,7 +80,7 @@ def secrets_set(env: _SecretsContext, key: str, value: str | None) -> None:
     if value is None:
         value = click.prompt(f"Value for {key}", hide_input=True)
     store = env.store()
-    store.set(key, value)
+    _set_values(store, {key: value})
     if store.backend == KEYRING_BACKEND:
         _strip_env_file_keys(env.env_file, [key])
     click.echo(f"Stored {key} ({store.backend}).")
@@ -123,13 +125,29 @@ def secrets_import(env: _SecretsContext, file: Path) -> None:
     if not values:
         raise click.ClickException(f"no values found in {file}")
     store = env.store()
-    for key, value in values.items():
-        store.set(key, value)
+    _set_values(store, values)
     if store.backend == KEYRING_BACKEND:
         _strip_env_file_keys(env.env_file, list(values))
     click.echo(f"Imported {len(values)} secrets ({store.backend}).")
     if store.backend == KEYRING_BACKEND:
         click.echo(f"Delete {file} once you no longer need it.")
+
+
+def _set_values(store: SecretStore, values: dict[str, str]) -> None:
+    """Store values with safe CLI errors that never include secret contents."""
+    try:
+        store.set_many(values)
+    except SecretValueTooLargeError as exc:
+        raise click.ClickException(
+            t(
+                "cli.secrets.value_too_large",
+                secret_key=exc.key,
+                size=exc.size,
+                limit=exc.limit,
+            )
+        ) from exc
+    except SecretStoreError as exc:
+        raise click.ClickException(t("cli.secrets.store_failed", error=exc)) from exc
 
 
 def _strip_env_file_keys(env_file: Path, keys: list[str]) -> None:

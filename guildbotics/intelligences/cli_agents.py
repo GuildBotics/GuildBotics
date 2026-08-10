@@ -157,6 +157,14 @@ def require_cli_agent_path(path: str, *, where: str) -> str:
     )
 
 
+def cli_agent_executable(name: str) -> str:
+    """Return the executable name for a catalog AI CLI tool."""
+    for agent in CLI_AGENTS:
+        if agent.name == name:
+            return agent.executable
+    return ""
+
+
 def resolve_default_cli_executable() -> str:
     """Return the executable (binary) of the team's default AI CLI tool."""
     try:
@@ -168,8 +176,4 @@ def resolve_default_cli_executable() -> str:
     except Exception:
         return ""
 
-    default_name = cli_agent_name_from_path(default_file)
-    for agent in CLI_AGENTS:
-        if agent.name == default_name:
-            return agent.executable
-    return ""
+    return cli_agent_executable(cli_agent_name_from_path(default_file))

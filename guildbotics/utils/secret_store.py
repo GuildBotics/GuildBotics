@@ -27,6 +27,12 @@ from typing import Any
 from dotenv import dotenv_values
 
 from guildbotics.utils.fileio import load_yaml_dict, save_yaml_file
+from guildbotics.utils.keychain import (
+    Keychain,
+    SecretStoreError,
+    SecretValueTooLargeError,
+    system_keychain,
+)
 
 SECRETS_BACKEND_ENV = "GUILDBOTICS_SECRETS_BACKEND"
 KEYRING_BACKEND = "keyring"
@@ -122,6 +128,11 @@ class SecretStore(ABC):
     def keys(self) -> list[str]:
         """Return the names of the stored keys."""
 
+    def set_many(self, values: dict[str, str]) -> None:
+        """Store multiple values after backend-specific validation."""
+        for key, value in values.items():
+            self.set(key, value)
+
     def values(self) -> dict[str, str]:
         """Return every stored key with its value."""
         result: dict[str, str] = {}
@@ -144,8 +155,11 @@ class EnvFileSecretStore(SecretStore):
         return read_env_values(self.location).get(key)
 
     def set(self, key: str, value: str) -> None:
+        self.set_many({key: value})
+
+    def set_many(self, new_values: dict[str, str]) -> None:
         values = read_env_values(self.location)
-        values[key] = value
+        values.update(new_values)
         write_env_values(self.location, values)
 
     def delete(self, key: str) -> None:
@@ -167,33 +181,47 @@ class KeyringSecretStore(SecretStore):
 
     backend = KEYRING_BACKEND
 
-    def __init__(self, config_dir: Path):
+    def __init__(self, config_dir: Path, keychain: Keychain | None = None):
         self.location = config_dir / SECRETS_INDEX_FILENAME
+        self._keychain = keychain or system_keychain()
 
     def get(self, key: str) -> str | None:
         index = self._read_index()
         if key not in index["keys"]:
             return None
-        import keyring
-
-        return keyring.get_password(self._service(index), key)
+        try:
+            return self._keychain.get_password(self._service(index), key)
+        except SecretStoreError:
+            raise
+        except Exception as exc:
+            raise SecretStoreError(str(exc)) from exc
 
     def set(self, key: str, value: str) -> None:
-        import keyring
+        self.set_many({key: value})
 
+    def set_many(self, values: dict[str, str]) -> None:
         index = self._read_index()
-        keyring.set_password(self._service(index), key, value)
-        if key not in index["keys"]:
-            index["keys"].append(key)
+        service = self._service(index)
+        try:
+            for key, value in values.items():
+                self._keychain.validate_password(key, value)
+            for key, value in values.items():
+                self._keychain.set_password(service, key, value)
+        except (SecretStoreError, SecretValueTooLargeError):
+            raise
+        except Exception as exc:
+            raise SecretStoreError(str(exc)) from exc
+        index["keys"].extend(values)
         self._write_index(index)
 
     def delete(self, key: str) -> None:
-        import keyring
-        from keyring.errors import PasswordDeleteError
-
         index = self._read_index()
-        with contextlib.suppress(PasswordDeleteError):
-            keyring.delete_password(self._service(index), key)
+        try:
+            self._keychain.delete_password(self._service(index), key)
+        except SecretStoreError:
+            raise
+        except Exception as exc:
+            raise SecretStoreError(str(exc)) from exc
         if key in index["keys"]:
             index["keys"].remove(key)
             self._write_index(index)

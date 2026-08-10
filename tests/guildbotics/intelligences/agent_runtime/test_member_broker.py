@@ -15,8 +15,9 @@ from guildbotics.capabilities.task_runs import TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
-    _ScopedTokenVerifier,
+    _member_cli_command,
     _member_environment,
+    _ScopedTokenVerifier,
     _validate_arguments,
 )
 from guildbotics.intelligences.agent_runtime.models import (
@@ -81,6 +82,35 @@ class _HangingProcess(_Process):
         return b"", b"terminated"
 
 
+@pytest.mark.parametrize(
+    ("platform", "executable_name"),
+    [("win32", "guildbotics.exe"), ("linux", "guildbotics")],
+)
+def test_frozen_member_cli_uses_the_platform_executable_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    platform: str,
+    executable_name: str,
+) -> None:
+    executable = tmp_path / ".guildbotics" / "bin" / executable_name
+    executable.parent.mkdir(parents=True)
+    executable.write_text("launcher", encoding="utf-8")
+    monkeypatch.setattr(
+        "guildbotics.intelligences.agent_runtime.member_broker.sys.frozen",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "guildbotics.intelligences.agent_runtime.member_broker.sys.platform", platform
+    )
+    monkeypatch.setattr(
+        "guildbotics.intelligences.agent_runtime.member_broker.Path.home",
+        lambda: tmp_path,
+    )
+
+    assert _member_cli_command() == (str(executable),)
+
+
 @pytest.mark.asyncio
 async def test_execute_uses_fixed_member_entrypoint_and_trusted_environment(
     monkeypatch, tmp_path
@@ -88,13 +118,13 @@ async def test_execute_uses_fixed_member_entrypoint_and_trusted_environment(
     process = _Process()
     launched: list[tuple[tuple[str, ...], dict[str, Any]]] = []
 
-    async def create_subprocess_exec(*argv: str, **kwargs: Any) -> _Process:
+    async def create_agent_subprocess(*argv: str, **kwargs: Any) -> _Process:
         launched.append((argv, kwargs))
         return process
 
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.asyncio.create_subprocess_exec",
-        create_subprocess_exec,
+        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
+        create_agent_subprocess,
     )
     context = _context(tmp_path)
     broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
@@ -220,12 +250,12 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
 ) -> None:
     process = _Process()
 
-    async def create_subprocess_exec(*argv: str, **kwargs: Any) -> _Process:
+    async def create_agent_subprocess(*argv: str, **kwargs: Any) -> _Process:
         return process
 
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.asyncio.create_subprocess_exec",
-        create_subprocess_exec,
+        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
+        create_agent_subprocess,
     )
     broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
     context = _context(tmp_path)
@@ -285,7 +315,7 @@ async def test_deactivate_terminates_an_outstanding_member_command(
 ) -> None:
     process = _HangingProcess()
 
-    async def create_subprocess_exec(*argv: str, **kwargs: Any) -> _HangingProcess:
+    async def create_agent_subprocess(*argv: str, **kwargs: Any) -> _HangingProcess:
         return process
 
     async def terminate(candidate: _HangingProcess) -> None:
@@ -294,8 +324,8 @@ async def test_deactivate_terminates_an_outstanding_member_command(
         candidate.stopped.set()
 
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.asyncio.create_subprocess_exec",
-        create_subprocess_exec,
+        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
+        create_agent_subprocess,
     )
     monkeypatch.setattr(
         "guildbotics.intelligences.agent_runtime.member_broker.terminate_process_tree",
@@ -323,7 +353,7 @@ async def test_cancelled_request_does_not_leave_a_member_process_running(
     process = _HangingProcess()
     terminated: list[_HangingProcess] = []
 
-    async def create_subprocess_exec(*argv: str, **kwargs: Any) -> _HangingProcess:
+    async def create_agent_subprocess(*argv: str, **kwargs: Any) -> _HangingProcess:
         return process
 
     async def terminate(candidate: _HangingProcess) -> None:
@@ -332,8 +362,8 @@ async def test_cancelled_request_does_not_leave_a_member_process_running(
         candidate.stopped.set()
 
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.asyncio.create_subprocess_exec",
-        create_subprocess_exec,
+        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
+        create_agent_subprocess,
     )
     monkeypatch.setattr(
         "guildbotics.intelligences.agent_runtime.member_broker.terminate_process_tree",

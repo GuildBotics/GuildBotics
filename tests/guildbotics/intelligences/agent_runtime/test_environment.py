@@ -141,6 +141,25 @@ async def test_windows_tree_shutdown_terminates_descendants_after_root_exit(
     assert calls == [process]
 
 
+@pytest.mark.asyncio
+async def test_posix_tree_shutdown_escalates_process_group(monkeypatch) -> None:
+    process = _Process()
+    calls: list[tuple[int, bool]] = []
+
+    def terminate_group(pid: int, *, force: bool = False) -> None:
+        calls.append((pid, force))
+        if force:
+            process.returncode = 1
+
+    monkeypatch.setattr(environment, "_WINDOWS", False)
+    monkeypatch.setattr(environment.os, "name", "posix")
+    monkeypatch.setattr(environment, "terminate_posix_process_group", terminate_group)
+
+    await environment.terminate_process_tree(process, grace_seconds=0)
+
+    assert calls == [(42, False), (42, True)]
+
+
 def test_windows_job_assigns_process_then_resumes_only_thread(monkeypatch) -> None:
     events: list[object] = []
     monkeypatch.setattr(

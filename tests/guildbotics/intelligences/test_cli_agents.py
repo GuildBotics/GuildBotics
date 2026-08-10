@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ from guildbotics.intelligences import cli_agents
 from guildbotics.intelligences.cli_agents import (
     CLI_AGENTS,
     cli_agent_default_path,
+    cli_agent_executable,
     cli_agent_name_from_path,
     get_cli_agent_search_path,
     require_cli_agent_path,
@@ -88,15 +90,15 @@ def test_cli_agent_search_path_falls_back_for_ambient_empty_path(monkeypatch) ->
 
     path = get_cli_agent_search_path()
 
-    entries = path.split(":")
+    entries = path.split(os.pathsep)
     assert "/usr/bin" in entries
     assert "/opt/homebrew/bin" in entries
 
 
 def test_cli_agent_search_path_adds_gui_app_fallbacks() -> None:
-    path = get_cli_agent_search_path("/usr/bin:/bin")
+    path = get_cli_agent_search_path(os.pathsep.join(("/usr/bin", "/bin")))
 
-    entries = path.split(":")
+    entries = path.split(os.pathsep)
     assert entries[1:3] == ["/usr/bin", "/bin"]
     assert "/opt/homebrew/bin" in entries
     assert "/usr/local/bin" in entries
@@ -105,33 +107,37 @@ def test_cli_agent_search_path_adds_gui_app_fallbacks() -> None:
 def test_cli_agent_search_path_deduplicates_entries(monkeypatch) -> None:
     monkeypatch.setattr(cli_agents.Path, "home", lambda: Path("/home/tester"))
 
-    path = get_cli_agent_search_path("/usr/bin:/usr/bin:/opt/homebrew/bin")
-    entries = path.split(":")
+    path = get_cli_agent_search_path(
+        os.pathsep.join(("/usr/bin", "/usr/bin", "/opt/homebrew/bin"))
+    )
+    entries = path.split(os.pathsep)
 
     assert entries.count("/usr/bin") == 1
     assert entries.count("/opt/homebrew/bin") == 1
 
 
 def test_cli_agent_search_path_includes_user_bin_dirs(monkeypatch) -> None:
-    monkeypatch.setattr(cli_agents.Path, "home", lambda: Path("/home/tester"))
+    home = Path("/home/tester")
+    monkeypatch.setattr(cli_agents.Path, "home", lambda: home)
 
-    entries = get_cli_agent_search_path("/usr/bin").split(":")
+    entries = get_cli_agent_search_path("/usr/bin").split(os.pathsep)
 
-    assert entries[0] == "/home/tester/.guildbotics/bin"
-    assert "/home/tester/.local/bin" in entries
-    assert "/home/tester/bin" in entries
-    assert "/home/tester/.cargo/bin" in entries
-    assert "/home/tester/.volta/bin" in entries
+    assert entries[0] == str(home / ".guildbotics/bin")
+    assert str(home / ".local/bin") in entries
+    assert str(home / "bin") in entries
+    assert str(home / ".cargo/bin") in entries
+    assert str(home / ".volta/bin") in entries
 
 
 def test_cli_agent_search_path_falls_back_to_defpath_when_none(monkeypatch) -> None:
-    monkeypatch.setattr(cli_agents.os, "defpath", "/defpath/bin")
+    default_path = str(Path("/defpath/bin"))
+    monkeypatch.setattr(cli_agents.os, "defpath", default_path)
     monkeypatch.delenv("PATH", raising=False)
     monkeypatch.setattr(cli_agents.Path, "home", lambda: Path("/home/tester"))
 
-    entries = get_cli_agent_search_path(None).split(":")
+    entries = get_cli_agent_search_path(None).split(os.pathsep)
 
-    assert "/defpath/bin" in entries
+    assert default_path in entries
 
 
 def test_resolve_cli_agent_path_checks_managed_guildbotics_bin(
@@ -139,12 +145,12 @@ def test_resolve_cli_agent_path_checks_managed_guildbotics_bin(
 ) -> None:
     bin_dir = tmp_path / ".guildbotics/bin"
     bin_dir.mkdir(parents=True)
-    executable = bin_dir / "codex"
+    executable = bin_dir / ("codex.exe" if os.name == "nt" else "codex")
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o755)
     monkeypatch.setattr(cli_agents.Path, "home", lambda: tmp_path)
 
-    assert resolve_cli_agent_path("codex", "/usr/bin") == str(executable)
+    assert Path(resolve_cli_agent_path("codex", "/usr/bin")) == executable
 
 
 def test_managed_bin_wins_over_same_named_path_command(
@@ -152,17 +158,18 @@ def test_managed_bin_wins_over_same_named_path_command(
 ) -> None:
     managed_bin = tmp_path / ".guildbotics/bin"
     managed_bin.mkdir(parents=True)
-    managed = managed_bin / "guildbotics"
+    executable_name = "guildbotics.exe" if os.name == "nt" else "guildbotics"
+    managed = managed_bin / executable_name
     managed.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     managed.chmod(0o755)
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    fake = fake_bin / "guildbotics"
+    fake = fake_bin / executable_name
     fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     fake.chmod(0o755)
     monkeypatch.setattr(cli_agents.Path, "home", lambda: tmp_path)
 
-    assert resolve_cli_agent_path("guildbotics", str(fake_bin)) == str(managed)
+    assert Path(resolve_cli_agent_path("guildbotics", str(fake_bin))) == managed
 
 
 def test_resolve_cli_agent_path_returns_empty_when_missing(
@@ -175,6 +182,12 @@ def test_resolve_cli_agent_path_returns_empty_when_missing(
 
 def test_resolve_cli_agent_path_empty_executable() -> None:
     assert resolve_cli_agent_path("") == ""
+
+
+def test_cli_agent_executable_uses_the_catalog() -> None:
+    assert cli_agent_executable("grok") == "grok"
+    assert cli_agent_executable("antigravity") == "agy"
+    assert cli_agent_executable("unknown") == ""
 
 
 def test_resolve_default_cli_executable_uses_the_catalog(
