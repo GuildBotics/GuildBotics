@@ -10,6 +10,7 @@ import uvicorn
 
 from guildbotics.app_api.api import create_app
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.processes import pid_exists
 from guildbotics.utils.workspace_state import (
     apply_workspace_environment,
     read_active_workspace,
@@ -20,16 +21,7 @@ ALLOWED_ORIGINS_ENV = "GUILDBOTICS_APP_API_ALLOWED_ORIGINS"
 
 
 def _parent_is_alive(parent_pid: int) -> bool:
-    try:
-        os.kill(parent_pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # The process exists but is owned by someone else; treat as alive.
-        return True
-    except OSError:
-        return False
-    return True
+    return pid_exists(parent_pid)
 
 
 def _watch_parent(parent_pid: int) -> None:

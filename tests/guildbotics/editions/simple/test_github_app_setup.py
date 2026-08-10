@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -132,7 +133,8 @@ async def test_complete_stores_credentials_and_writes_key_file(
     key_file = Path(completed.private_key_path)
     assert key_file == tmp_path / "github-apps/my-bot.private-key.pem"
     assert key_file.read_text() == "-----BEGIN RSA PRIVATE KEY-----\nkey\n"
-    assert stat.S_IMODE(key_file.stat().st_mode) & KEY_MODE_MASK == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(key_file.stat().st_mode) & KEY_MODE_MASK == 0o600
 
 
 @pytest.mark.asyncio

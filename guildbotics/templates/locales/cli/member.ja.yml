@@ -1,4 +1,11 @@
 ja:
+  content:
+    exclusive: "--content-stdin と --content-file のどちらか一方だけを指定してください。"
+    required: "--content-stdin または --content-file の指定が必要です。"
+    stdin_help: "コマンドの自由記述本文全体を標準入力から読み取ります。"
+    file_help: "コマンドの自由記述本文全体を UTF-8 ファイルから読み取ります。"
+    file_not_utf8: "本文ファイルが有効な UTF-8 ではありません: %{path}"
+    file_read_failed: "本文ファイル %{path} を読み取れませんでした: %{error}"
   agent:
     help: native agent runtime state を管理します。
     conversation_help: 永続化された native agent conversation を管理します。

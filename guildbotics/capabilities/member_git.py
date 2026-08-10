@@ -17,7 +17,11 @@ from guildbotics.capabilities.member_github import (
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.github.github_utils import get_person_github_token
 from guildbotics.utils.fileio import get_workspace_path
-from guildbotics.utils.git_tool import GitTool, create_git_askpass_script
+from guildbotics.utils.git_tool import (
+    GitTool,
+    build_git_auth_environment,
+    create_git_askpass_script,
+)
 
 
 @dataclass(frozen=True)
@@ -179,15 +183,15 @@ class MemberGitWorkspaceService:
         self._validate_repo_path(repo_path, workspace_mode=workspace_mode, cwd=cwd)
         if not message.strip():
             raise MemberCapabilityError("Commit message must not be empty.")
-        repo = git.Repo(repo_path)
-        branch = repo.active_branch.name
-        has_staged = self._has_staged_changes(repo)
-        commit_sha = None
-        if has_staged:
-            actor = self._member_actor()
-            commit_sha = repo.index.commit(
-                message.strip(), author=actor, committer=actor
-            ).hexsha
+        with git.Repo(repo_path) as repo:
+            branch = repo.active_branch.name
+            has_staged = self._has_staged_changes(repo)
+            commit_sha = None
+            if has_staged:
+                actor = self._member_actor()
+                commit_sha = repo.index.commit(
+                    message.strip(), author=actor, committer=actor
+                ).hexsha
         return CommitResult(
             repo_path=str(repo_path),
             branch=branch,
@@ -205,10 +209,10 @@ class MemberGitWorkspaceService:
     ) -> PushResult:
         repo_path = repo_path.expanduser().resolve()
         self._validate_repo_path(repo_path, workspace_mode=workspace_mode, cwd=cwd)
-        repo = git.Repo(repo_path)
-        branch = repo.active_branch.name
         token = await get_person_github_token(self.person, self.github.base_url)
-        pushed, commits = self._push_if_needed(repo, branch, token)
+        with git.Repo(repo_path) as repo:
+            branch = repo.active_branch.name
+            pushed, commits = self._push_if_needed(repo, branch, token)
         return PushResult(
             repo_path=str(repo_path),
             branch=branch,
@@ -268,14 +272,14 @@ class MemberGitWorkspaceService:
                 f"repo_path is not a git repository: {repo_path}"
             )
         try:
-            current_repo = git.Repo(
+            with git.Repo(
                 cwd.expanduser().resolve(), search_parent_directories=True
-            )
+            ) as current_repo:
+                current_root = Path(current_repo.working_tree_dir or "").resolve()
         except git.InvalidGitRepositoryError as exc:
             raise MemberCapabilityError(
                 "current workspace mode requires running inside the target git repository."
             ) from exc
-        current_root = Path(current_repo.working_tree_dir or "").resolve()
         if repo_path != current_root:
             raise MemberCapabilityError(
                 f"repo_path must match the current workspace repository: {current_root}"
@@ -379,10 +383,7 @@ def _git_auth_environment(repo: git.Repo, token: str) -> Iterator[None]:
     try:
         askpass_path = create_git_askpass_script()
         with repo.git.custom_environment(
-            GIT_ASKPASS=str(askpass_path),
-            GIT_TERMINAL_PROMPT="0",
-            GIT_USERNAME="x-access-token",
-            GIT_PASSWORD=token,
+            **build_git_auth_environment(askpass_path, token)
         ):
             yield
     finally:

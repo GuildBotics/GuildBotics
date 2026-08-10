@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from guildbotics.utils.fileio import load_yaml_dict
+from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import (
     ENV_FILE_BACKEND,
     KEYRING_BACKEND,
@@ -148,6 +149,34 @@ class TestKeyringSecretStore:
 
         assert configured_secrets_backend(tmp_path) == KEYRING_BACKEND
         assert load_yaml_dict(tmp_path / SECRETS_INDEX_FILENAME)["keys"] == []
+
+    def test_set_many_indexes_values_written_before_a_failure(self, tmp_path):
+        class FailingKeychain:
+            def __init__(self):
+                self.values: dict[tuple[str, str], str] = {}
+
+            def validate_password(self, username: str, password: str) -> None:
+                del username, password
+
+            def get_password(self, service: str, username: str) -> str | None:
+                return self.values.get((service, username))
+
+            def set_password(self, service: str, username: str, password: str) -> None:
+                if username == "B_KEY":
+                    raise SecretStoreError("keychain write failed")
+                self.values[(service, username)] = password
+
+            def delete_password(self, service: str, username: str) -> None:
+                self.values.pop((service, username), None)
+
+        store = KeyringSecretStore(tmp_path, keychain=FailingKeychain())
+
+        with pytest.raises(SecretStoreError, match="keychain write failed"):
+            store.set_many({"A_KEY": "value-a", "B_KEY": "value-b"})
+
+        assert store.keys() == ["A_KEY"]
+        assert store.get("A_KEY") == "value-a"
+        assert store.get("B_KEY") is None
 
 
 class TestBackendResolution:

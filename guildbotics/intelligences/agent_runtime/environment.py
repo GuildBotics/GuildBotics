@@ -5,13 +5,19 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import signal
 import tempfile
 from contextlib import suppress
 from pathlib import Path
+from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
+from guildbotics.intelligences.agent_runtime.windows_job import (
+    WindowsJob,
+    creation_flags,
+    register_process_job,
+    terminate_process_job,
+)
 from guildbotics.intelligences.cli_agents import get_cli_agent_search_path
 from guildbotics.runtime.person_lease import (
     DELEGATION_ID_ENV,
@@ -21,9 +27,11 @@ from guildbotics.runtime.person_lease import (
 )
 from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.processes import terminate_posix_process_group
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
+_WINDOWS = os.name == "nt"
 
 #: Ambient parent values an AI CLI process must never inherit: the direct
 #: write credentials, and the execution metadata that authorises a nested
@@ -94,17 +102,31 @@ async def terminate_process_tree(
 ) -> None:
     """Terminate the process group and reap the owned subprocess."""
     pid = getattr(process, "pid", None)
+    if _WINDOWS:
+        if process.returncode is None:
+            try:
+                await asyncio.wait_for(process.wait(), timeout=grace_seconds)
+                return
+            except TimeoutError:
+                pass
+        terminated = terminate_process_job(process)
+        if not terminated and process.returncode is None:
+            raise RuntimeError("Agent subprocess has no Windows Job Object.")
+        with suppress(asyncio.CancelledError, Exception):
+            await asyncio.shield(process.wait())
+        return
+
     if process.returncode is not None:
         # The direct child may have exited while background descendants still
         # hold inherited pipes or continue working in its process group.
         if os.name == "posix" and pid:
             with suppress(ProcessLookupError):
-                os.killpg(pid, signal.SIGTERM)
+                terminate_posix_process_group(pid)
         await process.wait()
         return
     if os.name == "posix" and pid:
         with suppress(ProcessLookupError):
-            os.killpg(pid, signal.SIGTERM)
+            terminate_posix_process_group(pid)
     else:
         with suppress(ProcessLookupError):
             process.terminate()
@@ -115,12 +137,44 @@ async def terminate_process_tree(
         pass
     if os.name == "posix" and pid:
         with suppress(ProcessLookupError):
-            os.killpg(pid, signal.SIGKILL)
+            terminate_posix_process_group(pid, force=True)
     else:
         with suppress(ProcessLookupError):
             process.kill()
     with suppress(asyncio.CancelledError, Exception):
         await asyncio.shield(process.wait())
+
+
+async def create_agent_subprocess(
+    *program: str,
+    **kwargs: Any,
+) -> asyncio.subprocess.Process:
+    """Create an agent subprocess under the platform's process-tree policy."""
+    if not _WINDOWS:
+        return await asyncio.create_subprocess_exec(*program, **kwargs)
+
+    job = WindowsJob.create()
+    process: asyncio.subprocess.Process | None = None
+    existing_flags = int(kwargs.pop("creationflags", 0))
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *program,
+            creationflags=existing_flags | creation_flags(),
+            **kwargs,
+        )
+        job.assign_and_resume(process.pid)
+    except Exception:
+        if process is not None:
+            with suppress(Exception):
+                job.terminate()
+            with suppress(Exception):
+                process.kill()
+            with suppress(Exception):
+                await process.wait()
+        job.close()
+        raise
+    register_process_job(process, job)
+    return process
 
 
 def remove_isolated_config(path: str) -> None:

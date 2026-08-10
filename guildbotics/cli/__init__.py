@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import errno
 import os
 import signal
 import sys
 import threading
 import time
 import traceback
-from contextlib import suppress
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -35,6 +33,12 @@ from guildbotics.observability.diagnostics_events import (
     install_diagnostics_log_handler,
     start_system_session,
 )
+from guildbotics.runtime.service_control import (
+    ServiceControlWatcher,
+    StopStage,
+    clear_stop_request,
+    write_stop_request,
+)
 from guildbotics.runtime.service_lock import (
     ServiceLock,
     ServiceLockMetadata,
@@ -52,6 +56,7 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger
+from guildbotics.utils.processes import force_terminate_pid, pid_exists
 from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 
@@ -90,14 +95,17 @@ def _service_lock_path() -> Path:
     return get_machine_state_path("run", "service.lock")
 
 
-def _pid_is_running(pid: int) -> bool:
-    try:
-        # Signal 0 checks for existence without sending a signal
-        os.kill(pid, 0)
-    except OSError as e:
-        return e.errno == errno.EPERM
-    else:
-        return True
+def _stop_request_path() -> Path:
+    return get_machine_state_path("run", "stop-request.json")
+
+
+def _configure_windows_standard_streams() -> None:
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
 
 
 @click.group(context_settings={"show_default": True})
@@ -108,6 +116,7 @@ def _pid_is_running(pid: int) -> bool:
 )
 def main() -> None:
     """GuildBotics CLI entrypoint."""
+    _configure_windows_standard_streams()
     install_diagnostics_log_handler(get_logger())
 
 
@@ -137,9 +146,14 @@ def start(
 ) -> None:
     """Start GuildBotics runtimes (scheduler and event listener runner)."""
     _load_env_from_cwd()
+    request_path = _stop_request_path()
     service_lock = ServiceLock(_service_lock_path())
     try:
-        service_lock.acquire(owner="cli", workspace=Path.cwd())
+        metadata = service_lock.acquire(
+            owner="cli",
+            workspace=Path.cwd(),
+            before_publish=lambda: clear_stop_request(request_path),
+        )
     except ServiceLockUnavailableError as exc:
         raise click.ClickException(
             _service_lock_conflict_message(exc.metadata)
@@ -149,8 +163,11 @@ def start(
         _run_cli_background_service(
             only_target=only_target,
             max_consecutive_errors=max_consecutive_errors,
+            service_instance_id=metadata.service_instance_id,
+            request_path=request_path,
         )
     finally:
+        clear_stop_request(request_path)
         service_lock.release()
 
 
@@ -158,12 +175,16 @@ def _run_cli_background_service(
     *,
     only_target: str | None,
     max_consecutive_errors: int,
+    service_instance_id: str,
+    request_path: Path,
 ) -> None:
     start_system_session(new_id())
     try:
         _run_cli_background_service_session(
             only_target=only_target,
             max_consecutive_errors=max_consecutive_errors,
+            service_instance_id=service_instance_id,
+            request_path=request_path,
         )
     finally:
         finish_system_session()
@@ -173,6 +194,8 @@ def _run_cli_background_service_session(
     *,
     only_target: str | None,
     max_consecutive_errors: int,
+    service_instance_id: str,
+    request_path: Path,
 ) -> None:
     edition = get_edition()
 
@@ -219,11 +242,19 @@ def _run_cli_background_service_session(
         )
         _request_shutdown(cancel=False)
 
-    # Register signal handlers for graceful shutdown
+    watcher = ServiceControlWatcher(
+        service_instance_id,
+        _request_shutdown,
+        path=request_path,
+    )
+
+    # Signals support foreground interrupts and external process supervisors.
+    # GuildBotics stop requests use the cross-platform control file above.
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
     try:
+        watcher.start()
         if event_runner is not None:
             event_runner.start()
         if scheduler is not None:
@@ -236,6 +267,7 @@ def _run_cli_background_service_session(
     except KeyboardInterrupt:
         _request_shutdown(cancel=False)
     finally:
+        watcher.close()
         if scheduler is not None:
             scheduler.shutdown(graceful=True)
         if event_runner is not None:
@@ -355,7 +387,7 @@ def version_cmd() -> None:
 @click.option(
     "--force",
     is_flag=True,
-    help="Cancel in-flight work after timeout, then SIGKILL as a last resort",
+    help="Cancel in-flight work after timeout, then force terminate as a last resort",
 )
 def stop(timeout: int, force: bool) -> None:
     """Gracefully stop a CLI-managed background service."""
@@ -371,17 +403,10 @@ def stop(timeout: int, force: bool) -> None:
         raise click.ClickException(t("runtime.service_lock.desktop_managed"))
 
     pid = metadata.pid
-    if not _pid_is_running(pid):
+    if not pid_exists(pid):
         raise click.ClickException(t("runtime.service_lock.missing_process", pid=pid))
 
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except PermissionError:
-        click.echo(t("runtime.service_lock.permission_denied", pid=pid))
-        return
-    except ProcessLookupError:
-        click.echo(t("runtime.service_lock.process_missing", pid=pid))
-        return
+    _write_service_stop_request(metadata, "graceful")
 
     # Wait for graceful shutdown (the scheduler finishes in-flight work first).
     if _wait_for_process_exit(pid, timeout):
@@ -392,25 +417,44 @@ def stop(timeout: int, force: bool) -> None:
         click.echo(t("runtime.service_lock.stop_timeout"))
         return
 
-    # Escalate: a second SIGTERM cancels in-flight work, SIGKILL is the last resort.
-    with suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGTERM)
+    # Escalate monotonically from graceful to cancellation, then force stop.
+    _write_service_stop_request(metadata, "cancel")
     if _wait_for_process_exit(pid, timeout):
         click.echo(t("runtime.service_lock.stopped_after_cancel"))
         return
 
     try:
-        os.kill(pid, signal.SIGKILL)
+        force_terminate_pid(pid)
     except Exception as e:
-        click.echo(t("runtime.service_lock.sigkill_failed", pid=pid, error=e))
+        click.echo(t("runtime.service_lock.force_kill_failed", pid=pid, error=e))
     else:
         click.echo(t("runtime.service_lock.force_killed"))
+
+
+def _write_service_stop_request(
+    metadata: ServiceLockMetadata,
+    stage: StopStage,
+) -> None:
+    try:
+        write_stop_request(
+            metadata.service_instance_id,
+            stage,
+            _stop_request_path(),
+        )
+    except PermissionError as exc:
+        raise click.ClickException(
+            t("runtime.service_lock.permission_denied", pid=metadata.pid)
+        ) from exc
+    except TimeoutError as exc:
+        raise click.ClickException(
+            t("runtime.service_lock.control_timeout", pid=metadata.pid)
+        ) from exc
 
 
 def _wait_for_process_exit(pid: int, timeout: float) -> bool:
     deadline = time.time() + max(0, timeout)
     while True:
-        if not _pid_is_running(pid):
+        if not pid_exists(pid):
             return True
         if time.time() >= deadline:
             return False

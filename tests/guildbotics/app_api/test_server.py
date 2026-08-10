@@ -37,6 +37,13 @@ def _isolate_runtime_environment(monkeypatch) -> None:
         monkeypatch.delenv(key)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_machine_state(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
 def test_restore_active_workspace_applies_backend_workspace(
     tmp_path: Path, monkeypatch
 ) -> None:

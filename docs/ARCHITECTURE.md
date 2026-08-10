@@ -433,7 +433,13 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   machines). New workspace setup pins the backend: keyring when a keychain is
   available, env-file otherwise. Backend selection: `GUILDBOTICS_SECRETS_BACKEND`
   env var > `secrets.yml` > env-file. Machine moves use `guildbotics secrets
-export` / `import`.
+  export` / `import`.
+- **Keychain adapters** (`utils/keychain.py`): `KeyringSecretStore` owns the common
+  workspace index and delegates value I/O to a platform adapter. macOS and Linux
+  retain the Python keyring backend. Windows uses `utils/windows_credentials.py`
+  and writes UTF-8 opaque blobs to a GuildBotics-specific Credential Manager
+  namespace, preserving the 2,560-byte capacity for ASCII-heavy PEM keys. Batch
+  imports validate every value before the first write.
 - **Resolution priority** at process start: real environment variables > OS keychain >
   `.env`. Values are injected into `os.environ` once at startup; app_api removes its
   own injected keys on workspace switch but preserves variables inherited from the

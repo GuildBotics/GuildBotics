@@ -18,6 +18,7 @@ from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
+    create_agent_subprocess,
     isolated_agent_environment,
     member_command_environment,
     remove_isolated_config,
@@ -346,7 +347,7 @@ class AcpAdapterBase:
         env, self._gh_config_dir = isolated_agent_environment(cwd)
         env.update(self._agent_member_environment(context))
         try:
-            process = await asyncio.create_subprocess_exec(
+            process = await create_agent_subprocess(
                 *argv,
                 cwd=str(cwd),
                 env=env,

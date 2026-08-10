@@ -72,7 +72,11 @@ def read_active_workspace() -> WorkspaceState | None:
     if not isinstance(workspace_value, str) or not workspace_value.strip():
         return None
     state = workspace_state(Path(workspace_value))
-    if not state.workspace.is_dir():
+    try:
+        workspace_exists = state.workspace.is_dir()
+    except OSError:
+        return None
+    if not workspace_exists:
         return None
     return state
 

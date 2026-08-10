@@ -52,6 +52,22 @@ def unlock_file(handle: IO[str]) -> None:
     _windows_locking.locking(handle.fileno(), _windows_locking.LK_UNLCK, 1)
 
 
+def read_lock_data(handle: IO[str]) -> str:
+    """Read data stored after the byte reserved for Windows locking."""
+    handle.seek(1)
+    return handle.read()
+
+
+def write_lock_data(handle: IO[str], value: str) -> None:
+    """Replace data while preserving the leading byte used for locking."""
+    handle.seek(0)
+    handle.write(" ")
+    handle.write(value)
+    handle.truncate()
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
 def _ensure_lock_byte(handle: IO[str]) -> None:
     handle.seek(0, os.SEEK_END)
     if handle.tell() == 0:

@@ -11,6 +11,12 @@ case "$DESKTOP_TARGET" in
 esac
 APP_API_NAME="guildbotics-app-api-${DESKTOP_TARGET}"
 CLI_NAME="guildbotics-cli-${DESKTOP_TARGET}"
+SOURCE_SUFFIX=""
+if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
+  APP_API_NAME="${APP_API_NAME}.exe"
+  CLI_NAME="${CLI_NAME}.exe"
+  SOURCE_SUFFIX=".exe"
+fi
 
 cd "$REPO_ROOT"
 
@@ -27,8 +33,8 @@ uv run --with pyinstaller python -m PyInstaller \
   --distpath dist --workpath build/cli
 
 mkdir -p desktop/src-tauri/binaries
-cp dist/guildbotics-app-api "desktop/src-tauri/binaries/${APP_API_NAME}"
-cp dist/guildbotics-cli "desktop/src-tauri/binaries/${CLI_NAME}"
+cp "dist/guildbotics-app-api${SOURCE_SUFFIX}" "desktop/src-tauri/binaries/${APP_API_NAME}"
+cp "dist/guildbotics-cli${SOURCE_SUFFIX}" "desktop/src-tauri/binaries/${CLI_NAME}"
 chmod +x "desktop/src-tauri/binaries/${APP_API_NAME}"
 chmod +x "desktop/src-tauri/binaries/${CLI_NAME}"
 

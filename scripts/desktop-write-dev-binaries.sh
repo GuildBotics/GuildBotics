@@ -8,6 +8,11 @@ BIN_DIR="$REPO_ROOT/desktop/src-tauri/binaries"
 SIDECAR_PATH="$BIN_DIR/guildbotics-app-api-${DESKTOP_TARGET}"
 CLI_PATH="$BIN_DIR/guildbotics-cli-${DESKTOP_TARGET}"
 
+if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
+  "$SCRIPT_DIR/desktop-build-backend.sh"
+  exit 0
+fi
+
 mkdir -p "$BIN_DIR"
 cat >"$SIDECAR_PATH" <<SH
 #!/bin/sh

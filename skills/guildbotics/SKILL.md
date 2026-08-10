@@ -11,21 +11,31 @@ This skill only defines the interactive envelope: how to work side by side with 
 
 ## Required First Step
 
-Run:
+On macOS or Linux, run the desktop-managed CLI by absolute path:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>
 ```
 
-Treat the returned non-secret member context as the source of truth for the member's persona, role, profile, judgment criteria, and `communication_style`.
-Its `capabilities` section is the authoritative reference for every `guildbotics member ...` command, the standard work procedure, and the cross-cutting rules. The same reference can be reprinted any time with `"$HOME/.guildbotics/bin/guildbotics" member help`.
-Do not perform GitHub, git, or Slack writes before reading `member context`.
-Prefer the desktop-managed CLI at `$HOME/.guildbotics/bin/guildbotics`; use bare `guildbotics` only if that managed CLI is unavailable. If it reports that no active workspace is configured, ask the user to select a workspace in GuildBotics desktop or run `guildbotics workspace use <path>`.
+On Windows, the installer adds the managed CLI directory to the user PATH. Open a new shell session and run:
 
-If the user asks to verify credentials, run:
+```text
+guildbotics member context --person <person_id>
+```
+
+Treat the returned non-secret member context as the source of truth for the member's persona, role, profile, judgment criteria, and `communication_style`.
+Its `capabilities` section is the authoritative reference for every `guildbotics member ...` command, the standard work procedure, and the cross-cutting rules. The same reference can be reprinted with `"$HOME/.guildbotics/bin/guildbotics" member help` on macOS/Linux or `guildbotics member help` on Windows.
+Do not perform GitHub, git, or Slack writes before reading `member context`.
+Use the desktop-managed absolute path on macOS/Linux and bare `guildbotics` on Windows. If it reports that no active workspace is configured, ask the user to select a workspace in GuildBotics desktop or run `guildbotics workspace use <path>`.
+
+If the user asks to verify credentials, use the same OS-specific executable form:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member context --person <person_id> --check-credentials --format json
+```
+
+```text
+guildbotics member context --person <person_id> --check-credentials --format json
 ```
 
 This credential check is allowed: it performs a read-only GuildBotics member credential probe and does not perform GitHub or git writes.
@@ -44,14 +54,22 @@ Treat the user's currently open repository as the shared pair-programming worksp
 - Do not run `member git prepare` or clone into the member workspace unless the user explicitly asks for an isolated workspace.
 - Do not switch branches, reset, clean, or pull automatically. If the current branch or repository does not match the work, stop and ask the user before making git workspace changes.
 - Stage with plain git; create branches with plain git (`git switch -c <branch>`) when the user asks. The member git commands only add the member identity and credential.
-- Always pass `--workspace-mode current` to `member git commit`, `member git push`, and `member git publish`:
+- Always pass `--workspace-mode current` to `member git commit`, `member git push`, and `member git publish`.
+- Before a command that writes free-form content, create a UTF-8 file in the OS temporary directory, outside the repository and worktree, using a unique file name. Write the exact content with a file-editing capability instead of an inline shell literal, pass the path as one argument to `--content-file`, and delete the file even when the command fails. Never create or stage this file inside the repository.
+- On macOS/Linux, use:
 
 ```bash
 git add -A   # or: git add <paths> to stage only part of your changes
-"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --content-stdin --workspace-mode current <<'EOF'
-<commit message in the GuildBotics project language>
-EOF
+"$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --content-file "<temporary_content_file>" --workspace-mode current
 "$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current
+```
+
+- On Windows, use the equivalent bare CLI commands from a new shell session:
+
+```text
+git add -A
+guildbotics member git commit --person <person_id> --repo-path <current_repo_path> --content-file "<temporary_content_file>" --workspace-mode current
+guildbotics member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current
 ```
 
 Run `member git commit` without `member git push` when the user asks for a local commit only.

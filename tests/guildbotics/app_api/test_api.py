@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
 from yaml import safe_load
 
-from guildbotics.app_api.api import TAURI_ORIGIN, TOKEN_HEADER, create_app
+from guildbotics.app_api.api import TAURI_ORIGINS, TOKEN_HEADER, create_app
 from guildbotics.app_api.command_input_files import (
     COMMAND_INPUT_DIRECTORY_NAME,
     CommandInputFileStore,
@@ -2457,16 +2457,17 @@ def test_preflight_rejects_an_unlisted_localhost_origin(tmp_path: Path) -> None:
     assert "access-control-allow-origin" not in response.headers
 
 
-def test_preflight_allows_the_tauri_origin_without_configuration(
-    tmp_path: Path,
+@pytest.mark.parametrize("origin", TAURI_ORIGINS)
+def test_preflight_allows_a_packaged_tauri_origin_without_configuration(
+    tmp_path: Path, origin: str
 ) -> None:
     client = TestClient(
         create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
     )
 
-    response = _preflight(client, TAURI_ORIGIN)
+    response = _preflight(client, origin)
 
-    assert response.headers["access-control-allow-origin"] == TAURI_ORIGIN
+    assert response.headers["access-control-allow-origin"] == origin
 
 
 def test_preflight_allows_an_origin_injected_by_the_launcher(tmp_path: Path) -> None:

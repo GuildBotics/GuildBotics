@@ -267,8 +267,10 @@ def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
+    data_root = tmp_path / "data"
+    monkeypatch.setattr(member_module, "get_workspace_data_root", lambda: data_root)
     key = ConversationKey("aiko", "codex", "ticket", "issue-300")
-    store = ConversationStore(tmp_path / "data")
+    store = ConversationStore(data_root)
     record = store.resolve(key, ResumePolicy.AUTO)
     record.provider_session_id = "thread-1"
     store.save(record)
@@ -276,6 +278,8 @@ def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_
     result = CliRunner().invoke(
         member_module.member,
         [
+            "--workspace",
+            str(tmp_path),
             "agent",
             "conversation",
             "reset",
@@ -609,6 +613,7 @@ def test_member_context_markdown_highlights_communication_style(monkeypatch):
 
 def test_member_context_uses_active_workspace(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     workspace = tmp_path / "workspace"
@@ -643,6 +648,7 @@ def test_member_context_workspace_option_overrides_active_workspace(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     active_workspace = tmp_path / "active"
@@ -735,6 +741,7 @@ def test_member_active_workspace_without_env_does_not_load_cwd_env(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
@@ -814,7 +821,7 @@ def test_member_context_check_credentials_fail_closed(monkeypatch):
     assert "GITHUB_ACCESS_TOKEN" not in result.output
 
 
-def test_member_write_command_requires_content_stdin():
+def test_member_write_command_requires_content_source():
     runner = CliRunner()
 
     result = runner.invoke(
@@ -831,7 +838,7 @@ def test_member_write_command_requires_content_stdin():
     )
 
     assert result.exit_code != 0
-    assert "Missing option '--content-stdin'" in result.output
+    assert "--content-stdin or --content-file" in result.output
 
 
 CONTENT_COMMANDS = (
@@ -882,6 +889,7 @@ def test_required_content_commands_reject_empty_stdin(command):
         "git publish",
         "github issue comment",
         "github issue create",
+        "github issue update",
         "github pr create",
         "github pr update",
         "github pr comment",
@@ -890,11 +898,12 @@ def test_required_content_commands_reject_empty_stdin(command):
         "task complete",
     ],
 )
-def test_content_command_help_exposes_only_content_stdin(command):
+def test_content_command_help_exposes_shared_content_sources(command):
     result = CliRunner().invoke(member_module.member, [*command.split(), "--help"])
 
     assert result.exit_code == 0
     assert "--content-stdin" in result.output
+    assert "--content-file" in result.output
     for removed in (
         "--title-file",
         "--body-file",
@@ -905,6 +914,102 @@ def test_content_command_help_exposes_only_content_stdin(command):
         "--summary-file",
     ):
         assert removed not in result.output
+
+
+def test_required_content_option_reads_utf8_file(tmp_path):
+    content_file = tmp_path / "message.txt"
+    content_file.write_text("日本語\n$ `value`\n", encoding="utf-8")
+
+    @click.command()
+    @member_module._required_content_stdin_option
+    def command():
+        click.echo(member_module._read_stdin("body"), nl=False)
+
+    result = CliRunner().invoke(
+        command,
+        ["--content-file", str(content_file)],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "日本語\n$ `value`\n"
+
+
+def test_content_sources_are_mutually_exclusive(tmp_path):
+    content_file = tmp_path / "message.txt"
+    content_file.write_text("body", encoding="utf-8")
+
+    @click.command()
+    @member_module._required_content_stdin_option
+    def command():
+        pass
+
+    result = CliRunner().invoke(
+        command,
+        ["--content-stdin", "--content-file", str(content_file)],
+        input="stdin",
+    )
+
+    assert result.exit_code != 0
+    assert "exactly one" in result.output
+
+
+def test_content_file_must_exist(tmp_path):
+    @click.command()
+    @member_module._required_content_stdin_option
+    def command():
+        pass
+
+    result = CliRunner().invoke(
+        command,
+        ["--content-file", str(tmp_path / "missing.txt")],
+    )
+
+    assert result.exit_code != 0
+    assert "does not exist" in result.output
+
+
+def test_content_file_must_be_utf8(tmp_path):
+    content_file = tmp_path / "message.txt"
+    content_file.write_bytes(b"\xff\xfe")
+
+    @click.command()
+    @member_module._required_content_stdin_option
+    def command():
+        pass
+
+    result = CliRunner().invoke(
+        command,
+        ["--content-file", str(content_file)],
+    )
+
+    assert result.exit_code != 0
+    assert "valid UTF-8" in result.output
+
+
+def test_content_file_read_failure_is_reported(monkeypatch, tmp_path):
+    content_file = tmp_path / "message.txt"
+    content_file.write_text("body", encoding="utf-8")
+    real_read_text = member_module.Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        if path == content_file:
+            raise OSError("read failed")
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(member_module.Path, "read_text", read_text)
+
+    @click.command()
+    @member_module._required_content_stdin_option
+    def command():
+        pass
+
+    result = CliRunner().invoke(
+        command,
+        ["--content-file", str(content_file)],
+    )
+
+    assert result.exit_code != 0
+    assert "Could not read content file" in result.output
 
 
 @pytest.mark.parametrize(
@@ -1367,7 +1472,7 @@ def test_member_git_prepare_rejects_branch_without_repo():
     assert "--branch requires --repo." in result.output
 
 
-def test_member_git_commit_requires_content_stdin(tmp_path):
+def test_member_git_commit_requires_content_source(tmp_path):
     runner = CliRunner()
 
     result = runner.invoke(
@@ -1383,7 +1488,7 @@ def test_member_git_commit_requires_content_stdin(tmp_path):
     )
 
     assert result.exit_code != 0
-    assert "Missing option '--content-stdin'" in result.output
+    assert "--content-stdin or --content-file" in result.output
 
 
 def test_member_git_commit_rejects_removed_message_options(tmp_path):
@@ -1856,7 +1961,7 @@ def test_member_github_pr_create_rejects_missing_content_source():
     )
 
     assert result.exit_code != 0
-    assert "Missing option '--content-stdin'" in result.output
+    assert "--content-stdin or --content-file" in result.output
 
 
 def test_member_github_pr_update_rejects_update_without_any_change():
@@ -1875,7 +1980,7 @@ def test_member_github_pr_update_rejects_update_without_any_change():
     )
 
     assert result.exit_code != 0
-    assert "pr update needs --content-stdin or --title." in result.output
+    assert "pr update needs --content-stdin/--content-file or --title." in result.output
 
 
 def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypatch):

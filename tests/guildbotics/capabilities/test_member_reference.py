@@ -29,7 +29,7 @@ def test_reference_covers_every_member_domain():
     assert "guildbotics member github pr create" in text
     assert "guildbotics member github pr update" in text
     assert "guildbotics member github pr review-comment" in text
-    assert "--content-stdin" in text
+    assert "--content-file" in text
     assert "guildbotics member chat reply" in text
     assert "guildbotics member task complete" in text
     assert "guildbotics member help" in text
@@ -129,11 +129,17 @@ def test_reference_states_which_github_writes_stay_human_decisions():
     assert "the labels the target repository already defines" in text
 
 
-def test_reference_standardizes_free_form_input_and_quoted_heredocs():
+def test_reference_standardizes_free_form_input_with_utf8_files():
     text = capability_reference_text()
-    assert "--content-stdin" in text
-    assert "<<'EOF'" in text
-    assert "`$()` remain literal" in text
+    assert "--content-file <file>" in text
+    assert "UTF-8" in text
+    assert "OS temporary directory" in text
+    assert "outside the repository and worktree" in text
+    assert "unique file name" in text
+    assert "one argv value" in text
+    assert "even when the command fails" in text
+    assert "relative name with no spaces" not in text
+    assert "--content-stdin" not in text
     for removed in (
         "--title-file",
         "--body-file",
@@ -150,7 +156,7 @@ def test_reference_documents_complete_content_command_usage():
     text = capability_reference_text()
     assert "[--add-to-project|--no-add-to-project]" in text
     assert "(--channel-id <id> | --channel-name <name>) --thread-ts <ts>" in text
-    assert "[--scope personal|team] --title <title> --content-stdin" in text
+    assert "[--scope personal|team] --title <title> --content-file <file>" in text
     assert "[--keyword <word> ...] [--add-keyword <word> ...]" in text
     assert "[--ticket <url>] [--pr <url>]" in text
     assert "[--kind note|policy]" in text

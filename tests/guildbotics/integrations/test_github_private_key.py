@@ -40,7 +40,7 @@ def test_prefers_keychain_content_over_path(
 def test_falls_back_to_key_file(fake_keyring, tmp_path, monkeypatch, person):
     _pin_workspace(tmp_path, monkeypatch)
     pem_file = tmp_path / "aiko.pem"
-    pem_file.write_text(PEM_FROM_FILE)
+    pem_file.write_bytes(PEM_FROM_FILE.encode())
     monkeypatch.setenv("AIKO_GITHUB_PRIVATE_KEY_PATH", str(pem_file))
 
     assert get_person_private_key_pem(person) == PEM_FROM_FILE.encode()

@@ -136,10 +136,14 @@ fn pick_free_port() -> u16 {
 }
 
 fn home_dir() -> io::Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
+    #[allow(deprecated)]
+    resolve_home_dir(std::env::home_dir())
+}
+
+fn resolve_home_dir(discovered: Option<PathBuf>) -> io::Result<PathBuf> {
+    discovered
         .filter(|path| !path.as_os_str().is_empty())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory not found"))
 }
 
 fn desktop_target_triple_for(os: &str, architecture: &str) -> Option<&'static str> {
@@ -148,6 +152,7 @@ fn desktop_target_triple_for(os: &str, architecture: &str) -> Option<&'static st
         ("macos", "x86_64") => "x86_64-apple-darwin",
         ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         _ => return None,
     })
 }
@@ -161,9 +166,11 @@ fn bundled_cli_candidates() -> Vec<PathBuf> {
     let target_triple = desktop_target_triple();
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(dir) = current_exe.parent() {
-            candidates.push(dir.join("guildbotics-cli"));
+            candidates.push(dir.join(platform_executable_name("guildbotics-cli")));
             if let Some(target_triple) = target_triple {
-                candidates.push(dir.join(format!("guildbotics-cli-{target_triple}")));
+                candidates.push(dir.join(platform_executable_name(&format!(
+                    "guildbotics-cli-{target_triple}"
+                ))));
             }
         }
     }
@@ -171,7 +178,9 @@ fn bundled_cli_candidates() -> Vec<PathBuf> {
         candidates.push(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("binaries")
-                .join(format!("guildbotics-cli-{target_triple}")),
+                .join(platform_executable_name(&format!(
+                    "guildbotics-cli-{target_triple}"
+                ))),
         );
     }
     candidates
@@ -206,22 +215,40 @@ fn make_executable(_path: &Path) -> io::Result<()> {
 fn install_member_cli(home: &Path) -> io::Result<()> {
     let source = find_bundled_cli()?;
     let managed_dir = home.join(".guildbotics").join("bin");
-    let managed_cli = managed_dir.join("guildbotics");
+    let managed_cli = managed_dir.join(platform_executable_name("guildbotics"));
     fs::create_dir_all(&managed_dir)?;
     fs::copy(source, &managed_cli)?;
     make_executable(&managed_cli)?;
 
-    let local_bin = home.join(".local").join("bin");
-    let local_cli = local_bin.join("guildbotics");
-    fs::create_dir_all(&local_bin)?;
-    if should_write_managed_shim(&local_cli) {
-        fs::write(
-            &local_cli,
-            "#!/bin/sh\n# Managed by GuildBotics desktop.\nexec \"$HOME/.guildbotics/bin/guildbotics\" \"$@\"\n",
-        )?;
-        make_executable(&local_cli)?;
+    if should_install_shell_shim(std::env::consts::OS) {
+        let local_bin = home.join(".local").join("bin");
+        let local_cli = local_bin.join("guildbotics");
+        fs::create_dir_all(&local_bin)?;
+        if should_write_managed_shim(&local_cli) {
+            fs::write(
+                &local_cli,
+                "#!/bin/sh\n# Managed by GuildBotics desktop.\nexec \"$HOME/.guildbotics/bin/guildbotics\" \"$@\"\n",
+            )?;
+            make_executable(&local_cli)?;
+        }
     }
     Ok(())
+}
+
+fn executable_name_for(base: &str, os: &str) -> String {
+    if os == "windows" {
+        format!("{base}.exe")
+    } else {
+        base.to_owned()
+    }
+}
+
+fn platform_executable_name(base: &str) -> String {
+    executable_name_for(base, std::env::consts::OS)
+}
+
+fn should_install_shell_shim(os: &str) -> bool {
+    os != "windows"
 }
 
 fn should_write_managed_shim(path: &Path) -> bool {
@@ -589,7 +616,34 @@ mod tests {
             desktop_target_triple_for("linux", "x86_64"),
             Some("x86_64-unknown-linux-gnu")
         );
-        assert_eq!(desktop_target_triple_for("windows", "x86_64"), None);
+        assert_eq!(
+            desktop_target_triple_for("windows", "x86_64"),
+            Some("x86_64-pc-windows-msvc")
+        );
+    }
+
+    #[test]
+    fn windows_cli_names_include_executable_suffix_and_skip_shell_shim() {
+        assert_eq!(
+            executable_name_for("guildbotics-cli-x86_64-pc-windows-msvc", "windows"),
+            "guildbotics-cli-x86_64-pc-windows-msvc.exe"
+        );
+        assert_eq!(
+            executable_name_for("guildbotics", "windows"),
+            "guildbotics.exe"
+        );
+        assert!(!should_install_shell_shim("windows"));
+        assert!(should_install_shell_shim("macos"));
+    }
+
+    #[test]
+    fn home_resolution_accepts_windows_profile_paths_without_home_env() {
+        let profile = PathBuf::from(r"C:\Users\Aiko Example");
+        assert_eq!(resolve_home_dir(Some(profile.clone())).unwrap(), profile);
+        assert_eq!(
+            resolve_home_dir(None).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }
 

@@ -19,6 +19,7 @@ from typing import Any
 
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
+    create_agent_subprocess,
     isolated_agent_environment,
     member_command_environment,
     remove_isolated_config,
@@ -171,7 +172,7 @@ class AntigravityStreamJsonAdapter:
         elif effort := str(settings.get("effort", "")):
             args.extend(("--effort", effort))
         try:
-            self._process = await asyncio.create_subprocess_exec(
+            self._process = await create_agent_subprocess(
                 *args,
                 cwd=str(context.cwd),
                 env=env,
@@ -383,7 +384,7 @@ class AntigravityStreamJsonAdapter:
         self._model_catalog_read = True
         process: asyncio.subprocess.Process | None = None
         try:
-            process = await asyncio.create_subprocess_exec(
+            process = await create_agent_subprocess(
                 self._executable,
                 "models",
                 # `agy models` blocks forever on an attached terminal.
@@ -417,7 +418,7 @@ class AntigravityStreamJsonAdapter:
         env, gh_config_dir = isolated_agent_environment(context.cwd)
         process: asyncio.subprocess.Process | None = None
         try:
-            process = await asyncio.create_subprocess_exec(
+            process = await create_agent_subprocess(
                 self._executable,
                 "--help",
                 cwd=str(context.cwd),

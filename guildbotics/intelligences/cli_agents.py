@@ -87,19 +87,23 @@ def get_cli_agent_search_path(path: str | None = None) -> str:
     current = os.environ.get("PATH") if path is None else path
     if path is not None and current == "":
         return ""
-    entries = [entry for entry in (current or os.defpath).split(os.pathsep) if entry]
     home = Path.home()
-    entries.extend(
-        [
-            str(home / ".guildbotics/bin"),
+    entries = [
+        str(home / ".guildbotics/bin"),
+        *[entry for entry in (current or os.defpath).split(os.pathsep) if entry],
+        *[
             str(home / ".local/bin"),
             str(home / "bin"),
             str(home / ".cargo/bin"),
             str(home / ".volta/bin"),
-        ]
-    )
+        ],
+    ]
     entries.extend(GUI_APP_PATHS)
-    return os.pathsep.join(dict.fromkeys(entries))
+    unique: dict[str, str] = {}
+    for entry in entries:
+        key = os.path.normcase(os.path.normpath(entry))
+        unique.setdefault(key, entry)
+    return os.pathsep.join(unique.values())
 
 
 def resolve_cli_agent_path(executable: str, path: str | None = None) -> str:
@@ -153,6 +157,14 @@ def require_cli_agent_path(path: str, *, where: str) -> str:
     )
 
 
+def cli_agent_executable(name: str) -> str:
+    """Return the executable name for a catalog AI CLI tool."""
+    for agent in CLI_AGENTS:
+        if agent.name == name:
+            return agent.executable
+    return ""
+
+
 def resolve_default_cli_executable() -> str:
     """Return the executable (binary) of the team's default AI CLI tool."""
     try:
@@ -164,8 +176,4 @@ def resolve_default_cli_executable() -> str:
     except Exception:
         return ""
 
-    default_name = cli_agent_name_from_path(default_file)
-    for agent in CLI_AGENTS:
-        if agent.name == default_name:
-            return agent.executable
-    return ""
+    return cli_agent_executable(cli_agent_name_from_path(default_file))

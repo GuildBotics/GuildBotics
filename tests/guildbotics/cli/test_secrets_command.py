@@ -4,6 +4,7 @@ from pathlib import Path
 
 import importlib
 
+import i18n
 from click.testing import CliRunner
 
 from guildbotics.cli import main
@@ -15,6 +16,23 @@ from guildbotics.utils.secret_store import (
     configured_secrets_backend,
     read_env_values,
 )
+from guildbotics.utils.i18n_tool import set_language, t
+from guildbotics.utils.windows_credentials import WindowsCredentialManager
+
+
+class FakeCredentialApi:
+    def __init__(self):
+        self.values: dict[str, bytes] = {}
+
+    def read(self, target: str) -> bytes | None:
+        return self.values.get(target)
+
+    def write(self, target: str, username: str, blob: bytes) -> None:
+        del username
+        self.values[target] = blob
+
+    def delete(self, target: str) -> None:
+        self.values.pop(target, None)
 
 
 def _workspace(tmp_path: Path, monkeypatch, *, env_lines: str = "") -> Path:
@@ -141,6 +159,89 @@ def test_export_and_import_roundtrip_multiline_pem(fake_keyring, tmp_path, monke
     assert imported.exit_code == 0, imported.output
     assert KeyringSecretStore(_config_dir(target)).get("ALICE_GITHUB_PRIVATE_KEY") == (
         pem
+    )
+
+
+def test_windows_import_accepts_large_pem(tmp_path, monkeypatch):
+    workspace = _workspace(tmp_path, monkeypatch)
+    api = FakeCredentialApi()
+    manager = WindowsCredentialManager(api)
+    KeyringSecretStore(_config_dir(workspace), manager).ensure_initialized()
+    monkeypatch.setattr(
+        secrets_cli,
+        "resolve_secret_store",
+        lambda *_args: KeyringSecretStore(_config_dir(workspace), manager),
+    )
+    pem = "x" * 1679
+    import_file = tmp_path / "secrets.env"
+    import_file.write_text(f'ALICE_GITHUB_PRIVATE_KEY="{pem}"\n')
+
+    result = CliRunner().invoke(
+        secrets, ["--workspace", str(workspace), "import", str(import_file)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        KeyringSecretStore(_config_dir(workspace), manager).get(
+            "ALICE_GITHUB_PRIVATE_KEY"
+        )
+        == pem
+    )
+
+
+def test_windows_import_prevalidates_all_values(tmp_path, monkeypatch):
+    workspace = _workspace(tmp_path, monkeypatch)
+    api = FakeCredentialApi()
+    manager = WindowsCredentialManager(api)
+    KeyringSecretStore(_config_dir(workspace), manager).ensure_initialized()
+    monkeypatch.setattr(
+        secrets_cli,
+        "resolve_secret_store",
+        lambda *_args: KeyringSecretStore(_config_dir(workspace), manager),
+    )
+    import_file = tmp_path / "secrets.env"
+    import_file.write_text(f"SMALL=ok\nTOO_LARGE={'x' * 2561}\n")
+
+    result = CliRunner().invoke(
+        secrets, ["--workspace", str(workspace), "import", str(import_file)]
+    )
+
+    assert result.exit_code == 1
+    assert "TOO_LARGE" in result.output
+    assert "2561" in result.output
+    assert "2560" in result.output
+    assert "x" * 100 not in result.output
+    assert api.values == {}
+    assert KeyringSecretStore(_config_dir(workspace), manager).keys() == []
+
+
+def test_secret_size_error_is_translated_in_english_and_japanese():
+    previous_locale = i18n.get("locale")
+    try:
+        set_language("en")
+        english = t(
+            "cli.secrets.value_too_large",
+            secret_key="TOO_LARGE",
+            size=2561,
+            limit=2560,
+        )
+        set_language("ja")
+        japanese = t(
+            "cli.secrets.value_too_large",
+            secret_key="TOO_LARGE",
+            size=2561,
+            limit=2560,
+        )
+    finally:
+        i18n.set("locale", previous_locale)
+
+    assert english == (
+        "Secret TOO_LARGE requires 2561 bytes, exceeding the keychain limit of "
+        "2560 bytes."
+    )
+    assert japanese == (
+        "シークレット TOO_LARGE は 2561 バイトあり、キーチェーンの上限 2560 "
+        "バイトを超えています。"
     )
 
 

@@ -16,7 +16,7 @@ from guildbotics.entities.team import (
     Team,
 )
 from guildbotics.integrations.chat_service import ChatIdentity
-from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
+from guildbotics.intelligences.brains.cli_agent import CliAgentBrain, ExecutableInfo
 
 TICKET_STATUSES = ["Todo", "Doing", "Done"]
 CLI_AGENT_FAILURE_RETURNCODE = 2
@@ -32,10 +32,15 @@ class _CliResult:
 class _StubBrain(CliAgentBrain):
     """Minimal CliAgentBrain stand-in returning a canned execution result."""
 
-    def __init__(self, result: _CliResult) -> None:
+    def __init__(
+        self, result: _CliResult | Exception, *, adapter: str = "codex"
+    ) -> None:
         self._result = result
+        self.executable_info = ExecutableInfo(adapter=adapter)
 
     async def run_with_execution_details(self, message: str, cwd: Any) -> _CliResult:
+        if isinstance(self._result, Exception):
+            raise self._result
         return self._result
 
 
@@ -80,9 +85,11 @@ class _StubContext:
     team: Team
     person: Person | None = None
     brain: Any = None
+    member_brains: dict[str, Any] = field(default_factory=dict)
     ticket_manager: Any = field(default_factory=_StubTicketManager)
     chat_service: Any = field(default_factory=_StubChatService)
     talk_result: str = "OK"
+    close_events: list[str] | None = None
     logger: logging.Logger = field(
         default_factory=lambda: logging.getLogger("diagnostics-test")
     )
@@ -91,16 +98,19 @@ class _StubContext:
         clone = _StubContext(
             team=self.team,
             person=member,
-            brain=self.brain,
+            brain=self.member_brains.get(member.person_id, self.brain),
+            member_brains=self.member_brains,
             ticket_manager=self.ticket_manager,
             chat_service=self.chat_service,
             talk_result=self.talk_result,
+            close_events=self.close_events,
             logger=self.logger,
         )
         return clone
 
     async def aclose(self) -> None:
-        return None
+        if self.close_events is not None:
+            self.close_events.append("context")
 
     def get_brain(self, name: str, config: dict, _extra: Any) -> Any:
         return self.brain
@@ -127,7 +137,7 @@ def _patch_cli(
     path: str = "/usr/local/bin/codex",
 ) -> None:
     monkeypatch.setattr(
-        diagnostics_module, "resolve_default_cli_executable", lambda: executable
+        diagnostics_module, "cli_agent_executable", lambda _name: executable
     )
     monkeypatch.setattr(
         diagnostics_module, "resolve_cli_agent_path", lambda *_a, **_k: path
@@ -489,16 +499,19 @@ async def test_llm_check_falls_through_when_provider_unknown(
 @pytest.mark.asyncio
 async def test_cli_agent_mapping_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_talk(monkeypatch)
-    monkeypatch.setattr(
-        diagnostics_module, "resolve_default_cli_executable", lambda: ""
+    _patch_cli(monkeypatch, executable="")
+    context = _StubContext(
+        team=_team([_person("alice", is_active=True)]),
+        brain=_StubBrain(_CliResult()),
     )
-    context = _StubContext(team=_team([_person("alice", is_active=True)]))
 
     response = await _run(context)
 
     check = _by_code(response)["cli_agent_mapping"]
     assert check.status == "error"
-    assert check.message == "Default AI CLI tool executable could not be inferred."
+    assert check.message == "Configured AI CLI tool executable could not be inferred."
+    assert check.person_id == "alice"
+    assert check.target == "codex"
 
 
 @pytest.mark.asyncio
@@ -507,13 +520,17 @@ async def test_cli_agent_executable_not_found(
 ) -> None:
     _patch_talk(monkeypatch)
     _patch_cli(monkeypatch, executable="codex", path="")
-    context = _StubContext(team=_team([_person("alice", is_active=True)]))
+    context = _StubContext(
+        team=_team([_person("alice", is_active=True)]),
+        brain=_StubBrain(_CliResult()),
+    )
 
     response = await _run(context)
 
     check = _by_code(response)["cli_agent_executable"]
     assert check.status == "error"
     assert check.target == "codex"
+    assert check.person_id == "alice"
     assert "not found on PATH" in check.message
 
 
@@ -535,6 +552,107 @@ async def test_cli_agent_executable_found_and_brain_ok(
     assert checks["cli_agent_executable"].context["path"] == "/usr/local/bin/codex"
     assert checks["cli_agent_brain"].status == "ok"
     assert checks["cli_agent_brain"].person_id == "alice"
+    assert checks["cli_agent_brain"].target == "codex"
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_uses_each_members_effective_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    resolved: list[str] = []
+
+    def resolve(executable: str) -> str:
+        resolved.append(executable)
+        return f"/tools/{executable}"
+
+    monkeypatch.setattr(diagnostics_module, "resolve_cli_agent_path", resolve)
+    context = _StubContext(
+        team=_team(
+            [
+                _person("alice", is_active=True),
+                _person("kenji", is_active=True),
+            ]
+        ),
+        member_brains={
+            "alice": _StubBrain(_CliResult(), adapter="codex"),
+            "kenji": _StubBrain(_CliResult(), adapter="grok"),
+        },
+    )
+
+    response = await _run(context)
+
+    executable_checks = [
+        check for check in response.checks if check.code == "cli_agent_executable"
+    ]
+    brain_checks = [
+        check for check in response.checks if check.code == "cli_agent_brain"
+    ]
+    assert resolved == ["codex", "grok"]
+    assert [
+        (check.person_id, check.target, check.context["path"])
+        for check in executable_checks
+    ] == [
+        ("alice", "codex", "/tools/codex"),
+        ("kenji", "grok", "/tools/grok"),
+    ]
+    assert [(check.person_id, check.target) for check in brain_checks] == [
+        ("alice", "codex"),
+        ("kenji", "grok"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_failure_uses_the_members_effective_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_talk(monkeypatch)
+    _patch_cli(monkeypatch, executable="grok", path="C:/tools/grok.exe")
+    context = _StubContext(
+        team=_team([_person("kenji", is_active=True)]),
+        brain=_StubBrain(RuntimeError("member broker failed"), adapter="grok"),
+    )
+
+    response = await _run(context)
+
+    check = _by_code(response)["cli_agent_brain"]
+    assert check.status == "error"
+    assert check.person_id == "kenji"
+    assert check.target == "grok"
+    assert check.context["executable"] == "grok"
+    assert "member broker failed" in check.message
+
+
+@pytest.mark.asyncio
+async def test_cli_agent_closes_context_before_removing_temporary_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    _patch_cli(monkeypatch)
+    events: list[str] = []
+
+    class TrackingTemporaryDirectory:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.name = str(tmp_path)
+
+        def cleanup(self) -> None:
+            events.append("temporary_directory")
+
+    monkeypatch.setattr(
+        diagnostics_module.tempfile,
+        "TemporaryDirectory",
+        TrackingTemporaryDirectory,
+    )
+    member = _person("alice", is_active=True)
+    context = _StubContext(
+        team=_team([member]),
+        brain=_StubBrain(_CliResult(returncode=0, stdout="OK")),
+        close_events=events,
+    )
+
+    checks = await ScenarioDiagnosticsService()._check_cli_agent_brain(context, member)
+
+    assert checks[-1].status == "ok"
+    assert events == ["context", "temporary_directory"]
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ from uvicorn import Config, Server
 
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
+    create_agent_subprocess,
     member_command_environment,
     terminate_process_tree,
 )
@@ -176,7 +177,7 @@ class MemberCapabilityBroker:
                 *arguments,
             )
             env = _member_environment(context)
-            process = await asyncio.create_subprocess_exec(
+            process = await create_agent_subprocess(
                 *argv,
                 cwd=str(context.cwd),
                 env=env,
@@ -307,7 +308,8 @@ def _member_cli_command() -> tuple[str, ...]:
     """Resolve the matching CLI entrypoint for source and packaged runtimes."""
     if not getattr(sys, "frozen", False):
         return (sys.executable, "-m", "guildbotics.cli")
-    executable = Path.home() / ".guildbotics" / "bin" / "guildbotics"
+    executable_name = "guildbotics.exe" if sys.platform == "win32" else "guildbotics"
+    executable = Path.home() / ".guildbotics" / "bin" / executable_name
     if not executable.is_file():
         raise RuntimeError(f"Bundled GuildBotics member CLI is missing: {executable}")
     return (str(executable),)

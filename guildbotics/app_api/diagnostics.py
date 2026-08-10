@@ -28,8 +28,8 @@ from guildbotics.integrations.github.github_utils import (
 from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.cli_agents import (
+    cli_agent_executable,
     resolve_cli_agent_path,
-    resolve_default_cli_executable,
 )
 from guildbotics.intelligences.functions import talk_as
 from guildbotics.intelligences.llm_providers import provider_env_keys
@@ -353,48 +353,19 @@ class ScenarioDiagnosticsService:
     async def _check_cli_agent(
         self, context: Context, members: list[Person]
     ) -> list[DiagnosticCheck]:
-        executable = self._resolve_default_cli_executable()
-        if not executable:
-            return [
-                self._check(
-                    "cli_agent",
-                    "cli_agent_mapping",
-                    "error",
-                    "Default AI CLI tool executable could not be inferred.",
-                )
-            ]
-
-        path = resolve_cli_agent_path(executable)
-        if not path:
-            return [
-                self._check(
-                    "cli_agent",
-                    "cli_agent_executable",
-                    "error",
-                    f"AI CLI tool executable '{executable}' was not found on PATH.",
-                    target=executable,
-                )
-            ]
-        checks = [
-            self._check(
-                "cli_agent",
-                "cli_agent_executable",
-                "ok",
-                f"AI CLI tool executable '{executable}' was found.",
-                target=executable,
-                context={"path": path},
-            )
-        ]
+        checks: list[DiagnosticCheck] = []
         for member in members:
-            checks.append(
-                await self._check_cli_agent_brain(context, member, executable)
-            )
+            checks.extend(await self._check_cli_agent_brain(context, member))
         return checks
 
     async def _check_cli_agent_brain(
-        self, context: Context, member: Person, executable: str
-    ) -> DiagnosticCheck:
+        self, context: Context, member: Person
+    ) -> list[DiagnosticCheck]:
         c = context.clone_for(member)
+        temporary_directory: tempfile.TemporaryDirectory[str] | None = None
+        checks: list[DiagnosticCheck] = []
+        target = ""
+        executable = ""
         try:
             config = {
                 "brain": "agent",
@@ -411,40 +382,83 @@ class ScenarioDiagnosticsService:
             )
             brain = c.get_brain("diagnostics/cli_agent", config, None)
             if not isinstance(brain, CliAgentBrain):
-                return self._check(
+                return [
+                    self._check(
+                        "cli_agent",
+                        "cli_agent_brain",
+                        "error",
+                        "Configured CLI diagnostics brain is not CliAgentBrain.",
+                        person_id=member.person_id,
+                        context={"brain_type": type(brain).__name__},
+                    )
+                ]
+            target = brain.executable_info.adapter
+            executable = cli_agent_executable(target)
+            if not executable:
+                return [
+                    self._check(
+                        "cli_agent",
+                        "cli_agent_mapping",
+                        "error",
+                        "Configured AI CLI tool executable could not be inferred.",
+                        person_id=member.person_id,
+                        target=target,
+                    )
+                ]
+            path = resolve_cli_agent_path(executable)
+            if not path:
+                return [
+                    self._check(
+                        "cli_agent",
+                        "cli_agent_executable",
+                        "error",
+                        f"AI CLI tool executable '{executable}' was not found on PATH.",
+                        person_id=member.person_id,
+                        target=target,
+                        context={"executable": executable},
+                    )
+                ]
+            checks.append(
+                self._check(
                     "cli_agent",
-                    "cli_agent_brain",
-                    "error",
-                    "Configured CLI diagnostics brain is not CliAgentBrain.",
+                    "cli_agent_executable",
+                    "ok",
+                    f"AI CLI tool executable '{executable}' was found.",
                     person_id=member.person_id,
-                    target=executable,
-                    context={"brain_type": type(brain).__name__},
+                    target=target,
+                    context={"executable": executable, "path": path},
                 )
-            with tempfile.TemporaryDirectory(
+            )
+            temporary_directory = tempfile.TemporaryDirectory(
                 prefix="guildbotics-diagnostics-cli-"
-            ) as tmp:
-                result = await brain.run_with_execution_details(message, cwd=Path(tmp))
+            )
+            result = await brain.run_with_execution_details(
+                message, cwd=Path(temporary_directory.name)
+            )
 
             if result.returncode != 0:
-                return self._check(
-                    "cli_agent",
-                    "cli_agent_brain",
-                    "error",
-                    self._format_cli_agent_error(
-                        "AI CLI tool command failed",
-                        result.stderr,
-                        result.stdout,
-                        result.returncode,
-                    ),
-                    person_id=member.person_id,
-                    target=executable,
-                    context={
-                        "executable": executable,
-                        "returncode": result.returncode,
-                        "stderr": self._truncate(result.stderr),
-                        "stdout": self._truncate(result.stdout),
-                    },
+                checks.append(
+                    self._check(
+                        "cli_agent",
+                        "cli_agent_brain",
+                        "error",
+                        self._format_cli_agent_error(
+                            "AI CLI tool command failed",
+                            result.stderr,
+                            result.stdout,
+                            result.returncode,
+                        ),
+                        person_id=member.person_id,
+                        target=target,
+                        context={
+                            "executable": executable,
+                            "returncode": result.returncode,
+                            "stderr": self._truncate(result.stderr),
+                            "stdout": self._truncate(result.stdout),
+                        },
+                    )
                 )
+                return checks
 
             if not result.stdout.strip():
                 c.logger.warning(
@@ -454,31 +468,39 @@ class ScenarioDiagnosticsService:
                     executable,
                     self._truncate(result.stderr),
                 )
-                return self._check(
+                checks.append(
+                    self._check(
+                        "cli_agent",
+                        "cli_agent_brain",
+                        "error",
+                        self._format_cli_agent_error(
+                            "AI CLI tool command completed but returned no response",
+                            result.stderr,
+                            result.stdout,
+                            result.returncode,
+                        ),
+                        person_id=member.person_id,
+                        target=target,
+                        context={
+                            "executable": executable,
+                            "empty_stdout": True,
+                            "stderr": self._truncate(result.stderr),
+                        },
+                    )
+                )
+                return checks
+            checks.append(
+                self._check(
                     "cli_agent",
                     "cli_agent_brain",
-                    "error",
-                    self._format_cli_agent_error(
-                        "AI CLI tool command completed but returned no response",
-                        result.stderr,
-                        result.stdout,
-                        result.returncode,
-                    ),
+                    "ok",
+                    "AI CLI tool accepted a minimal read-only request.",
                     person_id=member.person_id,
-                    target=executable,
-                    context={
-                        "executable": executable,
-                        "empty_stdout": True,
-                        "stderr": self._truncate(result.stderr),
-                    },
+                    target=target,
+                    context={"executable": executable},
                 )
-            return self._check(
-                "cli_agent",
-                "cli_agent_brain",
-                "ok",
-                "AI CLI tool accepted a minimal read-only request.",
-                person_id=member.person_id,
             )
+            return checks
         except Exception as exc:
             c.logger.warning(
                 "AI CLI tool diagnostics failed for person=%s executable=%s: %s",
@@ -486,17 +508,27 @@ class ScenarioDiagnosticsService:
                 executable,
                 exc,
             )
-            return self._check(
-                "cli_agent",
-                "cli_agent_brain",
-                "error",
-                self._safe_error("AI CLI tool brain check failed", exc),
-                person_id=member.person_id,
-                target=executable,
-                context={"error_type": type(exc).__name__, "executable": executable},
+            checks.append(
+                self._check(
+                    "cli_agent",
+                    "cli_agent_brain",
+                    "error",
+                    self._safe_error("AI CLI tool brain check failed", exc),
+                    person_id=member.person_id,
+                    target=target,
+                    context={
+                        "error_type": type(exc).__name__,
+                        "executable": executable,
+                    },
+                )
             )
+            return checks
         finally:
-            await c.aclose()
+            try:
+                await c.aclose()
+            finally:
+                if temporary_directory is not None:
+                    temporary_directory.cleanup()
 
     async def _check_github(
         self, context: Context, members: list[Person]
@@ -828,9 +860,6 @@ class ScenarioDiagnosticsService:
             person_id=person_id,
             target=target or channel_id,
         )
-
-    def _resolve_default_cli_executable(self) -> str:
-        return resolve_default_cli_executable()
 
     def _response(
         self, checks: list[DiagnosticCheck], active_members: list[str]

@@ -51,8 +51,8 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 ### 必要なもの
 
-- **OS**: Linux（Ubuntu 24.04 で動作確認）または macOS（Sequoia で動作確認）
-  - デスクトップアプリは macOS Apple Silicon (arm64) と Linux x86_64 に対応
+- **OS**: Linux（Ubuntu 24.04 で動作確認）、macOS（Sequoia で動作確認）、または Windows 11
+  - デスクトップアプリは macOS Apple Silicon (arm64)、Linux x86_64、Windows x86_64 を対象とします
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: GuildBotics のビルドと CLI のインストールに使います
 - **LLM API キー**（いずれか 1 つを事前に取得）:
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
@@ -69,12 +69,12 @@ Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI を利�
 
 ### インストール
 
-現在、デスクトップアプリの一般向けインストーラーは配布していません。リポジトリを取得し、ローカルでビルドします。ビルドには uv に加えて **Node.js 24 以上**と **Rust (rustup) stable 1.88 以上**（Linux では WebKitGTK 4.1 開発パッケージ）が必要です。前提ツールとビルド・インストール手順は [desktop/README.md](desktop/README.md#1-前提ツール) を参照してください。
+現在、デスクトップアプリの一般向けインストーラーは配布していません。リポジトリを取得し、ローカルでビルドします。ビルドには uv に加えて **Node.js 24 以上**と **Rust (rustup) stable 1.88 以上**（Linux では WebKitGTK 4.1 開発パッケージ）が必要です。macOS / Linux の手順は [desktop/README.md](desktop/README.md#1-前提ツール)、Windows 実機のセットアップ・NSIS build・smoke checklist は [Windows で GuildBotics Desktop をビルドする](docs/windows_desktop_build.ja.md)を参照してください。
 
 デスクトップアプリの初回起動時に、以下が配置されます。
 
-- `~/.guildbotics/bin/guildbotics`: AI CLI ツール / スキルが使う管理用 GuildBotics CLI
-- `~/.local/bin/guildbotics`: 上記 CLI へ転送する小さな実行ファイル（shim）。未作成、または既存の管理用 shim の場合だけ更新されます
+- macOS / Linux の `~/.guildbotics/bin/guildbotics`、または Windows の `%USERPROFILE%\.guildbotics\bin\guildbotics.exe`: AI CLI ツール / スキルが使う管理用 GuildBotics CLI
+- macOS / Linux の `~/.local/bin/guildbotics`: 上記 CLI へ転送する小さな実行ファイル（shim）。Windows では代わりに NSIS installer が managed bin を user PATH へ追加し、uninstall 時は自分が追加した entry だけを削除します
 - 検出済みの Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の GuildBotics スキル。ユーザーが作成・編集したスキルは上書きしません
 
 デスクトップアプリを使わない環境（ヘッドレスサーバーなど）では、`uv tool install guildbotics` で CLI を単体インストールできます（→ [サーバーで運用する](#サーバーで運用する)）。
@@ -199,8 +199,10 @@ GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステ�
 
 手動で作成する場合は、GitHub App 作成の際に以下の Permission 設定を行ってください。
 
-- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** をそれぞれ Read & Write
+- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** をそれぞれ Read & Write
 - **Organization permissions**: **Projects** を Read & Write
+
+既存 App に **Workflows** を追加した場合は、再利用する前に各インストール先で権限変更を承認してください。
 
 GitHub App 作成後に以下の作業を行ってください。
 
@@ -387,6 +389,7 @@ commands:
 GuildBotics は、シークレット（LLM API キーおよびアカウントトークン類）を可能な限りプレーンテキストファイルの外に保存します。
 
 - **OS キーチェーン（新規ワークスペースの既定）:** 利用可能なキーチェーン（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service（GNOME Keyring 等））がある場合、セットアップはシークレットの値をキーチェーンに保存します。ワークスペース側には、保存済みキー名の一覧だけを記録した非シークレットのインデックスファイル `.guildbotics/config/secrets.yml` を置きます。
+- **Windows の資格情報:** GuildBotics はシークレット値を UTF-8 の Credential Manager blob として保存するため、ASCII が中心の PEM 秘密鍵でも Windows の 2,560 byte 上限をすべて利用できます。import は書き込み前に全値を検証します。
 - **`.env` バックエンド:** インデックスファイルの無いワークスペース（キーチェーンが使えないマシンで作成した場合など）は、ワークスペースの `.env` を使います。ヘッドレスサーバーや CI ではこの方式をサポートします。GuildBotics が書き出す `.env` は所有者のみ読み書き可能（`0600`）のパーミッションになります。
 - **優先順位:** 実環境変数 > OS キーチェーン > `.env`。サーバー運用では、バックエンドに関係なく環境変数での注入が常に最優先されます。
 - **GitHub App 秘密鍵:** キーチェーン利用ワークスペースでのメンバー設定保存は、`*_GITHUB_PRIVATE_KEY_PATH` が指す PEM ファイルの中身をキーチェーンへコピーし、パスのエントリも `.env` から取り除きます。キーチェーンの内容がファイルを置き換えるため、残る作業は平文の `.pem` ファイルを手動で削除することだけです。他のシークレットと異なり、鍵の中身は環境変数には一切公開されず、GitHub App トークン発行の瞬間にだけキーチェーンから読み出されるため、AI CLI ツールの子プロセスから見えることはありません。
@@ -529,7 +532,7 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 
 | 症状 | 最初に確認すること |
 | --- | --- |
-| `guildbotics` コマンドが見つからない | `~/.guildbotics/bin/guildbotics` を絶対パスで実行してください。`~/.local/bin` が PATH に含まれているかも確認してください |
+| `guildbotics` コマンドが見つからない | macOS / Linux では `~/.guildbotics/bin/guildbotics` を実行し、`~/.local/bin` の PATH を確認します。Windows では install 後に新しい shell を開き、user PATH の `%USERPROFILE%\.guildbotics\bin` を確認します |
 | どのワークスペースが使われているか分からない | デスクトップアプリの **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います |
 | メンバーが動作しない・設定に不安がある | デスクトップアプリの **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください |
 | GitHub に書き込めない | メンバーの PAT スコープ（`repo` + `project`）または GitHub App の Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます |

@@ -228,7 +228,13 @@ desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/GuildBotics
 desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/GuildBotics_<version>_amd64.AppImage
 ```
 
-`<version>` は [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `version` です。Tauri は各 OS 用の config を自動選択します。macOS は [src-tauri/tauri.macos.conf.json](src-tauri/tauri.macos.conf.json) で DMG、Linux は [src-tauri/tauri.linux.conf.json](src-tauri/tauri.linux.conf.json) で `.deb` と AppImage を指定しています。
+Windows x86_64 の成果物は NSIS installer です。Windows 実機の前提ツール、native test、build、smoke checklist は [Windows build 手順](../docs/windows_desktop_build.ja.md)を参照してください。
+
+```
+desktop/src-tauri/target/release/bundle/nsis/GuildBotics_<version>_x64-setup.exe
+```
+
+`<version>` は [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `version` です。Tauri は各 OS 用の config を自動選択します。macOS は [src-tauri/tauri.macos.conf.json](src-tauri/tauri.macos.conf.json) で DMG、Linux は [src-tauri/tauri.linux.conf.json](src-tauri/tauri.linux.conf.json) で `.deb` と AppImage、Windows は [src-tauri/tauri.windows.conf.json](src-tauri/tauri.windows.conf.json) で NSIS を指定しています。
 
 各パッケージには desktop 本体、sidecar `guildbotics-app-api`、sidecar `guildbotics-cli` が同梱されます。macOS の secrets を設定していないローカルビルドは **ad-hoc 署名（実質 unsigned）** です。署名・notarization は次節を参照。
 
@@ -236,7 +242,7 @@ desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/GuildB
 
 ## 3. 開発モード（`tauri dev`）
 
-毎回 PyInstaller を build せずに開発したい場合は、`scripts/desktop-dev-tauri.sh` を使います。このスクリプトは Tauri sidecar の配置先に「ソースを直接実行する薄いシェルスクリプト」を Local API / CLI の両方について自動生成します。
+macOS / Linux で毎回 PyInstaller を build せずに開発したい場合は、`scripts/desktop-dev-tauri.sh` を使います。このスクリプトは Tauri sidecar の配置先に「ソースを直接実行する薄いシェルスクリプト」を Local API / CLI の両方について自動生成します。Windows の Tauri は `.exe` sidecar を要求するため、同じ script が先に `desktop-build-backend.sh` で実体を build します。
 
 ```bash
 scripts/desktop-dev-tauri.sh
