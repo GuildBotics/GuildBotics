@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
-from typing import Protocol
+from typing import Any, Protocol
 
 from guildbotics.utils.keychain import (
     SecretStoreError,
@@ -20,6 +20,18 @@ CREDENTIAL_BLOB_LIMIT = 5 * 512
 _CRED_TYPE_GENERIC = 1
 _CRED_PERSIST_ENTERPRISE = 3
 _ERROR_NOT_FOUND = 1168
+
+
+def _windows_library(name: str) -> Any:
+    return vars(ctypes)["WinDLL"](name, use_last_error=True)
+
+
+def _windows_last_error() -> int:
+    return int(vars(ctypes)["get_last_error"]())
+
+
+def _windows_error(error: int) -> OSError:
+    return vars(ctypes)["WinError"](error)
 
 
 class _CredentialApi(Protocol):
@@ -61,7 +73,7 @@ class _Credential(ctypes.Structure):
 
 class _WindowsCredentialApi:
     def __init__(self) -> None:
-        library = ctypes.WinDLL("Advapi32.dll", use_last_error=True)
+        library = _windows_library("Advapi32.dll")
         self._write = library.CredWriteW
         self._write.argtypes = [ctypes.POINTER(_Credential), wintypes.DWORD]
         self._write.restype = wintypes.BOOL
@@ -88,10 +100,10 @@ class _WindowsCredentialApi:
             0,
             ctypes.byref(credential),
         ):
-            error = ctypes.get_last_error()
+            error = _windows_last_error()
             if error == _ERROR_NOT_FOUND:
                 return None
-            raise ctypes.WinError(error)
+            raise _windows_error(error)
         try:
             value = credential.contents
             if not value.CredentialBlobSize:
@@ -119,14 +131,14 @@ class _WindowsCredentialApi:
             UserName=username,
         )
         if not self._write(ctypes.byref(credential), 0):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _windows_error(_windows_last_error())
 
     def delete(self, target: str) -> None:
         if self._delete(target, _CRED_TYPE_GENERIC, 0):
             return
-        error = ctypes.get_last_error()
+        error = _windows_last_error()
         if error != _ERROR_NOT_FOUND:
-            raise ctypes.WinError(error)
+            raise _windows_error(error)
 
 
 class WindowsCredentialManager:
