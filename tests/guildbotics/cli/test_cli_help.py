@@ -13,6 +13,7 @@ from collections.abc import Iterator
 import click
 from click.testing import CliRunner
 
+from guildbotics import cli as cli_module
 from guildbotics.cli import main
 from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
@@ -61,3 +62,43 @@ def test_help_shows_defaults_required_and_repeatable(monkeypatch, tmp_path) -> N
     result = runner.invoke(main, ["stop", "--help"])
     assert result.exit_code == 0
     assert "[default: 30]" in result.output
+
+
+def test_windows_cli_configures_standard_streams_as_utf8(monkeypatch) -> None:
+    class ReconfigurableStream:
+        def __init__(self) -> None:
+            self.encodings: list[str] = []
+
+        def reconfigure(self, *, encoding: str) -> None:
+            self.encodings.append(encoding)
+
+    stdout = ReconfigurableStream()
+    stderr = ReconfigurableStream()
+    monkeypatch.setattr(cli_module.sys, "platform", "win32")
+    monkeypatch.setattr(cli_module.sys, "stdout", stdout)
+    monkeypatch.setattr(cli_module.sys, "stderr", stderr)
+
+    cli_module._configure_windows_standard_streams()
+
+    assert stdout.encodings == ["utf-8"]
+    assert stderr.encodings == ["utf-8"]
+
+
+def test_non_windows_cli_preserves_standard_stream_encoding(monkeypatch) -> None:
+    class ReconfigurableStream:
+        def __init__(self) -> None:
+            self.called = False
+
+        def reconfigure(self, *, encoding: str) -> None:
+            self.called = True
+
+    stdout = ReconfigurableStream()
+    stderr = ReconfigurableStream()
+    monkeypatch.setattr(cli_module.sys, "platform", "linux")
+    monkeypatch.setattr(cli_module.sys, "stdout", stdout)
+    monkeypatch.setattr(cli_module.sys, "stderr", stderr)
+
+    cli_module._configure_windows_standard_streams()
+
+    assert not stdout.called
+    assert not stderr.called

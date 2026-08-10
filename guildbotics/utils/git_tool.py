@@ -29,6 +29,26 @@ def create_git_askpass_script() -> Path:
     return Path(askpass.name)
 
 
+def build_git_auth_environment(askpass_path: Path, token: str) -> dict[str, str]:
+    """Build an isolated Git authentication environment for a member token.
+
+    The empty command-scope ``credential.helper`` value resets helpers inherited
+    from system, global, and repository configuration. This prevents a local
+    credential manager from replacing the member token or opening an interactive
+    sign-in prompt.
+    """
+    config_index = int(os.getenv("GIT_CONFIG_COUNT", "0"))
+    return {
+        "GIT_ASKPASS": str(askpass_path),
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_USERNAME": "x-access-token",
+        "GIT_PASSWORD": token,
+        "GIT_CONFIG_COUNT": str(config_index + 1),
+        f"GIT_CONFIG_KEY_{config_index}": "credential.helper",
+        f"GIT_CONFIG_VALUE_{config_index}": "",
+    }
+
+
 class GitTool:
     """
     A robust Git tool for managing Git operations within a specified workspace.
@@ -108,12 +128,7 @@ class GitTool:
             return {}
 
         self._askpass_path = create_git_askpass_script()
-        return {
-            "GIT_ASKPASS": str(self._askpass_path),
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_USERNAME": "x-access-token",
-            "GIT_PASSWORD": self._auth_token,
-        }
+        return build_git_auth_environment(self._askpass_path, self._auth_token)
 
     @contextmanager
     def _git_auth_environment(self) -> Iterator[None]:
@@ -124,6 +139,9 @@ class GitTool:
             yield
 
     def close(self) -> None:
+        repo = getattr(self, "repo", None)
+        if repo is not None:
+            repo.close()
         if self._askpass_path is None:
             return
         try:

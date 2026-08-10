@@ -199,8 +199,10 @@ The member edit screen in the desktop app (select "GitHub Apps" on the GitHub ta
 
 When creating the GitHub App manually, configure the following permissions.
 
-- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** as Read & Write
+- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** as Read & Write
 - **Organization permissions**: **Projects** as Read & Write
+
+When adding **Workflows** to an existing App, approve the requested permission update for each installation before using the App again.
 
 After creating the GitHub App:
 

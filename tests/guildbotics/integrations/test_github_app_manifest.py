@@ -52,6 +52,7 @@ def test_build_app_manifest_contains_required_permissions() -> None:
         "pull_requests": "write",
         "repository_projects": "write",
         "organization_projects": "write",
+        "workflows": "write",
         "metadata": "read",
     }
     # Webhooks stay disabled: GuildBotics polls GitHub instead.

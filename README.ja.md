@@ -199,8 +199,10 @@ GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステ�
 
 手動で作成する場合は、GitHub App 作成の際に以下の Permission 設定を行ってください。
 
-- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** をそれぞれ Read & Write
+- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** をそれぞれ Read & Write
 - **Organization permissions**: **Projects** を Read & Write
+
+既存 App に **Workflows** を追加した場合は、再利用する前に各インストール先で権限変更を承認してください。
 
 GitHub App 作成後に以下の作業を行ってください。
 

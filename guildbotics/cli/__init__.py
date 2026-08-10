@@ -99,6 +99,15 @@ def _stop_request_path() -> Path:
     return get_machine_state_path("run", "stop-request.json")
 
 
+def _configure_windows_standard_streams() -> None:
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
+
+
 @click.group(context_settings={"show_default": True})
 @click.version_option(
     version=_resolve_version(),
@@ -107,6 +116,7 @@ def _stop_request_path() -> Path:
 )
 def main() -> None:
     """GuildBotics CLI entrypoint."""
+    _configure_windows_standard_streams()
     install_diagnostics_log_handler(get_logger())
 
 

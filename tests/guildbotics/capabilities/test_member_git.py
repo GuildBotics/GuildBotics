@@ -13,6 +13,27 @@ from guildbotics.capabilities.member_github import (
 from guildbotics.entities.team import Person, Project, Team
 
 
+@pytest.fixture(autouse=True)
+def close_test_repositories(monkeypatch: pytest.MonkeyPatch):
+    """Close every GitPython repository created by a test.
+
+    GitPython keeps ``git cat-file --batch`` processes behind repository
+    objects. Explicit cleanup is required on Windows, where finalizing a stale
+    process after its native handle closes raises ``WinError 6``.
+    """
+    repositories: list[git.Repo] = []
+    original_init = git.Repo.__init__
+
+    def tracked_init(repo, *args, **kwargs):
+        original_init(repo, *args, **kwargs)
+        repositories.append(repo)
+
+    monkeypatch.setattr(git.Repo, "__init__", tracked_init)
+    yield
+    for repo in reversed(repositories):
+        repo.close()
+
+
 def _team(person: Person) -> Team:
     return Team(project=Project(name="demo"), members=[person])
 
@@ -53,6 +74,29 @@ def _workspace_repo(tmp_path: Path, workspace: Path) -> tuple[git.Repo, Path]:
         writer.set_value("user", "name", "Existing")
         writer.set_value("user", "email", "existing@example.com")
     return repo, repo_path
+
+
+def test_member_git_auth_environment_disables_external_helpers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    repo = git.Repo.init(tmp_path / "repo")
+    askpass_path = tmp_path / "askpass.sh"
+    askpass_path.write_text("askpass", encoding="utf-8")
+    monkeypatch.setattr(member_git, "create_git_askpass_script", lambda: askpass_path)
+
+    with member_git._git_auth_environment(repo, "member-token"):
+        assert repo.git._environment == {
+            "GIT_ASKPASS": str(askpass_path),
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_USERNAME": "x-access-token",
+            "GIT_PASSWORD": "member-token",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "",
+        }
+
+    assert not askpass_path.exists()
 
 
 @pytest.mark.asyncio
