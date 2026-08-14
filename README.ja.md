@@ -95,7 +95,7 @@ Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI を利�
 
 GuildBotics では、プロジェクトの作業場所として選ぶフォルダを **ワークスペース** と呼びます。ワークスペースには、以下のようなプレーンテキストの設定ファイルが書き出されます。
 
-- `.env`: 環境変数設定（ログレベル等の非シークレット設定）
+- `.guildbotics/local/debug.env`: デバイス固有の非シークレットなデバッグ設定（ログレベル）
 - `.guildbotics/config/secrets.yml`: OS キーチェーンに保存したシークレットのキー名一覧（値は含まない）
 - `.guildbotics/config/team/project.yml`: プロジェクト定義
 - `.guildbotics/config/intelligences/`: LLM と AI CLI ツールの設定
@@ -216,7 +216,7 @@ GitHub App 作成後に以下の作業を行ってください。
 ### 認証情報と実行環境を準備する
 
 - 各メンバーの GitHub 認証情報（PAT または GitHub App の設定値）を、デスクトップアプリのメンバー設定から GuildBotics に登録してください。GitHub / git への書き込みは、ローカルの `gh auth` ユーザーではなく、割り当てられたメンバーの認証情報で行われます
-- チケット駆動の作業は、メンバーごとの作業ディレクトリ（既定: `<workspace>/.guildbotics/data/workspaces/<person_id>`）で行われます。リポジトリの複製、push、PR 作成、コメントは、メンバー自身が `guildbotics member` CLI 経由で実行します
+- チケット駆動の作業は、メンバーごとの作業ディレクトリ（既定: `<workspace>/.guildbotics/local/clones/<person_id>`）で行われます。リポジトリの複製、push、PR 作成、コメントは、メンバー自身が `guildbotics member` CLI 経由で実行します
 - AI CLI ツールを対話的にも使う場合は、`gh`、直接のトークン / API 書き込み、`git push` を拒否または承認必須にすることを推奨します。これは利用者自身の GitHub アカウントへフォールバックすることを避けるための防止策であり、トークン流出を完全に技術的に封じ込めるサンドボックスではありません
 - Codex を AI CLI ツールとして使う場合は、Codex CLI の認証とネットワーク到達性を確認してください:
 
@@ -388,22 +388,21 @@ commands:
 
 GuildBotics は、シークレット（LLM API キーおよびアカウントトークン類）を可能な限りプレーンテキストファイルの外に保存します。
 
-- **OS キーチェーン（新規ワークスペースの既定）:** 利用可能なキーチェーン（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service（GNOME Keyring 等））がある場合、セットアップはシークレットの値をキーチェーンに保存します。ワークスペース側には、保存済みキー名の一覧だけを記録した非シークレットのインデックスファイル `.guildbotics/config/secrets.yml` を置きます。
+- **OS キーチェーン:** シークレット値は OS 秘密ストア（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service）に保存します。ワークスペース側には、キー名と世代だけを記録した非シークレットのインデックス `.guildbotics/config/secrets.yml` と、デバイス固有世代の `.guildbotics/local/secrets.json` を置きます。`.env` バックエンドはありません。
 - **Windows の資格情報:** GuildBotics はシークレット値を UTF-8 の Credential Manager blob として保存するため、ASCII が中心の PEM 秘密鍵でも Windows の 2,560 byte 上限をすべて利用できます。import は書き込み前に全値を検証します。
-- **`.env` バックエンド:** インデックスファイルの無いワークスペース（キーチェーンが使えないマシンで作成した場合など）は、ワークスペースの `.env` を使います。ヘッドレスサーバーや CI ではこの方式をサポートします。GuildBotics が書き出す `.env` は所有者のみ読み書き可能（`0600`）のパーミッションになります。
-- **優先順位:** 実環境変数 > OS キーチェーン > `.env`。サーバー運用では、バックエンドに関係なく環境変数での注入が常に最優先されます。
-- **GitHub App 秘密鍵:** キーチェーン利用ワークスペースでのメンバー設定保存は、`*_GITHUB_PRIVATE_KEY_PATH` が指す PEM ファイルの中身をキーチェーンへコピーし、パスのエントリも `.env` から取り除きます。キーチェーンの内容がファイルを置き換えるため、残る作業は平文の `.pem` ファイルを手動で削除することだけです。他のシークレットと異なり、鍵の中身は環境変数には一切公開されず、GitHub App トークン発行の瞬間にだけキーチェーンから読み出されるため、AI CLI ツールの子プロセスから見えることはありません。
-- **`GUILDBOTICS_SECRETS_BACKEND`:** `keyring` または `env-file` を指定すると、そのプロセスに限りバックエンドを強制できます（CI やスクリプト環境向け）。
+- **優先順位:** 実環境変数 > OS キーチェーン。GuildBotics はワークスペースの `.env` を読みません。
+- **GitHub App 秘密鍵:** メンバー保存時に PEM をキーチェーンへ吸収します。登録時に生成したファイルは OS の一時ディレクトリへ書き、吸収後に削除します。鍵の中身は環境変数には出しません。
+- **交換形式:** `guildbotics secrets export` / `import` は dotenv を転送ファイルとしてだけ使います。`secrets set --from-file` は PEM などのファイルをキーチェーンへ取り込みます。
 
 シークレットの管理には `guildbotics secrets` CLI を使います（サブコマンドとオプションの一覧は [CLI リファレンス](docs/cli_reference.md#guildbotics-secrets)を参照）。
 
 ```bash
-guildbotics secrets status                        # 使用中のバックエンドとキーチェーンの利用可否
+guildbotics secrets status                        # OS 秘密ストアの利用可否と登録キー数
 guildbotics secrets export --file secrets.env     # 引越用にシークレットを書き出し
 guildbotics secrets import secrets.env            # 移行先マシンで読み込み
 ```
 
-シークレットはワークスペースごとに保存されます（キーチェーンのエントリは `secrets.yml` の `store_id` で名前空間が分かれます）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時はカレントディレクトリのワークスペース、無ければ選択中の active workspace が使われます。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
+シークレットはワークスペースごとに保存されます（キーチェーンのエントリは `secrets.yml` の `store_id` で名前空間が分かれます）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
@@ -417,7 +416,7 @@ guildbotics secrets --workspace /path/to/workspace list
 1. 移行先で `uv tool install guildbotics` により CLI をインストールします
 2. ワークスペースフォルダを移行先へコピーします
 3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行します（エクスポートファイルは使用後に削除してください）。キーチェーンのエントリ自体がマシンの外に出ることはありません
-4. キーチェーンの無いサーバーでは、シークレットは `.env` に保存するか環境変数で渡してください
+4. キーチェーンの無いサーバーでは、OS 秘密ストアを用意するか、実行時の環境変数でシークレットを渡してください
 
 **サービスの起動と停止**（デスクトップアプリの **サービス実行** 画面に相当します）:
 
@@ -462,11 +461,9 @@ CLI とデスクトップアプリは共通のロックファイル（`~/.guildb
 **GitHub アクセス**（メンバー毎、形式: `{PERSON_ID}_...`）:
 
 - `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: マシンアカウント/代理エージェント用 PAT
-- `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: GitHub App 用
+- GitHub App の ID はメンバー YAML（`account_info.github_app_id` / `github_installation_id`）に置き、PEM は OS キーチェーンの `{PERSON_ID}_GITHUB_PRIVATE_KEY` に保存します
 
-カレントディレクトリに `.env` ファイルが存在する場合、自動的に読み込まれます。OS キーチェーンに保存されたシークレットも同様に自動で読み込まれます。
-
-デスクトップアプリを使わずに運用する場合は、絶対パスの `.env` を指す `GUILDBOTICS_ENV_FILE`、またはカレントディレクトリの `.env` がフォールバックになります。`guildbotics start` とデスクトップ実行環境は、ワークスペースの `.env` を読み込んだときに `GUILDBOTICS_ENV_FILE` も自動設定します。
+OS キーチェーンに保存されたシークレットは自動で読み込まれます。GuildBotics はワークスペースの `.env` を読みません。
 
 ### ワークスペースとデータの保存場所
 
@@ -476,22 +473,22 @@ CLI とデスクトップアプリは共通のロックファイル（`~/.guildb
 guildbotics workspace status
 guildbotics workspace current
 guildbotics workspace use /path/to/workspace
+guildbotics workspace migrate --from /path/to/source-checkout --to /path/to/guildbotics-workspace
 ```
 
 `guildbotics member` コマンドが使うワークスペースは、次の順で解決されます。
 
 1. サブコマンドの前の `--workspace <dir>` 指定
-2. すでに設定済みワークスペース内（明示的な `GUILDBOTICS_CONFIG_DIR` またはカレントディレクトリの `.guildbotics/config`）で実行されている場合は、そのワークスペース
+2. 明示的な `GUILDBOTICS_WORKSPACE_ROOT`、または `<workspace>/.guildbotics/config` を指す `GUILDBOTICS_CONFIG_DIR`
 3. デスクトップアプリまたは `guildbotics workspace use` が記録した使用中のワークスペース
 
-選択されたワークスペースから `GUILDBOTICS_CONFIG_DIR` が `<workspace>/.guildbotics/config` に設定され、`<workspace>/.env` が存在する場合は `GUILDBOTICS_ENV_FILE` も設定されます。
+プロセスのカレントディレクトリはワークスペースとして扱いません。選択されたワークスペースから `GUILDBOTICS_CONFIG_DIR` が `<workspace>/.guildbotics/config` に設定されます。
 
-GuildBotics が保存するローカルデータは、大きく 2 種類あります。
+GuildBotics が保存するローカルデータは、次の 3 種類です。
 
 - 使用中のワークスペース情報や CLI スケジューラーの PID など、PC 全体で共有する管理情報は `$HOME/.guildbotics/data` に保存されます
-- メンバーごとの作業ディレクトリ、タスクやチャット実行の証跡、診断ログ、プロンプトの記録、チャット状態など、ワークスペースごとの実行データは、既定で `<workspace>/.guildbotics/data` に保存されます
-
-ワークスペースごとの実行データの保存先は、ワークスペースの `.env` に `GUILDBOTICS_DATA_DIR` を設定すると変更できます。起動時点の環境変数に `GUILDBOTICS_DATA_DIR` があり、ワークスペースの `.env` に同じ設定が無い場合は、その起動中のプロセスで共有する実行データの保存先として使われます。
+- memory、会話の制御状態、task-run 証跡、Activity イベントなど、共有する永続状態は `<workspace>/.guildbotics/state` に保存されます
+- 診断ログ、transcript、チャット cache、member clone、AI CLI session など、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
 
 ### 設定ファイル
 
@@ -540,11 +537,11 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 | コマンド実行が失敗した | デスクトップアプリの **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます |
 | スケジューラが止まった | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください |
 
-**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/data/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。
+**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。
 
 **デバッグ出力**: 詳細なログを取得するための環境変数:
 
 - `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
 - `AGNO_DEBUG`: Agno エンジンの追加デバッグ出力 (`true`/`false`)
-- `GUILDBOTICS_TRANSCRIPT_DETAIL`: `standard`（既定）または `full`。`standard` は大量の thinking/delta イベントを省き、AI CLI ツールの stderr は末尾 8 KiB のみ保持
-- `GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS`: session JSONL の保持日数（既定: `30`）
+
+transcript の詳細度（`standard` / `full`）と保持日数は、デスクトップアプリの **診断** 画面から設定し、`.guildbotics/config/transcripts.yml` に保存されます。

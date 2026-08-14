@@ -78,7 +78,6 @@ def test_command_authoring_answer_cannot_contain_changes() -> None:
 def _project_update_kwargs(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
         "config_dir": Path("/cfg"),
-        "env_file_path": Path("/cfg/.env"),
         "language": "en",
         "llm_api_type": "openai",
         "cli_agent": "codex",
@@ -223,7 +222,6 @@ def test_command_run_request_requires_non_empty_command() -> None:
 def test_project_config_update_request_provider_api_keys_default_empty() -> None:
     request = ProjectConfigUpdateRequest(
         config_dir=Path("/cfg"),
-        env_file_path=Path("/cfg/.env"),
         language="en",
         llm_api_type="openai",
         cli_agent="codex",
@@ -235,7 +233,6 @@ def test_project_config_update_request_provider_api_keys_default_empty() -> None
 def test_project_config_update_request_keeps_provider_api_keys() -> None:
     request = ProjectConfigUpdateRequest(
         config_dir=Path("/cfg"),
-        env_file_path=Path("/cfg/.env"),
         language="en",
         llm_api_type="openai",
         cli_agent="codex",
@@ -261,4 +258,4 @@ def test_project_update_input_serializes_path_to_json_string() -> None:
     request = ProjectUpdateInput(**_project_update_kwargs())
     payload = json.loads(request.model_dump_json())
     assert payload["config_dir"] == "/cfg"
-    assert payload["env_file_path"] == "/cfg/.env"
+    assert "env_file_path" not in payload

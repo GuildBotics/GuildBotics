@@ -24,7 +24,8 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // first-setup screen.
   await expect(page.getByRole("heading", { name: "First setup" })).toBeVisible();
 
-  // The workspace is pre-filled from the backend cwd (the temp workspace).
+  // The workspace is pre-filled from the stack's selected workspace root
+  // (GUILDBOTICS_WORKSPACE_ROOT), never from the backend cwd.
   // Allow for macOS /private symlink normalization.
   const workspaceField = page.getByLabel("Workspace");
   await expect

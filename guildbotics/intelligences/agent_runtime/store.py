@@ -17,6 +17,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
+from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.safe_path import safe_path_component
 
 _STORE_VERSION = 1
@@ -31,13 +32,15 @@ _MAX_CONTEXT_UTILIZATION = 0.90
 class ConversationStore:
     def __init__(
         self,
-        workspace_data_root: Path,
+        workspace_root: Path | None = None,
         *,
         ttl: timedelta = _DEFAULT_TTL,
         max_turns: int = _DEFAULT_MAX_TURNS,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
     ) -> None:
-        self._root = workspace_data_root / "agent-runtime" / "conversations"
+        self._root = get_workspace_local_path(
+            "agent-runtime", "conversations", workspace_root=workspace_root
+        )
         self._ttl = ttl
         self._max_turns = max(1, max_turns)
         self._max_tokens = max(1, max_tokens)

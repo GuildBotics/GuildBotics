@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
+    WorkspaceUnresolvedError,
     active_workspace_file,
     apply_workspace_environment,
     apply_workspace_for_cli,
@@ -13,10 +13,7 @@ from guildbotics.utils.workspace_state import (
     workspace_status_payload,
     write_active_workspace,
 )
-
-
-def _clear_workspace_data_dir(monkeypatch) -> None:
-    monkeypatch.delenv(GUILDBOTICS_DATA_DIR, raising=False)
+import pytest
 
 
 def _set_home(monkeypatch, path) -> None:
@@ -25,7 +22,6 @@ def _set_home(monkeypatch, path) -> None:
 
 
 def test_write_and_read_active_workspace(monkeypatch, tmp_path):
-    _clear_workspace_data_dir(monkeypatch)
     _set_home(monkeypatch, tmp_path)
     workspace = tmp_path / "project"
     workspace.mkdir()
@@ -38,50 +34,39 @@ def test_write_and_read_active_workspace(monkeypatch, tmp_path):
     assert loaded is not None
     assert loaded.workspace == workspace.resolve()
     assert loaded.config_dir == workspace.resolve() / ".guildbotics" / "config"
-    assert loaded.env_file == workspace.resolve() / ".env"
+    assert not hasattr(loaded, "env_file")
 
 
 def test_active_workspace_file_uses_machine_state_root(monkeypatch, tmp_path):
     home = tmp_path / "home"
-    data_dir = tmp_path / "custom-data"
     _set_home(monkeypatch, home)
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(data_dir))
 
     assert active_workspace_file() == (
         home / ".guildbotics" / "data" / "active-workspace.json"
     )
 
 
-def test_apply_workspace_environment_sets_config_and_env(monkeypatch, tmp_path):
-    # Sandbox HOME so write_active_workspace targets the temp dir instead of the
-    # real ~/.guildbotics/data/active-workspace.json (writing there would clobber
-    # the developer's active workspace when the suite runs).
+def test_apply_workspace_environment_sets_config_and_root(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
-    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
-    _clear_workspace_data_dir(monkeypatch)
     workspace = tmp_path / "project"
     workspace.mkdir()
-    (workspace / ".env").write_text("TOKEN=value\n", encoding="utf-8")
 
     state = write_active_workspace(workspace)
     apply_workspace_environment(state)
 
     assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(state.config_dir)
-    assert os.environ[GUILDBOTICS_ENV_FILE] == str(state.env_file)
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(
-        workspace.resolve() / ".guildbotics" / "data"
-    )
     assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
+    assert "GUILDBOTICS_ENV_FILE" not in os.environ
+    assert "GUILDBOTICS_DATA_DIR" not in os.environ
 
 
-def test_apply_workspace_for_cli_uses_active_when_no_primary_source(
+def test_apply_workspace_for_cli_uses_active_when_no_explicit_source(
     monkeypatch, tmp_path
 ):
     _set_home(monkeypatch, tmp_path)
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
-    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
-    _clear_workspace_data_dir(monkeypatch)
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
     cwd = tmp_path / "other"
     cwd.mkdir()
     workspace = tmp_path / "project"
@@ -92,46 +77,35 @@ def test_apply_workspace_for_cli_uses_active_when_no_primary_source(
 
     assert applied == state
     assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(state.config_dir)
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(
-        workspace.resolve() / ".guildbotics" / "data"
-    )
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
 
 
-def test_apply_workspace_for_cli_keeps_existing_primary_source(monkeypatch, tmp_path):
+def test_apply_workspace_for_cli_keeps_explicit_workspace_env(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
-    _clear_workspace_data_dir(monkeypatch)
-    existing = tmp_path / "explicit-config"
-    monkeypatch.setenv(GUILDBOTICS_CONFIG_DIR, str(existing))
-    workspace = tmp_path / "project"
+    workspace = tmp_path / "explicit"
     workspace.mkdir()
-    write_active_workspace(workspace)
+    (workspace / ".guildbotics" / "config").mkdir(parents=True)
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace))
+    other = tmp_path / "project"
+    other.mkdir()
+    write_active_workspace(other)
 
     applied = apply_workspace_for_cli(cwd=tmp_path)
 
     assert applied is None
-    assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(existing)
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(
-        tmp_path.resolve() / ".guildbotics" / "data"
-    )
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
 
 
-def test_apply_workspace_for_cli_prefers_workspace_env_data_dir(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+def test_apply_workspace_for_cli_does_not_use_cwd(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "inherited-data"))
-    workspace = tmp_path / "project"
-    workspace.mkdir()
-    (workspace / ".env").write_text(
-        "GUILDBOTICS_DATA_DIR=workspace-data\n",
-        encoding="utf-8",
-    )
+    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (cwd / ".guildbotics" / "config").mkdir(parents=True)
 
-    applied = apply_workspace_for_cli(workspace)
-
-    assert applied is not None
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(
-        (tmp_path / "workspace-data").resolve(strict=False)
-    )
+    with pytest.raises(WorkspaceUnresolvedError):
+        apply_workspace_for_cli(cwd=cwd)
 
 
 def test_workspace_status_payload_reports_missing_active_workspace(
@@ -145,6 +119,7 @@ def test_workspace_status_payload_reports_missing_active_workspace(
         "configured": False,
         "state_file": str(active_workspace_file()),
     }
+    assert "env_file" not in payload
 
 
 def test_read_active_workspace_ignores_an_inaccessible_target(

@@ -30,8 +30,7 @@ from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities import Person, Project, Role, Team
 from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     active_workspace_file,
@@ -235,7 +234,6 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    monkeypatch.delenv(GUILDBOTICS_DATA_DIR, raising=False)
     return tmp_path
 
 
@@ -288,16 +286,30 @@ def test_config_status_reports_missing_when_no_project_file(
     status = AppRuntime(EventBus()).get_config_status()
 
     assert status.project_file_exists is False
-    assert status.env_file == isolated_home / ".env"
-    assert status.env_file_exists is False
+    assert status.workspace == isolated_home.resolve()
+    assert status.workspace_state_dir == isolated_home / ".guildbotics" / "state"
 
 
-def test_config_status_detects_existing_env_file(isolated_home: Path) -> None:
-    (isolated_home / ".env").write_text("OPENAI_API_KEY=value\n")
+def test_config_status_never_falls_back_to_cwd_without_a_workspace(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First launch: no workspace is selected, so none may be reported.
+
+    Reporting the process cwd here would let Setup silently create
+    ``.guildbotics/`` inside a source checkout.
+    """
+    monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
 
     status = AppRuntime(EventBus()).get_config_status()
 
-    assert status.env_file_exists is True
+    assert status.workspace is None
+    assert status.config_dir is None
+    assert status.project_file is None
+    assert status.project_file_exists is False
+    assert status.storage_dir is None
+    assert status.workspace_state_dir is None
+    assert status.workspace_local_dir is None
 
 
 # --- set_workspace() --------------------------------------------------------
@@ -342,27 +354,27 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     workspace = isolated_home / "workspace"
     workspace.mkdir()
     _write_project(workspace / ".guildbotics" / "config")
-    (workspace / ".env").write_text("WORKSPACE_MARKER=loaded\n")
 
     status = runtime.set_workspace(workspace)
 
     assert stop_calls == [True]
     assert Path.cwd() == workspace.resolve()
-    assert os.environ["WORKSPACE_MARKER"] == "loaded"
     assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
         workspace.resolve() / ".guildbotics" / "config"
     )
-    assert os.environ[GUILDBOTICS_ENV_FILE] == str(workspace.resolve() / ".env")
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(
-        workspace.resolve() / ".guildbotics" / "data"
-    )
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
     assert active_workspace_file().exists()
     assert status.cwd == workspace.resolve()
+    assert status.workspace == workspace.resolve()
     assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
-    assert status.workspace_data_dir == workspace.resolve() / ".guildbotics" / "data"
-    assert status.storage_dir == status.workspace_data_dir
+    assert status.workspace_state_dir == (
+        workspace.resolve() / ".guildbotics" / "state"
+    )
+    assert status.workspace_local_dir == (
+        workspace.resolve() / ".guildbotics" / "local"
+    )
+    assert status.storage_dir == workspace.resolve()
     assert status.config_dir == workspace.resolve() / ".guildbotics" / "config"
-    assert status.env_file_exists is True
 
 
 def test_set_workspace_splits_system_session_with_same_service_run_id(
@@ -416,29 +428,31 @@ def test_set_workspace_preserves_inherited_environment_variables(
     runtime.set_workspace(workspace)
 
     assert os.environ["WORKSPACE_MARKER"] == "from-parent-process"
+    assert "from-env-file" not in os.environ.get("WORKSPACE_MARKER", "")
 
 
-def test_set_workspace_updates_its_own_injections_across_switches(
+def test_set_workspace_updates_workspace_root_across_switches(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(
         runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
     )
-    monkeypatch.setenv("WORKSPACE_MARKER", "placeholder")
-    monkeypatch.delenv("WORKSPACE_MARKER")
 
-    for name, value in (("one", "first"), ("two", "second")):
+    for name in ("one", "two"):
         workspace = isolated_home / name
         workspace.mkdir()
         _write_project(workspace / ".guildbotics" / "config")
-        (workspace / ".env").write_text(f"WORKSPACE_MARKER={value}\n")
 
     runtime.set_workspace(isolated_home / "one")
-    assert os.environ["WORKSPACE_MARKER"] == "first"
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(
+        (isolated_home / "one").resolve()
+    )
 
     runtime.set_workspace(isolated_home / "two")
-    assert os.environ["WORKSPACE_MARKER"] == "second"
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(
+        (isolated_home / "two").resolve()
+    )
 
 
 def _idle_runtime_status() -> RuntimeStatus:
@@ -534,7 +548,6 @@ def test_set_workspace_env_does_not_override_home_state_root(
                 "USERPROFILE=workspace-userprofile",
                 "HOMEDRIVE=Z:",
                 "HOMEPATH=\\Users\\Workspace",
-                "WORKSPACE_MARKER=loaded",
             ]
         ),
         encoding="utf-8",
@@ -546,72 +559,13 @@ def test_set_workspace_env_does_not_override_home_state_root(
     assert os.environ["USERPROFILE"] == original_userprofile
     assert os.environ["HOMEDRIVE"] == original_homedrive
     assert os.environ["HOMEPATH"] == original_homepath
-    assert os.environ["WORKSPACE_MARKER"] == "loaded"
     assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
     assert active_workspace_file() == (
         isolated_home / "home/.guildbotics/data/active-workspace.json"
     )
 
 
-def test_set_workspace_prefers_env_data_dir_over_inherited(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    inherited_data = isolated_home / "inherited-data"
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(inherited_data))
-    runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(
-        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
-    )
-
-    workspace = isolated_home / "workspace"
-    workspace.mkdir()
-    _write_project(workspace / ".guildbotics" / "config")
-    (workspace / ".env").write_text(
-        "GUILDBOTICS_DATA_DIR=workspace-data\n",
-        encoding="utf-8",
-    )
-
-    status = runtime.set_workspace(workspace)
-
-    expected = (workspace / "workspace-data").resolve(strict=False)
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(expected)
-    assert status.workspace_data_dir == expected
-    assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
-    assert active_workspace_file() == (
-        isolated_home / "home/.guildbotics/data/active-workspace.json"
-    )
-
-
-def test_set_workspace_uses_initial_inherited_data_dir_across_switches(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    inherited_data = isolated_home / "inherited-data"
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(inherited_data))
-    runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(
-        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
-    )
-
-    workspace_a = isolated_home / "workspace-a"
-    workspace_a.mkdir()
-    _write_project(workspace_a / ".guildbotics" / "config")
-    (workspace_a / ".env").write_text(
-        "GUILDBOTICS_DATA_DIR=workspace-a-data\n",
-        encoding="utf-8",
-    )
-
-    workspace_b = isolated_home / "workspace-b"
-    workspace_b.mkdir()
-    _write_project(workspace_b / ".guildbotics" / "config")
-
-    runtime.set_workspace(workspace_a)
-    status_b = runtime.set_workspace(workspace_b)
-
-    assert status_b.workspace_data_dir == inherited_data.resolve(strict=False)
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(inherited_data.resolve(strict=False))
-
-
-def test_get_context_does_not_reapply_workspace_data_root(
+def test_get_context_keeps_selected_workspace_root(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
@@ -621,21 +575,7 @@ def test_get_context_does_not_reapply_workspace_data_root(
     workspace = isolated_home / "workspace"
     workspace.mkdir()
     _write_project(workspace / ".guildbotics" / "config")
-    env_file = workspace / ".env"
-    env_file.write_text(
-        "GUILDBOTICS_DATA_DIR=data-a\n"
-        "GUILDBOTICS_WORKSPACE_ROOT=wrong-root\n"
-        "WORKSPACE_MARKER=a\n",
-        encoding="utf-8",
-    )
     runtime.set_workspace(workspace)
-    data_root = os.environ[GUILDBOTICS_DATA_DIR]
-    env_file.write_text(
-        "GUILDBOTICS_DATA_DIR=data-b\n"
-        "GUILDBOTICS_WORKSPACE_ROOT=still-wrong\n"
-        "WORKSPACE_MARKER=b\n",
-        encoding="utf-8",
-    )
 
     class _FakeEdition:
         def get_context(self, message: str = "") -> _FakeContext:
@@ -647,9 +587,7 @@ def test_get_context_does_not_reapply_workspace_data_root(
 
     runtime._get_context()
 
-    assert os.environ[GUILDBOTICS_DATA_DIR] == data_root
     assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
-    assert os.environ["WORKSPACE_MARKER"] == "b"
 
 
 def test_diagnostics_store_switches_with_workspace_data_root(
@@ -677,43 +615,15 @@ def test_diagnostics_store_switches_with_workspace_data_root(
 
     assert store.list_traces() == []
     assert (
-        store.path == workspace_b.resolve() / ".guildbotics/data/run/diagnostics.jsonl"
+        store.path == workspace_b.resolve() / ".guildbotics/local/run/diagnostics.jsonl"
     )
 
 
-def test_set_workspace_clears_stale_dotenv_keys_from_previous_workspace(
+def test_set_workspace_clears_stale_secret_keys_from_previous_workspace(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(
-        runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
-    )
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
+    from guildbotics.utils.secret_store import KeyringSecretStore
 
-    workspace_a = isolated_home / "workspace-a"
-    workspace_a.mkdir()
-    _write_project(workspace_a / ".guildbotics" / "config")
-    (workspace_a / ".env").write_text("OPENAI_API_KEY=secret-a\nWORKSPACE_MARKER=a\n")
-
-    workspace_b = isolated_home / "workspace-b"
-    workspace_b.mkdir()
-    _write_project(workspace_b / ".guildbotics" / "config")
-    (workspace_b / ".env").write_text("WORKSPACE_MARKER=b\n")
-
-    runtime.set_workspace(workspace_a)
-    assert os.environ["OPENAI_API_KEY"] == "secret-a"
-
-    runtime.set_workspace(workspace_b)
-    # Workspace B does not define OPENAI_API_KEY, so the credential injected by
-    # workspace A must not leak into workspace B.
-    assert "OPENAI_API_KEY" not in os.environ
-    assert os.environ["WORKSPACE_MARKER"] == "b"
-
-
-def test_set_workspace_clears_dotenv_keys_when_new_env_missing(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(
         runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
@@ -723,7 +633,9 @@ def test_set_workspace_clears_dotenv_keys_when_new_env_missing(
     workspace_a = isolated_home / "workspace-a"
     workspace_a.mkdir()
     _write_project(workspace_a / ".guildbotics" / "config")
-    (workspace_a / ".env").write_text("OPENAI_API_KEY=secret-a\n")
+    KeyringSecretStore(workspace_a / ".guildbotics" / "config").set(
+        "OPENAI_API_KEY", "secret-a"
+    )
 
     workspace_b = isolated_home / "workspace-b"
     workspace_b.mkdir()
@@ -875,21 +787,9 @@ def test_transcript_settings_defaults_and_usage(
     assert status.memory_max_size_bytes == 8 * 1024 * 1024
 
 
-def test_update_transcript_settings_writes_env(
+def test_update_transcript_settings_writes_config(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_DETAIL", "standard")
-    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", "30")
-    (isolated_home / ".env").write_text(
-        "\n".join(
-            [
-                "# leading comment",
-                "OPENAI_API_KEY=first",
-                "EXTRA=keep",
-            ]
-        )
-        + "\n"
-    )
     runtime = AppRuntime(EventBus())
 
     status = runtime.update_transcript_settings(
@@ -898,24 +798,22 @@ def test_update_transcript_settings_writes_env(
 
     assert status.detail == "full"
     assert status.retention_days == 14
-    assert os.environ["GUILDBOTICS_TRANSCRIPT_DETAIL"] == "full"
-    assert os.environ["GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS"] == "14"
-    env_text = (isolated_home / ".env").read_text()
-    assert "OPENAI_API_KEY=first" in env_text
-    assert "EXTRA=keep" in env_text
-    assert "GUILDBOTICS_TRANSCRIPT_DETAIL=full" in env_text
-    assert "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS=14" in env_text
+    settings_file = isolated_home / ".guildbotics" / "config" / "transcripts.yml"
+    assert "full" in settings_file.read_text(encoding="utf-8")
+    assert "14" in settings_file.read_text(encoding="utf-8")
 
 
 # --- runtime debug ----------------------------------------------------------
 
 
-def test_runtime_debug_status_reads_env_file(
+def test_runtime_debug_status_reads_debug_env(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from guildbotics.utils.env_loader import write_debug_env
+
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     monkeypatch.delenv("AGNO_DEBUG", raising=False)
-    (isolated_home / ".env").write_text("LOG_LEVEL=DEBUG\nAGNO_DEBUG=false\n")
+    write_debug_env({"LOG_LEVEL": "DEBUG", "AGNO_DEBUG": "false"})
     runtime = AppRuntime(EventBus())
 
     status = runtime.get_runtime_debug_status()
@@ -923,16 +821,13 @@ def test_runtime_debug_status_reads_env_file(
     assert status.enabled is True
     assert status.log_level == "DEBUG"
     assert status.agno_debug is False
-    assert status.env_file == isolated_home / ".env"
-    assert status.env_file_exists is True
 
 
-def test_update_runtime_debug_writes_env_environ_and_logger_level(
+def test_update_runtime_debug_writes_debug_env_and_logger_level(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     monkeypatch.delenv("AGNO_DEBUG", raising=False)
-    (isolated_home / ".env").write_text("OPENAI_API_KEY=keep\nLOG_LEVEL=INFO\n")
     runtime = AppRuntime(EventBus())
     logger = logging.getLogger("guildbotics")
     original_level = logger.level
@@ -946,16 +841,10 @@ def test_update_runtime_debug_writes_env_environ_and_logger_level(
         assert os.environ["AGNO_DEBUG"] == "true"
         assert logger.level == logging.DEBUG
         assert handler.level == logging.DEBUG
-        env_map = dict(
-            line.split("=", 1)
-            for line in (isolated_home / ".env").read_text().splitlines()
-            if "=" in line
-        )
-        assert env_map == {
-            "OPENAI_API_KEY": "keep",
-            "LOG_LEVEL": "DEBUG",
-            "AGNO_DEBUG": "true",
-        }
+        debug_file = isolated_home / ".guildbotics" / "local" / "debug.env"
+        text = debug_file.read_text(encoding="utf-8")
+        assert "LOG_LEVEL=DEBUG" in text
+        assert "AGNO_DEBUG=true" in text
         assert status.enabled is True
         assert status.log_level == "DEBUG"
         assert status.agno_debug is True
@@ -969,16 +858,16 @@ def test_update_runtime_debug_disables_both_debug_flags(
 ) -> None:
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("AGNO_DEBUG", "true")
-    (isolated_home / ".env").write_text("LOG_LEVEL=DEBUG\nAGNO_DEBUG=true\n")
     runtime = AppRuntime(EventBus())
 
     status = runtime.update_runtime_debug(RuntimeDebugUpdateRequest(enabled=False))
 
     assert os.environ["LOG_LEVEL"] == "INFO"
     assert os.environ["AGNO_DEBUG"] == "false"
-    env_text = (isolated_home / ".env").read_text()
-    assert "LOG_LEVEL=INFO" in env_text
-    assert "AGNO_DEBUG=false" in env_text
+    debug_file = isolated_home / ".guildbotics" / "local" / "debug.env"
+    text = debug_file.read_text(encoding="utf-8")
+    assert "LOG_LEVEL=INFO" in text
+    assert "AGNO_DEBUG=false" in text
     assert status.enabled is False
     assert status.log_level == "INFO"
     assert status.agno_debug is False
@@ -1059,3 +948,29 @@ def test_detect_cli_agents_returns_empty_for_empty_catalog(
     runtime = AppRuntime(EventBus())
 
     assert runtime.detect_cli_agents().agents == []
+
+
+def test_runtime_startup_never_adopts_cwd_as_workspace(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sidecar started without a selected workspace must not publish cwd."""
+    monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+
+    runtime = AppRuntime(EventBus(), load_workspace_environment=True)
+
+    assert "GUILDBOTICS_WORKSPACE_ROOT" not in os.environ
+    assert runtime.get_config_status().workspace is None
+
+
+def test_runtime_startup_keeps_explicit_workspace_root(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    explicit = isolated_home / "selected-workspace"
+    explicit.mkdir()
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(explicit))
+
+    runtime = AppRuntime(EventBus(), load_workspace_environment=True)
+
+    assert os.environ["GUILDBOTICS_WORKSPACE_ROOT"] == str(explicit.resolve())
+    assert runtime.get_config_status().workspace == explicit.resolve()

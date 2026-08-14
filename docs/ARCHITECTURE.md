@@ -301,7 +301,7 @@ The generic execution substrate used by workflows and custom commands:
   `Context.shared_state` carries structured state. Their update order is workflow
   compatibility surface — change with care.
 - Config file resolution (`utils/fileio.py`): primary config
-  (`GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`) → package templates.
+  (the selected workspace's `.guildbotics/config`) → package templates.
   Localized files resolve `.<lang>` → `.en` → bare name; person-specific commands
   (`team/members/<person_id>/...`) take precedence over shared ones.
 - `commands/discovery.py` is the single definition of resolution precedence
@@ -390,71 +390,60 @@ Members persist knowledge across runs as a document store (mechanism in
 
 ## 7. Storage Roots
 
-Path resolution separates four roots (implementation: `utils/fileio.py`).
+Path resolution separates machine state from a dedicated GuildBotics workspace
+(implementation: `utils/fileio.py`). The workspace root is never inferred from
+the process cwd or a member working clone.
 
-| Root                   | Location                                                                                                                  | Holds                                                                                                                                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Machine state root     | `$HOME/.guildbotics/data` (fixed)                                                                                         | `active-workspace.json`, `run/service.lock` — state needed _before_ a workspace is chosen                                                                                                                 |
-| Runtime workspace root | selected workspace (App API `chdir`s to it; member CLI resolves `--workspace` → explicit config → cwd → active workspace) | `.env`, `.guildbotics/config`                                                                                                                                                                             |
-| Workspace data root    | `<workspace>/.guildbotics/data`, overridable via `GUILDBOTICS_DATA_DIR`                                                   | member workspaces (`workspaces/<person_id>`), task-run evidence (`task-runs/*.jsonl`), diagnostics index (`run/diagnostics.jsonl`), execution transcripts (`run/sessions/*.jsonl`), chat state, documents |
-| Config root            | `GUILDBOTICS_CONFIG_DIR` or cwd `.guildbotics/config`; package templates as fallback                                      | project / member configuration, desktop hotkey assignments (`hotkeys.yml`)                                                                                                                                |
+| Root               | Location                                                                                         | Holds                                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `run/service.lock` — state needed _before_ a workspace is chosen                                                                      |
+| Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
+| Config             | `<workspace>/.guildbotics/config`                                                                | project / member YAML, `secrets.yml` (key names and generations), transcript settings, hotkeys                                                                 |
+| Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run evidence, activity events                                                                                       |
+| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, person leases, chat message cache, member clones, AI CLI sessions, work dirs, `debug.env`                                            |
 
 Invariants:
 
-- Machine state root is always derived from `HOME` and never affected by
-  `GUILDBOTICS_DATA_DIR`, `GUILDBOTICS_CONFIG_DIR`, or workspace `.env`.
-- App API startup restores `active-workspace.json` before constructing stores and runtime
-  services. Missing or invalid state falls back to the process startup directory. The Desktop
-  frontend neither persists nor restores workspace state from browser storage.
-- `GUILDBOTICS_CONFIG_DIR` selects the _config source_ only; it is not a workspace or
-  data root.
-- The workspace application boundary also publishes the selected runtime workspace as
-  `GUILDBOTICS_WORKSPACE_ROOT`. Agent execution copies that resolved value into
-  `AgentExecutionContext`; it is never reconstructed from `GUILDBOTICS_DATA_DIR`.
-- The effective workspace data root is fixed at the _workspace application boundary_
-  (App API `set_workspace()`, CLI/member CLI startup, `run`/`start` initialization) and
-  written to `os.environ["GUILDBOTICS_DATA_DIR"]` there — and only there. Workers,
-  workflows, and commands never mutate it mid-run; agent invocations carry the
-  resolved root and run id in `AgentExecutionContext`.
-- Stores that keep a path (diagnostics store, chat state store) must re-resolve or be
-  rebound on workspace switch; App API keeps the process-startup
-  `GUILDBOTICS_DATA_DIR` as the inherited fallback so switching workspaces never leaks
-  the previous workspace's root.
+- Machine state root is always derived from `HOME` and never from the workspace.
+- Workspace root is resolved only from `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`,
+  `GUILDBOTICS_CONFIG_DIR` when it is `<ws>/.guildbotics/config`, or
+  `active-workspace.json`. Missing workspace is an error for writes.
+- `config/` and `state/` are the future Git-sync tree. `local/` is device-only.
+- `guildbotics workspace migrate --from <checkout> --to <workspace>` copies an old
+  source-checkout `.guildbotics/` into a dedicated workspace without changing the
+  user's source repository.
+- `GUILDBOTICS_WORKSPACE_ROOT` is published at the workspace application boundary.
+  Agent execution copies that resolved value into `AgentExecutionContext`.
+- There is no `GUILDBOTICS_DATA_DIR` override and no workspace `.env` file.
 
 ## 8. Secret Storage (SecretStore)
 
 Secrets = LLM provider API keys (`models/<provider>/default.yml` `api_key_env`) and
 person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN` /
-`SLACK_APP_TOKEN`). Non-secret IDs/paths stay in `.env`.
+`SLACK_APP_TOKEN`). Non-secret GitHub App IDs live in `person.yml` `account_info`.
 
-- **Backends** (`utils/secret_store.py`): `keyring` (OS keychain; the workspace keeps
-  only a value-less index in `.guildbotics/config/secrets.yml`) and `env-file`
-  (workspace `.env`; the default when no keychain is available, e.g. headless
-  machines). New workspace setup pins the backend: keyring when a keychain is
-  available, env-file otherwise. Backend selection: `GUILDBOTICS_SECRETS_BACKEND`
-  env var > `secrets.yml` > env-file. Machine moves use `guildbotics secrets
-  export` / `import`.
-- **Keychain adapters** (`utils/keychain.py`): `KeyringSecretStore` owns the common
+- **Backend** (`utils/secret_store.py`): OS keychain only. The workspace keeps a
+  non-secret index in `.guildbotics/config/secrets.yml` (`store_id`, logical key
+  names, generations) and device generations in `.guildbotics/local/secrets.json`.
+  There is no env-file backend and no `GUILDBOTICS_SECRETS_BACKEND` switch. A
+  missing or locked keychain is an error. Machine moves use `guildbotics secrets
+  export` / `import` (dotenv is an exchange format only). `secrets set --from-file`
+  absorbs a PEM or other file into the keychain.
+- **Keychain adapters** (`utils/keychain.py`): `KeyringSecretStore` owns the
   workspace index and delegates value I/O to a platform adapter. macOS and Linux
   retain the Python keyring backend. Windows uses `utils/windows_credentials.py`
   and writes UTF-8 opaque blobs to a GuildBotics-specific Credential Manager
   namespace, preserving the 2,560-byte capacity for ASCII-heavy PEM keys. Batch
   imports validate every value before the first write.
-- **Resolution priority** at process start: real environment variables > OS keychain >
-  `.env`. Values are injected into `os.environ` once at startup; app_api removes its
-  own injected keys on workspace switch but preserves variables inherited from the
-  parent process.
+- **Resolution priority** at process start: real environment variables > OS keychain.
+  Allowlisted debug settings (`LOG_LEVEL`, `AGNO_DEBUG`) come from
+  `local/debug.env`. GuildBotics never reads a workspace `.env`.
 - **Exception**: `*_GITHUB_PRIVATE_KEY` (GitHub App PEM content) is _never_ injected
-  into the environment — AI CLI tool subprocesses inherit `os.environ` wholesale, so an
-  App private key in the environment would leak to every agent process. Consumers read
-  it on demand through the secret store; env-file workspaces configure a
-  `*_GITHUB_PRIVATE_KEY_PATH` file instead.
-- **Writes**: `.env` files written by GuildBotics are always `0600`, written atomically
-  (`mkstemp` + `os.replace`); dotenv serialization round-trips multiline values (PEM).
-  Workspace moves use `guildbotics secrets export` / `import`.
-- **Tests**: an autouse fixture forces `GUILDBOTICS_SECRETS_BACKEND=env-file` so tests
-  never touch a real keychain; keyring paths are tested with the `fake_keyring`
-  fixture.
+  into the environment. Consumers read it on demand through the secret store.
+  Generated registration PEMs are written under the OS temporary directory and
+  deleted after the keychain absorbs them.
+- **Tests**: an autouse `fake_keyring` fixture installs an in-memory keychain so
+  tests never touch the developer's real OS store.
 
 ## 9. Observability and Diagnostics
 

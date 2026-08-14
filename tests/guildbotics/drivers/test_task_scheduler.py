@@ -14,7 +14,7 @@ EXPECTED_ROUTINE_CALL_COUNT = 2
 def _isolated_data_dir(monkeypatch, tmp_path):
     # Keep the per-member chat dispatcher pointed at an empty temp workspace so it
     # is a no-op (no queued chat events) in these scheduler timing tests.
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
 
 
 class _Logger:

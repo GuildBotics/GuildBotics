@@ -66,15 +66,11 @@ vi.mock("./api/client", async (importOriginal) => {
       enabled: false,
       log_level: "INFO",
       agno_debug: false,
-      env_file: "/workspace/.env",
-      env_file_exists: true,
     })),
     updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => ({
       enabled: body.enabled,
       log_level: body.enabled ? "DEBUG" : "INFO",
       agno_debug: body.enabled,
-      env_file: "/workspace/.env",
-      env_file_exists: true,
     })),
     verify: vi.fn(),
     runScenarioDiagnostics: vi.fn(),
@@ -124,8 +120,6 @@ beforeEach(() => {
     enabled: false,
     log_level: "INFO",
     agno_debug: false,
-    env_file: "/workspace/.env",
-    env_file_exists: true,
   });
   vi.mocked(getMemoryEvents)
     .mockReset()
@@ -148,8 +142,6 @@ beforeEach(() => {
       enabled: body.enabled,
       log_level: body.enabled ? "DEBUG" : "INFO",
       agno_debug: body.enabled,
-      env_file: "/workspace/.env",
-      env_file_exists: true,
     }));
   vi.mocked(runScenarioDiagnostics).mockReset().mockResolvedValue(scenarioResponse());
   vi.mocked(getTraces).mockReset().mockResolvedValue({ traces: [] });
@@ -1042,8 +1034,7 @@ function renderApp(initialPath = "/diagnostics") {
 function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
   return {
     cwd: "/workspace",
-    env_file: "/workspace/.env",
-    env_file_exists: true,
+    workspace: "/workspace",
     config_dir: "/workspace/.guildbotics/config",
     project_file: "/workspace/.guildbotics/config/project.yml",
     project_file_exists: true,
@@ -1055,7 +1046,6 @@ function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
 function projectConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   return {
     config_dir: "/workspace/.guildbotics/config",
-    env_file_path: "/workspace/.env",
     language: "en",
     description: "Demo project",
     llm_api_type: "openai",
@@ -1074,8 +1064,6 @@ function transcriptSettings(
   return {
     detail: "standard",
     retention_days: 30,
-    env_file: "/workspace/.env",
-    env_file_exists: true,
     sessions_dir: "/workspace/.guildbotics/data/run/sessions",
     total_size_bytes: 0,
     index_size_bytes: 0,

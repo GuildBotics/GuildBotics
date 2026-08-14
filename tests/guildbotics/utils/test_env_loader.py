@@ -1,129 +1,81 @@
+from __future__ import annotations
+
 import os
 
 from guildbotics.utils.env_loader import (
-    GUILDBOTICS_ENV_FILE,
-    HOME_ENV_PROTECTED_KEYS,
+    ALLOWED_DEBUG_KEYS,
     load_guildbotics_env,
-    read_workspace_secrets,
+    read_debug_env,
+    write_debug_env,
 )
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 
-def test_load_guildbotics_env_prefers_env_file(monkeypatch, tmp_path):
-    env_file = tmp_path / "secrets.env"
-    cwd_env = tmp_path / ".env"
-    env_file.write_text("AIKO_GITHUB_ACCESS_TOKEN=from-file\n", encoding="utf-8")
-    cwd_env.write_text("AIKO_GITHUB_ACCESS_TOKEN=from-cwd\n", encoding="utf-8")
-    monkeypatch.setenv(GUILDBOTICS_ENV_FILE, str(env_file))
-
-    loaded = load_guildbotics_env(tmp_path, override=True, prefer_env_file=True)
-
-    assert loaded == env_file
-    assert loaded is not None
-    assert loaded.is_absolute()
-    assert loaded.read_text(encoding="utf-8")
-    assert loaded == env_file.resolve()
-    assert os.environ["AIKO_GITHUB_ACCESS_TOKEN"] == "from-file"
-    assert os.environ[GUILDBOTICS_ENV_FILE] == str(env_file.resolve())
-
-
-def test_load_guildbotics_env_sets_absolute_path(monkeypatch, tmp_path):
-    env_file = tmp_path / ".env"
-    env_file.write_text("AIKO_GITHUB_ACCESS_TOKEN=from-cwd\n", encoding="utf-8")
-
-    loaded = load_guildbotics_env(tmp_path, override=True, prefer_env_file=False)
-
-    assert loaded == env_file.resolve()
-    assert loaded is not None
-    assert loaded.is_absolute()
-    assert loaded.read_text(encoding="utf-8")
-    assert os.environ["AIKO_GITHUB_ACCESS_TOKEN"] == "from-cwd"
-    assert os.environ[GUILDBOTICS_ENV_FILE] == str(env_file.resolve())
-
-
-def test_load_guildbotics_env_skips_home_keys_when_unset(monkeypatch, tmp_path):
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                "HOME=workspace-home",
-                "USERPROFILE=workspace-userprofile",
-                "HOMEDRIVE=Z:",
-                "HOMEPATH=\\Users\\Workspace",
-                "WORKSPACE_MARKER=loaded",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    for key in HOME_ENV_PROTECTED_KEYS:
-        monkeypatch.delenv(key, raising=False)
-
-    loaded = load_guildbotics_env(tmp_path, override=True, prefer_env_file=False)
-
-    assert loaded == env_file.resolve()
-    for key in HOME_ENV_PROTECTED_KEYS:
-        assert key not in os.environ
-    assert os.environ["WORKSPACE_MARKER"] == "loaded"
-    assert os.environ[GUILDBOTICS_ENV_FILE] == str(env_file.resolve())
-
-
-def _keyring_workspace(tmp_path, monkeypatch):
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    config_dir = tmp_path / ".guildbotics" / "config"
-    config_dir.mkdir(parents=True)
-    return KeyringSecretStore(config_dir)
-
-
-def test_read_workspace_secrets_empty_for_legacy_workspace(tmp_path, monkeypatch):
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=from-env-file\n", encoding="utf-8")
-
-    assert read_workspace_secrets(tmp_path) == {}
-
-
-def test_load_guildbotics_env_prefers_keychain_over_env_file(
+def test_load_guildbotics_env_uses_keychain_not_dotenv(
     fake_keyring, tmp_path, monkeypatch
 ):
-    store = _keyring_workspace(tmp_path, monkeypatch)
-    store.set("KEYCHAIN_TEST_TOKEN", "from-keychain")
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "KEYCHAIN_TEST_TOKEN=from-env-file\nPLAIN_TEST_SETTING=from-env-file\n",
-        encoding="utf-8",
-    )
-    monkeypatch.delenv("KEYCHAIN_TEST_TOKEN", raising=False)
-    monkeypatch.delenv("PLAIN_TEST_SETTING", raising=False)
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=from-dotenv\n", encoding="utf-8")
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("OPENAI_API_KEY", "from-keychain")
 
-    loaded = load_guildbotics_env(tmp_path, override=True, prefer_env_file=False)
+    load_guildbotics_env(override=True)
 
-    assert loaded == env_file.resolve()
-    assert os.environ["KEYCHAIN_TEST_TOKEN"] == "from-keychain"
-    assert os.environ["PLAIN_TEST_SETTING"] == "from-env-file"
-    monkeypatch.delenv("KEYCHAIN_TEST_TOKEN")
-    monkeypatch.delenv("PLAIN_TEST_SETTING")
+    assert os.environ["OPENAI_API_KEY"] == "from-keychain"
 
 
-def test_load_guildbotics_env_keeps_real_environment_variables(
+def test_debug_env_allowlist(tmp_path, monkeypatch):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    write_debug_env({"LOG_LEVEL": "DEBUG", "AGNO_DEBUG": "true", "SECRET": "nope"})
+    values = read_debug_env()
+    assert values == {"LOG_LEVEL": "DEBUG", "AGNO_DEBUG": "true"}
+    assert "SECRET" not in values
+    assert ALLOWED_DEBUG_KEYS == {"LOG_LEVEL", "AGNO_DEBUG"}
+
+
+def test_env_provided_secrets_are_not_read_from_the_keychain(
     fake_keyring, tmp_path, monkeypatch
 ):
-    store = _keyring_workspace(tmp_path, monkeypatch)
-    store.set("KEYCHAIN_TEST_TOKEN", "from-keychain")
-    monkeypatch.setenv("KEYCHAIN_TEST_TOKEN", "from-real-env")
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("OPENAI_API_KEY", "from-keychain")
+    store.set("SLACK_SIGNING", "from-keychain")
+    monkeypatch.setenv("OPENAI_API_KEY", "from-real-env")
+    monkeypatch.delenv("SLACK_SIGNING", raising=False)
+    fetched: list[str] = []
+    original_get = KeyringSecretStore.get
 
-    load_guildbotics_env(tmp_path, override=False, prefer_env_file=False)
+    def tracking_get(self, key):
+        fetched.append(key)
+        return original_get(self, key)
 
-    assert os.environ["KEYCHAIN_TEST_TOKEN"] == "from-real-env"
+    monkeypatch.setattr(KeyringSecretStore, "get", tracking_get)
+
+    load_guildbotics_env(override=False)
+
+    assert os.environ["OPENAI_API_KEY"] == "from-real-env"
+    assert os.environ.pop("SLACK_SIGNING") == "from-keychain"
+    assert "OPENAI_API_KEY" not in fetched
 
 
-def test_load_guildbotics_env_loads_keychain_without_env_file(
+def test_locked_keychain_does_not_break_env_var_only_operation(
     fake_keyring, tmp_path, monkeypatch
 ):
-    store = _keyring_workspace(tmp_path, monkeypatch)
-    store.set("KEYCHAIN_TEST_TOKEN", "from-keychain")
-    monkeypatch.delenv("KEYCHAIN_TEST_TOKEN", raising=False)
+    """Servers that provide every secret as a real environment variable must
+    start even when the OS secret store is locked or unreachable."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("OPENAI_API_KEY", "from-keychain")
 
-    loaded = load_guildbotics_env(tmp_path, override=True, prefer_env_file=False)
+    def locked_get(self, key):
+        raise SecretStoreError("keychain is locked")
 
-    assert loaded is None
-    assert os.environ["KEYCHAIN_TEST_TOKEN"] == "from-keychain"
-    monkeypatch.delenv("KEYCHAIN_TEST_TOKEN")
+    monkeypatch.setattr(KeyringSecretStore, "get", locked_get)
+    monkeypatch.setenv("OPENAI_API_KEY", "from-real-env")
+
+    load_guildbotics_env(override=True)
+
+    assert os.environ["OPENAI_API_KEY"] == "from-real-env"

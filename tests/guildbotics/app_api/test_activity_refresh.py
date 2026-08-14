@@ -7,6 +7,7 @@ from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 
@@ -74,3 +75,42 @@ def test_activity_history_rejects_invalid_sync_ranges(sync_start, sync_end, tmp_
         )
 
     assert exc_info.value.code == "invalid_activity_sync_range"
+
+
+def test_activity_records_link_traces_only_with_local_diagnostics(tmp_path):
+    """Shared activity events keep their trace link only when this device's
+    diagnostics actually know the trace; synced events from another device
+    must not grow dead detail links."""
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    store.record(
+        {
+            "kind": "event",
+            "type": "command.finished",
+            "timestamp": "2026-07-10T01:00:00+00:00",
+            "trace_id": "local-1",
+            "person_id": "alice",
+            "source": "interactive",
+        }
+    )
+    events = ActivityEventStore()
+    for trace_id in ("local-1", "remote-1"):
+        events.record(
+            {
+                "type": "github.push",
+                "timestamp": "2026-07-10T02:00:00+00:00",
+                "trace_id": trace_id,
+                "person_id": "alice",
+                "source": "interactive",
+                "payload": {"ref": "refs/heads/main"},
+            }
+        )
+    runtime = AppRuntime(EventBus(store=store), diagnostics_store=store)
+
+    records = runtime._activity_records_between(
+        datetime(2026, 7, 9, tzinfo=UTC),
+        datetime(2026, 7, 11, tzinfo=UTC),
+        limit=100,
+    )
+
+    pushes = [item for item in records if item["type"] == "github.push"]
+    assert sorted(str(item.get("trace_id")) for item in pushes) == ["None", "local-1"]

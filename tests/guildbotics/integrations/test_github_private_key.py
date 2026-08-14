@@ -1,4 +1,4 @@
-"""Resolution of the GitHub App private key (keychain content vs. PEM file)."""
+"""Resolution of the GitHub App private key from the OS secret store."""
 
 import pytest
 
@@ -9,7 +9,6 @@ from guildbotics.utils.secret_store import KeyringSecretStore
 PEM_FROM_STORE = (
     "-----BEGIN RSA PRIVATE KEY-----\nstore\n-----END RSA PRIVATE KEY-----\n"
 )
-PEM_FROM_FILE = "-----BEGIN RSA PRIVATE KEY-----\nfile\n-----END RSA PRIVATE KEY-----\n"
 
 
 @pytest.fixture
@@ -25,25 +24,25 @@ def _pin_workspace(tmp_path, monkeypatch):
     return config_dir
 
 
-def test_prefers_keychain_content_over_path(
+def test_reads_key_content_from_secret_store(
     fake_keyring, tmp_path, monkeypatch, person
 ):
     config_dir = _pin_workspace(tmp_path, monkeypatch)
     KeyringSecretStore(config_dir).set("AIKO_GITHUB_PRIVATE_KEY", PEM_FROM_STORE)
-    pem_file = tmp_path / "aiko.pem"
-    pem_file.write_text(PEM_FROM_FILE)
-    monkeypatch.setenv("AIKO_GITHUB_PRIVATE_KEY_PATH", str(pem_file))
 
     assert get_person_private_key_pem(person) == PEM_FROM_STORE.encode()
 
 
-def test_falls_back_to_key_file(fake_keyring, tmp_path, monkeypatch, person):
+def test_missing_key_raises_instead_of_reading_files(
+    fake_keyring, tmp_path, monkeypatch, person
+):
     _pin_workspace(tmp_path, monkeypatch)
     pem_file = tmp_path / "aiko.pem"
-    pem_file.write_bytes(PEM_FROM_FILE.encode())
+    pem_file.write_text(PEM_FROM_STORE)
     monkeypatch.setenv("AIKO_GITHUB_PRIVATE_KEY_PATH", str(pem_file))
 
-    assert get_person_private_key_pem(person) == PEM_FROM_FILE.encode()
+    with pytest.raises(KeyError, match="AIKO_GITHUB_PRIVATE_KEY"):
+        get_person_private_key_pem(person)
 
 
 def test_key_content_is_not_published_to_environment(
@@ -60,7 +59,7 @@ def test_key_content_is_not_published_to_environment(
     monkeypatch.delenv("AIKO_GITHUB_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("AIKO_GITHUB_PRIVATE_KEY", raising=False)
 
-    load_guildbotics_env(tmp_path, override=True, prefer_env_file=False)
+    load_guildbotics_env(override=True)
 
     assert "AIKO_GITHUB_PRIVATE_KEY" not in os.environ
     assert os.environ["AIKO_GITHUB_ACCESS_TOKEN"] == "ghp-secret"

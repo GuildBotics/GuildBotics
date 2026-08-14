@@ -298,7 +298,7 @@ class CodexAppServerAdapter:
         if self._transport.process is not None:
             await self.close()
         cwd = context.cwd
-        env, self._gh_config_dir = isolated_agent_environment(cwd)
+        env, self._gh_config_dir = isolated_agent_environment()
         env.update(member_command_environment(context))
         env.update(delegation_environment(context.run_id))
         try:

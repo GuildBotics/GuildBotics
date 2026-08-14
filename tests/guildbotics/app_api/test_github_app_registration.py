@@ -29,12 +29,11 @@ class RuntimeStub:
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(
             cwd=tmp_path,
-            env_file=tmp_path / ".env",
-            env_file_exists=False,
+            workspace=tmp_path,
             config_dir=tmp_path / ".guildbotics/config",
             project_file=tmp_path / ".guildbotics/config/team/project.yml",
             project_file_exists=False,
-            storage_dir=tmp_path / ".guildbotics/data",
+            storage_dir=tmp_path,
         )
 
     def get_config_status(self) -> ConfigStatus:
@@ -190,5 +189,7 @@ def test_status_reports_credentials_and_detected_installation(
         "https://github.com/apps/my-bot/installations/new"
     )
     key_file = Path(status["private_key_path"])
-    assert key_file.is_relative_to(tmp_path / ".guildbotics/data/github-apps")
+    from guildbotics.editions.simple.setup_service import github_app_key_dir
+
+    assert key_file.is_relative_to(github_app_key_dir())
     assert key_file.read_text() == "-----BEGIN RSA PRIVATE KEY-----\nkey\n"

@@ -45,9 +45,9 @@ INDEX_EVENT_TYPES = frozenset(
         "chat_dispatch.retry_scheduled",
         "chat_dispatch.abandoned",
         "workflow.rate_limited",
+        "credential.failed",
     }
 )
-INDEX_EVENT_PREFIXES = ("github.", "credential.")
 
 
 @dataclass
@@ -95,19 +95,54 @@ class TranscriptRoute:
     index_records: list[dict[str, Any]]
 
 
+def transcript_settings_path() -> Path:
+    from guildbotics.utils.fileio import get_workspace_config_dir
+
+    return get_workspace_config_dir() / "transcripts.yml"
+
+
+def read_transcript_settings() -> dict[str, Any]:
+    from guildbotics.utils.fileio import WorkspaceNotConfiguredError, load_yaml_dict
+
+    try:
+        data = load_yaml_dict(transcript_settings_path())
+    except WorkspaceNotConfiguredError:
+        data = {}
+    detail = str(data.get("detail") or DEFAULT_TRANSCRIPT_DETAIL)
+    try:
+        retention = int(data.get("retention_days") or DEFAULT_TRANSCRIPT_RETENTION_DAYS)
+    except (TypeError, ValueError):
+        retention = DEFAULT_TRANSCRIPT_RETENTION_DAYS
+    return {
+        "detail": "full"
+        if detail.strip().lower() == "full"
+        else DEFAULT_TRANSCRIPT_DETAIL,
+        "retention_days": max(1, retention),
+    }
+
+
+def write_transcript_settings(*, detail: str, retention_days: int) -> None:
+    from guildbotics.utils.fileio import save_yaml_file
+
+    path = transcript_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_yaml_file(
+        path,
+        {
+            "detail": "full"
+            if detail.strip().lower() == "full"
+            else DEFAULT_TRANSCRIPT_DETAIL,
+            "retention_days": max(1, int(retention_days)),
+        },
+    )
+
+
 def transcript_detail() -> str:
-    value = os.getenv(TRANSCRIPT_DETAIL_ENV, DEFAULT_TRANSCRIPT_DETAIL)
-    return "full" if value.strip().lower() == "full" else DEFAULT_TRANSCRIPT_DETAIL
+    return str(read_transcript_settings()["detail"])
 
 
 def transcript_retention_days() -> int:
-    raw = os.getenv(
-        TRANSCRIPT_RETENTION_DAYS_ENV, str(DEFAULT_TRANSCRIPT_RETENTION_DAYS)
-    )
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return DEFAULT_TRANSCRIPT_RETENTION_DAYS
+    return int(read_transcript_settings()["retention_days"])
 
 
 def standard_stderr_tail(value: str) -> str:
@@ -378,16 +413,12 @@ class SessionTranscriptStore:
 
 
 def _belongs_in_index(item: dict[str, Any]) -> bool:
-    if _attributes(item).get("github.activity_id"):
-        return True
     if item.get("kind") != "event":
         return False
     event_type = str(item.get("type") or "")
     if event_type == "session.pointer" or event_type.startswith("system."):
         return True
-    if event_type in INDEX_EVENT_TYPES:
-        return True
-    return event_type.startswith(INDEX_EVENT_PREFIXES)
+    return event_type in INDEX_EVENT_TYPES
 
 
 def _is_finished_boundary(item: dict[str, Any]) -> bool:

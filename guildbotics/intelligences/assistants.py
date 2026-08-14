@@ -20,6 +20,7 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.functions import to_dict
 from guildbotics.runtime import Context
+from guildbotics.utils.fileio import get_workspace_work_path
 
 
 class AssistantResponseError(CommandError):
@@ -82,8 +83,8 @@ def open_assistant_session[TResult: BaseModel](
         conversation_id: Stable identity shared by every turn of the conversation.
         trace_id: Unique correlation identity for this turn.
         result_type: Structured response type the agent must return.
-        workspace_data_root: Runtime-owned writable data directory.
-        cwd_name: Directory under the data root the agent runs in.
+        workspace_data_root: Selected GuildBotics workspace root.
+        cwd_name: Directory under ``.guildbotics/local/work`` the agent runs in.
         read_only: Whether the agent may only inspect recorded state. Adapters
             enforce this at the provider level, and such a turn takes no member
             execution lease.
@@ -100,7 +101,7 @@ def open_assistant_session[TResult: BaseModel](
         "workspace_data_root": str(workspace_data_root),
         "read_only": read_only,
     }
-    cwd = workspace_data_root / cwd_name
+    cwd = get_workspace_work_path(cwd_name, workspace_root=workspace_data_root)
     cwd.mkdir(parents=True, exist_ok=True)
     kwargs = to_dict(context, {"agent_execution_context": execution_context}, cwd)
     return AssistantSession(

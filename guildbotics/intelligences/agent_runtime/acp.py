@@ -344,7 +344,7 @@ class AcpAdapterBase:
         if self._transport.process is not None:
             await self.close()
         cwd = context.cwd
-        env, self._gh_config_dir = isolated_agent_environment(cwd)
+        env, self._gh_config_dir = isolated_agent_environment()
         env.update(self._agent_member_environment(context))
         try:
             process = await create_agent_subprocess(

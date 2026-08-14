@@ -601,6 +601,50 @@ async def test_dispatch_failure_records_retry_scheduled_event(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_thread_context_unavailable_keeps_event_pending_forever(
+    monkeypatch, tmp_path
+):
+    """A provider outage never consumes retry budget or abandons the event."""
+    from guildbotics.integrations.chat_state_store import ThreadContextUnavailableError
+
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    pending.attempt_count = 5
+    pending.max_attempts = 5
+    store.save_pending_event("slack", "alice", "C1", pending)
+
+    class _UnavailableRunner:
+        def __init__(self, *a):
+            pass
+
+        async def run(self):
+            raise ThreadContextUnavailableError("provider down")
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _UnavailableRunner
+    )
+    abandoned: list[dict] = []
+    monkeypatch.setattr(
+        "guildbotics.drivers.pending_chat_dispatcher.record_chat_dispatch_abandoned",
+        lambda **kwargs: abandoned.append(kwargs),
+    )
+    context = _FakeContext()
+    context.logger.warning = lambda *a, **k: None
+    dispatcher = PendingChatDispatcher(context, state_store=store)  # type: ignore[arg-type]
+
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert abandoned == []
+    assert not store.is_processed_event("slack", "alice", "C1", "E1")
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    # The consumed attempt is handed back so the event can wait indefinitely.
+    assert pending.attempt_count == 5
+    assert pending.last_error_category == "provider_unavailable"
+    assert pending.next_attempt_at is not None
+
+
+@pytest.mark.asyncio
 async def test_dispatcher_side_abandon_records_abandoned_event(monkeypatch, tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     store.upsert_pending_event("slack", "alice", "C1", _event())

@@ -145,7 +145,7 @@ class AntigravityStreamJsonAdapter:
                 details={"prompt_bytes": prompt_bytes, "limit": _MAX_PROMPT_BYTES},
             )
         settings, rejected = await self._turn_settings(context)
-        env, gh_config_dir = isolated_agent_environment(context.cwd)
+        env, gh_config_dir = isolated_agent_environment()
         env.update(member_command_environment(context))
         env.update(delegation_environment(context.run_id))
         log_fd, log_path = tempfile.mkstemp(prefix="guildbotics-agy-log-")
@@ -415,7 +415,7 @@ class AntigravityStreamJsonAdapter:
     async def _ensure_supported(self, context: AgentExecutionContext) -> None:
         if self._capabilities_checked:
             return
-        env, gh_config_dir = isolated_agent_environment(context.cwd)
+        env, gh_config_dir = isolated_agent_environment()
         process: asyncio.subprocess.Process | None = None
         try:
             process = await create_agent_subprocess(

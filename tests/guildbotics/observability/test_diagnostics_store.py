@@ -291,12 +291,12 @@ def test_rotation_does_not_duplicate_the_record_on_disk(tmp_path: Path) -> None:
 def test_default_store_construction_does_not_create_workspace_files(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path))
-
     store = DiagnosticsStore()
 
-    assert store.path == tmp_path / "run/diagnostics.jsonl"
-    assert (tmp_path / "run").exists() is False
+    assert store.path == (
+        tmp_path / ".guildbotics" / "local" / "run" / "diagnostics.jsonl"
+    )
+    assert (tmp_path / ".guildbotics" / "local" / "run").exists() is False
 
 
 def test_importing_diagnostics_events_does_not_mutate_cwd(tmp_path: Path) -> None:
@@ -329,11 +329,13 @@ def test_reads_pick_up_records_appended_by_another_process(tmp_path: Path) -> No
     reader = DiagnosticsStore(path)
     writer = DiagnosticsStore(path)
 
-    writer.record(_event("t1", "github.push", timestamp="2026-07-02T22:40:00+09:00"))
+    writer.record(
+        _event("t1", "command.started", timestamp="2026-07-02T22:40:00+09:00")
+    )
 
     records = reader.records_between(includes=lambda _timestamp: True, limit=10)
     assert [record["trace_id"] for record in records] == ["t1"]
-    assert [record["type"] for record in records] == ["github.push"]
+    assert [record["type"] for record in records] == ["command.started"]
     assert reader.list_traces()[0]["trace_id"] == "t1"
 
 

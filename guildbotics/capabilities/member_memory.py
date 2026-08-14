@@ -18,7 +18,7 @@ from guildbotics.capabilities.member_memory_audit import append_memory_event
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.utils.fileio import (
-    get_workspace_data_path,
+    get_workspace_state_path,
     load_yaml_file,
     save_yaml_file,
 )
@@ -55,7 +55,7 @@ class PolicyParams:
 class MemberMemoryService:
     def __init__(self, person: Person) -> None:
         self.person = person
-        self.root = get_workspace_data_path("documents")
+        self.root = get_workspace_state_path("documents")
 
     def record(
         self,

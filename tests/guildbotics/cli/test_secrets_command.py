@@ -13,7 +13,6 @@ from guildbotics.cli.secrets import secrets
 secrets_cli = importlib.import_module("guildbotics.cli.secrets")
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
-    configured_secrets_backend,
     read_env_values,
 )
 from guildbotics.utils.i18n_tool import set_language, t
@@ -38,12 +37,11 @@ class FakeCredentialApi:
 def _workspace(tmp_path: Path, monkeypatch, *, env_lines: str = "") -> Path:
     """Create a workspace dir and keep runtime env vars from leaking out."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    for key in ("GUILDBOTICS_CONFIG_DIR", "GUILDBOTICS_ENV_FILE"):
+    for key in ("GUILDBOTICS_CONFIG_DIR",):
         monkeypatch.setenv(key, "placeholder")
         monkeypatch.delenv(key)
     workspace = tmp_path / "workspace"
     (workspace / ".guildbotics" / "config").mkdir(parents=True)
-    (workspace / ".env").write_text(env_lines)
     return workspace
 
 
@@ -59,25 +57,21 @@ def test_secrets_group_is_registered_on_main_cli(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0
-    assert "backend: env-file" in result.output
+    assert "os_secret_store: available" in result.output
 
 
-def test_status_reports_default_backend(fake_keyring, tmp_path, monkeypatch):
+def test_status_reports_os_secret_store(fake_keyring, tmp_path, monkeypatch):
     workspace = _workspace(tmp_path, monkeypatch)
 
     result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "status"])
 
     assert result.exit_code == 0
-    assert "backend: env-file (default)" in result.output
-    assert "keychain available: yes" in result.output
+    assert "os_secret_store: available" in result.output
+    assert "locked: no" in result.output
 
 
-def test_set_stores_in_keychain_and_strips_env_file(
-    fake_keyring, tmp_path, monkeypatch
-):
-    workspace = _workspace(
-        tmp_path, monkeypatch, env_lines="MY_TOKEN=plaintext\nLOG_LEVEL=debug\n"
-    )
+def test_set_stores_in_keychain(fake_keyring, tmp_path, monkeypatch):
+    workspace = _workspace(tmp_path, monkeypatch)
     KeyringSecretStore(_config_dir(workspace)).ensure_initialized()
 
     result = CliRunner().invoke(
@@ -86,9 +80,6 @@ def test_set_stores_in_keychain_and_strips_env_file(
 
     assert result.exit_code == 0, result.output
     assert KeyringSecretStore(_config_dir(workspace)).get("MY_TOKEN") == "new-secret"
-    env_values = read_env_values(workspace / ".env")
-    assert "MY_TOKEN" not in env_values
-    assert env_values["LOG_LEVEL"] == "debug"
 
 
 def test_list_and_delete(fake_keyring, tmp_path, monkeypatch):
@@ -166,11 +157,13 @@ def test_windows_import_accepts_large_pem(tmp_path, monkeypatch):
     workspace = _workspace(tmp_path, monkeypatch)
     api = FakeCredentialApi()
     manager = WindowsCredentialManager(api)
-    KeyringSecretStore(_config_dir(workspace), manager).ensure_initialized()
+    KeyringSecretStore(_config_dir(workspace), keychain=manager).ensure_initialized()
     monkeypatch.setattr(
         secrets_cli,
         "resolve_secret_store",
-        lambda *_args: KeyringSecretStore(_config_dir(workspace), manager),
+        lambda *_args, **_kwargs: KeyringSecretStore(
+            _config_dir(workspace), keychain=manager
+        ),
     )
     pem = "x" * 1679
     import_file = tmp_path / "secrets.env"
@@ -182,7 +175,7 @@ def test_windows_import_accepts_large_pem(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert (
-        KeyringSecretStore(_config_dir(workspace), manager).get(
+        KeyringSecretStore(_config_dir(workspace), keychain=manager).get(
             "ALICE_GITHUB_PRIVATE_KEY"
         )
         == pem
@@ -193,11 +186,13 @@ def test_windows_import_prevalidates_all_values(tmp_path, monkeypatch):
     workspace = _workspace(tmp_path, monkeypatch)
     api = FakeCredentialApi()
     manager = WindowsCredentialManager(api)
-    KeyringSecretStore(_config_dir(workspace), manager).ensure_initialized()
+    KeyringSecretStore(_config_dir(workspace), keychain=manager).ensure_initialized()
     monkeypatch.setattr(
         secrets_cli,
         "resolve_secret_store",
-        lambda *_args: KeyringSecretStore(_config_dir(workspace), manager),
+        lambda *_args, **_kwargs: KeyringSecretStore(
+            _config_dir(workspace), keychain=manager
+        ),
     )
     import_file = tmp_path / "secrets.env"
     import_file.write_text(f"SMALL=ok\nTOO_LARGE={'x' * 2561}\n")
@@ -212,7 +207,7 @@ def test_windows_import_prevalidates_all_values(tmp_path, monkeypatch):
     assert "2560" in result.output
     assert "x" * 100 not in result.output
     assert api.values == {}
-    assert KeyringSecretStore(_config_dir(workspace), manager).keys() == []
+    assert KeyringSecretStore(_config_dir(workspace), keychain=manager).keys() == []
 
 
 def test_secret_size_error_is_translated_in_english_and_japanese():

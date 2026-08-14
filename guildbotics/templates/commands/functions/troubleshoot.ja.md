@@ -21,8 +21,8 @@ inputs:
 - `guildbotics diagnostics trace <trace_id> [--kind event|log|io|memory] [--level error] [--limit N]` — 1実行のsummaryとrecordを返します。`--kind`は繰り返し指定できます。
 - `guildbotics diagnostics system [--limit N]` — 個別の実行に属さないサービス全体のrecordを返します。
 
-`guildbotics`コマンドがPATHにない場合は、workspaceの`.guildbotics/data/run/diagnostics.jsonl`(索引)と
-`.guildbotics/data/run/sessions/<trace_id>.jsonl`(完全なトランスクリプト)を直接読んでください。
+`guildbotics`コマンドがPATHにない場合は、workspaceの`.guildbotics/local/run/diagnostics.jsonl`(索引)と
+`.guildbotics/local/run/sessions/<trace_id>.jsonl`(完全なトランスクリプト)を直接読んでください。
 
 上記以外は実行してはいけません。書き込みを伴うコマンド、`guildbotics member ...`、git、gh、
 ネットワークアクセスはすべて禁止です。あなたは調査するだけで、修復してはいけません。

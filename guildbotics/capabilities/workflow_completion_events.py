@@ -93,13 +93,15 @@ def record_chat_dispatch_abandoned(
     attempt_count: int,
     max_attempts: int,
     error: str,
+    error_category: str = "failed",
 ) -> None:
     """Record that the event was terminalized after its final attempt.
 
     The dispatcher increments its attempt counter before running the workflow,
     so ``attempt_count`` can arrive one higher than ``max_attempts`` for the
     attempt that triggered abandonment. The diagnostics payload caps it at
-    ``max_attempts`` so it never reads as "attempt 6 of 5".
+    ``max_attempts`` so it never reads as "attempt 6 of 5". The raw ``error``
+    stays in local diagnostics; shared activity keeps only ``error_category``.
     """
     record_correlated_event(
         event_type="chat_dispatch.abandoned",
@@ -110,5 +112,6 @@ def record_chat_dispatch_abandoned(
             "attempt_count": min(attempt_count, max_attempts),
             "max_attempts": max_attempts,
             "error": error,
+            "error_category": error_category,
         },
     )

@@ -64,7 +64,9 @@ async def test_troubleshoot_turn_sends_question_and_focus(tmp_path: Path) -> Non
     assert state["work_kind"] == "troubleshooting"
     assert state["work_identity"] == "conv-1"
     assert state["run_id"] == "trace-1"
-    assert brain.kwargs["cwd"] == tmp_path / "troubleshooting"
+    assert brain.kwargs["cwd"] == (
+        tmp_path / ".guildbotics" / "local" / "work" / "troubleshooting"
+    )
 
 
 @pytest.mark.asyncio

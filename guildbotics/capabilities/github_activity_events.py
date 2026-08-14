@@ -7,8 +7,8 @@ from typing import Any, cast
 
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.github_utils import create_github_client
+from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 ACTIVITY_DUPLICATE_SCAN_LIMIT = 50_000
 
@@ -239,11 +239,8 @@ def _timestamp_between(timestamp: str, start: datetime, end: datetime) -> bool:
 def _existing_activity_ids(start: datetime, end: datetime) -> set[str]:
     return {
         str(attributes.get("github.activity_id"))
-        for item in DiagnosticsStore(
-            memory_limit=ACTIVITY_DUPLICATE_SCAN_LIMIT
-        ).records_between(
-            includes=lambda timestamp: _timestamp_between(timestamp, start, end),
-            limit=ACTIVITY_DUPLICATE_SCAN_LIMIT,
+        for item in ActivityEventStore().list_between(
+            start, end, limit=ACTIVITY_DUPLICATE_SCAN_LIMIT
         )
         if isinstance((attributes := item.get("attributes")), dict)
         and attributes.get("github.activity_id")
@@ -260,7 +257,7 @@ async def refresh_github_activity_events(
             for member in team.members
             if (
                 member.has_secret("GITHUB_ACCESS_TOKEN")
-                or member.has_secret("GITHUB_APP_ID")
+                or member.has_account_info("github_app_id")
             )
         ),
         None,

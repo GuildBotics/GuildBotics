@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import signal
 import sys
 import threading
@@ -24,7 +23,6 @@ from guildbotics.drivers import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
     TaskScheduler,
-    run_command,
 )
 from guildbotics.editions import get_edition
 from guildbotics.observability import new_id
@@ -33,6 +31,7 @@ from guildbotics.observability.diagnostics_events import (
     install_diagnostics_log_handler,
     start_system_session,
 )
+from guildbotics.runtime.local_command_executor import LocalCommandExecutor
 from guildbotics.runtime.service_control import (
     ServiceControlWatcher,
     StopStage,
@@ -45,19 +44,15 @@ from guildbotics.runtime.service_lock import (
     ServiceLockUnavailableError,
     inspect_service_lock,
 )
-from guildbotics.utils.env_loader import (
-    load_guildbotics_env,
-    resolve_guildbotics_env_file,
-)
-from guildbotics.utils.fileio import (
-    GUILDBOTICS_DATA_DIR,
-    apply_workspace_data_root,
-    get_machine_state_path,
-)
+from guildbotics.utils.env_loader import load_guildbotics_env
+from guildbotics.utils.fileio import get_machine_state_path, get_workspace_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.processes import force_terminate_pid, pid_exists
-from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
+from guildbotics.utils.workspace_state import (
+    WorkspaceUnresolvedError,
+    apply_workspace_for_cli,
+)
 
 
 def _resolve_version() -> str:
@@ -72,23 +67,15 @@ def _resolve_version() -> str:
             return "0.0.0+unknown"
 
 
-def _apply_runtime_workspace(workspace_root: Path) -> Path:
-    root = workspace_root.expanduser().resolve(strict=False)
-    env_file = resolve_guildbotics_env_file(root, prefer_env_file=True)
-    inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
-    apply_workspace_data_root(
-        root,
-        env_file,
-        inherited_data_dir=inherited_data_dir,
-    )
-    load_guildbotics_env(root, override=False, prefer_env_file=True)
-    if not os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip():
-        os.environ[GUILDBOTICS_CONFIG_DIR] = str(root / ".guildbotics" / "config")
-    return root
-
-
-def _load_env_from_cwd() -> None:
-    _apply_runtime_workspace(Path.cwd())
+def _apply_selected_workspace() -> Path:
+    try:
+        state = apply_workspace_for_cli()
+    except WorkspaceUnresolvedError as exc:
+        raise click.ClickException(str(exc)) from exc
+    load_guildbotics_env(override=False)
+    if state is not None:
+        return state.workspace
+    return get_workspace_root()
 
 
 def _service_lock_path() -> Path:
@@ -145,13 +132,13 @@ def start(
     max_consecutive_errors: int,
 ) -> None:
     """Start GuildBotics runtimes (scheduler and event listener runner)."""
-    _load_env_from_cwd()
+    workspace = _apply_selected_workspace()
     request_path = _stop_request_path()
     service_lock = ServiceLock(_service_lock_path())
     try:
         metadata = service_lock.acquire(
             owner="cli",
-            workspace=Path.cwd(),
+            workspace=workspace,
             before_publish=lambda: clear_stop_request(request_path),
         )
     except ServiceLockUnavailableError as exc:
@@ -304,7 +291,8 @@ def run(
     command_args: tuple[str, ...],
 ) -> None:
     """Run the GuildBotics application."""
-    runtime_workspace = _apply_runtime_workspace(Path(cwd) if cwd else Path.cwd())
+    _apply_selected_workspace()
+    command_cwd = Path(cwd).expanduser().resolve(strict=False) if cwd else None
     message = "" if sys.stdin.isatty() else sys.stdin.read()
     asyncio.run(
         _run_custom_command(
@@ -312,7 +300,7 @@ def run(
             command_args,
             person_option,
             message,
-            runtime_workspace if cwd else None,
+            command_cwd,
         )
     )
 
@@ -330,7 +318,7 @@ async def _run_custom_command(
     identifier = person_option or inline_person
 
     try:
-        rendered = await run_command(
+        rendered = await LocalCommandExecutor().run(
             context,
             command_name=command_name,
             command_args=command_args,
@@ -391,7 +379,7 @@ def version_cmd() -> None:
 )
 def stop(timeout: int, force: bool) -> None:
     """Gracefully stop a CLI-managed background service."""
-    _load_env_from_cwd()
+    _apply_selected_workspace()
     status = inspect_service_lock(_service_lock_path())
     if not status.locked:
         click.echo(t("runtime.service_lock.not_running"))

@@ -36,7 +36,7 @@ from guildbotics.utils.i18n_tool import t
 
 @pytest.fixture(autouse=True)
 def _isolated_data_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
 
 
 class StubLogger:
@@ -628,6 +628,139 @@ async def test_muted_unmentioned_followup_after_prior_mention_skips(tmp_path):
     assert ctx.invocations == []
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E2"]
+
+
+class MentionSnapshotChatService(FakeChatService):
+    """Serves a thread snapshot whose first message mentions the member."""
+
+    async def list_thread_events(
+        self, channel_id, *, thread_ts, cursor=None, limit=100
+    ) -> ChatEventPage:
+        return ChatEventPage(
+            events=[
+                ChatEvent(
+                    event_id="E1",
+                    channel_id=channel_id,
+                    message_ts="100.1",
+                    thread_ts=thread_ts,
+                    author_id="U_USER",
+                    text="<@U_ALICE> please check",
+                    mentions=["U_ALICE"],
+                )
+            ]
+        )
+
+
+class UnavailableChatService(FakeChatService):
+    async def list_thread_events(
+        self, channel_id, *, thread_ts, cursor=None, limit=100
+    ) -> ChatEventPage:
+        raise RuntimeError("provider unavailable")
+
+
+@pytest.mark.asyncio
+async def test_empty_cache_followup_participates_via_provider_snapshot(tmp_path):
+    # Handoff to a device with an empty local chat cache: the provider snapshot
+    # alone must yield the same participation decision.
+    service = MentionSnapshotChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("noop")
+    _set_incoming_event(
+        ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    kwargs = _agent_invocations(ctx)[0][1]
+    assert kwargs["event_id"] == "E2"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_is_fetched_once_and_persisted_to_cache(tmp_path):
+    # The same provider snapshot must serve the participation decision and the
+    # agent prompt (no second fetch that could fail), and it is persisted to
+    # the local cache so retries keep the decided-upon context.
+    class CountingChatService(MentionSnapshotChatService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fetch_count = 0
+
+        async def list_thread_events(self, *args, **kwargs):
+            self.fetch_count += 1
+            return await super().list_thread_events(*args, **kwargs)
+
+    service = CountingChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("noop")
+    _set_incoming_event(
+        ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert service.fetch_count == 1
+    cached = state_store.load_thread_messages("slack", "alice", "C1", "100.1")
+    assert [message.message_ts for message in cached] == ["100.1", "100.2"]
+    assert cached[0].mentions == ["U_ALICE"]
+
+
+@pytest.mark.asyncio
+async def test_provider_unavailable_without_cache_keeps_event_unprocessed(tmp_path):
+    # Neither the provider nor the local cache can decide participation: the
+    # event must bubble as ThreadContextUnavailableError, staying unprocessed
+    # and creating no task run.
+    service = UnavailableChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("noop")
+    _set_incoming_event(
+        ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
+    )
+
+    with pytest.raises(chat_conversation_workflow.ThreadContextUnavailableError):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
+
+    assert ctx.invocations == []
+    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
+    assert channel_state.processed_event_ids == []
+
+
+@pytest.mark.asyncio
+async def test_provider_unavailable_with_cached_mention_still_delegates(tmp_path):
+    # The provider is down but the local cache already proves the prior
+    # mention, so processing continues from the cache.
+    service = UnavailableChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    state_store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "100.1",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="100.1",
+            message_ts="100.1",
+            author_id="U_USER",
+            text="<@U_ALICE> please check",
+            mentions=["U_ALICE"],
+        ),
+    )
+    ctx = FakeInvokeContext("noop")
+    _set_incoming_event(
+        ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
+    )
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    kwargs = _agent_invocations(ctx)[0][1]
+    assert kwargs["event_id"] == "E2"
 
 
 @pytest.mark.asyncio

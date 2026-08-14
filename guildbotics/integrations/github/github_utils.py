@@ -127,18 +127,14 @@ def _load_rsa_private_key(private_key_pem: bytes) -> RSAPrivateKey:
 def get_person_private_key_pem(person: Person) -> bytes:
     """Return the PEM for the member's GitHub App.
 
-    Keychain workspaces hold the key content in the secret store (it is
-    deliberately kept out of ``os.environ``, see
-    ``secret_store.is_environment_secret``); ``.env``-backend workspaces
-    configure a ``*_GITHUB_PRIVATE_KEY_PATH`` file instead.
+    The key content lives only in the OS secret store; it is deliberately
+    kept out of ``os.environ`` (see ``secret_store.is_environment_secret``).
     """
-    content = workspace_secret_store().get(
-        person.to_person_env_key("GITHUB_PRIVATE_KEY")
-    )
-    if content:
-        return content.encode()
-    with open(person.get_secret("github_private_key_path"), "rb") as f:
-        return f.read()
+    key = person.to_person_env_key("GITHUB_PRIVATE_KEY")
+    content = workspace_secret_store().get(key)
+    if not content:
+        raise KeyError(f"Secret '{key}' is not stored in the OS secret store.")
+    return content.encode()
 
 
 def _build_github_app_jwt(app_id: str, private_key: RSAPrivateKey) -> str:
@@ -175,8 +171,8 @@ async def get_person_github_token(person: Person, base_url: str) -> str:
     """Return the token that represents the configured GitHub identity for a member."""
     if get_github_account_type(person) == GitHubAppAuth.GITHUB_APPS:
         return await create_github_app_installation_token(
-            app_id=person.get_secret("github_app_id"),
-            installation_id=person.get_secret("github_installation_id"),
+            app_id=person.get_account_info("github_app_id"),
+            installation_id=person.get_account_info("github_installation_id"),
             private_key_pem=get_person_private_key_pem(person),
             base_url=base_url,
         )
@@ -198,8 +194,8 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
         # Use GitHub App authentication with auto-refresh
         try:
             auth = GitHubAppAuth(
-                app_id=person.get_secret("github_app_id"),
-                installation_id=person.get_secret("github_installation_id"),
+                app_id=person.get_account_info("github_app_id"),
+                installation_id=person.get_account_info("github_installation_id"),
                 private_key_pem=get_person_private_key_pem(person),
                 person_id=person.person_id,
             )

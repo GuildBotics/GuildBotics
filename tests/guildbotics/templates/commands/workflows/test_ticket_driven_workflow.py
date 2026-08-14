@@ -7,7 +7,7 @@ from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 
@@ -15,7 +15,7 @@ from guildbotics.utils.i18n_tool import get_language, set_language, t
 def _isolated_workspace_data(monkeypatch, tmp_path):
     previous_language = get_language()
     set_language("en")
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / ".guildbotics" / "data"))
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     yield
     set_language(previous_language)
 
@@ -69,7 +69,6 @@ class StubContext:
         self.task_run_status = "done"
         self.evidence_type = "issue_comment"
         self.task_run_store_root = None
-        self.data_dir_after_invoke = None
 
         class _PersonStub:
             person_id = "aiko"
@@ -110,8 +109,6 @@ class StubContext:
                 kwargs["ticket_url"],
                 kwargs["person_id"],
             )
-        if self.data_dir_after_invoke is not None:
-            os.environ[GUILDBOTICS_DATA_DIR] = str(self.data_dir_after_invoke)
         return self.invoke_response
 
 
@@ -137,10 +134,9 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
     command_name, args, kwargs, execution_context = ctx.invocations[0]
     assert command_name == "functions/handle_github_ticket"
     assert args == ()
-    data_dir = Path(tmp_path) / ".guildbotics" / "data"
     assert execution_context == {
         "run_id": kwargs["workflow_run_id"],
-        "workspace_data_root": str(data_dir),
+        "workspace_data_root": str(Path(tmp_path)),
         "work_kind": "ticket",
         "work_identity": "https://github.com/GuildBotics/GuildBotics/issues/1",
         "resume_policy": "fresh",
@@ -160,7 +156,7 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
     assert "issue_description" not in kwargs
     assert kwargs["language"] == "English"
     assert kwargs["member_workspace"] == str(
-        Path(tmp_path) / ".guildbotics" / "data" / "workspaces" / "aiko"
+        Path(tmp_path) / ".guildbotics" / "local" / "clones" / "aiko"
     )
     assert kwargs["cwd"] == Path(kwargs["member_workspace"])
     # Issue trigger: prepare command has no --pr-url.
@@ -189,38 +185,13 @@ async def test_move_to_working_keeps_status_when_move_is_noop():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "relative_store_root",
-    [
-        Path(".guildbotics-data") / "task-runs",
-        Path(".guildbotics") / "data" / "task-runs",
-    ],
-)
-async def test_run_accepts_task_completion_written_inside_member_workspace(
-    tmp_path, relative_store_root
-):
+async def test_run_accepts_task_completion_written_to_workspace_state_store(tmp_path):
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
-    member_workspace = tmp_path / ".guildbotics" / "data" / "workspaces" / "aiko"
-    ctx.task_run_store_root = member_workspace / relative_store_root
-
-    response = await ticket_driven_workflow.main(ctx)
-
-    assert response == AgentResponse(
-        status=AgentResponse.DONE,
-        message="done",
-        skip_ticket_comment=True,
-    )
-    assert tm.commented == []
-
-
-@pytest.mark.asyncio
-async def test_run_reads_completion_from_invocation_data_root_if_env_changes(tmp_path):
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-    ctx.data_dir_after_invoke = tmp_path / "stale" / "data"
+    # The member CLI writes completions to the shared workspace state store;
+    # member-workspace-local task-run fallbacks no longer exist.
+    ctx.task_run_store_root = tmp_path / ".guildbotics" / "state" / "task-runs"
 
     response = await ticket_driven_workflow.main(ctx)
 

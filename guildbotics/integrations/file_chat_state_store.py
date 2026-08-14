@@ -20,8 +20,11 @@ from guildbotics.integrations.chat_state_store import (
     ThreadMessageState,
     ThreadSystemNoticeState,
 )
+from guildbotics.integrations.chat_workflow_status import (
+    normalize_workflow_status_metadata,
+)
 from guildbotics.intelligences.effort import normalize_effort
-from guildbotics.utils.fileio import get_workspace_data_path
+from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 
 
 class FileConversationStateStore(ConversationStateStore):
@@ -30,11 +33,17 @@ class FileConversationStateStore(ConversationStateStore):
     def __init__(
         self,
         base_dir: Path | None = None,
+        cache_dir: Path | None = None,
         max_processed_events: int = 500,
         max_thread_messages: int = 500,
     ):
         self._base_dir = (
-            base_dir if base_dir is not None else get_workspace_data_path("chat_state")
+            base_dir if base_dir is not None else get_workspace_state_path("chat_state")
+        )
+        self._cache_dir = (
+            cache_dir
+            if cache_dir is not None
+            else get_workspace_local_path("chat-cache")
         )
         self._max_processed_events = max(1, int(max_processed_events))
         self._max_thread_messages = max(1, int(max_thread_messages))
@@ -160,8 +169,7 @@ class FileConversationStateStore(ConversationStateStore):
         thread_ts: str,
         state: ThreadConversationState,
     ) -> None:
-        payload = self._read_thread_payload(service, person_id, channel_id, thread_ts)
-        payload.update(asdict(state))
+        payload = asdict(state)
         payload["participants"] = sorted(state.participants)
         self._write_json(
             self._thread_file(service, person_id, channel_id, thread_ts), payload
@@ -170,7 +178,9 @@ class FileConversationStateStore(ConversationStateStore):
     def load_thread_messages(
         self, service: str, person_id: str, channel_id: str, thread_ts: str
     ) -> list[ThreadMessageState]:
-        data = self._read_thread_payload(service, person_id, channel_id, thread_ts)
+        data = self._read_json(
+            self._thread_cache_file(service, person_id, channel_id, thread_ts)
+        )
         raw_items = data.get("messages") or []
         if not isinstance(raw_items, list):
             return []
@@ -218,7 +228,8 @@ class FileConversationStateStore(ConversationStateStore):
         thread_ts: str,
         message: ThreadMessageState,
     ) -> None:
-        payload = self._read_thread_payload(service, person_id, channel_id, thread_ts)
+        path = self._thread_cache_file(service, person_id, channel_id, thread_ts)
+        payload = self._read_json(path)
         raw_items = payload.get("messages") or []
         if not isinstance(raw_items, list):
             raw_items = []
@@ -248,10 +259,19 @@ class FileConversationStateStore(ConversationStateStore):
             merged.append(item)
 
         merged.sort(key=lambda x: str(x.get("message_ts", "")))
-        payload["messages"] = merged[-self._max_thread_messages :]
         self._write_json(
-            self._thread_file(service, person_id, channel_id, thread_ts), payload
+            path,
+            {"messages": merged[-self._max_thread_messages :]},
         )
+        # The shared thread state is what makes the thread discoverable
+        # (list_thread_states, backfill, handoff to another device); the cache
+        # file above is device-local and never synchronized.
+        state_file = self._thread_file(service, person_id, channel_id, thread_ts)
+        if not state_file.exists():
+            self._write_json(
+                state_file,
+                {"channel_id": channel_id, "thread_ts": thread_ts},
+            )
 
     def load_scheduled_post_state(
         self, service: str, person_id: str, schedule_name: str
@@ -315,7 +335,7 @@ class FileConversationStateStore(ConversationStateStore):
                             ),
                             is_bot_message=bool(item.get("is_bot_message", False)),
                             is_thread_reply=bool(item.get("is_thread_reply", False)),
-                            metadata=_to_str_object_dict(item.get("metadata")),
+                            metadata=_pending_metadata(item.get("metadata")),
                         ),
                         chat_participation=str(
                             item.get("chat_participation", "strict") or "strict"
@@ -511,6 +531,15 @@ class FileConversationStateStore(ConversationStateStore):
                         path.unlink()
                 with suppress(Exception):
                     thread_dir.rmdir()
+            cache_dir = self._thread_cache_file(
+                service, person_id, channel_id, "_"
+            ).parent
+            if cache_dir.is_dir():
+                for path in cache_dir.glob("*.json"):
+                    with suppress(Exception):
+                        path.unlink()
+                with suppress(Exception):
+                    cache_dir.rmdir()
 
     def _root(self, service: str, person_id: str) -> Path:
         return self._base_dir / _safe_segment(service) / _safe_segment(person_id)
@@ -530,6 +559,19 @@ class FileConversationStateStore(ConversationStateStore):
     ) -> Path:
         return (
             self._root(service, person_id)
+            / "threads"
+            / _safe_segment(channel_id)
+            / f"{_safe_segment(thread_ts)}.json"
+        )
+
+    def _cache_root(self, service: str, person_id: str) -> Path:
+        return self._cache_dir / _safe_segment(service) / _safe_segment(person_id)
+
+    def _thread_cache_file(
+        self, service: str, person_id: str, channel_id: str, thread_ts: str
+    ) -> Path:
+        return (
+            self._cache_root(service, person_id)
             / "threads"
             / _safe_segment(channel_id)
             / f"{_safe_segment(thread_ts)}.json"
@@ -622,6 +664,13 @@ def _to_str_object_dict(value: object) -> dict[str, object]:
     return {str(key): item for key, item in value.items() if str(key)}
 
 
+def _pending_metadata(value: object) -> dict[str, object]:
+    """The only metadata a persisted pending event carries is GuildBotics'
+    own workflow-status marker, rebuilt from its schema; everything else
+    (provider metadata included) has no slot in the shared file."""
+    return normalize_workflow_status_metadata(value)
+
+
 def _pending_event_to_item(pending: PendingChatEvent) -> dict[str, object]:
     event = pending.event
     return {
@@ -635,7 +684,7 @@ def _pending_event_to_item(pending: PendingChatEvent) -> dict[str, object]:
         "is_edit_or_delete": bool(event.is_edit_or_delete),
         "is_bot_message": bool(event.is_bot_message),
         "is_thread_reply": bool(event.is_thread_reply),
-        "metadata": _to_str_object_dict(event.metadata),
+        "metadata": _pending_metadata(event.metadata),
         "chat_participation": pending.chat_participation,
         "attempt_count": max(0, int(pending.attempt_count)),
         "max_attempts": max(1, int(pending.max_attempts)),

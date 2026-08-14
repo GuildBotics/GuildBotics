@@ -95,7 +95,7 @@ Launching the desktop app opens **Project** setup, where you configure:
 
 In GuildBotics, the folder you choose as the project's working location is called the **workspace**. Plain text configuration files are written there:
 
-- `.env`: environment variable settings (non-secret settings such as the log level)
+- `.guildbotics/local/debug.env`: device-local, non-secret debug settings (log level)
 - `.guildbotics/config/secrets.yml`: index of key names stored in the OS keychain (never the values)
 - `.guildbotics/config/team/project.yml`: project definition
 - `.guildbotics/config/intelligences/`: LLM and AI CLI tool settings
@@ -216,7 +216,7 @@ Issue a **Classic** PAT for your own account as well, with both the `repo` and `
 ### Prepare Credentials and the Execution Environment
 
 - Register each member's GitHub credentials (the PAT, or the GitHub App settings) in GuildBotics from member settings in the desktop app. Writes to GitHub / git use the assigned member's credentials, not your local `gh auth` user
-- Ticket-driven work happens in a per-member working directory (default: `<workspace>/.guildbotics/data/workspaces/<person_id>`). Cloning, pushing, PR creation, and comments are executed by the member itself through the `guildbotics member` CLI
+- Ticket-driven work happens in a per-member working directory (default: `<workspace>/.guildbotics/local/clones/<person_id>`). Cloning, pushing, PR creation, and comments are executed by the member itself through the `guildbotics member` CLI
 - If you also use the AI CLI tool interactively, we recommend denying or requiring approval for `gh`, direct token / API writes, and `git push`. This is a guardrail against falling back to your own GitHub account, not a sandbox that fully contains token leakage
 - When using Codex as the AI CLI tool, check the Codex CLI's authentication and network reachability:
 
@@ -388,22 +388,21 @@ For all front matter options, context injection, and command composition, see th
 
 GuildBotics keeps secrets (LLM API keys and account tokens) out of plain text files whenever it can.
 
-- **OS keychain (default for new workspaces):** when a keychain is available (macOS Keychain, Windows Credential Manager, Linux Secret Service such as GNOME Keyring), setup stores secret values there. The workspace only keeps a non-secret index file, `.guildbotics/config/secrets.yml`, listing the stored key names.
+- **OS keychain:** secret values live in the OS secret store (macOS Keychain, Windows Credential Manager, Linux Secret Service). The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names and generations. Device-local generations are in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
 - **Windows credentials:** GuildBotics stores secret values as UTF-8 Credential Manager blobs, allowing ASCII-heavy PEM private keys to use the full 2,560-byte Windows limit. An import validates every value before writing any of them.
-- **`.env` backend:** workspaces without that index file (for example one created on a machine without a keychain) use the workspace `.env`. This is the supported approach for headless servers and CI. The `.env` file GuildBotics writes is owner read/write only (`0600`).
-- **Precedence:** real environment variables > OS keychain > `.env`. In server operation, injecting environment variables always wins regardless of the backend.
-- **GitHub App private key:** saving member settings in a keychain-backed workspace copies the contents of the PEM file referenced by `*_GITHUB_PRIVATE_KEY_PATH` into the keychain and removes the path entry from `.env`. The keychain copy replaces the file, so all that remains is deleting the plaintext `.pem` yourself. Unlike other secrets, the key material is never exposed in environment variables; it is read from the keychain only at the moment a GitHub App token is issued, so AI CLI tool child processes never see it.
-- **`GUILDBOTICS_SECRETS_BACKEND`:** set to `keyring` or `env-file` to force a backend for that process only (for CI and scripted environments).
+- **Precedence:** real environment variables > OS keychain. GuildBotics does not read a workspace `.env`.
+- **GitHub App private key:** member save absorbs the PEM into the keychain. Generated registration files are written under the OS temporary directory and deleted after absorb. The key material is never exposed in environment variables.
+- **Exchange format:** `guildbotics secrets export` / `import` use dotenv only as a transfer file. `secrets set --from-file` absorbs a file (for example a PEM) into the keychain.
 
 Manage secrets with the `guildbotics secrets` CLI (see the [CLI Reference](docs/cli_reference.md#guildbotics-secrets) for all subcommands and options):
 
 ```bash
-guildbotics secrets status                        # backend in use and keychain availability
+guildbotics secrets status                        # OS secret-store availability and key count
 guildbotics secrets export --file secrets.env     # export secrets for a move
 guildbotics secrets import secrets.env            # import them on the new machine
 ```
 
-Secrets are stored per workspace (keychain entries are namespaced by the `store_id` in `secrets.yml`). Choose the target workspace with `--workspace` before the subcommand. Without it, the workspace in the current directory is used, or the active workspace when there is none. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
+Secrets are stored per workspace (keychain entries are namespaced by the `store_id` in `secrets.yml`). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
@@ -417,7 +416,7 @@ All non-secret configuration is stored as plain text files inside the workspace,
 1. Install the CLI on the target machine with `uv tool install guildbotics`
 2. Copy the workspace folder to the target machine
 3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target (delete the export file afterwards). Keychain entries themselves never leave the machine
-4. On servers without a keychain, store secrets in `.env` or pass them as environment variables
+4. On servers without a keychain, set up an OS secret store or pass the secrets as environment variables at run time
 
 **Starting and stopping the service** (equivalent to the **Service** screen in the desktop app):
 
@@ -462,11 +461,9 @@ The CLI and the desktop app share a lock file (`~/.guildbotics/data/run/service.
 **GitHub access** (per member, format: `{PERSON_ID}_...`):
 
 - `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: PAT for a machine account / proxy agent
-- `{PERSON_ID}_GITHUB_APP_ID`, `{PERSON_ID}_GITHUB_INSTALLATION_ID`, `{PERSON_ID}_GITHUB_PRIVATE_KEY_PATH`: for a GitHub App
+- GitHub App IDs live in the member YAML (`account_info.github_app_id` / `github_installation_id`); the PEM is stored in the OS keychain as `{PERSON_ID}_GITHUB_PRIVATE_KEY`
 
-A `.env` file in the current directory is loaded automatically. Secrets stored in the OS keychain are loaded automatically as well.
-
-When running without the desktop app, `GUILDBOTICS_ENV_FILE` pointing at an absolute `.env` path, or the `.env` in the current directory, is the fallback. `guildbotics start` and the desktop runtime also set `GUILDBOTICS_ENV_FILE` automatically when they load a workspace `.env`.
+Secrets stored in the OS keychain are loaded automatically. GuildBotics does not read a workspace `.env`.
 
 ### Workspace and Data Locations
 
@@ -476,22 +473,22 @@ The workspace in use is recorded in `~/.guildbotics/data/active-workspace.json`.
 guildbotics workspace status
 guildbotics workspace current
 guildbotics workspace use /path/to/workspace
+guildbotics workspace migrate --from /path/to/source-checkout --to /path/to/guildbotics-workspace
 ```
 
 The workspace used by `guildbotics member` commands is resolved in this order:
 
 1. `--workspace <dir>` given before the subcommand
-2. The workspace you are running inside, when it is already configured (an explicit `GUILDBOTICS_CONFIG_DIR`, or `.guildbotics/config` in the current directory)
+2. An explicit `GUILDBOTICS_WORKSPACE_ROOT` or `GUILDBOTICS_CONFIG_DIR` that points at `<workspace>/.guildbotics/config`
 3. The workspace in use as recorded by the desktop app or `guildbotics workspace use`
 
-From the selected workspace, `GUILDBOTICS_CONFIG_DIR` is set to `<workspace>/.guildbotics/config`, and `GUILDBOTICS_ENV_FILE` is set too when `<workspace>/.env` exists.
+The process cwd is never treated as a workspace. From the selected workspace, `GUILDBOTICS_CONFIG_DIR` is set to `<workspace>/.guildbotics/config`.
 
-GuildBotics stores two kinds of local data:
+GuildBotics stores three kinds of local data:
 
 - Machine-wide management information — the workspace in use, the CLI scheduler PID, and so on — is stored in `$HOME/.guildbotics/data`
-- Per-workspace runtime data — per-member working directories, task and chat execution records, diagnostics logs, prompt transcripts, and chat state — is stored by default in `<workspace>/.guildbotics/data`
-
-You can change where per-workspace runtime data is stored by setting `GUILDBOTICS_DATA_DIR` in the workspace `.env`. If `GUILDBOTICS_DATA_DIR` is present in the environment at startup and the workspace `.env` does not set it, it is used as the shared runtime data location for that running process.
+- Shared workspace state — memory, chat control, task-run evidence, activity events — is stored in `<workspace>/.guildbotics/state`
+- Device-local data — diagnostics, transcripts, chat cache, member clones, AI CLI sessions — is stored in `<workspace>/.guildbotics/local`
 
 ### Configuration Files
 
@@ -540,11 +537,11 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | A command execution failed | Open the session on the **Diagnostics** screen in the desktop app and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |
 
-**Diagnostics logs**: a searchable execution summary is recorded in `<workspace>/.guildbotics/data/run/diagnostics.jsonl`, and the full events, logs, spans, and inputs/outputs are stored per execution as JSONL under `run/sessions/`. The **Diagnostics** screen in the desktop app shows both the execution history and the latest global / system session.
+**Diagnostics logs**: a searchable execution summary is recorded in `<workspace>/.guildbotics/local/run/diagnostics.jsonl`, and the full events, logs, spans, and inputs/outputs are stored per execution as JSONL under `run/sessions/`. The **Diagnostics** screen in the desktop app shows both the execution history and the latest global / system session.
 
 **Debug output**: environment variables for more verbose logging:
 
 - `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
 - `AGNO_DEBUG`: extra debug output from the Agno engine (`true`/`false`)
-- `GUILDBOTICS_TRANSCRIPT_DETAIL`: `standard` (default) or `full`. `standard` omits high-volume thinking/delta events and keeps only the last 8 KiB of AI CLI tool stderr
-- `GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS`: how many days session JSONL files are kept (default: `30`)
+
+Transcript detail (`standard` / `full`) and retention days are configured from the desktop app's **Diagnostics** screen and stored in `.guildbotics/config/transcripts.yml`.

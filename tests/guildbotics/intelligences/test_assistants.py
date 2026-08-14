@@ -85,7 +85,7 @@ async def test_session_runs_in_a_created_directory_under_the_data_root(
     tmp_path: Path,
 ) -> None:
     brain = _BrainStub()
-    cwd = tmp_path / "demo"
+    cwd = tmp_path / ".guildbotics" / "local" / "work" / "demo"
     assert not cwd.exists()
 
     await _open(_ContextStub(brain), tmp_path).send({})

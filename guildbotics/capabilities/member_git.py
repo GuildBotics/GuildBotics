@@ -16,7 +16,7 @@ from guildbotics.capabilities.member_github import (
 )
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.github.github_utils import get_person_github_token
-from guildbotics.utils.fileio import get_workspace_path
+from guildbotics.utils.fileio import get_member_clone_path
 from guildbotics.utils.git_tool import (
     GitTool,
     build_git_auth_environment,
@@ -90,7 +90,7 @@ class MemberGitWorkspaceService:
         self.team = team
         self.logger = logger or logging.getLogger(__name__)
         self.github = MemberGitHubCapabilityService(person, team)
-        self.workspace_root = get_workspace_path(person.person_id)
+        self.workspace_root = get_member_clone_path(person.person_id)
 
     async def aclose(self) -> None:
         await self.github.aclose()

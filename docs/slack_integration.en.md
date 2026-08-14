@@ -120,7 +120,7 @@ The member's persona, which influences both what it says and whether it joins (c
 
 Scheduled posts are configured as **Scheduled commands** on the **Patrol** tab (→ [Scheduled Posts](#scheduled-posts)).
 
-Tokens are stored in the OS keychain or `.env`; everything else is stored in `team/members/<person_id>/person.yml`. For the stored format and the settings that are not available in the GUI, see the [`person.yml` Reference](#personyml-reference).
+Tokens are stored in the OS keychain; everything else is stored in `team/members/<person_id>/person.yml`. For the stored format and the settings that are not available in the GUI, see the [`person.yml` Reference](#personyml-reference).
 
 ## Scheduled Posts
 
@@ -178,7 +178,7 @@ Key points:
 - `startup_backfill_minutes` and `backfill_interval_seconds` cannot be set from the GUI. At startup, recent channel messages and known thread replies are pulled from Slack history (backfill); the defaults are `60` and `300` respectively. Setting `backfill_interval_seconds` to `0` disables the periodic history check after startup
 - `character` defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat decisions and reply generation read this profile through the AI CLI tool
 
-The Bot Token and App-Level Token are not stored in `person.yml`. They are passed through the OS keychain, `.env`, or the environment variables `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` (for example `ALICE_SLACK_BOT_TOKEN` for `alice`).
+The Bot Token and App-Level Token are not stored in `person.yml`. They are passed through the OS keychain or the environment variables `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` (for example `ALICE_SLACK_BOT_TOKEN` for `alice`).
 
 ## Posting and Reacting Manually
 
@@ -195,5 +195,5 @@ guildbotics member chat reaction add --person alice --service slack --channel-id
 
 - Chat events are received by the event listener runner, and processed serially by the event queue source inside each member's worker. Both start when the service starts (**Service → Run** in the GUI, or `guildbotics start`)
 - When the service is started without **Event triggers** (`guildbotics start --only scheduler` from the CLI), no chat events are received. Conversely, when **Patrol commands** and **Scheduled commands** are excluded (`--only events` from the CLI), the member worker still processes queued chat events
-- For chat handling by the AI CLI tool, `functions/handle_chat_event` runs with the member's working directory as `cwd`. By default this is `<workspace>/.guildbotics/data/workspaces/<person_id>/`, where cloned repositories under it can be referenced
+- For chat handling by the AI CLI tool, `functions/handle_chat_event` runs with the member's working directory as `cwd`. By default this is `<workspace>/.guildbotics/local/clones/<person_id>/`, where cloned repositories under it can be referenced
 - Replies, reactions, no-ops, and completions are recorded through `guildbotics member chat reply|post|reaction add|noop|complete`. The workflow verifies these execution records and does not accept the tool's natural-language stdout alone as evidence that something was posted to Slack

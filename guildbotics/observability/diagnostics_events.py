@@ -9,6 +9,10 @@ from typing import Any
 from pydantic import BaseModel
 
 from guildbotics.observability import correlation_fields
+from guildbotics.observability.activity_event_store import (
+    ActivityEventStore,
+    is_domain_activity_event,
+)
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 _STORE: DiagnosticsStore | None = None
@@ -38,26 +42,27 @@ def record_correlated_event(
     merged_attributes.update(
         {key: value for key, value in (attributes or {}).items() if value}
     )
-    _store().record(
-        {
-            "kind": "event",
-            "type": event_type,
-            "trace_id": correlation.get("trace_id"),
-            "span_id": correlation.get("span_id"),
-            "parent_id": correlation.get("parent_id"),
-            "call_id": correlation.get("call_id"),
-            "span": correlation.get("span", ""),
-            "source": correlation.get("source") or default_source,
-            "person_id": person_id or str(correlation.get("person_id") or ""),
-            "command": command
-            if command is not None
-            else str(correlation.get("command") or ""),
-            "workflow": correlation.get("workflow", ""),
-            "attributes": merged_attributes,
-            "payload": payload,
-            "timestamp": timestamp or datetime.now().astimezone().isoformat(),
-        }
-    )
+    record = {
+        "kind": "event",
+        "type": event_type,
+        "trace_id": correlation.get("trace_id"),
+        "span_id": correlation.get("span_id"),
+        "parent_id": correlation.get("parent_id"),
+        "call_id": correlation.get("call_id"),
+        "span": correlation.get("span", ""),
+        "source": correlation.get("source") or default_source,
+        "person_id": person_id or str(correlation.get("person_id") or ""),
+        "command": command
+        if command is not None
+        else str(correlation.get("command") or ""),
+        "workflow": correlation.get("workflow", ""),
+        "attributes": merged_attributes,
+        "payload": payload,
+        "timestamp": timestamp or datetime.now().astimezone().isoformat(),
+    }
+    if is_domain_activity_event(event_type):
+        ActivityEventStore().record(record)
+    _store().record(record)
 
 
 def record_correlated_io(*, io_type: str, payload: dict[str, Any]) -> None:

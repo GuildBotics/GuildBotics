@@ -62,7 +62,6 @@ def _start(service: GitHubAppRegistrationService, tmp_path: Path):
         organization="",
         callback_url=CALLBACK_URL,
         key_dir=tmp_path / "github-apps",
-        env_file_path=tmp_path / ".env",
     )
 
 
@@ -75,7 +74,6 @@ def test_start_rejects_invalid_app_name(tmp_path: Path) -> None:
                 organization="",
                 callback_url=CALLBACK_URL,
                 key_dir=tmp_path,
-                env_file_path=tmp_path / ".env",
             )
         assert exc_info.value.code == "invalid_github_app_name"
 
@@ -102,7 +100,6 @@ def test_manifest_form_embeds_state_and_callback(tmp_path: Path) -> None:
         organization="acme",
         callback_url=CALLBACK_URL,
         key_dir=tmp_path,
-        env_file_path=tmp_path / ".env",
     )
     url, manifest_json = service.manifest_form(registration.state)
     assert url == (
@@ -222,25 +219,6 @@ async def test_expired_unclaimed_registration_deletes_key_file(
     with pytest.raises(SetupServiceError):
         service.get(registration.state)
     assert not key_file.exists()
-
-
-@pytest.mark.asyncio
-async def test_expired_registration_keeps_env_referenced_key_file(
-    service: GitHubAppRegistrationService, tmp_path: Path
-) -> None:
-    registration = _start(service, tmp_path)
-    completed = await service.complete(registration.state, "tmp-code")
-    key_file = Path(completed.private_key_path)
-    # An env-file-backend member save keeps the path in .env; the file is now
-    # the member's persistent key store and must survive registration expiry.
-    (tmp_path / ".env").write_text(
-        f"MY_BOT_GITHUB_PRIVATE_KEY_PATH={completed.private_key_path}\n"
-    )
-
-    registration.created_at -= github_app_setup.REGISTRATION_TTL_SECONDS + 1
-    with pytest.raises(SetupServiceError):
-        service.get(registration.state)
-    assert key_file.exists()
 
 
 @pytest.mark.asyncio

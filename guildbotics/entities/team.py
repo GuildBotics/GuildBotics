@@ -346,6 +346,18 @@ class Person(BaseModel):
         sanitized_id = self.person_id.replace("-", "_")
         return f"{sanitized_id.upper()}_{key.upper()}"
 
+    def get_account_info(self, key: str) -> str:
+        """Return a non-secret account identifier from person configuration."""
+        value = self.account_info.get(key)
+        if value is None or str(value) == "":
+            raise KeyError(f"account_info '{key}' is not set.")
+        return str(value)
+
+    def has_account_info(self, key: str) -> bool:
+        """True when ``account_info`` has a non-empty value for ``key``."""
+        value = self.account_info.get(key)
+        return value is not None and str(value) != ""
+
     def get_secret(self, key: str) -> str:
         """
         Get a secret value from the environment variables with the person's ID.

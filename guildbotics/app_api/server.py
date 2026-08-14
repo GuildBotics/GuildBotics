@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import threading
 import time
@@ -9,10 +10,11 @@ from pathlib import Path
 import uvicorn
 
 from guildbotics.app_api.api import create_app
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import apply_workspace_root, get_workspace_root
 from guildbotics.utils.processes import pid_exists
 from guildbotics.utils.workspace_state import (
     apply_workspace_environment,
+    has_explicit_workspace_source,
     read_active_workspace,
 )
 
@@ -56,9 +58,19 @@ def _start_parent_watchdog() -> None:
     thread.start()
 
 
-def _restore_active_workspace(*, inherited_data_dir: str | None = None) -> Path:
-    """Apply the persisted workspace before constructing runtime services."""
+def _restore_active_workspace() -> Path:
+    """Apply the selected workspace before constructing runtime services.
+
+    An explicitly selected workspace (``GUILDBOTICS_WORKSPACE_ROOT`` or a
+    workspace-shaped ``GUILDBOTICS_CONFIG_DIR``) wins over the persisted
+    active workspace, matching the CLI resolution order.
+    """
     startup_cwd = Path.cwd()
+    if has_explicit_workspace_source():
+        workspace = apply_workspace_root(get_workspace_root())
+        with contextlib.suppress(OSError):
+            os.chdir(workspace)
+        return workspace
     state = read_active_workspace()
     if state is None:
         return startup_cwd
@@ -66,7 +78,7 @@ def _restore_active_workspace(*, inherited_data_dir: str | None = None) -> Path:
         os.chdir(state.workspace)
     except OSError:
         return startup_cwd
-    apply_workspace_environment(state, inherited_data_dir=inherited_data_dir)
+    apply_workspace_environment(state)
     return state.workspace
 
 
@@ -108,15 +120,13 @@ def main() -> None:
     token = _read_session_token()
     allowed_origins = _read_allowed_origins()
     _start_parent_watchdog()
-    inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
-    _restore_active_workspace(inherited_data_dir=inherited_data_dir)
+    _restore_active_workspace()
 
     uvicorn.run(
         create_app(
             session_token=token,
             allowed_origins=allowed_origins,
             restore_workspace_environment=True,
-            inherited_data_dir=inherited_data_dir,
         ),
         host=args.host,
         port=args.port,

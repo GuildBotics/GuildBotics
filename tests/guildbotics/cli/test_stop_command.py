@@ -20,7 +20,7 @@ def _setup_stop(monkeypatch, tmp_path: Path, *, dies_after_stage: str | None):
     monkeypatch.setattr(
         "guildbotics.cli._stop_request_path", lambda: tmp_path / "stop-request.json"
     )
-    monkeypatch.setattr("guildbotics.cli._load_env_from_cwd", lambda: None)
+    monkeypatch.setattr("guildbotics.cli._apply_selected_workspace", lambda: Path.cwd())
     monkeypatch.setattr("guildbotics.cli.time.sleep", lambda _s: None)
 
     state = {"running": True}
@@ -147,7 +147,7 @@ def test_stop_rejects_desktop_managed_service(monkeypatch, tmp_path):
     service_lock = ServiceLock(lock_path)
     service_lock.acquire(owner="desktop", workspace=tmp_path)
     monkeypatch.setattr("guildbotics.cli._service_lock_path", lambda: lock_path)
-    monkeypatch.setattr("guildbotics.cli._load_env_from_cwd", lambda: None)
+    monkeypatch.setattr("guildbotics.cli._apply_selected_workspace", lambda: Path.cwd())
     try:
         result = CliRunner().invoke(cli_main, ["stop"])
     finally:

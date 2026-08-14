@@ -700,8 +700,7 @@ function panelFor(title: string): HTMLElement {
 function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
   return {
     cwd: "/workspace",
-    env_file: "/workspace/.env",
-    env_file_exists: true,
+    workspace: "/workspace",
     config_dir: "/workspace/.guildbotics/config",
     project_file: "/workspace/.guildbotics/config/project.yml",
     project_file_exists: true,

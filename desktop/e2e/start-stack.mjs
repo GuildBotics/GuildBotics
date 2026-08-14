@@ -85,7 +85,6 @@ if (!/^[a-z][a-z0-9-]*$/.test(stackName)) {
 const workspaceDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-ws-`));
 const homeDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-home-`));
 const configDir = join(workspaceDir, ".guildbotics", "config");
-const envFile = join(workspaceDir, ".env");
 
 // The catalog of AI CLI tools lives on the Python side; read it from there so a
 // newly supported tool is shadowed below without a second list to keep in sync.
@@ -150,7 +149,6 @@ writeFileSync(
       workspaceDir,
       homeDir,
       configDir,
-      envFile,
       cliStubLog,
       backendPort,
       frontendPort,
@@ -181,12 +179,61 @@ const backendEnv = {
 // `get_cli_agent_search_path` appends the usual install locations after PATH, so
 // the stubs only win by being first.
 backendEnv.PATH = [cliStubDir, backendEnv.PATH].filter(Boolean).join(delimiter);
-// Force the workspace config layout (`<cwd>/.guildbotics/config`) by removing any
-// inherited override; this yields config-status `primary_config_location=workspace`.
+// The backend never derives a workspace from its cwd, so the stack's temp
+// workspace must be selected explicitly; remove any inherited config override.
 delete backendEnv.GUILDBOTICS_CONFIG_DIR;
-// Keep e2e secrets in the temp workspace .env instead of polluting the
-// developer's OS keychain with throwaway entries.
-backendEnv.GUILDBOTICS_SECRETS_BACKEND = "env-file";
+backendEnv.GUILDBOTICS_WORKSPACE_ROOT = workspaceDir;
+// Keep e2e secrets in a throwaway file-backed keyring stub instead of
+// polluting the developer's OS keychain (or failing on keychain-less CI).
+writeFileSync(
+  join(cliStubDir, "guildbotics_e2e_keyring.py"),
+  [
+    '"""File-backed keyring stub so e2e stacks never touch a real OS keychain."""',
+    "import json",
+    "import os",
+    "",
+    "from keyring.backend import KeyringBackend",
+    "from keyring.errors import PasswordDeleteError",
+    "",
+    "",
+    "class E2EKeyring(KeyringBackend):",
+    "    priority = 100",
+    "",
+    "    def _path(self):",
+    '        return os.path.join(os.environ["HOME"], "e2e-keyring.json")',
+    "",
+    "    def _load(self):",
+    "        try:",
+    '            with open(self._path(), encoding="utf-8") as handle:',
+    "                return json.load(handle)",
+    "        except (OSError, ValueError):",
+    "            return {}",
+    "",
+    "    def _save(self, data):",
+    '        with open(self._path(), "w", encoding="utf-8") as handle:',
+    "            json.dump(data, handle)",
+    "",
+    "    def get_password(self, service, username):",
+    "        return self._load().get(service, {}).get(username)",
+    "",
+    "    def set_password(self, service, username, password):",
+    "        data = self._load()",
+    "        data.setdefault(service, {})[username] = password",
+    "        self._save(data)",
+    "",
+    "    def delete_password(self, service, username):",
+    "        data = self._load()",
+    "        try:",
+    "            del data[service][username]",
+    "        except KeyError as exc:",
+    "            raise PasswordDeleteError(username) from exc",
+    "        self._save(data)",
+    "",
+  ].join("\n"),
+  { mode: 0o600 },
+);
+backendEnv.PYTHON_KEYRING_BACKEND = "guildbotics_e2e_keyring.E2EKeyring";
+backendEnv.PYTHONPATH = [cliStubDir, backendEnv.PYTHONPATH].filter(Boolean).join(delimiter);
 // Offline-LLM stacks must NOT inherit a developer's real LLM key from the
 // shell; otherwise the diagnostics missing-key short-circuit cannot be
 // asserted deterministically.
@@ -296,8 +343,6 @@ async function postJson(path, body) {
 async function seedWorkspace() {
   await postJson("/config/init", {
     config_dir: configDir,
-    env_file_path: envFile,
-    env_file_option: "overwrite",
     language: "en",
     description: "E2E configured workspace",
     llm_api_type: "openai",
@@ -306,7 +351,6 @@ async function seedWorkspace() {
   });
   await postJson("/config/members", {
     config_dir: configDir,
-    env_file_path: envFile,
     person_type: "",
     person_id: seededMemberId,
     person_name: "Local Agent",

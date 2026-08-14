@@ -101,8 +101,7 @@ const subscribeEventsMock = vi.mocked(subscribeEvents);
 function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
   return {
     cwd: "/workspace",
-    env_file: "/workspace/.env",
-    env_file_exists: true,
+    workspace: "/workspace",
     config_dir: "/workspace/.guildbotics/config",
     project_file: "/workspace/.guildbotics/config/team/project.yml",
     project_file_exists: true,

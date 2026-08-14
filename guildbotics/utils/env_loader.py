@@ -3,18 +3,22 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import dotenv_values
-
+from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
+    get_workspace_config_dir,
+    get_workspace_local_path,
+)
+from guildbotics.utils.keychain import SecretStoreError
+from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.secret_store import (
-    KEYRING_BACKEND,
     KeyringSecretStore,
     SecretStore,
-    configured_secrets_backend,
     is_environment_secret,
+    read_env_values,
     resolve_secret_store,
+    write_env_values,
 )
 
-GUILDBOTICS_ENV_FILE = "GUILDBOTICS_ENV_FILE"
 HOME_ENV_PROTECTED_KEYS = frozenset(
     {
         "HOME",
@@ -23,92 +27,115 @@ HOME_ENV_PROTECTED_KEYS = frozenset(
         "HOMEPATH",
     }
 )
+ALLOWED_DEBUG_KEYS = frozenset({"LOG_LEVEL", "AGNO_DEBUG"})
+DEBUG_ENV_FILENAME = "debug.env"
 
 
-def workspace_config_dir(cwd: Path) -> Path:
-    """Resolve the workspace config dir the same way ``fileio`` does."""
-    configured = os.getenv("GUILDBOTICS_CONFIG_DIR", "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    return cwd / ".guildbotics" / "config"
+def workspace_config_dir(cwd: Path | None = None) -> Path:
+    """Resolve the selected workspace config dir."""
+    del cwd
+    return get_workspace_config_dir()
 
 
 def workspace_secret_store(cwd: Path | None = None) -> SecretStore:
-    """Resolve the secret store for the workspace around ``cwd``.
+    """Resolve the secret store for the selected workspace.
 
     For consumers that read a secret at the point of use instead of through
     ``os.environ`` (e.g. the GitHub App private key).
     """
-    if cwd is None:
-        cwd = Path.cwd()
-    env_file = resolve_guildbotics_env_file(cwd) or cwd / ".env"
-    return resolve_secret_store(workspace_config_dir(cwd), env_file)
+    del cwd
+    return resolve_secret_store(get_workspace_config_dir())
 
 
-def read_workspace_secrets(cwd: Path) -> dict[str, str]:
-    """Read the workspace's OS-keychain secrets destined for ``os.environ``.
+def read_workspace_secrets(
+    *, skip: frozenset[str] | set[str] = frozenset()
+) -> dict[str, str]:
+    """Read OS-keychain secrets destined for ``os.environ``.
 
-    Empty unless the workspace is configured for the keyring backend. Secrets
-    excluded from environment publication (``is_environment_secret``) are
-    left out; they are resolved via ``workspace_secret_store`` where needed.
+    Keys in ``skip`` (already supplied as real environment variables) are not
+    fetched. A missing or locked keychain yields the values read so far instead
+    of failing: real environment variables always keep working without one.
     """
-    config_dir = workspace_config_dir(cwd)
-    if configured_secrets_backend(config_dir) != KEYRING_BACKEND:
+    try:
+        store = KeyringSecretStore(get_workspace_config_dir())
+    except WorkspaceNotConfiguredError:
+        return {}
+    values: dict[str, str] = {}
+    try:
+        stored_keys = store.keys()
+        for key in stored_keys:
+            if not is_environment_secret(key) or key in skip:
+                continue
+            value = store.get(key)
+            if value is not None:
+                values[key] = value
+    except SecretStoreError as exc:
+        get_logger().warning(
+            "OS secret store is unavailable; relying on process environment "
+            "variables for the remaining secrets: %s",
+            exc,
+        )
+    return values
+
+
+def debug_env_path(workspace_root: Path | None = None) -> Path:
+    """Return the path of the device-local debug settings file."""
+    return get_workspace_local_path(DEBUG_ENV_FILENAME, workspace_root=workspace_root)
+
+
+def read_debug_env(workspace_root: Path | None = None) -> dict[str, str]:
+    """Read allowlisted non-secret debug settings from ``local/debug.env``."""
+    try:
+        path = debug_env_path(workspace_root)
+    except WorkspaceNotConfiguredError:
         return {}
     return {
         key: value
-        for key, value in KeyringSecretStore(config_dir).values().items()
-        if is_environment_secret(key)
+        for key, value in read_env_values(path).items()
+        if key in ALLOWED_DEBUG_KEYS
     }
 
 
-def resolve_guildbotics_env_file(
-    cwd: Path | None = None, *, prefer_env_file: bool = True
-) -> Path | None:
-    """Resolve the .env file GuildBotics should load for this process."""
-    if cwd is None:
-        cwd = Path.cwd()
-
-    if prefer_env_file:
-        configured = os.getenv(GUILDBOTICS_ENV_FILE, "").strip()
-        if configured:
-            path = Path(configured).expanduser()
-            if path.is_absolute() and path.is_file():
-                return path.resolve()
-
-    dotenv_path = cwd / ".env"
-    if dotenv_path.is_file():
-        return dotenv_path.resolve()
-    return None
+def write_debug_env(values: dict[str, str], workspace_root: Path | None = None) -> Path:
+    """Replace allowlisted debug settings in ``local/debug.env``."""
+    path = debug_env_path(workspace_root)
+    current = read_debug_env(workspace_root)
+    for key, value in values.items():
+        if key not in ALLOWED_DEBUG_KEYS:
+            continue
+        if value:
+            current[key] = value
+        else:
+            current.pop(key, None)
+    write_env_values(path, current)
+    return path
 
 
-def load_guildbotics_env(
-    cwd: Path | None = None, *, override: bool = False, prefer_env_file: bool = True
-) -> Path | None:
-    """Load GuildBotics secrets and .env, publishing the .env path for children.
+def load_guildbotics_env(cwd: Path | None = None, *, override: bool = False) -> None:
+    """Publish OS-keychain secrets and local debug settings into ``os.environ``.
 
-    OS-keychain secrets win over ``.env`` values; pre-existing environment
-    variables win over both unless ``override`` is set.
+    Pre-existing environment variables win unless ``override`` is set, and are
+    then not even read from the keychain, so servers configured purely through
+    environment variables run without an OS secret store.
     """
-    if cwd is None:
-        cwd = Path.cwd()
-    env_file = resolve_guildbotics_env_file(cwd, prefer_env_file=prefer_env_file)
+    del cwd
+    skip = frozenset() if override else frozenset(os.environ)
     values: dict[str, str] = {}
-    if env_file is not None:
-        values.update(
-            {
-                key: value
-                for key, value in dotenv_values(env_file).items()
-                if value is not None
-            }
-        )
-    values.update(read_workspace_secrets(cwd))
+    values.update(read_debug_env())
+    values.update(read_workspace_secrets(skip=skip))
     for key, value in values.items():
         if key in HOME_ENV_PROTECTED_KEYS:
             continue
         if override or key not in os.environ:
             os.environ[key] = value
-    if env_file is None:
-        return None
-    os.environ[GUILDBOTICS_ENV_FILE] = str(env_file)
-    return env_file
+
+
+def apply_debug_env_to_process(values: dict[str, str]) -> None:
+    """Publish allowlisted debug keys into the current process."""
+    for key, value in values.items():
+        if key not in ALLOWED_DEBUG_KEYS:
+            continue
+        if value:
+            os.environ[key] = value
+        else:
+            os.environ.pop(key, None)

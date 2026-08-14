@@ -141,10 +141,10 @@ async def test_invalid_github_app_key_records_credential_failure(monkeypatch) ->
     recorded = []
     person = SimpleNamespace(
         person_id="alice",
-        get_secret=lambda key: {
+        get_account_info=lambda key: {
             "github_app_id": "1",
             "github_installation_id": "2",
-        }.get(key, ""),
+        }[key],
     )
     monkeypatch.setattr(
         github_utils,

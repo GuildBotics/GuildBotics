@@ -7,7 +7,6 @@ from uuid import uuid4
 
 from guildbotics.capabilities.completion_retry import run_with_completion_retry
 from guildbotics.capabilities.task_runs import (
-    TaskRunError,
     TaskRunStatus,
     TaskRunStore,
 )
@@ -26,7 +25,11 @@ from guildbotics.integrations.workflow_status_comment import (
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.observability import set_attributes
 from guildbotics.runtime import Context
-from guildbotics.utils.fileio import get_workspace_data_root
+from guildbotics.utils.fileio import (
+    get_member_clone_path,
+    get_workspace_root,
+    get_workspace_state_path,
+)
 from guildbotics.utils.i18n_tool import t
 
 COMMAND_METADATA = {
@@ -126,23 +129,8 @@ def _normalize_agent_response(response: Any) -> AgentResponse:
     )
 
 
-def _task_run_status(
-    run_id: str, task_run_root: Path, member_workspace: Path
-) -> TaskRunStatus:
-    first_error: TaskRunError | None = None
-    stores = [
-        TaskRunStore(task_run_root),
-        TaskRunStore(member_workspace / ".guildbotics-data" / "task-runs"),
-        TaskRunStore(member_workspace / ".guildbotics" / "data" / "task-runs"),
-    ]
-    for store in stores:
-        try:
-            return store.status(run_id)
-        except TaskRunError as exc:
-            first_error = first_error or exc
-    if first_error is not None:
-        raise first_error
-    raise TaskRunError(f"Task run '{run_id}' was not found.")
+def _task_run_status(run_id: str, task_run_root: Path) -> TaskRunStatus:
+    return TaskRunStore(task_run_root).status(run_id)
 
 
 def _rate_limited_summary(retry_after: WorkflowRateLimit) -> str:
@@ -197,8 +185,8 @@ async def _main(
     await _move_task_to_working_if_ready(context, ticket_manager)
 
     ticket_url = await ticket_manager.get_ticket_url(context.task, markdown=False)
-    workspace_data_root = get_workspace_data_root()
-    member_workspace = workspace_data_root / "workspaces" / context.person.person_id
+    workspace_root = get_workspace_root()
+    member_workspace = get_member_clone_path(context.person.person_id)
     member_workspace.mkdir(parents=True, exist_ok=True)
 
     last_response: list[Any] = []
@@ -206,7 +194,7 @@ async def _main(
     async def _invoke_ticket_turn(run_id: str, attempt: int) -> None:
         execution_context = {
             "run_id": run_id,
-            "workspace_data_root": str(workspace_data_root),
+            "workspace_data_root": str(workspace_root),
             "work_kind": "ticket",
             "work_identity": ticket_url,
             "resume_policy": "fresh" if attempt == 1 else "auto",
@@ -241,7 +229,7 @@ async def _main(
     completion, _run_id = await run_with_completion_retry(
         invoke=_invoke_ticket_turn,
         check_completion=lambda rid: _task_run_status(
-            rid, workspace_data_root / "task-runs", member_workspace
+            rid, get_workspace_state_path("task-runs", workspace_root=workspace_root)
         ),
         max_attempts=_max_agent_attempts(),
         run_id=run_id,

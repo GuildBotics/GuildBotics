@@ -27,6 +27,7 @@ from guildbotics.integrations.chat_service import (
 )
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
+    ThreadContextUnavailableError,
     ThreadConversationState,
     ThreadHandoffState,
     ThreadMessageState,
@@ -44,7 +45,11 @@ from guildbotics.intelligences.effort import (
     promote_effort,
 )
 from guildbotics.runtime.event_listener import IncomingChatEvent
-from guildbotics.utils.fileio import get_workspace_data_root
+from guildbotics.utils.fileio import (
+    get_member_clone_path,
+    get_workspace_root,
+    get_workspace_state_path,
+)
 from guildbotics.utils.i18n_tool import t
 
 CHAT_MAX_ATTEMPTS_ENV = "GUILDBOTICS_CHAT_MAX_ATTEMPTS"
@@ -157,6 +162,10 @@ async def main(
                 event=incoming.event,
                 chat_participation=incoming.chat_participation,
             )
+        except ThreadContextUnavailableError:
+            # Not a workflow failure: the dispatcher keeps the event pending
+            # and backs off until the provider can serve the thread again.
+            raise
         except Exception as exc:
             retry_context = _read_retry_context_from_context(context)
             if retry_context.is_final_attempt:
@@ -166,6 +175,11 @@ async def main(
                     attempt_count=retry_context.attempt_count,
                     max_attempts=retry_context.max_attempts,
                     error=str(exc),
+                    error_category=(
+                        "rate_limited"
+                        if workflow_rate_limit_from_exception(exc) is not None
+                        else "failed"
+                    ),
                 )
                 _log(
                     context,
@@ -218,14 +232,30 @@ async def _handle_event(
         )
         return
 
-    thread_messages = state_store.load_thread_messages(
+    cached_thread_messages = state_store.load_thread_messages(
         service_name, person_id, channel_id, event.thread_ts
     )
     latest_mentions_self = identity_user_id in set(event.mentions)
-    thread_has_mentioned_self = _thread_has_mentioned_user(
-        thread_messages, identity_user_id
-    )
     participation = _chat_participation(chat_participation)
+    # One provider snapshot serves both the participation decision and the
+    # agent prompt: a second fetch could fail and lose the very context the
+    # decision was based on.
+    snapshot_events, snapshot_complete = await _fetch_thread_events(
+        context=context, chat_service=chat_service, event=event
+    )
+    thread_has_mentioned_self = _events_mention_user(
+        snapshot_events, identity_user_id
+    ) or _thread_has_mentioned_user(cached_thread_messages, identity_user_id)
+    if (
+        not snapshot_complete
+        and participation == "strict"
+        and not latest_mentions_self
+        and not thread_has_mentioned_self
+    ):
+        raise ThreadContextUnavailableError(
+            "Provider thread snapshot is unavailable and the local cache "
+            "cannot decide participation."
+        )
     if _should_skip_event(
         participation=participation,
         mentions=list(event.mentions),
@@ -237,6 +267,19 @@ async def _handle_event(
         )
         return
 
+    # Persist the snapshot into the device-local cache so retries and later
+    # events keep this context even when the provider becomes unavailable.
+    cached_ts = {message.message_ts for message in cached_thread_messages}
+    for thread_event in snapshot_events:
+        if not thread_event.message_ts or thread_event.message_ts in cached_ts:
+            continue
+        state_store.append_thread_message(
+            service_name,
+            person_id,
+            channel_id,
+            event.thread_ts,
+            _event_to_thread_message(event.thread_ts, thread_event),
+        )
     if not already_processed:
         state_store.append_thread_message(
             service_name,
@@ -257,8 +300,8 @@ async def _handle_event(
     thread_messages = state_store.load_thread_messages(
         service_name, person_id, channel_id, event.thread_ts
     )
-    workspace_data_root = get_workspace_data_root()
-    member_workspace = _get_chat_workspace_path(context, workspace_data_root)
+    workspace_root = get_workspace_root()
+    member_workspace = _get_chat_workspace_path(context)
     if member_workspace is None:
         raise RuntimeError("Member workspace path could not be resolved.")
     prompt_payload = await _build_agent_prompt_payload(
@@ -269,6 +312,7 @@ async def _handle_event(
         self_user_id=identity_user_id,
         thread_state=thread_state,
         chat_participation=participation,
+        live_thread=(snapshot_events, snapshot_complete),
     )
 
     invoke = getattr(context, "invoke", None)
@@ -307,7 +351,7 @@ async def _handle_event(
         logical_attempt = retry_context.attempt_count + _attempt - 1
         execution_context = {
             "run_id": run_id,
-            "workspace_data_root": str(workspace_data_root),
+            "workspace_data_root": str(workspace_root),
             "work_kind": "chat",
             "work_identity": ":".join(
                 (
@@ -383,7 +427,8 @@ async def _handle_event(
     # as a crash-recovery net.
     try:
         recovered = _recorded_chat_completion(
-            retry_context.run_id, workspace_data_root / "task-runs", member_workspace
+            retry_context.run_id,
+            get_workspace_state_path("task-runs", workspace_root=workspace_root),
         )
         if recovered is not None:
             record_workflow_completed(
@@ -404,7 +449,10 @@ async def _handle_event(
             (completion, evidence), _run_id = await run_with_completion_retry(
                 invoke=_invoke_chat_turn,
                 check_completion=lambda rid: _chat_run_status(
-                    rid, workspace_data_root / "task-runs", member_workspace
+                    rid,
+                    get_workspace_state_path(
+                        "task-runs", workspace_root=workspace_root
+                    ),
                 ),
                 max_attempts=_IN_DISPATCH_COMPLETION_ATTEMPTS,
                 run_id=retry_context.run_id or None,
@@ -444,6 +492,11 @@ async def _handle_event(
                 attempt_count=retry_context.attempt_count,
                 max_attempts=retry_context.max_attempts,
                 error=str(exc),
+                error_category=(
+                    "rate_limited"
+                    if workflow_rate_limit_from_exception(exc) is not None
+                    else "failed"
+                ),
             )
             _log(
                 context,
@@ -673,6 +726,7 @@ async def _build_agent_prompt_payload(
     self_user_id: str,
     thread_state: ThreadConversationState,
     chat_participation: str = "strict",
+    live_thread: tuple[list[ChatEvent], bool] | None = None,
 ) -> dict[str, Any]:
     person_labels = await _chat_user_to_person_labels(context)
     author_labels = _build_author_labels(
@@ -695,13 +749,17 @@ async def _build_agent_prompt_payload(
         )
         for message in thread_messages
     ]
-    thread_context, thread_context_complete = await _live_thread_context(
-        context=context,
-        chat_service=chat_service,
-        event=event,
+    if live_thread is None:
+        live_thread = await _fetch_thread_events(
+            context=context, chat_service=chat_service, event=event
+        )
+    live_events, thread_context_complete = live_thread
+    thread_context = _merge_thread_context(
+        live_events,
+        cached_thread_context=cached_thread_context,
         self_user_id=self_user_id,
         author_labels=author_labels,
-        cached_thread_context=cached_thread_context,
+        chat_service=chat_service,
     )
     return {
         "latest_message": _message_to_prompt_dict(prompt_latest_message),
@@ -714,20 +772,19 @@ async def _build_agent_prompt_payload(
     }
 
 
-async def _live_thread_context(
+async def _fetch_thread_events(
     *,
     context: Any,
     chat_service: ChatService,
     event: ChatEvent,
-    self_user_id: str,
-    author_labels: dict[str, str],
-    cached_thread_context: list[dict[str, str]],
-) -> tuple[list[dict[str, str]], bool]:
-    messages = {
-        message.get("timestamp", ""): message
-        for message in cached_thread_context[-_MAX_THREAD_CONTEXT_MESSAGES:]
-        if message.get("timestamp")
-    }
+) -> tuple[list[ChatEvent], bool]:
+    """Fetch the bounded provider snapshot of the thread once.
+
+    Returns the raw events (oldest first, at most the context bound) and
+    whether the provider served the thread completely. One fetch serves both
+    the participation decision and the agent prompt.
+    """
+    events: dict[str, ChatEvent] = {}
     cursor: str | None = None
     seen_cursors: set[str] = set()
     try:
@@ -739,16 +796,14 @@ async def _live_thread_context(
                 limit=_MAX_THREAD_CONTEXT_MESSAGES,
             )
             for thread_event in page.events:
-                prompt_message = _to_prompt_message_from_event(
-                    thread_event, self_user_id, author_labels, chat_service
-                )
-                messages[prompt_message.timestamp] = _message_to_prompt_dict(
-                    prompt_message
-                )
-            messages = {
-                message["timestamp"]: message
-                for message in _bounded_thread_context(messages)
-            }
+                if thread_event.message_ts:
+                    events[thread_event.message_ts] = thread_event
+            events = dict(
+                sorted(
+                    events.items(),
+                    key=lambda item: _split_timestamp(item[0]),
+                )[-_MAX_THREAD_CONTEXT_MESSAGES:]
+            )
             next_cursor = str(page.cursor or "")
             if not next_cursor:
                 break
@@ -758,8 +813,54 @@ async def _live_thread_context(
             cursor = next_cursor
     except Exception as exc:
         _log(context, "warning", "live chat thread context unavailable: %s", exc)
-        return _bounded_thread_context(messages), False
-    return _bounded_thread_context(messages), True
+        return list(events.values()), False
+    return list(events.values()), True
+
+
+def _events_mention_user(events: list[ChatEvent], user_id: str) -> bool:
+    if not user_id:
+        return False
+    for thread_event in events:
+        if user_id in set(thread_event.mentions):
+            return True
+        if user_id in _mentioned_user_ids_from_text(thread_event.text or ""):
+            return True
+    return False
+
+
+def _event_to_thread_message(
+    thread_ts: str, thread_event: ChatEvent
+) -> ThreadMessageState:
+    return ThreadMessageState(
+        channel_id=thread_event.channel_id,
+        thread_ts=thread_ts,
+        message_ts=thread_event.message_ts,
+        author_id=thread_event.author_id,
+        text=thread_event.text,
+        mentions=list(thread_event.mentions),
+        is_bot_message=thread_event.is_bot_message,
+    )
+
+
+def _merge_thread_context(
+    live_events: list[ChatEvent],
+    *,
+    cached_thread_context: list[dict[str, str]],
+    self_user_id: str,
+    author_labels: dict[str, str],
+    chat_service: ChatService,
+) -> list[dict[str, str]]:
+    messages = {
+        message.get("timestamp", ""): message
+        for message in cached_thread_context[-_MAX_THREAD_CONTEXT_MESSAGES:]
+        if message.get("timestamp")
+    }
+    for thread_event in live_events:
+        prompt_message = _to_prompt_message_from_event(
+            thread_event, self_user_id, author_labels, chat_service
+        )
+        messages[prompt_message.timestamp] = _message_to_prompt_dict(prompt_message)
+    return _bounded_thread_context(messages)
 
 
 def _bounded_thread_context(
@@ -770,7 +871,10 @@ def _bounded_thread_context(
 
 
 def _timestamp_key(message: dict[str, str]) -> tuple[int, ...]:
-    timestamp = message.get("timestamp", "")
+    return _split_timestamp(message.get("timestamp", ""))
+
+
+def _split_timestamp(timestamp: str) -> tuple[int, ...]:
     try:
         return tuple(int(part) for part in timestamp.split("."))
     except ValueError:
@@ -778,7 +882,7 @@ def _timestamp_key(message: dict[str, str]) -> tuple[int, ...]:
 
 
 def _recorded_chat_completion(
-    run_id: str, task_run_root: Path, member_workspace: Path
+    run_id: str, task_run_root: Path
 ) -> tuple[Any, list[dict[str, Any]]] | None:
     """Return the completion a re-dispatched run already recorded, if any.
 
@@ -790,28 +894,16 @@ def _recorded_chat_completion(
     if not run_id:
         return None
     try:
-        return _chat_run_status(run_id, task_run_root, member_workspace)
+        return _chat_run_status(run_id, task_run_root)
     except Exception:
         return None
 
 
 def _chat_run_status(
-    run_id: str, task_run_root: Path, member_workspace: Path
+    run_id: str, task_run_root: Path
 ) -> tuple[Any, list[dict[str, Any]]]:
-    first_error: Exception | None = None
-    stores = [
-        RunStore(task_run_root),
-        RunStore(member_workspace / ".guildbotics-data" / "task-runs"),
-        RunStore(member_workspace / ".guildbotics" / "data" / "task-runs"),
-    ]
-    for store in stores:
-        try:
-            return store.status(run_id), store.evidence(run_id)
-        except Exception as exc:
-            first_error = first_error or exc
-    if first_error is not None:
-        raise first_error
-    raise RuntimeError(f"Chat run '{run_id}' was not found.")
+    store = RunStore(task_run_root)
+    return store.status(run_id), store.evidence(run_id)
 
 
 def _latest_chat_post_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -929,11 +1021,11 @@ def _chat_participation(value: Any) -> str:
     return "strict"
 
 
-def _get_chat_workspace_path(context: Any, workspace_data_root: Path) -> Path | None:
+def _get_chat_workspace_path(context: Any) -> Path | None:
     person_id = str(getattr(getattr(context, "person", None), "person_id", "")).strip()
     if not person_id:
         return None
-    path = workspace_data_root / "workspaces" / person_id
+    path = get_member_clone_path(person_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
 

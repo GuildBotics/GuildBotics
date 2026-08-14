@@ -5,30 +5,30 @@ from pathlib import Path
 import click
 
 from guildbotics.utils.env_loader import workspace_config_dir
+from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError, SecretValueTooLargeError
 from guildbotics.utils.secret_store import (
-    KEYRING_BACKEND,
-    SecretStore,
-    configured_secrets_backend,
+    KeyringSecretStore,
     format_env_line,
-    keyring_available,
+    keyring_status,
     read_env_values,
     resolve_secret_store,
     write_env_text,
-    write_env_values,
 )
-from guildbotics.utils.workspace_state import apply_workspace_for_cli
+from guildbotics.utils.workspace_state import (
+    WorkspaceUnresolvedError,
+    apply_workspace_for_cli,
+)
 
 
 class _SecretsContext:
     def __init__(self, root: Path):
         self.root = root
-        self.config_dir = workspace_config_dir(root)
-        self.env_file = root / ".env"
+        self.config_dir = workspace_config_dir()
 
-    def store(self) -> SecretStore:
-        return resolve_secret_store(self.config_dir, self.env_file)
+    def store(self) -> KeyringSecretStore:
+        return resolve_secret_store(self.config_dir)
 
 
 @click.group()
@@ -46,21 +46,39 @@ def secrets(ctx: click.Context, workspace_dir: Path | None) -> None:
         applied_workspace = apply_workspace_for_cli(workspace_dir)
     except NotADirectoryError as exc:
         raise click.ClickException(f"workspace does not exist: {exc}") from exc
-    root = applied_workspace.workspace if applied_workspace else Path.cwd()
+    except WorkspaceUnresolvedError as exc:
+        raise click.ClickException(str(exc)) from exc
+    root = applied_workspace.workspace if applied_workspace else get_workspace_root()
     ctx.obj = _SecretsContext(root.resolve())
 
 
 @secrets.command(name="status")
 @click.pass_obj
 def secrets_status(env: _SecretsContext) -> None:
-    """Show the secret backend used by this workspace."""
-    configured = configured_secrets_backend(env.config_dir)
-    store = env.store()
+    """Show OS secret-store status for this workspace."""
+    status = keyring_status()
+    stale: list[str] = []
+    try:
+        store = env.store()
+        key_count = len(store.keys())
+        stale = store.stale_keys()
+        location = str(store.location)
+    except SecretStoreError:
+        key_count = 0
+        location = str(env.config_dir / "secrets.yml")
     click.echo(f"workspace: {env.root}")
-    click.echo(f"backend: {store.backend}" + ("" if configured else " (default)"))
-    click.echo(f"location: {store.location}")
-    click.echo(f"keychain available: {'yes' if keyring_available() else 'no'}")
-    click.echo(f"stored keys: {len(store.keys())}")
+    click.echo(
+        f"os_secret_store: {'available' if status['available'] else 'unavailable'}"
+    )
+    click.echo(f"locked: {'yes' if status['locked'] else 'no'}")
+    click.echo(f"location: {location}")
+    click.echo(f"stored keys: {key_count}")
+    click.echo(f"stale keys: {len(stale)}")
+    for key in stale:
+        click.echo(
+            f"  {key}: this device holds an older generation; "
+            "run `guildbotics secrets set` or `secrets import` here"
+        )
 
 
 @secrets.command(name="list")
@@ -74,16 +92,29 @@ def secrets_list(env: _SecretsContext) -> None:
 @secrets.command(name="set")
 @click.argument("key")
 @click.argument("value", required=False)
+@click.option(
+    "--from-file",
+    "from_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Read the secret value from a file instead of VALUE.",
+)
 @click.pass_obj
-def secrets_set(env: _SecretsContext, key: str, value: str | None) -> None:
+def secrets_set(
+    env: _SecretsContext,
+    key: str,
+    value: str | None,
+    from_file: Path | None,
+) -> None:
     """Store a secret value (prompts when VALUE is omitted)."""
-    if value is None:
+    if from_file is not None and value is not None:
+        raise click.ClickException("Specify VALUE or --from-file, not both.")
+    if from_file is not None:
+        value = from_file.read_text(encoding="utf-8")
+    elif value is None:
         value = click.prompt(f"Value for {key}", hide_input=True)
-    store = env.store()
-    _set_values(store, {key: value})
-    if store.backend == KEYRING_BACKEND:
-        _strip_env_file_keys(env.env_file, [key])
-    click.echo(f"Stored {key} ({store.backend}).")
+    _set_values(env.store(), {key: value})
+    click.echo(f"Stored {key}.")
 
 
 @secrets.command(name="delete")
@@ -105,7 +136,7 @@ def secrets_delete(env: _SecretsContext, key: str) -> None:
 )
 @click.pass_obj
 def secrets_export(env: _SecretsContext, file_path: Path | None) -> None:
-    """Export stored secrets in dotenv format (for moving machines)."""
+    """Export stored secrets in dotenv format (exchange format only)."""
     values = env.store().values()
     content = "\n".join(format_env_line(key, values[key]) for key in sorted(values))
     if file_path is None:
@@ -120,20 +151,16 @@ def secrets_export(env: _SecretsContext, file_path: Path | None) -> None:
 @click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.pass_obj
 def secrets_import(env: _SecretsContext, file: Path) -> None:
-    """Import secrets from a dotenv-format file into the workspace store."""
+    """Import secrets from a dotenv-format exchange file into the OS store."""
     values = read_env_values(file)
     if not values:
         raise click.ClickException(f"no values found in {file}")
-    store = env.store()
-    _set_values(store, values)
-    if store.backend == KEYRING_BACKEND:
-        _strip_env_file_keys(env.env_file, list(values))
-    click.echo(f"Imported {len(values)} secrets ({store.backend}).")
-    if store.backend == KEYRING_BACKEND:
-        click.echo(f"Delete {file} once you no longer need it.")
+    _set_values(env.store(), values)
+    click.echo(f"Imported {len(values)} secrets.")
+    click.echo(f"Delete {file} once you no longer need it.")
 
 
-def _set_values(store: SecretStore, values: dict[str, str]) -> None:
+def _set_values(store: KeyringSecretStore, values: dict[str, str]) -> None:
     """Store values with safe CLI errors that never include secret contents."""
     try:
         store.set_many(values)
@@ -148,13 +175,3 @@ def _set_values(store: SecretStore, values: dict[str, str]) -> None:
         ) from exc
     except SecretStoreError as exc:
         raise click.ClickException(t("cli.secrets.store_failed", error=exc)) from exc
-
-
-def _strip_env_file_keys(env_file: Path, keys: list[str]) -> None:
-    """Drop keys from .env so no plaintext copy shadows the keychain."""
-    if not env_file.exists():
-        return
-    env_values = read_env_values(env_file)
-    remaining = {key: value for key, value in env_values.items() if key not in keys}
-    if len(remaining) != len(env_values):
-        write_env_values(env_file, remaining)

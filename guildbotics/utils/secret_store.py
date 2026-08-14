@@ -1,46 +1,43 @@
-"""Workspace-scoped secret storage.
+"""Workspace-scoped secret storage backed by the OS keychain.
 
 Secrets (LLM API keys, GitHub/Slack tokens) live in the operating system
-keychain whenever a functional backend is available (macOS Keychain, Windows
-Credential Manager, Linux Secret Service). The workspace keeps only a
-non-secret index file (``.guildbotics/config/secrets.yml``) naming the stored
-keys, so the workspace stays portable while the secret values stay out of
-plaintext files. Workspaces without that index file (e.g. created on a
-keyring-less machine) use ``.env`` storage instead.
-
-Resolution precedence for a secret value is: real environment variable >
-OS keychain > ``.env`` file. Servers and CI therefore keep working with plain
-environment variables regardless of the configured backend.
+keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+The workspace keeps only a non-secret index file
+(``.guildbotics/config/secrets.yml``) naming the stored keys and their
+shared generation. Each device records the generations it actually holds in
+``.guildbotics/local/secrets.json``. Secret values themselves are never
+written to workspace files.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
 
-from guildbotics.utils.fileio import load_yaml_dict, save_yaml_file
+from guildbotics.utils.fileio import (
+    get_workspace_config_dir,
+    load_yaml_dict,
+    save_yaml_file,
+)
 from guildbotics.utils.keychain import (
     Keychain,
     SecretStoreError,
     system_keychain,
 )
 
-SECRETS_BACKEND_ENV = "GUILDBOTICS_SECRETS_BACKEND"
-KEYRING_BACKEND = "keyring"
-ENV_FILE_BACKEND = "env-file"
 SECRETS_INDEX_FILENAME = "secrets.yml"
+LOCAL_SECRETS_FILENAME = "secrets.json"
 _KEYRING_SERVICE_PREFIX = "GuildBotics"
-# Values that dotenv can reproduce without quoting; anything else (newlines,
-# quotes, spaces, comments, backslashes) is written double-quoted with escapes
-# so that multi-line secrets such as PEM keys survive a write/read round-trip.
 _PLAIN_ENV_VALUE = re.compile(r"[^\s#'\"\\]*")
 
 # Secrets that must never be published to process environment variables:
@@ -55,6 +52,11 @@ def is_environment_secret(key: str) -> bool:
     return not key.endswith(ENVIRONMENT_EXCLUDED_SECRET_SUFFIXES)
 
 
+def utc_now_iso() -> str:
+    """Return a UTC timestamp suitable for secret metadata."""
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def read_env_values(env_file: Path) -> dict[str, str]:
     """Read a dotenv file into a plain ``{key: value}`` mapping."""
     raw_values = dict(dotenv_values(env_file)) if env_file.exists() else {}
@@ -64,12 +66,7 @@ def read_env_values(env_file: Path) -> dict[str, str]:
 
 
 def write_env_text(env_file: Path, text: str) -> None:
-    """Write dotenv content atomically, owner-only from the moment it exists.
-
-    ``mkstemp`` creates the temp file with mode 0600, so the content is never
-    readable by other users — not even between creation and a later chmod —
-    and ``os.replace`` swaps it in atomically.
-    """
+    """Write dotenv content atomically, owner-only from the moment it exists."""
     env_file.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=env_file.parent, prefix=f".{env_file.name}.")
     try:
@@ -106,10 +103,7 @@ def write_env_values(env_file: Path, values: dict[str, str]) -> None:
 class SecretStore(ABC):
     """Named secret values scoped to one workspace."""
 
-    backend: str
     location: Path
-    """The workspace file backing this store (the .env file, or the
-    non-secret keychain index)."""
 
     @abstractmethod
     def get(self, key: str) -> str | None:
@@ -142,51 +136,35 @@ class SecretStore(ABC):
         return result
 
 
-class EnvFileSecretStore(SecretStore):
-    """Plaintext storage: secrets sit in the workspace ``.env`` file."""
-
-    backend = ENV_FILE_BACKEND
-
-    def __init__(self, env_file: Path):
-        self.location = env_file
-
-    def get(self, key: str) -> str | None:
-        return read_env_values(self.location).get(key)
-
-    def set(self, key: str, value: str) -> None:
-        self.set_many({key: value})
-
-    def set_many(self, new_values: dict[str, str]) -> None:
-        values = read_env_values(self.location)
-        values.update(new_values)
-        write_env_values(self.location, values)
-
-    def delete(self, key: str) -> None:
-        values = read_env_values(self.location)
-        if values.pop(key, None) is not None:
-            write_env_values(self.location, values)
-
-    def keys(self) -> list[str]:
-        return list(read_env_values(self.location))
-
-
 class KeyringSecretStore(SecretStore):
-    """OS keychain storage with a non-secret key index in the workspace.
+    """OS keychain storage with a non-secret key index in the workspace."""
 
-    The index file records the backend choice, a stable ``store_id`` (the
-    keychain namespace, so moving the workspace directory keeps its secrets),
-    and the stored key names — keyring backends cannot enumerate entries.
-    """
-
-    backend = KEYRING_BACKEND
-
-    def __init__(self, config_dir: Path, keychain: Keychain | None = None):
+    def __init__(
+        self,
+        config_dir: Path,
+        *,
+        local_index: Path | None = None,
+        keychain: Keychain | None = None,
+    ):
         self.location = config_dir / SECRETS_INDEX_FILENAME
+        # The device-local generation record always belongs to the SAME
+        # workspace as ``config_dir`` (its sibling ``local/`` directory);
+        # resolving it from ambient environment variables would let the two
+        # halves of one store land in different workspaces.
+        self._local_index = (
+            local_index or config_dir.parent / "local" / LOCAL_SECRETS_FILENAME
+        )
         self._keychain = keychain or system_keychain()
 
     def get(self, key: str) -> str | None:
         index = self._read_index()
-        if key not in index["keys"]:
+        meta = index["keys"].get(key)
+        if meta is None:
+            return None
+        if self._is_stale(key, meta):
+            # Another device updated the shared generation; the value this
+            # keychain holds is outdated. Never serve it — the key needs a
+            # `secrets set` / `secrets import` here (`secrets status` lists it).
             return None
         try:
             return self._keychain.get_password(self._service(index), key)
@@ -194,6 +172,17 @@ class KeyringSecretStore(SecretStore):
             raise
         except Exception as exc:
             raise SecretStoreError(str(exc)) from exc
+
+    def stale_keys(self) -> list[str]:
+        """Keys whose shared generation this device does not hold."""
+        index = self._read_index()
+        return sorted(
+            key for key, meta in index["keys"].items() if self._is_stale(key, meta)
+        )
+
+    def _is_stale(self, key: str, meta: dict[str, Any]) -> bool:
+        shared = _as_generation(meta.get("generation"))
+        return shared is not None and self.local_generation(key) != shared
 
     def set(self, key: str, value: str) -> None:
         self.set_many({key: value})
@@ -210,13 +199,11 @@ class KeyringSecretStore(SecretStore):
                 written_keys.append(key)
         except Exception as exc:
             if written_keys:
-                index["keys"].extend(written_keys)
-                self._write_index(index)
+                self._record_keys(index, written_keys)
             if isinstance(exc, SecretStoreError):
                 raise
             raise SecretStoreError(str(exc)) from exc
-        index["keys"].extend(written_keys)
-        self._write_index(index)
+        self._record_keys(index, written_keys)
 
     def delete(self, key: str) -> None:
         index = self._read_index()
@@ -227,33 +214,114 @@ class KeyringSecretStore(SecretStore):
         except Exception as exc:
             raise SecretStoreError(str(exc)) from exc
         if key in index["keys"]:
-            index["keys"].remove(key)
+            del index["keys"][key]
             self._write_index(index)
+            self._drop_local_generation(key)
 
     def keys(self) -> list[str]:
         return list(self._read_index()["keys"])
 
     def ensure_initialized(self) -> None:
-        """Persist the index file, pinning this workspace to this backend."""
+        """Persist the index file, pinning this workspace to the OS keychain."""
         self._write_index(self._read_index())
+
+    def adopt_shared_generations(self) -> None:
+        """Record that this device holds every generation in the shared index.
+
+        Used when a workspace arrives on a device whose keychain already has
+        the values (e.g. the one-shot workspace relocation on the same machine).
+        """
+        index = self._read_index()
+        self._align_local_generations(index, list(index["keys"]))
+
+    def shared_generation(self, key: str) -> int | None:
+        """Return the shared generation recorded for ``key``, if any."""
+        meta = self._read_index()["keys"].get(key)
+        if not isinstance(meta, dict):
+            return None
+        return _as_generation(meta.get("generation"))
+
+    def local_generation(self, key: str) -> int | None:
+        """Return the generation this device holds for ``key``, if any."""
+        return self._read_local().get("keys", {}).get(key, {}).get("generation")
 
     def _service(self, index: dict[str, Any]) -> str:
         return f"{_KEYRING_SERVICE_PREFIX}/{index['store_id']}"
 
+    def _record_keys(self, index: dict[str, Any], keys: list[str]) -> None:
+        now = utc_now_iso()
+        for key in keys:
+            current = index["keys"].get(key) or {}
+            generation = _as_generation(current.get("generation")) or 0
+            index["keys"][key] = {
+                "generation": generation + 1,
+                "updated_at": now,
+            }
+        self._write_index(index)
+        self._align_local_generations(index, keys)
+
     def _read_index(self) -> dict[str, Any]:
         data = load_yaml_dict(self.location)
         store_id = str(data.get("store_id", "")) or uuid.uuid4().hex
-        keys = data.get("keys")
         return {
-            "backend": KEYRING_BACKEND,
             "store_id": store_id,
-            "keys": [str(key) for key in keys] if isinstance(keys, list) else [],
+            "keys": _parse_key_index(data.get("keys")),
         }
 
     def _write_index(self, index: dict[str, Any]) -> None:
-        index["keys"] = sorted(set(index["keys"]))
+        payload = {
+            "store_id": index["store_id"],
+            "keys": {key: dict(index["keys"][key]) for key in sorted(index["keys"])},
+        }
         self.location.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(self.location, index)
+        save_yaml_file(self.location, payload)
+
+    def _read_local(self) -> dict[str, Any]:
+        if not self._local_index.exists():
+            return {"schema_version": 1, "keys": {}}
+        try:
+            data = json.loads(self._local_index.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"schema_version": 1, "keys": {}}
+        if not isinstance(data, dict):
+            return {"schema_version": 1, "keys": {}}
+        raw_keys = data.get("keys")
+        keys: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_keys, dict):
+            for key, meta in raw_keys.items():
+                if not isinstance(meta, dict):
+                    continue
+                generation = _as_generation(meta.get("generation"))
+                if generation is None:
+                    continue
+                keys[str(key)] = {
+                    "generation": generation,
+                    "pending_send": bool(meta.get("pending_send", False)),
+                }
+        return {"schema_version": 1, "keys": keys}
+
+    def _write_local(self, payload: dict[str, Any]) -> None:
+        self._local_index.parent.mkdir(parents=True, exist_ok=True)
+        self._local_index.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def _align_local_generations(self, index: dict[str, Any], keys: list[str]) -> None:
+        local = self._read_local()
+        for key in keys:
+            meta = index["keys"].get(key) or {}
+            generation = _as_generation(meta.get("generation"))
+            if generation is None:
+                continue
+            local["keys"][key] = {"generation": generation, "pending_send": False}
+        self._write_local(local)
+
+    def _drop_local_generation(self, key: str) -> None:
+        local = self._read_local()
+        if key in local["keys"]:
+            del local["keys"][key]
+            self._write_local(local)
 
 
 def keyring_available() -> bool:
@@ -270,35 +338,79 @@ def keyring_available() -> bool:
         return False
 
 
-def configured_secrets_backend(config_dir: Path) -> str | None:
-    """Return the backend pinned for this workspace, or ``None`` when unset.
+def keyring_status() -> dict[str, Any]:
+    """Probe the OS keychain with a read so status reflects connectivity.
 
-    ``GUILDBOTICS_SECRETS_BACKEND`` overrides the workspace index file so that
-    tests, CI, and server deployments can force a backend.
+    The probe never exposes or writes secret values: it reads a well-known
+    non-existent entry, which succeeds (returning nothing) on a reachable,
+    unlocked keychain and raises when the store is locked or unreachable.
     """
-    override = os.getenv(SECRETS_BACKEND_ENV, "").strip()
-    if override in {KEYRING_BACKEND, ENV_FILE_BACKEND}:
-        return override
-    index_file = config_dir / SECRETS_INDEX_FILENAME
-    if index_file.exists():
-        backend = str(load_yaml_dict(index_file).get("backend", ""))
-        if backend in {KEYRING_BACKEND, ENV_FILE_BACKEND}:
-            return backend
-    return None
+    if not keyring_available():
+        return {"available": False, "locked": False, "backend": "unavailable"}
+    try:
+        system_keychain().get_password(
+            f"{_KEYRING_SERVICE_PREFIX}/status-probe", "probe"
+        )
+    except Exception as exc:
+        return {
+            "available": False,
+            "locked": _is_locked_error(exc),
+            "backend": "os-keychain",
+        }
+    return {"available": True, "locked": False, "backend": "os-keychain"}
+
+
+def _is_locked_error(exc: BaseException) -> bool:
+    try:
+        from keyring.errors import KeyringLocked
+    except ImportError:
+        return False
+    return isinstance(exc, KeyringLocked) or "lock" in str(exc).lower()
 
 
 def resolve_secret_store(
-    config_dir: Path, env_file: Path, *, create_default: bool = False
-) -> SecretStore:
-    """Return the workspace's secret store.
+    config_dir: Path | None = None,
+    *,
+    create_default: bool = False,
+) -> KeyringSecretStore:
+    """Return the workspace's OS-keychain secret store.
 
-    Without ``create_default`` an unconfigured workspace uses the ``.env``
-    backend. With it (initial project setup), the OS keychain is chosen when
-    available.
+    There is no plaintext fallback. A missing or locked keychain raises
+    ``SecretStoreError``.
     """
-    backend = configured_secrets_backend(config_dir)
-    if backend is None and create_default and keyring_available():
-        backend = KEYRING_BACKEND
-    if backend == KEYRING_BACKEND:
-        return KeyringSecretStore(config_dir)
-    return EnvFileSecretStore(env_file)
+    if not keyring_available():
+        raise SecretStoreError(
+            "The OS secret store is unavailable. Unlock it or install a "
+            "supported backend, then retry."
+        )
+    store = KeyringSecretStore(
+        config_dir if config_dir is not None else get_workspace_config_dir()
+    )
+    if create_default:
+        store.ensure_initialized()
+    return store
+
+
+def _parse_key_index(raw: object) -> dict[str, dict[str, Any]]:
+    keys: dict[str, dict[str, Any]] = {}
+    if not isinstance(raw, dict):
+        return keys
+    for key, meta in raw.items():
+        if not isinstance(meta, dict):
+            continue
+        generation = _as_generation(meta.get("generation"))
+        if generation is None:
+            continue
+        keys[str(key)] = {
+            "generation": generation,
+            "updated_at": str(meta.get("updated_at") or "") or utc_now_iso(),
+        }
+    return keys
+
+
+def _as_generation(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 1:
+        return None
+    return value

@@ -97,7 +97,7 @@ class ClaudeStreamJsonAdapter:
         emit: EventSink,
     ) -> AgentTerminalResult:
         await self._ensure_supported(context)
-        env, gh_config_dir = isolated_agent_environment(context.cwd)
+        env, gh_config_dir = isolated_agent_environment()
         env.update(member_command_environment(context))
         env.update(delegation_environment(context.run_id))
         permission_mode = (
@@ -340,7 +340,7 @@ class ClaudeStreamJsonAdapter:
     async def _ensure_supported(self, context: AgentExecutionContext) -> None:
         if self._capabilities_checked:
             return
-        env, gh_config_dir = isolated_agent_environment(context.cwd)
+        env, gh_config_dir = isolated_agent_environment()
         process: asyncio.subprocess.Process | None = None
         try:
             process = await create_agent_subprocess(

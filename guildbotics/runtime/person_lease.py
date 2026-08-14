@@ -18,7 +18,7 @@ from guildbotics.runtime.advisory_lock import open_lock_file as _open_lock_file
 from guildbotics.runtime.advisory_lock import read_lock_data as _read_lock_data
 from guildbotics.runtime.advisory_lock import unlock_file as _unlock
 from guildbotics.runtime.advisory_lock import write_lock_data as _write_lock_data
-from guildbotics.utils.fileio import get_workspace_data_root
+from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.processes import pid_exists
 from guildbotics.utils.safe_path import safe_path_component
@@ -83,13 +83,13 @@ _current_lease: ContextVar[PersonExecutionLease | None] = ContextVar(
 
 
 class PersonExecutionLease:
-    def __init__(self, person_id: str, data_root: Path | None = None) -> None:
+    def __init__(self, person_id: str, workspace_root: Path | None = None) -> None:
         self.person_id = person_id
         self.path = (
-            (data_root or get_workspace_data_root())
-            / "run"
-            / "person-leases"
-            / (f"{safe_path_component(person_id)}.lock")
+            get_workspace_local_path(
+                "run", "person-leases", workspace_root=workspace_root
+            )
+            / f"{safe_path_component(person_id)}.lock"
         )
         self._guard = threading.RLock()
         self._file: IO[str] | None = None
@@ -201,7 +201,7 @@ def delegation_environment(run_id: str) -> dict[str, str]:
 def validate_delegation(
     person_id: str,
     *,
-    data_root: Path | None = None,
+    workspace_root: Path | None = None,
     environ: dict[str, str] | None = None,
 ) -> PersonLeaseMetadata | None:
     env = environ or os.environ
@@ -211,10 +211,8 @@ def validate_delegation(
     if not lease_id or not delegation_id or not run_id:
         return None
     path = (
-        (data_root or get_workspace_data_root())
-        / "run"
-        / "person-leases"
-        / (f"{safe_path_component(person_id)}.lock")
+        get_workspace_local_path("run", "person-leases", workspace_root=workspace_root)
+        / f"{safe_path_component(person_id)}.lock"
     )
     handle = _open_lock_file(path)
     try:

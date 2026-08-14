@@ -74,16 +74,17 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics run`](#guildbotics-run) | Run the GuildBotics application. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
-| [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (for moving machines). |
-| [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format file into the workspace store. |
+| [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
+| [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format exchange file into the OS store. |
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
-| [`guildbotics secrets status`](#guildbotics-secrets-status) | Show the secret backend used by this workspace. |
+| [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
 | [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
 | [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
+| [`guildbotics workspace migrate`](#guildbotics-workspace-migrate) | Copy a source-checkout workspace into a dedicated workspace root. |
 | [`guildbotics workspace status`](#guildbotics-workspace-status) | Show active workspace status without failing when it is missing. |
 | [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for desktop and external AI CLI tools. |
 
@@ -1134,11 +1135,11 @@ guildbotics secrets [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
-| [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (for moving machines). |
-| [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format file into the workspace store. |
+| [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
+| [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format exchange file into the OS store. |
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
-| [`guildbotics secrets status`](#guildbotics-secrets-status) | Show the secret backend used by this workspace. |
+| [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
 
 ## `guildbotics secrets delete`
 
@@ -1154,7 +1155,7 @@ guildbotics secrets delete [OPTIONS] KEY
 
 ## `guildbotics secrets export`
 
-Export stored secrets in dotenv format (for moving machines).
+Export stored secrets in dotenv format (exchange format only).
 
 ```text
 guildbotics secrets export [OPTIONS]
@@ -1167,7 +1168,7 @@ guildbotics secrets export [OPTIONS]
 
 ## `guildbotics secrets import`
 
-Import secrets from a dotenv-format file into the workspace store.
+Import secrets from a dotenv-format exchange file into the OS store.
 
 ```text
 guildbotics secrets import [OPTIONS] FILE
@@ -1199,11 +1200,12 @@ guildbotics secrets set [OPTIONS] KEY [VALUE]
 
 | Option | Description |
 | --- | --- |
+| `--from-file FILE` | Read the secret value from a file instead of VALUE. |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics secrets status`
 
-Show the secret backend used by this workspace.
+Show OS secret-store status for this workspace.
 
 ```text
 guildbotics secrets status [OPTIONS]
@@ -1268,6 +1270,7 @@ guildbotics workspace [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
+| [`guildbotics workspace migrate`](#guildbotics-workspace-migrate) | Copy a source-checkout workspace into a dedicated workspace root. |
 | [`guildbotics workspace status`](#guildbotics-workspace-status) | Show active workspace status without failing when it is missing. |
 | [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for desktop and external AI CLI tools. |
 
@@ -1281,6 +1284,21 @@ guildbotics workspace current [OPTIONS]
 
 | Option | Description |
 | --- | --- |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics workspace migrate`
+
+Copy a source-checkout workspace into a dedicated workspace root.
+
+```text
+guildbotics workspace migrate [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--from DIRECTORY` | Existing source checkout that contains .guildbotics/. [required] |
+| `--to DIRECTORY` | New dedicated GuildBotics workspace root. [required] |
 | `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |
 

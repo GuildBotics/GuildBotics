@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
-from dotenv import dotenv_values
 from fastapi import (
     Depends,
     FastAPI,
@@ -119,6 +118,7 @@ from guildbotics.editions.simple.slack_app_setup import (
 )
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.utils.env_loader import read_workspace_secrets
 from guildbotics.utils.fileio import get_template_path, load_yaml_file
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
@@ -152,7 +152,6 @@ def create_app(
     diagnostics_store: DiagnosticsStore | None = None,
     command_input_file_store: CommandInputFileStore | None = None,
     restore_workspace_environment: bool = False,
-    inherited_data_dir: str | None = None,
 ) -> FastAPI:
     token = session_token or secrets.token_urlsafe(32)
     store = diagnostics_store or DiagnosticsStore()
@@ -163,7 +162,6 @@ def create_app(
         app_runtime = AppRuntime(
             bus,
             diagnostics_store=store,
-            inherited_data_dir=inherited_data_dir,
             load_workspace_environment=True,
         )
     else:
@@ -715,7 +713,9 @@ def create_app(
         _: None = Depends(require_token),
     ) -> LlmProvidersResponse:
         config_dir = app_runtime.get_config_status().config_dir
-        return LlmProvidersResponse(providers=discover_llm_providers(config_dir))
+        return LlmProvidersResponse(
+            providers=discover_llm_providers(config_dir or get_template_path())
+        )
 
     @app.get(
         "/config/intelligences",
@@ -786,7 +786,6 @@ def create_app(
             snapshot: ProjectConfigSnapshot = (
                 SimpleProjectSetupService().read_project_config(
                     config_dir=config_dir,
-                    env_file_path=status.env_file,
                 )
             )
         except SetupServiceError as exc:
@@ -875,7 +874,7 @@ def create_app(
             status = app_runtime.get_config_status()
             if _get_existing_config_dir(status) is not None:
                 payload["config_dir"] = _resolve_existing_config_dir(app_runtime)
-                payload["env_file_path"] = status.env_file
+
             result = SimplePersonSetupService().write_person(
                 PersonSetupInput.model_validate(payload)
             )
@@ -906,7 +905,6 @@ def create_app(
                 SimplePersonSetupService().read_person_config(
                     config_dir=config_dir,
                     person_id=person_id,
-                    env_file_path=status.env_file,
                 )
             )
         except SetupServiceError as exc:
@@ -931,9 +929,8 @@ def create_app(
                     "original_person_id must match the path parameter.",
                     status_code=400,
                 )
-            status = app_runtime.get_config_status()
             payload["config_dir"] = _resolve_existing_config_dir(app_runtime)
-            payload["env_file_path"] = status.env_file
+
             result = SimplePersonSetupService().update_person(
                 PersonUpdateInput.model_validate(payload)
             )
@@ -952,11 +949,9 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         try:
-            status = app_runtime.get_config_status()
             result = SimplePersonSetupService().delete_person(
                 config_dir=_resolve_existing_config_dir(app_runtime),
                 person_id=person_id,
-                env_file_path=status.env_file,
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
@@ -993,15 +988,13 @@ def create_app(
         request: GitHubAppRegistrationStartRequest,
         _: None = Depends(require_token),
     ) -> GitHubAppRegistrationStatus:
-        status = app_runtime.get_config_status()
         base = request.callback_base_url.rstrip("/")
         try:
             registration = github_app_registrations.start(
                 app_name=request.app_name,
                 organization=request.organization,
                 callback_url=f"{base}/github-app/registrations/callback",
-                key_dir=github_app_key_dir(Path(status.storage_dir)),
-                env_file_path=Path(status.env_file),
+                key_dir=github_app_key_dir(),
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
@@ -1092,13 +1085,12 @@ def create_app(
     ) -> SlackTokenVerification:
         stored_bot_token = ""
         stored_app_token = ""
-        if request.person_id:
-            status = app_runtime.get_config_status()
+        config_dir = app_runtime.get_config_status().config_dir
+        if request.person_id and config_dir is not None:
             stored_bot_token, stored_app_token = (
                 SimplePersonSetupService().read_slack_tokens(
-                    config_dir=status.config_dir,
+                    config_dir=config_dir,
                     person_id=request.person_id,
-                    env_file_path=status.env_file,
                 )
             )
         return await slack_app_setup.verify_tokens(
@@ -1198,7 +1190,6 @@ def create_app(
             member_config = SimplePersonSetupService().read_person_config(
                 config_dir=config_dir,
                 person_id=person_id,
-                env_file_path=status.env_file,
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
@@ -1249,7 +1240,6 @@ def create_app(
             member_config = SimplePersonSetupService().read_person_config(
                 config_dir=config_dir,
                 person_id=person_id,
-                env_file_path=status.env_file,
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
@@ -1263,10 +1253,12 @@ def create_app(
                 status_code=400,
             )
 
-        env_values = (
-            dict(dotenv_values(status.env_file)) if status.env_file.exists() else {}
-        )
-        all_env = {**dict(os.environ), **env_values}
+        # Real environment variables win over keychain values, and keys they
+        # already provide are not fetched from the keychain at all.
+        all_env = {
+            **read_workspace_secrets(skip=frozenset(os.environ)),
+            **dict(os.environ),
+        }
         sanitized = person_id.upper().replace("-", "_")
         slack_bot_token = all_env.get(f"{sanitized}_SLACK_BOT_TOKEN")
 
@@ -1335,7 +1327,7 @@ def _resolve_existing_config_dir(app_runtime: AppRuntime) -> Path:
 
 
 def _get_existing_config_dir(status: ConfigStatus) -> Path | None:
-    if status.project_file_exists:
+    if status.project_file_exists and status.config_dir is not None:
         return status.config_dir
     return None
 

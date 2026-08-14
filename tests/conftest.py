@@ -8,25 +8,13 @@ from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
 from guildbotics.utils.import_utils import ClassResolver
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR, GUILDBOTICS_WORKSPACE_ROOT
-from guildbotics.utils.secret_store import ENV_FILE_BACKEND, SECRETS_BACKEND_ENV
-
-
-@pytest.fixture(autouse=True)
-def _force_env_file_secret_backend(monkeypatch):
-    """Keep tests off the developer's real OS keychain.
-
-    Keyring-path tests opt back in through the ``fake_keyring`` fixture,
-    which removes this override and installs an in-memory backend.
-    """
-    monkeypatch.setenv(SECRETS_BACKEND_ENV, ENV_FILE_BACKEND)
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 
 
 @pytest.fixture(autouse=True)
 def _isolate_workspace_data(monkeypatch, tmp_path):
     """Keep runtime files created by tests inside each test's temporary tree."""
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "workspace-data"))
 
 
 @pytest.fixture(autouse=True)
@@ -47,16 +35,16 @@ def _ignore_ambient_slack_tokens(monkeypatch):
 
     Secret resolution prefers real environment variables, so ambient global or
     ``<PERSON>_``-prefixed ``SLACK_BOT_TOKEN`` / ``SLACK_APP_TOKEN`` values
-    would win over the values tests stage in ``.env`` files or mocks.
+    would win over the values tests stage in the workspace secret store.
     """
     for name in list(os.environ):
         if name.endswith(("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")):
             monkeypatch.delenv(name)
 
 
-@pytest.fixture
-def fake_keyring(monkeypatch):
-    """Install an in-memory keyring backend and re-enable auto-detection."""
+@pytest.fixture(autouse=True)
+def fake_keyring():
+    """Keep tests off the developer's real OS keychain."""
     import keyring
     from keyring.backend import KeyringBackend
     from keyring.errors import PasswordDeleteError
@@ -82,7 +70,6 @@ def fake_keyring(monkeypatch):
     backend = InMemoryKeyring()
     original = keyring.get_keyring()
     keyring.set_keyring(backend)
-    monkeypatch.delenv(SECRETS_BACKEND_ENV, raising=False)
     yield backend
     keyring.set_keyring(original)
 

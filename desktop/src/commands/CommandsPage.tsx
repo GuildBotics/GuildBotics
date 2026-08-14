@@ -116,7 +116,7 @@ export function CommandsPage() {
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
-  const storageDir = config.data?.storage_dir;
+  const storageDir = config.data?.storage_dir ?? undefined;
   const configDir = config.data?.config_dir ?? "";
 
   const [initial] = useState(() => loadEditorState(storageDir));

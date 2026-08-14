@@ -81,8 +81,7 @@ def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
     env = {**os.environ, "HOME": str(home), "GUILDBOTICS_APP_API_TOKEN": TOKEN}
     for key in (
         "GUILDBOTICS_CONFIG_DIR",
-        "GUILDBOTICS_TRANSCRIPT_DETAIL",
-        "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS",
+        "GUILDBOTICS_WORKSPACE_ROOT",
     ):
         env.pop(key, None)
     process = subprocess.Popen(
@@ -194,9 +193,7 @@ def test_sidecar_restores_backend_active_workspace(tmp_path: Path) -> None:
     home = tmp_path / "home"
     for path in (startup, workspace, home):
         path.mkdir()
-    (workspace / ".env").write_text(
-        "GUILDBOTICS_DATA_DIR=selected-data\n", encoding="utf-8"
-    )
+    (workspace / ".guildbotics" / "config").mkdir(parents=True)
     state_path = home / ".guildbotics" / "data" / "active-workspace.json"
     state_path.parent.mkdir(parents=True)
     state_path.write_text(
@@ -215,7 +212,8 @@ def test_sidecar_restores_backend_active_workspace(tmp_path: Path) -> None:
         assert response.status_code == HTTP_OK
         payload = response.json()
         assert Path(payload["cwd"]) == workspace
-        assert Path(payload["workspace_data_dir"]) == workspace / "selected-data"
+        assert Path(payload["workspace"]) == workspace
+        assert Path(payload["storage_dir"]) == workspace
     finally:
         _terminate(running_sidecar.process)
 
