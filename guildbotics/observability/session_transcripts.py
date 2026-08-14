@@ -12,6 +12,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from guildbotics.observability.event_types import COMMAND_LIFECYCLE_EVENT_TYPES
+
 DEFAULT_TRANSCRIPT_DETAIL = "standard"
 DEFAULT_TRANSCRIPT_RETENTION_DAYS = 30
 TRANSCRIPT_DETAIL_ENV = "GUILDBOTICS_TRANSCRIPT_DETAIL"
@@ -25,14 +27,8 @@ _WRITE_LOCK = threading.Lock()
 _SYSTEM_LOCK = threading.Lock()
 _SYSTEM_SESSIONS: dict[Path, SystemSession] = {}
 
-INDEX_EVENT_TYPES = frozenset(
+INDEX_EVENT_TYPES = COMMAND_LIFECYCLE_EVENT_TYPES | frozenset(
     {
-        "command.started",
-        "command.finished",
-        "command.failed",
-        "member.command.started",
-        "member.command.finished",
-        "member.command.failed",
         "diagnostics.completed",
         "verify.completed",
         "span.finished",

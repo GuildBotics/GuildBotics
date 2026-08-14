@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from guildbotics.observability.event_types import COMMAND_LIFECYCLE_EVENT_TYPES
 from guildbotics.utils.fileio import (
     get_workspace_config_dir,
     get_workspace_state_path,
@@ -34,18 +35,12 @@ _LOCAL_ONLY_PAYLOAD_KEYS = frozenset(
 # and failure, and retry / abandonment decisions. Device-health events
 # (credential probes, diagnostics and verify runs, scheduler worker failures)
 # stay in local diagnostics; a new event type must opt in here.
-_DOMAIN_EVENT_TYPES = frozenset(
+_DOMAIN_EVENT_TYPES = COMMAND_LIFECYCLE_EVENT_TYPES | frozenset(
     {
         "github.push",
         "github.pull_request",
         "github.issue",
         "github.issue_comment",
-        "command.started",
-        "command.finished",
-        "command.failed",
-        "member.command.started",
-        "member.command.finished",
-        "member.command.failed",
         "workflow.completed",
         "workflow.completion_missing",
         "workflow.rate_limited",

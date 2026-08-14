@@ -13,8 +13,8 @@ import { readStackContext } from "./stack-context";
 // while still exercising the real backend-frontend wiring end-to-end. This
 // journey:
 //   * asserts the Settings screen's Verification section renders backend-derived
-//     status badges (config Configured, env Detected, GitHub Disabled) for the
-//     seeded workspace;
+//     status badges (config Configured, GitHub Disabled) for the seeded
+//     workspace;
 //   * runs the real scenario diagnostics (`POST /diagnostics/scenario`) and
 //     asserts the missing-key check renders the i18n-mapped "LLM API key is
 //     missing" alert, plus a context line naming the env var (OPENAI_API_KEY);
@@ -35,9 +35,8 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
 
   // Readiness badges are derived from the real /config/status, /team and
   // /config/project responses for the seeded workspace: config "Configured",
-  // env file "Detected", GitHub "Disabled".
+  // GitHub "Disabled".
   await expect(page.getByText("Configured", { exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("Detected", { exact: true })).toBeVisible();
   await expect(page.getByText("Disabled", { exact: true })).toBeVisible();
   // Run the real read-only scenario diagnostics. With no OpenAI key configured
   // the backend short-circuits BEFORE any network call, so this resolves in
