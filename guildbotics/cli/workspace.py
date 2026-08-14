@@ -70,7 +70,11 @@ def current_workspace(output_format: str) -> None:
 def migrate_workspace_command(
     source_dir: Path, destination_dir: Path, output_format: str
 ) -> None:
-    """Copy a source-checkout workspace into a dedicated workspace root."""
+    """Copy a source-checkout workspace into a dedicated workspace root.
+
+    With the same --from and --to directory, upgrade an already-dedicated
+    workspace root from the old data/ layout in place.
+    """
     try:
         result = migrate_workspace(source_dir, destination_dir)
     except (FileNotFoundError, FileExistsError, NotADirectoryError, OSError) as exc:

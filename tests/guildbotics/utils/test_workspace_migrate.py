@@ -267,3 +267,41 @@ def test_migrate_scrubs_pending_events_to_minimal_schema(tmp_path, monkeypatch):
     assert '"reason": "failed"' in text
     assert "raw_provider_payload" not in text
     assert "client_msg_id" not in text
+
+
+def test_migrate_upgrades_dedicated_root_in_place(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    _write(
+        workspace / ".guildbotics" / "config" / "team" / "project.yml", "language: en\n"
+    )
+    _write(
+        workspace / ".guildbotics" / "config" / "secrets.yml",
+        "backend: keyring\nstore_id: abc123\nkeys:\n- OPENAI_API_KEY\n",
+    )
+    _write(
+        workspace / ".guildbotics" / "data" / "documents" / "team" / "doc" / "body.md",
+        "hello\n",
+    )
+    # The new layout is already partially in use: merging must still bring
+    # over the old documents without touching the new one.
+    _write(
+        workspace / ".guildbotics" / "state" / "documents" / "team" / "new" / "body.md",
+        "recent\n",
+    )
+
+    result = migrate_workspace(workspace, workspace)
+
+    guild = workspace / ".guildbotics"
+    # data/ is reclassified into the new layout and left untouched itself.
+    assert (guild / "state" / "documents" / "team" / "doc" / "body.md").exists()
+    assert (guild / "state" / "documents" / "team" / "new" / "body.md").read_text(
+        encoding="utf-8"
+    ) == "recent\n"
+    assert (guild / "data" / "documents" / "team" / "doc" / "body.md").exists()
+    # The old secrets index is converted and this device keeps its holdings.
+    store = KeyringSecretStore(guild / "config")
+    assert store.keys() == ["OPENAI_API_KEY"]
+    assert store.local_generation("OPENAI_API_KEY") == 1
+    assert result.destination == workspace.resolve()

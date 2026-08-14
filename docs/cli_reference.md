@@ -1291,6 +1291,9 @@ guildbotics workspace current [OPTIONS]
 
 Copy a source-checkout workspace into a dedicated workspace root.
 
+With the same --from and --to directory, upgrade an already-dedicated
+workspace root from the old data/ layout in place.
+
 ```text
 guildbotics workspace migrate [OPTIONS]
 ```

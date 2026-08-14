@@ -38,26 +38,32 @@ def migrate_workspace(
     """Copy ``source/.guildbotics`` into a dedicated workspace root.
 
     The source checkout is not modified. Existing destination data is left
-    untouched and never overwritten.
+    untouched and never overwritten. When ``source`` and ``destination`` are
+    the same directory, an already-dedicated workspace root is upgraded in
+    place instead: the old ``data/`` layout is reclassified into ``state/``
+    and ``local/`` (leaving ``data/`` untouched) and the old secrets index is
+    converted.
     """
     source = source.expanduser().resolve(strict=False)
     destination = destination.expanduser().resolve(strict=False)
+    in_place = source == destination
     source_guild = source / ".guildbotics"
     dest_guild = destination / ".guildbotics"
     if not source_guild.is_dir():
         raise FileNotFoundError(f"source workspace not found: {source_guild}")
-    if dest_guild.exists() and any(dest_guild.iterdir()):
+    if not in_place and dest_guild.exists() and any(dest_guild.iterdir()):
         raise FileExistsError(f"destination already has workspace data: {dest_guild}")
     destination.mkdir(parents=True, exist_ok=True)
     dest_guild.mkdir(parents=True, exist_ok=True)
 
     copied: list[str] = []
     skipped: list[str] = []
-    _copy_tree(source_guild / "config", dest_guild / "config", copied, skipped)
+    if not in_place:
+        _copy_tree(source_guild / "config", dest_guild / "config", copied, skipped)
     data_root = source_guild / "data"
     if data_root.is_dir():
         _reclassify_data(data_root, dest_guild, copied, skipped)
-    else:
+    elif not in_place:
         for name in ("state", "local"):
             _copy_tree(source_guild / name, dest_guild / name, copied, skipped)
 
@@ -231,14 +237,25 @@ def _split_chat_cache(dest_guild: Path) -> None:
 def _copy_tree(
     source: Path, destination: Path, copied: list[str], skipped: list[str]
 ) -> None:
+    """Copy ``source`` into ``destination`` without ever overwriting.
+
+    Existing directories are merged entry by entry so a partially populated
+    destination (e.g. a workspace the new layout already wrote to) still
+    receives every missing item; existing files are always kept.
+    """
     if not source.exists():
         return
-    if destination.exists():
-        skipped.append(str(destination))
-        return
     if source.is_file():
+        if destination.exists():
+            skipped.append(str(destination))
+            return
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
-    else:
+        copied.append(str(destination))
+        return
+    if not destination.exists():
         shutil.copytree(source, destination)
-    copied.append(str(destination))
+        copied.append(str(destination))
+        return
+    for child in sorted(source.iterdir()):
+        _copy_tree(child, destination / child.name, copied, skipped)
