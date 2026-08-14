@@ -31,19 +31,12 @@ ALLOWED_DEBUG_KEYS = frozenset({"LOG_LEVEL", "AGNO_DEBUG"})
 DEBUG_ENV_FILENAME = "debug.env"
 
 
-def workspace_config_dir(cwd: Path | None = None) -> Path:
-    """Resolve the selected workspace config dir."""
-    del cwd
-    return get_workspace_config_dir()
-
-
-def workspace_secret_store(cwd: Path | None = None) -> SecretStore:
+def workspace_secret_store() -> SecretStore:
     """Resolve the secret store for the selected workspace.
 
     For consumers that read a secret at the point of use instead of through
     ``os.environ`` (e.g. the GitHub App private key).
     """
-    del cwd
     return resolve_secret_store(get_workspace_config_dir())
 
 
@@ -111,14 +104,13 @@ def write_debug_env(values: dict[str, str], workspace_root: Path | None = None) 
     return path
 
 
-def load_guildbotics_env(cwd: Path | None = None, *, override: bool = False) -> None:
+def load_guildbotics_env(*, override: bool = False) -> None:
     """Publish OS-keychain secrets and local debug settings into ``os.environ``.
 
     Pre-existing environment variables win unless ``override`` is set, and are
     then not even read from the keychain, so servers configured purely through
     environment variables run without an OS secret store.
     """
-    del cwd
     skip = frozenset() if override else frozenset(os.environ)
     values: dict[str, str] = {}
     values.update(read_debug_env())

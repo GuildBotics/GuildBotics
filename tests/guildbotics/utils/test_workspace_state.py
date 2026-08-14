@@ -67,13 +67,11 @@ def test_apply_workspace_for_cli_uses_active_when_no_explicit_source(
     _set_home(monkeypatch, tmp_path)
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
-    cwd = tmp_path / "other"
-    cwd.mkdir()
     workspace = tmp_path / "project"
     workspace.mkdir()
     state = write_active_workspace(workspace)
 
-    applied = apply_workspace_for_cli(cwd=cwd)
+    applied = apply_workspace_for_cli()
 
     assert applied == state
     assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(state.config_dir)
@@ -90,7 +88,7 @@ def test_apply_workspace_for_cli_keeps_explicit_workspace_env(monkeypatch, tmp_p
     other.mkdir()
     write_active_workspace(other)
 
-    applied = apply_workspace_for_cli(cwd=tmp_path)
+    applied = apply_workspace_for_cli()
 
     assert applied is None
     assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
@@ -103,9 +101,10 @@ def test_apply_workspace_for_cli_does_not_use_cwd(monkeypatch, tmp_path):
     cwd = tmp_path / "repo"
     cwd.mkdir()
     (cwd / ".guildbotics" / "config").mkdir(parents=True)
+    monkeypatch.chdir(cwd)
 
     with pytest.raises(WorkspaceUnresolvedError):
-        apply_workspace_for_cli(cwd=cwd)
+        apply_workspace_for_cli()
 
 
 def test_workspace_status_payload_reports_missing_active_workspace(

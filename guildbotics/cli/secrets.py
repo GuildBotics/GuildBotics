@@ -4,8 +4,7 @@ from pathlib import Path
 
 import click
 
-from guildbotics.utils.env_loader import workspace_config_dir
-from guildbotics.utils.fileio import get_workspace_root
+from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError, SecretValueTooLargeError
 from guildbotics.utils.secret_store import (
@@ -25,7 +24,7 @@ from guildbotics.utils.workspace_state import (
 class _SecretsContext:
     def __init__(self, root: Path):
         self.root = root
-        self.config_dir = workspace_config_dir()
+        self.config_dir = get_workspace_config_dir()
 
     def store(self) -> KeyringSecretStore:
         return resolve_secret_store(self.config_dir)

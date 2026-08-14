@@ -88,18 +88,13 @@ def has_explicit_workspace_source() -> bool:
     return bool(config_dir and workspace_root_from_config_dir(Path(config_dir)))
 
 
-def apply_workspace_for_cli(
-    workspace: Path | None = None,
-    *,
-    cwd: Path | None = None,
-) -> WorkspaceState | None:
+def apply_workspace_for_cli(workspace: Path | None = None) -> WorkspaceState | None:
     """Select the workspace for a CLI command.
 
     Only ``--workspace``, an explicit environment variable, or the persisted
     active workspace are accepted. The process cwd is never treated as a
     workspace root.
     """
-    del cwd
     if workspace is not None:
         state = workspace_state(workspace)
         if not state.workspace.is_dir():
