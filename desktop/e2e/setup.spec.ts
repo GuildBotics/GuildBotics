@@ -117,8 +117,13 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByLabel("high thinking_budget").fill("4096");
   await page.getByLabel("low thinking_budget").fill("0");
 
-  // Autosave is debounced; poll until the backend has rewritten the file. The
-  // read tolerates a not-yet-written file so the poll can keep waiting.
+  // Saving is deliberate: one button writes the basic settings and the advanced
+  // editor, and the advanced half is composed against what the basic half just
+  // wrote. Nothing reaches disk until it is pressed.
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+
+  // Poll until the backend has written the file. The read tolerates a
+  // not-yet-written file so the poll can keep waiting.
   const modelFile = join(
     ctx.workspaceDir,
     ".guildbotics",
