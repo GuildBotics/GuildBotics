@@ -22,6 +22,12 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics diagnostics system`](#guildbotics-diagnostics-system) | Show service-wide records that belong to no single execution. |
 | [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace) | Show one execution's summary and records. |
 | [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces) | List recorded executions, newest first. |
+| [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
+| [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
+| [`guildbotics hub status`](#guildbotics-hub-status) | Show whether this machine hosts a hub, and which workspaces it holds. |
+| [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
+| [`guildbotics hub workspace create`](#guildbotics-hub-workspace-create) | Create the repository a workspace synchronizes through. |
+| [`guildbotics hub workspace list`](#guildbotics-hub-workspace-list) | List the workspaces this hub holds. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics member agent`](#guildbotics-member-agent) | Manage native agent runtime state. |
@@ -104,6 +110,7 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
+| [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics run`](#guildbotics-run) | Run the GuildBotics application. |
@@ -180,6 +187,93 @@ guildbotics diagnostics traces [OPTIONS]
 | `--limit INTEGER RANGE` | Maximum entries. [default: 50; 1\<=x\<=1000] |
 | `--include-assistant / --no-include-assistant` | Include the Desktop AI assistants' own traces. [default: no-include-assistant] |
 | `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics hub`
+
+Host a synchronization hub for GuildBotics workspaces on this machine.
+
+```text
+guildbotics hub [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
+| [`guildbotics hub status`](#guildbotics-hub-status) | Show whether this machine hosts a hub, and which workspaces it holds. |
+| [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
+
+## `guildbotics hub create`
+
+Make this machine a hub, or show the hub it already hosts.
+
+```text
+guildbotics hub create [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics hub status`
+
+Show whether this machine hosts a hub, and which workspaces it holds.
+
+```text
+guildbotics hub status [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics hub workspace`
+
+Manage the repositories this hub holds, one per workspace.
+
+```text
+guildbotics hub workspace [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics hub workspace create`](#guildbotics-hub-workspace-create) | Create the repository a workspace synchronizes through. |
+| [`guildbotics hub workspace list`](#guildbotics-hub-workspace-list) | List the workspaces this hub holds. |
+
+## `guildbotics hub workspace create`
+
+Create the repository a workspace synchronizes through.
+
+```text
+guildbotics hub workspace create [OPTIONS] WORKSPACE_ID
+```
+
+| Option | Description |
+| --- | --- |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics hub workspace list`
+
+List the workspaces this hub holds.
+
+```text
+guildbotics hub workspace list [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics kill`

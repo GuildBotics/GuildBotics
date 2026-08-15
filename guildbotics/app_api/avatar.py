@@ -11,14 +11,19 @@ from guildbotics.utils.avatar import (
     find_avatar_file,
     get_member_avatar_dir,
 )
+from guildbotics.workspace.validation import MAX_SHARED_AVATAR_BYTES
 
 logger = logging.getLogger("guildbotics.app_api.avatar")
 
 # Outbound avatar downloads must time out so a stalled remote endpoint cannot
 # hang the API worker indefinitely.
 AVATAR_DOWNLOAD_TIMEOUT = 15.0
-# Reject avatar uploads larger than this to avoid persisting huge payloads.
-MAX_AVATAR_BYTES = 5 * 1024 * 1024
+# An avatar is shared between the user's machines, so the size that matters is
+# the one synchronization will carry. Accepting anything larger here would store
+# an avatar the product displays but can never send: the sync boundary would
+# hold it back on every cycle, and nothing in the normal paths would fail to
+# tell the user why.
+MAX_AVATAR_BYTES = MAX_SHARED_AVATAR_BYTES
 
 __all__ = [
     "MAX_AVATAR_BYTES",
@@ -28,6 +33,7 @@ __all__ = [
     "get_github_avatar_url",
     "get_slack_avatar_url",
     "import_avatar_from_url",
+    "require_shareable_avatar",
     "save_avatar_file",
 ]
 
@@ -47,12 +53,25 @@ def clean_existing_avatars(member_dir: Path) -> None:
                 logger.warning("Failed to delete existing avatar file %s: %s", path, e)
 
 
-def save_avatar_file(config_dir: Path, person_id: str, upload_file: UploadFile) -> Path:
-    content = upload_file.file.read()
+def require_shareable_avatar(content: bytes) -> bytes:
+    """Return ``content`` if it is small enough to reach the other machines.
+
+    Both ways an avatar arrives -- uploaded, or fetched from a provider URL --
+    go through here, because a check on only one of them still lets in an
+    avatar that can never be shared.
+
+    Raises:
+        ValueError: When the image is above the shared size limit.
+    """
     if len(content) > MAX_AVATAR_BYTES:
         raise ValueError(
             f"Avatar file is too large (max {MAX_AVATAR_BYTES // (1024 * 1024)} MB)."
         )
+    return content
+
+
+def save_avatar_file(config_dir: Path, person_id: str, upload_file: UploadFile) -> Path:
+    content = require_shareable_avatar(upload_file.file.read())
 
     member_dir = get_member_avatar_dir(config_dir, person_id)
     member_dir.mkdir(parents=True, exist_ok=True)
@@ -79,6 +98,7 @@ async def import_avatar_from_url(config_dir: Path, person_id: str, url: str) -> 
         )
         response.raise_for_status()
 
+    content = require_shareable_avatar(response.content)
     content_type = response.headers.get("Content-Type", "").lower()
     if "png" in content_type:
         suffix = ".png"
@@ -96,7 +116,7 @@ async def import_avatar_from_url(config_dir: Path, person_id: str, url: str) -> 
     clean_existing_avatars(member_dir)
 
     dest_path = member_dir / f"avatar{suffix}"
-    dest_path.write_bytes(response.content)
+    dest_path.write_bytes(content)
 
     return dest_path
 

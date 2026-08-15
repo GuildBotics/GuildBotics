@@ -78,6 +78,7 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.trace_presentations import normalize_trace_presentation
 from guildbotics.app_api.verify import VerifyService
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
 )
@@ -259,6 +260,7 @@ class AppRuntime:
         self._cli_agent_usage_lock = asyncio.Lock()
         self._cli_agent_usage_cache: tuple[float, CliAgentUsagesResponse] | None = None
         self._loaded_dotenv_keys: set[str] = set()
+        self._workspace_sync = WorkspaceSyncService()
         if load_workspace_environment:
             self._load_workspace_env()
         self._lifecycle = RuntimeLifecycleService(
@@ -332,6 +334,17 @@ class AppRuntime:
             raise _workspace_switch_blocked_error(stopped)
         if self._diagnostics_store is not None:
             self._diagnostics_store.finish_system_session()
+        # Stopped before the switch so the queue of the workspace being left
+        # cannot commit into the one being entered. A queue still finishing a
+        # fetch or push holds that workspace's repository, so the switch waits
+        # rather than leaving two of them running side by side.
+        if not self._workspace_sync.deactivate():
+            raise AppApiError(
+                "workspace_switch_blocked",
+                "Synchronization for the current workspace is still stopping. "
+                "Try again in a moment.",
+                status_code=409,
+            )
         os.chdir(workspace)
         write_active_workspace(workspace)
         apply_workspace_root(workspace)
@@ -339,6 +352,7 @@ class AppRuntime:
         if self._diagnostics_store is not None:
             self._diagnostics_store.start_system_session(self._system_service_run_id)
             self._diagnostics_store.start_maintenance()
+        self._workspace_sync.activate()
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:

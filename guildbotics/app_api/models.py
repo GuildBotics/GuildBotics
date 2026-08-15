@@ -51,6 +51,116 @@ class WorkspaceChangeRequest(BaseModel):
     workspace_dir: Path
 
 
+class HubStatus(BaseModel):
+    """Whether this machine hosts a hub, and what it holds."""
+
+    hosted: bool
+    hub_root: Path
+    hub_id: str | None = None
+    created_at: str | None = None
+    ssh_endpoint: str | None = None
+    workspace_ids: list[str] = Field(default_factory=list)
+
+
+class HubTarget(BaseModel):
+    """Which hub an operation is about.
+
+    An empty ``endpoint`` means this machine, which needs no network and no
+    host key: the hub repositories are right there on disk.
+    """
+
+    endpoint: str = ""
+
+
+class HubTrustRequest(BaseModel):
+    """Trust a hub machine's host key, naming the one the user confirmed.
+
+    The fingerprint comes back from the caller so that what is stored is what
+    was shown, rather than whatever the machine answers when asked again.
+    """
+
+    endpoint: str = ""
+    fingerprint: str = ""
+
+
+class HubConnection(BaseModel):
+    """What this device can see of a hub before connecting a workspace to it."""
+
+    endpoint: str = ""
+    is_local: bool
+    host_key_fingerprints: list[str] = Field(default_factory=list)
+    host_key_trusted: bool = True
+    workspace_ids: list[str] = Field(default_factory=list)
+
+
+class DeviceSshKey(BaseModel):
+    """This device's public key, for registration on a hub machine."""
+
+    exists: bool
+    path: Path | None = None
+    public_key: str = ""
+    fingerprint: str = ""
+
+
+class UnsendableChangeModel(BaseModel):
+    """A local change that cannot be shared until the file is repaired."""
+
+    path: str
+    reason: str
+
+
+class WorkspaceSyncStatus(BaseModel):
+    """The synchronization state of the selected workspace."""
+
+    enabled: bool
+    workspace_id: str | None = None
+    device_id: str | None = None
+    hub_url: str | None = None
+    state: str = "disabled"
+    local_head: str | None = None
+    remote_head: str | None = None
+    ahead_count: int = 0
+    behind_count: int = 0
+    unsendable_changes: list[UnsendableChangeModel] = Field(default_factory=list)
+    last_success_at: str | None = None
+    last_error_code: str | None = None
+
+
+class WorkspaceSyncEnableRequest(BaseModel):
+    """Connect the selected workspace to a hub.
+
+    ``workspace_id`` names the hub workspace to join. Leaving it empty
+    registers this workspace on the hub under its own identifier.
+    """
+
+    hub: HubTarget = Field(default_factory=HubTarget)
+    workspace_id: str = ""
+
+
+class WorkspaceSyncPreview(BaseModel):
+    """What joining the workspace a hub already holds would do.
+
+    Registering is not previewed: a hub with no copy of this workspace has
+    nothing to compare against.
+    """
+
+    hub_workspace_id: str | None = None
+    workspace_id: str
+    mode: Literal["join", "reconnect"]
+    hub_only: list[str] = Field(default_factory=list)
+    device_only: list[str] = Field(default_factory=list)
+    differing: list[str] = Field(default_factory=list)
+    unsendable_changes: list[UnsendableChangeModel] = Field(default_factory=list)
+
+
+class WorkspaceSyncCloneRequest(BaseModel):
+    """Create a new workspace root from a copy of a hub's shared content."""
+
+    hub: HubTarget = Field(default_factory=HubTarget)
+    workspace_id: str
+    workspace_dir: Path
+
+
 class ProjectSummary(BaseModel):
     name: str = ""
     language_code: str

@@ -7,11 +7,32 @@ subscriber of the Workspace Sync Port, so no capability, command runner, or API
 layer learns that Git is involved.
 
 The package sits above workspace storage and observability and below the
-capability, driver, and API layers.
+capability, driver, and API layers. Only a process entry point imports it, and
+only to install the queue with
+:func:`~guildbotics.sync.activation.activate_workspace_sync`; everything else
+reaches synchronization through the port.
 """
 
 from __future__ import annotations
 
+from guildbotics.sync.activation import (
+    SyncStillStoppingError,
+    activate_workspace_sync,
+    current_sync_manager,
+    deactivate_workspace_sync,
+    paused_workspace_sync,
+)
+from guildbotics.sync.commits import UnsendableChange
+from guildbotics.sync.enrollment import (
+    EnrollmentError,
+    EnrollmentMode,
+    EnrollmentPreview,
+    EnrollmentResult,
+    PreviewMode,
+    clone_workspace,
+    enroll,
+    preview_enrollment,
+)
 from guildbotics.sync.local_repository import (
     LocalSyncRepository,
     SyncRepositoryError,
@@ -22,20 +43,32 @@ from guildbotics.sync.manager import (
     GitSyncStatus,
     SharedDataAnomaly,
     SyncState,
-    UnsendableChange,
     build_git_sync_manager,
 )
 from guildbotics.sync.rejections import record_update_rejected
 
 __all__ = [
+    "EnrollmentError",
+    "EnrollmentMode",
+    "EnrollmentPreview",
+    "EnrollmentResult",
     "GitSyncManager",
     "GitSyncStatus",
     "LocalSyncRepository",
+    "PreviewMode",
     "SharedDataAnomaly",
     "SyncRepositoryError",
     "SyncState",
+    "SyncStillStoppingError",
     "UnsendableChange",
     "WorkingTreeChange",
+    "activate_workspace_sync",
     "build_git_sync_manager",
+    "clone_workspace",
+    "current_sync_manager",
+    "deactivate_workspace_sync",
+    "enroll",
+    "paused_workspace_sync",
+    "preview_enrollment",
     "record_update_rejected",
 ]

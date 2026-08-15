@@ -33,9 +33,19 @@ def find_package_subdir(subpath: Path) -> Path:
         current = current.parent
 
 
+def get_machine_root() -> Path:
+    """Return the machine-wide GuildBotics directory, ``~/.guildbotics``.
+
+    Everything that belongs to the machine rather than to a workspace lives
+    under it: the managed CLI, this device's state, and a hub when this machine
+    hosts one.
+    """
+    return Path.home() / ".guildbotics"
+
+
 def get_machine_state_root() -> Path:
     """Return the machine-local GuildBotics state root."""
-    return Path.home() / ".guildbotics" / "data"
+    return get_machine_root() / "data"
 
 
 def get_machine_state_path(*parts: str) -> Path:

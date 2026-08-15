@@ -424,7 +424,8 @@ def test_unrelated_histories_are_damage_not_a_concurrent_update(
     stranger.write(CONFIG, "language: en\n")
     stranger.manager.synchronize()
 
-    status = first.manager.change_remote(str(other_hub))
+    first.repository.set_remote(str(other_hub))
+    status = first.manager.synchronize()
 
     assert status.state == "invalid_shared_state"
     assert status.last_error_code == "unrelated_histories"
@@ -441,7 +442,8 @@ def test_a_hub_with_commits_but_no_workspace_identity_stops_the_queue(
     stranger.write(CONFIG, "language: en\n")
     stranger.manager.synchronize()
 
-    status = first.manager.change_remote(str(other_hub))
+    first.repository.set_remote(str(other_hub))
+    status = first.manager.synchronize()
 
     assert status.state == "invalid_shared_state"
     assert status.last_error_code == "missing_workspace_identity"

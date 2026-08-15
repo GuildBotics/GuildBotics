@@ -490,3 +490,54 @@ def test_import_avatar_from_slack_env_var_wins_over_keychain(
         headers={"Authorization": "Bearer xoxb-env-token"},
         timeout=10.0,
     )
+
+
+def test_the_upload_limit_is_the_limit_synchronization_can_carry() -> None:
+    """An avatar the product accepts but the sync boundary refuses would be
+    displayed here and never reach the other machines, with nothing in the
+    normal paths failing to say why."""
+    from guildbotics.app_api.avatar import MAX_AVATAR_BYTES
+    from guildbotics.workspace.validation import MAX_SHARED_AVATAR_BYTES
+
+    assert MAX_AVATAR_BYTES == MAX_SHARED_AVATAR_BYTES
+
+
+@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
+@patch(
+    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
+)
+def test_an_imported_avatar_is_refused_when_it_is_too_large(
+    mock_read_config: MagicMock,
+    mock_async_client_cls: MagicMock,
+    client: TestClient,
+    test_workspace: Path,
+) -> None:
+    """A provider URL is the other way an avatar arrives, so it needs the same
+    limit: checking only the upload still lets in one that cannot be shared."""
+    from guildbotics.app_api.avatar import MAX_AVATAR_BYTES
+
+    mock_read_config.return_value = PersonConfigSnapshot(
+        person_id="alice",
+        person_name="Alice",
+        person_type="human",
+        is_active=True,
+        github_username="alice-git",
+        git_email="alice@example.com",
+    )
+    mock_client = MagicMock()
+    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
+    user_response = MagicMock()
+    user_response.json.return_value = {"avatar_url": "https://github.com/a.png"}
+    user_response.raise_for_status = MagicMock()
+    image_response = MagicMock()
+    image_response.headers = {"Content-Type": "image/png"}
+    image_response.content = b"x" * (MAX_AVATAR_BYTES + 1)
+    image_response.raise_for_status = MagicMock()
+    mock_client.get = AsyncMock(side_effect=[user_response, image_response])
+
+    response = client.post("/config/members/alice/avatar/github", headers=AUTH_HEADERS)
+
+    assert response.status_code != 200
+    assert not (
+        test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
+    ).exists()

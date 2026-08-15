@@ -47,7 +47,8 @@
 - `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、interactive session
 - `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
 - `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）
-- `guildbotics/sync/*` … Workspace Sync Port の唯一の購読者。ローカル同期 repository（`local_repository.py`）、同期 queue / 自動収束 / rejected ref（`manager.py`）、更新不採用の Activity 記録（`rejections.py`）
+- `guildbotics/sync/*` … Workspace Sync Port の唯一の購読者。ローカル同期 repository（`local_repository.py`）、commit 境界（`commits.py`）、同期 queue / 自動収束 / rejected ref（`manager.py`）、更新不採用の Activity 記録（`rejections.py`）、Hub への接続と参加（`enrollment.py`）、queue の install（`activation.py`）
+- `guildbotics/hub/*` … Hub。bare repository の作成と fast-forward only 設定（`host.py`）、device から Hub への到達（`connection.py`）。中身の意味は知らない
 - `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤
 
 依存方向のハードルール（`tests/guildbotics/test_layer_boundaries.py` で担保）:
@@ -55,7 +56,8 @@
 - `guildbotics/app_api/*` は最上位層であり、他の guildbotics package から import してはならない。app_api と core の両方が必要とする知識（provider / AI CLIツールカタログなど）は core 側（例: `guildbotics/intelligences/*`）に置き、app_api は API model への変換だけを持つ
 - `guildbotics/observability/*` は `utils` 以外に依存しない記録基盤であり、app_api や capability の都合を知らない
 - `guildbotics/workspace/*` は `utils` と `entities` 以外に依存しない storage 層であり、capability / driver / app_api の都合を知らない
-- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に **他のどの package からも import してはならない**。capability / driver / integration / app_api は Workspace Sync Port 越しにだけ同期へ届く
+- `guildbotics/hub/*` は `utils` 以外に依存しない。Hub は repository の入れ物と OpenSSH 経路だけを知り、共有 record の意味を知らない
+- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py` の1つだけ）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。**composition root を増やさない。** activation の防御は module state なので process をまたいで効かず、2 process が同じ Workspace を activate すると同じ repository に queue が2本走る（`service.lock` は Desktop が scheduler 開始時にしか取らないので、この衝突を防がない）。マシン全体の所有者ができる（#418 の Device Agent）までは Desktop backend の1本だけとする
 
 リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 
@@ -119,14 +121,45 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - commit / fetch / 自動収束 / push、first-committer-wins、後着 commit の `refs/guildbotics/rejected/<rejection_id>` への退避
 - 送信前と受信時に同じ `validate_shared_file()` を通し、通らないローカル変更は「送信できない変更」として保留、受信側で通らなければ共有データ異常として停止（検証の中身は「4.1 共有 state の書き込み」を参照）
 - `await_pushed(change_id)` の同期 barrier と `GitSyncStatus` の算出
+- Hub への接続（新規登録 / 既存 Workspace への参加 / 複製の取得）と、参加前の差分の算出
 
 禁止:
 
-- 他の package から import されること（同期へは Workspace Sync Port 越しにだけ届く）
+- composition root 以外の package から import されること（同期へは Workspace Sync Port 越しにだけ届く）
 - 呼び出し元から repository path を受け取ること（検証済み Workspace root から毎回導出する）
 - ファイル内容の domain 知識を持つこと
 - 退避内容を Activity / API へ載せること（`rejection_id` と対象 path だけを記録し、回復は変更元 device 上の手動手順）
 - ambient に選択中の Workspace を解決すること。manager が扱う Workspace root を、Activity の保存先と write 通知の path 解決まで引き回す（別 root の初期参加・切替と競合するため）
+- 参加前の差分表示（preview）で remote を設定すること。実行しなかった preview が「同期有効」に見えると、次の起動で queue が回りはじめる
+
+参加フローの規約:
+
+- 参加は上書きではない。**このマシンの内容を先に commit してから** Hub の内容を採用し、押し出された commit は rejected ref と Activity に残す
+- **preview するのは参加のときだけ。** 新規登録は比較する相手がいないので、preview のために repository を作らない（作ると、有効化しなかった Workspace に `.git` と Workspace ID が残る）
+- preview と実行は同じ前半（`initialize` → identity → commit）と同じ分類関数を共有する。preview が実行と違う起点や違う結論を語らないようにするため
+- 同じ path は Hub 側を採用、Hub に無い path は保持して送信、Workspace ID は Hub 側を採用する
+- **tree の直接比較でよいのは履歴を共有していない相手だけ。** 共通の commit がある相手（Hub 再構築後の再接続など）では「両方が持っている」は何も意味しない。`merge_base` があれば通常の収束（manager）へ委譲し、参加側で別の規則を作らない
+- **検証を通らないファイルを Hub の内容で上書きしない。** これは競争に負けた側ではなく、まだ送れていない利用者の編集であり、commit されていないので rejected ref にも残らない。`restore_from_index` の対象から必ず引く（manager 側と同じ）
+- **接続に失敗したら remote を残さない。** 残すと次の起動が「同期有効」と判定して、利用者が使えないと言われた Hub に対して queue が回りはじめる
+- **Git の例外を境界の外へ出さない。** Hub が落ちている・鍵が未登録・アドレスが違うは最も普通の異常系なので、`EnrollmentError` などへ変換して API が利用者に見せられる形にする。`_HUB_FAILURES` のような一覧は「利用者に見せられるもの」の宣言であって、下位の例外を捕まえる網ではない
+- **停止しなかった queue を手放さない。** timeout した worker は repository を掴んだままなので、忘れると次の activate が同じ repository に2本目を作る。`stop()` の戻り値を呼び出し側まで返し、Workspace 切替はそれで中止する
+
+#### Hub (`guildbotics/hub/*`)
+
+責務:
+
+- `~/.guildbotics/hub/` の作成と、Workspace ごとの bare repository（`host.py`）
+- fast-forward only（`receive.denyNonFastForwards` / `denyDeletes`）の適用。並行更新の自動収束はこの拒否が支えている
+- device から Hub への到達（`connection.py`）。接続先の解析、Git remote URL、host key の確認と登録、device 公開鍵、Hub 上の `guildbotics hub` コマンドの SSH 実行
+- Hub 自身の操作は Hub マシンの `guildbotics hub` コマンドが行う（sshd から実行される前提。Windows の PATH 設定は README で案内する）
+
+禁止:
+
+- 共有 record の意味を知ること（`utils` 以外へ依存しない）
+- Workspace root の path を保存すること（Hub は Workspace ID だけで対応づける）
+- 接続先文字列から port や path を受け取ること（Hub 内の配置は GuildBotics が決める）
+- 生の Git command を Hub へ ssh で送り込むこと（Hub 側の CLI を呼ぶ）
+- 接続先や Workspace ID を検証せずに path / コマンド引数へ渡すこと。Workspace ID は**正規形の UUID だけ**を受け付ける（`urn:uuid:` や大文字は同じ UUID の別表記で、1つの Workspace が複数 directory へ割れる）。接続先は先頭 `-` を拒否する（`ssh` の option として解釈される）
 
 #### App API (`guildbotics/app_api/*`)
 
@@ -233,7 +266,7 @@ help / docstring が正であり、member コマンドの一行説明は
 
 ### 4.1 共有 state の書き込み（Workspace Sync Port）
 
-`<workspace>/.guildbotics/config` と `state` はマシン間で共有する領域、`local` はこの device 限定。共有領域への書き込みは
+`<workspace>/.guildbotics/config` と `state` はマシン間で共有する領域、`local` はこの device 限定。**マシンの形をしたものは `local` へ置く。** 絶対パス（`clones/`）と同じ意味で、ホットキー（`local/hotkeys.yml`）もそう扱う: ある組み合わせが空いているかは OS 標準ショートカット・他アプリ・キーボード配列で決まり、Workspace ではなくマシンの性質である。共有領域への書き込みは
 `guildbotics/utils/workspace_sync_port.py` の `write_shared_*` / `delete_shared_path` / `notify_shared_state_changed` を通し、
 完了後に `ChangeSet` を Workspace Sync Port へ通知する。
 
@@ -249,6 +282,7 @@ help / docstring が正であり、member コマンドの一行説明は
 - 共有 record は `schema_version` を現在値へ固定する。旧 schema の fallback 読み込みは作らない
 - 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
 - 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` は key 名と generation 以外の field を拒否するため、Secret 値の混入を内容検査なしに防げる
+- **書き手は、境界が拒否するものを受理しない。** サイズ上限は境界にしか見えない唯一のクラス（構文や schema と違い、製品の通常経路はどこも失敗しない）なので、書き手側の上限を境界の定数から導出する。例: `MAX_AVATAR_BYTES = MAX_SHARED_AVATAR_BYTES`、`DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES`。同じ資産に書き込み経路が複数ある場合（アップロードと URL 取り込みなど）は全部に掛ける
 
 ### 5. スケジューラ
 

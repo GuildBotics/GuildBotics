@@ -18,6 +18,7 @@ settle a concurrent update belong to
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from git import GitCommandError, Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
 from guildbotics.utils.fileio import get_workspace_root
+from guildbotics.utils.openssh import OpenSshNotFoundError, git_ssh_command
 from guildbotics.utils.workspace_sync_port import SHARED_ROOTS
 
 #: The only branch normal operation shares. Users are given no branch controls.
@@ -33,6 +35,8 @@ SYNC_BRANCH = "main"
 SYNC_REMOTE = "origin"
 #: Where a local commit goes when the hub already accepted a change to its paths.
 REJECTED_REF_PREFIX = "refs/guildbotics/rejected"
+#: Where a hub's content is read before the workspace is connected to it.
+PREVIEW_REF = "refs/guildbotics/hub-preview"
 #: ``local/`` is device-only; ``.env`` is refused a second time here because a
 #: file of secrets must not reach the hub even if one is written by hand.
 GITIGNORE_CONTENT = "local/\n.env\n"
@@ -120,6 +124,30 @@ class LocalSyncRepository:
         repository.git.config("user.name", "GuildBotics")
         repository.git.config("user.email", "sync@guildbotics.invalid")
         repository.git.config("commit.gpgsign", "false")
+
+    def clone(self, url: str) -> None:
+        """Create this repository as a copy of a hub's shared content.
+
+        This is how a machine takes a workspace it has never held before. A
+        workspace that already has content joins instead, so that its own files
+        are committed and kept rather than overwritten by the copy.
+
+        Raises:
+            SyncRepositoryError: When this workspace already has a repository.
+        """
+        self.verify_boundary()
+        if self.initialized:
+            raise SyncRepositoryError(
+                f"{self.path} already exists. Enable synchronization on it "
+                "instead of taking a second copy."
+            )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        environment = {"GIT_TERMINAL_PROMPT": "0"}
+        with suppress(OpenSshNotFoundError):
+            environment["GIT_SSH_COMMAND"] = git_ssh_command()
+        Repo.clone_from(
+            url, self.path, branch=SYNC_BRANCH, origin=SYNC_REMOTE, env=environment
+        )
 
     def working_tree_changes(self) -> list[WorkingTreeChange]:
         """Return every shared file that differs from the current commit.
@@ -243,6 +271,17 @@ class LocalSyncRepository:
         else:
             repository.create_remote(SYNC_REMOTE, url)
 
+    def clear_remote(self) -> None:
+        """Forget the hub, returning the workspace to not being synchronized.
+
+        A connection attempt that fails partway must not leave a remote behind:
+        the next start would see a workspace that looks connected and would run
+        a queue against a hub that was never accepted.
+        """
+        if self.has_remote():
+            repository = self._repo()
+            repository.delete_remote(repository.remote(SYNC_REMOTE))
+
     def fetch(self) -> None:
         """Update the local view of the hub.
 
@@ -250,6 +289,39 @@ class LocalSyncRepository:
         hub that has no commits yet is an empty answer rather than an error.
         """
         self._repo().git.fetch(SYNC_REMOTE)
+
+    def fetch_preview(self, url: str) -> str | None:
+        """Read a hub's content without connecting this workspace to it.
+
+        Showing the user what joining would do must not leave the workspace
+        looking joined, so the URL is used directly and no remote is recorded.
+
+        The hub is asked what it has before anything is fetched. A hub that is
+        empty and a hub that cannot be reached would otherwise both look like
+        "nothing to fetch", and the user would be shown an empty hub they are
+        about to register with when the real answer is that their key is not
+        registered yet.
+
+        Returns:
+            str | None: The hub's commit, or None when the hub is still empty.
+
+        Raises:
+            GitCommandError: When the hub cannot be reached.
+        """
+        listing = str(self._repo().git.ls_remote(url, f"refs/heads/{SYNC_BRANCH}"))
+        if not listing.strip():
+            return None
+        self._repo().git.fetch(url, f"+{SYNC_BRANCH}:{PREVIEW_REF}")
+        return self._repo().git.rev_parse(PREVIEW_REF)
+
+    def forget_preview(self) -> None:
+        """Drop the ref a preview fetched, along with its claim on the objects.
+
+        A hub the user decided not to join has no business keeping content in
+        this repository.
+        """
+        with suppress(GitCommandError):
+            self._repo().git.update_ref("-d", PREVIEW_REF)
 
     def push(self) -> None:
         """Send the sync branch to the hub, which accepts fast-forwards only."""
@@ -324,9 +396,24 @@ class LocalSyncRepository:
                 f"{self.path} belongs to the repository at "
                 f"{repository.working_tree_dir}."
             )
+        _apply_ssh_client(repository)
         return repository
 
 
 def _batched(paths: Sequence[str]) -> Iterator[Sequence[str]]:
     for start in range(0, len(paths), _PATH_BATCH):
         yield paths[start : start + _PATH_BATCH]
+
+
+def _apply_ssh_client(repository: Repo) -> None:
+    """Pin Git to the same OpenSSH client the hub commands use.
+
+    On Windows, Git ships an ``ssh.exe`` of its own with its own
+    ``known_hosts``, so a hub the user confirmed once would be an unknown host
+    to ``git fetch``. A machine with no client at all is left alone: a hub
+    reached through a filesystem path needs none.
+    """
+    with suppress(OpenSshNotFoundError):
+        repository.git.update_environment(
+            GIT_SSH_COMMAND=git_ssh_command(), GIT_TERMINAL_PROMPT="0"
+        )
