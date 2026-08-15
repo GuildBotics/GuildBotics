@@ -23,7 +23,72 @@ from guildbotics.integrations.chat_workflow_status import (
 )
 from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
+from guildbotics.utils.shared_file_validators import (
+    SharedFileInvalidError,
+    register_shared_validator,
+)
 from guildbotics.utils.workspace_sync_port import delete_shared_path, write_shared_json
+
+#: Everything a persisted pending event is allowed to carry. Handing work to
+#: another device needs the normalized message and GuildBotics' own decisions,
+#: never the provider payload it came from, so the shared file is defined by
+#: what may appear in it rather than by what must be stripped out.
+PENDING_EVENT_FIELDS = frozenset(
+    {
+        "event_id",
+        "channel_id",
+        "message_ts",
+        "thread_ts",
+        "author_id",
+        "text",
+        "mentions",
+        "is_edit_or_delete",
+        "is_bot_message",
+        "is_thread_reply",
+        "metadata",
+        "chat_participation",
+        "attempt_count",
+        "max_attempts",
+        "next_attempt_at",
+        "run_id",
+        "last_error_category",
+        "wake_cursor",
+    }
+)
+
+_PENDING_EVENTS_DIR = "/pending_events/"
+
+
+def validate_shared_conversation_state(relative_path: str, data: bytes) -> None:
+    """Validate one ``state/chat_state/`` file for the shared-state boundary.
+
+    Conversation control state is what stops a device that takes over a service
+    from reprocessing or dropping work, so an arriving file that is not an
+    object of this shape is damage rather than a concurrent edit.
+
+    Raises:
+        SharedFileInvalidError: When the file is not a conversation state
+            object, or a pending event carries a field with no slot in it.
+    """
+    payload = json.loads(data.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise SharedFileInvalidError(relative_path, "is not a JSON object")
+    if _PENDING_EVENTS_DIR not in f"/{relative_path}":
+        return
+    events = payload.get("events")
+    if not isinstance(events, list):
+        raise SharedFileInvalidError(relative_path, "has no list of pending events")
+    for event in events:
+        if not isinstance(event, dict):
+            raise SharedFileInvalidError(relative_path, "has a non-object event")
+        unknown = sorted(set(map(str, event)) - PENDING_EVENT_FIELDS)
+        if unknown:
+            raise SharedFileInvalidError(
+                relative_path, f"has an event carrying {', '.join(unknown)}"
+            )
+
+
+register_shared_validator("state/chat_state", validate_shared_conversation_state)
 
 
 class FileConversationStateStore(ConversationStateStore):

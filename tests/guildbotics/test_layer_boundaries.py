@@ -12,6 +12,11 @@ converting it into API response models.
 ``guildbotics.workspace`` owns workspace storage -- identity, shared-record
 schemas, and config revisions -- and sits below the capability, driver, and API
 layers, so it may depend only on ``guildbotics.utils`` and ``guildbotics.entities``.
+
+``guildbotics.sync`` turns announced shared writes into Git work. It sits above
+workspace storage and observability and below everything else: capabilities,
+drivers, integrations, and the API layer must reach it only through the
+Workspace Sync Port, never by importing it.
 """
 
 from __future__ import annotations
@@ -85,6 +90,36 @@ def test_workspace_storage_depends_only_on_utils_and_entities() -> None:
         for relative, modules in _imports_by_module("workspace", inside=True).items()
         for module in sorted(modules)
         if not _matches(module, allowed)
+    ]
+    assert offenders == []
+
+
+def test_sync_depends_only_on_storage_and_recording() -> None:
+    allowed = (
+        "guildbotics.sync",
+        "guildbotics.workspace",
+        "guildbotics.observability",
+        "guildbotics.utils",
+        "guildbotics.entities",
+    )
+    offenders = [
+        f"{relative}: {module}"
+        for relative, modules in _imports_by_module("sync", inside=True).items()
+        for module in sorted(modules)
+        if not _matches(module, allowed)
+    ]
+    assert offenders == []
+
+
+def test_nothing_reaches_around_the_workspace_sync_port() -> None:
+    """Capabilities, drivers, integrations, and the API layer announce writes
+    through the port; importing the sync package would reintroduce the direct
+    dependency on Git the port exists to remove."""
+    offenders = [
+        f"{relative}: {module}"
+        for relative, modules in _imports_by_module("sync", inside=False).items()
+        for module in sorted(modules)
+        if _matches(module, ("guildbotics.sync",))
     ]
     assert offenders == []
 

@@ -22,6 +22,11 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
     save_yaml_file,
 )
+from guildbotics.utils.shared_file_validators import (
+    SharedFileInvalidError,
+    register_shared_validator,
+)
+from guildbotics.utils.timestamps import parse_iso_datetime
 from guildbotics.utils.workspace_sync_port import (
     notify_shared_state_changed,
     write_shared_text,
@@ -45,6 +50,51 @@ POLICY_BASELINE_BODY = """- Keep only reusable lessons: pitfalls, solution steps
 - Add synonyms and English/Japanese variants to keywords so recall can find the note.
 - Do not write secrets, tokens, or personal data in memory."""
 LOGGER = logging.getLogger(__name__)
+
+#: Metadata fields every memory document must carry. Recall, the digest, and
+#: the audit trail are all driven from them, so a device receiving a document
+#: without them would show a broken memory rather than an out-of-date one.
+_REQUIRED_META_FIELDS = ("title", "summary", "created_at", "updated_at", "kind")
+_META_LIST_FIELDS = ("keywords", "source")
+#: What a memory document may be. ``policy`` documents carry standing rules and
+#: are the reason the kind is validated rather than merely stored.
+MEMORY_KINDS = ("note", "policy")
+
+
+def validate_shared_memory_document(relative_path: str, data: bytes) -> None:
+    """Validate one ``state/documents/`` file for the shared-state boundary.
+
+    Only the metadata has a shape to check. Bodies and assets are the user's
+    own prose and files, already held to the boundary's size and encoding
+    bounds, and the audit journal is checked line by line as a journal.
+
+    Raises:
+        SharedFileInvalidError: When metadata is missing a field recall needs,
+            or holds one of the wrong type.
+    """
+    if not relative_path.endswith(f"/{META_FILE}"):
+        return
+    meta = yaml.safe_load(data.decode("utf-8"))
+    if not isinstance(meta, dict):
+        raise SharedFileInvalidError(relative_path, "is not a metadata mapping")
+    for field in _REQUIRED_META_FIELDS:
+        if not str(meta.get(field) or "").strip():
+            raise SharedFileInvalidError(relative_path, f"has no {field}")
+    for field in ("created_at", "updated_at"):
+        if parse_iso_datetime(str(meta[field])) is None:
+            raise SharedFileInvalidError(
+                relative_path, f"has an unparsable {field} {meta[field]!r}"
+            )
+    if str(meta["kind"]) not in MEMORY_KINDS:
+        raise SharedFileInvalidError(
+            relative_path, f"has an unknown kind {meta['kind']!r}"
+        )
+    for field in _META_LIST_FIELDS:
+        if not isinstance(meta.get(field, []), list):
+            raise SharedFileInvalidError(relative_path, f"has a non-list {field}")
+
+
+register_shared_validator("state/documents", validate_shared_memory_document)
 
 
 class MemberMemoryError(RuntimeError):
@@ -696,7 +746,7 @@ def _validate_doc_id(doc_id: str) -> str:
 
 def _normalize_kind(kind: str) -> str:
     clean = kind.strip() or "note"
-    if clean not in {"note", "policy"}:
+    if clean not in MEMORY_KINDS:
         raise MemberMemoryError("Memory kind must be note or policy.")
     return clean
 

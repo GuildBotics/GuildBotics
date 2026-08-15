@@ -7,13 +7,19 @@ concurrent update. Because only validated content is ever shared, a receiving
 failure means a defect or a damaged repository, not a user mistake.
 
 The synchronization machinery itself holds no knowledge of file contents. It
-calls :func:`validate_shared_file`, which dispatches to the implementation that
-owns each kind of file: a validator the owning module registered in
-``guildbotics.utils.shared_file_validators``, otherwise the entity models for
-config, the record models for workspace and device identity, and a kind check
-for member avatars. Files with no owner yet are held to their syntax, so an
-unregistered kind cannot be silently exempted from the size bound or from
-being well-formed.
+calls :func:`validate_shared_file`, which applies two layers. The boundary
+itself enforces what holds for every shared file regardless of kind: it is
+inside the shared roots, within its size bound, decodable, and syntactically
+well-formed. On top of that, the implementation that owns the file kind adds
+meaning -- a validator the owning module registered in
+``guildbotics.utils.shared_file_validators``, the entity models for config, the
+record models for workspace and device identity, or a kind check for member
+avatars.
+
+Keeping the two layers separate is deliberate. An owner never has to restate
+the size bound or the encoding check to add a semantic rule, and a kind with no
+owner yet is still held to the boundary, so nothing is silently exempted by
+having been forgotten.
 """
 
 from __future__ import annotations
@@ -72,22 +78,23 @@ def validate_shared_file(relative_path: str, data: bytes) -> None:
         return
 
     if path.suffix == ".jsonl":
+        # Append journals trade a larger bound for their own trimming.
         _require_size(relative_path, data, MAX_SHARED_JOURNAL_BYTES)
         _require_json_lines(relative_path, _require_utf8(relative_path, data))
-        return
+    else:
+        _require_size(relative_path, data, MAX_SHARED_FILE_BYTES)
+        text = _require_utf8(relative_path, data)
+        model = _record_model(path)
+        if model is not None:
+            _require_model(relative_path, model, text)
+        elif path.suffix in {".yml", ".yaml"}:
+            _require_yaml(relative_path, text)
+        elif path.suffix == ".json":
+            _require_json(relative_path, text)
 
-    _require_size(relative_path, data, MAX_SHARED_FILE_BYTES)
-    text = _require_utf8(relative_path, data)
     registered = find_shared_validator(relative_path)
-    model = _record_model(path)
     if registered is not None:
         registered(relative_path, data)
-    elif model is not None:
-        _require_model(relative_path, model, text)
-    elif path.suffix in {".yml", ".yaml"}:
-        _require_yaml(relative_path, text)
-    elif path.suffix == ".json":
-        _require_json(relative_path, text)
 
 
 _MEMBERS_DIR = ("config", "team", "members")

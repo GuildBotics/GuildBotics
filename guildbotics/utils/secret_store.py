@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml  # type: ignore
 from dotenv import dotenv_values
 
 from guildbotics.utils.fileio import (
@@ -34,6 +35,11 @@ from guildbotics.utils.keychain import (
     SecretStoreError,
     system_keychain,
 )
+from guildbotics.utils.shared_file_validators import (
+    SharedFileInvalidError,
+    register_shared_validator,
+)
+from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 SECRETS_INDEX_FILENAME = "secrets.yml"
 LOCAL_SECRETS_FILENAME = "secrets.json"
@@ -50,6 +56,48 @@ ENVIRONMENT_EXCLUDED_SECRET_SUFFIXES = ("_GITHUB_PRIVATE_KEY",)
 def is_environment_secret(key: str) -> bool:
     """True when the secret may be published to ``os.environ``."""
     return not key.endswith(ENVIRONMENT_EXCLUDED_SECRET_SUFFIXES)
+
+
+#: Everything the shared index may say about a key. A value has no slot here,
+#: which is what keeps secrets out of the synchronized history structurally
+#: rather than by inspecting content for things that look like secrets.
+SECRET_INDEX_ENTRY_FIELDS = frozenset({"generation", "updated_at"})
+
+
+def validate_shared_secrets_index(relative_path: str, data: bytes) -> None:
+    """Validate ``config/secrets.yml`` for the shared-state boundary.
+
+    Raises:
+        SharedFileInvalidError: When the file is not a key index of key names
+            and generations, which would mean a secret value reached a file
+            that every device receives.
+    """
+    payload = yaml.safe_load(data.decode("utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise SharedFileInvalidError(relative_path, "is not a secret key index")
+    unknown = sorted(set(map(str, payload)) - {"store_id", "keys"})
+    if unknown:
+        raise SharedFileInvalidError(relative_path, f"carries {', '.join(unknown)}")
+    keys = payload.get("keys") or {}
+    if not isinstance(keys, dict):
+        raise SharedFileInvalidError(relative_path, "has a non-mapping key index")
+    for key, entry in keys.items():
+        if not isinstance(entry, dict):
+            raise SharedFileInvalidError(relative_path, f"stores a value for {key}")
+        extra = sorted(set(map(str, entry)) - SECRET_INDEX_ENTRY_FIELDS)
+        if extra:
+            raise SharedFileInvalidError(
+                relative_path, f"records {', '.join(extra)} for {key}"
+            )
+        if not isinstance(entry.get("generation"), int):
+            raise SharedFileInvalidError(
+                relative_path, f"has a non-numeric generation for {key}"
+            )
+
+
+register_shared_validator(
+    f"config/{SECRETS_INDEX_FILENAME}", validate_shared_secrets_index
+)
 
 
 def utc_now_iso() -> str:
@@ -307,6 +355,7 @@ class KeyringSecretStore(SecretStore):
         }
         self.location.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(self.location, payload)
+        notify_shared_state_changed("update", [self.location])
 
     def _read_local(self) -> dict[str, Any]:
         if not self._local_index.exists():

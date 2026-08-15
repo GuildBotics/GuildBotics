@@ -9,10 +9,46 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.shared_file_validators import (
+    SharedFileInvalidError,
+    register_shared_validator,
+)
+from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
+#: What a run journal line may be. Everything else -- provider payloads, output
+#: bodies, anything a future caller invents -- has no slot in shared state.
+RUN_RECORD_KINDS = ("evidence", "complete")
+
+
+def validate_shared_task_run(relative_path: str, data: bytes) -> None:
+    """Validate one ``state/task-runs/`` journal for the shared-state boundary.
+
+    A run journal is what stops the same work from being done twice after a
+    service moves to another machine, so a device that receives one it cannot
+    read must stop rather than start the work again.
+
+    Raises:
+        SharedFileInvalidError: When a line is not a run record of a known kind.
+    """
+    for number, line in enumerate(data.decode("utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if not isinstance(record, dict):
+            raise SharedFileInvalidError(
+                relative_path, f"has no object on line {number}"
+            )
+        if record.get("kind") not in RUN_RECORD_KINDS:
+            raise SharedFileInvalidError(
+                relative_path,
+                f"has an unknown record kind {record.get('kind')!r} on line {number}",
+            )
+
+
+register_shared_validator("state/task-runs", validate_shared_task_run)
 
 
 @dataclass(frozen=True)
@@ -94,10 +130,14 @@ class RunStore:
     def append(self, run_id: str, record: dict[str, Any]) -> None:
         path = self._path(run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "recorded_at": datetime.now(UTC).isoformat(),
-            **record,
-        }
+        # Run journals are shared state, so one uniform pass masks secret
+        # values and bounds every string, whatever shape the record has.
+        payload = redact_for_sharing(
+            {
+                "recorded_at": datetime.now(UTC).isoformat(),
+                **record,
+            }
+        )
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
         notify_shared_state_changed("update", [path])
@@ -109,11 +149,7 @@ class RunStore:
             return
         self.append(
             run_id,
-            {
-                "kind": "evidence",
-                "evidence_type": evidence_type,
-                "payload": _without_secrets(payload),
-            },
+            {"kind": "evidence", "evidence_type": evidence_type, "payload": payload},
         )
 
     def complete(
@@ -337,19 +373,6 @@ def _evidence_types(records: list[dict[str, Any]]) -> list[str]:
         if record.get("kind") == "evidence" and record.get("evidence_type")
     }
     return sorted(evidence)
-
-
-def _without_secrets(payload: dict[str, Any]) -> dict[str, Any]:
-    redacted: dict[str, Any] = {}
-    for key, value in payload.items():
-        upper = key.upper()
-        if any(
-            part in upper for part in ("TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY")
-        ):
-            redacted[key] = "***"
-        else:
-            redacted[key] = value
-    return redacted
 
 
 def _has_code_publish(records: list[dict[str, Any]]) -> bool:
