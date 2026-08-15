@@ -24,7 +24,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from guildbotics.app_api.command_input_files import CommandInputFileStore
@@ -160,6 +160,10 @@ class ConfigWriteResponse(BaseModel):
     project: ProjectSetupResult | None = None
     member: PersonSetupResult | None = None
     intelligence: dict[str, Any] | None = None
+    # Where the files this write touched now stand. The screen that saved is
+    # still open and will very likely save again, so handing it the new
+    # revisions is what keeps its next save from colliding with this one.
+    revisions: dict[str, str] = Field(default_factory=dict)
 
 
 class AvatarMutationResponse(BaseModel):
@@ -874,6 +878,9 @@ def create_app(
         _: None = Depends(require_token),
     ) -> IntelligenceConfigResponse:
         config_dir = _resolve_existing_config_dir(app_runtime)
+        revisions = config_repository(config_dir).tree_revisions(
+            intelligence_config_dir(person_id)
+        )
         try:
             response = IntelligenceConfigService().read_config(
                 config_dir=config_dir,
@@ -881,13 +888,7 @@ def create_app(
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return response.model_copy(
-            update={
-                "revisions": config_repository(config_dir).tree_revisions(
-                    intelligence_config_dir(person_id)
-                )
-            }
-        )
+        return response.model_copy(update={"revisions": revisions})
 
     @app.put(
         "/config/intelligences",
@@ -937,6 +938,10 @@ def create_app(
                 context={"project": str(status.project_file)},
                 status_code=400,
             )
+        # Revisions first: pairing content read earlier with a revision read
+        # later would describe a state that never existed, and a save composed
+        # against it would slip past the very check it feeds.
+        revisions = config_repository(config_dir).revisions(PROJECT_CONFIG_PATHS)
         try:
             snapshot: ProjectConfigSnapshot = (
                 SimpleProjectSetupService().read_project_config(
@@ -946,12 +951,7 @@ def create_app(
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
         return ProjectConfigResponse.model_validate(
-            snapshot.model_dump()
-            | {
-                "revisions": config_repository(config_dir).revisions(
-                    PROJECT_CONFIG_PATHS
-                )
-            }
+            snapshot.model_dump() | {"revisions": revisions}
         )
 
     @app.post(
@@ -1003,7 +1003,12 @@ def create_app(
                 )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ConfigWriteResponse(project=result)
+        return ConfigWriteResponse(
+            project=result,
+            revisions=config_repository(request.config_dir).revisions(
+                PROJECT_CONFIG_PATHS
+            ),
+        )
 
     @app.put(
         "/config/project/default-person",
@@ -1063,6 +1068,9 @@ def create_app(
                 context={"project": str(status.project_file)},
                 status_code=400,
             )
+        revisions = config_repository(config_dir).revisions(
+            person_config_paths(person_id)
+        )
         try:
             snapshot: PersonConfigSnapshot = (
                 SimplePersonSetupService().read_person_config(
@@ -1072,13 +1080,7 @@ def create_app(
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return snapshot.model_copy(
-            update={
-                "revisions": config_repository(config_dir).revisions(
-                    person_config_paths(person_id)
-                )
-            }
-        )
+        return snapshot.model_copy(update={"revisions": revisions})
 
     @app.put(
         "/config/members/{person_id}",
@@ -1107,7 +1109,14 @@ def create_app(
                 )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ConfigWriteResponse(member=result)
+        # The member may have been renamed, so the paths that matter now are
+        # the new ones, not the ones the request was composed against.
+        return ConfigWriteResponse(
+            member=result,
+            revisions=config_repository(config_dir).revisions(
+                person_config_paths(request.person_id)
+            ),
+        )
 
     @app.delete(
         "/config/members/{person_id}",

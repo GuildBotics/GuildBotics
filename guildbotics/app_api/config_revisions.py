@@ -26,6 +26,7 @@ from guildbotics.workspace.config_repository import (
     ConfigRepository,
     StaleConfigWriteError,
 )
+from guildbotics.workspace.validation import SharedFileInvalidError
 
 #: Reported to the frontend when a save was composed against older content.
 CONFIG_CHANGED = "config_changed"
@@ -66,6 +67,10 @@ def guarded_config_write(
     try:
         with repository.guard(expected):
             yield
+    except SharedFileInvalidError as exc:
+        # The caller named something that is not a config file at all, so this
+        # is a malformed request rather than a race with another machine.
+        raise AppApiError("config_revision_invalid", str(exc), status_code=400) from exc
     except StaleConfigWriteError as exc:
         raise AppApiError(
             CONFIG_CHANGED,

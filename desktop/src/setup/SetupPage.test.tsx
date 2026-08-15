@@ -987,6 +987,38 @@ describe("SetupPage", () => {
     });
   });
 
+  it("saves twice in a row without colliding with its own first save", async () => {
+    // The second save must not carry the revision the first one replaced: that
+    // would report a conflict with another machine where there is none, and
+    // throw the second edit away.
+    const user = userEvent.setup();
+    // Stand in for the file the save actually changes, so a later read of it
+    // reports what the save left rather than what it replaced.
+    vi.mocked(updateProjectConfig).mockImplementation(async () => {
+      vi.mocked(getProjectConfig).mockResolvedValue(
+        projectConfig({ revisions: { "team/project.yml": "after-first-save" } }),
+      );
+      return configWriteResponse({ "team/project.yml": "after-first-save" });
+    });
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await user.type(description, "First");
+    await saveSection(user);
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
+
+    await user.clear(description);
+    await user.type(description, "Second");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateProjectConfig).mock.calls[1][0]).toMatchObject({
+      expected_revisions: { "team/project.yml": "after-first-save" },
+    });
+  });
+
   it("reloads instead of resending when the save is refused as stale", async () => {
     // What synchronization makes ordinary: another machine's edit arrived while
     // this screen was open. Re-sending the form is exactly the overwrite the
@@ -1133,8 +1165,9 @@ function memberConfig() {
   };
 }
 
-function configWriteResponse() {
+function configWriteResponse(revisions: Record<string, string> = {}) {
   return {
+    revisions,
     project: null,
     member: null,
     intelligence: null,
@@ -3579,6 +3612,33 @@ describe("IntelligenceEditor (team default)", () => {
     expect(body.cli_agent_mapping).not.toHaveProperty("custom_cli");
   });
 
+  it("composes the advanced save against what the basic save just wrote", async () => {
+    // One button saves both halves, and the basic half rewrites two of the
+    // files the advanced half guards. Sending the revisions read before that
+    // write would make the screen collide with itself on every provider
+    // change, and report it as a conflict with another machine.
+    const user = userEvent.setup();
+    vi.mocked(updateProjectConfig).mockResolvedValue(
+      configWriteResponse({
+        "team/project.yml": "p2",
+        "intelligences/model_mapping.yml": "m2",
+        "intelligences/cli_agent_mapping.yml": "c2",
+      }),
+    );
+    await openTeamIntelligenceAdvanced(user);
+
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-6");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].expected_revisions).toMatchObject({
+      "intelligences/model_mapping.yml": "m2",
+      "intelligences/cli_agent_mapping.yml": "c2",
+    });
+  });
+
   it("sends a model definition edit through updateIntelligenceConfig on save", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
@@ -3845,6 +3905,33 @@ describe("IntelligenceEditor (member override)", () => {
     });
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
     vi.mocked(getIntelligenceConfig).mockResolvedValue(memberIntelligenceConfig());
+  });
+
+  it("carries the revisions its own save reported into the next one", async () => {
+    // The editor stays open on the member it just saved. Sending the revision
+    // that save replaced would report a conflict with another machine where
+    // there is none, and discard the second round of edits.
+    const user = userEvent.setup();
+    vi.mocked(updateMemberConfig).mockResolvedValue(
+      configWriteResponse({ "team/members/alice/person.yml": "after-first-save" }),
+    );
+    renderSetupPage("/setup?section=members");
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+
+    const name = await screen.findByLabelText(t("setup.members.personName"));
+    await user.clear(name);
+    await user.type(name, "First");
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+
+    await user.clear(name);
+    await user.type(name, "Second");
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateMemberConfig).mock.calls[1][1]).toMatchObject({
+      expected_revisions: { "team/members/alice/person.yml": "after-first-save" },
+    });
   });
 
   it("registers an external save callback and persists a member override on save", async () => {

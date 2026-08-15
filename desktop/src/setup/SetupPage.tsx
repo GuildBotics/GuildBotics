@@ -351,7 +351,15 @@ export function SetupPage() {
       }
       return initConfig(toInitialProjectSetupRequest(values));
     },
-    onSuccess: () => {
+    onSuccess: (written) => {
+      // Take the revisions from the reply rather than waiting for the refetch
+      // below: the screen stays open and can be saved again immediately, and a
+      // save that overtakes the refetch would carry the revision it replaced.
+      if ("revisions" in written) {
+        queryClient.setQueryData<ProjectConfig>(["project-config"], (current) =>
+          current ? { ...current, revisions: written.revisions } : current,
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ["config"] });
       queryClient.invalidateQueries({ queryKey: ["team"] });
       queryClient.invalidateQueries({ queryKey: ["project-config"] });
@@ -483,18 +491,26 @@ export function SetupPage() {
   const currentSectionReady = currentCoreSection
     ? isCoreSectionReady(currentCoreSection, visibleStatus)
     : true;
-  const saveNow = async () => {
+  /**
+   * Save the basic settings.
+   *
+   * Returns where the files it wrote now stand, so a save that continues into
+   * the advanced editor is composed against this result rather than against
+   * what was on screen before it ran.
+   */
+  const saveNow = async (): Promise<ConfigRevisions> => {
     if (form.validate().hasErrors) {
       setSaveState("error");
-      return;
+      return {};
     }
     const creatingInitialSetup = !hasExistingProject;
     const initialSetupRequest = creatingInitialSetup
       ? toInitialProjectSetupRequest(form.values)
       : null;
+    let revisionsWritten: ConfigRevisions = {};
     setSaveState("saving");
     try {
-      await saveMutation.mutateAsync(form.values);
+      const written = await saveMutation.mutateAsync(form.values);
       if (creatingInitialSetup) {
         await restartBackend(form.values.workspaceDir);
         await Promise.all([
@@ -504,6 +520,7 @@ export function SetupPage() {
       }
       form.resetDirty(form.values);
       setSaveState("saved");
+      revisionsWritten = "revisions" in written ? written.revisions : {};
       if (initialSetupRequest) {
         notifications.show({
           autoClose: false,
@@ -532,6 +549,7 @@ export function SetupPage() {
         });
       }
     }
+    return revisionsWritten;
   };
   const applyWorkspaceSwitch = async (workspace: string, switchId: number) => {
     await restartBackend(workspace);
@@ -641,7 +659,9 @@ export function SetupPage() {
         status={visibleStatus}
         hasExistingProject={hasExistingProject}
         initialProgress={initialProgress}
-        onCreateInitial={saveNow}
+        onCreateInitial={async () => {
+          await saveNow();
+        }}
         creating={saveMutation.isPending}
         canGoBack={canGoBack}
         canGoNext={canGoNext}
@@ -897,7 +917,7 @@ function ProjectSection({
   saveState: "idle" | "saving" | "saved" | "error";
   persisted: boolean;
   saving: boolean;
-  onSave: () => Promise<void>;
+  onSave: () => Promise<ConfigRevisions>;
   onWorkspaceChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
@@ -989,7 +1009,7 @@ function IntelligenceSection({
   saveState: "idle" | "saving" | "saved" | "error";
   persisted: boolean;
   saving: boolean;
-  onSave: () => Promise<void>;
+  onSave: () => Promise<ConfigRevisions>;
   detections: CliAgentDetection[];
   detectionLoading: boolean;
   storedProviderKeys: Record<string, boolean> | undefined;
@@ -999,13 +1019,16 @@ function IntelligenceSection({
   const queryClient = useQueryClient();
   // The advanced editor writes different files from the basic settings above
   // it, but they are one screen to the user, so one button saves both.
-  const saveAdvanced = useRef<(() => Promise<void>) | null>(null);
+  const saveAdvanced = useRef<((written: ConfigRevisions) => Promise<void>) | null>(null);
   const [savingSection, setSavingSection] = useState(false);
   const saveSection = async () => {
     setSavingSection(true);
     try {
-      await onSave();
-      await saveAdvanced.current?.();
+      // The basic settings write two of the files the advanced editor guards,
+      // so the advanced save is composed against what this one just left --
+      // otherwise one button would reliably collide with itself.
+      const written = await onSave();
+      await saveAdvanced.current?.(written);
     } catch {
       // Both halves report their own failure: the basic settings through the
       // section's save state, the advanced editor through its own alert.
@@ -1641,7 +1664,7 @@ function IntelligenceEditor({
   llmProviderAvailability?: LlmProviderAvailability;
   providers: LlmProviderInfo[];
   /** The enclosing section's save button drives this editor too. */
-  onRegisterSave?: (save: (() => Promise<void>) | null) => void;
+  onRegisterSave?: (save: ((written?: ConfigRevisions) => Promise<void>) | null) => void;
   teamLlmApiType?: string;
   teamCliAgent?: string;
   onTeamLlmApiTypeChange?: (val: string) => void;
@@ -1691,18 +1714,23 @@ function IntelligenceEditor({
   const dirty = Boolean(serializedPayload && savedSerialized !== serializedPayload);
   const canSave = Boolean(payload && dirty && !hasJsonError);
 
-  const saveDraft = useCallback(async () => {
-    if (!payload || !serializedPayload || hasJsonError) {
-      return;
-    }
-    await mutation.mutateAsync({
-      ...payload,
-      expected_revisions: query.data?.revisions ?? {},
-    });
-    setDraftState((current) =>
-      current?.key === draftKey ? { ...current, savedSerialized: serializedPayload } : current,
-    );
-  }, [draftKey, hasJsonError, mutation, payload, query.data, serializedPayload]);
+  const saveDraft = useCallback(
+    async (written?: ConfigRevisions) => {
+      if (!payload || !serializedPayload || hasJsonError) {
+        return;
+      }
+      await mutation.mutateAsync({
+        ...payload,
+        // `written` describes files a save that just ran left behind, and takes
+        // precedence over what this editor read before that save.
+        expected_revisions: { ...(query.data?.revisions ?? {}), ...(written ?? {}) },
+      });
+      setDraftState((current) =>
+        current?.key === draftKey ? { ...current, savedSerialized: serializedPayload } : current,
+      );
+    },
+    [draftKey, hasJsonError, mutation, payload, query.data, serializedPayload],
+  );
 
   const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
     setDraftState((current) => {
@@ -3064,7 +3092,10 @@ function MembersSection({
       originalPersonId: string;
       body: MemberConfigUpdateRequest;
     }) => updateMemberConfig(originalPersonId, body),
-    onSuccess: (_, variables) => {
+    onSuccess: (written, variables) => {
+      // The screen stays open on the member that was just saved, so without
+      // this its next save would be composed against the revision it replaced.
+      setMemberRevisions(written.revisions);
       const previous =
         members.find((member) => member.person_id === variables.originalPersonId) ??
         draftMembers.find((member) => member.person_id === variables.originalPersonId);

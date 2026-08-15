@@ -291,3 +291,129 @@ def test_an_intelligence_save_is_refused_when_the_directory_moved(
     assert (config_dir / "intelligences/model_mapping.yml").read_text(
         encoding="utf-8"
     ) == "default: gpt-4o\n"
+
+
+def test_a_save_reports_where_the_files_it_wrote_now_stand(
+    client: TestClient, config_dir: Path
+) -> None:
+    """The screen stays open, so its next save needs this rather than the
+    revisions it was loaded with."""
+    revisions = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+
+    written = client.put(
+        "/config/project",
+        headers=AUTH_HEADERS,
+        json=_project_payload(config_dir, revisions, description="Renamed"),
+    ).json()
+
+    assert (
+        written["revisions"]
+        == (client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"])
+    )
+    assert written["revisions"][PROJECT] != revisions[PROJECT]
+
+
+def test_saving_twice_from_the_same_screen_is_not_a_conflict(
+    client: TestClient, config_dir: Path
+) -> None:
+    """A screen colliding with its own previous save would report a conflict
+    with another machine where there is none, and discard the second edit."""
+    revisions = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+
+    first = client.put(
+        "/config/project",
+        headers=AUTH_HEADERS,
+        json=_project_payload(config_dir, revisions, description="First"),
+    )
+    second = client.put(
+        "/config/project",
+        headers=AUTH_HEADERS,
+        json=_project_payload(
+            config_dir, first.json()["revisions"], description="Second"
+        ),
+    )
+
+    assert second.status_code == HTTP_OK
+    stored = safe_load((config_dir / PROJECT).read_text(encoding="utf-8"))
+    assert stored["description"] == "Second"
+
+
+def test_a_member_save_reports_the_paths_it_ended_up_writing(
+    client: TestClient, config_dir: Path
+) -> None:
+    """A rename moves the file, so the revisions that matter afterwards are the
+    new path's, not the ones the request was composed against."""
+    client.post(
+        "/config/members",
+        headers=AUTH_HEADERS,
+        json={
+            "config_dir": str(config_dir),
+            "person_type": "",
+            "person_id": "alice",
+            "person_name": "Alice",
+            "is_active": True,
+            "github_username": "",
+            "git_email": "",
+            "roles": ["architect"],
+            "speaking_style": "concise",
+        },
+    )
+    revisions = client.get("/config/members/alice", headers=AUTH_HEADERS).json()[
+        "revisions"
+    ]
+
+    written = client.put(
+        "/config/members/alice",
+        headers=AUTH_HEADERS,
+        json=_member_payload(config_dir, revisions, person_id="alice2"),
+    ).json()
+
+    assert set(written["revisions"]) == {"team/members/alice2/person.yml"}
+    # And that revision is the one a following save must use.
+    again = client.put(
+        "/config/members/alice2",
+        headers=AUTH_HEADERS,
+        json=_member_payload(
+            config_dir,
+            written["revisions"],
+            person_id="alice2",
+            original_person_id="alice2",
+            person_name="Renamed twice",
+        ),
+    )
+    assert again.status_code == HTTP_OK
+
+
+def test_a_file_created_after_the_read_is_not_overwritten_unseen(
+    client: TestClient, config_dir: Path
+) -> None:
+    """An absent file is a revision of its own: something that appears between
+    the read and the save is a change like any other."""
+    (config_dir / CLI_MAPPING).unlink()
+    revisions = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    assert revisions[CLI_MAPPING] == ""
+    (config_dir / CLI_MAPPING).write_text("default: claude\n", encoding="utf-8")
+
+    response = client.put(
+        "/config/project",
+        headers=AUTH_HEADERS,
+        json=_project_payload(
+            config_dir, revisions, description="From the stale screen"
+        ),
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert (config_dir / CLI_MAPPING).read_text(encoding="utf-8") == "default: claude\n"
+
+
+def test_a_revision_naming_something_outside_config_is_a_bad_request(
+    client: TestClient, config_dir: Path
+) -> None:
+    response = client.put(
+        "/config/project",
+        headers=AUTH_HEADERS,
+        json=_project_payload(config_dir, {"../state/workspace.json": "abc"}),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "config_revision_invalid"

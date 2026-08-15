@@ -75,15 +75,32 @@ def test_a_read_returns_the_content_and_its_revision(
     assert snapshot.path.read_text(encoding="utf-8") == content
 
 
-def test_revisions_omit_files_that_do_not_exist(
+def test_a_file_that_does_not_exist_has_an_empty_revision(
     repository: ConfigRepository, config_dir: Path
 ) -> None:
+    """Absence is a revision of its own, so a file that appears afterwards is a
+    change the guard can still see."""
     write(config_dir, PROJECT, project_yaml("GuildBotics"))
 
     revisions = repository.revisions([PROJECT, MODEL_MAPPING])
 
-    assert set(revisions) == {PROJECT}
     assert revisions[PROJECT] == blob_id(project_yaml("GuildBotics").encode())
+    assert revisions[MODEL_MAPPING] == ""
+
+
+def test_a_file_created_since_the_read_refuses_the_save(
+    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+) -> None:
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
+    expected = repository.revisions([PROJECT, MODEL_MAPPING])
+    write(config_dir, MODEL_MAPPING, project_yaml("gpt"))
+    port.changes.clear()
+
+    with pytest.raises(StaleConfigWriteError):
+        with repository.guard(expected):
+            pytest.fail("the body must not run against superseded content")
+
+    assert port.changes == []
 
 
 def test_a_guarded_write_at_the_current_revisions_applies(

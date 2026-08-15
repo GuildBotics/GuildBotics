@@ -110,26 +110,28 @@ class ConfigRepository:
     def revisions(self, relative_paths: Iterable[str]) -> dict[str, str]:
         """Return the current revision of each named config file.
 
-        Files that do not exist are omitted, so their absence is what a later
-        :meth:`guard` compares against.
+        A file that does not exist is reported as an empty revision rather than
+        left out, so its absence is itself what a later :meth:`guard` compares
+        against: a file created meanwhile is a change like any other, and
+        omitting it would let the save replace it unseen.
 
         Args:
             relative_paths (Iterable[str]): Paths relative to the config
                 directory, for example ``team/project.yml``.
         """
-        found = {path: self._snapshot(path) for path in relative_paths}
+        snapshots = {path: self._snapshot(path) for path in relative_paths}
         return {
-            path: snapshot.blob_id
-            for path, snapshot in found.items()
-            if snapshot is not None
+            path: snapshot.blob_id if snapshot is not None else ""
+            for path, snapshot in snapshots.items()
         }
 
     def tree_revisions(self, relative_dir: str) -> dict[str, str]:
         """Return revisions for every config file under ``relative_dir``.
 
         Screens that reconcile a whole directory -- writing some files, pruning
-        others -- are stale if anything under it moved, not only the files they
-        happen to write this time.
+        others -- are stale if any file they read has moved since. A file
+        created under the directory afterwards is not covered: there is no path
+        to name for something that did not exist to be read.
 
         Args:
             relative_dir (str): A directory relative to the config directory,
