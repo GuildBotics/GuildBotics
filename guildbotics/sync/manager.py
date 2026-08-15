@@ -22,6 +22,7 @@ of being overwritten.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -77,6 +78,8 @@ PUSH_BARRIER_SECONDS = 120.0
 MAX_TRACKED_CHANGES = 1000
 
 _WORKSPACE_IDENTITY_PATH = "state/workspace.json"
+
+LOGGER = logging.getLogger(__name__)
 
 
 class SharedDataAnomaly(RuntimeError):
@@ -271,7 +274,16 @@ class GitSyncManager:
             if notified and self._coalesce_delay > 0:
                 time.sleep(self._coalesce_delay)
                 self._wake.clear()
-            self.synchronize()
+            try:
+                self.synchronize()
+            except Exception:
+                # Every failure synchronization expects is already turned into
+                # a status by ``synchronize``. Anything left is a defect, and a
+                # worker that dies of one leaves a device that looks idle while
+                # it has stopped synchronizing -- so the queue keeps going and
+                # says why. Direct callers still see the exception.
+                LOGGER.exception("The synchronization queue hit an unexpected error.")
+                self._last_error_code = "unexpected_error"
 
     # -- Synchronization ----------------------------------------------------
 
@@ -508,13 +520,26 @@ class GitSyncManager:
                 "missing_workspace_identity",
                 f"{_WORKSPACE_IDENTITY_PATH} is gone from this workspace",
             )
-        identity = WorkspaceIdentity.model_validate_json(path.read_bytes())
+        identity = self._read_identity(_WORKSPACE_IDENTITY_PATH, path.read_bytes())
         if identity.workspace_id != self._workspace_id:
             raise SharedDataAnomaly(
                 "workspace_identity_mismatch",
                 f"this copy now holds workspace {identity.workspace_id}, "
                 f"not {self._workspace_id}",
             )
+
+    def _read_identity(self, path: str, data: bytes) -> WorkspaceIdentity:
+        """Parse a workspace identity, reporting damage as damage.
+
+        Both sides parse through here so an identity this build cannot read
+        stops the queue where it can be diagnosed. Letting the parse error
+        escape instead would end the background worker, leaving a device that
+        looks idle while it is no longer synchronizing at all.
+        """
+        try:
+            return WorkspaceIdentity.model_validate_json(data)
+        except ValueError as exc:
+            raise self._anomaly_for(path, data, str(exc)) from exc
 
     def _verify_workspace_identity(self, remote: str | None) -> None:
         """Refuse to synchronize with a hub holding a different workspace."""
@@ -526,10 +551,7 @@ class GitSyncManager:
                 "missing_workspace_identity",
                 f"the hub has commits but no {_WORKSPACE_IDENTITY_PATH}",
             )
-        try:
-            identity = WorkspaceIdentity.model_validate_json(data)
-        except ValueError as exc:
-            raise self._anomaly_for(_WORKSPACE_IDENTITY_PATH, data, str(exc)) from exc
+        identity = self._read_identity(_WORKSPACE_IDENTITY_PATH, data)
         if identity.workspace_id != self._workspace_id:
             raise SharedDataAnomaly(
                 "workspace_identity_mismatch",

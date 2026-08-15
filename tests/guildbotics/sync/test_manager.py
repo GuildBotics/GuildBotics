@@ -465,6 +465,60 @@ def test_deleting_the_workspace_identity_is_never_shared(
     assert _hub_file(hub, "state/workspace.json") is not None
 
 
+def test_an_unreadable_local_identity_stops_the_queue(first: Device) -> None:
+    """The parse must not escape: an exception leaving ``synchronize`` would end
+    the background worker, leaving a device that looks idle while it has
+    stopped synchronizing."""
+    (first.shared / "state" / "workspace.json").write_text("{ broken", encoding="utf-8")
+
+    status = first.manager.synchronize()
+
+    assert status.state == "invalid_shared_state"
+    assert status.last_error_code == "invalid_shared_file"
+
+
+def test_a_local_identity_from_a_newer_build_asks_for_an_update(
+    first: Device,
+) -> None:
+    first.write(
+        "state/workspace.json",
+        dump_shared_json(
+            {
+                "schema_version": 2,
+                "workspace_id": WORKSPACE_ID,
+                "created_at": "2026-08-01T00:00:00Z",
+            }
+        ),
+    )
+
+    status = first.manager.synchronize()
+
+    assert status.state == "update_required"
+    assert status.last_error_code == "schema_version_ahead"
+
+
+def test_the_queue_survives_an_unexpected_error(first: Device) -> None:
+    """A defect must not silently end the worker. The loop keeps running and
+    the status says something went wrong."""
+
+    def fail() -> None:
+        raise RuntimeError("a defect nobody predicted")
+
+    first.repository.verify_boundary = fail  # type: ignore[method-assign]
+    first.manager.start()
+    try:
+        deadline = time.monotonic() + 10
+        while (
+            time.monotonic() < deadline
+            and first.manager.status().last_error_code != "unexpected_error"
+        ):
+            time.sleep(0.05)
+    finally:
+        first.manager.stop(timeout=10)
+
+    assert first.manager.status().last_error_code == "unexpected_error"
+
+
 def test_a_copy_that_became_another_workspace_stops_the_queue(
     first: Device,
 ) -> None:
