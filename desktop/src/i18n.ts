@@ -47,6 +47,67 @@ const resources = {
           logPath: "Bootstrap log",
         },
       },
+      sync: {
+        indicator: {
+          aria: "Synchronization: {{state}}",
+        },
+        state: {
+          synced: {
+            label: "In sync",
+            detail: "This machine and the hub hold the same content.",
+          },
+          sending: {
+            label: "Waiting to send",
+            detail: "Changes made here have not reached the hub yet. They are sent automatically.",
+          },
+          receiving: {
+            label: "Receiving",
+            detail: "Content from the hub is being taken in.",
+          },
+          unreachable: {
+            label: "Hub unreachable",
+            detail:
+              "This workspace still works, and changes are kept until the hub can be reached again.",
+          },
+          unsendable: {
+            label: "Changes that cannot be sent",
+            detail: "Some files cannot be shared until they are repaired on this machine.",
+          },
+          invalid_shared_state: {
+            label: "Shared data problem",
+            detail:
+              "Synchronization stopped because the shared content could not be reconciled automatically.",
+          },
+          update_required: {
+            label: "Update required",
+            detail:
+              "Another machine is running a newer version of GuildBotics, and this one cannot read what it wrote.",
+          },
+          disabled: { label: "Not synchronized", detail: "" },
+        },
+        alerts: {
+          unreachable:
+            "The hub cannot be reached. Local work continues; sharing resumes automatically.",
+          unsendable_one: "One change cannot be sent until the file is repaired.",
+          unsendable_other: "{{count}} changes cannot be sent until the files are repaired.",
+          invalid_shared_state:
+            "Synchronization stopped because the shared content could not be reconciled.",
+          update_required: "Update GuildBotics on this machine to keep sharing this workspace.",
+        },
+        counts: {
+          ahead_one: "1 change waiting to be sent",
+          ahead_other: "{{count}} changes waiting to be sent",
+          behind_one: "1 change to take in",
+          behind_other: "{{count}} changes to take in",
+          unsendable_one: "1 change cannot be sent",
+          unsendable_other: "{{count}} changes cannot be sent",
+          lastSuccess: "Last synchronized: {{time}}",
+        },
+        actions: {
+          retry: "Try again",
+          settings: "Sync and devices",
+        },
+      },
       systemAlerts: {
         region: "System health alerts",
         severity: {
@@ -1569,6 +1630,66 @@ const resources = {
           failed: "GuildBotics を起動できませんでした",
           retry: "再試行",
           logPath: "ブートログ",
+        },
+      },
+      sync: {
+        indicator: {
+          aria: "同期: {{state}}",
+        },
+        state: {
+          synced: {
+            label: "同期済み",
+            detail: "このマシンと Hub の内容が一致しています。",
+          },
+          sending: {
+            label: "送信保留",
+            detail: "このマシンでの変更がまだ Hub に届いていません。自動で送信されます。",
+          },
+          receiving: {
+            label: "受信中",
+            detail: "Hub の更新を取り込んでいます。",
+          },
+          unreachable: {
+            label: "Hub 不達",
+            detail:
+              "このワークスペースはこのまま使えます。変更は Hub に接続できるまで保持されます。",
+          },
+          unsendable: {
+            label: "送信できない変更",
+            detail: "一部のファイルは、このマシンで直すまで共有できません。",
+          },
+          invalid_shared_state: {
+            label: "共有データ異常",
+            detail: "共有内容を自動で収束できなかったため、同期を停止しました。",
+          },
+          update_required: {
+            label: "更新が必要",
+            detail:
+              "別のマシンが新しいバージョンの GuildBotics を使っており、このマシンでは内容を読めません。",
+          },
+          disabled: { label: "同期していません", detail: "" },
+        },
+        alerts: {
+          unreachable:
+            "Hub に接続できません。このマシンでの作業は続けられ、共有は自動で再開します。",
+          unsendable_one: "1 件の変更は、ファイルを直すまで送信できません。",
+          unsendable_other: "{{count}} 件の変更は、ファイルを直すまで送信できません。",
+          invalid_shared_state: "共有内容を収束できなかったため、同期を停止しました。",
+          update_required:
+            "このワークスペースの共有を続けるには、このマシンの GuildBotics を更新してください。",
+        },
+        counts: {
+          ahead_one: "送信待ちの変更 1 件",
+          ahead_other: "送信待ちの変更 {{count}} 件",
+          behind_one: "取り込む変更 1 件",
+          behind_other: "取り込む変更 {{count}} 件",
+          unsendable_one: "送信できない変更 1 件",
+          unsendable_other: "送信できない変更 {{count}} 件",
+          lastSuccess: "最終同期: {{time}}",
+        },
+        actions: {
+          retry: "再試行",
+          settings: "同期・device 設定",
         },
       },
       systemAlerts: {

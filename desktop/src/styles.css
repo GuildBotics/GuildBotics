@@ -138,6 +138,52 @@ body {
   gap: 4px;
 }
 
+/* Sits above the navigation, small enough to read past rather than through. */
+.sync-indicator {
+  align-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 12px;
+  gap: 8px;
+  margin-bottom: -20px;
+  min-height: 28px;
+  padding: 0 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.sync-indicator:hover {
+  border-color: var(--color-border);
+}
+
+.sync-indicator-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-indicator.success {
+  color: var(--color-success);
+}
+
+.sync-indicator.info {
+  color: var(--color-text-subtle);
+}
+
+.sync-indicator.warning {
+  color: var(--color-warning);
+}
+
+.sync-indicator.danger {
+  color: var(--color-danger);
+}
+
 .nav-item {
   align-items: center;
   border-radius: 6px;
