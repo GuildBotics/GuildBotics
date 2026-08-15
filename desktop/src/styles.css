@@ -1893,6 +1893,10 @@ pre {
 .activity-now-line {
   background: var(--color-brand);
   bottom: 0;
+  /* A marker, not a target: without this it sits above the timeline and
+     swallows hovers on whatever happened around now -- the most recent
+     activity, which is the part most likely to be inspected. */
+  pointer-events: none;
   position: absolute;
   top: 0;
   width: 2px;
