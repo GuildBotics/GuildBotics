@@ -54,7 +54,10 @@ LOGGER = logging.getLogger(__name__)
 #: Metadata fields every memory document must carry. Recall, the digest, and
 #: the audit trail are all driven from them, so a device receiving a document
 #: without them would show a broken memory rather than an out-of-date one.
-_REQUIRED_META_FIELDS = ("title", "summary", "created_at", "updated_at", "kind")
+#: ``summary`` is deliberately absent: it is optional when recording and recall
+#: reads it as an empty string, so requiring it here would hold back a document
+#: the user recorded exactly as the CLI allows.
+_REQUIRED_META_FIELDS = ("title", "created_at", "updated_at", "kind")
 _META_LIST_FIELDS = ("keywords", "source")
 #: What a memory document may be. ``policy`` documents carry standing rules and
 #: are the reason the kind is validated rather than merely stored.

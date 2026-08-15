@@ -126,6 +126,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - 呼び出し元から repository path を受け取ること（検証済み Workspace root から毎回導出する）
 - ファイル内容の domain 知識を持つこと（種別ごとの検証は所有 module が registry へ登録する）
 - 退避内容を Activity / API へ載せること（`rejection_id` と対象 path だけを記録し、回復は変更元 device 上の手動手順）
+- ambient に選択中の Workspace を解決すること。manager が扱う Workspace root を、Activity の保存先と write 通知の path 解決まで引き回す（別 root の初期参加・切替と競合するため）
 
 #### App API (`guildbotics/app_api/*`)
 
@@ -241,7 +242,9 @@ help / docstring が正であり、member コマンドの一行説明は
 - 共有 JSON は `dump_shared_json`（sort_keys + 末尾改行）で統一する。device ごとにバイト列がぶれると不要な並行更新になる
 - device 固有 field を共有 record へ入れない境界は、field 名のブロックリストではなく pydantic の `extra="forbid"`（`SharedRecord`）とサイズ上限で構造的に守る
 - 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
-- 共有ファイルの種別ごとの検証は2層。`guildbotics/workspace/validation.py` が共有 root・サイズ上限・decode・構文という全種別共通の境界を保証し、その上に所有 module が `guildbotics/utils/shared_file_validators.py` の `register_shared_validator()` で意味の検証を足す。`validation.py` が種別を知りに行く形にはしない（`observability` などは storage 層から import できないため）。新しい共有 record を追加したら、その所有 module で validator を登録する
+- 共有ファイルの種別ごとの検証は2層。`guildbotics/workspace/validation.py` が共有 root・サイズ上限・decode・構文という全種別共通の境界を保証し、その上に所有 module が `guildbotics/utils/shared_file_validators.py` の `register_shared_validator()` で意味の検証を足す。`validation.py` が種別を知りに行く形にはしない（`observability` などは storage 層から import できないため）
+- 新しい共有 record を追加したら、**所有 module で validator を登録し、あわせて `OWNED_SHARED_PREFIXES` へ prefix と所有 module 名を宣言する**。登録は import 時に起きるため、宣言が無いと所有 module を読み込んでいない process では構文検査だけで通ってしまう（同期境界が import 順で fail-open になる）。宣言があれば未登録は拒否になる
+- 共有 record の validator は、**読み手が必須にしている field を必ず含める**。読み手が黙って skip する形（例: `load_pending_events` は ID / timestamp 欠落の item を skip）だと、受信 device は停止せずに work を失う
 - 共有 record は `schema_version` を現在値へ固定し、ID と日時も型として検証する。旧 schema の fallback 読み込みは作らない
 - 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
 - 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` の validator は key 名と generation 以外の field を拒否するため、Secret 値の混入を内容検査なしに防げる

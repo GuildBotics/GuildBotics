@@ -8,6 +8,7 @@ when another device receives it.
 
 from __future__ import annotations
 
+import importlib
 import json
 
 import pytest
@@ -19,10 +20,16 @@ import guildbotics.capabilities.task_runs  # noqa: F401
 import guildbotics.integrations.file_chat_state_store  # noqa: F401
 import guildbotics.utils.secret_store  # noqa: F401
 from guildbotics.integrations.file_chat_state_store import PENDING_EVENT_FIELDS
-from guildbotics.utils.shared_file_validators import SharedFileInvalidError
+from guildbotics.utils import shared_file_validators
+from guildbotics.utils.shared_file_validators import (
+    OWNED_SHARED_PREFIXES,
+    SharedFileInvalidError,
+    find_shared_validator,
+)
 from guildbotics.workspace.validation import validate_shared_file
 
 PENDING = "state/chat_state/slack/aiko/pending_events/C1.json"
+OWNED = "state/chat_state/slack/aiko/channels/C1.json"
 META = "state/documents/team/abc123/meta.yml"
 RUN = "state/task-runs/run-1.jsonl"
 SECRETS = "config/secrets.yml"
@@ -46,10 +53,54 @@ def _meta(**overrides: object) -> bytes:
 
 
 def _pending(**overrides: object) -> bytes:
-    event = {field: None for field in PENDING_EVENT_FIELDS}
-    event.update({"event_id": "E1", "channel_id": "C1", "text": "hello"})
+    event: dict[str, object] = {field: None for field in PENDING_EVENT_FIELDS}
+    event.update(
+        {
+            "event_id": "C1:100.1",
+            "channel_id": "C1",
+            "message_ts": "100.1",
+            "thread_ts": "100.1",
+            "text": "hello",
+            "mentions": ["U2"],
+        }
+    )
     event.update(overrides)
     return json.dumps({"events": [event]}).encode("utf-8")
+
+
+# -- Owners that were not loaded ----------------------------------------------
+
+
+def test_every_declared_owner_registers_the_kind_it_claims() -> None:
+    """The declaration and the registration are written in different modules,
+    so the boundary can only refuse a missing owner if the two agree."""
+    for prefix, owner in OWNED_SHARED_PREFIXES.items():
+        importlib.import_module(owner)
+        assert find_shared_validator(f"{prefix}/x") is not None, prefix
+
+
+def test_an_owned_kind_is_refused_when_its_owner_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registration happens on import, so import order would otherwise decide
+    how strictly a shared file is checked. A missing owner is a refusal, never
+    a quiet fallback to a syntax check."""
+    monkeypatch.setattr(shared_file_validators, "_validators", {})
+
+    with pytest.raises(SharedFileInvalidError, match="file_chat_state_store"):
+        validate_shared_file(OWNED, b'{"cursor": "1"}')
+
+
+def test_a_kind_with_no_owner_is_still_held_to_the_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shared_file_validators, "_validators", {})
+
+    validate_shared_file("config/intelligences/model_mapping.yml", b"default: gpt\n")
+    with pytest.raises(SharedFileInvalidError, match="not valid YAML"):
+        validate_shared_file(
+            "config/intelligences/model_mapping.yml", b"default: [unclosed\n"
+        )
 
 
 # -- Conversation control state ----------------------------------------------
@@ -64,6 +115,30 @@ def test_conversation_state_refuses_a_raw_provider_payload() -> None:
     provider payload it came from is refused rather than trimmed."""
     with pytest.raises(SharedFileInvalidError, match="raw_event"):
         validate_shared_file(PENDING, _pending(raw_event={"blocks": []}))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"event_id": None}, "no event_id"),
+        ({"message_ts": ""}, "no message_ts"),
+        ({"thread_ts": None}, "no thread_ts"),
+        ({"mentions": "U2"}, "non-list mentions"),
+    ],
+)
+def test_conversation_state_refuses_an_event_the_loader_would_skip(
+    overrides: dict[str, object], expected: str
+) -> None:
+    """``load_pending_events`` drops an item missing an id or a timestamp in
+    silence. A device taking over the service would lose the work, so the
+    boundary refuses the file instead of letting it arrive and be ignored."""
+    with pytest.raises(SharedFileInvalidError, match=expected):
+        validate_shared_file(PENDING, _pending(**overrides))
+
+
+def test_conversation_state_refuses_an_empty_event() -> None:
+    with pytest.raises(SharedFileInvalidError, match="no event_id"):
+        validate_shared_file(PENDING, b'{"events": [{}]}')
 
 
 def test_conversation_state_refuses_a_file_that_is_not_an_object() -> None:
@@ -84,6 +159,12 @@ def test_memory_metadata_accepts_a_document_with_extra_fields() -> None:
     """``--set`` puts caller-chosen fields in metadata, so extras are allowed;
     what recall needs is what must be there."""
     validate_shared_file(META, _meta(review_round=2))
+
+
+def test_memory_metadata_accepts_a_document_recorded_without_a_summary() -> None:
+    """``--summary`` is optional and recall reads a missing one as empty, so
+    requiring it would hold back a document the user recorded correctly."""
+    validate_shared_file(META, _meta(summary=""))
 
 
 @pytest.mark.parametrize(

@@ -36,6 +36,14 @@ def _activity_event(event_id: str, summary: str) -> str:
     )
 
 
+def _identity(workspace_id: str) -> str:
+    return dump_shared_json(
+        WorkspaceIdentity(
+            workspace_id=workspace_id, created_at="2026-08-01T00:00:00Z"
+        ).model_dump()
+    )
+
+
 def _hub_bytes(hub: Path, path: str) -> bytes | None:
     try:
         return bytes(
@@ -409,9 +417,12 @@ def test_a_stopped_queue_refuses_new_work_until_it_is_resumed(
 def test_unrelated_histories_are_damage_not_a_concurrent_update(
     tmp_path: Path, first: Device
 ) -> None:
+    """A hub built from scratch rather than from a copy carries the same
+    workspace but shares no history, which no convergence rule can settle."""
     other_hub = tmp_path / "other.git"
     Repo.init(other_hub, bare=True, initial_branch="main")
     stranger = make_device(tmp_path / "stranger", other_hub, device_id="device-x")
+    stranger.write("state/workspace.json", _identity(WORKSPACE_ID))
     stranger.write(CONFIG, "language: en\n")
     stranger.manager.synchronize()
 
@@ -419,6 +430,52 @@ def test_unrelated_histories_are_damage_not_a_concurrent_update(
 
     assert status.state == "invalid_shared_state"
     assert status.last_error_code == "unrelated_histories"
+
+
+def test_a_hub_with_commits_but_no_workspace_identity_stops_the_queue(
+    tmp_path: Path, first: Device
+) -> None:
+    """The identity is the only thing that keeps two workspaces apart, so a hub
+    that has content but cannot name its workspace is not joined."""
+    other_hub = tmp_path / "nameless.git"
+    Repo.init(other_hub, bare=True, initial_branch="main")
+    stranger = make_device(tmp_path / "nameless", other_hub, device_id="device-x")
+    stranger.write(CONFIG, "language: en\n")
+    stranger.manager.synchronize()
+
+    status = first.manager.change_remote(str(other_hub))
+
+    assert status.state == "invalid_shared_state"
+    assert status.last_error_code == "missing_workspace_identity"
+
+
+def test_deleting_the_workspace_identity_is_never_shared(
+    first: Device, hub: Path
+) -> None:
+    """Propagating the deletion would leave no device able to tell workspaces
+    apart again, so it stops here instead of becoming a change to send."""
+    first.write(CONFIG, "language: ja\n")
+    first.manager.synchronize()
+    (first.shared / "state" / "workspace.json").unlink()
+
+    status = first.manager.synchronize()
+
+    assert status.state == "invalid_shared_state"
+    assert status.last_error_code == "missing_workspace_identity"
+    assert _hub_file(hub, "state/workspace.json") is not None
+
+
+def test_a_copy_that_became_another_workspace_stops_the_queue(
+    first: Device,
+) -> None:
+    first.write(
+        "state/workspace.json", _identity("0198ab00-0000-7000-8000-0000000000ff")
+    )
+
+    status = first.manager.synchronize()
+
+    assert status.state == "invalid_shared_state"
+    assert status.last_error_code == "workspace_identity_mismatch"
 
 
 # -- The execution barrier ----------------------------------------------------
@@ -514,6 +571,61 @@ def test_the_queue_checks_the_hub_on_its_own_without_a_notification(
         listener.manager.stop()
 
     assert listener.read(CONFIG) == "language: ja\n"
+
+
+def test_a_worker_that_outlives_its_stop_blocks_a_second_one(
+    first: Device,
+) -> None:
+    """One device runs one queue. A fetch can block for longer than the stop
+    timeout, and starting a second worker beside it would put two threads on
+    one repository."""
+    release = threading.Event()
+    first.repository.fetch = lambda: release.wait(10)  # type: ignore[method-assign]
+    first.write(CONFIG, "language: ja\n")
+    first.manager.start()
+    try:
+        assert first.manager.stop(timeout=0.2) is False
+        assert first.manager.start() is False
+    finally:
+        release.set()
+        assert first.manager.stop(timeout=10) is True
+
+    assert first.manager.start() is True
+    assert first.manager.stop(timeout=10) is True
+
+
+def test_a_worker_stopped_before_a_restart_never_wakes_up_again(
+    first: Device,
+) -> None:
+    """The restarted queue must not revive the previous worker, which would be
+    the second thread the stop was meant to remove."""
+    first.manager.start()
+    assert first.manager.stop(timeout=10) is True
+    stopped = first.manager._stopping  # noqa: SLF001
+
+    assert first.manager.start() is True
+    try:
+        assert stopped.is_set()
+        assert first.manager._stopping is not stopped  # noqa: SLF001
+    finally:
+        first.manager.stop(timeout=10)
+
+
+def test_a_settled_change_is_remembered_while_the_queue_is_far_below_its_cap(
+    first: Device,
+) -> None:
+    """Forgetting is for the cap alone; a barrier asking about its own change
+    must not be told it is unknown just because others settled after it."""
+    changes = [
+        first.write(
+            f"state/events/2026/08/keep-{index}.json", _activity_event(f"k{index}", "x")
+        )
+        for index in range(50)
+    ]
+
+    first.manager.synchronize()
+
+    assert all(first.manager.await_pushed(change.change_id) for change in changes)
 
 
 def test_a_burst_of_saves_becomes_one_commit(tmp_path: Path, hub: Path) -> None:

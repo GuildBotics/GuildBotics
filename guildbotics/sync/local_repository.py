@@ -70,6 +70,16 @@ class LocalSyncRepository:
         self._workspace_root = workspace_root
         self.path = self._expected_path()
 
+    @property
+    def workspace_root(self) -> Path:
+        """The resolved workspace this repository belongs to.
+
+        Callers that need to reach other parts of the same workspace use this
+        rather than resolving the selected workspace again, which could name a
+        different one while a workspace is being switched.
+        """
+        return self.path.parent
+
     def verify_boundary(self) -> None:
         """Confirm this repository is still the workspace's own synchronized copy.
 

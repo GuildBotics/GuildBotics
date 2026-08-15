@@ -93,17 +93,29 @@ def default_events_root() -> Path:
 
 
 class ActivityEventStore:
-    """Write and list shared activity events as one JSON file per event."""
+    """Write and list shared activity events as one JSON file per event.
 
-    def __init__(self, root: Path | None = None) -> None:
+    Args:
+        root (Path | None): The events directory, or None for the selected
+            workspace's.
+        workspace_root (Path | None): The workspace the events belong to. A
+            caller that already knows which workspace it is acting for passes
+            it, so recording does not resolve the selected workspace a second
+            time and land in a different one while workspaces are switching.
+    """
+
+    def __init__(
+        self, root: Path | None = None, *, workspace_root: Path | None = None
+    ) -> None:
         self.root = root if root is not None else default_events_root()
+        self.workspace_root = workspace_root
 
     def record(self, record: dict[str, Any]) -> Path:
         event = _to_activity_event(record)
         occurred = str(event["occurred_at"])
         year, month = _year_month(occurred)
         path = self.root / year / month / f"{event['event_id']}.json"
-        write_shared_json(path, event)
+        write_shared_json(path, event, workspace_root=self.workspace_root)
         return path
 
     def list_between(

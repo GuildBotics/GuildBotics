@@ -28,6 +28,7 @@ def recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         paths=["config/team/project.yml", "state/chat_state/slack/aiko/c.json"],
         device_id="device-mac",
         workspace_id=WORKSPACE_ID,
+        workspace_root=tmp_path,
     )
     root = tmp_path / ".guildbotics" / "state" / "events"
     written = sorted(root.glob("*/*/*.json"))

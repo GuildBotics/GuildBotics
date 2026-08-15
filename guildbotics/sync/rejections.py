@@ -13,9 +13,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
+from guildbotics.utils.fileio import get_workspace_state_path
 
 #: Signature the sync manager depends on, so the recorder can be substituted.
 RejectionRecorder = Callable[..., None]
@@ -27,6 +29,7 @@ def record_update_rejected(
     paths: Sequence[str],
     device_id: str,
     workspace_id: str,
+    workspace_root: Path,
 ) -> None:
     """Record one provider-neutral activity event for a rejected local change.
 
@@ -37,8 +40,15 @@ def record_update_rejected(
         device_id (str): The device whose change was not accepted, which is the
             only device the manual recovery procedure can run on.
         workspace_id (str): The workspace the rejection happened in.
+        workspace_root (Path): The workspace whose repository holds the stashed
+            commit. Passed explicitly so the event lands in the copy the
+            ``rejection_id`` can actually be resolved against, rather than in
+            whichever workspace happens to be selected.
     """
-    ActivityEventStore().record(
+    ActivityEventStore(
+        get_workspace_state_path("events", workspace_root=workspace_root),
+        workspace_root=workspace_root,
+    ).record(
         {
             "type": SYNC_UPDATE_REJECTED,
             "workspace_id": workspace_id,

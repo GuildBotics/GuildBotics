@@ -180,6 +180,7 @@ class GitSyncManager:
         self._pending: dict[str, _Pending] = {}
         self._pending_lock = threading.Lock()
         self._sync_lock = threading.RLock()
+        self._lifecycle_lock = threading.Lock()
         self._wake = threading.Event()
         self._stopping = threading.Event()
         self._worker: threading.Thread | None = None
@@ -217,29 +218,55 @@ class GitSyncManager:
 
     # -- Lifecycle ----------------------------------------------------------
 
-    def start(self) -> None:
-        """Run the device's single synchronization queue in the background."""
-        if self._worker is not None:
-            return
-        self._stopping.clear()
-        self._worker = threading.Thread(
-            target=self._serve, name="guildbotics-sync", daemon=True
-        )
-        self._worker.start()
+    def start(self) -> bool:
+        """Run the device's single synchronization queue in the background.
 
-    def stop(self, timeout: float = 5.0) -> None:
-        """Stop the background queue, leaving unsent commits for the next start."""
-        self._stopping.set()
-        self._wake.set()
-        worker, self._worker = self._worker, None
-        if worker is not None:
+        Returns:
+            bool: False when a worker is still running, which is the case after
+                a :meth:`stop` that timed out. Starting a second one would put
+                two threads on one repository, so the caller is told instead.
+        """
+        with self._lifecycle_lock:
+            if self._worker is not None and self._worker.is_alive():
+                return False
+            # Each worker watches an event of its own, so a thread that outlives
+            # its stop can never be revived by the next start.
+            stopping = threading.Event()
+            self._stopping = stopping
+            self._worker = threading.Thread(
+                target=self._serve,
+                args=(stopping,),
+                name="guildbotics-sync",
+                daemon=True,
+            )
+            self._worker.start()
+            return True
+
+    def stop(self, timeout: float = 5.0) -> bool:
+        """Stop the background queue, leaving unsent commits for the next start.
+
+        Returns:
+            bool: Whether the worker actually finished. A fetch or push can
+                block for longer than ``timeout``; until it returns, the worker
+                is kept so no second one can be started beside it.
+        """
+        with self._lifecycle_lock:
+            worker = self._worker
+            if worker is None:
+                return True
+            self._stopping.set()
+            self._wake.set()
             worker.join(timeout)
+            if worker.is_alive():
+                return False
+            self._worker = None
+            return True
 
-    def _serve(self) -> None:
-        while not self._stopping.is_set():
+    def _serve(self, stopping: threading.Event) -> None:
+        while not stopping.is_set():
             notified = self._wake.wait(self._fallback_interval)
             self._wake.clear()
-            if self._stopping.is_set():
+            if stopping.is_set():
                 return
             if notified and self._coalesce_delay > 0:
                 time.sleep(self._coalesce_delay)
@@ -309,6 +336,7 @@ class GitSyncManager:
 
     def _synchronize(self) -> None:
         self._repository.verify_boundary()
+        self._verify_local_identity()
         self._commit_working_tree()
         if not self._repository.has_remote():
             self._state = "unreachable"
@@ -402,6 +430,7 @@ class GitSyncManager:
             paths=conflicts,
             device_id=self._device_id,
             workspace_id=self._workspace_id,
+            workspace_root=self._repository.workspace_root,
         )
 
     def _push(self) -> bool:
@@ -458,13 +487,45 @@ class GitSyncManager:
 
     # -- Received content ---------------------------------------------------
 
+    def _verify_local_identity(self) -> None:
+        """Refuse to send anything from a copy that lost its workspace identity.
+
+        The identity is the only thing that stops two workspaces from being
+        mixed, so a deletion of it must never become a change to share: once
+        propagated, no device could tell the workspaces apart again. A
+        repository with no commits yet is exempt, because that is the state a
+        device is in while it is still taking the workspace from the hub.
+        """
+        if self._repository.head() is None:
+            return
+        path = (
+            self._repository.workspace_root
+            / ".guildbotics"
+            / (_WORKSPACE_IDENTITY_PATH)
+        )
+        if not path.is_file():
+            raise SharedDataAnomaly(
+                "missing_workspace_identity",
+                f"{_WORKSPACE_IDENTITY_PATH} is gone from this workspace",
+            )
+        identity = WorkspaceIdentity.model_validate_json(path.read_bytes())
+        if identity.workspace_id != self._workspace_id:
+            raise SharedDataAnomaly(
+                "workspace_identity_mismatch",
+                f"this copy now holds workspace {identity.workspace_id}, "
+                f"not {self._workspace_id}",
+            )
+
     def _verify_workspace_identity(self, remote: str | None) -> None:
         """Refuse to synchronize with a hub holding a different workspace."""
         if remote is None:
             return
         data = self._repository.read_blob(remote, _WORKSPACE_IDENTITY_PATH)
         if data is None:
-            return
+            raise SharedDataAnomaly(
+                "missing_workspace_identity",
+                f"the hub has commits but no {_WORKSPACE_IDENTITY_PATH}",
+            )
         try:
             identity = WorkspaceIdentity.model_validate_json(data)
         except ValueError as exc:
@@ -538,6 +599,11 @@ class GitSyncManager:
 
     def _forget_oldest_settled(self) -> None:
         excess = len(self._pending) - MAX_TRACKED_CHANGES
+        if excess <= 0:
+            # Below the cap nothing is forgotten. Slicing by a negative excess
+            # would instead drop all but the newest few, and a barrier asking
+            # about its own change would be told it is unknown.
+            return
         settled = [
             change_id for change_id, pending in self._pending.items() if pending.settled
         ]

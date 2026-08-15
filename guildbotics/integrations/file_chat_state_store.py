@@ -56,6 +56,14 @@ PENDING_EVENT_FIELDS = frozenset(
     }
 )
 
+#: What ``load_pending_events`` needs before it will rebuild an event at all.
+#: An item missing one of these is skipped in silence, so a device taking over
+#: a service would drop the work instead of doing it: the shared boundary has
+#: to refuse such a file rather than let it arrive and be quietly ignored.
+PENDING_EVENT_REQUIRED_FIELDS = ("event_id", "message_ts", "thread_ts")
+#: Fields the loader reads as a list of strings.
+PENDING_EVENT_LIST_FIELDS = ("mentions",)
+
 _PENDING_EVENTS_DIR = "/pending_events/"
 
 
@@ -68,7 +76,8 @@ def validate_shared_conversation_state(relative_path: str, data: bytes) -> None:
 
     Raises:
         SharedFileInvalidError: When the file is not a conversation state
-            object, or a pending event carries a field with no slot in it.
+            object, or a pending event carries a field with no slot in it, or
+            lacks one the loader needs to rebuild the event.
     """
     payload = json.loads(data.decode("utf-8"))
     if not isinstance(payload, dict):
@@ -79,12 +88,24 @@ def validate_shared_conversation_state(relative_path: str, data: bytes) -> None:
     if not isinstance(events, list):
         raise SharedFileInvalidError(relative_path, "has no list of pending events")
     for event in events:
-        if not isinstance(event, dict):
-            raise SharedFileInvalidError(relative_path, "has a non-object event")
-        unknown = sorted(set(map(str, event)) - PENDING_EVENT_FIELDS)
-        if unknown:
+        _validate_pending_event(relative_path, event)
+
+
+def _validate_pending_event(relative_path: str, event: object) -> None:
+    if not isinstance(event, dict):
+        raise SharedFileInvalidError(relative_path, "has a non-object event")
+    unknown = sorted(set(map(str, event)) - PENDING_EVENT_FIELDS)
+    if unknown:
+        raise SharedFileInvalidError(
+            relative_path, f"has an event carrying {', '.join(unknown)}"
+        )
+    for field in PENDING_EVENT_REQUIRED_FIELDS:
+        if not str(event.get(field) or "").strip():
+            raise SharedFileInvalidError(relative_path, f"has an event with no {field}")
+    for field in PENDING_EVENT_LIST_FIELDS:
+        if not isinstance(event.get(field, []), list):
             raise SharedFileInvalidError(
-                relative_path, f"has an event carrying {', '.join(unknown)}"
+                relative_path, f"has an event with a non-list {field}"
             )
 
 

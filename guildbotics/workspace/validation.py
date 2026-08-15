@@ -35,7 +35,7 @@ from guildbotics.entities import Person, Project
 from guildbotics.utils.avatar import SUPPORTED_EXTENSIONS
 from guildbotics.utils.shared_file_validators import (
     SharedFileInvalidError,
-    find_shared_validator,
+    require_shared_validator,
 )
 from guildbotics.utils.workspace_sync_port import SHARED_ROOTS
 from guildbotics.workspace.identity import DeviceRecord, WorkspaceIdentity
@@ -92,7 +92,7 @@ def validate_shared_file(relative_path: str, data: bytes) -> None:
         elif path.suffix == ".json":
             _require_json(relative_path, text)
 
-    registered = find_shared_validator(relative_path)
+    registered = require_shared_validator(relative_path)
     if registered is not None:
         registered(relative_path, data)
 
