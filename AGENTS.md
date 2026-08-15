@@ -47,7 +47,8 @@
 - `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、interactive session
 - `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
 - `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）
-- `guildbotics/sync/*` … Workspace Sync Port の唯一の購読者。ローカル同期 repository（`local_repository.py`）、同期 queue / 自動収束 / rejected ref（`manager.py`）、更新不採用の Activity 記録（`rejections.py`）
+- `guildbotics/sync/*` … Workspace Sync Port の唯一の購読者。ローカル同期 repository（`local_repository.py`）、commit 境界（`commits.py`）、同期 queue / 自動収束 / rejected ref（`manager.py`）、更新不採用の Activity 記録（`rejections.py`）、Hub への接続と参加（`enrollment.py`）、queue の install（`activation.py`）
+- `guildbotics/hub/*` … Hub。bare repository の作成と fast-forward only 設定（`host.py`）、device から Hub への到達（`connection.py`）。中身の意味は知らない
 - `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤
 
 依存方向のハードルール（`tests/guildbotics/test_layer_boundaries.py` で担保）:
@@ -55,7 +56,8 @@
 - `guildbotics/app_api/*` は最上位層であり、他の guildbotics package から import してはならない。app_api と core の両方が必要とする知識（provider / AI CLIツールカタログなど）は core 側（例: `guildbotics/intelligences/*`）に置き、app_api は API model への変換だけを持つ
 - `guildbotics/observability/*` は `utils` 以外に依存しない記録基盤であり、app_api や capability の都合を知らない
 - `guildbotics/workspace/*` は `utils` と `entities` 以外に依存しない storage 層であり、capability / driver / app_api の都合を知らない
-- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に **他のどの package からも import してはならない**。capability / driver / integration / app_api は Workspace Sync Port 越しにだけ同期へ届く
+- `guildbotics/hub/*` は `utils` 以外に依存しない。Hub は repository の入れ物と OpenSSH 経路だけを知り、共有 record の意味を知らない
+- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py` と `cli/__init__.py`。長寿命 process 1本につき1つ）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。composition root を増やすときは、その process が本当に queue を持つべきかを先に確認する
 
 リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 
@@ -119,14 +121,38 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - commit / fetch / 自動収束 / push、first-committer-wins、後着 commit の `refs/guildbotics/rejected/<rejection_id>` への退避
 - 送信前と受信時に同じ `validate_shared_file()` を通し、通らないローカル変更は「送信できない変更」として保留、受信側で通らなければ共有データ異常として停止（検証の中身は「4.1 共有 state の書き込み」を参照）
 - `await_pushed(change_id)` の同期 barrier と `GitSyncStatus` の算出
+- Hub への接続（新規登録 / 既存 Workspace への参加 / 複製の取得）と、参加前の差分の算出
 
 禁止:
 
-- 他の package から import されること（同期へは Workspace Sync Port 越しにだけ届く）
+- composition root 以外の package から import されること（同期へは Workspace Sync Port 越しにだけ届く）
 - 呼び出し元から repository path を受け取ること（検証済み Workspace root から毎回導出する）
 - ファイル内容の domain 知識を持つこと
 - 退避内容を Activity / API へ載せること（`rejection_id` と対象 path だけを記録し、回復は変更元 device 上の手動手順）
 - ambient に選択中の Workspace を解決すること。manager が扱う Workspace root を、Activity の保存先と write 通知の path 解決まで引き回す（別 root の初期参加・切替と競合するため）
+- 参加前の差分表示（preview）で remote を設定すること。実行しなかった preview が「同期有効」に見えると、次の起動で queue が回りはじめる
+
+参加フローの規約:
+
+- 参加は上書きではない。**このマシンの内容を先に commit してから** Hub の内容を採用し、押し出された commit は rejected ref と Activity に残す
+- preview と実行は同じ前半（`initialize` → identity → commit）を共有する。preview が実行と違う起点を語らないようにするため
+- 同じ path は Hub 側を採用、Hub に無い path は保持して送信、Workspace ID は Hub 側を採用する
+
+#### Hub (`guildbotics/hub/*`)
+
+責務:
+
+- `~/.guildbotics/hub/` の作成と、Workspace ごとの bare repository（`host.py`）
+- fast-forward only（`receive.denyNonFastForwards` / `denyDeletes`）の適用。並行更新の自動収束はこの拒否が支えている
+- device から Hub への到達（`connection.py`）。接続先の解析、Git remote URL、host key の確認と登録、device 公開鍵、Hub 上の `guildbotics hub` コマンドの SSH 実行
+- Hub 自身の操作は Hub マシンの `guildbotics hub` コマンドが行う（sshd から実行される前提。Windows の PATH 設定は README で案内する）
+
+禁止:
+
+- 共有 record の意味を知ること（`utils` 以外へ依存しない）
+- Workspace root の path を保存すること（Hub は Workspace ID だけで対応づける）
+- 接続先文字列から port や path を受け取ること（Hub 内の配置は GuildBotics が決める）
+- 生の Git command を Hub へ ssh で送り込むこと（Hub 側の CLI を呼ぶ）
 
 #### App API (`guildbotics/app_api/*`)
 

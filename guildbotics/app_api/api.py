@@ -54,10 +54,14 @@ from guildbotics.app_api.models import (
     CommandRunResponse,
     ConfigStatus,
     DefaultPersonUpdateRequest,
+    DeviceSshKey,
     GitHubAppRegistrationStartRequest,
     GitHubAppRegistrationStatus,
     HealthResponse,
     HotkeySettings,
+    HubConnection,
+    HubStatus,
+    HubTarget,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     LlmProvidersResponse,
@@ -91,8 +95,13 @@ from guildbotics.app_api.models import (
     TroubleshootingResponse,
     VerifyResponse,
     WorkspaceChangeRequest,
+    WorkspaceSyncCloneRequest,
+    WorkspaceSyncEnableRequest,
+    WorkspaceSyncPreview,
+    WorkspaceSyncStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.editions.simple import slack_app_setup
 from guildbotics.editions.simple.github_app_setup import (
     GitHubAppRegistration,
@@ -175,6 +184,9 @@ def create_app(
         app_runtime, "system_service_run_id", secrets.token_urlsafe(16)
     )
     input_file_store = command_input_file_store or CommandInputFileStore()
+    # The service holds no state of its own: the queue it starts and stops
+    # is process-wide, so this instance and the runtime's act on the same one.
+    sync_service = WorkspaceSyncService()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -186,6 +198,7 @@ def create_app(
         try:
             store.start_system_session(system_service_run_id)
             store.start_maintenance()
+            sync_service.activate()
             if not any(
                 isinstance(handler, EventBusLogHandler) for handler in logger.handlers
             ):
@@ -199,6 +212,7 @@ def create_app(
             finally:
                 try:
                     app_runtime.stop_scheduler(force=True)
+                    sync_service.deactivate()
                 finally:
                     if added_app_handler:
                         logger.removeHandler(log_handler)
@@ -278,6 +292,98 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigStatus:
         return app_runtime.set_workspace(request.workspace_dir)
+
+    @app.get("/hub", response_model=HubStatus, responses=error_responses)
+    def hub_status(_: None = Depends(require_token)) -> HubStatus:
+        return sync_service.get_hub()
+
+    @app.post("/hub", response_model=HubStatus, responses=error_responses)
+    def hub_create(_: None = Depends(require_token)) -> HubStatus:
+        return sync_service.create_hub()
+
+    @app.post("/hub/inspect", response_model=HubConnection, responses=error_responses)
+    def hub_inspect(
+        request: HubTarget,
+        _: None = Depends(require_token),
+    ) -> HubConnection:
+        return sync_service.inspect_hub(request)
+
+    @app.post("/hub/trust", response_model=HubConnection, responses=error_responses)
+    def hub_trust(
+        request: HubTarget,
+        _: None = Depends(require_token),
+    ) -> HubConnection:
+        return sync_service.trust_hub(request)
+
+    @app.get("/hub/ssh-key", response_model=DeviceSshKey, responses=error_responses)
+    def hub_ssh_key(_: None = Depends(require_token)) -> DeviceSshKey:
+        return sync_service.get_ssh_key()
+
+    @app.post("/hub/ssh-key", response_model=DeviceSshKey, responses=error_responses)
+    def hub_ssh_key_create(_: None = Depends(require_token)) -> DeviceSshKey:
+        return sync_service.create_ssh_key()
+
+    @app.get(
+        "/workspace/sync",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_status(
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncStatus:
+        return sync_service.get_status()
+
+    @app.post(
+        "/workspace/sync/preview",
+        response_model=WorkspaceSyncPreview,
+        responses=error_responses,
+    )
+    def workspace_sync_preview(
+        request: WorkspaceSyncEnableRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncPreview:
+        return sync_service.preview(request)
+
+    @app.post(
+        "/workspace/sync/enable",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_enable(
+        request: WorkspaceSyncEnableRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncStatus:
+        return sync_service.enable(request)
+
+    @app.post(
+        "/workspace/sync/hub",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_change_hub(
+        request: WorkspaceSyncEnableRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncStatus:
+        return sync_service.change_hub(request)
+
+    @app.post(
+        "/workspace/sync/retry",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_retry(_: None = Depends(require_token)) -> WorkspaceSyncStatus:
+        return sync_service.retry()
+
+    @app.post(
+        "/workspace/sync/clone", response_model=ConfigStatus, responses=error_responses
+    )
+    def workspace_sync_clone(
+        request: WorkspaceSyncCloneRequest,
+        _: None = Depends(require_token),
+    ) -> ConfigStatus:
+        """Take a copy of a hub's workspace and switch to it."""
+        destination = sync_service.clone(request)
+        return app_runtime.set_workspace(destination)
 
     @app.get("/team", response_model=TeamSummary, responses=error_responses)
     def team(_: None = Depends(require_token)) -> TeamSummary:

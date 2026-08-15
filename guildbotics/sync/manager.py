@@ -26,17 +26,18 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 from git import GitCommandError
 
-from guildbotics.sync.local_repository import (
-    LocalSyncRepository,
-    SyncRepositoryError,
-    WorkingTreeChange,
+from guildbotics.sync.commits import (
+    UnsendableChange,
+    commit_shared_changes,
+    utc_now,
+    validate_received,
 )
+from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
 from guildbotics.utils.workspace_sync_port import ChangeSet
 from guildbotics.workspace.identity import (
@@ -97,19 +98,6 @@ class SharedDataAnomaly(RuntimeError):
         super().__init__(f"{code}: {detail}")
         self.code = code
         self.state = state
-
-
-@dataclass(frozen=True)
-class UnsendableChange:
-    """A local change held back because the file does not validate.
-
-    Attributes:
-        path (str): The path relative to ``.guildbotics/``.
-        reason (str): Why it was held back, for the user to act on.
-    """
-
-    path: str
-    reason: str
 
 
 @dataclass(frozen=True)
@@ -359,7 +347,7 @@ class GitSyncManager:
             if self._synchronize_once():
                 self._state = "idle"
                 self._last_error_code = None
-                self._last_success_at = _utc_now()
+                self._last_success_at = utc_now()
                 self._resolve_shared()
                 return
         self._state = "idle"
@@ -465,38 +453,9 @@ class GitSyncManager:
     # -- Commit boundary ----------------------------------------------------
 
     def _commit_working_tree(self) -> None:
-        """Commit every shared change that validates, holding back the rest.
-
-        This is also what recovers a change whose save notification was lost
-        and what picks up an edit made with an external editor: the scan looks
-        at the working tree, not at what was announced.
-        """
-        sendable: list[WorkingTreeChange] = []
-        held: list[UnsendableChange] = []
-        for change in self._repository.working_tree_changes():
-            if change.deleted:
-                sendable.append(change)
-                continue
-            try:
-                validate_shared_file(
-                    change.path, self._repository.read_working_tree(change.path)
-                )
-            except SharedFileInvalidError as exc:
-                held.append(UnsendableChange(path=change.path, reason=exc.reason))
-            else:
-                sendable.append(change)
-        self._invalid_paths = tuple(held)
-        if not sendable:
-            return
-        self._repository.stage([change.path for change in sendable])
-        self._repository.commit(self._commit_message(sendable))
-
-    def _commit_message(self, changes: Sequence[WorkingTreeChange]) -> str:
-        deleted = sum(1 for change in changes if change.deleted)
-        return (
-            f"Sync shared state: {len(changes) - deleted} written, {deleted} deleted"
-            f"\n\nDevice: {self._device_id}\nRecorded-At: {_utc_now()}\n"
-        )
+        """Commit every shared change that validates, holding back the rest."""
+        outcome = commit_shared_changes(self._repository, device_id=self._device_id)
+        self._invalid_paths = outcome.unsendable
 
     # -- Received content ---------------------------------------------------
 
@@ -564,21 +523,15 @@ class GitSyncManager:
             )
 
     def _validate_received(self, remote: str, changes: dict[str, str]) -> None:
-        """Check arriving files with the same validation the send side used.
-
-        Only validated content is ever sent, so a file that fails here means a
-        defect or a damaged repository -- never a mistake the user made.
-        """
-        for path, status in changes.items():
-            if status == "D":
-                continue
-            data = self._repository.read_blob(remote, path)
-            if data is None:
-                continue
-            try:
-                validate_shared_file(path, data)
-            except SharedFileInvalidError as exc:
-                raise self._anomaly_for(exc) from exc
+        """Stop the queue on an arriving file this build cannot read."""
+        try:
+            validate_received(
+                self._repository,
+                remote,
+                (path for path, status in changes.items() if status != "D"),
+            )
+        except SharedFileInvalidError as exc:
+            raise self._anomaly_for(exc) from exc
 
     def _anomaly_for(self, exc: SharedFileInvalidError) -> SharedDataAnomaly:
         """Tell "this build is too old" apart from "this file is damaged"."""
@@ -649,7 +602,3 @@ def build_git_sync_manager(workspace_root: Path | None = None) -> GitSyncManager
 
 #: Git's empty tree, used as the base when this workspace has no commits yet.
 _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")

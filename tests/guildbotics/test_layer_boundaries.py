@@ -13,10 +13,17 @@ converting it into API response models.
 schemas, and config revisions -- and sits below the capability, driver, and API
 layers, so it may depend only on ``guildbotics.utils`` and ``guildbotics.entities``.
 
+``guildbotics.hub`` owns the machine that hosts synchronization repositories and
+how a device reaches one over OpenSSH. It knows nothing about what those
+repositories contain, so it may depend only on ``guildbotics.utils``.
+
 ``guildbotics.sync`` turns announced shared writes into Git work. It sits above
 workspace storage and observability and below everything else: capabilities,
 drivers, integrations, and the API layer must reach it only through the
-Workspace Sync Port, never by importing it.
+Workspace Sync Port, never by importing it. The exception is the composition
+roots below, which are the process entry points that install the queue -- one
+per long-lived process. Wiring an implementation is what a composition root is
+for; reaching around the port from anywhere else is what the rule forbids.
 """
 
 from __future__ import annotations
@@ -94,6 +101,17 @@ def test_workspace_storage_depends_only_on_utils_and_entities() -> None:
     assert offenders == []
 
 
+def test_hub_depends_only_on_utils() -> None:
+    allowed = ("guildbotics.hub", "guildbotics.utils")
+    offenders = [
+        f"{relative}: {module}"
+        for relative, modules in _imports_by_module("hub", inside=True).items()
+        for module in sorted(modules)
+        if not _matches(module, allowed)
+    ]
+    assert offenders == []
+
+
 def test_sync_depends_only_on_storage_and_recording() -> None:
     allowed = (
         "guildbotics.sync",
@@ -111,6 +129,16 @@ def test_sync_depends_only_on_storage_and_recording() -> None:
     assert offenders == []
 
 
+#: The only modules that may import ``guildbotics.sync``: one per long-lived
+#: process, each installing the queue for the workspace that process works in.
+SYNC_COMPOSITION_ROOTS = frozenset(
+    {
+        Path("app_api/workspace_sync.py"),
+        Path("cli/__init__.py"),
+    }
+)
+
+
 def test_nothing_reaches_around_the_workspace_sync_port() -> None:
     """Capabilities, drivers, integrations, and the API layer announce writes
     through the port; importing the sync package would reintroduce the direct
@@ -118,10 +146,25 @@ def test_nothing_reaches_around_the_workspace_sync_port() -> None:
     offenders = [
         f"{relative}: {module}"
         for relative, modules in _imports_by_module("sync", inside=False).items()
+        if relative not in SYNC_COMPOSITION_ROOTS
         for module in sorted(modules)
         if _matches(module, ("guildbotics.sync",))
     ]
     assert offenders == []
+
+
+def test_every_declared_sync_composition_root_installs_the_queue() -> None:
+    """A stale entry would quietly widen the exception it declares."""
+    imports = _imports_by_module("sync", inside=False)
+    unused = [
+        str(relative)
+        for relative in sorted(SYNC_COMPOSITION_ROOTS)
+        if not any(
+            _matches(module, ("guildbotics.sync",))
+            for module in imports.get(relative, set())
+        )
+    ]
+    assert unused == []
 
 
 def test_native_provider_wire_protocol_does_not_leak_into_app_or_frontend() -> None:

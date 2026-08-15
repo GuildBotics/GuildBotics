@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 
 from guildbotics.cli.diagnostics import diagnostics
+from guildbotics.cli.hub import hub
 from guildbotics.cli.member import member
 from guildbotics.cli.secrets import secrets
 from guildbotics.cli.workspace import workspace
@@ -44,6 +45,7 @@ from guildbotics.runtime.service_lock import (
     ServiceLockUnavailableError,
     inspect_service_lock,
 )
+from guildbotics.sync import activate_workspace_sync, deactivate_workspace_sync
 from guildbotics.utils.env_loader import load_guildbotics_env
 from guildbotics.utils.fileio import get_machine_state_path, get_workspace_root
 from guildbotics.utils.i18n_tool import t
@@ -108,6 +110,7 @@ def main() -> None:
 
 
 main.add_command(diagnostics)
+main.add_command(hub)
 main.add_command(member)
 main.add_command(secrets)
 main.add_command(workspace)
@@ -146,6 +149,10 @@ def start(
             _service_lock_conflict_message(exc.metadata)
         ) from exc
 
+    # A headless service writes shared state like any other process, so it runs
+    # the synchronization queue for as long as it is up. A workspace with no
+    # hub starts nothing and issues no Git command.
+    activate_workspace_sync(workspace)
     try:
         _run_cli_background_service(
             only_target=only_target,
@@ -154,6 +161,7 @@ def start(
             request_path=request_path,
         )
     finally:
+        deactivate_workspace_sync()
         clear_stop_request(request_path)
         service_lock.release()
 
