@@ -112,7 +112,20 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // Switch the slot to a provider whose effort setting is an integer, so the
   // typed control has a number to carry all the way to YAML.
   await page.getByRole("combobox", { name: "Provider" }).click();
-  await page.getByRole("option", { name: "Google Gemini", exact: true }).click();
+  const providerOption = page.getByRole("option", { name: "Google Gemini", exact: true });
+  // The page is still settling while the provider and CLI-tool cards land, and
+  // Mantine hides an open dropdown for good the moment floating-ui calls the
+  // trigger clipped -- nothing brings it back, so the control keeps saying
+  // `aria-expanded="true"` over a list that is not rendered (#427). A dropdown
+  // that claims to be open has to still be showing its list after the page
+  // moves under it, which is a real-browser measurement jsdom cannot make.
+  await page.mouse.wheel(0, 400);
+  await page.mouse.wheel(0, -400);
+  // floating-ui remeasures on the frames after the scroll, so give the latch
+  // its chance to happen before asserting that it did not.
+  await page.waitForTimeout(200);
+  await expect(providerOption).toBeVisible();
+  await providerOption.click();
   await page.getByRole("button", { name: "Customize" }).first().click();
   await page.getByLabel("high thinking_budget").fill("4096");
   await page.getByLabel("low thinking_budget").fill("0");
