@@ -218,6 +218,38 @@ class KeyringSecretStore(SecretStore):
             self._write_index(index)
             self._drop_local_generation(key)
 
+    def rename(self, old_key: str, new_key: str) -> None:
+        """Move a key's shared metadata, local generation, and stored value.
+
+        The index entry moves regardless of whether this device holds the
+        key's current generation, so shared metadata never keeps a stale
+        entry under the old name; a stale value stays stale under the new
+        name. No-op when ``old_key`` is not indexed (e.g. a retried rename).
+        """
+        if old_key == new_key:
+            return
+        index = self._read_index()
+        meta = index["keys"].pop(old_key, None)
+        if meta is None:
+            return
+        service = self._service(index)
+        try:
+            value = self._keychain.get_password(service, old_key)
+            if value is not None:
+                self._keychain.set_password(service, new_key, value)
+            self._keychain.delete_password(service, old_key)
+        except SecretStoreError:
+            raise
+        except Exception as exc:
+            raise SecretStoreError(str(exc)) from exc
+        index["keys"][new_key] = meta
+        self._write_index(index)
+        local = self._read_local()
+        local_meta = local["keys"].pop(old_key, None)
+        if local_meta is not None:
+            local["keys"][new_key] = local_meta
+            self._write_local(local)
+
     def keys(self) -> list[str]:
         return list(self._read_index()["keys"])
 

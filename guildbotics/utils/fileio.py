@@ -155,10 +155,16 @@ def get_primary_config_path(path: Path) -> Path:
 
     Returns:
         Path: The absolute path to the configuration file.
+
+    Raises:
+        WorkspaceNotConfiguredError: When no workspace is selected. Reads
+            that want the package-template fallback use ``get_config_path``;
+            the primary path is also a write target and must never point
+            into the package templates.
     """
     config_dir = get_primary_config_dir()
     if config_dir is None:
-        return get_template_path() / path
+        raise WorkspaceNotConfiguredError("No GuildBotics workspace is selected.")
     return config_dir / path
 
 
@@ -176,8 +182,11 @@ def _get_config_path(path: Path) -> Path:
     Returns:
         Path: An absolute path to an existing file, or the template path fallback.
     """
-    p = get_primary_config_path(path)
-    if p.exists():
+    try:
+        p = get_primary_config_path(path)
+    except WorkspaceNotConfiguredError:
+        p = None
+    if p is not None and p.exists():
         return p
 
     return get_template_path() / path

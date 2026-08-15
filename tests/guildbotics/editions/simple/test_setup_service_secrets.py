@@ -7,6 +7,8 @@ plain configuration files.
 
 from pathlib import Path
 
+import pytest
+
 from guildbotics.editions.simple.setup_service import (
     PersonSetupInput,
     PersonUpdateInput,
@@ -15,11 +17,12 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
-from guildbotics.utils.fileio import load_yaml_file
+from guildbotics.utils.fileio import load_yaml_file, save_yaml_file
 from guildbotics.utils.secret_store import (
     SECRETS_INDEX_FILENAME,
     KeyringSecretStore,
 )
+from guildbotics.utils.keychain import SecretStoreError
 
 
 def _project_input(config_dir: Path, **overrides):
@@ -290,3 +293,99 @@ class TestPersonSecrets:
         assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
         assert store.get("ALICE_SLACK_APP_TOKEN") is None
         assert store.keys() == []
+
+
+class TestStaleKeyMetadata:
+    """Shared key metadata follows rename/delete even when the local value
+    is stale (another device holds the current generation)."""
+
+    def _workspace(self, tmp_path: Path) -> Path:
+        config_dir = _config_dir(tmp_path)
+        config_dir.mkdir(parents=True)
+        KeyringSecretStore(config_dir).ensure_initialized()
+        return config_dir
+
+    def _make_stale(self, config_dir: Path, key: str) -> None:
+        store = KeyringSecretStore(config_dir)
+        index = load_yaml_file(store.location)
+        index["keys"][key]["generation"] = index["keys"][key]["generation"] + 1
+        save_yaml_file(store.location, index)
+        assert store.get(key) is None
+
+    def test_update_person_rename_moves_stale_key_metadata(
+        self, fake_keyring, tmp_path
+    ):
+        config_dir = self._workspace(tmp_path)
+        service = SimplePersonSetupService()
+        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+        self._make_stale(config_dir, "ALICE_GITHUB_ACCESS_TOKEN")
+
+        service.update_person(
+            PersonUpdateInput(
+                **{
+                    **_person_input(config_dir).model_dump(),
+                    "original_person_id": "alice",
+                    "person_id": "alice-2",
+                }
+            )
+        )
+
+        store = KeyringSecretStore(config_dir)
+        assert "ALICE_GITHUB_ACCESS_TOKEN" not in store.keys()
+        assert "ALICE_2_GITHUB_ACCESS_TOKEN" in store.keys()
+        assert "ALICE_2_GITHUB_ACCESS_TOKEN" in store.stale_keys()
+
+    def test_delete_person_removes_stale_key_metadata(self, fake_keyring, tmp_path):
+        config_dir = self._workspace(tmp_path)
+        service = SimplePersonSetupService()
+        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+        self._make_stale(config_dir, "ALICE_GITHUB_ACCESS_TOKEN")
+
+        service.delete_person(config_dir=config_dir, person_id="alice")
+
+        assert "ALICE_GITHUB_ACCESS_TOKEN" not in KeyringSecretStore(config_dir).keys()
+
+    def test_update_person_store_failure_leaves_member_config_untouched(
+        self, fake_keyring, tmp_path, monkeypatch
+    ):
+        config_dir = self._workspace(tmp_path)
+        service = SimplePersonSetupService()
+        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+
+        def _raise(self, old_key, new_key):
+            raise SecretStoreError("keychain is locked")
+
+        monkeypatch.setattr(KeyringSecretStore, "rename", _raise)
+        with pytest.raises(SecretStoreError):
+            service.update_person(
+                PersonUpdateInput(
+                    **{
+                        **_person_input(config_dir).model_dump(),
+                        "original_person_id": "alice",
+                        "person_id": "alice-2",
+                    }
+                )
+            )
+
+        assert (config_dir / "team" / "members" / "alice" / "person.yml").exists()
+        assert not (config_dir / "team" / "members" / "alice-2").exists()
+
+    def test_delete_person_store_failure_keeps_member_config(
+        self, fake_keyring, tmp_path, monkeypatch
+    ):
+        config_dir = self._workspace(tmp_path)
+        service = SimplePersonSetupService()
+        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+
+        def _raise(self, key):
+            raise SecretStoreError("keychain is locked")
+
+        monkeypatch.setattr(KeyringSecretStore, "delete", _raise)
+        with pytest.raises(SecretStoreError):
+            service.delete_person(config_dir=config_dir, person_id="alice")
+
+        assert (config_dir / "team" / "members" / "alice" / "person.yml").exists()
+
+        monkeypatch.undo()
+        service.delete_person(config_dir=config_dir, person_id="alice")
+        assert not (config_dir / "team" / "members" / "alice").exists()

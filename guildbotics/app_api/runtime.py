@@ -1667,7 +1667,10 @@ class AppRuntime:
 
 def _command_roots(person_id: str) -> list[Path]:
     """Physical roots whose logical command names seed the general catalog."""
-    primary = get_primary_config_path(Path())
+    try:
+        primary = get_primary_config_path(Path())
+    except WorkspaceNotConfiguredError:
+        return []
     return [
         primary / "team" / "members" / person_id / "commands",
         get_shared_commands_root(),

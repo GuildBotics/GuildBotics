@@ -15,6 +15,7 @@ from pathlib import Path
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import HotkeySettings
 from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
     get_primary_config_path,
     load_yaml_file,
     save_yaml_file,
@@ -115,7 +116,10 @@ def _normalized(settings: HotkeySettings) -> HotkeySettings:
 
 def load_hotkeys() -> HotkeySettings:
     """Read the workspace hotkey assignments, defaulting to none."""
-    path = hotkeys_file()
+    try:
+        path = hotkeys_file()
+    except WorkspaceNotConfiguredError:
+        return HotkeySettings()
     if not path.is_file():
         return HotkeySettings()
     data = load_yaml_file(path)

@@ -119,7 +119,11 @@ from guildbotics.editions.simple.slack_app_setup import (
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import read_workspace_secrets
-from guildbotics.utils.fileio import get_template_path, load_yaml_file
+from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
+    get_template_path,
+    load_yaml_file,
+)
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
 # Origins the packaged desktop webview serves the app from. Windows uses the
@@ -232,6 +236,12 @@ def create_app(
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(_, exc: AppApiError) -> JSONResponse:
         return _error_response(exc.status_code, exc.code, exc.message, exc.context)
+
+    @app.exception_handler(WorkspaceNotConfiguredError)
+    async def workspace_not_configured_handler(
+        _, exc: WorkspaceNotConfiguredError
+    ) -> JSONResponse:
+        return _error_response(409, "workspace_not_configured", str(exc), {})
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(

@@ -956,6 +956,28 @@ class SimplePersonSetupService:
         new_person_dir = _person_config_dir(config.config_dir, config.person_id)
         if old_person_dir != new_person_dir and new_person_dir.exists():
             raise SetupServiceError("person_id_conflict", "Member ID already exists.")
+
+        # SecretStore first: shared key metadata moves independently of local
+        # value freshness, and a store failure leaves the member config
+        # untouched so the same update can be retried.
+        store = resolve_secret_store(config.config_dir)
+        old_prefix = self._person_env_prefix(config.original_person_id)
+        new_prefix = self._person_env_prefix(config.person_id)
+        renamed = False
+        if old_prefix != new_prefix:
+            indexed = set(store.keys())
+            for suffix in Person.SECRET_ENV_SUFFIXES:
+                old_key = f"{old_prefix}_{suffix}"
+                if old_key in indexed:
+                    store.rename(old_key, f"{new_prefix}_{suffix}")
+                    renamed = True
+        pending_secrets = self.build_person_secrets(config)
+        stored_pem = self._store_private_key_content(store, config)
+        for key, value in pending_secrets.items():
+            store.set(key, value)
+        if renamed or pending_secrets or stored_pem:
+            files.append(CreatedFile(path=store.location, action="update"))
+
         if old_person_dir != new_person_dir:
             new_person_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old_person_dir), str(new_person_dir))
@@ -970,25 +992,6 @@ class SimplePersonSetupService:
         save_yaml_file(person_file, self.build_person_config(config))
         files.append(CreatedFile(path=person_file, action="update"))
 
-        store = resolve_secret_store(config.config_dir)
-        pending_secrets: dict[str, str] = {}
-        old_prefix = self._person_env_prefix(config.original_person_id)
-        new_prefix = self._person_env_prefix(config.person_id)
-        for suffix in Person.SECRET_ENV_SUFFIXES:
-            old_key = f"{old_prefix}_{suffix}"
-            new_key = f"{new_prefix}_{suffix}"
-            if old_key != new_key:
-                stored_value = store.get(old_key)
-                if stored_value is not None:
-                    pending_secrets[new_key] = stored_value
-                    store.delete(old_key)
-        pending_secrets.update(self.build_person_secrets(config))
-        self._store_private_key_content(store, config)
-        for key, value in pending_secrets.items():
-            store.set(key, value)
-        if pending_secrets:
-            files.append(CreatedFile(path=store.location, action="update"))
-
         return PersonSetupResult(files=files)
 
     def delete_person(self, *, config_dir: Path, person_id: str) -> PersonSetupResult:
@@ -998,18 +1001,21 @@ class SimplePersonSetupService:
         if not person_file.exists():
             raise SetupServiceError("person_not_found", "Member config was not found.")
 
+        # SecretStore first: indexed keys are removed whether or not this
+        # device holds their current generation, and a store failure leaves
+        # the member config intact so the deletion can be retried.
+        store = resolve_secret_store(config_dir)
+        person_keys = set(self._person_secret_env_keys(person_id))
+        stored_keys = store.keys()
+        indexed = [key for key in stored_keys if key in person_keys]
+        for key in indexed:
+            store.delete(key)
+        if indexed:
+            files.append(CreatedFile(path=store.location, action="update"))
+
         shutil.rmtree(person_dir)
         files.append(CreatedFile(path=person_file, action="delete"))
         files.extend(_retarget_default_person_id(config_dir, person_id, ""))
-
-        store = resolve_secret_store(config_dir)
-        deleted = False
-        for key in self._person_secret_env_keys(person_id):
-            if store.get(key) is not None:
-                store.delete(key)
-                deleted = True
-        if deleted:
-            files.append(CreatedFile(path=store.location, action="update"))
         return PersonSetupResult(files=files)
 
     def build_person_config(

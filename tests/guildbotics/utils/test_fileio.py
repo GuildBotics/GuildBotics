@@ -249,3 +249,22 @@ def test_save_yaml_file_roundtrip_cleans(tmp_path):
     save_yaml_file(out, raw)
     loaded = load_yaml_file(out)
     assert loaded == expected
+
+
+def test_get_primary_config_path_requires_workspace(monkeypatch, tmp_path):
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    with pytest.raises(WorkspaceNotConfiguredError):
+        get_primary_config_path(Path("hotkeys.yml"))
+
+
+def test_get_config_path_uses_template_without_workspace(monkeypatch, tmp_path):
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    resolved = get_config_path("team/project.yml")
+
+    assert resolved == find_package_subdir(Path("templates")) / "team" / "project.yml"

@@ -159,3 +159,39 @@ def test_store_anchors_local_index_to_its_config_dir(
     store = KeyringSecretStore(workspace_b / ".guildbotics" / "config")
     assert store.get("OPENAI_API_KEY") == "secret-b"
     assert store.stale_keys() == []
+
+
+def test_keyring_store_rename_moves_value_and_generations(
+    fake_keyring, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("ALICE_GITHUB_ACCESS_TOKEN", "ghp-secret")
+
+    store.rename("ALICE_GITHUB_ACCESS_TOKEN", "ALICE_2_GITHUB_ACCESS_TOKEN")
+
+    assert store.keys() == ["ALICE_2_GITHUB_ACCESS_TOKEN"]
+    assert store.get("ALICE_2_GITHUB_ACCESS_TOKEN") == "ghp-secret"
+    assert store.shared_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 1
+    assert store.local_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 1
+    assert store.local_generation("ALICE_GITHUB_ACCESS_TOKEN") is None
+
+
+def test_keyring_store_rename_moves_stale_metadata_and_keeps_it_stale(
+    fake_keyring, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("ALICE_GITHUB_ACCESS_TOKEN", "ghp-secret")
+    # Another device bumped the shared generation; this device is stale now.
+    index = load_yaml_dict(store.location)
+    index["keys"]["ALICE_GITHUB_ACCESS_TOKEN"]["generation"] = 2
+    save_yaml_file(store.location, index)
+    assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
+
+    store.rename("ALICE_GITHUB_ACCESS_TOKEN", "ALICE_2_GITHUB_ACCESS_TOKEN")
+
+    assert store.keys() == ["ALICE_2_GITHUB_ACCESS_TOKEN"]
+    assert store.shared_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 2
+    assert store.get("ALICE_2_GITHUB_ACCESS_TOKEN") is None
+    assert "ALICE_2_GITHUB_ACCESS_TOKEN" in store.stale_keys()
