@@ -318,18 +318,29 @@ def test_changing_the_hub_stops_the_queue_before_it_touches_the_repository(
 
 
 def test_the_queue_is_running_again_after_a_failed_hub_change(
-    client: TestClient, tmp_path: Path
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed attempt must not leave a workspace that has a hub quietly not
-    synchronizing."""
-    _enabled(client)
+    synchronizing. The failure has to happen inside the pause to prove it: a
+    request rejected before the queue stops would pass without testing anything.
+    """
+    enabled = _enabled(client)
+    paused: list[bool] = []
 
-    client.post(
+    def failing_enroll(*args: object, **kwargs: object) -> None:
+        paused.append(current_sync_manager() is None)
+        raise workspace_sync.EnrollmentError("the hub refused this workspace")
+
+    monkeypatch.setattr(workspace_sync, "enroll", failing_enroll)
+
+    response = client.post(
         "/workspace/sync/hub",
         headers=AUTH_HEADERS,
-        json={"hub": {"endpoint": "hub.invalid"}, "workspace_id": "not-a-uuid"},
+        json={"hub": {}, "workspace_id": enabled["workspace_id"]},
     )
 
+    assert response.status_code == HTTP_CONFLICT
+    assert paused == [True], "the failure did not happen inside the pause"
     assert current_sync_manager() is not None
     assert _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["enabled"] is True
 
@@ -364,3 +375,24 @@ def test_trusting_a_hub_requires_the_confirmed_fingerprint(
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "host_key_not_confirmed"
+
+
+def test_a_hub_offering_a_different_key_asks_the_user_to_look_again(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Otherwise the answer is an unhandled error rather than the one thing the
+    user can act on: check the fingerprint again."""
+
+    def changed(endpoint: object, fingerprint: str) -> None:
+        raise workspace_sync.HostKeyChangedError("hub.local offers another key")
+
+    monkeypatch.setattr(workspace_sync.connection, "trust_host_key", changed)
+
+    response = client.post(
+        "/hub/trust",
+        headers=AUTH_HEADERS,
+        json={"endpoint": "hub.local", "fingerprint": "SHA256:confirmed"},
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "host_key_changed"

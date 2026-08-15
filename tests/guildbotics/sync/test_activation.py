@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -165,3 +166,55 @@ def test_reactivating_the_same_workspace_reuses_its_queue(
     monkeypatch.setattr(manager, "stop", lambda timeout=5.0: False)
 
     assert activation.activate_workspace_sync(root) is manager
+
+
+def test_a_pause_keeps_every_other_activation_out_for_its_whole_body(
+    tmp_path: Path, hub: Path
+) -> None:
+    """Holding the lock only across the stop would let a second request see no
+    manager and walk into the same repository, or start a queue beside the
+    work in progress."""
+    root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), root)
+    activation.activate_workspace_sync(root)
+    order: list[str] = []
+    inside = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        with activation.paused_workspace_sync(root):
+            order.append("paused")
+            inside.set()
+            release.wait(5)
+        order.append("resumed")
+
+    def contend() -> None:
+        activation.activate_workspace_sync(root)
+        order.append("activated")
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert inside.wait(5)
+    other = threading.Thread(target=contend)
+    other.start()
+    other.join(0.2)
+
+    assert other.is_alive(), "a second activation entered while the pause was held"
+    release.set()
+    holder.join(5)
+    other.join(5)
+    assert order == ["paused", "resumed", "activated"]
+
+
+def test_a_pause_restores_the_queue_after_the_body_fails(
+    tmp_path: Path, hub: Path
+) -> None:
+    root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), root)
+    activation.activate_workspace_sync(root)
+
+    with pytest.raises(RuntimeError), activation.paused_workspace_sync(root):
+        assert activation.current_sync_manager() is None
+        raise RuntimeError("enrollment failed")
+
+    assert activation.current_sync_manager() is not None

@@ -148,23 +148,28 @@ def test_a_windows_login_name_is_still_an_address(text: str) -> None:
     assert connection.parse_hub_endpoint(text).host == "hub.local"
 
 
-def _scanning(monkeypatch: pytest.MonkeyPatch, lines: list[str], prints: str) -> None:
-    monkeypatch.setattr(connection, "_scan_host_keys", lambda endpoint: lines)
-    monkeypatch.setattr(connection, "_fingerprints", lambda scanned: tuple([prints]))
+ED25519 = "hub.local ssh-ed25519 AAAAC3Nz"
+RSA = "hub.local ssh-rsa AAAAB3Nz"
+
+
+def _offering(monkeypatch: pytest.MonkeyPatch, keys: dict[str, str]) -> None:
+    """Make the hub offer these ``line -> fingerprint`` pairs."""
+    monkeypatch.setattr(connection, "_scan_host_keys", lambda endpoint: list(keys))
+    monkeypatch.setattr(connection, "_fingerprint_of", lambda line: keys[line])
 
 
 def test_trusting_stores_the_key_the_user_confirmed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(connection, "_ssh_dir", lambda: tmp_path / ".ssh")
-    _scanning(monkeypatch, ["hub.local ssh-ed25519 AAAA"], "SHA256:confirmed")
+    _offering(monkeypatch, {ED25519: "SHA256:confirmed"})
 
     result = connection.trust_host_key(
         HubEndpoint(host="hub.local"), "SHA256:confirmed"
     )
 
     assert result.trusted is True
-    assert "ssh-ed25519 AAAA" in (tmp_path / ".ssh" / "known_hosts").read_text()
+    assert (tmp_path / ".ssh" / "known_hosts").read_text().strip() == ED25519
 
 
 def test_a_machine_offering_a_different_key_is_not_trusted(
@@ -173,9 +178,28 @@ def test_a_machine_offering_a_different_key_is_not_trusted(
     """The confirmation is the only moment a machine-in-the-middle is caught, so
     storing whatever the second read returns would make it decorative."""
     monkeypatch.setattr(connection, "_ssh_dir", lambda: tmp_path / ".ssh")
-    _scanning(monkeypatch, ["hub.local ssh-ed25519 SOMETHINGELSE"], "SHA256:other")
+    _offering(monkeypatch, {ED25519: "SHA256:other"})
 
     with pytest.raises(connection.HostKeyChangedError):
         connection.trust_host_key(HubEndpoint(host="hub.local"), "SHA256:confirmed")
 
     assert not (tmp_path / ".ssh" / "known_hosts").exists()
+
+
+def test_only_the_confirmed_key_is_trusted_when_several_are_offered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A confirmed public key is public, so anyone can present it again. Keys
+    that merely arrive alongside it were never shown to the user, and a later
+    connection could be negotiated onto one of them."""
+    monkeypatch.setattr(connection, "_ssh_dir", lambda: tmp_path / ".ssh")
+    _offering(monkeypatch, {ED25519: "SHA256:confirmed", RSA: "SHA256:unseen"})
+
+    result = connection.trust_host_key(
+        HubEndpoint(host="hub.local"), "SHA256:confirmed"
+    )
+
+    known_hosts = (tmp_path / ".ssh" / "known_hosts").read_text()
+    assert ED25519 in known_hosts
+    assert "ssh-rsa" not in known_hosts
+    assert result.fingerprints == ("SHA256:confirmed",)

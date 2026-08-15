@@ -30,6 +30,7 @@ from guildbotics.app_api.models import (
     WorkspaceSyncStatus,
 )
 from guildbotics.hub import (
+    HostKeyChangedError,
     HubLocation,
     HubUnreachableError,
     InvalidHubEndpointError,
@@ -48,6 +49,7 @@ from guildbotics.sync import (
     current_sync_manager,
     deactivate_workspace_sync,
     enroll,
+    paused_workspace_sync,
     preview_enrollment,
 )
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_workspace_root
@@ -70,7 +72,6 @@ _HUB_FAILURES = (
     host.HubError,
     EnrollmentError,
     SyncRepositoryError,
-    SyncStillStoppingError,
 )
 
 
@@ -134,8 +135,19 @@ class WorkspaceSyncService:
                 "Name the fingerprint that was confirmed before trusting a hub.",
                 status_code=400,
             )
-        with _reporting("hub_unreachable", f"{location.label} could not be reached."):
-            connection.trust_host_key(location.endpoint, request.fingerprint)
+        try:
+            with _reporting(
+                "hub_unreachable", f"{location.label} could not be reached."
+            ):
+                connection.trust_host_key(location.endpoint, request.fingerprint)
+        except HostKeyChangedError as exc:
+            raise AppApiError(
+                "host_key_changed",
+                f"{location.label} offered a different host key than the one "
+                "confirmed. Check the fingerprint again before trusting it.",
+                context={"detail": str(exc)},
+                status_code=409,
+            ) from exc
         return self.inspect_hub(target)
 
     def get_ssh_key(self) -> DeviceSshKey:
@@ -283,31 +295,28 @@ class WorkspaceSyncService:
 
     @contextmanager
     def _paused(self) -> Iterator[None]:
-        """Hold the workspace's repository alone for the duration.
+        """Hold the workspace's repository alone, reporting a busy queue.
 
-        Enrolling and previewing both commit, fetch, reset the branch, and move
-        refs in the very repository a running queue is working in. Two threads
-        doing that interleave, so the queue stops first -- the same rule a
-        workspace switch follows, and the invariant the rest of this package is
-        built on.
+        The exclusion itself belongs to the activation boundary, which is
+        process-wide: this service is instantiated more than once, so a lock
+        held here would not keep a workspace switch or another request out.
 
         Raises:
-            AppApiError: When the queue is still finishing and cannot be stopped.
-                Proceeding would put a second worker on the same repository.
+            AppApiError: When the queue is still finishing and cannot be
+                stopped. Proceeding would put a second worker on the same
+                repository.
         """
-        if not deactivate_workspace_sync():
+        try:
+            with paused_workspace_sync(_workspace_root()):
+                yield
+        except SyncStillStoppingError as exc:
             raise AppApiError(
                 "workspace_sync_busy",
                 "Synchronization is still finishing its last cycle. "
                 "Try again in a moment.",
+                context={"detail": str(exc)},
                 status_code=409,
-            )
-        try:
-            yield
-        finally:
-            # Restored whether or not the work succeeded: a failed attempt must
-            # not leave a workspace that had a hub silently not synchronizing.
-            activate_workspace_sync(_workspace_root())
+            ) from exc
 
     def _remote_url(
         self, location: HubLocation, workspace_id: str, *, create: bool

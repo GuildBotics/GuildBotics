@@ -1,6 +1,9 @@
 """Putting the sync queue into a running process, and taking it out again.
 
-This is the one place synchronization is wired to the rest of GuildBotics.
+This is the one place synchronization is wired to the rest of GuildBotics, and
+the one place that decides which process-wide queue is running. Everything that
+starts one, stops one, or needs the repository to itself goes through the same
+lock here, so those never overlap.
 Everything else announces writes through the Workspace Sync Port and never
 learns whether anything is listening, so a workspace with no hub keeps the
 no-op port and issues no Git command and no SSH connection at all.
@@ -24,6 +27,8 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
@@ -64,25 +69,37 @@ def activate_workspace_sync(
             holding a repository, so starting another one now would put two
             threads on it.
     """
-    global _manager, _workspace
     with _lock:
-        repository = _connected_repository(workspace_root)
-        if repository is None:
-            _stop_locked()
-            return None
-        if _manager is not None and _workspace == repository.workspace_root:
-            return _manager
+        return _activate_locked(workspace_root)
+
+
+@contextmanager
+def paused_workspace_sync(workspace_root: Path | None = None) -> Iterator[None]:
+    """Hold one workspace's repository alone, with no queue running in it.
+
+    Enrolling and previewing commit, fetch, reset the branch, and move refs in
+    the very repository the queue works in, so the queue stops for the duration.
+    The lock is held across the whole body rather than only across the stop:
+    releasing it in between would let a second request see no manager and walk
+    into the same repository, and would let an activation start a queue beside
+    the work in progress.
+
+    Raises:
+        SyncStillStoppingError: When the queue could not be stopped. Whatever
+            was going to be done here would have been done beside it.
+    """
+    with _lock:
         if not _stop_locked():
             raise SyncStillStoppingError(
-                "The previous workspace's synchronization queue has not finished "
-                "stopping. Try again in a moment."
+                "The synchronization queue has not finished stopping. "
+                "Try again in a moment."
             )
-        manager = build_git_sync_manager(repository.workspace_root)
-        set_workspace_sync_port(manager)
-        manager.start()
-        _manager = manager
-        _workspace = repository.workspace_root
-        return manager
+        try:
+            yield
+        finally:
+            # Restored whether or not the work succeeded: a failed attempt must
+            # not leave a workspace that has a hub quietly not synchronizing.
+            _activate_locked(workspace_root)
 
 
 def deactivate_workspace_sync() -> bool:
@@ -97,6 +114,28 @@ def deactivate_workspace_sync() -> bool:
     """
     with _lock:
         return _stop_locked()
+
+
+def _activate_locked(workspace_root: Path | None) -> GitSyncManager | None:
+    """Start the queue for a workspace. The caller holds the activation lock."""
+    global _manager, _workspace
+    repository = _connected_repository(workspace_root)
+    if repository is None:
+        _stop_locked()
+        return None
+    if _manager is not None and _workspace == repository.workspace_root:
+        return _manager
+    if not _stop_locked():
+        raise SyncStillStoppingError(
+            "The previous workspace's synchronization queue has not finished "
+            "stopping. Try again in a moment."
+        )
+    manager = build_git_sync_manager(repository.workspace_root)
+    set_workspace_sync_port(manager)
+    manager.start()
+    _manager = manager
+    _workspace = repository.workspace_root
+    return manager
 
 
 def _stop_locked() -> bool:

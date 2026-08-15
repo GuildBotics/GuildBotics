@@ -202,7 +202,7 @@ def probe_host_key(endpoint: HubEndpoint) -> HubHostKey:
     one moment where a machine-in-the-middle can be caught.
     """
     return HubHostKey(
-        fingerprints=_fingerprints(_scan_host_keys(endpoint)),
+        fingerprints=tuple(_fingerprint_of(line) for line in _scan_host_keys(endpoint)),
         trusted=_is_known_host(endpoint),
     )
 
@@ -216,6 +216,11 @@ def trust_host_key(endpoint: HubEndpoint, fingerprint: str) -> HubHostKey:
     confirmation decorative, since a machine that answered honestly the first
     time could answer differently the second.
 
+    Only the key with that fingerprint is stored, not everything the machine
+    offers alongside it. A confirmed public key is public, so anyone can present
+    it again; trusting the other keys that arrive with it would trust keys the
+    user never saw, and a later connection could be negotiated onto one of them.
+
     Args:
         endpoint (HubEndpoint): The hub machine.
         fingerprint (str): The ``SHA256:`` fingerprint the user confirmed.
@@ -223,9 +228,12 @@ def trust_host_key(endpoint: HubEndpoint, fingerprint: str) -> HubHostKey:
     Raises:
         HostKeyChangedError: When the machine no longer offers that key.
     """
-    lines = _scan_host_keys(endpoint)
-    offered = _fingerprints(lines)
-    if fingerprint not in offered:
+    confirmed = [
+        line
+        for line in _scan_host_keys(endpoint)
+        if _fingerprint_of(line) == fingerprint
+    ]
+    if not confirmed:
         raise HostKeyChangedError(
             f"{endpoint.host} no longer offers the host key that was confirmed. "
             "Check the fingerprint again before trusting it."
@@ -235,12 +243,12 @@ def trust_host_key(endpoint: HubEndpoint, fingerprint: str) -> HubHostKey:
     existing = (
         set(path.read_text(encoding="utf-8").splitlines()) if path.is_file() else set()
     )
-    added = [line for line in lines if line not in existing]
+    added = [line for line in confirmed if line not in existing]
     if added:
         with path.open("a", encoding="utf-8") as handle:
             handle.write("\n".join(added) + "\n")
         path.chmod(0o600)
-    return HubHostKey(fingerprints=offered, trusted=True)
+    return HubHostKey(fingerprints=(fingerprint,), trusted=True)
 
 
 def read_ssh_key() -> HubSshKey | None:
@@ -311,7 +319,12 @@ def _scan_host_keys(endpoint: HubEndpoint) -> list[str]:
     return lines
 
 
-def _fingerprints(lines: list[str]) -> tuple[str, ...]:
+def _fingerprint_of(line: str) -> str:
+    """Return the fingerprint of one scanned host key.
+
+    One key at a time, so a fingerprint is never attributed to the wrong line:
+    which key the user confirmed is the whole question here.
+    """
     keygen = keygen_executable()
     if keygen is None:
         raise HubUnreachableError(
@@ -320,14 +333,9 @@ def _fingerprints(lines: list[str]) -> tuple[str, ...]:
     output = _run(
         [keygen, "-l", "-f", "-"],
         "read an SSH host key fingerprint",
-        stdin="\n".join(lines) + "\n",
+        stdin=f"{line}\n",
     )
-    return tuple(
-        field
-        for line in output.splitlines()
-        for field in line.split()
-        if field.startswith("SHA256:")
-    )
+    return next((field for field in output.split() if field.startswith("SHA256:")), "")
 
 
 def _is_known_host(endpoint: HubEndpoint) -> bool:
