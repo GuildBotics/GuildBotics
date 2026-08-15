@@ -58,8 +58,11 @@ _WORKSPACE_IDENTITY_PATH = "state/workspace.json"
 
 #: What connecting this workspace to a hub turns out to be. ``register`` gives
 #: the hub its first content, ``join`` merges two histories that never met, and
-#: ``reconnect`` settles a hub this workspace already shares history with.
+#: ``reconnect`` settles a hub this workspace already shares history with. Only
+#: the last two are ever previewed; the first has nothing to compare against.
 EnrollmentMode = Literal["register", "join", "reconnect"]
+#: The outcomes a preview can describe, which is every one but ``register``.
+PreviewMode = Literal["join", "reconnect"]
 
 
 class EnrollmentError(RuntimeError):
@@ -71,10 +74,9 @@ class EnrollmentPreview:
     """What joining a hub would do, shown before anything is adopted.
 
     Attributes:
-        hub_workspace_id (str | None): The workspace the hub holds, or None
-            when the hub repository is still empty and this workspace would
-            become its first content.
-        mode (EnrollmentMode): What connecting would turn out to be.
+        hub_workspace_id (str): The workspace the hub holds. It is adopted here
+            when the join proceeds and the two identifiers differ.
+        mode (PreviewMode): What connecting would turn out to be.
         workspace_id (str): This workspace's current identifier. It is replaced
             by ``hub_workspace_id`` when the two differ and the join proceeds.
         hub_only (tuple[str, ...]): Files only the hub has. They are added here.
@@ -86,8 +88,8 @@ class EnrollmentPreview:
             shared until they are repaired.
     """
 
-    hub_workspace_id: str | None
-    mode: EnrollmentMode
+    hub_workspace_id: str
+    mode: PreviewMode
     workspace_id: str
     hub_only: tuple[str, ...]
     device_only: tuple[str, ...]
@@ -121,14 +123,20 @@ class EnrollmentResult:
 def preview_enrollment(
     remote_url: str, workspace_root: Path | None = None
 ) -> EnrollmentPreview:
-    """Report what connecting this workspace to ``remote_url`` would do.
+    """Report what joining the workspace the hub holds at ``remote_url`` would do.
+
+    Only joining has anything to preview. Registering gives a hub its first
+    content, so there is no other side to compare against -- and asking for one
+    anyway would make this workspace a repository for an answer that is known
+    in advance.
 
     Nothing about this workspace's connection changes: the hub is read through
     its URL, so a preview the user does not act on leaves a workspace that is
     still not synchronized.
 
     Raises:
-        EnrollmentError: When the hub cannot be reached or cannot be read.
+        EnrollmentError: When the hub cannot be reached, cannot be read, or
+            does not hold this workspace.
     """
     repository, outcome = _prepare(workspace_root)
     with _as_enrollment_error("The hub could not be read"):
@@ -140,30 +148,13 @@ def preview_enrollment(
             repository.forget_preview()
 
 
-def preview_registration(workspace_root: Path | None = None) -> EnrollmentPreview:
-    """Report what registering with a hub that does not hold this workspace does.
-
-    The hub has no repository for it yet, so there is nothing to fetch and
-    nothing to compare -- but the user still needs to be told which of their
-    files cannot be shared until they are repaired.
-    """
-    repository, outcome = _prepare(workspace_root)
-    return _preview(repository, outcome, None)
-
-
 def _preview(
     repository: LocalSyncRepository, outcome: CommitOutcome, remote: str | None
 ) -> EnrollmentPreview:
     local = outcome.head
     if remote is None or local is None:
-        return EnrollmentPreview(
-            hub_workspace_id=None,
-            mode="register",
-            workspace_id=_local_identity(repository).workspace_id,
-            hub_only=(),
-            device_only=(),
-            differing=(),
-            unsendable=outcome.unsendable,
+        raise EnrollmentError(
+            "The hub does not hold this workspace, so there is nothing to compare."
         )
     hub_only, device_only, differing = _classify(repository, local, remote)
     return EnrollmentPreview(
@@ -378,7 +369,7 @@ def _join(
     )
 
 
-def _mode(repository: LocalSyncRepository, local: str, remote: str) -> EnrollmentMode:
+def _mode(repository: LocalSyncRepository, local: str, remote: str) -> PreviewMode:
     """Tell a first meeting apart from a reunion."""
     return "reconnect" if repository.merge_base(local, remote) is not None else "join"
 

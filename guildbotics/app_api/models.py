@@ -127,11 +127,15 @@ class WorkspaceSyncEnableRequest(BaseModel):
 
 
 class WorkspaceSyncPreview(BaseModel):
-    """What connecting the selected workspace to a hub would do."""
+    """What joining the workspace a hub already holds would do.
+
+    Registering is not previewed: a hub with no copy of this workspace has
+    nothing to compare against.
+    """
 
     hub_workspace_id: str | None = None
     workspace_id: str
-    mode: Literal["register", "join", "reconnect"]
+    mode: Literal["join", "reconnect"]
     hub_only: list[str] = Field(default_factory=list)
     device_only: list[str] = Field(default_factory=list)
     differing: list[str] = Field(default_factory=list)

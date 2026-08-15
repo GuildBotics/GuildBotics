@@ -27,10 +27,10 @@ from guildbotics.sync.enrollment import (
     EnrollmentMode,
     EnrollmentPreview,
     EnrollmentResult,
+    PreviewMode,
     clone_workspace,
     enroll,
     preview_enrollment,
-    preview_registration,
 )
 from guildbotics.sync.local_repository import (
     LocalSyncRepository,
@@ -54,6 +54,7 @@ __all__ = [
     "GitSyncManager",
     "GitSyncStatus",
     "LocalSyncRepository",
+    "PreviewMode",
     "SharedDataAnomaly",
     "SyncRepositoryError",
     "SyncState",
@@ -67,6 +68,5 @@ __all__ = [
     "deactivate_workspace_sync",
     "enroll",
     "preview_enrollment",
-    "preview_registration",
     "record_update_rejected",
 ]

@@ -129,19 +129,34 @@ def test_enabling_without_a_hub_reports_why(client: TestClient) -> None:
     assert response.json()["code"] == "hub_register_failed"
 
 
-def test_a_preview_reports_the_difference_without_connecting(
+def test_a_hub_that_does_not_hold_this_workspace_has_nothing_to_preview(
     client: TestClient,
 ) -> None:
+    """The caller already knows it would be a registration, from the hub's own
+    workspace list, and a preview must not make this workspace a repository to
+    answer a question with one possible answer."""
     client.post("/hub", headers=AUTH_HEADERS)
 
-    payload = _json(
-        client.post("/workspace/sync/preview", headers=AUTH_HEADERS, json={"hub": {}})
+    response = client.post(
+        "/workspace/sync/preview", headers=AUTH_HEADERS, json={"hub": {}}
     )
 
-    assert payload["mode"] == "register"
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "sync_preview_unavailable"
     assert (
         _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["enabled"] is False
     )
+
+
+def test_a_preview_before_a_first_connection_leaves_no_repository(
+    client: TestClient, workspace: Path
+) -> None:
+    client.post("/hub", headers=AUTH_HEADERS)
+
+    client.post("/workspace/sync/preview", headers=AUTH_HEADERS, json={"hub": {}})
+
+    assert not (workspace / ".guildbotics" / ".git").exists()
+    assert not (workspace / ".guildbotics" / "state" / "workspace.json").exists()
 
 
 def test_retrying_an_unsynchronized_workspace_changes_nothing(

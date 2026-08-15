@@ -48,7 +48,6 @@ from guildbotics.sync import (
     deactivate_workspace_sync,
     enroll,
     preview_enrollment,
-    preview_registration,
 )
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_workspace_root
 from guildbotics.utils.openssh import OpenSshNotFoundError
@@ -147,20 +146,23 @@ class WorkspaceSyncService:
     def preview(self, request: WorkspaceSyncEnableRequest) -> WorkspaceSyncPreview:
         """Report what enabling synchronization would do, changing nothing shared.
 
-        The hub is asked what it holds before anything is compared. A workspace
-        it does not hold yet has nothing to compare against, and no repository
-        to read either -- creating one would be a change, and a preview makes
-        none.
+        Only joining is previewed. Registering gives the hub its first content,
+        so there is nothing on the other side to show -- and the caller already
+        knows which it is from the hub's own workspace list.
         """
         location = _location(request.hub)
-        target = request.workspace_id or _own_workspace_id()
+        target = request.workspace_id or _workspace_id() or ""
         with _reporting("sync_preview_failed", "The hub could not be compared."):
-            if target not in self._workspace_ids(location):
-                preview = preview_registration(_workspace_root())
-            else:
-                preview = preview_enrollment(
-                    connection.hub_remote_url(location, target), _workspace_root()
+            if not target or target not in self._workspace_ids(location):
+                raise AppApiError(
+                    "sync_preview_unavailable",
+                    f"{location.label} does not hold this workspace, so enabling "
+                    "synchronization would register it rather than join it.",
+                    status_code=409,
                 )
+            preview = preview_enrollment(
+                connection.hub_remote_url(location, target), _workspace_root()
+            )
         return WorkspaceSyncPreview(
             hub_workspace_id=preview.hub_workspace_id,
             workspace_id=preview.workspace_id,

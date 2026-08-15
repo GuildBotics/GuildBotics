@@ -135,6 +135,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 参加フローの規約:
 
 - 参加は上書きではない。**このマシンの内容を先に commit してから** Hub の内容を採用し、押し出された commit は rejected ref と Activity に残す
+- **preview するのは参加のときだけ。** 新規登録は比較する相手がいないので、preview のために repository を作らない（作ると、有効化しなかった Workspace に `.git` と Workspace ID が残る）
 - preview と実行は同じ前半（`initialize` → identity → commit）と同じ分類関数を共有する。preview が実行と違う起点や違う結論を語らないようにするため
 - 同じ path は Hub 側を採用、Hub に無い path は保持して送信、Workspace ID は Hub 側を採用する
 - **tree の直接比較でよいのは履歴を共有していない相手だけ。** 共通の commit がある相手（Hub 再構築後の再接続など）では「両方が持っている」は何も意味しない。`merge_base` があれば通常の収束（manager）へ委譲し、参加側で別の規則を作らない
@@ -281,6 +282,7 @@ help / docstring が正であり、member コマンドの一行説明は
 - 共有 record は `schema_version` を現在値へ固定する。旧 schema の fallback 読み込みは作らない
 - 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
 - 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` は key 名と generation 以外の field を拒否するため、Secret 値の混入を内容検査なしに防げる
+- **書き手は、境界が拒否するものを受理しない。** サイズ上限は境界にしか見えない唯一のクラス（構文や schema と違い、製品の通常経路はどこも失敗しない）なので、書き手側の上限を境界の定数から導出する。例: `MAX_AVATAR_BYTES = MAX_SHARED_AVATAR_BYTES`、`DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES`。同じ資産に書き込み経路が複数ある場合（アップロードと URL 取り込みなど）は全部に掛ける
 
 ### 5. スケジューラ
 

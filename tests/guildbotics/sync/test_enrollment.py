@@ -306,24 +306,24 @@ def test_a_preview_leaves_the_workspace_unconnected(tmp_path: Path, hub: Path) -
     assert (joining / ".guildbotics" / CONFIG).read_text() == "name: mine\n"
 
 
-def test_a_preview_of_an_empty_hub_reports_a_registration(
-    tmp_path: Path, hub: Path
-) -> None:
+def test_an_empty_hub_has_nothing_to_preview(tmp_path: Path, hub: Path) -> None:
+    """Registering gives the hub its first content, so there is no other side
+    to compare against -- and asking anyway would make this workspace a
+    repository for an answer that is known in advance."""
     root = _workspace(tmp_path / "mac", **{CONFIG: "name: demo\n"})
 
-    preview = enrollment.preview_enrollment(str(hub), root)
-
-    assert preview.hub_workspace_id is None
-    assert preview.differing == ()
+    with pytest.raises(enrollment.EnrollmentError):
+        enrollment.preview_enrollment(str(hub), root)
 
 
 def test_a_preview_reports_what_cannot_be_shared_yet(tmp_path: Path, hub: Path) -> None:
-    root = _workspace(
-        tmp_path / "mac",
-        **{CONFIG: "name: demo\n", "state/chat_state/broken.json": "{not json"},
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
+    joining = _workspace(
+        tmp_path / "windows",
+        **{CONFIG: "name: mine\n", "state/chat_state/broken.json": "{not json"},
     )
 
-    preview = enrollment.preview_enrollment(str(hub), root)
+    preview = enrollment.preview_enrollment(str(hub), joining)
 
     assert [change.path for change in preview.unsendable] == [
         "state/chat_state/broken.json"
