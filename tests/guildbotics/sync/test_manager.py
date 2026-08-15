@@ -22,6 +22,8 @@ from guildbotics.workspace.identity import WorkspaceIdentity
 from tests.guildbotics.sync.conftest import WORKSPACE_ID, Device, make_device
 
 CONFIG = "config/team/project.yml"
+#: A shared record whose syntax the boundary still refuses to send.
+BROKEN = "state/chat_state/slack/aiko/channels/C1.json"
 
 
 def _activity_event(event_id: str, summary: str) -> str:
@@ -291,16 +293,14 @@ def test_a_hub_that_keeps_moving_is_redone_a_bounded_number_of_times(
 def test_an_invalid_file_is_held_back_while_the_rest_is_sent(
     first: Device, hub: Path
 ) -> None:
-    first.write("state/events/2026/08/broken.json", '{"schema_version": 1}')
+    first.write(BROKEN, "{not json}")
     first.write(CONFIG, "language: ja\n")
 
     status = first.manager.synchronize()
 
-    assert [held.path for held in status.invalid_paths] == [
-        "state/events/2026/08/broken.json"
-    ]
-    assert "event_id" in status.invalid_paths[0].reason
-    assert _hub_file(hub, "state/events/2026/08/broken.json") is None
+    assert [held.path for held in status.invalid_paths] == [BROKEN]
+    assert "not valid JSON" in status.invalid_paths[0].reason
+    assert _hub_file(hub, BROKEN) is None
     assert _hub_file(hub, CONFIG) == "language: ja\n"
 
 
@@ -309,30 +309,28 @@ def test_a_held_back_change_is_not_overwritten_by_the_hub(
 ) -> None:
     """A file that fails validation was never shareable, so it never loses a
     race -- but it is still the user's work and must survive convergence."""
-    path = "state/events/2026/08/e5.json"
-    first.write(path, _activity_event("e5", "from mac"))
+    first.write(BROKEN, '{"cursor": "from mac"}')
     first.write(CONFIG, "language: ja\n")
     first.manager.synchronize()
-    second.write(path, '{"schema_version": 1}')
+    second.write(BROKEN, "{not json}")
 
     status = second.manager.synchronize()
 
-    assert [held.path for held in status.invalid_paths] == [path]
-    assert second.read(path) == '{"schema_version": 1}'
+    assert [held.path for held in status.invalid_paths] == [BROKEN]
+    assert second.read(BROKEN) == "{not json}"
     assert second.read(CONFIG) == "language: ja\n"
-    assert "from mac" in (_hub_file(hub, path) or "")
+    assert "from mac" in (_hub_file(hub, BROKEN) or "")
 
 
 def test_a_repaired_file_is_sent_by_the_next_scan(first: Device, hub: Path) -> None:
-    path = "state/events/2026/08/e3.json"
-    first.write(path, '{"schema_version": 1}')
+    first.write(BROKEN, "{not json}")
     first.manager.synchronize()
 
-    first.write(path, _activity_event("e3", "repaired"))
+    first.write(BROKEN, '{"cursor": "repaired"}')
     status = first.manager.synchronize()
 
     assert status.invalid_paths == ()
-    assert _hub_file(hub, path) is not None
+    assert _hub_file(hub, BROKEN) is not None
 
 
 # -- Damaged shared data ------------------------------------------------------
@@ -587,7 +585,7 @@ def test_a_barrier_does_not_complete_while_shared_data_is_damaged(
 def test_a_barrier_does_not_complete_for_a_change_held_back_by_validation(
     first: Device,
 ) -> None:
-    change = first.write("state/events/2026/08/broken.json", '{"schema_version": 1}')
+    change = first.write(BROKEN, "{not json}")
 
     first.manager.synchronize()
 

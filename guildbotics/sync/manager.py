@@ -21,7 +21,6 @@ of being overwritten.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -39,16 +38,18 @@ from guildbotics.sync.local_repository import (
     WorkingTreeChange,
 )
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
-from guildbotics.utils.shared_file_validators import SharedFileInvalidError
 from guildbotics.utils.workspace_sync_port import ChangeSet
 from guildbotics.workspace.identity import (
-    SHARED_RECORD_SCHEMA_VERSION,
     WorkspaceIdentity,
     ensure_device_identity,
     ensure_workspace_identity,
     new_uuid7,
 )
-from guildbotics.workspace.validation import validate_shared_file
+from guildbotics.workspace.validation import (
+    SharedFileInvalidError,
+    SharedSchemaAheadError,
+    validate_shared_file,
+)
 
 SyncState = Literal[
     "idle",
@@ -537,9 +538,12 @@ class GitSyncManager:
         looks idle while it is no longer synchronizing at all.
         """
         try:
+            validate_shared_file(path, data)
             return WorkspaceIdentity.model_validate_json(data)
+        except SharedFileInvalidError as exc:
+            raise self._anomaly_for(exc) from exc
         except ValueError as exc:
-            raise self._anomaly_for(path, data, str(exc)) from exc
+            raise SharedDataAnomaly("invalid_shared_file", f"{path}: {exc}") from exc
 
     def _verify_workspace_identity(self, remote: str | None) -> None:
         """Refuse to synchronize with a hub holding a different workspace."""
@@ -574,17 +578,15 @@ class GitSyncManager:
             try:
                 validate_shared_file(path, data)
             except SharedFileInvalidError as exc:
-                raise self._anomaly_for(path, data, exc.reason) from exc
+                raise self._anomaly_for(exc) from exc
 
-    def _anomaly_for(self, path: str, data: bytes, reason: str) -> SharedDataAnomaly:
+    def _anomaly_for(self, exc: SharedFileInvalidError) -> SharedDataAnomaly:
         """Tell "this build is too old" apart from "this file is damaged"."""
-        if _declared_schema_version(data) > SHARED_RECORD_SCHEMA_VERSION:
+        if isinstance(exc, SharedSchemaAheadError):
             return SharedDataAnomaly(
-                "schema_version_ahead",
-                f"{path} was written by a newer GuildBotics",
-                state="update_required",
+                "schema_version_ahead", str(exc), state="update_required"
             )
-        return SharedDataAnomaly("invalid_shared_file", f"{path} {reason}")
+        return SharedDataAnomaly("invalid_shared_file", str(exc))
 
     # -- Pending changes ----------------------------------------------------
 
@@ -647,15 +649,6 @@ def build_git_sync_manager(workspace_root: Path | None = None) -> GitSyncManager
 
 #: Git's empty tree, used as the base when this workspace has no commits yet.
 _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
-
-def _declared_schema_version(data: bytes) -> int:
-    try:
-        payload = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return 0
-    version = payload.get("schema_version") if isinstance(payload, dict) else None
-    return version if isinstance(version, int) else 0
 
 
 def _utc_now() -> str:
