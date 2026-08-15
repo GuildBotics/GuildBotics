@@ -132,6 +132,7 @@ import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
+import { SyncSettings } from "../sync/SyncSettings";
 import { isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
 import { normalizeLanguage } from "../i18n";
@@ -212,6 +213,8 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   // Hotkeys are an everyday convenience rather than part of getting running,
   // so they are offered only once the workspace is configured.
   "shortcuts",
+  // Sharing a workspace presupposes there is one to share.
+  "sync",
   "verification",
 ] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
@@ -674,6 +677,7 @@ export function SetupPage() {
           ) : null}
           {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
           {activeSection === "shortcuts" ? <ShortcutsSection /> : null}
+          {activeSection === "sync" ? <SyncSettings /> : null}
           {activeSection === "verification" ? (
             <VerificationSection
               config={config.data}
@@ -848,6 +852,7 @@ function SetupSectionNav({
     ["members", t("setup.nav.members"), status.membersReady],
     ["github", t("setup.nav.github"), status.githubReady],
     ["shortcuts", t("setup.nav.shortcuts"), true],
+    ["sync", t("setup.nav.sync"), true],
     ["verification", t("setup.nav.verification"), status.verificationReady],
   ];
   return (

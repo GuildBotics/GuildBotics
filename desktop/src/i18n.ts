@@ -51,6 +51,91 @@ const resources = {
         indicator: {
           aria: "Synchronization: {{state}}",
         },
+        settings: {
+          title: "Sync and devices",
+          subtitle: "Share this workspace with your other machines through a hub you run yourself.",
+        },
+        connect: {
+          title: "Connect to a hub",
+          changeTitle: "Connect to a different hub",
+          endpoint: "Hub address",
+          endpointHint:
+            "The machine hosting the hub, as user@host. GuildBotics decides where the repositories live on it.",
+          inspect: "Look up",
+          failed: "Could not connect",
+          chooseTitle: "What to do with this workspace",
+          register: "Register this workspace on the hub",
+          joinHint: "Or join a workspace the hub already holds:",
+          join: "Join…",
+        },
+        hostKey: {
+          title: "Confirm this machine's host key",
+          body: "Select the fingerprint that matches the one shown on the hub machine. Nothing is sent until it matches.",
+          confirm: "This is the one",
+          compareHint: "On the hub machine, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
+        },
+        preview: {
+          title: "Before joining",
+          mode: {
+            join: "This machine's content is committed first, then the hub's version wins for any file both hold. What loses is kept locally and never discarded.",
+            reconnect:
+              "This machine and the hub share history, so the usual reconciliation applies rather than a replacement.",
+          },
+          differing_one: "1 file the hub's version will replace",
+          differing_other: "{{count}} files the hub's version will replace",
+          hubOnly_one: "1 file to take from the hub",
+          hubOnly_other: "{{count}} files to take from the hub",
+          deviceOnly_one: "1 file only this machine has, which will be sent",
+          deviceOnly_other: "{{count}} files only this machine has, which will be sent",
+          unsendableTitle: "Some changes stay on this machine",
+          unsendableBody_one: "1 change cannot be sent yet and is left untouched.",
+          unsendableBody_other: "{{count}} changes cannot be sent yet and are left untouched.",
+          cancel: "Cancel",
+          confirm: "Join",
+        },
+        connected: {
+          title: "Connected hub",
+          change: "Connect to a different hub",
+          cancelChange: "Cancel",
+          changeHint:
+            "Use this after rebuilding the hub on another machine. Content only this machine has is sent to the new hub rather than discarded.",
+        },
+        unsendable: {
+          title: "Changes that cannot be sent",
+          body: "These files stay on this machine until they are repaired here. Nothing is discarded.",
+          path: "File",
+          reason: "Reason",
+        },
+        devices: {
+          title: "Devices",
+          empty: "No device has joined this workspace yet.",
+          name: "Name",
+          os: "OS",
+          joinedAt: "Joined",
+          id: "Device ID",
+          self: "This machine",
+          copy: "Copy",
+          copied: "Copied",
+          rename: "Name of this machine",
+          renameHint: "Each machine is named on itself.",
+          renameAction: "Rename",
+        },
+        sshKey: {
+          title: "This device's SSH key",
+          body: "Add this public key to the hub machine's authorized_keys. GuildBotics cannot do it for you: that step is what proves you already have access to that machine.",
+          create: "Create a key",
+          copy: "Copy",
+          copied: "Copied",
+        },
+        host: {
+          title: "Host the hub on this machine",
+          body: "One machine holds the shared repositories the others connect to.",
+          create: "Host the hub here",
+          hosted_one: "Hosting the hub, with 1 workspace.",
+          hosted_other: "Hosting the hub, with {{count}} workspaces.",
+          sshdHint:
+            "The other machines reach it over SSH, so this machine needs an OpenSSH server running.",
+        },
         state: {
           synced: {
             label: "In sync",
@@ -516,6 +601,7 @@ const resources = {
           members: "Members",
           github: "GitHub",
           shortcuts: "Shortcuts",
+          sync: "Sync and devices",
           verification: "Verification",
         },
         verification: {
@@ -1636,6 +1722,91 @@ const resources = {
         indicator: {
           aria: "同期: {{state}}",
         },
+        settings: {
+          title: "同期・device 設定",
+          subtitle: "自分で用意した Hub を経由して、このワークスペースを他のマシンと共有します。",
+        },
+        connect: {
+          title: "Hub へ接続する",
+          changeTitle: "別の Hub へ接続する",
+          endpoint: "Hub のアドレス",
+          endpointHint:
+            "Hub を動かしているマシンを user@host の形で指定します。マシン内のどこに置くかは GuildBotics が決めます。",
+          inspect: "確認する",
+          failed: "接続できませんでした",
+          chooseTitle: "このワークスペースをどうするか",
+          register: "このワークスペースを Hub に登録する",
+          joinHint: "または、Hub にすでにあるワークスペースへ参加する:",
+          join: "参加する…",
+        },
+        hostKey: {
+          title: "このマシンのホスト鍵を確認してください",
+          body: "Hub マシン側に表示されている fingerprint と一致するものを選んでください。一致するまで何も送信しません。",
+          confirm: "これで合っています",
+          compareHint: "Hub マシンで実行: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
+        },
+        preview: {
+          title: "参加する前に",
+          mode: {
+            join: "先にこのマシンの内容を commit してから、両方にあるファイルは Hub 側を採用します。押し出された内容はこのマシンに残り、破棄されません。",
+            reconnect:
+              "このマシンと Hub は履歴を共有しているため、置き換えではなく通常の収束処理になります。",
+          },
+          differing_one: "Hub 側の内容で置き換わるファイル 1 件",
+          differing_other: "Hub 側の内容で置き換わるファイル {{count}} 件",
+          hubOnly_one: "Hub から取り込むファイル 1 件",
+          hubOnly_other: "Hub から取り込むファイル {{count}} 件",
+          deviceOnly_one: "このマシンにだけあり、送信されるファイル 1 件",
+          deviceOnly_other: "このマシンにだけあり、送信されるファイル {{count}} 件",
+          unsendableTitle: "このマシンに残る変更があります",
+          unsendableBody_one: "1 件の変更はまだ送信できないため、そのまま残します。",
+          unsendableBody_other: "{{count}} 件の変更はまだ送信できないため、そのまま残します。",
+          cancel: "キャンセル",
+          confirm: "参加する",
+        },
+        connected: {
+          title: "接続中の Hub",
+          change: "別の Hub へ接続する",
+          cancelChange: "キャンセル",
+          changeHint:
+            "Hub を別マシンで作り直したときに使います。このマシンにだけある内容は破棄されず、新しい Hub へ送信されます。",
+        },
+        unsendable: {
+          title: "送信できない変更",
+          body: "これらのファイルは、このマシンで直すまで送信されずに残ります。破棄はされません。",
+          path: "ファイル",
+          reason: "理由",
+        },
+        devices: {
+          title: "device 一覧",
+          empty: "このワークスペースに参加した device はまだありません。",
+          name: "名前",
+          os: "OS",
+          joinedAt: "参加日時",
+          id: "device ID",
+          self: "このマシン",
+          copy: "コピー",
+          copied: "コピーしました",
+          rename: "このマシンの名前",
+          renameHint: "各マシンの名前は、そのマシン自身で変更します。",
+          renameAction: "変更する",
+        },
+        sshKey: {
+          title: "この device の SSH 鍵",
+          body: "この公開鍵を Hub マシンの authorized_keys へ追加してください。GuildBotics が代行はしません。その操作自体が、そのマシンへのアクセス権を持っていることの証明になるためです。",
+          create: "鍵を作成する",
+          copy: "コピー",
+          copied: "コピーしました",
+        },
+        host: {
+          title: "このマシンで Hub を動かす",
+          body: "1台のマシンが、他のマシンの接続先となる共有 repository を持ちます。",
+          create: "このマシンを Hub にする",
+          hosted_one: "Hub を動かしています（ワークスペース 1 件）。",
+          hosted_other: "Hub を動かしています（ワークスペース {{count}} 件）。",
+          sshdHint:
+            "他のマシンは SSH で接続するため、このマシンで OpenSSH サーバーを有効にしておく必要があります。",
+        },
         state: {
           synced: {
             label: "同期済み",
@@ -1796,6 +1967,7 @@ const resources = {
           members: "メンバー",
           github: "GitHub",
           shortcuts: "ショートカット",
+          sync: "同期・device",
           verification: "検証",
         },
         verification: {
