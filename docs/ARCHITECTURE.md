@@ -37,12 +37,15 @@ guildbotics/
 ├── drivers/         # Scheduler, command runner, workflow dispatcher, event listeners
 ├── editions/        # Edition abstraction + Simple edition (setup services reused by GUI)
 ├── entities/        # Domain models (Team, Person, Task, Message)
+├── hub/             # The bare repositories a hub holds, and reaching one over OpenSSH
 ├── integrations/    # GitHub / Slack clients (used by capabilities and workflows)
 ├── intelligences/   # Brains (agno_agent / cli_agent), LLM judgment functions, catalogs
 ├── loader/          # YAML team/role loaders
 ├── observability/   # Diagnostics records, trace/span correlation, interactive sessions
 ├── runtime/         # Context, member resolution, factories, WorkflowInvocation
+├── sync/            # The Git sync queue: local repository, commits, enrollment, activation
 ├── templates/       # Config templates, workflow commands, prompts, locales
+├── workspace/       # Workspace storage: identity, shared-file validation, config CAS
 └── utils/           # fileio (config/storage roots), secret store, i18n, ...
 ```
 
@@ -53,6 +56,15 @@ Hard dependency rules (enforced by `tests/guildbotics/test_layer_boundaries.py`)
   core (`guildbotics/intelligences/*`); app_api only converts it to API models.
 - `observability` depends on nothing but `utils`. It records; it does not know about
   app_api or capability concerns.
+- `workspace` depends on nothing but `utils` and `entities`. It is storage; it does not
+  know about capabilities, drivers, or app_api.
+- `hub` depends on nothing but `utils`. It knows about repositories and an SSH route,
+  never about what the shared records mean.
+- `sync` may be imported **only by a composition root**, listed in
+  `tests/guildbotics/test_layer_boundaries.py` (`SYNC_COMPOSITION_ROOTS`). Everything
+  else reaches synchronization through the Workspace Sync Port. The list must not grow:
+  the guard against two queues on one repository is module state, so it does not hold
+  across processes.
 - Lower layers (`entities`, `utils`) never depend on orchestration layers
   (`commands`, `templates`, `drivers`).
 
@@ -398,9 +410,9 @@ the process cwd or a member working clone.
 | ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `run/service.lock` — state needed _before_ a workspace is chosen                                                                      |
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
-| Config             | `<workspace>/.guildbotics/config`                                                                | project / member YAML, `secrets.yml` (key names and generations), transcript settings, hotkeys                                                                 |
+| Config             | `<workspace>/.guildbotics/config`                                                                | project / member YAML, `secrets.yml` (key names and generations), transcript settings                                                                 |
 | Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run evidence, activity events                                                                                       |
-| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, person leases, chat message cache, member clones, AI CLI sessions, work dirs, `debug.env`                                            |
+| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, person leases, chat message cache, member clones, AI CLI sessions, work dirs, hotkeys, `debug.env`                                            |
 
 Invariants:
 
@@ -408,7 +420,10 @@ Invariants:
 - Workspace root is resolved only from `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`,
   `GUILDBOTICS_CONFIG_DIR` when it is `<ws>/.guildbotics/config`, or
   `active-workspace.json`. Missing workspace is an error for writes.
-- `config/` and `state/` are the future Git-sync tree. `local/` is device-only.
+- `config/` and `state/` are the synchronized tree; `local/` is device-only. Anything
+  whose value is decided by the machine rather than the workspace belongs in `local/` —
+  absolute paths, but also hotkeys, since which combinations are free depends on the OS,
+  the other applications installed, and the keyboard layout.
 - `guildbotics workspace migrate --from <checkout> --to <workspace>` copies an old
   source-checkout `.guildbotics/` into a dedicated workspace without changing the
   user's source repository.
@@ -416,7 +431,69 @@ Invariants:
   Agent execution copies that resolved value into `AgentExecutionContext`.
 - There is no `GUILDBOTICS_DATA_DIR` override and no workspace `.env` file.
 
-## 8. Secret Storage (SecretStore)
+## 8. Workspace Synchronization
+
+One workspace can be shared by several of the user's machines. `config/` and `state/`
+are the shared tree; `local/` never leaves the device it was written on.
+
+**Hub.** A machine the user chooses, holding one bare Git repository per workspace under
+`~/.guildbotics/hub` (`guildbotics/hub/host.py`). Every repository is configured
+`receive.denyNonFastForwards` and `receive.denyDeletes` on each access: the automatic
+reconciliation below rests on the hub refusing to rewind, so a repository restored from a
+backup must still refuse a force push. The hub knows nothing about what the records mean,
+and stores no workspace paths — only workspace identifiers.
+
+Operations on a hub are performed by the `guildbotics hub` CLI on the hub machine itself,
+invoked over SSH by the joining device (`guildbotics/hub/connection.py`). Raw Git commands
+are never sent across. Synchronization pins `GIT_SSH_COMMAND` to the OS OpenSSH so that a
+host key the user confirmed once is the same one `git fetch` sees.
+
+**Workspace Sync Port** (`utils/workspace_sync_port.py`). Storage layers announce a
+completed shared write as a `ChangeSet` and never learn that Git is involved. Writes go
+through `write_shared_*` / `delete_shared_path`; paths under `local/` are dropped by the
+port rather than classified by the caller. `guildbotics/sync` is the only subscriber.
+
+**Git Sync Manager** (`guildbotics/sync/manager.py`). One queue per device runs commit →
+fetch → reconcile → push, coalescing bursts. `<workspace>/.guildbotics` is itself an
+independent Git repository, and its path is always derived from a verified workspace root
+rather than accepted from a caller, so a member working clone cannot be handed to a sync
+command. Notifications can be lost without losing changes: a periodic rescan of the working
+tree recovers anything the port did not report.
+
+**Concurrent edits.** The hub serializes what is committed. Whichever change lands first is
+kept; the later commit is moved to `refs/guildbotics/rejected/<rejection_id>` on the device
+that made it, and one provider-neutral activity event records the paths, that device, the
+time, and the identifier. This is not an error and does not stop the queue. The set aside
+content stays out of every API: recovery is a manual, source-device-only procedure
+documented in the README.
+
+**Validation boundary** (`workspace/validation.py`). What crosses the boundary is checked
+for three things only: shared root, size limits, decode and syntax; a `schema_version`
+newer than this build understands; and the structure of `config/secrets.yml`. These are
+the checks nothing else can make — a writer's bug belongs in the writer's tests, and a file
+the user hand-edits fails the same way on every device with or without synchronization.
+Per-record semantic validators are deliberately absent; adding a shared record needs no
+change here.
+
+**Joining.** A device with existing content commits it first, then adopts the hub's version
+of any file both hold and sends what only it has. It is not an overwrite, and the commit
+pushed aside is kept. Joining is previewed; registering is not, because a hub with no copy
+of the workspace has nothing to compare against.
+
+**Optimistic locking** (`workspace/config_repository.py`). Config is the shared state a
+person edits by hand, so a screen can be composed against content another machine has since
+replaced. Reads report each file's Git blob ID; saves state the IDs they expect, and a save
+whose expectation no longer holds is refused rather than merged. Comparison and writing
+happen inside one lock covering every file the screen saves — a refusal that had already
+applied half of itself is the outcome the check exists to prevent. This applies to config
+alone; for every other shared file the first-committer-wins rule settles it.
+
+**Queue ownership.** Only the Desktop backend activates the queue
+(`app_api/workspace_sync.py`). The exclusion lives in `sync/activation.py` as module state,
+which does not hold across processes, so a second long-lived process would put two workers
+on one repository. `run/service.lock` is the scheduler's exclusion, not the queue's.
+
+## 9. Secret Storage (SecretStore)
 
 Secrets = LLM provider API keys (`models/<provider>/default.yml` `api_key_env`) and
 person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN` /
@@ -445,7 +522,7 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
 - **Tests**: an autouse `fake_keyring` fixture installs an in-memory keychain so
   tests never touch the developer's real OS store.
 
-## 9. Observability and Diagnostics
+## 10. Observability and Diagnostics
 
 `guildbotics/observability/` is the recording substrate (depends only on `utils`):
 
@@ -503,7 +580,7 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   in log and I/O records that the index never stores. Desktop assistant traces are excluded by
   default so the troubleshooting agent does not investigate its own conversations.
 
-## 10. Desktop App
+## 11. Desktop App
 
 `desktop/` is a Tauri v2 + React (Mantine, TanStack Query) frontend; the repository is
 a monorepo on purpose.
@@ -529,9 +606,22 @@ a monorepo on purpose.
   app also installs a managed `guildbotics` CLI shim and the GuildBotics skill for
   interactive agents. External AI CLI tools are _not_ bundled — the GUI detects,
   verifies, and configures them only.
-- **Global hotkeys and the quick-run window**: assignments live in the workspace config
-  (`.guildbotics/config/hotkeys.yml`, served by `GET`/`PUT /hotkeys`), so they travel
-  with the workspace rather than being pinned to one machine. `guildbotics/app_api/hotkeys.py`
+- **Sync and devices**: a settings section (`desktop/src/sync/`) covering hub hosting,
+  connecting, reconnecting to a rebuilt hub, the changes that cannot be sent, the devices
+  that joined, and this device's SSH key. A sidebar indicator derives one of seven states
+  from `GET /workspace/sync`, ordering them so that what waiting will not fix comes first;
+  only those states also reach the app-wide warning band. Connecting is a sequence rather
+  than one button because each step means something: the hub must be reachable before its
+  workspaces can be listed, the host key is confirmed by a person (synchronization runs SSH
+  non-interactively, so this is the only opportunity), and joining an existing workspace is
+  previewed while registering a new one is not.
+- **Config saves are explicit and revision-checked**: every settings screen saves on a
+  button, and sends back the revisions its read reported. A refused save reloads the screen
+  instead of resending, since resending is exactly the overwrite that was refused.
+- **Global hotkeys and the quick-run window**: assignments are device-local
+  (`.guildbotics/local/hotkeys.yml`, served by `GET`/`PUT /hotkeys`) because which
+  combinations are free is a property of the machine, not of the workspace.
+  `guildbotics/app_api/hotkeys.py`
   owns the accelerator grammar and the conflict rules; the Tauri host only registers
   what the frontend hands it. Pressing a combination reads clipboard text or an image
   and opens a resizable frameless window (`quick.html`); clipboard images are persisted
@@ -572,7 +662,7 @@ a monorepo on purpose.
 
 See `desktop/README.md` for build, development, and test instructions.
 
-## 11. Domain Model Notes
+## 12. Domain Model Notes
 
 Core entities live in `guildbotics/entities/` (`Team`, `Person`, `Task`, `Message`).
 Two Person distinctions matter architecturally:
@@ -592,7 +682,7 @@ Two Person distinctions matter architecturally:
   runs; the commands that do not act as a member (`member help`, and
   `member task status`, which ignores `--person`) never resolve one.
 
-## 12. Extension Points
+## 13. Extension Points
 
 - **New brain**: implement `Brain`, register via the intelligence mappings
   (`guildbotics/templates/intelligences/*.yml`).
@@ -613,7 +703,7 @@ Two Person distinctions matter architecturally:
   observability), the normalizer/API model (app_api), and the frontend rendering
   (desktop) as three separate responsibilities.
 
-## 13. Related Documents
+## 14. Related Documents
 
 - `AGENTS.md` — working rules for this repository: responsibility boundaries, CI
   commands, testing strategy, prompt layer model.

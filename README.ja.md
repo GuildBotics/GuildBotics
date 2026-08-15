@@ -58,6 +58,9 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
   - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
   - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
+- **OpenSSH**（1 つのワークスペースを複数マシンで共有する場合のみ）:
+  - 参加する各マシンに OpenSSH **クライアント**が必要です。Windows 10 1809 以降は標準搭載のため追加インストールは不要です
+  - Hub 役のマシンには OpenSSH **サーバー**も必要です。Windows はオプション機能「OpenSSH サーバー」、macOS はリモートログイン、Linux は `openssh-server` を有効にしてください
 - **AI CLI ツール**（いずれか 1 つを事前にインストールして一度起動し、認証を済ませてください）:
   - [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
@@ -488,7 +491,127 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 
 - 使用中のワークスペース情報や CLI スケジューラーの PID など、PC 全体で共有する管理情報は `$HOME/.guildbotics/data` に保存されます
 - memory、会話の制御状態、task-run 証跡、Activity イベントなど、共有する永続状態は `<workspace>/.guildbotics/state` に保存されます
-- 診断ログ、transcript、チャット cache、member clone、AI CLI session など、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
+- 診断ログ、transcript、チャット cache、member clone、AI CLI session、ホットキーなど、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
+
+### 複数マシンでワークスペースを共有する
+
+1 つのワークスペースを自分の複数のマシンで共有できます。設定・メンバー・memory・チャットの
+処理状態・Activity 履歴が揃い、API キー・メンバーの作業クローン・診断情報・ホットキーは
+作成したマシンに残ります。
+
+共有は **Hub** を経由します。Hub は利用者が選んだ 1 台のマシンで、他のマシンが SSH 経由で
+push / fetch する Git リポジトリを持ちます。サービスではなく、他社が運用するものでもありません。
+自分が既に持っているマシンの `~/.guildbotics/hub` 配下のディレクトリです。
+
+以下の操作はすべて、デスクトップアプリの **設定 → 同期・device** で行います。
+
+#### 1 台目を設定する
+
+1. Hub 役にするマシンで「このマシンを Hub にする」を選びます。そのマシンで OpenSSH サーバーが
+   動いていることを確認してください（[必要なもの](#必要なもの)を参照）。
+2. ワークスペースを持つマシンで、Hub のアドレスを `user@host` の形で入力し「確認する」を選びます。
+3. 表示された fingerprint を Hub マシン側のものと見比べ、一致するものを確認します。Hub マシンでは
+   次のコマンドで表示できます。
+
+   ```bash
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+
+   鍵を確認できるのはこの 1 回だけです。以降の同期は SSH を非対話モードで実行するため、
+   OpenSSH 自身の初回確認プロンプトは表示されません。
+4. 「このワークスペースを Hub に登録する」を選びます。
+
+接続を拒否される場合は、「この device の SSH 鍵」に表示された公開鍵を Hub マシンの
+`~/.ssh/authorized_keys` へ追加してから、もう一度試してください。
+
+#### 2 台目以降を追加する
+
+新しいマシンでも同じ手順で SSH 鍵を Hub に登録してから、次のどちらかを行います。
+
+- **複製を取得する**: Hub の一覧からワークスペースを選び、その内容から新しいワークスペース
+  ディレクトリを作ります
+- **手元の内容を持ったまま参加する**: すでにワークスペースがあるマシンで Hub を確認し、
+  対応するワークスペースの「参加する…」を選びます
+
+参加は上書きではありません。先にこのマシンの内容を commit し、両方にあるファイルは Hub 側を
+採用し、このマシンにだけあるファイルは Hub へ送信します。確認画面に出るのは、まさにこの
+振り分けです。この過程で押し出された commit はローカルに保持されます
+（[反映されなかった変更を回復する](#反映されなかった変更を回復する)を参照）。
+
+#### Hub を作り直す
+
+参加している各マシンが完全な複製を持っているため、Hub を失っても、どれか 1 台から作り直せます。
+
+1. 新しい Hub 役にするマシンで「このマシンを Hub にする」を選びます。
+2. 他の各マシンで「接続中の Hub → 別の Hub へ接続する」を開き、新しいアドレスへ接続します。
+
+1 台にしかない内容は破棄されず新しい Hub へ送信されるため、再接続の順番によって内容が失われる
+ことはありません。
+
+#### 2 台が同じファイルを変更したとき
+
+先に Hub へ確定した変更が残ります。もう一方のマシンの commit は、マージも破棄もされません。
+ローカルに退避され、対象ファイル・device・時刻・回復用 ID が Activity 履歴に記録されます。
+同期は停止せず、利用者が解決を求められることもありません。
+
+#### 反映されなかった変更を回復する
+
+これは通常操作ではなく、例外的な手順です。GuildBotics が退避内容を自動で復元することはなく、
+デスクトップアプリからも API からも内容は参照できません。
+
+退避された commit は**変更したマシンにだけ**存在するため、以下のコマンドはすべてそのマシンで
+実行します。`<workspace>`・`<path>`・`<rejection_id>` は Activity 履歴の記録から取ります。
+
+1. 退避された commit があることを確認します。
+
+   ```bash
+   git -C "<workspace>/.guildbotics" show-ref --verify "refs/guildbotics/rejected/<rejection_id>"
+   ```
+
+2. 対象のファイルを確認します。
+
+   ```bash
+   git -C "<workspace>/.guildbotics" diff-tree --no-commit-id --name-status -r "refs/guildbotics/rejected/<rejection_id>"
+   ```
+
+3. 退避された内容を読むか、現在採用されている内容と比較します。
+
+   ```bash
+   git -C "<workspace>/.guildbotics" diff HEAD "refs/guildbotics/rejected/<rejection_id>" -- "<path>"
+   git -C "<workspace>/.guildbotics" show "refs/guildbotics/rejected/<rejection_id>:<path>"
+   ```
+
+   退避側で削除されたファイルは表示する内容が無いため、`git diff` では削除の事実だけが分かります。
+   バイナリファイルは表示に適さないので、次の手順で書き出して確認してください。
+
+4. Git の外にファイルが必要な場合は、手順 2 で確認した path だけを書き出します。
+
+   ```bash
+   git -C "<workspace>/.guildbotics" archive --format=zip --output="<出力先ディレクトリ>/guildbotics-rejected-<rejection_id>.zip" "refs/guildbotics/rejected/<rejection_id>" -- "<path>"
+   ```
+
+5. 必要な変更は、現在採用されている内容を起点に、GuildBotics の通常の編集操作で改めて作成します。
+   保存した変更は他の編集と同じように共有されます。
+
+同期リポジトリに対して次の操作はしないでください。上の規則を経由せずに共有内容を置き換えてしまいます。
+
+- rejected ref に対する `checkout` / `switch` / `reset` / `merge` / `rebase` / `cherry-pick` / `push`
+- 書き出し先を `<workspace>/.guildbotics/` 配下にすること
+
+変更したマシンを失った場合や、そのマシンの rejected ref が失われた場合は回復できません。
+自動削除は行いません。
+
+#### sidebar の表示の意味
+
+| 状態 | 意味 | 操作 |
+| --- | --- | --- |
+| 同期済み | このマシンと Hub の内容が一致 | なし |
+| 送信保留 | 未送信の変更がある | なし。自動で送信されます |
+| 受信中 | Hub の更新を取り込み中 | 待機 |
+| Hub 不達 | ローカル利用は可能、共有は遅延 | 待機、または「再試行」 |
+| 送信できない変更 | このマシンで直すまで共有できないファイルがある | 「同期・device 設定」で対象と理由を確認 |
+| 共有データ異常 | 自動収束できなかった | 「同期・device 設定」を開く |
+| 更新が必要 | 別マシンが新しいバージョンで書いた内容がある | このマシンの GuildBotics を更新 |
 
 ### 設定ファイル
 
