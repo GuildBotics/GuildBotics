@@ -350,7 +350,7 @@ class MemberMemoryService:
         if target.exists():
             raise MemberMemoryError(f"Archived memory already exists: {doc.doc_id}")
         doc.path.rename(target)
-        notify_shared_state_changed("update", [doc.path, target])
+        _notify_document_moved(doc.path, target)
         self._remove_recent(doc.doc_id)
         self._record_audit(
             "archive",
@@ -372,7 +372,7 @@ class MemberMemoryService:
         if target.exists():
             raise MemberMemoryError(f"Team memory already exists: {doc.doc_id}")
         doc.path.rename(target)
-        notify_shared_state_changed("update", [doc.path, target])
+        _notify_document_moved(doc.path, target)
         self._touch_recent(doc.doc_id)
         self._record_audit(
             "promote",
@@ -618,6 +618,17 @@ class _MemoryDoc:
     meta: dict[str, Any]
     body: str
     meta_text: str
+
+
+def _notify_document_moved(source: Path, target: Path) -> None:
+    """Announce a moved document as the delete and create it actually is.
+
+    Archiving and promoting rename a document directory. A consumer that
+    stages or coalesces by operation would drop one half of the move if both
+    paths arrived under a single operation.
+    """
+    notify_shared_state_changed("delete", [source])
+    notify_shared_state_changed("create", [target])
 
 
 def _summary_payload(doc: _MemoryDoc, *, snippet: str = "") -> dict[str, Any]:

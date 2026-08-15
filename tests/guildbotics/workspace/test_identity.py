@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from pathlib import Path
 
@@ -174,6 +175,67 @@ def test_listing_device_records_is_ordered_by_identifier(
         record.device_id for record in records
     )
     assert other in records
+
+
+def test_concurrent_first_use_agrees_on_one_workspace_id() -> None:
+    start = threading.Barrier(4)
+    seen: list[str] = []
+
+    def create() -> None:
+        start.wait()
+        seen.append(ensure_workspace_identity().workspace_id)
+
+    threads = [threading.Thread(target=create) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    stored = read_workspace_identity()
+    assert stored is not None
+    assert set(seen) == {stored.workspace_id}
+
+
+def test_concurrent_first_use_agrees_on_one_device_id() -> None:
+    start = threading.Barrier(4)
+    seen: list[str] = []
+
+    def create() -> None:
+        start.wait()
+        seen.append(ensure_device_identity().device_id)
+
+    threads = [threading.Thread(target=create) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    stored = read_device_identity()
+    assert stored is not None
+    assert set(seen) == {stored.device_id}
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"schema_version": 999},
+        {"device_id": "not-a-uuid"},
+        {"joined_at": "yesterday"},
+        {"display_name": ""},
+        {"os": "plan9"},
+    ],
+)
+def test_a_device_record_pins_version_identifier_and_time(override: dict) -> None:
+    payload = {
+        "schema_version": 1,
+        "device_id": "00000000-0000-7000-8000-000000000000",
+        "display_name": "Hub",
+        "os": "linux",
+        "joined_at": "2026-08-15T00:00:00Z",
+    } | override
+
+    with pytest.raises(ValueError):
+        DeviceRecord.model_validate(payload)
 
 
 def test_a_device_record_rejects_device_local_fields() -> None:

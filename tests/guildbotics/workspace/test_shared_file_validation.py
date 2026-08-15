@@ -5,6 +5,9 @@ import json
 import pytest
 import yaml  # type: ignore
 
+from guildbotics.observability.activity_event_store import (
+    ACTIVITY_EVENT_SCHEMA_VERSION,
+)
 from guildbotics.workspace.validation import (
     MAX_SHARED_AVATAR_BYTES,
     MAX_SHARED_FILE_BYTES,
@@ -32,6 +35,13 @@ DEVICE_JSON = json.dumps(
         "status": "active",
     }
 ).encode()
+ACTIVITY_EVENT = {
+    "schema_version": ACTIVITY_EVENT_SCHEMA_VERSION,
+    "event_id": "e1",
+    "occurred_at": "2026-08-15T00:00:00Z",
+    "kind": "github.push",
+}
+ACTIVITY_EVENT_JSON = json.dumps(ACTIVITY_EVENT).encode()
 
 
 @pytest.mark.parametrize(
@@ -46,7 +56,7 @@ DEVICE_JSON = json.dumps(
             "state/devices/019c5e8d-31ce-7a62-a8a9-6ce16cb88945.json",
             DEVICE_JSON,
         ),
-        ("state/events/2026/08/e1.json", b'{"event_id": "e1"}'),
+        ("state/events/2026/08/e1.json", ACTIVITY_EVENT_JSON),
         ("state/documents/team/abc/body.md", "note\n".encode()),
         ("state/documents/memory_events.jsonl", b'{"kind": "memory"}\n\n'),
         ("config/team/members/yuki/avatar.png", b"\x89PNG\r\n\x1a\n"),
@@ -103,6 +113,66 @@ def test_invalid_shared_files_are_rejected(
 
     assert fragment in error.value.reason
     assert error.value.relative_path == relative_path
+
+
+@pytest.mark.parametrize(
+    ("payload", "fragment"),
+    [
+        ({}, "schema_version"),
+        (ACTIVITY_EVENT | {"schema_version": 999}, "schema_version"),
+        (ACTIVITY_EVENT | {"event_id": ""}, "has no event_id"),
+        (ACTIVITY_EVENT | {"kind": ""}, "has no kind"),
+        (ACTIVITY_EVENT | {"occurred_at": "not a time"}, "unparsable occurred_at"),
+    ],
+)
+def test_an_activity_event_is_validated_by_its_owner(
+    payload: dict, fragment: str
+) -> None:
+    with pytest.raises(SharedFileInvalidError) as error:
+        validate_shared_file(
+            "state/events/2026/08/e1.json", json.dumps(payload).encode()
+        )
+
+    assert fragment in error.value.reason
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "payload", "fragment"),
+    [
+        (
+            "state/workspace.json",
+            json.loads(WORKSPACE_JSON) | {"schema_version": 999},
+            "WorkspaceIdentity",
+        ),
+        (
+            "state/workspace.json",
+            json.loads(WORKSPACE_JSON) | {"workspace_id": "not-a-uuid"},
+            "WorkspaceIdentity",
+        ),
+        (
+            "state/workspace.json",
+            json.loads(WORKSPACE_JSON) | {"created_at": "yesterday"},
+            "WorkspaceIdentity",
+        ),
+        (
+            "state/devices/one.json",
+            json.loads(DEVICE_JSON) | {"joined_at": ""},
+            "DeviceRecord",
+        ),
+        (
+            "state/devices/one.json",
+            json.loads(DEVICE_JSON) | {"display_name": ""},
+            "DeviceRecord",
+        ),
+    ],
+)
+def test_identity_records_pin_version_identifier_and_time(
+    relative_path: str, payload: dict, fragment: str
+) -> None:
+    with pytest.raises(SharedFileInvalidError) as error:
+        validate_shared_file(relative_path, json.dumps(payload).encode())
+
+    assert fragment in error.value.reason
 
 
 def test_a_shared_record_rejects_device_local_fields() -> None:

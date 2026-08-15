@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import subprocess
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 import yaml  # type: ignore
 
-from guildbotics.utils import workspace_sync_port
+from guildbotics.workspace import config_repository
 from guildbotics.workspace.config_repository import (
     ConfigRepository,
     StaleConfigWriteError,
@@ -160,6 +161,72 @@ def test_only_one_of_two_concurrent_writers_wins(
     current = repository.read_config(PROJECT)
     assert current is not None
     assert current.content == project_yaml(winner)
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "../state/workspace.json",
+        "team/../../state/workspace.json",
+        "/etc/passwd",
+        "",
+    ],
+)
+def test_a_path_outside_the_config_directory_is_refused(
+    repository: ConfigRepository,
+    port: RecordingPort,
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    with pytest.raises(SharedFileInvalidError):
+        repository.write_config(relative_path, None, "{}\n")
+    with pytest.raises(SharedFileInvalidError):
+        repository.read_config(relative_path)
+
+    assert not (tmp_path / ".guildbotics/state/workspace.json").exists()
+    assert port.changes == []
+
+
+def test_a_symlink_out_of_the_config_directory_is_refused(
+    repository: ConfigRepository, port: RecordingPort, tmp_path: Path
+) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "escape").symlink_to(tmp_path / ".guildbotics/state")
+
+    with pytest.raises(SharedFileInvalidError):
+        repository.write_config("escape/workspace.json", None, "{}\n")
+
+    assert port.changes == []
+
+
+def test_a_write_reports_the_content_it_committed(
+    repository: ConfigRepository,
+    port: RecordingPort,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base = repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
+    ours = project_yaml("Ours")
+    theirs = project_yaml("Theirs")
+    config_path = tmp_path / ".guildbotics/config" / PROJECT
+    original = config_repository.held_lock
+
+    @contextmanager
+    def racing_lock(path: Path, *args: object, **kwargs: object):
+        with original(path, *args, **kwargs) as handle:  # type: ignore[arg-type]
+            yield handle
+        # Another writer takes the lock the instant this one releases it.
+        if config_path.read_text(encoding="utf-8") == ours:
+            config_path.write_text(theirs, encoding="utf-8")
+
+    monkeypatch.setattr(config_repository, "held_lock", racing_lock)
+
+    written = repository.write_config(PROJECT, base.blob_id, ours)
+
+    assert written.content == ours
+    assert written.blob_id == blob_id(ours.encode())
+    assert config_path.read_text(encoding="utf-8") == theirs
 
 
 def test_the_write_lock_is_released_after_each_write(

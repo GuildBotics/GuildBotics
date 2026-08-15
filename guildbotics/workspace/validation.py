@@ -8,8 +8,12 @@ failure means a defect or a damaged repository, not a user mistake.
 
 The synchronization machinery itself holds no knowledge of file contents. It
 calls :func:`validate_shared_file`, which dispatches to the implementation that
-already owns each kind of file: the entity models for config, the record models
-for shared state, and a kind check for member avatars.
+owns each kind of file: a validator the owning module registered in
+``guildbotics.utils.shared_file_validators``, otherwise the entity models for
+config, the record models for workspace and device identity, and a kind check
+for member avatars. Files with no owner yet are held to their syntax, so an
+unregistered kind cannot be silently exempted from the size bound or from
+being well-formed.
 """
 
 from __future__ import annotations
@@ -23,8 +27,20 @@ from pydantic import BaseModel, ValidationError
 
 from guildbotics.entities import Person, Project
 from guildbotics.utils.avatar import SUPPORTED_EXTENSIONS
+from guildbotics.utils.shared_file_validators import (
+    SharedFileInvalidError,
+    find_shared_validator,
+)
 from guildbotics.utils.workspace_sync_port import SHARED_ROOTS
 from guildbotics.workspace.identity import DeviceRecord, WorkspaceIdentity
+
+__all__ = [
+    "MAX_SHARED_AVATAR_BYTES",
+    "MAX_SHARED_FILE_BYTES",
+    "MAX_SHARED_JOURNAL_BYTES",
+    "SharedFileInvalidError",
+    "validate_shared_file",
+]
 
 #: Shared records stay small; bulk console and prompt data belongs in ``local/``.
 MAX_SHARED_FILE_BYTES = 1_048_576
@@ -32,15 +48,6 @@ MAX_SHARED_FILE_BYTES = 1_048_576
 MAX_SHARED_JOURNAL_BYTES = 8 * 1024 * 1024
 #: Member avatars are the only binary the normal shared set carries.
 MAX_SHARED_AVATAR_BYTES = 4_194_304
-
-
-class SharedFileInvalidError(ValueError):
-    """Raised when a shared file fails the validation its kind requires."""
-
-    def __init__(self, relative_path: str, reason: str) -> None:
-        super().__init__(f"{relative_path}: {reason}")
-        self.relative_path = relative_path
-        self.reason = reason
 
 
 def validate_shared_file(relative_path: str, data: bytes) -> None:
@@ -71,8 +78,11 @@ def validate_shared_file(relative_path: str, data: bytes) -> None:
 
     _require_size(relative_path, data, MAX_SHARED_FILE_BYTES)
     text = _require_utf8(relative_path, data)
+    registered = find_shared_validator(relative_path)
     model = _record_model(path)
-    if model is not None:
+    if registered is not None:
+        registered(relative_path, data)
+    elif model is not None:
         _require_model(relative_path, model, text)
     elif path.suffix in {".yml", ".yaml"}:
         _require_yaml(relative_path, text)

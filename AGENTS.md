@@ -222,6 +222,8 @@ help / docstring が正であり、member コマンドの一行説明は
 - 共有 JSON は `dump_shared_json`（sort_keys + 末尾改行）で統一する。device ごとにバイト列がぶれると不要な並行更新になる
 - device 固有 field を共有 record へ入れない境界は、field 名のブロックリストではなく pydantic の `extra="forbid"`（`SharedRecord`）とサイズ上限で構造的に守る
 - 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
+- 共有ファイルの種別ごとの検証は、所有 module が `guildbotics/utils/shared_file_validators.py` の `register_shared_validator()` へ登録する。`guildbotics/workspace/validation.py` が種別を知りに行く形にはしない（`observability` などは storage 層から import できないため）。新しい共有 record を追加したら、その所有 module で validator を登録する
+- 共有 record は `schema_version` を現在値へ固定し、ID と日時も型として検証する。旧 schema の fallback 読み込みは作らない
 
 ### 5. スケジューラ
 

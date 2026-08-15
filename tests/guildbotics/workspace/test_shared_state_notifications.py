@@ -36,6 +36,16 @@ def announced_paths(port: RecordingPort) -> list[str]:
     return [path for change in port.changes for path in change.paths]
 
 
+def _moved(port: RecordingPort, doc_id: str) -> list[tuple[str, str]]:
+    """Return what was announced for one document, in order."""
+    return [
+        (change.operation, path)
+        for change in port.changes
+        for path in change.paths
+        if path.endswith(doc_id)
+    ]
+
+
 def test_activity_events_are_announced(port: RecordingPort) -> None:
     ActivityEventStore().record(
         {
@@ -117,11 +127,10 @@ def test_archiving_memory_announces_both_locations(
 
     MemberMemoryService(person).archive(doc_id=doc_id, scope="team")
 
-    moves = [change for change in port.changes if len(change.paths) == 2]
-    assert moves, port.changes
-    source, target = moves[0].paths
-    assert source == f"state/documents/team/{doc_id}"
-    assert target == f"state/documents/team/archived/{doc_id}"
+    assert _moved(port, doc_id) == [
+        ("delete", f"state/documents/team/{doc_id}"),
+        ("create", f"state/documents/team/archived/{doc_id}"),
+    ]
 
 
 def test_promoting_memory_announces_both_locations(
@@ -134,11 +143,10 @@ def test_promoting_memory_announces_both_locations(
 
     MemberMemoryService(person).promote(doc_id=doc_id)
 
-    moves = [change for change in port.changes if len(change.paths) == 2]
-    assert moves, port.changes
-    source, target = moves[0].paths
-    assert source == f"state/documents/personal/{person.person_id}/{doc_id}"
-    assert target == f"state/documents/team/{doc_id}"
+    assert _moved(port, doc_id) == [
+        ("delete", f"state/documents/personal/{person.person_id}/{doc_id}"),
+        ("create", f"state/documents/team/{doc_id}"),
+    ]
 
 
 @pytest.mark.parametrize(

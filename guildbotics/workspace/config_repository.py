@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
+from guildbotics.utils.shared_file_validators import SharedFileInvalidError
 from guildbotics.utils.workspace_sync_port import write_shared_text
 from guildbotics.workspace.validation import validate_shared_file
 
@@ -119,24 +120,48 @@ class ConfigRepository:
             SharedFileInvalidError: When ``content`` is not valid for this
                 file's kind, leaving the file untouched.
         """
+        path = self._absolute_path(relative_path)
         shared_path = self._shared_path(relative_path)
-        validate_shared_file(shared_path, content.encode("utf-8"))
+        data = content.encode("utf-8")
+        validate_shared_file(shared_path, data)
         with held_lock(self._lock_path):
             current = self._snapshot(relative_path)
             current_blob_id = current.blob_id if current is not None else None
             if current_blob_id != expected_blob_id:
                 raise StaleConfigWriteError(shared_path, current)
-            write_shared_text(
-                self._absolute_path(relative_path),
-                content,
-                workspace_root=self.workspace_root,
+            write_shared_text(path, content, workspace_root=self.workspace_root)
+            # Describe the bytes this call committed rather than re-reading the
+            # file. Reading after the lock would report the content of whoever
+            # wrote next, which is not what this write applied.
+            return ConfigSnapshot(
+                relative_path=shared_path,
+                path=path,
+                blob_id=blob_id(data),
+                content=content,
             )
-        written = self._snapshot(relative_path)
-        assert written is not None  # just written under the lock
-        return written
 
     def _absolute_path(self, relative_path: str) -> Path:
-        return self._config_dir / relative_path
+        """Resolve a config-relative path, refusing anything outside config/.
+
+        Raises:
+            SharedFileInvalidError: When the path is absolute, walks up with
+                ``..``, or otherwise lands outside the config directory.
+        """
+        candidate = PurePosixPath(relative_path)
+        if not relative_path.strip():
+            raise SharedFileInvalidError(relative_path, "names no config file")
+        if candidate.is_absolute() or PureWindowsPath(relative_path).is_absolute():
+            raise SharedFileInvalidError(relative_path, "is an absolute path")
+        if ".." in candidate.parts:
+            raise SharedFileInvalidError(relative_path, "walks outside config/")
+        path = self._config_dir / relative_path
+        # Symlinks can leave the directory without a ``..`` in the path, so the
+        # resolved location is what decides.
+        if not path.resolve(strict=False).is_relative_to(
+            self._config_dir.resolve(strict=False)
+        ):
+            raise SharedFileInvalidError(relative_path, "resolves outside config/")
+        return path
 
     def _shared_path(self, relative_path: str) -> str:
         return (PurePosixPath("config") / PurePosixPath(relative_path)).as_posix()
