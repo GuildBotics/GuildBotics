@@ -1046,6 +1046,7 @@ function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
 function projectConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   return {
     config_dir: "/workspace/.guildbotics/config",
+    revisions: {},
     language: "en",
     description: "Demo project",
     llm_api_type: "openai",

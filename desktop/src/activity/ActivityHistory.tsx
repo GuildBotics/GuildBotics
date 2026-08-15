@@ -25,6 +25,7 @@ import {
   Clock3,
   ExternalLink,
   FileText,
+  FileWarning,
   GitBranch,
   GitCommitHorizontal,
   GitMerge,
@@ -1465,6 +1466,8 @@ function eventIcon(type: ActivityHistoryEvent["type"]) {
       return <CircleDot size={12} />;
     case "issue_resolve":
       return <CheckCircle2 size={12} />;
+    case "sync_rejected":
+      return <FileWarning size={12} />;
     case "external":
       return <GitBranch size={12} />;
   }
@@ -1478,6 +1481,7 @@ function eventColor(type: ActivityHistoryEvent["type"]): string {
     push: "warning",
     issue_create: "info",
     issue_resolve: "success",
+    sync_rejected: "warning",
     external: "neutral",
   }[type];
 }

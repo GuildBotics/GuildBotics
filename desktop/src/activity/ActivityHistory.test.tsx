@@ -203,6 +203,7 @@ beforeEach(() => {
   vi.mocked(getActivityHistory).mockResolvedValue(ACTIVITY_FIXTURE);
   vi.mocked(getIntelligenceConfig).mockResolvedValue({
     config_dir: "",
+    revisions: {},
     person_id: "alice",
     inherited: false,
     model_mapping: {},
@@ -545,6 +546,7 @@ describe("ActivityHistoryPage", () => {
   ) {
     vi.mocked(getIntelligenceConfig).mockResolvedValue({
       config_dir: "",
+      revisions: {},
       person_id: "alice",
       inherited: false,
       model_mapping: {},

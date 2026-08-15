@@ -960,11 +960,14 @@ const resources = {
           agentFieldError:
             "Could not update the Agent field. Check member credentials and the Project URL.",
         },
-        autosave: {
-          idle: "Autosave",
-          saving: "Saving",
+        save: {
+          action: "Save",
           saved: "Saved",
           error: "Save failed",
+        },
+        staleSave: {
+          title: "Nothing was saved",
+          body: "This screen was loaded before a more recent change, so it has been reloaded with the current settings. Make the change again.",
         },
         validation: {
           workspaceRequired: "Workspace is required.",
@@ -2180,11 +2183,14 @@ const resources = {
           agentFieldError:
             "Agent フィールドを更新できませんでした。メンバーの認証情報と Project URL を確認してください。",
         },
-        autosave: {
-          idle: "自動保存",
-          saving: "保存中",
-          saved: "保存済み",
-          error: "保存失敗",
+        save: {
+          action: "保存",
+          saved: "保存しました",
+          error: "保存できませんでした",
+        },
+        staleSave: {
+          title: "保存しませんでした",
+          body: "この画面を開いた後に設定が変更されていたため、現在の内容を読み直しました。もう一度変更してください。",
         },
         validation: {
           workspaceRequired: "ワークスペースは必須です。",

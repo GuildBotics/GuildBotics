@@ -156,6 +156,7 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getIntelligenceConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
+      revisions: {},
       person_id: null,
       inherited: false,
       model_mapping: { default: "models/openai.yml", openai: "models/openai.yml" },
@@ -212,6 +213,7 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getProjectConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
+      revisions: {},
       language: "en",
       description: "Demo project",
       llm_api_type: "openai",
@@ -926,7 +928,7 @@ describe("SetupPage", () => {
     expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
   });
 
-  it("autosaves an existing project through updateProjectConfig", async () => {
+  it("saves an existing project through updateProjectConfig when asked to", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup");
 
@@ -934,6 +936,7 @@ describe("SetupPage", () => {
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
     await user.type(description, "Updated description");
+    await saveSection(user);
 
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
     expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
@@ -942,16 +945,74 @@ describe("SetupPage", () => {
     expect(initConfig).not.toHaveBeenCalled();
   });
 
-  it("does not autosave when the form has a validation error", async () => {
+  it("does not write while the user is only typing", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup");
 
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
+    await user.type(description, "Half a thou");
 
     await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(updateProjectConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not save when the form has a validation error", async () => {
+    const user = userEvent.setup();
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await saveSection(user);
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(updateProjectConfig).not.toHaveBeenCalled();
+  });
+
+  it("sends the revisions the form was composed against", async () => {
+    const user = userEvent.setup();
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await user.type(description, "Updated description");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
+      expected_revisions: { "team/project.yml": "abc123" },
+    });
+  });
+
+  it("reloads instead of resending when the save is refused as stale", async () => {
+    // What synchronization makes ordinary: another machine's edit arrived while
+    // this screen was open. Re-sending the form is exactly the overwrite the
+    // backend refused, so the screen takes the current content instead.
+    const user = userEvent.setup();
+    vi.mocked(updateProjectConfig).mockRejectedValueOnce(
+      new ApiRequestError({
+        code: "config_changed",
+        message: "changed since it was read",
+        context: { path: "config/team/project.yml", revisions: {} },
+      }),
+    );
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await user.type(description, "From the stale screen");
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ description: "From the other machine" }),
+    );
+    await saveSection(user);
+
+    expect(await screen.findByText(t("setup.staleSave.title"))).toBeInTheDocument();
+    await waitFor(() => expect(description).toHaveValue("From the other machine"));
+    expect(updateProjectConfig).toHaveBeenCalledTimes(1);
   });
 
   it("renders the verification section and runs diagnostics", async () => {
@@ -1157,6 +1218,7 @@ type ProjectConfigValue = Parameters<typeof toProjectUpdateRequest>[2];
 function projectConfig(overrides: Record<string, unknown> = {}): ProjectConfigValue {
   return {
     config_dir: "/workspace/.guildbotics/config",
+    revisions: { "team/project.yml": "abc123" },
     language: "en",
     description: "Existing project",
     llm_api_type: "openai",
@@ -1787,6 +1849,7 @@ describe("character payload round trip", () => {
 describe("toIntelligenceUpdatePayload", () => {
   const team = {
     config_dir: "/workspace/.guildbotics/config",
+    revisions: {},
     person_id: null,
     inherited: false,
     model_mapping: { default: "models/openai.yml" },
@@ -2004,6 +2067,7 @@ describe("patrol / schedule helpers", () => {
 
 function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig {
   return {
+    revisions: {},
     person_id: "alice",
     person_name: "Alice",
     // No GitHub linking keeps the loaded member valid for save without extra
@@ -3209,6 +3273,7 @@ describe("PatrolSettingsEditor", () => {
 function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): IntelligenceConfig {
   return {
     config_dir: "/workspace/.guildbotics/config",
+    revisions: {},
     person_id: null,
     inherited: false,
     model_mapping: { default: "models/openai/default.yml" },
@@ -3308,6 +3373,11 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
   });
 }
 
+/** Saving is deliberate now, so every settings test has to press the button. */
+async function saveSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: t("setup.save.action") }));
+}
+
 async function openTeamIntelligenceAdvanced(user: ReturnType<typeof userEvent.setup>) {
   renderSetupPage("/setup");
   // The intelligence section is reached through the sidebar nav (only the
@@ -3350,7 +3420,7 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("autosaves an LLM slot rename after focus blur, without losing focus during typing, and holds autosave while focused", async () => {
+  it("renames an LLM slot on blur and sends it on save, without losing focus while typing", async () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(
       teamIntelligenceConfig({
         model_mapping: {
@@ -3412,12 +3482,10 @@ describe("IntelligenceEditor (team default)", () => {
     expect(slotInput).toHaveFocus();
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
 
-    // Wait 1000ms (>800ms debounce) while focused and verify no save occurred
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
-
-    // Trigger blur manually to commit rename
+    // The rename commits on blur; the save button is what sends it.
     fireEvent.blur(slotInput!);
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3437,6 +3505,8 @@ describe("IntelligenceEditor (team default)", () => {
       await screen.findByRole("button", { name: t("setup.intelligence.addCliSlot") }),
     );
 
+    await saveSection(user);
+
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
     });
@@ -3450,7 +3520,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(new Set(paths).size).toBe(paths.length);
   });
 
-  it("autosaves a CLI slot rename after focus blur, without losing focus during typing, and holds autosave while focused", async () => {
+  it("renames a CLI slot on blur and sends it on save, without losing focus while typing", async () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(
       teamIntelligenceConfig({
         cli_agent_mapping: {
@@ -3496,12 +3566,10 @@ describe("IntelligenceEditor (team default)", () => {
     expect(slotInput).toHaveFocus();
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
 
-    // Wait 1000ms (>800ms debounce) while focused and verify no save occurred
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
-
-    // Trigger blur manually to commit rename
+    // The rename commits on blur; the save button is what sends it.
     fireEvent.blur(slotInput!);
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3511,13 +3579,15 @@ describe("IntelligenceEditor (team default)", () => {
     expect(body.cli_agent_mapping).not.toHaveProperty("custom_cli");
   });
 
-  it("autosaves a model definition edit through updateIntelligenceConfig after debounce", async () => {
+  it("sends a model definition edit through updateIntelligenceConfig on save", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
     await user.type(modelId, "gpt-6");
+
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3530,14 +3600,17 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("does not autosave repeatedly before the debounce elapses", async () => {
+  it("writes nothing until the save button is pressed", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.type(modelId, "X");
-    // The debounce is 800ms; right after typing nothing has been persisted yet.
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3554,6 +3627,8 @@ describe("IntelligenceEditor (team default)", () => {
     await user.click(engineSelect);
     await user.click(await screen.findByRole("option", { name: "CLI" }));
 
+    await saveSection(user);
+
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
     });
@@ -3565,7 +3640,7 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("shows a JSON validation error and blocks autosave for a malformed effort", async () => {
+  it("shows a JSON validation error and blocks the save for a malformed effort", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
@@ -3584,7 +3659,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
-  it("autosaves a typed effort edit through the API", async () => {
+  it("sends a typed effort edit through the API on save", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
@@ -3593,6 +3668,7 @@ describe("IntelligenceEditor (team default)", () => {
     );
     await user.click(screen.getByLabelText("low reasoning_effort"));
     await user.click(await screen.findByRole("option", { name: "low" }));
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3606,7 +3682,7 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("blocks autosave while the JSON escape hatch holds malformed text", async () => {
+  it("blocks the save while the JSON escape hatch holds malformed text", async () => {
     // The field withholds onChange while the text is malformed, so without the
     // validity wiring the pending autosave would still fire and silently
     // persist the last value that parsed -- not what is on screen.
@@ -3654,7 +3730,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
   });
 
-  it("autosaves one native adapter policy without changing the others", async () => {
+  it("saves one native adapter policy without changing the others", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
@@ -3670,6 +3746,7 @@ describe("IntelligenceEditor (team default)", () => {
         name: t("setup.intelligence.filesystemOptions.host"),
       }),
     );
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3730,9 +3807,9 @@ describe("IntelligenceEditor (team default)", () => {
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
     await user.type(modelId, "broken-model");
+    await saveSection(user);
 
-    expect(await screen.findByText(t("setup.intelligence.saveAdvancedError"))).toBeInTheDocument();
-    expect(screen.getByText("write blew up")).toBeInTheDocument();
+    expect(await screen.findByText("write blew up")).toBeInTheDocument();
   });
 });
 
@@ -3917,6 +3994,7 @@ describe("IntelligenceEditor (member override)", () => {
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0]).toEqual({
       config_dir: "/workspace/.guildbotics/config",
+      expected_revisions: {},
       person_id: "alice",
       inherit_team_defaults: true,
     });
