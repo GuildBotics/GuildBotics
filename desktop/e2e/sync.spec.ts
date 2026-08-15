@@ -254,12 +254,7 @@ test("⑩ takes in a change pushed straight to the hub, with nothing asked of th
     .toContain("arrived on its own");
 });
 
-// Held back: a rebuilt hub is left empty when this device has fetched from the
-// old one, because the stale remote-tracking ref makes the queue believe the new
-// hub already holds everything. The UI then reports "In sync" over an empty hub.
-// See the issue draft raised with this change; flip this back to `test` with the
-// fix.
-test.fixme("⑨ reconnects to a hub rebuilt somewhere else", async ({ page }) => {
+test("⑨ reconnects to a hub rebuilt somewhere else", async ({ page }) => {
   // Reconnecting stops the queue first, and the queue is at that moment failing
   // against a hub that no longer exists, so this takes more than one cycle.
   test.setTimeout(180_000);
@@ -277,18 +272,6 @@ test.fixme("⑨ reconnects to a hub rebuilt somewhere else", async ({ page }) =>
   await page.getByRole("button", { name: "Connect to a different hub" }).click();
   await lookUpLocalHub(page);
   await page.getByRole("button", { name: "Register this workspace on the hub" }).click();
-  await page.waitForTimeout(5000);
-  console.log("DEBUG status:", JSON.stringify(await syncStatus()));
-  console.log(
-    "DEBUG tree:",
-    JSON.stringify(
-      execFileSync("find", [hubRoot()], { encoding: "utf-8" }).split("\n").slice(0, 12),
-    ),
-    "| ls-tree:",
-    JSON.stringify(
-      gitOrEmpty(hubRepository(workspaceId), "ls-tree", "-r", "--name-only", "main").slice(0, 300),
-    ),
-  );
 
   await expect
     .poll(() => gitOrEmpty(hubRepository(workspaceId), "ls-tree", "-r", "--name-only", "main"), {
