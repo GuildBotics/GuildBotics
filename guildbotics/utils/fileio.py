@@ -369,6 +369,26 @@ def load_yaml_file(file: Path) -> dict | list[dict]:
         return yaml.safe_load(f)
 
 
+def dump_yaml(data: dict | list[dict]) -> str:
+    """Serialize ``data`` the one way this project writes YAML.
+
+    Keys whose value is None or an empty string are omitted, so a config file
+    describes only what was actually set.
+
+    Args:
+        data (dict or list of dict): Data to serialize.
+
+    Returns:
+        str: The YAML text.
+    """
+    return yaml.dump(
+        _clean_data(data),
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+
 def save_yaml_file(file_path: Path, data: dict | list[dict]) -> None:
     """
     Save the given data to a YAML file, omitting keys with None or empty-string values.
@@ -380,12 +400,13 @@ def save_yaml_file(file_path: Path, data: dict | list[dict]) -> None:
     Returns:
         None
     """
-    # Clean data by removing keys with None or empty-string values
-    cleaned = _clean_data(data)
-    with file_path.open("w", encoding="utf-8") as f:
-        yaml.dump(
-            cleaned, f, allow_unicode=True, sort_keys=False, default_flow_style=False
-        )
+    # Imported here because the port itself builds on this module. Config is a
+    # shared root, so every YAML save under it has to reach the sync queue;
+    # routing it through the port keeps that true for callers that never learn
+    # synchronization exists, and paths outside the shared roots are dropped.
+    from guildbotics.utils.workspace_sync_port import write_shared_text
+
+    write_shared_text(file_path, dump_yaml(data))
 
 
 def _clean_data(data):

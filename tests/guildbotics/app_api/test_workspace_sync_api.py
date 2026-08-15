@@ -396,3 +396,59 @@ def test_a_hub_offering_a_different_key_asks_the_user_to_look_again(
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "host_key_changed"
+
+
+# -- Devices sharing the workspace --------------------------------------------
+
+
+def test_the_device_list_is_empty_until_this_machine_joins_one(
+    client: TestClient,
+) -> None:
+    """A workspace with no hub publishes no device record, so there is nothing
+    to list -- not even this machine."""
+    payload = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))
+
+    assert payload["devices"] == []
+    assert payload["device_id"]
+
+
+def test_this_machine_appears_once_it_has_a_record(
+    client: TestClient, workspace: Path
+) -> None:
+    _json(client.post("/hub", headers=AUTH_HEADERS))
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+
+    payload = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))
+
+    assert [device["is_self"] for device in payload["devices"]] == [True]
+    assert payload["devices"][0]["device_id"] == payload["device_id"]
+    assert payload["devices"][0]["os"]
+    assert payload["devices"][0]["joined_at"]
+
+
+def test_renaming_this_machine_publishes_the_new_name(
+    client: TestClient, workspace: Path
+) -> None:
+    _json(client.post("/hub", headers=AUTH_HEADERS))
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+
+    payload = _json(
+        client.post(
+            "/workspace/devices/self",
+            headers=AUTH_HEADERS,
+            json={"display_name": "  Work laptop  "},
+        )
+    )
+
+    assert [device["display_name"] for device in payload["devices"]] == ["Work laptop"]
+    stored = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))
+    assert stored["devices"][0]["display_name"] == "Work laptop"
+
+
+def test_a_blank_device_name_is_refused(client: TestClient) -> None:
+    response = client.post(
+        "/workspace/devices/self", headers=AUTH_HEADERS, json={"display_name": "   "}
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "device_name_invalid"

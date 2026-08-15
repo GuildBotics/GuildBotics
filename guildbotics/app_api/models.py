@@ -109,6 +109,36 @@ class UnsendableChangeModel(BaseModel):
     reason: str
 
 
+class WorkspaceDevice(BaseModel):
+    """A machine sharing this workspace, as the other machines see it.
+
+    Online state and what a device is currently running are deliberately
+    absent: nothing reports them yet, and an unqualified "offline" would be
+    read as a fault rather than as an absence of information.
+    """
+
+    device_id: str
+    display_name: str
+    os: str
+    joined_at: str
+    status: str = "active"
+    ssh_public_key_fingerprint: str = ""
+    # Whether this record is the machine the Desktop is running on, which is
+    # the only one whose name it can change.
+    is_self: bool = False
+
+
+class WorkspaceDevices(BaseModel):
+    devices: list[WorkspaceDevice] = Field(default_factory=list)
+    device_id: str = ""
+
+
+class DeviceRenameRequest(BaseModel):
+    """Rename this machine. Other devices are named on the machines themselves."""
+
+    display_name: str
+
+
 class WorkspaceSyncStatus(BaseModel):
     """The synchronization state of the selected workspace."""
 
@@ -612,6 +642,19 @@ class ActivityHistorySession(BaseModel):
     rate_limit: ActivityHistoryRateLimit | None = None
 
 
+class ActivityHistoryRejection(BaseModel):
+    """What identifies a local change the hub did not accept.
+
+    Only enough to find the stashed commit is carried: recovery is a manual
+    procedure on the device that made the change, and the stashed content is
+    deliberately absent from every API.
+    """
+
+    rejection_id: str
+    paths: list[str] = Field(default_factory=list)
+    source_device_id: str = ""
+
+
 class ActivityHistoryEvent(BaseModel):
     id: str
     timestamp: str
@@ -621,6 +664,9 @@ class ActivityHistoryEvent(BaseModel):
     detail: str = ""
     url: str = ""
     links: list[ActivityHistoryLink] = Field(default_factory=list)
+    # Present only on ``sync_rejected``, whose facts are structured rather than
+    # a link to somewhere else.
+    rejection: ActivityHistoryRejection | None = None
 
 
 class ActivityHistoryResponse(BaseModel):
@@ -930,6 +976,7 @@ class LlmProvidersResponse(BaseModel):
 
 class IntelligenceConfigResponse(BaseModel):
     config_dir: Path
+    revisions: dict[str, str] = Field(default_factory=dict)
     person_id: str | None = None
     inherited: bool = False
     model_mapping: dict[str, str] = Field(default_factory=dict)
@@ -950,6 +997,7 @@ class IntelligenceConfigResponse(BaseModel):
 
 class IntelligenceConfigUpdateRequest(BaseModel):
     config_dir: Path
+    expected_revisions: dict[str, str] = Field(default_factory=dict)
     person_id: str | None = None
     inherit_team_defaults: bool = False
     model_mapping: dict[str, str] = Field(default_factory=dict)
@@ -962,6 +1010,9 @@ class IntelligenceConfigUpdateRequest(BaseModel):
 
 class ProjectConfigResponse(BaseModel):
     config_dir: Path
+    # Config-relative path -> revision, to be sent back with the save so an
+    # edit made elsewhere since this read is refused instead of overwritten.
+    revisions: dict[str, str] = Field(default_factory=dict)
     language: str
     description: str = ""
     llm_api_type: str
@@ -1022,6 +1073,9 @@ class AgentFieldStateResponse(BaseModel):
 
 class ProjectConfigUpdateRequest(GitHubProjectInput):
     config_dir: Path
+    # Revisions this form was composed against. Empty during first-time setup,
+    # where there is no earlier content to be composed against.
+    expected_revisions: dict[str, str] = Field(default_factory=dict)
     language: Literal["en", "ja"]
     description: str = ""
     llm_api_type: str

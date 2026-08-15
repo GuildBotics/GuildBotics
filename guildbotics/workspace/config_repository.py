@@ -3,7 +3,7 @@
 Config files are the shared state a person edits by hand, so two machines --
 or one machine with a stale editor open -- can plausibly submit conflicting
 edits. Every read therefore returns the content together with its Git blob ID,
-and every write states the blob ID it expects to replace. A write whose
+and every save states the blob IDs it expects to replace. A save whose
 expectation no longer holds is refused rather than merged, and the caller
 redisplays the current content.
 
@@ -14,6 +14,13 @@ and replace, not a lock held for the length of an edit: a distributed lock
 would block local editing whenever the hub is unreachable, which the design
 refuses to trade away.
 
+One screen's save writes several config files, so the comparison covers all of
+them and the writing happens inside the same lock: refusing a save that has
+already applied half of itself would be the very outcome the check exists to
+prevent. :meth:`ConfigRepository.guard` is therefore the write API -- it wraps
+whatever the caller was already going to write, rather than asking every
+config writer to hand its content over.
+
 This optimistic lock applies to config alone. Memory documents, conversation
 state, and task runs keep their existing save APIs; when two devices really do
 change the same file, the sync manager's first-committer-wins rule settles it.
@@ -22,16 +29,14 @@ change the same file, the sync manager's first-committer-wins rule settles it.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
-from guildbotics.utils.workspace_sync_port import write_shared_text
-from guildbotics.workspace.validation import (
-    SharedFileInvalidError,
-    validate_shared_file,
-)
+from guildbotics.workspace.validation import SharedFileInvalidError
 
 
 def blob_id(data: bytes) -> str:
@@ -102,45 +107,70 @@ class ConfigRepository:
         """
         return self._snapshot(relative_path)
 
-    def write_config(
-        self, relative_path: str, expected_blob_id: str | None, content: str
-    ) -> ConfigSnapshot:
-        """Replace a config file when it still holds ``expected_blob_id``.
+    def revisions(self, relative_paths: Iterable[str]) -> dict[str, str]:
+        """Return the current revision of each named config file.
+
+        Files that do not exist are omitted, so their absence is what a later
+        :meth:`guard` compares against.
 
         Args:
-            relative_path (str): The path relative to the config directory.
-            expected_blob_id (str | None): The revision the caller read, or
-                None to require that the file does not exist yet.
-            content (str): The complete new content.
+            relative_paths (Iterable[str]): Paths relative to the config
+                directory, for example ``team/project.yml``.
+        """
+        found = {path: self._snapshot(path) for path in relative_paths}
+        return {
+            path: snapshot.blob_id
+            for path, snapshot in found.items()
+            if snapshot is not None
+        }
 
-        Returns:
-            ConfigSnapshot: The newly written content and its revision.
+    def tree_revisions(self, relative_dir: str) -> dict[str, str]:
+        """Return revisions for every config file under ``relative_dir``.
+
+        Screens that reconcile a whole directory -- writing some files, pruning
+        others -- are stale if anything under it moved, not only the files they
+        happen to write this time.
+
+        Args:
+            relative_dir (str): A directory relative to the config directory,
+                for example ``intelligences``.
+        """
+        root = self._absolute_path(relative_dir)
+        if not root.is_dir():
+            return {}
+        return self.revisions(
+            PurePosixPath(relative_dir)
+            .joinpath(path.relative_to(root).as_posix())
+            .as_posix()
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        )
+
+    @contextmanager
+    def guard(self, expected: Mapping[str, str]) -> Iterator[None]:
+        """Write config files only while they still hold the revisions read.
+
+        The caller's own writes happen inside the ``with`` body and inside the
+        lock, so a save that touches several files either applies completely or
+        not at all.
+
+        Args:
+            expected (Mapping[str, str]): Config-relative path to the revision
+                the caller read. A path left out is unconstrained; a path
+                mapped to an empty string must still not exist.
 
         Raises:
-            StaleConfigWriteError: When the stored revision differs, leaving
-                the file untouched and announcing nothing.
-            SharedFileInvalidError: When ``content`` is not valid for this
-                file's kind, leaving the file untouched.
+            StaleConfigWriteError: When one of the files changed since it was
+                read. Nothing has been written when this is raised.
         """
-        path = self._absolute_path(relative_path)
-        shared_path = self._shared_path(relative_path)
-        data = content.encode("utf-8")
-        validate_shared_file(shared_path, data)
         with held_lock(self._lock_path):
-            current = self._snapshot(relative_path)
-            current_blob_id = current.blob_id if current is not None else None
-            if current_blob_id != expected_blob_id:
-                raise StaleConfigWriteError(shared_path, current)
-            write_shared_text(path, content, workspace_root=self.workspace_root)
-            # Describe the bytes this call committed rather than re-reading the
-            # file. Reading after the lock would report the content of whoever
-            # wrote next, which is not what this write applied.
-            return ConfigSnapshot(
-                relative_path=shared_path,
-                path=path,
-                blob_id=blob_id(data),
-                content=content,
-            )
+            for relative_path, expected_blob_id in expected.items():
+                current = self._snapshot(relative_path)
+                if (current.blob_id if current is not None else "") != expected_blob_id:
+                    raise StaleConfigWriteError(
+                        self._shared_path(relative_path), current
+                    )
+            yield
 
     def _absolute_path(self, relative_path: str) -> Path:
         """Resolve a config-relative path, refusing anything outside config/.

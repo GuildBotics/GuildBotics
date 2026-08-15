@@ -28,10 +28,17 @@ from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from guildbotics.app_api.command_input_files import CommandInputFileStore
+from guildbotics.app_api.config_revisions import (
+    config_repository,
+    guarded_config_write,
+)
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.hotkeys import load_hotkeys, save_hotkeys
-from guildbotics.app_api.intelligences import IntelligenceConfigService
+from guildbotics.app_api.intelligences import (
+    IntelligenceConfigService,
+    intelligence_config_dir,
+)
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentFieldStateResponse,
@@ -54,6 +61,7 @@ from guildbotics.app_api.models import (
     CommandRunResponse,
     ConfigStatus,
     DefaultPersonUpdateRequest,
+    DeviceRenameRequest,
     DeviceSshKey,
     GitHubAppRegistrationStartRequest,
     GitHubAppRegistrationStatus,
@@ -96,6 +104,7 @@ from guildbotics.app_api.models import (
     TroubleshootingResponse,
     VerifyResponse,
     WorkspaceChangeRequest,
+    WorkspaceDevices,
     WorkspaceSyncCloneRequest,
     WorkspaceSyncEnableRequest,
     WorkspaceSyncPreview,
@@ -109,6 +118,7 @@ from guildbotics.editions.simple.github_app_setup import (
     GitHubAppRegistrationService,
 )
 from guildbotics.editions.simple.setup_service import (
+    PROJECT_CONFIG_PATHS,
     PersonConfigSnapshot,
     PersonSetupInput,
     PersonSetupResult,
@@ -121,6 +131,7 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
     github_app_key_dir,
+    person_config_paths,
 )
 from guildbotics.editions.simple.slack_app_setup import (
     SlackAppRegistrationInfo,
@@ -323,6 +334,25 @@ def create_app(
     @app.post("/hub/ssh-key", response_model=DeviceSshKey, responses=error_responses)
     def hub_ssh_key_create(_: None = Depends(require_token)) -> DeviceSshKey:
         return sync_service.create_ssh_key()
+
+    @app.get(
+        "/workspace/devices",
+        response_model=WorkspaceDevices,
+        responses=error_responses,
+    )
+    def workspace_devices(_: None = Depends(require_token)) -> WorkspaceDevices:
+        return sync_service.get_devices()
+
+    @app.post(
+        "/workspace/devices/self",
+        response_model=WorkspaceDevices,
+        responses=error_responses,
+    )
+    def workspace_device_rename(
+        request: DeviceRenameRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceDevices:
+        return sync_service.rename_device(request)
 
     @app.get(
         "/workspace/sync",
@@ -845,12 +875,19 @@ def create_app(
     ) -> IntelligenceConfigResponse:
         config_dir = _resolve_existing_config_dir(app_runtime)
         try:
-            return IntelligenceConfigService().read_config(
+            response = IntelligenceConfigService().read_config(
                 config_dir=config_dir,
                 person_id=person_id,
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
+        return response.model_copy(
+            update={
+                "revisions": config_repository(config_dir).tree_revisions(
+                    intelligence_config_dir(person_id)
+                )
+            }
+        )
 
     @app.put(
         "/config/intelligences",
@@ -862,7 +899,8 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         try:
-            result = IntelligenceConfigService().update_config(request)
+            with guarded_config_write(request.config_dir, request.expected_revisions):
+                result = IntelligenceConfigService().update_config(request)
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
         return ConfigWriteResponse(
@@ -907,7 +945,14 @@ def create_app(
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ProjectConfigResponse.model_validate(snapshot.model_dump())
+        return ProjectConfigResponse.model_validate(
+            snapshot.model_dump()
+            | {
+                "revisions": config_repository(config_dir).revisions(
+                    PROJECT_CONFIG_PATHS
+                )
+            }
+        )
 
     @app.post(
         "/config/project/status-options",
@@ -952,9 +997,10 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         try:
-            result = SimpleProjectSetupService().update_project(
-                ProjectUpdateInput.model_validate(request.model_dump())
-            )
+            with guarded_config_write(request.config_dir, request.expected_revisions):
+                result = SimpleProjectSetupService().update_project(
+                    ProjectUpdateInput.model_validate(request.model_dump())
+                )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
         return ConfigWriteResponse(project=result)
@@ -1026,7 +1072,13 @@ def create_app(
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return snapshot
+        return snapshot.model_copy(
+            update={
+                "revisions": config_repository(config_dir).revisions(
+                    person_config_paths(person_id)
+                )
+            }
+        )
 
     @app.put(
         "/config/members/{person_id}",
@@ -1046,11 +1098,13 @@ def create_app(
                     "original_person_id must match the path parameter.",
                     status_code=400,
                 )
-            payload["config_dir"] = _resolve_existing_config_dir(app_runtime)
+            config_dir = _resolve_existing_config_dir(app_runtime)
+            payload["config_dir"] = config_dir
 
-            result = SimplePersonSetupService().update_person(
-                PersonUpdateInput.model_validate(payload)
-            )
+            with guarded_config_write(config_dir, request.expected_revisions):
+                result = SimplePersonSetupService().update_person(
+                    PersonUpdateInput.model_validate(payload)
+                )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
         return ConfigWriteResponse(member=result)

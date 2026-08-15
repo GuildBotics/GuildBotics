@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 import yaml  # type: ignore
 
-from guildbotics.workspace import config_repository
+from guildbotics.utils.fileio import save_yaml_file
 from guildbotics.workspace.config_repository import (
     ConfigRepository,
     StaleConfigWriteError,
@@ -18,6 +17,7 @@ from guildbotics.workspace.validation import SharedFileInvalidError
 from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort
 
 PROJECT = "team/project.yml"
+MODEL_MAPPING = "intelligences/model_mapping.yml"
 
 
 @pytest.fixture
@@ -25,8 +25,20 @@ def repository() -> ConfigRepository:
     return ConfigRepository()
 
 
+@pytest.fixture
+def config_dir(tmp_path: Path) -> Path:
+    path = tmp_path / ".guildbotics/config"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def project_yaml(name: str) -> str:
     return yaml.safe_dump({"name": name})
+
+
+def write(config_dir: Path, relative_path: str, content: str) -> None:
+    """Write a config file the way the config screens do."""
+    save_yaml_file(config_dir / relative_path, yaml.safe_load(content))
 
 
 def test_blob_id_matches_git(tmp_path: Path) -> None:
@@ -49,10 +61,10 @@ def test_reading_an_absent_config_returns_none(repository: ConfigRepository) -> 
 
 
 def test_a_read_returns_the_content_and_its_revision(
-    repository: ConfigRepository, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path, port: RecordingPort
 ) -> None:
     content = project_yaml("GuildBotics")
-    repository.write_config(PROJECT, None, content)
+    write(config_dir, PROJECT, content)
 
     snapshot = repository.read_config(PROJECT)
 
@@ -63,93 +75,129 @@ def test_a_read_returns_the_content_and_its_revision(
     assert snapshot.path.read_text(encoding="utf-8") == content
 
 
-def test_creating_a_config_expects_no_prior_revision(
-    repository: ConfigRepository, port: RecordingPort
+def test_revisions_omit_files_that_do_not_exist(
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
-    written = repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
 
-    assert written.content == project_yaml("GuildBotics")
-    assert [change.paths for change in port.changes] == [("config/team/project.yml",)]
+    revisions = repository.revisions([PROJECT, MODEL_MAPPING])
+
+    assert set(revisions) == {PROJECT}
+    assert revisions[PROJECT] == blob_id(project_yaml("GuildBotics").encode())
 
 
-def test_creating_over_an_existing_config_is_refused(
-    repository: ConfigRepository, port: RecordingPort
+def test_a_guarded_write_at_the_current_revisions_applies(
+    repository: ConfigRepository, config_dir: Path, port: RecordingPort
 ) -> None:
-    repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
+    expected = repository.revisions([PROJECT])
+    port.changes.clear()
+
+    with repository.guard(expected):
+        write(config_dir, PROJECT, project_yaml("Renamed"))
+
+    snapshot = repository.read_config(PROJECT)
+    assert snapshot is not None
+    assert snapshot.content == project_yaml("Renamed")
+    assert [change.operation for change in port.changes] == ["update"]
+
+
+def test_a_guarded_write_at_a_stale_revision_changes_nothing(
+    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+) -> None:
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
+    stale = repository.revisions([PROJECT])
+    write(config_dir, PROJECT, project_yaml("Newer"))
     port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError) as error:
-        repository.write_config(PROJECT, None, project_yaml("Other"))
+        with repository.guard(stale):
+            pytest.fail("the body must not run against superseded content")
+
+    current = repository.read_config(PROJECT)
+    assert current is not None
+    assert current.content == project_yaml("Newer")
+    assert error.value.snapshot == current
+    assert error.value.relative_path == "config/team/project.yml"
+    assert port.changes == []
+
+
+def test_a_guarded_write_expecting_absence_is_refused_once_the_file_exists(
+    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+) -> None:
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
+    port.changes.clear()
+
+    with pytest.raises(StaleConfigWriteError) as error:
+        with repository.guard({PROJECT: ""}):
+            pytest.fail("the body must not run against superseded content")
 
     assert error.value.snapshot is not None
     assert error.value.snapshot.content == project_yaml("GuildBotics")
     assert port.changes == []
 
 
-def test_a_write_at_the_current_revision_succeeds(
-    repository: ConfigRepository, port: RecordingPort
+def test_one_stale_file_refuses_the_whole_save(
+    repository: ConfigRepository, config_dir: Path, port: RecordingPort
 ) -> None:
-    first = repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
-    port.changes.clear()
-
-    second = repository.write_config(PROJECT, first.blob_id, project_yaml("Renamed"))
-
-    assert second.content == project_yaml("Renamed")
-    assert second.blob_id != first.blob_id
-    assert [change.operation for change in port.changes] == ["update"]
-
-
-def test_a_write_at_a_stale_revision_changes_nothing(
-    repository: ConfigRepository, port: RecordingPort
-) -> None:
-    stale = repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
-    repository.write_config(PROJECT, stale.blob_id, project_yaml("Newer"))
+    """A save spanning several files applies completely or not at all."""
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
+    write(config_dir, MODEL_MAPPING, project_yaml("gpt"))
+    expected = repository.revisions([PROJECT, MODEL_MAPPING])
+    # Another device's change arrives for one of the two files.
+    write(config_dir, MODEL_MAPPING, project_yaml("claude"))
     port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError) as error:
-        repository.write_config(PROJECT, stale.blob_id, project_yaml("Older screen"))
+        with repository.guard(expected):
+            pytest.fail("the body must not run against superseded content")
 
-    current = repository.read_config(PROJECT)
-    assert current is not None
-    assert current.content == project_yaml("Newer")
-    assert error.value.snapshot == current
+    assert error.value.relative_path == "config/intelligences/model_mapping.yml"
+    untouched = repository.read_config(PROJECT)
+    assert untouched is not None
+    assert untouched.content == project_yaml("GuildBotics")
     assert port.changes == []
 
 
-def test_a_write_of_invalid_content_changes_nothing(
-    repository: ConfigRepository, port: RecordingPort
+def test_tree_revisions_cover_every_file_under_the_directory(
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
-    written = repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
-    port.changes.clear()
+    write(config_dir, MODEL_MAPPING, project_yaml("gpt"))
+    write(config_dir, "intelligences/models/openai.yml", project_yaml("openai"))
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
 
-    with pytest.raises(SharedFileInvalidError):
-        repository.write_config(PROJECT, written.blob_id, "name: [unclosed")
+    revisions = repository.tree_revisions("intelligences")
 
-    current = repository.read_config(PROJECT)
-    assert current is not None
-    assert current.content == project_yaml("GuildBotics")
-    assert port.changes == []
+    assert set(revisions) == {MODEL_MAPPING, "intelligences/models/openai.yml"}
 
 
-def test_only_one_of_two_concurrent_writers_wins(
-    repository: ConfigRepository, port: RecordingPort
+def test_tree_revisions_of_an_absent_directory_are_empty(
+    repository: ConfigRepository,
 ) -> None:
-    base = repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
+    assert repository.tree_revisions("intelligences") == {}
+
+
+def test_only_one_of_two_concurrent_savers_wins(
+    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+) -> None:
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
+    expected = repository.revisions([PROJECT])
     port.changes.clear()
     start = threading.Barrier(2)
     outcomes: list[str] = []
 
-    def write(name: str) -> None:
-        writer = ConfigRepository()
+    def save(name: str) -> None:
+        saver = ConfigRepository()
         start.wait()
         try:
-            writer.write_config(PROJECT, base.blob_id, project_yaml(name))
+            with saver.guard(expected):
+                write(config_dir, PROJECT, project_yaml(name))
         except StaleConfigWriteError:
             outcomes.append(f"stale:{name}")
         else:
             outcomes.append(f"written:{name}")
 
-    threads = [threading.Thread(target=write, args=(name,)) for name in ("A", "B")]
+    threads = [threading.Thread(target=save, args=(name,)) for name in ("A", "B")]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -179,7 +227,8 @@ def test_a_path_outside_the_config_directory_is_refused(
     relative_path: str,
 ) -> None:
     with pytest.raises(SharedFileInvalidError):
-        repository.write_config(relative_path, None, "{}\n")
+        with repository.guard({relative_path: ""}):
+            pytest.fail("an unusable path must be refused before the body runs")
     with pytest.raises(SharedFileInvalidError):
         repository.read_config(relative_path)
 
@@ -195,49 +244,23 @@ def test_a_symlink_out_of_the_config_directory_is_refused(
     (config_dir / "escape").symlink_to(tmp_path / ".guildbotics/state")
 
     with pytest.raises(SharedFileInvalidError):
-        repository.write_config("escape/workspace.json", None, "{}\n")
+        with repository.guard({"escape/workspace.json": ""}):
+            pytest.fail("an unusable path must be refused before the body runs")
 
     assert port.changes == []
 
 
-def test_a_write_reports_the_content_it_committed(
-    repository: ConfigRepository,
-    port: RecordingPort,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+def test_the_write_lock_is_released_after_each_save(
+    repository: ConfigRepository, config_dir: Path, port: RecordingPort
 ) -> None:
-    base = repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
-    ours = project_yaml("Ours")
-    theirs = project_yaml("Theirs")
-    config_path = tmp_path / ".guildbotics/config" / PROJECT
-    original = config_repository.held_lock
-
-    @contextmanager
-    def racing_lock(path: Path, *args: object, **kwargs: object):
-        with original(path, *args, **kwargs) as handle:  # type: ignore[arg-type]
-            yield handle
-        # Another writer takes the lock the instant this one releases it.
-        if config_path.read_text(encoding="utf-8") == ours:
-            config_path.write_text(theirs, encoding="utf-8")
-
-    monkeypatch.setattr(config_repository, "held_lock", racing_lock)
-
-    written = repository.write_config(PROJECT, base.blob_id, ours)
-
-    assert written.content == ours
-    assert written.blob_id == blob_id(ours.encode())
-    assert config_path.read_text(encoding="utf-8") == theirs
-
-
-def test_the_write_lock_is_released_after_each_write(
-    repository: ConfigRepository, port: RecordingPort
-) -> None:
-    written = repository.write_config(PROJECT, None, project_yaml("GuildBotics"))
+    with repository.guard({}):
+        write(config_dir, PROJECT, project_yaml("GuildBotics"))
 
     # A second repository instance in the same process must not deadlock on the
     # lock the first one already released.
-    again = ConfigRepository().write_config(
-        PROJECT, written.blob_id, project_yaml("Renamed")
-    )
+    with ConfigRepository().guard(repository.revisions([PROJECT])):
+        write(config_dir, PROJECT, project_yaml("Renamed"))
 
-    assert again.content == project_yaml("Renamed")
+    snapshot = repository.read_config(PROJECT)
+    assert snapshot is not None
+    assert snapshot.content == project_yaml("Renamed")
