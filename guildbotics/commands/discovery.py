@@ -7,6 +7,7 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.commands.registry import get_command_extensions
 from guildbotics.runtime.context import Context
 from guildbotics.utils.fileio import (
+    get_primary_config_dir,
     get_primary_config_path,
     get_template_path,
 )
@@ -43,12 +44,14 @@ def iter_candidate_paths(
         rel_bases.append(f"team/members/{person_id}/commands/{identifier}")
     rel_bases.append(f"commands/{identifier}")
 
+    primary_dir = get_primary_config_dir()
     template_root = get_template_path()
     for extension in extensions:
         for rel_base in rel_bases:
             base = Path(f"{rel_base}{extension}")
             for variant in _locale_variants(base, language_code):
-                yield get_primary_config_path(variant)
+                if primary_dir is not None:
+                    yield primary_dir / variant
                 yield template_root / variant
 
 

@@ -161,7 +161,7 @@ How the scheduler behaves (from `guildbotics/drivers/task_scheduler.py` and `gui
 **Error handling**:
 
 - The worker thread stops after consecutive command failures (default: 3)
-- A searchable execution summary is stored in `<workspace>/.guildbotics/data/run/diagnostics.jsonl`,
+- A searchable execution summary is stored in `<workspace>/.guildbotics/local/run/diagnostics.jsonl`,
   and the full per-execution record in `run/sessions/`
 
 ## Configuration Examples

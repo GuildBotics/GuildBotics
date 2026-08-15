@@ -148,8 +148,7 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getConfigStatus: vi.fn(async () => ({
       cwd: "/workspace",
-      env_file: "/workspace/.env",
-      env_file_exists: true,
+      workspace: "/workspace",
       config_dir: "/workspace/.guildbotics/config",
       project_file: "/workspace/.guildbotics/config/project.yml",
       project_file_exists: true,
@@ -213,7 +212,6 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getProjectConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
-      env_file_path: "/workspace/.env",
       language: "en",
       description: "Demo project",
       llm_api_type: "openai",
@@ -399,8 +397,7 @@ describe("SetupPage", () => {
     vi.mocked(getConfigStatus).mockResolvedValueOnce(
       configStatus({
         cwd: "/empty-workspace",
-        env_file: "/empty-workspace/.env",
-        env_file_exists: false,
+        workspace: "/empty-workspace",
         config_dir: "/empty-workspace/.guildbotics/config",
         project_file: "/empty-workspace/.guildbotics/config/team/project.yml",
         project_file_exists: false,
@@ -429,8 +426,7 @@ describe("SetupPage", () => {
     vi.mocked(getConfigStatus).mockResolvedValue(
       configStatus({
         cwd: "/empty-workspace",
-        env_file: "/empty-workspace/.env",
-        env_file_exists: false,
+        workspace: "/empty-workspace",
         config_dir: "/empty-workspace/.guildbotics/config",
         project_file: "/empty-workspace/.guildbotics/config/team/project.yml",
         project_file_exists: false,
@@ -502,8 +498,7 @@ describe("SetupPage", () => {
     vi.mocked(getConfigStatus).mockResolvedValueOnce(
       configStatus({
         cwd: "/empty-workspace",
-        env_file: "/empty-workspace/.env",
-        env_file_exists: false,
+        workspace: "/empty-workspace",
         config_dir: "/empty-workspace/.guildbotics/config",
         project_file: "/empty-workspace/.guildbotics/config/team/project.yml",
         project_file_exists: false,
@@ -517,8 +512,7 @@ describe("SetupPage", () => {
     vi.mocked(getConfigStatus).mockResolvedValueOnce(
       configStatus({
         cwd: "/configured-workspace",
-        env_file: "/configured-workspace/.env",
-        env_file_exists: true,
+        workspace: "/configured-workspace",
         config_dir: "/configured-workspace/.guildbotics/config",
         project_file: "/configured-workspace/.guildbotics/config/team/project.yml",
         project_file_exists: true,
@@ -527,7 +521,6 @@ describe("SetupPage", () => {
     vi.mocked(getProjectConfig).mockResolvedValueOnce(
       projectConfig({
         config_dir: "/configured-workspace/.guildbotics/config",
-        env_file_path: "/configured-workspace/.env",
         description: "Configured workspace",
       }),
     );
@@ -931,7 +924,6 @@ describe("SetupPage", () => {
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/workspace"));
     expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
     expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
-    expect(screen.getByText(/\/workspace\/\.env/)).toBeInTheDocument();
   });
 
   it("autosaves an existing project through updateProjectConfig", async () => {
@@ -971,7 +963,6 @@ describe("SetupPage", () => {
     await screen.findByRole("heading", { name: t("setup.verification.title") });
 
     expect(await screen.findByText(t("overview.ready"))).toBeInTheDocument();
-    expect(screen.getByText(t("overview.found"))).toBeInTheDocument();
     expect(await screen.findByText(t("overview.enabled"))).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
 
@@ -1067,10 +1058,8 @@ function memberConfig() {
     character: {},
     github_installation_id: null,
     github_app_id: null,
-    github_private_key_path: "",
     has_github_installation_id: false,
     has_github_app_id: false,
-    has_github_private_key_path: false,
     has_github_private_key: false,
     has_github_access_token: false,
     slack_user_id: "",
@@ -1097,7 +1086,6 @@ type MemberFormValues = Parameters<typeof getMemberFieldErrors>[0];
 function baseProjectValues(overrides: Partial<ProjectFormValues> = {}): ProjectFormValues {
   return {
     workspaceDir: "/workspace",
-    envFileOption: "append",
     language: "en",
     description: "Demo project",
     llmApiType: "openai",
@@ -1155,8 +1143,7 @@ function baseMemberValues(overrides: Partial<MemberFormValues> = {}): MemberForm
 function configStatus(overrides: Record<string, unknown> = {}): ConfigStatus {
   return {
     cwd: "/workspace",
-    env_file: "/workspace/.env",
-    env_file_exists: true,
+    workspace: "/workspace",
     config_dir: "/workspace/.guildbotics/config",
     project_file: "/workspace/.guildbotics/config/project.yml",
     project_file_exists: false,
@@ -1170,7 +1157,6 @@ type ProjectConfigValue = Parameters<typeof toProjectUpdateRequest>[2];
 function projectConfig(overrides: Record<string, unknown> = {}): ProjectConfigValue {
   return {
     config_dir: "/workspace/.guildbotics/config",
-    env_file_path: "/workspace/.env",
     language: "en",
     description: "Existing project",
     llm_api_type: "openai",
@@ -1332,7 +1318,6 @@ describe("initialProjectValues", () => {
     const values = initialProjectValues(undefined, "ja", null, undefined);
     expect(values).toMatchObject({
       workspaceDir: "",
-      envFileOption: "overwrite",
       language: "ja",
       description: "",
       llmApiType: "openai",
@@ -1342,25 +1327,10 @@ describe("initialProjectValues", () => {
     });
   });
 
-  it("derives workspace and append option from config status", () => {
-    const values = initialProjectValues(
-      configStatus({ env_file_exists: true }),
-      "en",
-      null,
-      undefined,
-    );
+  it("derives workspace from config status", () => {
+    const values = initialProjectValues(configStatus(), "en", null, undefined);
     expect(values.workspaceDir).toBe("/workspace");
-    expect(values.envFileOption).toBe("append");
-  });
-
-  it("maps a missing env file to overwrite option", () => {
-    const values = initialProjectValues(
-      configStatus({ env_file_exists: false }),
-      "en",
-      null,
-      undefined,
-    );
-    expect(values.envFileOption).toBe("overwrite");
+    expect("envFileOption" in values).toBe(false);
   });
 
   it("uses the project language when the project file exists", () => {
@@ -1394,14 +1364,10 @@ describe("initialProjectValues", () => {
 });
 
 describe("toProjectSetupRequest", () => {
-  it("honors the env file option override and omits GitHub fields when disabled", () => {
-    const request = toProjectSetupRequest(
-      baseProjectValues({ githubDecision: "disabled" }),
-      configStatus(),
-      { envFileOption: "overwrite" },
-    );
-    expect(request.env_file_option).toBe("overwrite");
-    expect(request.env_file_path).toBe("/workspace/.env");
+  it("omits GitHub fields when disabled", () => {
+    const request = toProjectSetupRequest(baseProjectValues({ githubDecision: "disabled" }));
+    expect(request).not.toHaveProperty("env_file_path");
+    expect(request).not.toHaveProperty("env_file_option");
     expect(request.config_dir).toBe("/workspace/.guildbotics/config");
     expect(request.owner).toBe("");
     expect(request.project_id).toBe("");
@@ -1414,7 +1380,6 @@ describe("toProjectSetupRequest", () => {
         githubDecision: "enabled",
         githubProjectUrl: "https://github.com/orgs/acme/projects/9",
       }),
-      configStatus(),
     );
     expect(request.owner).toBe("acme");
     expect(request.project_id).toBe("9");
@@ -1430,7 +1395,6 @@ describe("toProjectSetupRequest", () => {
         laneWorking: " Doing ",
         laneDone: " Shipped ",
       }),
-      configStatus(),
     );
     expect(request.lane_map).toEqual({
       ready: "Ready",
@@ -1448,7 +1412,6 @@ describe("toProjectSetupRequest", () => {
         laneWorking: "",
         laneDone: "",
       }),
-      configStatus(),
     );
     expect(request.lane_map).toEqual({
       ready: "Todo",
@@ -1458,10 +1421,7 @@ describe("toProjectSetupRequest", () => {
   });
 
   it("omits lane_map when GitHub is disabled", () => {
-    const request = toProjectSetupRequest(
-      baseProjectValues({ githubDecision: "disabled" }),
-      configStatus(),
-    );
+    const request = toProjectSetupRequest(baseProjectValues({ githubDecision: "disabled" }));
     expect(request.lane_map).toBeUndefined();
   });
 });
@@ -1655,9 +1615,9 @@ describe("getMemberFieldErrors", () => {
   });
 
   it("accepts a stored private key for github_apps members", () => {
-    // After `secrets migrate`, the PEM content lives in the OS keychain and
-    // the path entry is gone from .env; editing the member must not force
-    // the user to re-enter a path.
+    // After registration, the PEM content lives in the OS secret store and
+    // the path is not persisted; editing the member must not force the user
+    // to re-enter a path.
     const errors = getMemberFieldErrors(
       baseMemberValues({
         personType: "agent",
@@ -2068,10 +2028,8 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
     },
     github_installation_id: null,
     github_app_id: null,
-    github_private_key_path: "",
     has_github_installation_id: false,
     has_github_app_id: false,
-    has_github_private_key_path: false,
     has_github_private_key: false,
     has_github_access_token: false,
     slack_user_id: "",
@@ -2229,7 +2187,6 @@ describe("MembersSection", () => {
       is_active: true,
       roles: ["product"],
       config_dir: "/workspace/.guildbotics/config",
-      env_file_path: "/workspace/.env",
     });
     // A member without GitHub linking sends no GitHub credentials.
     expect(request.github_username).toBe("");
@@ -2583,7 +2540,7 @@ describe("MembersSection", () => {
     await waitFor(() => expect(deleteMemberConfig).toHaveBeenCalledTimes(1));
     expect(vi.mocked(deleteMemberConfig).mock.calls[0]).toEqual([
       "alice",
-      { config_dir: "/workspace/.guildbotics/config", env_file_path: "/workspace/.env" },
+      { config_dir: "/workspace/.guildbotics/config" },
     ]);
   });
 

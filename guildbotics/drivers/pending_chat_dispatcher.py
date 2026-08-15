@@ -18,6 +18,7 @@ from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
     PendingChatEvent,
+    ThreadContextUnavailableError,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability import trace_scope
@@ -188,6 +189,35 @@ class PendingChatDispatcher:
             except WorkRejectedError:
                 return 0
             except Exception as exc:  # leave queued for retry; do not block the queue
+                if _thread_context_unavailable(exc):
+                    # Provider outage, not a workflow failure: hand the attempt
+                    # back so the event stays pending (never abandoned) until
+                    # the provider can serve the thread context again.
+                    pending.attempt_count = max(0, pending.attempt_count - 1)
+                    pending.last_error_category = "provider_unavailable"
+                    pending.next_attempt_at = _next_attempt_at(
+                        pending.attempt_count + 1
+                    )
+                    self._state_store.save_pending_event(
+                        service, person.person_id, channel_id, pending
+                    )
+                    record_chat_dispatch_retry_scheduled(
+                        event_id=event_id,
+                        run_id=pending.run_id,
+                        attempt_count=pending.attempt_count,
+                        max_attempts=pending.max_attempts,
+                        next_attempt_at=pending.next_attempt_at or "",
+                        error_category=pending.last_error_category,
+                    )
+                    self._context.logger.warning(
+                        "chat thread context unavailable; event stays pending: "
+                        "person=%s channel=%s event=%s error=%s",
+                        person.person_id,
+                        channel_id,
+                        event_id,
+                        exc,
+                    )
+                    return 0
                 rate_limit = workflow_rate_limit_from_exception(exc)
                 pending.last_error_category = (
                     "rate_limited" if rate_limit is not None else "failed"
@@ -202,6 +232,7 @@ class PendingChatDispatcher:
                         attempt_count=pending.attempt_count,
                         max_attempts=pending.max_attempts,
                         error=str(exc),
+                        error_category=pending.last_error_category or "failed",
                     )
                     self._context.logger.error(
                         "chat event abandoned after final attempt: "
@@ -314,6 +345,23 @@ def _is_due(pending: PendingChatEvent) -> bool:
     if parsed is None:
         return True
     return parsed.astimezone(UTC) <= datetime.now(UTC)
+
+
+def _thread_context_unavailable(exc: BaseException) -> bool:
+    """True when the exception chain reports a provider thread-context outage."""
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ThreadContextUnavailableError):
+            return True
+        for linked in (current.__cause__, current.__context__):
+            if linked is not None:
+                stack.append(linked)
+    return False
 
 
 def _next_attempt_at(attempt_count: int) -> str:

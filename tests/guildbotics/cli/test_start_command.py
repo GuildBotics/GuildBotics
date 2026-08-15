@@ -75,12 +75,10 @@ class _FakeEventListenerRunner:
 
 def test_service_lock_path_uses_machine_state_root(monkeypatch, tmp_path):
     from guildbotics.cli import _service_lock_path
-    from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "workspace-data"))
 
     assert _service_lock_path() == home / ".guildbotics/data/run/service.lock"
 
@@ -105,7 +103,7 @@ def _patch_start_dependencies(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("guildbotics.cli.get_edition", lambda: edition)
     monkeypatch.setattr("guildbotics.cli.TaskScheduler", _scheduler_factory)
     monkeypatch.setattr("guildbotics.cli.EventListenerRunner", _events_factory)
-    monkeypatch.setattr("guildbotics.cli._load_env_from_cwd", lambda: None)
+    monkeypatch.setattr("guildbotics.cli._apply_selected_workspace", lambda: Path.cwd())
     monkeypatch.setattr(
         "guildbotics.cli._service_lock_path", lambda: tmp_path / "service.lock"
     )

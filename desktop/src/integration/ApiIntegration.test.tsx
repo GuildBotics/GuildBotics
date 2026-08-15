@@ -154,8 +154,7 @@ function installWebSocket(): void {
 function configStatus(overrides: Record<string, unknown> = {}) {
   return {
     cwd: "/workspace",
-    env_file: "/workspace/.env",
-    env_file_exists: true,
+    workspace: "/workspace",
     config_dir: "/workspace/.guildbotics/config",
     project_file: "/workspace/.guildbotics/config/project.yml",
     project_file_exists: true,
@@ -167,7 +166,6 @@ function configStatus(overrides: Record<string, unknown> = {}) {
 function projectConfig(overrides: Record<string, unknown> = {}) {
   return {
     config_dir: "/workspace/.guildbotics/config",
-    env_file_path: "/workspace/.env",
     language: "en",
     description: "Demo project",
     llm_api_type: "openai",
@@ -255,8 +253,6 @@ function transcriptSettings() {
   return {
     detail: "standard",
     retention_days: 30,
-    env_file: "",
-    env_file_exists: false,
     sessions_dir: "",
     total_size_bytes: 0,
     index_size_bytes: 0,
@@ -272,8 +268,6 @@ function runtimeDebug(overrides: { enabled?: boolean } = {}) {
     enabled,
     log_level: enabled ? "DEBUG" : "INFO",
     agno_debug: enabled,
-    env_file: "/workspace/.env",
-    env_file_exists: true,
   };
 }
 
@@ -534,7 +528,6 @@ describe("Setup integration (real client + mock server)", () => {
       is_active: true,
       roles: ["product"],
       config_dir: "/workspace/.guildbotics/config",
-      env_file_path: "/workspace/.env",
     });
 
     const createButton = await screen.findByRole("button", { name: t("setup.saveInitial") });
@@ -558,7 +551,6 @@ describe("Setup integration (real client + mock server)", () => {
     expect(server.lastBody("POST", "/workspace")).toEqual({ workspace_dir: "/workspace" });
     expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
     expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
-    expect(screen.getByText(/\/workspace\/\.env/)).toBeInTheDocument();
   });
 });
 

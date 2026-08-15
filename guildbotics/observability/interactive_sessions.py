@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from guildbotics.utils.fileio import get_workspace_data_path
+from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 INTERACTIVE_TRACE_STATE_FILE = "interactive_trace_state.json"
@@ -52,7 +52,7 @@ class InteractiveTraceStore:
 
     @property
     def path(self) -> Path:
-        return self._path or get_workspace_data_path(
+        return self._path or get_workspace_local_path(
             "run", INTERACTIVE_TRACE_STATE_FILE
         )
 

@@ -47,7 +47,6 @@ def client(workspace: Path) -> TestClient:
 def _init_project(
     client: TestClient,
     config_dir: Path,
-    env_file: Path,
     *,
     language: str = "en",
     description: str = "Temp automation workspace",
@@ -57,8 +56,6 @@ def _init_project(
         headers=AUTH_HEADERS,
         json={
             "config_dir": str(config_dir),
-            "env_file_path": str(env_file),
-            "env_file_option": "overwrite",
             "language": language,
             "description": description,
             "llm_api_type": "openai",
@@ -73,10 +70,8 @@ def test_temp_workspace_init_project_member_team_flow(
     client: TestClient, workspace: Path
 ) -> None:
     config_dir = workspace / ".guildbotics/config"
-    env_file = workspace / ".env"
-
     with client:
-        _init_project(client, config_dir, env_file)
+        _init_project(client, config_dir)
         # config/init wrote the project file on disk.
         assert (config_dir / "team/project.yml").exists()
 
@@ -94,7 +89,6 @@ def test_temp_workspace_init_project_member_team_flow(
             headers=AUTH_HEADERS,
             json={
                 "config_dir": str(config_dir),
-                "env_file_path": str(env_file),
                 "person_type": "",
                 "person_id": "local-agent",
                 "person_name": "Local Agent",
@@ -123,10 +117,8 @@ def test_temp_workspace_command_options_return_localized_sample_command(
     client: TestClient, workspace: Path
 ) -> None:
     config_dir = workspace / ".guildbotics/config"
-    env_file = workspace / ".env"
-
     with client:
-        _init_project(client, config_dir, env_file, language="ja")
+        _init_project(client, config_dir, language="ja")
         response = client.get("/commands/options", headers=AUTH_HEADERS)
 
     assert response.status_code == HTTP_OK
@@ -155,10 +147,8 @@ def test_temp_workspace_command_files_crud_flow(
     client: TestClient, workspace: Path
 ) -> None:
     config_dir = workspace / ".guildbotics/config"
-    env_file = workspace / ".env"
-
     with client:
-        _init_project(client, config_dir, env_file, language="en")
+        _init_project(client, config_dir, language="en")
 
         listing = client.get("/commands/files", headers=AUTH_HEADERS)
         assert listing.status_code == HTTP_OK
@@ -268,16 +258,13 @@ def test_command_file_execution_status_and_run_guard(
     client: TestClient, workspace: Path
 ) -> None:
     config_dir = workspace / ".guildbotics/config"
-    env_file = workspace / ".env"
-
     with client:
-        _init_project(client, config_dir, env_file, language="en")
+        _init_project(client, config_dir, language="en")
         client.post(
             "/config/members",
             headers=AUTH_HEADERS,
             json={
                 "config_dir": str(config_dir),
-                "env_file_path": str(env_file),
                 "person_type": "",
                 "person_id": "local-agent",
                 "person_name": "Local Agent",
@@ -419,10 +406,8 @@ def test_temp_workspace_intelligence_update_writes_files(
     client: TestClient, workspace: Path
 ) -> None:
     config_dir = workspace / ".guildbotics/config"
-    env_file = workspace / ".env"
-
     with client:
-        _init_project(client, config_dir, env_file)
+        _init_project(client, config_dir)
 
         current = client.get("/config/intelligences", headers=AUTH_HEADERS)
         assert current.status_code == HTTP_OK
@@ -461,10 +446,8 @@ def test_temp_workspace_intelligence_effort_round_trips_through_the_api(
 ) -> None:
     """Effort survives GET -> PUT -> YAML with its provider-shaped types."""
     config_dir = workspace / ".guildbotics/config"
-    env_file = workspace / ".env"
-
     with client:
-        _init_project(client, config_dir, env_file)
+        _init_project(client, config_dir)
 
         payload = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
         model_path = payload["model_mapping"]["default"]
@@ -517,10 +500,8 @@ def test_temp_workspace_transcript_settings_update_then_status(
     client: TestClient, workspace: Path
 ) -> None:
     config_dir = workspace / ".guildbotics/config"
-    env_file = workspace / ".env"
-
     with client:
-        _init_project(client, config_dir, env_file)
+        _init_project(client, config_dir)
 
         update = client.put(
             "/transcripts/settings",
@@ -537,6 +518,6 @@ def test_temp_workspace_transcript_settings_update_then_status(
     status_payload = status.json()
     assert status_payload["detail"] == "full"
     assert status_payload["retention_days"] == 14
-    env_text = env_file.read_text()
-    assert "GUILDBOTICS_TRANSCRIPT_DETAIL=full" in env_text
-    assert "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS=14" in env_text
+    settings = (config_dir / "transcripts.yml").read_text()
+    assert "detail: full" in settings
+    assert "retention_days: 14" in settings

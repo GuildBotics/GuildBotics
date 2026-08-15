@@ -10,7 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 from guildbotics.cli import main
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 
 
 def _record(**overrides: Any) -> dict[str, Any]:
@@ -34,11 +34,10 @@ def _record(**overrides: Any) -> dict[str, Any]:
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Seed a workspace data root with an index and two transcripts."""
-    data_root = tmp_path / "data"
-    run_dir = data_root / "run"
+    run_dir = tmp_path / ".guildbotics" / "local" / "run"
     sessions = run_dir / "sessions"
     sessions.mkdir(parents=True)
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(data_root))
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
@@ -83,7 +82,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         ),
         encoding="utf-8",
     )
-    return data_root
+    return tmp_path
 
 
 def _run(*args: str) -> dict[str, Any]:
@@ -161,13 +160,13 @@ def test_workspace_option_selects_another_workspace(
 ) -> None:
     other = tmp_path / "other"
     (other / ".guildbotics/config").mkdir(parents=True)
-    (other / ".guildbotics/data/run").mkdir(parents=True)
-    (other / ".guildbotics/data/run/diagnostics.jsonl").write_text(
+    run_dir = other / ".guildbotics/local/run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "diagnostics.jsonl").write_text(
         json.dumps(_record(trace_id="other-trace")) + "\n", encoding="utf-8"
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv(GUILDBOTICS_DATA_DIR, raising=False)
 
     result = CliRunner().invoke(
         main, ["diagnostics", "--workspace", str(other), "traces"]

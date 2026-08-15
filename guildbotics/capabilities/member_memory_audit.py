@@ -9,7 +9,7 @@ from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.observability import correlation_fields
-from guildbotics.utils.fileio import get_workspace_data_path
+from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 MEMORY_AUDIT_FILE = "memory_events.jsonl"
@@ -19,7 +19,7 @@ _MEMORY_AUDIT_LOCK = threading.Lock()
 
 
 def default_memory_audit_path() -> Path:
-    return get_workspace_data_path("documents", MEMORY_AUDIT_FILE)
+    return get_workspace_state_path("documents", MEMORY_AUDIT_FILE)
 
 
 def append_memory_event(

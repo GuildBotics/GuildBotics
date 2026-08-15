@@ -28,7 +28,6 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
 )
 from guildbotics.integrations.github import app_manifest
-from guildbotics.utils.secret_store import read_env_values
 
 REGISTRATION_TTL_SECONDS = 30 * 60
 GITHUB_APP_NAME_MAX_LENGTH = 34
@@ -67,7 +66,6 @@ class GitHubAppRegistration(GitHubAppRegistrationInfo):
     organization: str
     callback_url: str
     key_dir: Path
-    env_file_path: Path
     created_at: float = Field(default_factory=time.time)
     pem: str = ""
 
@@ -90,7 +88,6 @@ class GitHubAppRegistrationService:
         organization: str,
         callback_url: str,
         key_dir: Path,
-        env_file_path: Path,
     ) -> GitHubAppRegistration:
         name = app_name.strip()
         if not name or len(name) > GITHUB_APP_NAME_MAX_LENGTH:
@@ -105,7 +102,6 @@ class GitHubAppRegistrationService:
             organization=organization.strip(),
             callback_url=callback_url,
             key_dir=key_dir,
-            env_file_path=env_file_path,
         )
         self._registrations[registration.state] = registration
         return registration
@@ -203,18 +199,12 @@ class GitHubAppRegistrationService:
 
     @staticmethod
     def _discard_unclaimed_key_file(registration: GitHubAppRegistration) -> None:
-        """Delete the written PEM unless a saved member's .env references it.
+        """Delete the written PEM for an abandoned registration.
 
-        A keychain-backend save absorbs the content and deletes the file
-        itself; an env-file-backend save keeps the path in .env, which makes
-        the file the member's persistent key store. Anything else (an
-        abandoned registration) is an orphan and is cleaned up here.
+        Member save absorbs the PEM into the OS secret store and deletes a
+        flow-generated file. An expired registration that was never saved is
+        an orphan and is cleaned up here.
         """
         if not registration.private_key_path:
-            return
-        if (
-            registration.private_key_path
-            in read_env_values(registration.env_file_path).values()
-        ):
             return
         Path(registration.private_key_path).unlink(missing_ok=True)

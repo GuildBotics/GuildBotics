@@ -64,8 +64,7 @@ vi.mock("./api/client", async (importOriginal) => {
     ...actual,
     getConfigStatus: vi.fn(async () => ({
       cwd: "/workspace",
-      env_file: "/workspace/.env",
-      env_file_exists: true,
+      workspace: "/workspace",
       config_dir: "/workspace/.guildbotics/config",
       project_file: "/workspace/.guildbotics/config/project.yml",
       project_file_exists: true,
@@ -92,7 +91,6 @@ vi.mock("./api/client", async (importOriginal) => {
     })),
     getProjectConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
-      env_file_path: "/workspace/.env",
       language: "en",
       description: "Demo project",
       llm_api_type: "openai",
@@ -116,8 +114,6 @@ vi.mock("./api/client", async (importOriginal) => {
     getTranscriptSettings: vi.fn(async () => ({
       detail: "standard",
       retention_days: 30,
-      env_file: "/workspace/.env",
-      env_file_exists: true,
       sessions_dir: "/workspace/.guildbotics/data/run/sessions",
       total_size_bytes: 0,
       index_size_bytes: 0,
@@ -129,15 +125,11 @@ vi.mock("./api/client", async (importOriginal) => {
       enabled: false,
       log_level: "INFO",
       agno_debug: false,
-      env_file: "/workspace/.env",
-      env_file_exists: true,
     })),
     updateRuntimeDebug: vi.fn(async (body: { enabled: boolean }) => ({
       enabled: body.enabled,
       log_level: body.enabled ? "DEBUG" : "INFO",
       agno_debug: body.enabled,
-      env_file: "/workspace/.env",
-      env_file_exists: true,
     })),
     runScenarioDiagnostics: vi.fn(async () => ({
       ok: true,
@@ -174,8 +166,7 @@ describe("App", () => {
   it("hides activity navigation before initial setup", async () => {
     vi.mocked(getConfigStatus).mockResolvedValueOnce({
       cwd: "/workspace",
-      env_file: "/workspace/.env",
-      env_file_exists: false,
+      workspace: "/workspace",
       config_dir: "/workspace/.guildbotics/config",
       project_file: "/workspace/.guildbotics/config/project.yml",
       project_file_exists: false,

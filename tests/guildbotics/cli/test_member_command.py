@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+from datetime import UTC, datetime
 
 import click
 import pytest
@@ -11,9 +12,9 @@ from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.member_reference import command_summaries
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     write_active_workspace,
@@ -77,7 +78,9 @@ def _domain_event_records(*fields):
     """
     return [
         {field: _domain_event_field(record, field) for field in fields}
-        for record in DiagnosticsStore().records_between(includes=lambda _ts: True)
+        for record in ActivityEventStore().records_between(
+            datetime(1970, 1, 1, tzinfo=UTC), datetime(9999, 1, 1, tzinfo=UTC)
+        )
         if not record["type"].startswith("member.command.")
     ]
 
@@ -93,7 +96,7 @@ def _domain_event_field(record, field):
 
 @pytest.fixture(autouse=True)
 def _isolate_member_data_root(monkeypatch, tmp_path):
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
     monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
 
@@ -268,7 +271,7 @@ def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_
         member_module, "resolve_member_context", fake_resolve_member_context
     )
     data_root = tmp_path / "data"
-    monkeypatch.setattr(member_module, "get_workspace_data_root", lambda: data_root)
+    monkeypatch.setattr(member_module, "get_workspace_root", lambda: data_root)
     key = ConversationKey("aiko", "codex", "ticket", "issue-300")
     store = ConversationStore(data_root)
     record = store.resolve(key, ResumePolicy.AUTO)
@@ -615,10 +618,9 @@ def test_member_context_uses_active_workspace(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
-    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / ".env").write_text("WORKSPACE_MARKER=loaded\n", encoding="utf-8")
     write_active_workspace(workspace)
 
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
@@ -628,8 +630,6 @@ def test_member_context_uses_active_workspace(monkeypatch, tmp_path):
         assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
             workspace.resolve() / ".guildbotics" / "config"
         )
-        assert os.environ[GUILDBOTICS_ENV_FILE] == str(workspace.resolve() / ".env")
-        assert os.environ["WORKSPACE_MARKER"] == "loaded"
         return FakeContext(person), person
 
     monkeypatch.setattr(
@@ -650,7 +650,6 @@ def test_member_context_workspace_option_overrides_active_workspace(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
-    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     active_workspace = tmp_path / "active"
     active_workspace.mkdir()
     explicit_workspace = tmp_path / "explicit"
@@ -690,7 +689,6 @@ def test_member_context_workspace_option_overrides_active_workspace(
 def test_member_workspace_without_env_does_not_load_cwd_env(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
-    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
     caller = tmp_path / "caller"
     caller.mkdir()
@@ -734,7 +732,6 @@ def test_member_workspace_without_env_does_not_load_cwd_env(monkeypatch, tmp_pat
 
     assert result.exit_code == 0
     assert "CWD_ONLY_MARKER" not in os.environ
-    assert GUILDBOTICS_ENV_FILE not in os.environ
 
 
 def test_member_active_workspace_without_env_does_not_load_cwd_env(
@@ -743,7 +740,6 @@ def test_member_active_workspace_without_env_does_not_load_cwd_env(
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
-    monkeypatch.delenv(GUILDBOTICS_ENV_FILE, raising=False)
     monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
     caller = tmp_path / "caller"
     caller.mkdir()
@@ -779,7 +775,6 @@ def test_member_active_workspace_without_env_does_not_load_cwd_env(
 
     assert result.exit_code == 0
     assert "CWD_ONLY_MARKER" not in os.environ
-    assert GUILDBOTICS_ENV_FILE not in os.environ
 
 
 def test_member_context_check_credentials_fail_closed(monkeypatch):
@@ -2645,7 +2640,7 @@ def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path)
     monkeypatch.setattr(
         member_module, "InteractiveTraceStore", FakeInteractiveTraceStore
     )
-    store = TaskRunStore()
+    store = TaskRunStore(workspace / ".guildbotics" / "state" / "task-runs")
     store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
     store.complete(
         "run-1",

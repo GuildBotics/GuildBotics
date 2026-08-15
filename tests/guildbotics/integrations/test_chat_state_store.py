@@ -244,18 +244,12 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
 
 def test_list_thread_states_returns_known_threads_for_channel(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
-    store.append_thread_message(
+    store.save_thread_state(
         "slack",
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
-            channel_id="C1",
-            thread_ts="100.1",
-            message_ts="100.1",
-            author_id="U1",
-            text="root",
-        ),
+        ThreadConversationState(channel_id="C1", thread_ts="100.1"),
     )
     store.save_thread_state(
         "slack",
@@ -275,6 +269,39 @@ def test_list_thread_states_returns_known_threads_for_channel(tmp_path):
     states = store.list_thread_states("slack", "alice", "C1")
 
     assert [state.thread_ts for state in states] == ["100.1", "100.2"]
+
+
+def test_append_thread_message_splits_cache_from_shared_state(tmp_path):
+    state_dir = tmp_path / "state"
+    cache_dir = tmp_path / "cache"
+    store = FileConversationStateStore(base_dir=state_dir, cache_dir=cache_dir)
+
+    store.append_thread_message(
+        "slack",
+        "alice",
+        "C1",
+        "100.1",
+        ThreadMessageState(
+            channel_id="C1",
+            thread_ts="100.1",
+            message_ts="100.1",
+            author_id="U1",
+            text="root",
+            mentions=[],
+        ),
+    )
+
+    # Message bodies live only in the device-local cache.
+    cache_file = cache_dir / "slack" / "alice" / "threads" / "C1" / "100.1.json"
+    assert cache_file.is_file()
+    state_file = state_dir / "slack" / "alice" / "threads" / "C1" / "100.1.json"
+    assert state_file.is_file()
+    assert "root" not in state_file.read_text(encoding="utf-8")
+    # The shared thread state makes the thread discoverable for backfill and
+    # handoff even though the message cache is device-local.
+    assert [
+        state.thread_ts for state in store.list_thread_states("slack", "alice", "C1")
+    ] == ["100.1"]
 
 
 def test_pending_events_roundtrip_dedupe_and_remove(tmp_path):

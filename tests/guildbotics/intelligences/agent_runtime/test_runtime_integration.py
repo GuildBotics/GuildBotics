@@ -745,7 +745,7 @@ def test_native_environment_removes_direct_write_credentials(
     for key in stripped:
         monkeypatch.setenv(key, "secret")
 
-    env, gh_config_dir = isolated_agent_environment(tmp_path)
+    env, gh_config_dir = isolated_agent_environment()
     try:
         assert all(key not in env for key in stripped)
         assert env["GIT_TERMINAL_PROMPT"] == "0"
@@ -771,7 +771,7 @@ def test_member_command_environment_carries_only_execution_metadata(tmp_path) ->
     )
 
     assert member_command_environment(context) == {
-        "GUILDBOTICS_DATA_DIR": str(tmp_path),
+        "GUILDBOTICS_WORKSPACE_ROOT": str(tmp_path),
         RUN_ENV: "run-1",
         "GUILDBOTICS_CHAT_PARTICIPANT_LABELS": '{"U1":"aiko"}',
     }

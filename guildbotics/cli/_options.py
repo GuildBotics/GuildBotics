@@ -9,7 +9,11 @@ from typing import Any
 import click
 
 from guildbotics.utils.env_loader import load_guildbotics_env
-from guildbotics.utils.workspace_state import WorkspaceState, apply_workspace_for_cli
+from guildbotics.utils.workspace_state import (
+    WorkspaceState,
+    WorkspaceUnresolvedError,
+    apply_workspace_for_cli,
+)
 
 FormatChoice = click.Choice(["json", "markdown"])
 
@@ -50,8 +54,7 @@ def apply_workspace_option(workspace_dir: Path | None) -> WorkspaceState | None:
         applied = apply_workspace_for_cli(workspace_dir)
     except NotADirectoryError as exc:
         raise click.ClickException(f"workspace does not exist: {exc}") from exc
-    if applied is not None:
-        load_guildbotics_env(applied.workspace, override=False, prefer_env_file=False)
-    else:
-        load_guildbotics_env(Path.cwd(), override=False, prefer_env_file=True)
+    except WorkspaceUnresolvedError as exc:
+        raise click.ClickException(str(exc)) from exc
+    load_guildbotics_env(override=False)
     return applied

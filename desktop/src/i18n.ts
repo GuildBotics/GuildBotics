@@ -424,7 +424,7 @@ const resources = {
         saveErrorTitle: "Save failed",
         initialCreated: {
           title: "Initial settings created",
-          body: "Settings directory:\n{{configDir}}\nEnvironment file:\n{{envFilePath}}",
+          body: "Settings directory:\n{{configDir}}",
         },
         saveMode: {
           manual:
@@ -498,7 +498,7 @@ const resources = {
           apiKeyLabel: "{{provider}} API key",
           apiKeyButtonLabel: "Configure {{provider}} API key",
           apiKeyMissingTooltip: "Click the key button to configure the API key.",
-          keyPlaceholder: "Saved to .env after input",
+          keyPlaceholder: "Saved to the OS secret store after input",
           keyConfiguredPlaceholder: "Configured",
           keyConfiguredDescription:
             "The saved value is hidden. Leave this field empty to keep the current key.",
@@ -844,7 +844,7 @@ const resources = {
           tabHasError: "This tab has incomplete or invalid fields.",
           deleteConfirmTitle: "Delete member?",
           deleteConfirmBody:
-            "This will delete {{name}}'s member settings and related secrets from .env. This action cannot be undone.",
+            "This will delete {{name}}'s member settings and related secrets from the OS secret store. This action cannot be undone.",
           editingBadge: "Editing: {{id}}",
           loadError: "Failed to load member details",
           resolveError: "Failed to resolve member identity",
@@ -1109,10 +1109,10 @@ const resources = {
             title: "Project settings were not found",
             description: "Open Setup and create the initial settings for this workspace.",
           },
-          env_file: {
-            title: ".env was not found",
+          secret_store: {
+            title: "OS secret store is unavailable",
             description:
-              "Secrets are normally read from .env. This may be fine if environment variables are provided another way.",
+              "Unlock or install the OS secret store (Keychain, Credential Manager, or Secret Service), then retry.",
           },
           team_load: {
             title: "Team settings could not be loaded",
@@ -1207,9 +1207,6 @@ const resources = {
         config: "Settings file",
         ready: "Configured",
         missing: "Missing",
-        env: ".env",
-        found: "Detected",
-        notFound: "Not found",
         github: "GitHub",
         enabled: "Enabled",
         disabled: "Disabled",
@@ -1646,7 +1643,7 @@ const resources = {
         saveErrorTitle: "保存に失敗しました",
         initialCreated: {
           title: "初期設定を作成しました",
-          body: "設定ディレクトリ:\n{{configDir}}\n環境変数ファイル:\n{{envFilePath}}",
+          body: "設定ディレクトリ:\n{{configDir}}",
         },
         saveMode: {
           manual: "各セクションの必須項目を入力し、「初期設定を作成」を押して設定を保存します。",
@@ -1717,7 +1714,7 @@ const resources = {
           apiKeyLabel: "{{provider}} APIキー",
           apiKeyButtonLabel: "{{provider}} APIキーを設定",
           apiKeyMissingTooltip: "キーのボタンからAPIキーを設定してください。",
-          keyPlaceholder: "入力後 .env に保存",
+          keyPlaceholder: "入力後に OS の秘密ストアへ保存",
           keyConfiguredPlaceholder: "設定済み",
           keyConfiguredDescription:
             "保存済みの値は表示しません。空欄のままなら現在のキーを維持します。",
@@ -2066,7 +2063,7 @@ const resources = {
           tabHasError: "このタブに未入力または形式エラーの項目があります。",
           deleteConfirmTitle: "メンバーを削除しますか？",
           deleteConfirmBody:
-            "{{name}} のメンバー設定と .env 内の関連シークレットを削除します。この操作は元に戻せません。",
+            "{{name}} のメンバー設定と OS 秘密ストア内の関連シークレットを削除します。この操作は元に戻せません。",
           editingBadge: "編集中: {{id}}",
           loadError: "メンバー詳細の取得に失敗しました",
           resolveError: "メンバー識別子の解決に失敗しました",
@@ -2639,10 +2636,10 @@ const resources = {
             title: "プロジェクト設定が見つかりません",
             description: "Setup でこの workspace の初期設定を作成してください。",
           },
-          env_file: {
-            title: ".env が見つかりません",
+          secret_store: {
+            title: "OS 秘密ストアが利用できません",
             description:
-              "通常、シークレットは .env から読み込みます。別の方法で環境変数を渡している場合は問題ありません。",
+              "OS 秘密ストア（キーチェーン、資格情報マネージャー、Secret Service）を解除または導入してから再試行してください。",
           },
           team_load: {
             title: "チーム設定を読み込めません",
@@ -2740,9 +2737,6 @@ const resources = {
         config: "設定ファイル",
         ready: "設定済み",
         missing: "未設定",
-        env: ".env",
-        found: "検出済み",
-        notFound: "未検出",
         github: "GitHub",
         enabled: "有効",
         disabled: "未設定",

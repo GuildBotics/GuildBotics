@@ -132,7 +132,9 @@ async def test_author_command_turn_sends_scope_and_uses_read_only_session(
         "workspace_data_root": str(tmp_path),
         "read_only": True,
     }
-    assert brain.kwargs["cwd"] == tmp_path / "command-authoring"
+    assert brain.kwargs["cwd"] == (
+        tmp_path / ".guildbotics" / "local" / "work" / "command-authoring"
+    )
 
 
 @pytest.mark.asyncio

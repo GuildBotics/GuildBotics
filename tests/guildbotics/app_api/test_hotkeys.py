@@ -14,6 +14,7 @@ from guildbotics.app_api.hotkeys import (
     validate_settings,
 )
 from guildbotics.app_api.models import HotkeySettings
+from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_template_path
 from tests.guildbotics.app_api.test_api import RuntimeStub
 
 
@@ -169,3 +170,49 @@ def test_endpoint_requires_the_session_token(config_dir: Path, tmp_path: Path) -
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
     with TestClient(app) as client:
         assert client.get("/hotkeys").status_code == 401
+
+
+@pytest.fixture
+def no_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
+def test_load_returns_defaults_without_workspace(no_workspace: None) -> None:
+    assert load_hotkeys() == HotkeySettings()
+
+
+def test_save_without_workspace_fails_and_keeps_templates_pristine(
+    no_workspace: None,
+) -> None:
+    template_file = get_template_path() / "hotkeys.yml"
+    assert not template_file.exists()
+
+    with pytest.raises(WorkspaceNotConfiguredError):
+        save_hotkeys(HotkeySettings(quick_run="Control+Alt+G"))
+
+    assert not template_file.exists()
+
+
+def test_put_endpoint_reports_missing_workspace(
+    no_workspace: None, tmp_path: Path
+) -> None:
+    headers = {"X-GuildBotics-Session-Token": "secret"}
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+
+    with TestClient(app) as client:
+        assert client.get("/hotkeys", headers=headers).json() == {
+            "quick_run": "",
+            "commands": {},
+        }
+
+        rejected = client.put(
+            "/hotkeys",
+            headers=headers,
+            json={"quick_run": "Control+Alt+G", "commands": {}},
+        )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "workspace_not_configured"
+    assert not (get_template_path() / "hotkeys.yml").exists()

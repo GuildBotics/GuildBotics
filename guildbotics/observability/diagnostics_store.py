@@ -16,14 +16,29 @@ from guildbotics.observability.session_transcripts import (
     SYSTEM_TRACE_PREFIX,
     SessionTranscriptStore,
 )
-from guildbotics.utils.fileio import get_workspace_data_path
+from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
+    get_workspace_local_path,
+)
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 DEFAULT_DIAGNOSTICS_MAX_BYTES = 8 * 1024 * 1024
 
 
 def default_store_path() -> Path:
-    return get_workspace_data_path("run", "diagnostics.jsonl")
+    return get_workspace_local_path("run", "diagnostics.jsonl")
+
+
+def _default_store_path_or_none() -> Path | None:
+    """Resolve the default path, or ``None`` before a workspace is selected.
+
+    First launch has no workspace yet; the store then runs memory-only and
+    starts persisting as soon as a workspace is selected.
+    """
+    try:
+        return default_store_path()
+    except WorkspaceNotConfiguredError:
+        return None
 
 
 _CURSOR_ANCHOR_BYTES = 256
@@ -67,20 +82,30 @@ class DiagnosticsStore:
         max_file_bytes: int = DEFAULT_DIAGNOSTICS_MAX_BYTES,
     ) -> None:
         self._path_override = path
-        self._path = path or default_store_path()
+        self._path: Path | None = path or _default_store_path_or_none()
         self._memory_limit = memory_limit
         self._max_file_bytes = max_file_bytes
         self._records: deque[dict[str, Any]] = deque(maxlen=memory_limit)
         self._file_signature: tuple[int, int] | None = None
         self._lock = threading.Lock()
-        self._transcripts = SessionTranscriptStore(self._path)
+        self._transcripts: SessionTranscriptStore | None = (
+            SessionTranscriptStore(self._path) if self._path is not None else None
+        )
         self._maintenance_stop = threading.Event()
         self._maintenance_thread: threading.Thread | None = None
-        self._load_from_path(self._path)
+        if self._path is not None:
+            self._load_from_path(self._path)
         self._file_signature = self._file_signature_now()
 
     @property
     def path(self) -> Path:
+        resolved = self.resolved_path
+        if resolved is None:
+            raise WorkspaceNotConfiguredError("No GuildBotics workspace is selected.")
+        return resolved
+
+    @property
+    def resolved_path(self) -> Path | None:
         with self._lock:
             self._select_path_locked()
             return self._path
@@ -88,6 +113,9 @@ class DiagnosticsStore:
     def record(self, item: dict[str, Any]) -> None:
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None:
+                self._records.append(item)
+                return
             route = self._transcripts.route(item)
             for index_item in route.index_records:
                 self._record_index_locked(index_item)
@@ -95,6 +123,8 @@ class DiagnosticsStore:
     def start_system_session(self, service_run_id: str = "") -> None:
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None:
+                return
             route = self._transcripts.start_system_session(service_run_id)
             for item in route.index_records:
                 self._record_index_locked(item)
@@ -102,6 +132,8 @@ class DiagnosticsStore:
     def finish_system_session(self) -> None:
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None:
+                return
             route = self._transcripts.finish_system_session()
             for item in route.index_records:
                 self._record_index_locked(item)
@@ -109,6 +141,8 @@ class DiagnosticsStore:
     def start_maintenance(self) -> None:
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None:
+                return
             self._transcripts.prune_expired()
             if self._maintenance_thread is not None:
                 return
@@ -130,6 +164,8 @@ class DiagnosticsStore:
     def transcript_usage(self) -> dict[str, Any]:
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None or self._path is None:
+                return {"total_size_bytes": 0, "index_size_bytes": 0}
             usage = self._transcripts.usage()
             usage["index_size_bytes"] = _file_size(self._path)
             return usage
@@ -213,6 +249,8 @@ class DiagnosticsStore:
     def get_records(self, trace_id: str) -> list[dict[str, Any]]:
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None:
+                return []
             if trace_id.startswith(SYSTEM_TRACE_PREFIX):
                 _, records = self._transcripts.system_records(
                     trace_id.removeprefix(SYSTEM_TRACE_PREFIX)
@@ -225,6 +263,8 @@ class DiagnosticsStore:
     def transcript_exists(self, trace_id: str) -> bool:
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None:
+                return False
             if trace_id.startswith(SYSTEM_TRACE_PREFIX):
                 exists, _ = self._transcripts.system_records(
                     trace_id.removeprefix(SYSTEM_TRACE_PREFIX)
@@ -259,6 +299,8 @@ class DiagnosticsStore:
         """Return records from the most recent system session."""
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None:
+                return []
             session_id = self._transcripts.latest_system_session_id(list(self._records))
             if session_id is None:
                 return []
@@ -269,6 +311,8 @@ class DiagnosticsStore:
     def latest_system_trace_id(self) -> str | None:
         with self._lock:
             self._refresh_path_locked()
+            if self._transcripts is None:
+                return None
             session_id = self._transcripts.latest_system_session_id(list(self._records))
         return f"{SYSTEM_TRACE_PREFIX}{session_id}" if session_id else None
 
@@ -333,8 +377,8 @@ class DiagnosticsStore:
 
     def _select_path_locked(self) -> bool:
         if self._path_override is None:
-            path = default_store_path()
-            if path != self._path:
+            path = _default_store_path_or_none()
+            if path is not None and path != self._path:
                 self._path = path
                 self._transcripts = SessionTranscriptStore(self._path)
                 self._reload_from_path_locked()
@@ -347,6 +391,8 @@ class DiagnosticsStore:
         *,
         includes: Callable[[dict[str, Any]], bool],
     ) -> tuple[list[dict[str, Any]], DiagnosticsCursor]:
+        if self._path is None:
+            return [], DiagnosticsCursor(offset=0, device=0, inode=0, anchor="")
         try:
             with self._path.open("rb") as handle:
                 stat = os.fstat(handle.fileno())
@@ -419,10 +465,13 @@ class DiagnosticsStore:
 
     def _reload_from_path_locked(self) -> None:
         self._records.clear()
-        self._load_from_path(self._path)
+        if self._path is not None:
+            self._load_from_path(self._path)
         self._file_signature = self._file_signature_now()
 
     def _file_signature_now(self) -> tuple[int, int] | None:
+        if self._path is None:
+            return None
         try:
             stat = self._path.stat()
         except OSError:
@@ -448,6 +497,8 @@ class DiagnosticsStore:
             return
 
     def _append_to_file(self, item: dict[str, Any]) -> None:
+        if self._path is None:
+            return
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             if (
@@ -476,9 +527,12 @@ class DiagnosticsStore:
         while not self._maintenance_stop.wait(24 * 60 * 60):
             with self._lock:
                 self._refresh_path_locked()
-                self._transcripts.prune_expired()
+                if self._transcripts is not None:
+                    self._transcripts.prune_expired()
 
     def _rewrite_file(self) -> None:
+        if self._path is None:
+            return
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("w", encoding="utf-8") as handle:

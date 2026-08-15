@@ -7,6 +7,7 @@ from guildbotics.app_api.models import ConfigStatus
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github.github_utils import GitHubAppAuth
+from guildbotics.utils.secret_store import KeyringSecretStore
 
 PROVIDER_ENV_KEYS = (
     "OPENAI_API_KEY",
@@ -18,25 +19,28 @@ PROVIDER_ENV_KEYS = (
 def _config_status(
     tmp_path: Path,
     *,
-    env_file_exists: bool = True,
     project_file_exists: bool = True,
 ) -> ConfigStatus:
-    env_file = tmp_path / ".env"
-    if env_file_exists:
-        env_file.write_text("")
-    project_file = tmp_path / ".guildbotics/config/team/project.yml"
+    config_dir = tmp_path / ".guildbotics/config"
+    project_file = config_dir / "team/project.yml"
     project_file.parent.mkdir(parents=True, exist_ok=True)
     if project_file_exists:
         project_file.write_text("language: en\n")
     return ConfigStatus(
         cwd=tmp_path,
-        env_file=env_file,
-        env_file_exists=env_file.exists(),
-        config_dir=tmp_path / ".guildbotics/config",
+        workspace=tmp_path,
+        config_dir=config_dir,
         project_file=project_file,
         project_file_exists=project_file.exists(),
-        storage_dir=tmp_path / "home/.guildbotics/data",
+        storage_dir=tmp_path,
     )
+
+
+def _store_secrets(tmp_path: Path, values: dict[str, str]) -> KeyringSecretStore:
+    store = KeyringSecretStore(tmp_path / ".guildbotics/config")
+    for key, value in values.items():
+        store.set(key, value)
+    return store
 
 
 def _isolated_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,8 +90,8 @@ def test_verify_reports_missing_project_file(tmp_path: Path) -> None:
     assert not response.ok
 
 
-def test_verify_reports_missing_env_file_as_warning(tmp_path: Path) -> None:
-    config = _config_status(tmp_path, env_file_exists=False)
+def test_verify_reports_secret_store_available(tmp_path: Path) -> None:
+    config = _config_status(tmp_path)
     team = Team(
         project=Project(name="demo"),
         members=[Person(person_id="alice", name="Alice", is_active=True)],
@@ -96,8 +100,7 @@ def test_verify_reports_missing_env_file_as_warning(tmp_path: Path) -> None:
     response = VerifyService().verify(config=config, team=team)
 
     checks = _checks_by_code(response)
-    assert checks["env_file"].status == "warning"
-    assert "env_file" in {check.code for check in response.warnings}
+    assert checks["secret_store"].status == "ok"
 
 
 def test_verify_team_load_error(tmp_path: Path) -> None:
@@ -161,7 +164,7 @@ def test_verify_llm_provider_api_key_present(
 ) -> None:
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
-    config.env_file.write_text(f"{expected_key}=secret\n")
+    _store_secrets(tmp_path, {expected_key: "secret"})
     _write_model_mapping(tmp_path, default_model)
     team = Team(
         project=Project(name="demo"),
@@ -219,7 +222,7 @@ def test_verify_cli_agent_executable_found(
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
-    config.env_file.write_text("PATH=/custom/bin\n")
+    monkeypatch.setenv("PATH", "/custom/bin")
 
     resolved: dict[str, object] = {}
 
@@ -241,7 +244,6 @@ def test_verify_cli_agent_executable_found(
     assert check.status == "ok"
     assert check.target == "codex"
     assert check.context["path"] == "/custom/bin/codex"
-    # The .env PATH value is passed through to the resolver.
     assert resolved == {"executable": "codex", "search_path": "/custom/bin"}
 
 
@@ -318,29 +320,43 @@ def test_verify_github_disabled_skips_credentials(
 
 
 @pytest.mark.parametrize(
-    ("person_type", "env_keys"),
+    ("person_type", "account_info", "secrets", "expected_targets"),
     [
         (
             GitHubAppAuth.GITHUB_APPS,
-            (
-                "ALICE_GITHUB_INSTALLATION_ID",
-                "ALICE_GITHUB_APP_ID",
-                "ALICE_GITHUB_PRIVATE_KEY_PATH",
-            ),
+            {"github_installation_id": "1", "github_app_id": "2"},
+            {"ALICE_GITHUB_PRIVATE_KEY": "pem-content"},
+            {
+                "account_info.github_installation_id",
+                "account_info.github_app_id",
+                "ALICE_GITHUB_PRIVATE_KEY",
+            },
         ),
-        (GitHubAppAuth.MACHINE_USER, ("ALICE_GITHUB_ACCESS_TOKEN",)),
-        (GitHubAppAuth.PROXY_AGENT, ("ALICE_GITHUB_ACCESS_TOKEN",)),
+        (
+            GitHubAppAuth.MACHINE_USER,
+            {},
+            {"ALICE_GITHUB_ACCESS_TOKEN": "token"},
+            {"ALICE_GITHUB_ACCESS_TOKEN"},
+        ),
+        (
+            GitHubAppAuth.PROXY_AGENT,
+            {},
+            {"ALICE_GITHUB_ACCESS_TOKEN": "token"},
+            {"ALICE_GITHUB_ACCESS_TOKEN"},
+        ),
     ],
 )
 def test_verify_github_credentials_present(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     person_type: str,
-    env_keys: tuple[str, ...],
+    account_info: dict[str, str],
+    secrets: dict[str, str],
+    expected_targets: set[str],
 ) -> None:
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
-    config.env_file.write_text("\n".join(f"{key}=value" for key in env_keys) + "\n")
+    _store_secrets(tmp_path, secrets)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
     team = Team(
@@ -351,7 +367,7 @@ def test_verify_github_credentials_present(
                 name="Alice",
                 is_active=True,
                 person_type=person_type,
-                account_info={"github_account_type": person_type},
+                account_info={"github_account_type": person_type, **account_info},
             )
         ],
     )
@@ -361,9 +377,9 @@ def test_verify_github_credentials_present(
     github_checks = [
         check for check in response.checks if check.code == "github_credential"
     ]
-    assert len(github_checks) == len(env_keys)
+    assert len(github_checks) == len(expected_targets)
     assert all(check.status == "ok" for check in github_checks)
-    assert {check.target for check in github_checks} == set(env_keys)
+    assert {check.target for check in github_checks} == expected_targets
 
 
 def test_verify_accepts_private_key_content_from_keychain(
@@ -375,9 +391,6 @@ def test_verify_accepts_private_key_content_from_keychain(
 
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
-    config.env_file.write_text(
-        "ALICE_GITHUB_INSTALLATION_ID=1\nALICE_GITHUB_APP_ID=2\n"
-    )
     KeyringSecretStore(tmp_path / ".guildbotics/config").set(
         "ALICE_GITHUB_PRIVATE_KEY", "pem-content"
     )
@@ -391,7 +404,11 @@ def test_verify_accepts_private_key_content_from_keychain(
                 name="Alice",
                 is_active=True,
                 person_type=GitHubAppAuth.GITHUB_APPS,
-                account_info={"github_account_type": GitHubAppAuth.GITHUB_APPS},
+                account_info={
+                    "github_account_type": GitHubAppAuth.GITHUB_APPS,
+                    "github_installation_id": "1",
+                    "github_app_id": "2",
+                },
             )
         ],
     )
@@ -402,13 +419,13 @@ def test_verify_accepts_private_key_content_from_keychain(
         check for check in response.checks if check.code == "github_credential"
     ]
     assert all(check.status == "ok" for check in github_checks)
-    assert "ALICE_GITHUB_PRIVATE_KEY_PATH" in {check.target for check in github_checks}
+    assert "ALICE_GITHUB_PRIVATE_KEY" in {check.target for check in github_checks}
 
 
 @pytest.mark.parametrize(
     ("person_type", "env_key"),
     [
-        (GitHubAppAuth.GITHUB_APPS, "ALICE_GITHUB_APP_ID"),
+        (GitHubAppAuth.GITHUB_APPS, "account_info.github_app_id"),
         (GitHubAppAuth.MACHINE_USER, "ALICE_GITHUB_ACCESS_TOKEN"),
         (GitHubAppAuth.PROXY_AGENT, "ALICE_GITHUB_ACCESS_TOKEN"),
     ],
@@ -476,14 +493,12 @@ def test_verify_checks_env_keys_and_github_credentials(
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path / ".guildbotics/config"))
     monkeypatch.setenv("PATH", "")
     config = _config_status(tmp_path)
-    config.env_file.write_text(
-        "\n".join(
-            [
-                "OPENAI_API_KEY=openai-key",
-                "ALICE_GITHUB_ACCESS_TOKEN=github-token",
-                "PATH=",
-            ]
-        )
+    _store_secrets(
+        tmp_path,
+        {
+            "OPENAI_API_KEY": "openai-key",
+            "ALICE_GITHUB_ACCESS_TOKEN": "github-token",
+        },
     )
     project = Project(
         name="demo",

@@ -14,8 +14,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from dotenv import dotenv_values
-
 from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
 from guildbotics.app_api.command_files import CommandFileService, file_revision
@@ -115,7 +113,6 @@ from guildbotics.drivers import (
     CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
-    run_command,
 )
 from guildbotics.drivers.execution import (
     ExecutionCoordinator,
@@ -136,45 +133,44 @@ from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, resolve_cli_agent_path
 from guildbotics.intelligences.troubleshooting import troubleshoot_turn
 from guildbotics.observability import new_id, trace_scope
+from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import (
     DEFAULT_DIAGNOSTICS_MAX_BYTES,
     DiagnosticsStore,
 )
 from guildbotics.observability.session_transcripts import (
-    TRANSCRIPT_DETAIL_ENV,
-    TRANSCRIPT_RETENTION_DAYS_ENV,
     transcript_detail,
     transcript_retention_days,
 )
 from guildbotics.runtime import Context
+from guildbotics.runtime.local_command_executor import LocalCommandExecutor
 from guildbotics.runtime.member_context import resolve_person
 from guildbotics.runtime.service_lock import ServiceLockUnavailableError
 from guildbotics.utils.env_loader import (
-    GUILDBOTICS_ENV_FILE,
     HOME_ENV_PROTECTED_KEYS,
+    apply_debug_env_to_process,
+    read_debug_env,
     read_workspace_secrets,
+    write_debug_env,
 )
 from guildbotics.utils.fileio import (
-    GUILDBOTICS_DATA_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
-    apply_workspace_data_root,
+    WorkspaceNotConfiguredError,
+    apply_workspace_root,
     get_machine_state_root,
     get_person_config_path,
+    get_primary_config_dir,
     get_primary_config_path,
     get_template_path,
-    get_workspace_data_path,
-    get_workspace_data_root,
+    get_workspace_local_path,
+    get_workspace_root,
+    get_workspace_state_path,
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.secret_store import read_env_values, write_env_values
-from guildbotics.utils.workspace_state import (
-    GUILDBOTICS_CONFIG_DIR,
-    write_active_workspace,
-)
+from guildbotics.utils.workspace_state import write_active_workspace
 
 WORKSPACE_DOTENV_PROTECTED_KEYS = {
-    GUILDBOTICS_DATA_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
     *HOME_ENV_PROTECTED_KEYS,
 }
@@ -216,7 +212,7 @@ def _cli_agent_usage_model(snapshot: CliAgentUsageSnapshot) -> CliAgentUsage:
 
 
 def _activity_sync_state_path() -> Path:
-    return get_workspace_data_path("run", ACTIVITY_SYNC_STATE_FILE)
+    return get_workspace_local_path("run", ACTIVITY_SYNC_STATE_FILE)
 
 
 def _completed_activity_weeks() -> set[tuple[str, str]]:
@@ -249,7 +245,6 @@ class AppRuntime:
         *,
         stop_timeout_seconds: float = 10.0,
         diagnostics_store: DiagnosticsStore | None = None,
-        inherited_data_dir: str | None | _UseProcessDataDir = _USE_PROCESS_DATA_DIR,
         load_workspace_environment: bool = False,
     ) -> None:
         self._event_bus = event_bus
@@ -264,17 +259,8 @@ class AppRuntime:
         self._cli_agent_usage_lock = asyncio.Lock()
         self._cli_agent_usage_cache: tuple[float, CliAgentUsagesResponse] | None = None
         self._loaded_dotenv_keys: set[str] = set()
-        if isinstance(inherited_data_dir, _UseProcessDataDir):
-            inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
-        self._inherited_data_dir = inherited_data_dir
         if load_workspace_environment:
-            self._load_workspace_env(apply_data_root=True)
-        else:
-            apply_workspace_data_root(
-                Path.cwd(),
-                Path.cwd() / ".env",
-                inherited_data_dir=self._inherited_data_dir,
-            )
+            self._load_workspace_env()
         self._lifecycle = RuntimeLifecycleService(
             event_bus=event_bus,
             context_factory=self._get_context,
@@ -287,20 +273,34 @@ class AppRuntime:
         return self._system_service_run_id
 
     def get_config_status(self) -> ConfigStatus:
-        cwd = Path.cwd()
-        config_dir = get_primary_config_path(Path())
-        project_file = config_dir / "team" / "project.yml"
-        env_file = cwd / ".env"
+        try:
+            workspace: Path | None = get_workspace_root()
+        except WorkspaceNotConfiguredError:
+            # First launch: no workspace is selected yet. Never fall back to
+            # the process cwd — it may be a source checkout, and reporting it
+            # would let Setup create `.guildbotics/` there without an explicit
+            # choice.
+            workspace = None
+        config_dir = get_primary_config_dir() or (
+            workspace / ".guildbotics" / "config" if workspace is not None else None
+        )
+        project_file = (
+            config_dir / "team" / "project.yml" if config_dir is not None else None
+        )
         return ConfigStatus(
-            cwd=cwd,
-            env_file=env_file,
-            env_file_exists=env_file.exists(),
+            cwd=Path.cwd(),
+            workspace=workspace,
             config_dir=config_dir,
             project_file=project_file,
-            project_file_exists=project_file.exists(),
-            storage_dir=get_workspace_data_root(cwd),
+            project_file_exists=project_file is not None and project_file.exists(),
+            storage_dir=workspace,
             machine_state_dir=get_machine_state_root(),
-            workspace_data_dir=get_workspace_data_root(cwd),
+            workspace_state_dir=(
+                workspace / ".guildbotics" / "state" if workspace is not None else None
+            ),
+            workspace_local_dir=(
+                workspace / ".guildbotics" / "local" if workspace is not None else None
+            ),
         )
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
@@ -334,7 +334,8 @@ class AppRuntime:
             self._diagnostics_store.finish_system_session()
         os.chdir(workspace)
         write_active_workspace(workspace)
-        self._load_workspace_env(apply_data_root=True)
+        apply_workspace_root(workspace)
+        self._load_workspace_env()
         if self._diagnostics_store is not None:
             self._diagnostics_store.start_system_session(self._system_service_run_id)
             self._diagnostics_store.start_maintenance()
@@ -509,7 +510,7 @@ class AppRuntime:
                 content=request.content,
                 instruction=request.message,
                 available_commands=self._command_authoring_context(),
-                workspace_data_root=get_workspace_data_root(),
+                workspace_data_root=get_workspace_root(),
             )
         return CommandAuthoringResponse(
             trace_id=trace_id,
@@ -884,7 +885,7 @@ class AppRuntime:
             {"command": request.command, "person": person_id},
         )
         try:
-            output = await run_command(
+            output = await LocalCommandExecutor().run(
                 context,
                 command_name=request.command,
                 command_args=request.args,
@@ -977,7 +978,7 @@ class AppRuntime:
                 status_code=409,
             )
         context = self._get_context()
-        self._load_workspace_env(apply_data_root=True)
+        self._load_workspace_env()
         store = FileConversationStateStore()
         cutoff_ts = f"{time.time():.6f}"
         members_reset = 0
@@ -1019,7 +1020,6 @@ class AppRuntime:
         return False
 
     def get_transcript_settings(self) -> TranscriptSettingsStatus:
-        status = self.get_config_status()
         usage = (
             self._diagnostics_store.transcript_usage()
             if self._diagnostics_store is not None
@@ -1036,9 +1036,7 @@ class AppRuntime:
         return TranscriptSettingsStatus(
             detail=cast(Any, transcript_detail()),
             retention_days=transcript_retention_days(),
-            env_file=status.env_file,
-            env_file_exists=status.env_file.exists(),
-            sessions_dir=get_workspace_data_path("run", "sessions"),
+            sessions_dir=get_workspace_local_path("run", "sessions"),
             total_size_bytes=int(usage["total_size_bytes"]),
             index_size_bytes=int(usage["index_size_bytes"]),
             index_rewrite_threshold_bytes=DEFAULT_DIAGNOSTICS_MAX_BYTES,
@@ -1049,45 +1047,38 @@ class AppRuntime:
     def update_transcript_settings(
         self, request: TranscriptSettingsUpdateRequest
     ) -> TranscriptSettingsStatus:
-        status = self.get_config_status()
-        env_values = read_env_values(status.env_file)
-        env_values[TRANSCRIPT_DETAIL_ENV] = request.detail
-        env_values[TRANSCRIPT_RETENTION_DAYS_ENV] = str(request.retention_days)
-        os.environ[TRANSCRIPT_DETAIL_ENV] = request.detail
-        os.environ[TRANSCRIPT_RETENTION_DAYS_ENV] = str(request.retention_days)
-        write_env_values(status.env_file, env_values)
+        from guildbotics.observability.session_transcripts import (
+            write_transcript_settings,
+        )
+
+        write_transcript_settings(
+            detail=request.detail, retention_days=request.retention_days
+        )
         return self.get_transcript_settings()
 
     def get_runtime_debug_status(self) -> RuntimeDebugStatus:
-        status = self.get_config_status()
-        env_values = read_env_values(status.env_file)
-        log_level = str(env_values.get("LOG_LEVEL") or os.getenv("LOG_LEVEL") or "INFO")
+        debug_values = read_debug_env()
+        log_level = str(
+            debug_values.get("LOG_LEVEL") or os.getenv("LOG_LEVEL") or "INFO"
+        )
         agno_debug = _env_truthy(
-            str(env_values.get("AGNO_DEBUG") or os.getenv("AGNO_DEBUG") or "")
+            str(debug_values.get("AGNO_DEBUG") or os.getenv("AGNO_DEBUG") or "")
         )
         normalized_log_level = log_level.strip().upper() or "INFO"
         return RuntimeDebugStatus(
             enabled=normalized_log_level == "DEBUG" or agno_debug,
             log_level=normalized_log_level,
             agno_debug=agno_debug,
-            env_file=status.env_file,
-            env_file_exists=status.env_file.exists(),
         )
 
     def update_runtime_debug(
         self, request: RuntimeDebugUpdateRequest
     ) -> RuntimeDebugStatus:
-        status = self.get_config_status()
-        env_values = read_env_values(status.env_file)
         log_level = "DEBUG" if request.enabled else "INFO"
         agno_debug = "true" if request.enabled else "false"
-        env_values["LOG_LEVEL"] = log_level
-        env_values["AGNO_DEBUG"] = agno_debug
-        os.environ["LOG_LEVEL"] = log_level
-        os.environ["AGNO_DEBUG"] = agno_debug
+        write_debug_env({"LOG_LEVEL": log_level, "AGNO_DEBUG": agno_debug})
+        apply_debug_env_to_process({"LOG_LEVEL": log_level, "AGNO_DEBUG": agno_debug})
         _apply_runtime_log_level(log_level)
-        write_env_values(status.env_file, env_values)
-        self._loaded_dotenv_keys.update(env_values)
         return self.get_runtime_debug_status()
 
     def verify(self) -> VerifyResponse:
@@ -1218,7 +1209,7 @@ class AppRuntime:
                 trace_id=trace_id,
                 question=request.message,
                 focus=focus.model_dump(),
-                workspace_data_root=get_workspace_data_root(),
+                workspace_data_root=get_workspace_root(),
             )
         return TroubleshootingResponse(
             trace_id=trace_id,
@@ -1380,15 +1371,28 @@ class AppRuntime:
         def includes(value: str) -> bool:
             return _timestamp_in_range(value, start, end)
 
-        if self._diagnostics_store is not None:
-            records.extend(
-                item
-                for item in self._diagnostics_store.records_between(
-                    includes=includes, limit=limit
-                )
-                if item.get("type")
-                not in {"session.pointer", "system.started", "system.finished"}
-            )
+        diagnostics_records: list[dict[str, Any]] = (
+            self._diagnostics_store.records_between(includes=includes, limit=limit)
+            if self._diagnostics_store is not None
+            else []
+        )
+        # Shared activity events may originate on another device; only traces
+        # this device's diagnostics actually know get a detail link.
+        local_trace_ids = {
+            trace_id
+            for item in diagnostics_records
+            if (trace_id := item.get("trace_id"))
+        }
+        for item in ActivityEventStore().records_between(start, end, limit=limit):
+            if item.get("trace_id") not in local_trace_ids:
+                item["trace_id"] = None
+            records.append(item)
+        records.extend(
+            item
+            for item in diagnostics_records
+            if item.get("type")
+            not in {"session.pointer", "system.started", "system.finished"}
+        )
         records.extend(
             MemoryAuditStore().list_events(
                 since=start.isoformat(),
@@ -1605,7 +1609,7 @@ class AppRuntime:
             return False
 
     def _get_context(self, message: str = "") -> Context:
-        self._load_workspace_env(apply_data_root=False)
+        self._load_workspace_env()
         try:
             return get_edition().get_context(message)
         except FileNotFoundError as exc:
@@ -1615,44 +1619,34 @@ class AppRuntime:
                 context={"path": str(exc.filename or "")},
             ) from exc
 
-    def _load_workspace_env(self, *, apply_data_root: bool = False) -> None:
-        os.environ[GUILDBOTICS_CONFIG_DIR] = str(
-            (Path.cwd() / ".guildbotics" / "config").resolve()
+    def _load_workspace_env(self) -> None:
+        """Load debug settings and keychain secrets for the selected workspace.
+
+        The workspace itself is selected only by ``set_workspace()`` or the
+        launcher's restored active workspace — never derived from the process
+        cwd. Without a selection there is nothing to load.
+        """
+        try:
+            workspace = get_workspace_root()
+        except WorkspaceNotConfiguredError:
+            return
+        apply_workspace_root(workspace)
+        new_values: dict[str, str] = {}
+        new_values.update(read_debug_env())
+        # Real environment variables (not injected by this runtime) win over
+        # keychain values and are not even fetched from the keychain.
+        new_values.update(
+            read_workspace_secrets(
+                skip=frozenset(set(os.environ) - self._loaded_dotenv_keys)
+            )
         )
-        dotenv_path = Path.cwd() / ".env"
-        new_values = {
-            key: value
-            for key, value in (
-                dotenv_values(dotenv_path) if dotenv_path.exists() else {}
-            ).items()
-            if value is not None
-        }
-        # OS-keychain secrets win over .env values for the same key.
-        new_values.update(read_workspace_secrets(Path.cwd()))
         loaded_keys = set(new_values) - WORKSPACE_DOTENV_PROTECTED_KEYS
-        # Remove keys that a previously selected workspace injected but the
-        # current one no longer defines, so stale credentials (OpenAI, GitHub,
-        # Slack, ...) do not leak across workspace switches.
         for key in self._loaded_dotenv_keys - loaded_keys:
             os.environ.pop(key, None)
         for key in loaded_keys:
-            # Only overwrite values this runtime injected itself; variables
-            # inherited from the parent process are real environment variables
-            # and take precedence over workspace secrets (see README 7.2).
             if key in self._loaded_dotenv_keys or key not in os.environ:
                 os.environ[key] = new_values[key]
-        if dotenv_path.exists():
-            os.environ[GUILDBOTICS_ENV_FILE] = str(dotenv_path.resolve())
-            self._loaded_dotenv_keys = loaded_keys | {GUILDBOTICS_ENV_FILE}
-        else:
-            os.environ.pop(GUILDBOTICS_ENV_FILE, None)
-            self._loaded_dotenv_keys = loaded_keys
-        if apply_data_root:
-            apply_workspace_data_root(
-                Path.cwd(),
-                dotenv_path,
-                inherited_data_dir=self._inherited_data_dir,
-            )
+        self._loaded_dotenv_keys = loaded_keys
 
     def _reserve_command(self, trace_id: str) -> None:
         with self._lock:
@@ -1673,7 +1667,10 @@ class AppRuntime:
 
 def _command_roots(person_id: str) -> list[Path]:
     """Physical roots whose logical command names seed the general catalog."""
-    primary = get_primary_config_path(Path())
+    try:
+        primary = get_primary_config_path(Path())
+    except WorkspaceNotConfiguredError:
+        return []
     return [
         primary / "team" / "members" / person_id / "commands",
         get_shared_commands_root(),
@@ -2153,7 +2150,7 @@ def _memory_body_preview(path: str, *, limit: int = 800) -> str:
     relative_parts = parts[1:]
     if any(part in {"", ".", ".."} for part in relative_parts):
         return ""
-    body_path = get_workspace_data_path("documents", *relative_parts) / "body.md"
+    body_path = get_workspace_state_path("documents", *relative_parts) / "body.md"
     if not body_path.is_file():
         return ""
     try:

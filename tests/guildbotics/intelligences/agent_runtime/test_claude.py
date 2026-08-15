@@ -160,7 +160,7 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
         calls.append(args)
         if args[-1] != "--help":
             assert kwargs["env"][RUN_ENV] == "run-1"
-            assert kwargs["env"]["GUILDBOTICS_DATA_DIR"] == str(tmp_path)
+            assert kwargs["env"]["GUILDBOTICS_WORKSPACE_ROOT"] == str(tmp_path)
         return _HelpProcess() if args[-1] == "--help" else stream
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)

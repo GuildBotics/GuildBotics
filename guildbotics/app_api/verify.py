@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any, cast
-
-from dotenv import dotenv_values
 
 from guildbotics.app_api.models import ConfigStatus, VerifyCheck, VerifyResponse
 from guildbotics.entities.team import Person, Service, Team
@@ -51,7 +48,7 @@ class VerifyService:
         team: Team | None,
         team_error: Exception | None = None,
     ) -> VerifyResponse:
-        env = self._read_env(config.env_file)
+        env: dict[str, str | None] = dict(os.environ)
         checks = [
             *self._check_files(config),
             *self._check_team(team, team_error),
@@ -87,22 +84,23 @@ class VerifyService:
                 target=str(config.project_file),
             )
         ]
-        if config.env_file_exists:
+        from guildbotics.utils.secret_store import keyring_status
+
+        store = keyring_status()
+        if store["available"]:
             checks.append(
                 VerifyCheck(
-                    code="env_file",
+                    code="secret_store",
                     status="ok",
-                    message=".env file was found.",
-                    target=str(config.env_file),
+                    message="OS secret store is available.",
                 )
             )
         else:
             checks.append(
                 VerifyCheck(
-                    code="env_file",
-                    status="warning",
-                    message=".env file was not found.",
-                    target=str(config.env_file),
+                    code="secret_store",
+                    status="error",
+                    message="OS secret store is unavailable.",
                 )
             )
         return checks
@@ -165,7 +163,7 @@ class VerifyService:
         return [
             self._check(
                 "llm_api_key",
-                self._has_env(key, env),
+                self._has_env(key, env) or bool(workspace_secret_store().get(key)),
                 f"{key} is configured.",
                 f"{key} is not configured.",
                 target=key,
@@ -210,23 +208,28 @@ class VerifyService:
 
             keys = self._github_required_keys(member)
             for key in keys:
-                env_key = member.to_person_env_key(key)
-                configured = self._has_env(env_key, env)
-                if not configured and key == "github_private_key_path":
-                    # The App key may live in the OS keychain as content
-                    # instead of a PEM file path.
+                if key in {"github_app_id", "github_installation_id"}:
+                    configured = member.has_account_info(key)
+                    target = f"account_info.{key}"
+                elif key == "github_private_key":
                     configured = bool(
                         workspace_secret_store().get(
                             member.to_person_env_key("github_private_key")
                         )
                     )
+                    target = member.to_person_env_key(key)
+                else:
+                    target = member.to_person_env_key(key)
+                    configured = self._has_env(target, env) or bool(
+                        workspace_secret_store().get(target)
+                    )
                 checks.append(
                     self._check(
                         "github_credential",
                         configured,
-                        f"{env_key} is configured.",
-                        f"{env_key} is not configured.",
-                        target=env_key,
+                        f"{target} is configured.",
+                        f"{target} is not configured.",
+                        target=target,
                         context={"person_id": member.person_id, "key": key},
                     )
                 )
@@ -238,7 +241,7 @@ class VerifyService:
             return [
                 "github_installation_id",
                 "github_app_id",
-                "github_private_key_path",
+                "github_private_key",
             ]
         if github_account_type in {
             GitHubAppAuth.MACHINE_USER,
@@ -255,14 +258,6 @@ class VerifyService:
 
     def _resolve_default_cli_executable(self) -> str:
         return resolve_default_cli_executable()
-
-    def _read_env(self, env_file: Path) -> dict[str, str | None]:
-        values: dict[str, str | None] = (
-            dict(dotenv_values(env_file)) if env_file.exists() else {}
-        )
-        for key, value in os.environ.items():
-            values.setdefault(key, value)
-        return values
 
     def _has_env(self, key: str, env: dict[str, str | None]) -> bool:
         return bool(env.get(key))

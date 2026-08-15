@@ -23,8 +23,8 @@ Gather evidence yourself with these read-only commands. They all return JSON.
 - `guildbotics diagnostics system [--limit N]` — returns service-wide records that belong to no single execution.
 
 If the `guildbotics` command is not on PATH, read the workspace files directly instead:
-`.guildbotics/data/run/diagnostics.jsonl` (the index) and
-`.guildbotics/data/run/sessions/<trace_id>.jsonl` (the full transcript).
+`.guildbotics/local/run/diagnostics.jsonl` (the index) and
+`.guildbotics/local/run/sessions/<trace_id>.jsonl` (the full transcript).
 
 Run nothing else. Commands that write, `guildbotics member ...`, git, gh and network access
 are all forbidden. You only investigate; you never repair. The agent runtime enforces these

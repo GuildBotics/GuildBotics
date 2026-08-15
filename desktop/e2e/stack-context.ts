@@ -19,7 +19,6 @@ export type StackContext = {
   workspaceDir: string;
   homeDir: string;
   configDir: string;
-  envFile: string;
   /** Log the harness's AI CLI tool stubs append to when they are launched. */
   cliStubLog: string;
   backendPort: number;

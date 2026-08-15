@@ -13,7 +13,7 @@ from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.observability import trace_scope
 from guildbotics.utils.fileio import (
-    GUILDBOTICS_DATA_DIR,
+    GUILDBOTICS_WORKSPACE_ROOT,
     load_yaml_file,
     save_yaml_file,
 )
@@ -28,11 +28,10 @@ def person() -> Person:
 
 @pytest.fixture(autouse=True)
 def data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    root = tmp_path / "data"
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(root))
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     monkeypatch.delenv(RUN_ENV, raising=False)
     monkeypatch.delenv(TASK_RUN_ENV, raising=False)
-    return root
+    return tmp_path / ".guildbotics" / "state"
 
 
 def test_record_recall_get_and_digest_redact_secret(

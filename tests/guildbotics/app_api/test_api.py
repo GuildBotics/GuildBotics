@@ -131,12 +131,11 @@ class RuntimeStub:
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(
             cwd=tmp_path,
-            env_file=tmp_path / ".env",
-            env_file_exists=False,
+            workspace=tmp_path,
             config_dir=tmp_path / ".guildbotics/config",
             project_file=tmp_path / ".guildbotics/config/team/project.yml",
             project_file_exists=False,
-            storage_dir=tmp_path / "home/.guildbotics/data",
+            storage_dir=tmp_path,
         )
 
     def stop_scheduler(self, *, force: bool = False) -> RuntimeStatus:
@@ -180,11 +179,11 @@ class RuntimeStub:
         self.config_status = self.config_status.model_copy(
             update={
                 "cwd": workspace_dir,
-                "env_file": workspace_dir / ".env",
-                "env_file_exists": (workspace_dir / ".env").exists(),
+                "workspace": workspace_dir,
                 "config_dir": config_dir,
                 "project_file": project_file,
                 "project_file_exists": project_file_exists,
+                "storage_dir": workspace_dir,
             }
         )
         return self.config_status
@@ -299,8 +298,6 @@ class RuntimeStub:
         return TranscriptSettingsStatus(
             detail="standard",
             retention_days=30,
-            env_file=self.config_status.env_file,
-            env_file_exists=self.config_status.env_file.exists(),
             sessions_dir=self.config_status.storage_dir / "run/sessions",
             total_size_bytes=0,
             index_size_bytes=0,
@@ -324,8 +321,6 @@ class RuntimeStub:
             enabled=False,
             log_level="INFO",
             agno_debug=False,
-            env_file=self.config_status.env_file,
-            env_file_exists=self.config_status.env_file.exists(),
         )
 
     def update_runtime_debug(
@@ -335,8 +330,6 @@ class RuntimeStub:
             enabled=request.enabled,
             log_level="DEBUG" if request.enabled else "INFO",
             agno_debug=request.enabled,
-            env_file=self.config_status.env_file,
-            env_file_exists=True,
         )
 
     def verify(self) -> VerifyResponse:
@@ -1285,9 +1278,10 @@ def test_scenario_diagnostics_endpoint_accepts_person_id(tmp_path: Path) -> None
 
 
 def test_config_init_endpoint_writes_project_without_github(tmp_path: Path) -> None:
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
     config_dir = tmp_path / ".guildbotics/config"
-    env_file_path = tmp_path / ".env"
 
     with TestClient(app) as client:
         response = client.post(
@@ -1295,8 +1289,6 @@ def test_config_init_endpoint_writes_project_without_github(tmp_path: Path) -> N
             headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
-                "env_file_path": str(env_file_path),
-                "env_file_option": "overwrite",
                 "language": "en",
                 "description": "Local automation workspace",
                 "llm_api_type": "openai",
@@ -1308,7 +1300,8 @@ def test_config_init_endpoint_writes_project_without_github(tmp_path: Path) -> N
     assert response.status_code == HTTP_OK
     assert (config_dir / "team/project.yml").exists()
     assert "test-openai-key" not in response.text
-    assert "OPENAI_API_KEY=test-openai-key" in env_file_path.read_text()
+    assert KeyringSecretStore(config_dir).get("OPENAI_API_KEY") == "test-openai-key"
+    assert not (tmp_path / ".env").exists()
 
 
 def test_config_project_endpoints_read_and_update_non_destructively(
@@ -1340,8 +1333,9 @@ def test_config_project_endpoints_read_and_update_non_destructively(
         )
     )
     runtime.config_status.project_file_exists = True
-    env_file = tmp_path / ".env"
-    env_file.write_text("OPENAI_API_KEY=existing-openai\nEXTRA=keep")
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    KeyringSecretStore(config_dir).set("OPENAI_API_KEY", "existing-openai")
     model_mapping = config_dir / "intelligences/model_mapping.yml"
     model_mapping.parent.mkdir(parents=True, exist_ok=True)
     model_mapping.write_text(
@@ -1385,7 +1379,6 @@ def test_config_project_endpoints_read_and_update_non_destructively(
             headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
-                "env_file_path": str(env_file),
                 "language": "ja",
                 "description": "Updated description",
                 "llm_api_type": "gemini",
@@ -1410,9 +1403,8 @@ def test_config_project_endpoints_read_and_update_non_destructively(
     # the original file is dropped on update.
     assert "repositories" not in updated_project
 
-    env_text = env_file.read_text()
-    assert "OPENAI_API_KEY=existing-openai" in env_text
-    assert "EXTRA=keep" in env_text
+    assert KeyringSecretStore(config_dir).get("OPENAI_API_KEY") == "existing-openai"
+    assert not (tmp_path / ".env").exists()
 
 
 def test_config_members_resolve_endpoint(tmp_path: Path, monkeypatch) -> None:
@@ -1617,16 +1609,12 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
     (team_dir / "project.yml").parent.mkdir(parents=True, exist_ok=True)
     (team_dir / "project.yml").write_text("language: en")
     runtime.config_status.project_file_exists = True
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                "ALICE_GITHUB_ACCESS_TOKEN=token-a",
-                "ALICE_SLACK_BOT_TOKEN=xoxb-a",
-                "ALICE_SLACK_APP_TOKEN=xapp-a",
-            ]
-        )
-    )
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    store = KeyringSecretStore(config_dir)
+    store.set("ALICE_GITHUB_ACCESS_TOKEN", "token-a")
+    store.set("ALICE_SLACK_BOT_TOKEN", "xoxb-a")
+    store.set("ALICE_SLACK_APP_TOKEN", "xapp-a")
 
     with TestClient(app) as client:
         get_response = client.get(
@@ -1650,7 +1638,6 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
             headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
-                "env_file_path": str(env_file),
                 "original_person_id": "alice",
                 "person_type": "machine_user",
                 "person_id": "alice-renamed",
@@ -1688,10 +1675,10 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         assert updated["profile"]["character"]["archetype"] == "creative_designer"
         assert updated["message_channels"][0]["name"] == "C0999"
         assert updated["message_channels"][0]["chat"]["participation"] == "muted"
-        env_text = env_file.read_text()
-        assert "ALICE_GITHUB_ACCESS_TOKEN" not in env_text
-        assert "ALICE_RENAMED_GITHUB_ACCESS_TOKEN=token-b" in env_text
-        assert "ALICE_RENAMED_SLACK_BOT_TOKEN=xoxb-b" in env_text
+        store = KeyringSecretStore(config_dir)
+        assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
+        assert store.get("ALICE_RENAMED_GITHUB_ACCESS_TOKEN") == "token-b"
+        assert store.get("ALICE_RENAMED_SLACK_BOT_TOKEN") == "xoxb-b"
 
         delete_response = client.request(
             "DELETE",
@@ -1699,14 +1686,13 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
             headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
-                "env_file_path": str(env_file),
             },
         )
         assert delete_response.status_code == HTTP_OK
     assert not (config_dir / "team/members/alice-renamed/person.yml").exists()
-    env_text_after_delete = env_file.read_text()
-    assert "ALICE_RENAMED_GITHUB_ACCESS_TOKEN=token-b" not in env_text_after_delete
-    assert "ALICE_RENAMED_SLACK_BOT_TOKEN" not in env_text_after_delete
+    store = KeyringSecretStore(config_dir)
+    assert store.get("ALICE_RENAMED_GITHUB_ACCESS_TOKEN") is None
+    assert store.get("ALICE_RENAMED_SLACK_BOT_TOKEN") is None
 
 
 def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
@@ -1718,14 +1704,12 @@ def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
     runtime.config_status.project_file_exists = True
 
     wrong_config_dir = tmp_path / "wrong/.guildbotics/config"
-    wrong_env_file = tmp_path / "wrong/.env"
     with TestClient(app) as client:
         response = client.post(
             "/config/members",
             headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(wrong_config_dir),
-                "env_file_path": str(wrong_env_file),
                 "person_type": "",
                 "person_id": "new_member",
                 "person_name": "New Member",
@@ -1783,7 +1767,6 @@ def test_member_config_accepts_member_without_github_link(tmp_path: Path) -> Non
             headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
-                "env_file_path": str(env_file),
                 "person_type": "",
                 "person_id": "local-agent",
                 "person_name": "Local Agent",
@@ -1834,11 +1817,15 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
             return ContextStub()
 
     monkeypatch.chdir(tmp_path)
-    # Ensure the key is absent so the workspace .env is the source: variables
-    # inherited from the parent process would win over workspace values.
+    # Ensure the key is absent so the workspace secret store is the source:
+    # variables inherited from the parent process would win over stored values.
     monkeypatch.setenv("OPENAI_API_KEY", "placeholder")
     monkeypatch.delenv("OPENAI_API_KEY")
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=new-key\n")
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
+        "OPENAI_API_KEY", "new-key"
+    )
     monkeypatch.setattr(
         "guildbotics.app_api.runtime.get_edition",
         lambda: EditionStub(),
@@ -1859,11 +1846,9 @@ def test_app_runtime_updates_transcript_settings(monkeypatch, tmp_path: Path) ->
         TranscriptSettingsUpdateRequest(detail="full", retention_days=14)
     )
 
-    assert os.environ["GUILDBOTICS_TRANSCRIPT_DETAIL"] == "full"
-    assert os.environ["GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS"] == "14"
-    env_text = (tmp_path / ".env").read_text()
-    assert "GUILDBOTICS_TRANSCRIPT_DETAIL=full" in env_text
-    assert "GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS=14" in env_text
+    settings = (tmp_path / ".guildbotics" / "config" / "transcripts.yml").read_text()
+    assert "detail: full" in settings
+    assert "retention_days: 14" in settings
     assert status.detail == "full"
     assert status.retention_days == 14
 
@@ -2265,7 +2250,9 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
         "_get_context",
         lambda message="": type("ContextStub", (), {"team": team})(),
     )
-    monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
+    )
 
     running = asyncio.create_task(
         runtime.run_command(CommandRunRequest(command="first"))
@@ -2311,7 +2298,9 @@ async def test_manual_command_traces_resolved_default_person_without_activity_se
         "_get_context",
         lambda message="": type("ContextStub", (), {"team": team})(),
     )
-    monkeypatch.setattr("guildbotics.app_api.runtime.run_command", fake_run_command)
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
+    )
 
     await runtime.run_command(CommandRunRequest(command="functions/talk_as"))
 
@@ -2552,8 +2541,6 @@ def test_config_init_maps_setup_service_error(
         headers=AUTH_HEADERS,
         json={
             "config_dir": str(tmp_path / ".guildbotics/config"),
-            "env_file_path": str(tmp_path / ".env"),
-            "env_file_option": "overwrite",
             "language": "en",
             "description": "desc",
             "llm_api_type": "openai",
@@ -2690,7 +2677,6 @@ def test_config_project_update_maps_setup_service_error(
         headers=AUTH_HEADERS,
         json={
             "config_dir": str(tmp_path / ".guildbotics/config"),
-            "env_file_path": str(tmp_path / ".env"),
             "language": "en",
             "description": "desc",
             "llm_api_type": "openai",
@@ -2723,7 +2709,6 @@ def test_member_update_rejects_person_id_mismatch(tmp_path: Path) -> None:
         headers=AUTH_HEADERS,
         json={
             "config_dir": str(tmp_path / ".guildbotics/config"),
-            "env_file_path": str(tmp_path / ".env"),
             "original_person_id": "bob",
             "person_type": "machine_user",
             "person_id": "alice",
@@ -2935,7 +2920,6 @@ def test_chat_receive_state_reset_endpoint_uses_runtime(tmp_path: Path) -> None:
 def test_chat_receive_state_reset_ignores_past_for_active_members(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("GUILDBOTICS_DATA_DIR", raising=False)
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     runtime = AppRuntime(EventBus())
@@ -2980,7 +2964,6 @@ def test_chat_receive_state_reset_ignores_past_for_active_members(
 def test_chat_receive_state_reset_covers_name_only_subscription(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("GUILDBOTICS_DATA_DIR", raising=False)
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     runtime = AppRuntime(EventBus())

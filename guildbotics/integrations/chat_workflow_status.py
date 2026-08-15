@@ -37,6 +37,12 @@ def workflow_status_metadata(
 
 
 def normalize_workflow_status_metadata(metadata: object) -> dict[str, object]:
+    """Rebuild workflow-status metadata from its own schema.
+
+    This module owns the shape, so normalization reconstructs exactly the
+    fields ``workflow_status_metadata`` writes instead of passing the stored
+    dict through — anything else has no slot and disappears.
+    """
     if not isinstance(metadata, dict):
         return {}
     if metadata.get("event_type") != WORKFLOW_STATUS_EVENT_TYPE:
@@ -44,9 +50,21 @@ def normalize_workflow_status_metadata(metadata: object) -> dict[str, object]:
     payload = metadata.get("event_payload")
     if not isinstance(payload, dict):
         return {}
+    rebuilt: dict[str, object] = {
+        "kind": str(payload.get("kind") or ""),
+        "routing": str(payload.get("routing") or ""),
+        "reason": str(payload.get("reason") or ""),
+        "person_id": str(payload.get("person_id") or ""),
+        "source_event_id": str(payload.get("source_event_id") or ""),
+        "run_id": str(payload.get("run_id") or ""),
+    }
+    for optional in ("retry_after_at", "retry_after_text"):
+        value = str(payload.get(optional) or "")
+        if value:
+            rebuilt[optional] = value
     return {
         "event_type": WORKFLOW_STATUS_EVENT_TYPE,
-        "event_payload": dict(payload),
+        "event_payload": rebuilt,
     }
 
 

@@ -253,7 +253,7 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         assert args == ("codex", "app-server")
         assert kwargs["start_new_session"] is True
         assert kwargs["env"][TASK_RUN_ENV] == "run-1"
-        assert kwargs["env"]["GUILDBOTICS_DATA_DIR"] == str(tmp_path)
+        assert kwargs["env"]["GUILDBOTICS_WORKSPACE_ROOT"] == str(tmp_path)
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)

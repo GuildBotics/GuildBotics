@@ -3,21 +3,24 @@ from pathlib import Path
 import pytest
 
 from guildbotics.utils.fileio import (
-    GUILDBOTICS_DATA_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
+    WorkspaceNotConfiguredError,
     _clean_data,
-    apply_workspace_data_root,
+    apply_workspace_root,
     find_package_subdir,
     get_config_path,
     get_machine_state_path,
     get_machine_state_root,
+    get_member_clone_path,
     get_primary_config_path,
-    get_workspace_data_root,
+    get_workspace_config_dir,
+    get_workspace_local_path,
     get_workspace_root,
+    get_workspace_state_path,
+    get_workspace_work_path,
     load_markdown_with_frontmatter,
     load_person_slot_mapping,
     load_yaml_file,
-    resolve_workspace_data_root,
     save_yaml_file,
 )
 
@@ -91,8 +94,6 @@ def test_load_person_slot_mapping_merges_member_over_team(tmp_path, monkeypatch)
 
     merged = load_person_slot_mapping("yuki", rel)
 
-    # The overridden slot uses the member value; the untouched slot is inherited
-    # from the team instead of being dropped.
     assert merged == {
         "default": "models/anthropic/default.yml",
         "translation": "models/gemini/translation.yml",
@@ -129,18 +130,16 @@ def test_get_config_path_language_specific_and_fallback(tmp_path, monkeypatch):
     ja_file.write_text("msg: ja\n", encoding="utf-8")
     en_file.write_text("msg: en\n", encoding="utf-8")
 
-    # Prefers language-specific
     resolved_ja = get_config_path("prompt.yaml", language_code="ja")
     assert resolved_ja == ja_file
 
-    # Remove ja to force fallback to en
     ja_file.unlink()
     resolved_fallback = get_config_path("prompt.yaml", language_code="ja")
     assert resolved_fallback == en_file
 
 
-def test_get_primary_config_path_uses_absolute_workspace_path(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+def test_get_primary_config_path_uses_resolved_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
 
     assert get_primary_config_path(Path("team/project.yml")) == (
@@ -148,29 +147,10 @@ def test_get_primary_config_path_uses_absolute_workspace_path(tmp_path, monkeypa
     )
 
 
-def test_workspace_data_root_prefers_data_dir_env_when_home_changes(
-    tmp_path, monkeypatch
-):
-    data_dir = tmp_path / "stable-data"
-    changed_home = tmp_path / "agent-home"
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(data_dir))
-    monkeypatch.setenv("HOME", str(changed_home))
-
-    assert get_workspace_data_root() == data_dir
-
-
-def test_workspace_data_root_resolves_relative_data_dir(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", "stable-data")
-
-    assert get_workspace_data_root() == tmp_path / "stable-data"
-
-
-def test_get_machine_state_root_ignores_data_dir_env(tmp_path, monkeypatch):
+def test_get_machine_state_root_is_independent_of_workspace(tmp_path, monkeypatch):
     home = tmp_path / "home"
-    data_dir = tmp_path / "workspace-data"
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(data_dir))
+    monkeypatch.setenv("USERPROFILE", str(home))
 
     assert get_machine_state_root() == home / ".guildbotics" / "data"
     assert get_machine_state_path("run", "service.lock") == (
@@ -178,70 +158,45 @@ def test_get_machine_state_root_ignores_data_dir_env(tmp_path, monkeypatch):
     )
 
 
-def test_resolve_workspace_data_root_prefers_workspace_env_over_inherited(
-    tmp_path, monkeypatch
-):
-    monkeypatch.chdir(tmp_path)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    env_file = workspace / ".env"
-    env_file.write_text(
-        "GUILDBOTICS_DATA_DIR=workspace-data\nOTHER=value\n",
-        encoding="utf-8",
-    )
+def test_workspace_state_and_local_paths_do_not_overlap(tmp_path, monkeypatch):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
 
-    assert resolve_workspace_data_root(
-        workspace,
-        env_file,
-        inherited_data_dir=str(tmp_path / "inherited-data"),
-    ) == (tmp_path / "workspace-data").resolve(strict=False)
+    state = get_workspace_state_path("documents")
+    local = get_workspace_local_path("run")
+    clone = get_member_clone_path("aiko")
+    work = get_workspace_work_path("command-authoring")
 
-
-def test_resolve_workspace_data_root_uses_inherited_without_workspace_override(
-    tmp_path,
-):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    env_file = workspace / ".env"
-    env_file.write_text("OTHER=value\n", encoding="utf-8")
-
-    assert resolve_workspace_data_root(
-        workspace,
-        env_file,
-        inherited_data_dir=str(tmp_path / "inherited-data"),
-    ) == (tmp_path / "inherited-data").resolve(strict=False)
+    assert state == tmp_path / ".guildbotics" / "state" / "documents"
+    assert local == tmp_path / ".guildbotics" / "local" / "run"
+    assert clone == tmp_path / ".guildbotics" / "local" / "clones" / "aiko"
+    assert work == (tmp_path / ".guildbotics" / "local" / "work" / "command-authoring")
+    assert state.is_relative_to(tmp_path / ".guildbotics" / "state")
+    assert local.is_relative_to(tmp_path / ".guildbotics" / "local")
+    assert not state.is_relative_to(tmp_path / ".guildbotics" / "local")
+    assert not clone.is_relative_to(tmp_path / ".guildbotics" / "state")
 
 
-def test_resolve_workspace_data_root_defaults_to_workspace_data(tmp_path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    assert resolve_workspace_data_root(workspace) == (
-        workspace / ".guildbotics" / "data"
-    ).resolve(strict=False)
-
-
-def test_get_workspace_data_root_defaults_to_workspace_root(tmp_path, monkeypatch):
-    monkeypatch.delenv(GUILDBOTICS_DATA_DIR, raising=False)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    assert get_workspace_data_root(workspace) == (
-        workspace / ".guildbotics" / "data"
-    ).resolve(strict=False)
-
-
-def test_applied_workspace_root_is_independent_of_overridden_data_root(
-    tmp_path, monkeypatch
-):
-    workspace = tmp_path / "workspace"
-    data_root = tmp_path / "external-data"
+def test_get_workspace_root_does_not_use_cwd(tmp_path, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.chdir(other)
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
 
-    assert apply_workspace_data_root(
-        workspace, inherited_data_dir=str(data_root)
-    ) == data_root.resolve(strict=False)
-    assert get_workspace_root() == workspace.resolve(strict=False)
+    with pytest.raises(WorkspaceNotConfiguredError):
+        get_workspace_root()
+
+
+def test_apply_workspace_root_publishes_config_dir(tmp_path, monkeypatch):
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    applied = apply_workspace_root(workspace)
+
+    assert applied == workspace.resolve()
+    assert get_workspace_root() == workspace.resolve()
+    assert get_workspace_config_dir() == workspace.resolve() / ".guildbotics" / "config"
 
 
 def test_clean_data_removes_none_and_empty_keys():
@@ -294,3 +249,22 @@ def test_save_yaml_file_roundtrip_cleans(tmp_path):
     save_yaml_file(out, raw)
     loaded = load_yaml_file(out)
     assert loaded == expected
+
+
+def test_get_primary_config_path_requires_workspace(monkeypatch, tmp_path):
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    with pytest.raises(WorkspaceNotConfiguredError):
+        get_primary_config_path(Path("hotkeys.yml"))
+
+
+def test_get_config_path_uses_template_without_workspace(monkeypatch, tmp_path):
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    resolved = get_config_path("team/project.yml")
+
+    assert resolved == find_package_subdir(Path("templates")) / "team" / "project.yml"

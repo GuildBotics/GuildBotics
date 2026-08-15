@@ -161,7 +161,7 @@ schedules:
 **エラーハンドリング**:
 
 - 連続したコマンド失敗（デフォルト: 3回）でワーカースレッドを停止します
-- 検索用の実行サマリーは `<workspace>/.guildbotics/data/run/diagnostics.jsonl`、
+- 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl`、
   実行ごとの全文記録は `run/sessions/` に保存されます
 
 ## 設定例

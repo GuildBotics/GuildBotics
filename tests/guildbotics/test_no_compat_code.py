@@ -47,11 +47,27 @@ _CODEMIRROR_LEGACY_MODES = (
     "third-party package name, not compat with our own past."
 )
 
+_WORKSPACE_RELOCATION = (
+    "One-shot relocation of a source-checkout workspace into a dedicated root, "
+    "required by issue #416; it copies data forward without leaving any runtime "
+    "compat path that reads the old layout."
+)
+
 ALLOWED: tuple[Allowance, ...] = (
     Allowance(
         "guildbotics/intelligences/agent_runtime/codex.py",
         "_LEGACY_APPROVAL_METHODS",
         _CODEX_PROTOCOL,
+    ),
+    Allowance(
+        "guildbotics/utils/workspace_migrate.py",
+        "igrat",
+        _WORKSPACE_RELOCATION,
+    ),
+    Allowance(
+        "guildbotics/cli/workspace.py",
+        "igrat",
+        _WORKSPACE_RELOCATION,
     ),
     Allowance(
         "desktop/src/commands/CommandEditor.tsx",

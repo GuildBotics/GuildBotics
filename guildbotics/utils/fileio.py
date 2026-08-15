@@ -3,11 +3,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore
-from dotenv import dotenv_values
 
 CONFIG_PATH = ".guildbotics/config"
-GUILDBOTICS_DATA_DIR = "GUILDBOTICS_DATA_DIR"
 GUILDBOTICS_WORKSPACE_ROOT = "GUILDBOTICS_WORKSPACE_ROOT"
+GUILDBOTICS_CONFIG_DIR = "GUILDBOTICS_CONFIG_DIR"
+
+
+class WorkspaceNotConfiguredError(RuntimeError):
+    """Raised when a workspace path is required but none is selected."""
 
 
 def find_package_subdir(subpath: Path) -> Path:
@@ -38,82 +41,84 @@ def get_machine_state_path(*parts: str) -> Path:
     return get_machine_state_root().joinpath(*parts)
 
 
-def resolve_workspace_data_root(
-    workspace_root: Path,
-    env_file: Path | None = None,
-    inherited_data_dir: str | None = None,
-) -> Path:
-    """Resolve the effective data root for a runtime workspace."""
-    data_dir = _data_dir_from_env_file(env_file)
-    if data_dir is None:
-        data_dir = (inherited_data_dir or "").strip() or None
-    if data_dir is not None:
-        return Path(data_dir).expanduser().resolve(strict=False)
-    return workspace_root.expanduser().resolve(strict=False) / ".guildbotics" / "data"
+def _resolve_path(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
 
 
-def get_workspace_data_root(workspace_root: Path | None = None) -> Path:
-    """Return the current workspace data root."""
-    if data_dir := os.getenv(GUILDBOTICS_DATA_DIR, "").strip():
-        return Path(data_dir).expanduser().resolve(strict=False)
-    root = workspace_root if workspace_root is not None else Path.cwd()
-    return root.expanduser().resolve(strict=False) / ".guildbotics" / "data"
+def workspace_root_from_config_dir(config_dir: Path) -> Path | None:
+    """Return the workspace root when ``config_dir`` is ``<ws>/.guildbotics/config``."""
+    resolved = _resolve_path(config_dir)
+    if resolved.name == "config" and resolved.parent.name == ".guildbotics":
+        return resolved.parent.parent
+    return None
 
 
-def get_workspace_root() -> Path:
-    """Return the runtime workspace selected before command cwd isolation."""
-    root = os.getenv(GUILDBOTICS_WORKSPACE_ROOT, "").strip()
-    return Path(root or Path.cwd()).expanduser().resolve(strict=False)
+def get_workspace_root(workspace_root: Path | None = None) -> Path:
+    """Return the selected GuildBotics workspace root.
+
+    Resolution order:
+    1. The explicit ``workspace_root`` argument
+    2. ``GUILDBOTICS_WORKSPACE_ROOT``
+    3. ``GUILDBOTICS_CONFIG_DIR`` when it points at ``<ws>/.guildbotics/config``
+
+    The process cwd and member working clones are never used as a workspace.
+    """
+    if workspace_root is not None:
+        return _resolve_path(workspace_root)
+    configured = os.getenv(GUILDBOTICS_WORKSPACE_ROOT, "").strip()
+    if configured:
+        return _resolve_path(Path(configured))
+    config_dir = os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip()
+    if config_dir:
+        derived = workspace_root_from_config_dir(Path(config_dir))
+        if derived is not None:
+            return derived
+    raise WorkspaceNotConfiguredError(
+        "No GuildBotics workspace is selected. Use --workspace, "
+        "`guildbotics workspace use <path>`, or set GUILDBOTICS_WORKSPACE_ROOT."
+    )
 
 
-def get_workspace_data_path(
+def apply_workspace_root(workspace_root: Path) -> Path:
+    """Publish the selected workspace root and its config dir."""
+    resolved = _resolve_path(workspace_root)
+    os.environ[GUILDBOTICS_WORKSPACE_ROOT] = str(resolved)
+    os.environ[GUILDBOTICS_CONFIG_DIR] = str(resolved / ".guildbotics" / "config")
+    return resolved
+
+
+def get_workspace_config_dir(workspace_root: Path | None = None) -> Path:
+    """Return ``<workspace>/.guildbotics/config``."""
+    return get_workspace_root(workspace_root) / ".guildbotics" / "config"
+
+
+def get_workspace_state_path(
     *parts: str,
     workspace_root: Path | None = None,
 ) -> Path:
-    """Return a path under the current workspace data root."""
-    return get_workspace_data_root(workspace_root).joinpath(*parts)
+    """Return a path under ``<workspace>/.guildbotics/state``."""
+    return get_workspace_root(workspace_root).joinpath(".guildbotics", "state", *parts)
 
 
-def apply_workspace_data_root(
-    workspace_root: Path,
-    env_file: Path | None = None,
-    inherited_data_dir: str | None = None,
+def get_workspace_local_path(
+    *parts: str,
+    workspace_root: Path | None = None,
 ) -> Path:
-    """Resolve and publish the effective workspace data root."""
-    os.environ[GUILDBOTICS_WORKSPACE_ROOT] = str(
-        workspace_root.expanduser().resolve(strict=False)
-    )
-    data_root = resolve_workspace_data_root(
-        workspace_root,
-        env_file,
-        inherited_data_dir=inherited_data_dir,
-    )
-    os.environ[GUILDBOTICS_DATA_DIR] = str(data_root)
-    return data_root
+    """Return a path under ``<workspace>/.guildbotics/local``."""
+    return get_workspace_root(workspace_root).joinpath(".guildbotics", "local", *parts)
 
 
-def get_workspace_path(person_id: str, workspace_root: Path | None = None) -> Path:
-    """
-    Get the workspace path for a specific person.
-    Args:
-        person_id (str): The ID of the person.
-    Returns:
-        Path: The workspace path for the person.
-    """
-    return get_workspace_data_path(
-        "workspaces", person_id, workspace_root=workspace_root
-    )
+def get_member_clone_path(person_id: str, workspace_root: Path | None = None) -> Path:
+    """Return the member working clone directory (not synchronized)."""
+    return get_workspace_local_path("clones", person_id, workspace_root=workspace_root)
 
 
-def _data_dir_from_env_file(env_file: Path | None) -> str | None:
-    if env_file is None or not env_file.is_file():
-        return None
-    values = dotenv_values(env_file)
-    value = values.get(GUILDBOTICS_DATA_DIR)
-    if value is None:
-        return None
-    value = value.strip()
-    return value or None
+def get_workspace_work_path(
+    *parts: str,
+    workspace_root: Path | None = None,
+) -> Path:
+    """Return a path under the local work directory."""
+    return get_workspace_local_path("work", *parts, workspace_root=workspace_root)
 
 
 def get_template_path() -> Path:
@@ -125,9 +130,23 @@ def get_template_path() -> Path:
     return find_package_subdir(Path("templates"))
 
 
+def get_primary_config_dir() -> Path | None:
+    """Return the selected workspace config dir, or ``None`` when unset."""
+    configured = os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip()
+    if configured:
+        config_dir = Path(configured).expanduser()
+        if not config_dir.is_absolute():
+            config_dir = Path.cwd() / config_dir
+        return config_dir
+    try:
+        return get_workspace_config_dir()
+    except WorkspaceNotConfiguredError:
+        return None
+
+
 def get_primary_config_path(path: Path) -> Path:
     """
-    Get the primary configuration path from GUILDBOTICS_CONFIG_DIR or CONFIG_PATH.
+    Get the primary configuration path from the selected workspace.
 
     The returned path may not exist; check with .exists() if needed.
 
@@ -136,10 +155,16 @@ def get_primary_config_path(path: Path) -> Path:
 
     Returns:
         Path: The absolute path to the configuration file.
+
+    Raises:
+        WorkspaceNotConfiguredError: When no workspace is selected. Reads
+            that want the package-template fallback use ``get_config_path``;
+            the primary path is also a write target and must never point
+            into the package templates.
     """
-    config_dir = Path(os.getenv("GUILDBOTICS_CONFIG_DIR", CONFIG_PATH)).expanduser()
-    if not config_dir.is_absolute():
-        config_dir = Path.cwd() / config_dir
+    config_dir = get_primary_config_dir()
+    if config_dir is None:
+        raise WorkspaceNotConfiguredError("No GuildBotics workspace is selected.")
     return config_dir / path
 
 
@@ -157,8 +182,11 @@ def _get_config_path(path: Path) -> Path:
     Returns:
         Path: An absolute path to an existing file, or the template path fallback.
     """
-    p = get_primary_config_path(path)
-    if p.exists():
+    try:
+        p = get_primary_config_path(path)
+    except WorkspaceNotConfiguredError:
+        p = None
+    if p is not None and p.exists():
         return p
 
     return get_template_path() / path

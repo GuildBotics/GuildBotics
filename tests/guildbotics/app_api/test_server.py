@@ -17,8 +17,7 @@ from guildbotics.app_api.server import (
     _read_allowed_origins,
     _restore_active_workspace,
 )
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     active_workspace_file,
@@ -29,8 +28,7 @@ from guildbotics.utils.workspace_state import (
 def _isolate_runtime_environment(monkeypatch) -> None:
     for key in (
         GUILDBOTICS_CONFIG_DIR,
-        GUILDBOTICS_ENV_FILE,
-        GUILDBOTICS_DATA_DIR,
+        GUILDBOTICS_WORKSPACE_ROOT,
         "WORKSPACE_MARKER",
     ):
         monkeypatch.setenv(key, "placeholder")
@@ -51,18 +49,13 @@ def test_restore_active_workspace_applies_backend_workspace(
     workspace = tmp_path / "selected"
     startup.mkdir()
     workspace.mkdir()
-    (workspace / ".env").write_text(
-        "GUILDBOTICS_DATA_DIR=runtime-data\nWORKSPACE_MARKER=selected\n",
-        encoding="utf-8",
-    )
     monkeypatch.chdir(startup)
     _isolate_runtime_environment(monkeypatch)
     write_active_workspace(workspace)
 
-    restored = _restore_active_workspace(inherited_data_dir=None)
+    restored = _restore_active_workspace()
     AppRuntime(
         EventBus(),
-        inherited_data_dir=None,
         load_workspace_environment=True,
     )
 
@@ -71,36 +64,27 @@ def test_restore_active_workspace_applies_backend_workspace(
     assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
         workspace / ".guildbotics" / "config"
     )
-    assert os.environ[GUILDBOTICS_ENV_FILE] == str(workspace / ".env")
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(workspace / "runtime-data")
-    assert os.environ["WORKSPACE_MARKER"] == "selected"
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace)
 
 
-def test_restored_runtime_keeps_original_data_override_across_switches(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_restored_runtime_switches_workspace_root(tmp_path: Path, monkeypatch) -> None:
     startup = tmp_path / "startup"
     selected = tmp_path / "selected"
     other = tmp_path / "other"
-    inherited_data = tmp_path / "inherited-data"
     for path in (startup, selected, other):
         path.mkdir()
-    (selected / ".env").write_text(
-        "GUILDBOTICS_DATA_DIR=selected-data\n", encoding="utf-8"
-    )
     monkeypatch.chdir(startup)
     _isolate_runtime_environment(monkeypatch)
     write_active_workspace(selected)
 
-    _restore_active_workspace(inherited_data_dir=str(inherited_data))
+    _restore_active_workspace()
     runtime = AppRuntime(
         EventBus(),
-        inherited_data_dir=str(inherited_data),
         load_workspace_environment=True,
     )
     runtime.set_workspace(other)
 
-    assert os.environ[GUILDBOTICS_DATA_DIR] == str(inherited_data)
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(other.resolve())
 
 
 @pytest.fixture
@@ -198,12 +182,37 @@ def test_read_allowed_origins_parses_the_env_list(
     assert _read_allowed_origins() == expected
 
 
+def test_restore_active_workspace_prefers_explicit_root_over_active(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An explicit GUILDBOTICS_WORKSPACE_ROOT wins over active-workspace.json,
+    matching the CLI resolution order."""
+    startup = tmp_path / "startup"
+    explicit = tmp_path / "explicit"
+    active = tmp_path / "active"
+    for path in (startup, explicit, active):
+        path.mkdir()
+    monkeypatch.chdir(startup)
+    _isolate_runtime_environment(monkeypatch)
+    write_active_workspace(active)
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(explicit))
+
+    restored = _restore_active_workspace()
+
+    assert restored == explicit.resolve()
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(explicit.resolve())
+    assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
+        explicit.resolve() / ".guildbotics" / "config"
+    )
+
+
 def test_restore_active_workspace_keeps_startup_cwd_when_unconfigured(
     tmp_path: Path, monkeypatch
 ) -> None:
     startup = tmp_path / "startup"
     startup.mkdir()
     monkeypatch.chdir(startup)
+    _isolate_runtime_environment(monkeypatch)
 
     restored = _restore_active_workspace()
 
@@ -217,6 +226,7 @@ def test_restore_active_workspace_keeps_startup_cwd_when_target_is_missing(
     startup = tmp_path / "startup"
     startup.mkdir()
     monkeypatch.chdir(startup)
+    _isolate_runtime_environment(monkeypatch)
     path = active_workspace_file()
     path.parent.mkdir(parents=True)
     path.write_text(

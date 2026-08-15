@@ -121,7 +121,11 @@ def test_settings_change_and_explicit_reset_rotate_atomically(tmp_path) -> None:
     assert loaded.generation == 2
     assert loaded.rotation_reason == "reset"
     payload = json.loads(
-        next((tmp_path / "agent-runtime/conversations").rglob("*.json")).read_text()
+        next(
+            (
+                tmp_path / ".guildbotics" / "local" / "agent-runtime" / "conversations"
+            ).rglob("*.json")
+        ).read_text()
     )
     assert payload["version"] == 1
     serialized = json.dumps(payload).lower()

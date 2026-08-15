@@ -10,7 +10,7 @@ from guildbotics.capabilities.github_activity_events import (
     _existing_activity_ids,
 )
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.activity_event_store import ActivityEventStore
 
 ISSUE_NUMBER = 8
 
@@ -79,23 +79,32 @@ def test_closed_event_ignores_incomplete_or_invalid_items(override):
     )
 
 
-def test_existing_activity_ids_scans_beyond_default_memory_limit(monkeypatch, tmp_path):
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path))
+def test_existing_activity_ids_reads_shared_activity_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     activity_id = "issue:acme/demo:8:closed"
-    store = DiagnosticsStore()
+    store = ActivityEventStore()
     store.record(
         {
+            "type": "github.issue.closed",
             "timestamp": "2026-07-10T01:00:00Z",
             "attributes": {"github.activity_id": activity_id},
         }
     )
-    for index in range(5000):
+    for index in range(20):
         store.record(
             {
+                "type": "github.issue.closed",
                 "timestamp": "2026-07-10T02:00:00Z",
                 "attributes": {"filler": str(index)},
             }
         )
+    store.record(
+        {
+            "type": "github.issue.closed",
+            "timestamp": "2026-07-12T01:00:00Z",
+            "attributes": {"github.activity_id": "issue:acme/demo:9:closed"},
+        }
+    )
 
     existing = _existing_activity_ids(
         datetime(2026, 7, 10, tzinfo=UTC),
@@ -103,11 +112,13 @@ def test_existing_activity_ids_scans_beyond_default_memory_limit(monkeypatch, tm
     )
 
     assert activity_id in existing
+    # Out-of-range events do not count as existing.
+    assert "issue:acme/demo:9:closed" not in existing
 
 
 @pytest.mark.asyncio
 async def test_poller_records_each_closed_project_item_once(monkeypatch, tmp_path):
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     person = Person(person_id="aiko", name="Aiko")
     team = Team(
         project=Project(
@@ -183,7 +194,10 @@ async def test_poller_records_each_closed_project_item_once(monkeypatch, tmp_pat
     normalized_query = " ".join(queries[0].split())
     assert "items(first:100, after:$cursor) { nodes { content {" in normalized_query
     assert "} } pageInfo { hasNextPage endCursor } }" in normalized_query
-    records = DiagnosticsStore().records_between(includes=lambda _timestamp: True)
+    records = ActivityEventStore().records_between(
+        datetime(2026, 7, 9, tzinfo=UTC), datetime(2026, 7, 12, tzinfo=UTC)
+    )
+    assert len(records) == 1
     assert records[0]["person_id"] == ""
     assert records[0]["timestamp"] == "2026-07-10T01:00:00Z"
     assert (

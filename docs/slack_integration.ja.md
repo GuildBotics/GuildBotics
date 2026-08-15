@@ -120,7 +120,7 @@ Slack の OAuth リダイレクトは `http://localhost` を許可せず、ト�
 
 定期投稿は **巡回** タブの **定期実行コマンド** として設定します（→ [定期投稿](#定期投稿)）。
 
-トークンは OS キーチェーンまたは `.env` に保存され、それ以外の設定は `team/members/<person_id>/person.yml` に保存されます。保存形式と、GUI では設定できない項目は [`person.yml` リファレンス](#personyml-リファレンス)を参照してください。
+トークンは OS キーチェーンに保存され、それ以外の設定は `team/members/<person_id>/person.yml` に保存されます。保存形式と、GUI では設定できない項目は [`person.yml` リファレンス](#personyml-リファレンス)を参照してください。
 
 ## 定期投稿
 
@@ -178,7 +178,7 @@ task_schedules:
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
 - `character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断と返信生成は AI CLI ツール経由でこのプロフィールを参照します
 
-Bot Token と App-Level Token は `person.yml` には保存されません。OS キーチェーン、`.env`、または環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` で渡します（例: `alice` なら `ALICE_SLACK_BOT_TOKEN`）。
+Bot Token と App-Level Token は `person.yml` には保存されません。OS キーチェーンまたは環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` で渡します（例: `alice` なら `ALICE_SLACK_BOT_TOKEN`）。
 
 ## 手動での投稿・リアクション
 
@@ -195,5 +195,5 @@ guildbotics member chat reaction add --person alice --service slack --channel-id
 
 - チャットイベントの受信はイベントリスナーランナーが担当し、処理は各メンバーのメンバーワーカー内のイベントキューソースが直列に実行します。どちらもサービスの起動（GUI の **サービス実行 → 実行**、または `guildbotics start`）で起動します
 - **イベント起動** を含めずに起動した場合（CLI では `guildbotics start --only scheduler`）、チャットイベントは受信されません。逆に **巡回実行コマンド** と **定期実行コマンド** を外した場合（CLI では `--only events`）でも、メンバーワーカーはキュー済みチャットイベントを処理します
-- AI CLI ツールによるチャット処理では、`functions/handle_chat_event` がメンバーごとの作業ディレクトリを `cwd` にして実行されます。既定では `<workspace>/.guildbotics/data/workspaces/<person_id>/` です。この配下にある複製済みリポジトリを参照できます
+- AI CLI ツールによるチャット処理では、`functions/handle_chat_event` がメンバーごとの作業ディレクトリを `cwd` にして実行されます。既定では `<workspace>/.guildbotics/local/clones/<person_id>/` です。この配下にある複製済みリポジトリを参照できます
 - 返信・リアクション・no-op・完了の証跡は `guildbotics member chat reply|post|reaction add|noop|complete` 経由で記録されます。ワークフローはこの実行証跡を検証し、ツールの自然言語の標準出力だけでは Slack に投稿した証拠として扱いません

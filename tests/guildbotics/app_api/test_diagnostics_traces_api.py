@@ -21,8 +21,9 @@ from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability import span_scope, trace_scope
+from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+
 
 HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 HTTP_OK = 200
@@ -93,8 +94,7 @@ def test_verify_is_recorded_as_a_diagnostics_trace(
     client, bus, runtime, store = _runtime_app(tmp_path)
     config = ConfigStatus(
         cwd=tmp_path,
-        env_file=tmp_path / ".env",
-        env_file_exists=False,
+        workspace=tmp_path,
         config_dir=tmp_path / "config",
         project_file=tmp_path / "config/team/project.yml",
         project_file_exists=False,
@@ -293,6 +293,24 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         ],
     )
     monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
+    activity = ActivityEventStore()
+
+    def record_github(
+        event_type: str,
+        payload: dict,
+        *,
+        person_id: str = "",
+        source: str = "",
+    ) -> None:
+        activity.record(
+            {
+                "type": event_type,
+                "payload": payload,
+                "person_id": person_id,
+                "source": source,
+            }
+        )
+
     app = create_app(
         session_token="secret",
         runtime=runtime,
@@ -322,32 +340,30 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         bus.publish_event(
             "member.command.finished", {"command": "member memory recall"}
         )
-        bus.publish_event(
-            "github.pull_request",
-            {
-                "action": "opened",
-                "pull_request": {
-                    "number": 8,
-                    "title": "Add member activity",
-                    "html_url": "https://github.com/owner/repo/pull/8",
-                    "merged": False,
-                },
+        pr_opened = {
+            "action": "opened",
+            "pull_request": {
+                "number": 8,
+                "title": "Add member activity",
+                "html_url": "https://github.com/owner/repo/pull/8",
+                "merged": False,
             },
-        )
-        bus.publish_event(
-            "github.push",
-            {
-                "action": "push",
-                "ref": "refs/heads/feature",
-                "commits": [
-                    {
-                        "id": "abc1234",
-                        "message": "Improve activity history event context\n\nbody",
-                        "url": "https://github.com/owner/repo/commit/abc1234",
-                    }
-                ],
-            },
-        )
+        }
+        bus.publish_event("github.pull_request", pr_opened)
+        record_github("github.pull_request", pr_opened, person_id="alice")
+        push_payload = {
+            "action": "push",
+            "ref": "refs/heads/feature",
+            "commits": [
+                {
+                    "id": "abc1234",
+                    "message": "Improve activity history event context\n\nbody",
+                    "url": "https://github.com/owner/repo/commit/abc1234",
+                }
+            ],
+        }
+        bus.publish_event("github.push", push_payload)
+        record_github("github.push", push_payload, person_id="alice")
     with trace_scope(
         "interactive", trace_id="human-trace", person_id="bob", command="human"
     ):
@@ -364,51 +380,45 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         bus.publish_event(
             "command.finished", {"command": "workflows/ticket_driven_workflow"}
         )
-    bus.publish_event(
-        "github.pull_request",
-        {
-            "action": "closed",
-            "pull_request": {
-                "number": 7,
-                "title": "Add activity",
-                "html_url": "https://github.com/owner/repo/pull/7",
-                "merged": True,
+    merged = {
+        "action": "closed",
+        "pull_request": {
+            "number": 7,
+            "title": "Add activity",
+            "html_url": "https://github.com/owner/repo/pull/7",
+            "merged": True,
+        },
+    }
+    bus.publish_event("github.pull_request", merged, source="github")
+    record_github("github.pull_request", merged, source="github")
+    main_push = {
+        "ref": "refs/heads/main",
+        "compare": "https://github.com/owner/repo/compare/a...b",
+        "commits": [
+            {
+                "id": "abc",
+                "message": "Add activity page",
+                "url": "https://github.com/owner/repo/commit/abc",
             },
-        },
-        source="github",
-    )
-    bus.publish_event(
-        "github.push",
-        {
-            "ref": "refs/heads/main",
-            "compare": "https://github.com/owner/repo/compare/a...b",
-            "commits": [
-                {
-                    "id": "abc",
-                    "message": "Add activity page",
-                    "url": "https://github.com/owner/repo/commit/abc",
-                },
-                {
-                    "id": "def",
-                    "message": "Wire activity API",
-                    "url": "https://github.com/owner/repo/commit/def",
-                },
-            ],
-        },
-        source="github",
-    )
-    bus.publish_event(
-        "github.issue",
-        {
-            "action": "closed",
-            "issue": {
-                "number": 133,
-                "title": "Reconnect websocket",
-                "html_url": "https://github.com/owner/repo/issues/133",
+            {
+                "id": "def",
+                "message": "Wire activity API",
+                "url": "https://github.com/owner/repo/commit/def",
             },
+        ],
+    }
+    bus.publish_event("github.push", main_push, source="github")
+    record_github("github.push", main_push, source="github")
+    issue_closed = {
+        "action": "closed",
+        "issue": {
+            "number": 133,
+            "title": "Reconnect websocket",
+            "html_url": "https://github.com/owner/repo/issues/133",
         },
-        source="github",
-    )
+    }
+    bus.publish_event("github.issue", issue_closed, source="github")
+    record_github("github.issue", issue_closed, source="github")
     client = TestClient(app)
 
     with client:
@@ -534,7 +544,6 @@ def test_activity_history_sorts_mixed_timestamp_offsets_by_time(
 def test_memory_events_endpoint_filters_and_returns_body_preview(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
     person = Person(person_id="alice", name="Alice", person_type="human")
     service = MemberMemoryService(person)
     with trace_scope("manual", trace_id="memory-trace", person_id="alice"):
@@ -610,7 +619,6 @@ def test_memory_events_endpoint_filters_and_returns_body_preview(
 def test_trace_detail_merges_memory_events(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
     person = Person(person_id="alice", name="Alice", person_type="human")
     service = MemberMemoryService(person)
     client, bus = _app(tmp_path)

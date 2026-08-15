@@ -1,15 +1,14 @@
 """Config-write coverage for the simple setup service.
 
-These tests extend ``test_setup_service.py`` and focus on the file/env/YAML
+These tests extend ``test_setup_service.py`` and focus on the file/YAML
 write behaviours that the existing suite did not yet exercise:
 
 - project init file set across workspace / home / custom config locations
-- ``.env`` skip / append / overwrite operations for ``write_project``
 - secret blank-update must not clear an existing secret (same-id update)
 - GitHub disabled -> enabled -> disabled project diff
 - repo access https / ssh round trip
-- member add / update / delete env-key add / update / remove
-- member-id rename moves directory + env keys + slack channel mapping
+- member add / update / delete secret-key add / update / remove
+- member-id rename moves directory + secret keys + slack channel mapping
 - ``task_schedules`` / ``routine_commands`` YAML round trip
 - character / relationships / speaking_style round trip
 
@@ -36,6 +35,7 @@ from guildbotics.utils.fileio import (
     load_markdown_with_frontmatter,
     load_yaml_file,
 )
+from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.text_utils import replace_placeholders
 
 # Relative config-dir layout produced by ``write_project`` independent of the
@@ -52,13 +52,9 @@ PROJECT_RELATIVE_FILES = {
 }
 
 
-def _project_input(
-    config_dir: Path, env_file_path: Path, **overrides
-) -> ProjectSetupInput:
+def _project_input(config_dir: Path, **overrides) -> ProjectSetupInput:
     payload: dict = {
         "config_dir": config_dir,
-        "env_file_path": env_file_path,
-        "env_file_option": "overwrite",
         "language": "en",
         "llm_api_type": "openai",
         "cli_agent": "codex",
@@ -68,12 +64,9 @@ def _project_input(
     return ProjectSetupInput(**payload)
 
 
-def _github_project_input(
-    config_dir: Path, env_file_path: Path, **overrides
-) -> ProjectSetupInput:
+def _github_project_input(config_dir: Path, **overrides) -> ProjectSetupInput:
     return _project_input(
         config_dir,
-        env_file_path,
         owner="GuildBotics",
         project_id="1",
         github_project_url="https://github.com/orgs/GuildBotics/projects/1",
@@ -81,13 +74,9 @@ def _github_project_input(
     )
 
 
-def _person_input(
-    config_dir: Path, env_file_path: Path, **overrides
-) -> PersonSetupInput:
+def _person_input(config_dir: Path, **overrides) -> PersonSetupInput:
     payload: dict = {
         "config_dir": config_dir,
-        "env_file_path": env_file_path,
-        "append_env_file": False,
         "person_type": "machine_user",
         "person_id": "alice",
         "person_name": "Alice",
@@ -101,16 +90,8 @@ def _person_input(
     return PersonSetupInput(**payload)
 
 
-def _env_dict(env_file_path: Path) -> dict[str, str]:
-    text = env_file_path.read_text()
-    values: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        key, _, value = line.partition("=")
-        values[key] = value
-    return values
+def _secrets(config_dir: Path) -> dict[str, str]:
+    return KeyringSecretStore(config_dir).values()
 
 
 # --------------------------------------------------------------------------- #
@@ -127,10 +108,8 @@ def test_write_project_file_set_is_location_independent(
     tmp_path: Path, location: str
 ) -> None:
     config_dir = tmp_path / location
-    env_file_path = tmp_path / location / ".env"
-
     result = SimpleProjectSetupService().write_project(
-        _github_project_input(config_dir, env_file_path)
+        _github_project_input(config_dir)
     )
 
     created_paths = {created_file.path for created_file in result.files}
@@ -145,9 +124,7 @@ def test_write_project_file_set_is_location_independent(
     assert cli_agent_files
     for path in cli_agent_files:
         assert path.exists()
-    # The env file lives wherever the caller pointed it, even outside config_dir.
-    assert env_file_path in created_paths
-    assert env_file_path.exists()
+    assert KeyringSecretStore(config_dir).get("OPENAI_API_KEY") == "test-openai-key"
 
 
 @pytest.mark.parametrize("language", ["en", "ja"])
@@ -217,76 +194,17 @@ def test_translate_sample_uses_os_ui_language_without_arguments(
 
 
 # --------------------------------------------------------------------------- #
-# .env skip / append / overwrite
+# intelligence defaults and native policy
 # --------------------------------------------------------------------------- #
-
-
-def test_write_project_env_skip_leaves_existing_file_untouched(
-    tmp_path: Path,
-) -> None:
-    config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-    env_file_path.write_text("PRESERVED=1")
-
-    result = SimpleProjectSetupService().write_project(
-        _github_project_input(config_dir, env_file_path, env_file_option="skip")
-    )
-
-    created_paths = {created_file.path for created_file in result.files}
-    assert env_file_path not in created_paths
-    assert env_file_path.read_text() == "PRESERVED=1"
-
-
-def test_write_project_env_overwrite_replaces_file(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-    env_file_path.write_text("OLD=value\nOPENAI_API_KEY=stale")
-
-    result = SimpleProjectSetupService().write_project(
-        _github_project_input(config_dir, env_file_path, env_file_option="overwrite")
-    )
-
-    actions = {created_file.path: created_file.action for created_file in result.files}
-    assert actions[env_file_path] == "create"
-    text = env_file_path.read_text()
-    assert "OLD=value" not in text
-    assert "OPENAI_API_KEY=test-openai-key" in text
-
-
-def test_write_project_env_append_keeps_existing_lines(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-    env_file_path.write_text("EXISTING=keep")
-
-    result = SimpleProjectSetupService().write_project(
-        _github_project_input(config_dir, env_file_path, env_file_option="append")
-    )
-
-    actions = {created_file.path: created_file.action for created_file in result.files}
-    assert actions[env_file_path] == "append"
-    text = env_file_path.read_text()
-    assert text.startswith("EXISTING=keep")
-    assert "OPENAI_API_KEY=test-openai-key" in text
-
-
-def test_project_input_append_requires_existing_env_file(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-
-    with pytest.raises(ValueError, match="append requires an existing env file"):
-        _github_project_input(config_dir, env_file_path, env_file_option="append")
 
 
 def test_write_project_empty_intelligence_selection_keeps_template_defaults(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-
     SimpleProjectSetupService().write_project(
         _project_input(
             config_dir,
-            env_file_path,
             llm_api_type="",
             cli_agent="",
             provider_api_keys={},
@@ -303,10 +221,9 @@ def test_write_project_creates_policy_from_template_without_overwriting(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
     service = SimpleProjectSetupService()
 
-    service.write_project(_project_input(config_dir, env_file_path))
+    service.write_project(_project_input(config_dir))
     policy_file = config_dir / "intelligences/native_agent_policy.yml"
     template_file = get_template_path() / "intelligences/native_agent_policy.yml"
     assert policy_file.read_text(encoding="utf-8") == template_file.read_text(
@@ -314,7 +231,7 @@ def test_write_project_creates_policy_from_template_without_overwriting(
     )
 
     policy_file.write_text("codex:\n  filesystem_access: host\n", encoding="utf-8")
-    result = service.write_project(_project_input(config_dir, env_file_path))
+    result = service.write_project(_project_input(config_dir))
 
     assert policy_file.read_text(encoding="utf-8") == (
         "codex:\n  filesystem_access: host\n"
@@ -327,22 +244,20 @@ def test_write_project_creates_policy_from_template_without_overwriting(
 # --------------------------------------------------------------------------- #
 
 
-def _seed_project(config_dir: Path, env_file_path: Path) -> None:
-    SimpleProjectSetupService().write_project(_project_input(config_dir, env_file_path))
+def _seed_project(config_dir: Path) -> None:
+    SimpleProjectSetupService().write_project(_project_input(config_dir))
 
 
 def test_update_project_github_disabled_enabled_disabled_diff(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-    _seed_project(config_dir, env_file_path)
+    _seed_project(config_dir)
     service = SimpleProjectSetupService()
     project_file = config_dir / "team/project.yml"
 
     base = {
         "config_dir": config_dir,
-        "env_file_path": env_file_path,
         "language": "en",
         "llm_api_type": "openai",
         "cli_agent": "codex",
@@ -382,14 +297,12 @@ def test_update_project_github_disabled_enabled_disabled_diff(
 
 def test_update_project_enables_github_from_project_url(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-    _seed_project(config_dir, env_file_path)
+    _seed_project(config_dir)
     service = SimpleProjectSetupService()
 
     service.update_project(
         ProjectUpdateInput(
             config_dir=config_dir,
-            env_file_path=env_file_path,
             language="en",
             llm_api_type="openai",
             cli_agent="codex",
@@ -405,9 +318,7 @@ def test_update_project_enables_github_from_project_url(tmp_path: Path) -> None:
     assert code_hosting["owner"] == "GuildBotics"
     # Clone access is always HTTPS now, so no repo_base_url is persisted.
     assert "repo_base_url" not in code_hosting
-    snapshot = service.read_project_config(
-        config_dir=config_dir, env_file_path=env_file_path
-    )
+    snapshot = service.read_project_config(config_dir=config_dir)
     assert snapshot.github_enabled is True
 
 
@@ -415,11 +326,9 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
     SimpleProjectSetupService().write_project(
         _project_input(
             config_dir,
-            env_file_path,
             llm_api_type="gemini",
             cli_agent="claude",
             provider_api_keys={},
@@ -429,7 +338,6 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
     SimpleProjectSetupService().update_project(
         ProjectUpdateInput(
             config_dir=config_dir,
-            env_file_path=env_file_path,
             language="en",
             llm_api_type="",
             cli_agent="",
@@ -450,10 +358,7 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
 
 def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-    SimpleProjectSetupService().write_project(
-        _github_project_input(config_dir, env_file_path)
-    )
+    SimpleProjectSetupService().write_project(_github_project_input(config_dir))
 
     stored = load_yaml_file(config_dir / "team/project.yml")
     assert stored["services"]["ticket_manager"]["lane_map"] == {
@@ -465,11 +370,9 @@ def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
 
 def test_write_project_persists_custom_lane_map(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
     SimpleProjectSetupService().write_project(
         _github_project_input(
             config_dir,
-            env_file_path,
             lane_map=LaneMapInput(ready="Ready", working="Doing", done="Shipped"),
         )
     )
@@ -486,11 +389,9 @@ def test_blank_working_lane_falls_back_to_default(tmp_path: Path) -> None:
     # The YAML layer strips empty strings, so a blank working lane cannot be
     # persisted; it falls back to the default "In Progress".
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
     SimpleProjectSetupService().write_project(
         _github_project_input(
             config_dir,
-            env_file_path,
             lane_map=LaneMapInput(ready="Todo", working="", done="Done"),
         )
     )
@@ -506,19 +407,15 @@ def test_lane_map_rejects_identical_ready_and_done() -> None:
 
 def test_read_project_config_round_trips_lane_map(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
     service = SimpleProjectSetupService()
     service.write_project(
         _github_project_input(
             config_dir,
-            env_file_path,
             lane_map=LaneMapInput(ready="Ready", working="Doing", done="Shipped"),
         )
     )
 
-    snapshot = service.read_project_config(
-        config_dir=config_dir, env_file_path=env_file_path
-    )
+    snapshot = service.read_project_config(config_dir=config_dir)
     assert snapshot.lane_map.ready == "Ready"
     assert snapshot.lane_map.working == "Doing"
     assert snapshot.lane_map.done == "Shipped"
@@ -526,12 +423,10 @@ def test_read_project_config_round_trips_lane_map(tmp_path: Path) -> None:
 
 def test_update_project_github_disabled_writes_no_lane_map(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file_path = tmp_path / ".env"
-    _seed_project(config_dir, env_file_path)
+    _seed_project(config_dir)
     SimpleProjectSetupService().update_project(
         ProjectUpdateInput(
             config_dir=config_dir,
-            env_file_path=env_file_path,
             language="en",
             llm_api_type="openai",
             cli_agent="codex",
@@ -552,28 +447,22 @@ def test_update_person_blank_secret_keeps_existing_value_same_id(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    env_file.write_text("GLOBAL=keep")
     service = SimplePersonSetupService()
 
     service.write_person(
         _person_input(
             config_dir,
-            env_file,
-            append_env_file=True,
             github_access_token="github-token",
             slack_bot_token="xoxb-token",
         )
     )
-    assert _env_dict(env_file)["ALICE_GITHUB_ACCESS_TOKEN"] == "github-token"
+    assert _secrets(config_dir)["ALICE_GITHUB_ACCESS_TOKEN"] == "github-token"
 
     # Update with blank secrets and an unrelated profile change.
     service.update_person(
         PersonUpdateInput(
             config_dir=config_dir,
-            env_file_path=env_file,
             original_person_id="alice",
-            append_env_file=False,
             person_type="machine_user",
             person_id="alice",
             person_name="Alice Updated",
@@ -587,7 +476,7 @@ def test_update_person_blank_secret_keeps_existing_value_same_id(
         )
     )
 
-    env_values = _env_dict(env_file)
+    env_values = _secrets(config_dir)
     assert env_values["ALICE_GITHUB_ACCESS_TOKEN"] == "github-token"
     assert env_values["ALICE_SLACK_BOT_TOKEN"] == "xoxb-token"
 
@@ -599,28 +488,22 @@ def test_update_person_blank_secret_keeps_existing_value_same_id(
 
 def test_member_crud_adds_updates_and_removes_env_keys(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    env_file.write_text("GLOBAL=keep")
     service = SimplePersonSetupService()
 
     # add (append): env key created.
     service.write_person(
         _person_input(
             config_dir,
-            env_file,
-            append_env_file=True,
             github_access_token="token-v1",
         )
     )
-    assert _env_dict(env_file)["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v1"
+    assert _secrets(config_dir)["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v1"
 
     # update (same id): env key value replaced.
     service.update_person(
         PersonUpdateInput(
             config_dir=config_dir,
-            env_file_path=env_file,
             original_person_id="alice",
-            append_env_file=False,
             person_type="machine_user",
             person_id="alice",
             person_name="Alice",
@@ -632,17 +515,13 @@ def test_member_crud_adds_updates_and_removes_env_keys(tmp_path: Path) -> None:
             github_access_token="token-v2",
         )
     )
-    env_values = _env_dict(env_file)
+    env_values = _secrets(config_dir)
     assert env_values["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v2"
-    assert env_values["GLOBAL"] == "keep"
 
-    # delete: env key removed, unrelated key preserved.
-    service.delete_person(
-        config_dir=config_dir, person_id="alice", env_file_path=env_file
-    )
-    env_values = _env_dict(env_file)
+    # delete: secret key removed.
+    service.delete_person(config_dir=config_dir, person_id="alice")
+    env_values = _secrets(config_dir)
     assert "ALICE_GITHUB_ACCESS_TOKEN" not in env_values
-    assert env_values["GLOBAL"] == "keep"
     assert not (config_dir / "team/members/alice/person.yml").exists()
 
 
@@ -658,9 +537,8 @@ def _default_person_id(config_dir: Path) -> str:
 
 def test_set_default_person_writes_and_clears_project_setting(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    _seed_project(config_dir, env_file)
-    SimplePersonSetupService().write_person(_person_input(config_dir, env_file))
+    _seed_project(config_dir)
+    SimplePersonSetupService().write_person(_person_input(config_dir))
     service = SimpleProjectSetupService()
 
     result = service.set_default_person(config_dir=config_dir, person_id="alice")
@@ -679,9 +557,8 @@ def test_set_default_person_writes_and_clears_project_setting(tmp_path: Path) ->
 
 def test_set_default_person_reports_no_change_when_already_set(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    _seed_project(config_dir, env_file)
-    SimplePersonSetupService().write_person(_person_input(config_dir, env_file))
+    _seed_project(config_dir)
+    SimplePersonSetupService().write_person(_person_input(config_dir))
     service = SimpleProjectSetupService()
     service.set_default_person(config_dir=config_dir, person_id="alice")
 
@@ -692,8 +569,7 @@ def test_set_default_person_reports_no_change_when_already_set(tmp_path: Path) -
 
 def test_set_default_person_rejects_unknown_member(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    _seed_project(config_dir, env_file)
+    _seed_project(config_dir)
 
     with pytest.raises(Exception) as exc_info:
         SimpleProjectSetupService().set_default_person(
@@ -714,9 +590,8 @@ def test_set_default_person_rejects_malformed_ids(
     # A person ID is also a directory name, so traversal and separators are
     # rejected before the file lookup can resolve them to a real member.
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    _seed_project(config_dir, env_file)
-    SimplePersonSetupService().write_person(_person_input(config_dir, env_file))
+    _seed_project(config_dir)
+    SimplePersonSetupService().write_person(_person_input(config_dir))
 
     with pytest.raises(Exception) as exc_info:
         SimpleProjectSetupService().set_default_person(
@@ -729,12 +604,10 @@ def test_set_default_person_rejects_malformed_ids(
 
 def test_set_default_person_rejects_human_member(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    _seed_project(config_dir, env_file)
+    _seed_project(config_dir)
     SimplePersonSetupService().write_person(
         _person_input(
             config_dir,
-            env_file,
             person_id="hana",
             person_type="human",
             person_name="Hana",
@@ -756,10 +629,9 @@ def test_set_default_person_rejects_human_member(tmp_path: Path) -> None:
 
 def test_default_person_follows_member_rename(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    _seed_project(config_dir, env_file)
+    _seed_project(config_dir)
     service = SimplePersonSetupService()
-    service.write_person(_person_input(config_dir, env_file, person_id="old-id"))
+    service.write_person(_person_input(config_dir, person_id="old-id"))
     SimpleProjectSetupService().set_default_person(
         config_dir=config_dir, person_id="old-id"
     )
@@ -767,9 +639,7 @@ def test_default_person_follows_member_rename(tmp_path: Path) -> None:
     service.update_person(
         PersonUpdateInput(
             config_dir=config_dir,
-            env_file_path=env_file,
             original_person_id="old-id",
-            append_env_file=False,
             person_type="machine_user",
             person_id="new-id",
             person_name="Alice",
@@ -786,14 +656,12 @@ def test_default_person_follows_member_rename(tmp_path: Path) -> None:
 
 def test_default_person_is_cleared_when_the_member_is_deleted(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    _seed_project(config_dir, env_file)
+    _seed_project(config_dir)
     service = SimplePersonSetupService()
-    service.write_person(_person_input(config_dir, env_file))
+    service.write_person(_person_input(config_dir))
     service.write_person(
         _person_input(
             config_dir,
-            env_file,
             person_id="bob",
             github_username="bob",
             git_email="2+bob@users.noreply.github.com",
@@ -803,14 +671,10 @@ def test_default_person_is_cleared_when_the_member_is_deleted(tmp_path: Path) ->
         config_dir=config_dir, person_id="bob"
     )
 
-    service.delete_person(
-        config_dir=config_dir, person_id="alice", env_file_path=env_file
-    )
+    service.delete_person(config_dir=config_dir, person_id="alice")
     assert _default_person_id(config_dir) == "bob"
 
-    service.delete_person(
-        config_dir=config_dir, person_id="bob", env_file_path=env_file
-    )
+    service.delete_person(config_dir=config_dir, person_id="bob")
     assert _default_person_id(config_dir) == ""
 
 
@@ -823,15 +687,11 @@ def test_member_rename_moves_directory_env_keys_and_slack_mapping(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
-    env_file.write_text("GLOBAL=keep")
     service = SimplePersonSetupService()
 
     service.write_person(
         _person_input(
             config_dir,
-            env_file,
-            append_env_file=True,
             person_id="old-id",
             github_username="old-id",
             github_access_token="token-keep",
@@ -847,9 +707,7 @@ def test_member_rename_moves_directory_env_keys_and_slack_mapping(
     service.update_person(
         PersonUpdateInput(
             config_dir=config_dir,
-            env_file_path=env_file,
             original_person_id="old-id",
-            append_env_file=False,
             person_type="machine_user",
             person_id="new-id",
             person_name="Alice",
@@ -872,7 +730,7 @@ def test_member_rename_moves_directory_env_keys_and_slack_mapping(
     # Slack channel ownership mapping follows the new id.
     assert new_person["message_channels"][0]["used_by"] == ["new-id"]
 
-    env_values = _env_dict(env_file)
+    env_values = _secrets(config_dir)
     assert "OLD_ID_GITHUB_ACCESS_TOKEN" not in env_values
     assert "OLD_ID_SLACK_BOT_TOKEN" not in env_values
     assert env_values["NEW_ID_GITHUB_ACCESS_TOKEN"] == "token-keep"
@@ -881,14 +739,12 @@ def test_member_rename_moves_directory_env_keys_and_slack_mapping(
 
 def test_member_rename_into_existing_id_is_rejected(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
     service = SimplePersonSetupService()
 
-    service.write_person(_person_input(config_dir, env_file, person_id="alice"))
+    service.write_person(_person_input(config_dir, person_id="alice"))
     service.write_person(
         _person_input(
             config_dir,
-            env_file,
             person_id="bob",
             github_username="bob",
             git_email="2+bob@users.noreply.github.com",
@@ -899,9 +755,7 @@ def test_member_rename_into_existing_id_is_rejected(tmp_path: Path) -> None:
         service.update_person(
             PersonUpdateInput(
                 config_dir=config_dir,
-                env_file_path=env_file,
                 original_person_id="alice",
-                append_env_file=False,
                 person_type="machine_user",
                 person_id="bob",
                 person_name="Alice",
@@ -925,7 +779,6 @@ def test_member_rename_into_existing_id_is_rejected(tmp_path: Path) -> None:
 
 def test_person_routines_and_schedules_yaml_round_trip(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
     service = SimplePersonSetupService()
 
     routine_commands = [
@@ -940,7 +793,6 @@ def test_person_routines_and_schedules_yaml_round_trip(tmp_path: Path) -> None:
     service.write_person(
         _person_input(
             config_dir,
-            env_file,
             routine_commands=routine_commands,
             task_schedules=task_schedules,
         )
@@ -952,9 +804,7 @@ def test_person_routines_and_schedules_yaml_round_trip(tmp_path: Path) -> None:
     assert stored["task_schedules"] == task_schedules
 
     # Snapshot round trip.
-    snapshot = service.read_person_config(
-        config_dir=config_dir, person_id="alice", env_file_path=env_file
-    )
+    snapshot = service.read_person_config(config_dir=config_dir, person_id="alice")
     assert snapshot.routine_commands == routine_commands
     assert [s.model_dump() for s in snapshot.task_schedules] == task_schedules
 
@@ -968,7 +818,6 @@ def test_person_character_relationships_speaking_style_round_trip(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
-    env_file = tmp_path / ".env"
     service = SimplePersonSetupService()
 
     character = {
@@ -983,7 +832,6 @@ def test_person_character_relationships_speaking_style_round_trip(
     service.write_person(
         _person_input(
             config_dir,
-            env_file,
             speaking_style="Concise and direct.",
             relationships="Reports to {pm}; mentors juniors.",
             character=character,
@@ -995,9 +843,7 @@ def test_person_character_relationships_speaking_style_round_trip(
     assert stored["relationships"] == "Reports to {pm}; mentors juniors."
     assert stored["profile"]["character"] == character
 
-    snapshot = service.read_person_config(
-        config_dir=config_dir, person_id="alice", env_file_path=env_file
-    )
+    snapshot = service.read_person_config(config_dir=config_dir, person_id="alice")
     assert snapshot.speaking_style == "Concise and direct."
     assert snapshot.relationships == "Reports to {pm}; mentors juniors."
     assert snapshot.character == character

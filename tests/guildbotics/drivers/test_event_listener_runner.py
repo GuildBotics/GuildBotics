@@ -249,8 +249,7 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
     )
 
     # The workflow uses the default RunStore / state store, both keyed off
-    # GUILDBOTICS_DATA_DIR, so point them at a temp dir instead of user storage.
-    monkeypatch.setenv("GUILDBOTICS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
 
     chat_service = _WorkflowChatService()
     team = _make_team(language="en")

@@ -7,7 +7,6 @@ import os
 import shutil
 import tempfile
 from contextlib import suppress
-from pathlib import Path
 from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
@@ -25,10 +24,8 @@ from guildbotics.runtime.person_lease import (
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
 )
-from guildbotics.utils.env_loader import GUILDBOTICS_ENV_FILE
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.processes import terminate_posix_process_group
-from guildbotics.utils.workspace_state import GUILDBOTICS_CONFIG_DIR
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
 _WINDOWS = os.name == "nt"
@@ -60,18 +57,14 @@ _STRIPPED_PARENT_ENV = (
 STREAM_READ_LIMIT = 10 * 1024 * 1024
 
 
-def isolated_agent_environment(cwd: Path) -> tuple[dict[str, str], str]:
-    """Return an AI CLI environment with inherited credentials and grants removed."""
+def isolated_agent_environment() -> tuple[dict[str, str], str]:
+    """Return an AI CLI environment with inherited credentials and grants removed.
+
+    The workspace is identified only by explicit environment variables the
+    caller already holds; the agent cwd is never used to guess one.
+    """
     env = os.environ.copy()
     env["PATH"] = get_cli_agent_search_path(env.get("PATH"))
-    if not env.get(GUILDBOTICS_CONFIG_DIR, "").strip():
-        config_dir = cwd / ".guildbotics" / "config"
-        if config_dir.exists():
-            env[GUILDBOTICS_CONFIG_DIR] = str(config_dir.resolve())
-    if not env.get(GUILDBOTICS_ENV_FILE, "").strip():
-        env_file = cwd / ".env"
-        if env_file.is_file():
-            env[GUILDBOTICS_ENV_FILE] = str(env_file.resolve())
     gh_config_dir = tempfile.mkdtemp(prefix="guildbotics-gh-config-")
     for key in _STRIPPED_PARENT_ENV:
         env.pop(key, None)
@@ -89,7 +82,7 @@ def member_command_environment(context: AgentExecutionContext) -> dict[str, str]
     """Build the minimal verified-execution metadata inherited by child member CLI."""
     run_key = RUN_ENV if context.conversation_key.work_kind == "chat" else TASK_RUN_ENV
     env = {
-        GUILDBOTICS_DATA_DIR: str(context.workspace_data_root),
+        GUILDBOTICS_WORKSPACE_ROOT: str(context.workspace_data_root),
         run_key: context.run_id,
     }
     if context.participant_labels:

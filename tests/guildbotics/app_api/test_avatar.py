@@ -11,6 +11,7 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import ConfigStatus
 from guildbotics.editions.simple.setup_service import PersonConfigSnapshot
+from guildbotics.utils.secret_store import KeyringSecretStore
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
@@ -19,12 +20,11 @@ class RuntimeStub:
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(
             cwd=tmp_path,
-            env_file=tmp_path / ".env",
-            env_file_exists=True,
+            workspace=tmp_path,
             config_dir=tmp_path / ".guildbotics/config",
             project_file=tmp_path / ".guildbotics/config/team/project.yml",
             project_file_exists=True,
-            storage_dir=tmp_path / "home/.guildbotics/data",
+            storage_dir=tmp_path,
         )
 
     def stop_scheduler(self, *, force: bool = False) -> None:
@@ -205,7 +205,6 @@ def test_import_avatar_from_github_error_message_is_stable(
     assert "secret internal detail" not in payload["message"]
 
 
-@patch("guildbotics.app_api.api.dotenv_values")
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
 @patch(
     "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
@@ -213,7 +212,6 @@ def test_import_avatar_from_github_error_message_is_stable(
 def test_import_avatar_from_slack(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
-    mock_dotenv: MagicMock,
     client: TestClient,
     test_workspace: Path,
 ) -> None:
@@ -228,10 +226,9 @@ def test_import_avatar_from_slack(
         slack_user_id="U12345",
     )
 
-    (test_workspace / ".env").touch()
-
-    # Mock environment file values
-    mock_dotenv.return_value = {"ALICE_SLACK_BOT_TOKEN": "xoxb-alice-token"}
+    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
+        "ALICE_SLACK_BOT_TOKEN", "xoxb-alice-token"
+    )
 
     # Mock HTTP response for user info and image download
     mock_client = MagicMock()
@@ -269,7 +266,6 @@ def test_import_avatar_from_slack(
     assert saved_avatar.read_bytes() == b"slack image binary"
 
 
-@patch("guildbotics.app_api.api.dotenv_values")
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
 @patch(
     "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
@@ -277,7 +273,6 @@ def test_import_avatar_from_slack(
 def test_import_avatar_from_slack_missing_scope(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
-    mock_dotenv: MagicMock,
     client: TestClient,
     test_workspace: Path,
 ) -> None:
@@ -291,8 +286,9 @@ def test_import_avatar_from_slack_missing_scope(
         slack_user_id="U12345",
     )
 
-    (test_workspace / ".env").touch()
-    mock_dotenv.return_value = {"ALICE_SLACK_BOT_TOKEN": "xoxb-alice-token"}
+    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
+        "ALICE_SLACK_BOT_TOKEN", "xoxb-alice-token"
+    )
 
     mock_client = MagicMock()
     mock_async_client_cls.return_value.__aenter__.return_value = mock_client
@@ -307,7 +303,6 @@ def test_import_avatar_from_slack_missing_scope(
     assert response.json()["code"] == "slack_missing_scope"
 
 
-@patch("guildbotics.app_api.api.dotenv_values")
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
 @patch(
     "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
@@ -315,7 +310,6 @@ def test_import_avatar_from_slack_missing_scope(
 def test_import_avatar_from_slack_agent_no_user_id(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
-    mock_dotenv: MagicMock,
     client: TestClient,
     test_workspace: Path,
 ) -> None:
@@ -333,10 +327,9 @@ def test_import_avatar_from_slack_agent_no_user_id(
     (test_workspace / ".guildbotics/config/team/members/bob").mkdir(
         parents=True, exist_ok=True
     )
-    (test_workspace / ".env").touch()
-
-    # Bob's bot token
-    mock_dotenv.return_value = {"BOB_SLACK_BOT_TOKEN": "xoxb-bob-token"}
+    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
+        "BOB_SLACK_BOT_TOKEN", "xoxb-bob-token"
+    )
 
     mock_client = MagicMock()
     mock_async_client_cls.return_value.__aenter__.return_value = mock_client
@@ -389,7 +382,6 @@ def test_import_avatar_from_slack_agent_no_user_id(
     assert saved_avatar.read_bytes() == b"bob image binary"
 
 
-@patch("guildbotics.app_api.api.dotenv_values")
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
 @patch(
     "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
@@ -397,7 +389,6 @@ def test_import_avatar_from_slack_agent_no_user_id(
 def test_import_avatar_from_slack_human_token_fallback(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
-    mock_dotenv: MagicMock,
     client: TestClient,
     test_workspace: Path,
 ) -> None:
@@ -412,10 +403,9 @@ def test_import_avatar_from_slack_human_token_fallback(
         git_email="",
     )
 
-    (test_workspace / ".env").touch()
-
-    # No token for Alice, but has a token for Bob in the workspace
-    mock_dotenv.return_value = {"BOB_SLACK_BOT_TOKEN": "xoxb-bob-token"}
+    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
+        "BOB_SLACK_BOT_TOKEN", "xoxb-bob-token"
+    )
 
     mock_client = MagicMock()
     mock_async_client_cls.return_value.__aenter__.return_value = mock_client
@@ -449,3 +439,54 @@ def test_import_avatar_from_slack_human_token_fallback(
     saved_avatar = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
     assert saved_avatar.exists()
     assert saved_avatar.read_bytes() == b"alice image binary"
+
+
+@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
+@patch(
+    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
+)
+def test_import_avatar_from_slack_env_var_wins_over_keychain(
+    mock_read_config: MagicMock,
+    mock_async_client_cls: MagicMock,
+    client: TestClient,
+    test_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real environment variables take precedence over OS-keychain values."""
+    mock_read_config.return_value = PersonConfigSnapshot(
+        person_id="alice",
+        person_name="Alice",
+        person_type="human",
+        is_active=True,
+        github_username="alice-git",
+        git_email="alice@example.com",
+        slack_user_id="U12345",
+    )
+    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
+        "ALICE_SLACK_BOT_TOKEN", "xoxb-keychain-token"
+    )
+    monkeypatch.setenv("ALICE_SLACK_BOT_TOKEN", "xoxb-env-token")
+
+    mock_client = MagicMock()
+    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
+    mock_user_response = MagicMock()
+    mock_user_response.json.return_value = {
+        "ok": True,
+        "user": {"profile": {"image_512": "https://slack.com/avatar/alice.png"}},
+    }
+    mock_user_response.raise_for_status = MagicMock()
+    mock_image_response = MagicMock()
+    mock_image_response.headers = {"Content-Type": "image/png"}
+    mock_image_response.content = b"slack image binary"
+    mock_image_response.raise_for_status = MagicMock()
+    mock_client.get = AsyncMock(side_effect=[mock_user_response, mock_image_response])
+
+    response = client.post("/config/members/alice/avatar/slack", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    mock_client.get.assert_any_call(
+        "https://slack.com/api/users.info",
+        params={"user": "U12345"},
+        headers={"Authorization": "Bearer xoxb-env-token"},
+        timeout=10.0,
+    )

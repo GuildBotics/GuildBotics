@@ -27,12 +27,11 @@ class RuntimeStub:
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(
             cwd=tmp_path,
-            env_file=tmp_path / ".env",
-            env_file_exists=False,
+            workspace=tmp_path,
             config_dir=tmp_path / ".guildbotics/config",
             project_file=tmp_path / ".guildbotics/config/team/project.yml",
             project_file_exists=False,
-            storage_dir=tmp_path / ".guildbotics/data",
+            storage_dir=tmp_path,
         )
 
     def get_config_status(self) -> ConfigStatus:
@@ -198,7 +197,7 @@ def test_verify_checks_the_stored_tokens_of_the_member_being_edited(
     """Empty fields mean "keep the stored token", so they are not missing."""
     seen: dict = {}
 
-    def read_slack_tokens(self, *, config_dir, person_id, env_file_path):
+    def read_slack_tokens(self, *, config_dir, person_id):
         seen["person_id"] = person_id
         return (BOT_TOKEN, APP_TOKEN)
 

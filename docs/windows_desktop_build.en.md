@@ -89,6 +89,6 @@ Native `.sh` custom commands still require Bash and are not supported by the nat
 
 ## Moving an existing setup
 
-Use `guildbotics secrets export` on the source machine and transfer the result through a secure channel, then run `guildbotics secrets import` on Windows. Copy the workspace directory when configuration and memory documents are needed; those documents are under `<workspace>/.guildbotics/data/documents`.
+Use `guildbotics secrets export` on the source machine and transfer the result through a secure channel, then run `guildbotics secrets import` on Windows. Copy the workspace directory when configuration and memory documents are needed; those documents are under `<workspace>/.guildbotics/state/documents`.
 
 Windows builds predating the UTF-8 credential adapter used Python keyring's UTF-16 blob format. Those development credentials are in a different Credential Manager namespace and are not read by current builds; import the export file again after upgrading.

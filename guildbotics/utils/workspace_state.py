@@ -6,17 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from guildbotics.utils.env_loader import (
-    GUILDBOTICS_ENV_FILE,
-    resolve_guildbotics_env_file,
-)
 from guildbotics.utils.fileio import (
-    GUILDBOTICS_DATA_DIR,
-    apply_workspace_data_root,
+    GUILDBOTICS_CONFIG_DIR,
+    GUILDBOTICS_WORKSPACE_ROOT,
+    apply_workspace_root,
     get_machine_state_path,
+    get_workspace_root,
+    workspace_root_from_config_dir,
 )
 
-GUILDBOTICS_CONFIG_DIR = "GUILDBOTICS_CONFIG_DIR"
 ACTIVE_WORKSPACE_FILE = "active-workspace.json"
 
 
@@ -24,13 +22,11 @@ ACTIVE_WORKSPACE_FILE = "active-workspace.json"
 class WorkspaceState:
     workspace: Path
     config_dir: Path
-    env_file: Path
 
     def to_dict(self) -> dict[str, str]:
         return {
             "workspace": str(self.workspace),
             "config_dir": str(self.config_dir),
-            "env_file": str(self.env_file),
         }
 
 
@@ -43,7 +39,6 @@ def workspace_state(workspace: Path) -> WorkspaceState:
     return WorkspaceState(
         workspace=resolved,
         config_dir=resolved / ".guildbotics" / "config",
-        env_file=resolved / ".env",
     )
 
 
@@ -81,65 +76,43 @@ def read_active_workspace() -> WorkspaceState | None:
     return state
 
 
-def apply_workspace_environment(
-    state: WorkspaceState, *, inherited_data_dir: str | None = None
-) -> None:
-    os.environ[GUILDBOTICS_CONFIG_DIR] = str(state.config_dir)
-    if state.env_file.is_file():
-        os.environ[GUILDBOTICS_ENV_FILE] = str(state.env_file)
-    else:
-        os.environ.pop(GUILDBOTICS_ENV_FILE, None)
-    apply_workspace_data_root(
-        state.workspace,
-        state.env_file,
-        inherited_data_dir=inherited_data_dir,
-    )
+def apply_workspace_environment(state: WorkspaceState) -> None:
+    apply_workspace_root(state.workspace)
 
 
-def has_primary_config_source(cwd: Path | None = None) -> bool:
-    if os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip():
+def has_explicit_workspace_source() -> bool:
+    """True when a workspace is already selected by an explicit env var."""
+    if os.getenv(GUILDBOTICS_WORKSPACE_ROOT, "").strip():
         return True
-    if cwd is None:
-        cwd = Path.cwd()
-    return (cwd / ".guildbotics" / "config").exists()
+    config_dir = os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip()
+    return bool(config_dir and workspace_root_from_config_dir(Path(config_dir)))
 
 
-def apply_workspace_for_cli(
-    workspace: Path | None = None,
-    *,
-    cwd: Path | None = None,
-    inherited_data_dir: str | None = None,
-) -> WorkspaceState | None:
-    if inherited_data_dir is None:
-        inherited_data_dir = os.getenv(GUILDBOTICS_DATA_DIR, "").strip() or None
+def apply_workspace_for_cli(workspace: Path | None = None) -> WorkspaceState | None:
+    """Select the workspace for a CLI command.
+
+    Only ``--workspace``, an explicit environment variable, or the persisted
+    active workspace are accepted. The process cwd is never treated as a
+    workspace root.
+    """
     if workspace is not None:
         state = workspace_state(workspace)
         if not state.workspace.is_dir():
             raise NotADirectoryError(str(state.workspace))
-        apply_workspace_environment(state, inherited_data_dir=inherited_data_dir)
+        apply_workspace_environment(state)
         return state
 
-    if has_primary_config_source(cwd):
-        root = cwd if cwd is not None else Path.cwd()
-        env_file = resolve_guildbotics_env_file(root, prefer_env_file=True)
-        apply_workspace_data_root(
-            root,
-            env_file,
-            inherited_data_dir=inherited_data_dir,
-        )
+    if has_explicit_workspace_source():
+        apply_workspace_root(get_workspace_root())
         return None
 
     active_state = read_active_workspace()
-    if active_state is not None:
-        apply_workspace_environment(active_state, inherited_data_dir=inherited_data_dir)
-    else:
-        root = cwd if cwd is not None else Path.cwd()
-        env_file = resolve_guildbotics_env_file(root, prefer_env_file=True)
-        apply_workspace_data_root(
-            root,
-            env_file,
-            inherited_data_dir=inherited_data_dir,
+    if active_state is None:
+        raise WorkspaceUnresolvedError(
+            "No GuildBotics workspace is selected. Use --workspace, "
+            "`guildbotics workspace use <path>`, or set GUILDBOTICS_WORKSPACE_ROOT."
         )
+    apply_workspace_environment(active_state)
     return active_state
 
 
@@ -158,6 +131,8 @@ def workspace_status_payload(state: WorkspaceState | None = None) -> dict[str, A
         "workspace_exists": state.workspace.is_dir(),
         "config_dir": str(state.config_dir),
         "config_dir_exists": state.config_dir.is_dir(),
-        "env_file": str(state.env_file),
-        "env_file_exists": state.env_file.is_file(),
     }
+
+
+class WorkspaceUnresolvedError(RuntimeError):
+    """Raised when a CLI command cannot resolve a workspace."""

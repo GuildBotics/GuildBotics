@@ -15,7 +15,6 @@ from click.testing import CliRunner
 
 from guildbotics import cli as cli_module
 from guildbotics.cli import main
-from guildbotics.utils.fileio import GUILDBOTICS_DATA_DIR
 
 
 def _iter_commands(
@@ -48,7 +47,6 @@ def test_every_visible_command_and_option_has_help() -> None:
 def test_help_shows_defaults_required_and_repeatable(monkeypatch, tmp_path) -> None:
     """The root show_default setting and the option help conventions must
     surface in real --help output, not only in the generated reference."""
-    monkeypatch.setenv(GUILDBOTICS_DATA_DIR, str(tmp_path / "data"))
     runner = CliRunner()
 
     with runner.isolated_filesystem(temp_dir=tmp_path):

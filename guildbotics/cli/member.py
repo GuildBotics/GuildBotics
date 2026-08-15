@@ -61,7 +61,7 @@ from guildbotics.observability.interactive_sessions import (
     interactive_thread_key,
 )
 from guildbotics.runtime.member_context import resolve_member_context
-from guildbotics.utils.fileio import get_workspace_data_root
+from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
 
 WorkspaceMode = Literal["member", "current"]
@@ -162,11 +162,14 @@ _human_approved_option = click.option(
 def member(ctx: click.Context, workspace_dir: Path | None) -> None:
     """Operate as a configured GuildBotics member."""
     applied_workspace = apply_workspace_option(workspace_dir)
-    ctx.obj = {
-        "workspace": str(
-            (applied_workspace.workspace if applied_workspace else Path.cwd()).resolve()
-        )
-    }
+    workspace = (
+        applied_workspace.workspace
+        if applied_workspace is not None
+        # None means an explicit env var already selected the workspace;
+        # resolve it rather than falling back to the caller's cwd.
+        else get_workspace_root()
+    )
+    ctx.obj = {"workspace": str(workspace.resolve())}
 
 
 @member.command(name="context")
@@ -259,7 +262,7 @@ async def _agent_conversation_reset(
         work_kind=work_kind,
         work_identity=work_identity,
     )
-    store = ConversationStore(get_workspace_data_root())
+    store = ConversationStore(get_workspace_root())
     record = store.resolve(key, ResumePolicy.RESET)
     store.save(record)
     return {

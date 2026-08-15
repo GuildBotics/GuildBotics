@@ -28,14 +28,14 @@ export function memberAvatarUrl(personId: string, cacheBust?: number | string): 
 
 export type ConfigStatus = {
   cwd: string;
-  env_file: string;
-  env_file_exists: boolean;
-  config_dir: string;
-  project_file: string;
+  workspace: string | null;
+  config_dir: string | null;
+  project_file: string | null;
   project_file_exists: boolean;
-  storage_dir: string;
+  storage_dir: string | null;
   machine_state_dir?: string | null;
-  workspace_data_dir?: string | null;
+  workspace_state_dir?: string | null;
+  workspace_local_dir?: string | null;
 };
 
 export type WorkspaceChangeRequest = {
@@ -129,8 +129,6 @@ export type SchedulerStopRequest = {
 export type TranscriptSettingsStatus = {
   detail: "standard" | "full";
   retention_days: number;
-  env_file: string;
-  env_file_exists: boolean;
   sessions_dir: string;
   total_size_bytes: number;
   index_size_bytes: number;
@@ -148,8 +146,6 @@ export type RuntimeDebugStatus = {
   enabled: boolean;
   log_level: string;
   agno_debug: boolean;
-  env_file: string;
-  env_file_exists: boolean;
 };
 
 export type RuntimeDebugUpdateRequest = {
@@ -591,8 +587,6 @@ export type ProjectStatusOptionsRequest = {
 
 export type ProjectSetupRequest = {
   config_dir: string;
-  env_file_path: string;
-  env_file_option: "skip" | "append" | "overwrite";
   language: "en" | "ja";
   description?: string;
   owner?: string;
@@ -601,13 +595,11 @@ export type ProjectSetupRequest = {
   lane_map?: LaneMap;
   llm_api_type: string;
   cli_agent: string;
-  // provider id -> new API key value to write to the .env
   provider_api_keys?: Record<string, string>;
 };
 
 export type ProjectConfig = {
   config_dir: string;
-  env_file_path: string;
   language: "en" | "ja";
   description: string;
   llm_api_type: string;
@@ -615,13 +607,11 @@ export type ProjectConfig = {
   github_enabled: boolean;
   github_project_url: string;
   lane_map: LaneMap;
-  // provider id -> whether its API key is configured in the .env
   provider_api_keys: Record<string, boolean>;
 };
 
 export type ProjectConfigUpdateRequest = {
   config_dir: string;
-  env_file_path: string;
   language: "en" | "ja";
   description?: string;
   llm_api_type: string;
@@ -631,7 +621,6 @@ export type ProjectConfigUpdateRequest = {
   project_id?: string;
   github_project_url?: string;
   lane_map?: LaneMap;
-  // provider id -> new API key value to write to the .env
   provider_api_keys?: Record<string, string>;
 };
 
@@ -641,8 +630,6 @@ export type ChatParticipationPolicy = "strict" | "social" | "muted";
 
 type MemberWriteRequestBase = {
   config_dir: string;
-  env_file_path: string;
-  append_env_file?: boolean;
   person_type: MemberPersonType;
   github_account_type: MemberGitHubAccountType;
   person_id: string;
@@ -759,10 +746,8 @@ export type MemberConfig = {
   character: Record<string, unknown>;
   github_installation_id: number | null;
   github_app_id: number | null;
-  github_private_key_path: string;
   has_github_installation_id: boolean;
   has_github_app_id: boolean;
-  has_github_private_key_path: boolean;
   has_github_private_key: boolean;
   has_github_access_token: boolean;
   slack_user_id?: string;
@@ -786,7 +771,6 @@ export type MemberConfigUpdateRequest = MemberWriteRequestBase & {
 
 export type MemberDeleteRequest = {
   config_dir: string;
-  env_file_path: string;
 };
 
 export type RuntimeLog = Correlation & {

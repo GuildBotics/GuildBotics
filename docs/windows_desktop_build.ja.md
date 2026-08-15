@@ -89,6 +89,6 @@ native Windows command path では `.sh` custom command をサポートしませ
 
 ## 既存環境からの移行
 
-移行元で `guildbotics secrets export` を実行し、安全な経路で出力を移した後、Windows で `guildbotics secrets import` を実行します。設定と memory document が必要なら workspace directory をコピーしてください。memory document は `<workspace>/.guildbotics/data/documents` にあります。
+移行元で `guildbotics secrets export` を実行し、安全な経路で出力を移した後、Windows で `guildbotics secrets import` を実行します。設定と memory document が必要なら workspace directory をコピーしてください。memory document は `<workspace>/.guildbotics/state/documents` にあります。
 
 UTF-8 credential adapter 導入前の Windows build は、Python keyring の UTF-16 blob 形式を使っていました。開発中に保存した旧 credential は現在の build とは別の資格情報マネージャー名前空間にあり、読み込まれません。upgrade 後に export file をもう一度 import してください。

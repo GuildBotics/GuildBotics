@@ -88,13 +88,14 @@ def test_nested_delegation_requires_exact_locked_metadata(tmp_path) -> None:
     env = delegation_environment("run-1")
 
     assert (
-        validate_delegation("aiko", data_root=tmp_path, environ=env) == lease.metadata
+        validate_delegation("aiko", workspace_root=tmp_path, environ=env)
+        == lease.metadata
     )
 
     forged = dict(env)
     forged[DELEGATION_ID_ENV] = "forged"
-    assert validate_delegation("aiko", data_root=tmp_path, environ=forged) is None
-    assert validate_delegation("yuki", data_root=tmp_path, environ=env) is None
+    assert validate_delegation("aiko", workspace_root=tmp_path, environ=forged) is None
+    assert validate_delegation("yuki", workspace_root=tmp_path, environ=env) is None
     assert env == {
         LEASE_ID_ENV: lease.metadata.lease_id,
         DELEGATION_ID_ENV: lease.metadata.delegation_id,
@@ -103,7 +104,7 @@ def test_nested_delegation_requires_exact_locked_metadata(tmp_path) -> None:
     }
 
     lease.release()
-    assert validate_delegation("aiko", data_root=tmp_path, environ=env) is None
+    assert validate_delegation("aiko", workspace_root=tmp_path, environ=env) is None
 
 
 def test_completed_delegation_can_bind_a_later_native_run(tmp_path) -> None:
@@ -117,8 +118,10 @@ def test_completed_delegation_can_bind_a_later_native_run(tmp_path) -> None:
     assert first[LEASE_RUN_ENV] == "run-1"
     assert second[LEASE_RUN_ENV] == "run-2"
     assert first[LEASE_ID_ENV] == second[LEASE_ID_ENV]
-    assert validate_delegation("aiko", data_root=tmp_path, environ=first) is None
-    assert validate_delegation("aiko", data_root=tmp_path, environ=second) is not None
+    assert validate_delegation("aiko", workspace_root=tmp_path, environ=first) is None
+    assert (
+        validate_delegation("aiko", workspace_root=tmp_path, environ=second) is not None
+    )
     lease.release()
 
 

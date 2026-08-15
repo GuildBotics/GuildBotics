@@ -696,7 +696,7 @@ class CliAgentBrain(Brain):
             PersonLeaseUnavailableError,
             current_person_lease,
         )
-        from guildbotics.utils.fileio import get_workspace_data_root, get_workspace_root
+        from guildbotics.utils.fileio import get_workspace_root
 
         configured = _agent_execution_context(kwargs)
         adapter_name = self.executable_info.adapter
@@ -706,7 +706,7 @@ class CliAgentBrain(Brain):
             or uuid4().hex
         )
         data_root = Path(
-            str(configured.get("workspace_data_root") or get_workspace_data_root())
+            str(configured.get("workspace_data_root") or get_workspace_root())
         )
         work_kind = str(configured.get("work_kind") or "manual")
         work_identity = str(configured.get("work_identity") or run_id)

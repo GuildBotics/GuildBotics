@@ -89,6 +89,11 @@ class PendingChatEvent:
     wake_cursor: str = ""
 
 
+class ThreadContextUnavailableError(RuntimeError):
+    """Raised when the provider cannot serve the thread context a chat event
+    needs; the event must stay pending instead of being retried into failure."""
+
+
 class ConversationStateStore(ABC):
     """Persistent store for chat polling cursors and per-thread state."""
 

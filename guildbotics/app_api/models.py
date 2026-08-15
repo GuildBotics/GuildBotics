@@ -37,14 +37,14 @@ class HealthResponse(BaseModel):
 
 class ConfigStatus(BaseModel):
     cwd: Path
-    env_file: Path
-    env_file_exists: bool
-    config_dir: Path
-    project_file: Path
+    workspace: Path | None
+    config_dir: Path | None
+    project_file: Path | None
     project_file_exists: bool
-    storage_dir: Path
+    storage_dir: Path | None
     machine_state_dir: Path | None = None
-    workspace_data_dir: Path | None = None
+    workspace_state_dir: Path | None = None
+    workspace_local_dir: Path | None = None
 
 
 class WorkspaceChangeRequest(BaseModel):
@@ -76,7 +76,6 @@ class TeamSummary(BaseModel):
 
 class MemberDeleteRequest(BaseModel):
     config_dir: Path
-    env_file_path: Path
 
 
 class CommandArgumentOption(BaseModel):
@@ -604,8 +603,6 @@ class RuntimeDebugStatus(BaseModel):
     enabled: bool
     log_level: str
     agno_debug: bool
-    env_file: Path
-    env_file_exists: bool
 
 
 class TranscriptSettingsUpdateRequest(BaseModel):
@@ -616,8 +613,6 @@ class TranscriptSettingsUpdateRequest(BaseModel):
 class TranscriptSettingsStatus(BaseModel):
     detail: Literal["standard", "full"]
     retention_days: int
-    env_file: Path
-    env_file_exists: bool
     sessions_dir: Path
     total_size_bytes: int
     index_size_bytes: int
@@ -857,7 +852,6 @@ class IntelligenceConfigUpdateRequest(BaseModel):
 
 class ProjectConfigResponse(BaseModel):
     config_dir: Path
-    env_file_path: Path
     language: str
     description: str = ""
     llm_api_type: str
@@ -865,7 +859,7 @@ class ProjectConfigResponse(BaseModel):
     github_enabled: bool
     github_project_url: str = ""
     lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
-    # provider id -> whether its API key is configured in the .env
+    # provider id -> whether its API key is stored in the OS secret store
     provider_api_keys: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -918,7 +912,6 @@ class AgentFieldStateResponse(BaseModel):
 
 class ProjectConfigUpdateRequest(GitHubProjectInput):
     config_dir: Path
-    env_file_path: Path
     language: Literal["en", "ja"]
     description: str = ""
     llm_api_type: str

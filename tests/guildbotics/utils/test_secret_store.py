@@ -1,211 +1,197 @@
-import os
-import stat
-import sys
+from __future__ import annotations
 
-import pytest
+import json
 
-from guildbotics.utils.fileio import load_yaml_dict
-from guildbotics.utils.keychain import SecretStoreError
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_WORKSPACE_ROOT,
+    load_yaml_dict,
+    save_yaml_file,
+)
 from guildbotics.utils.secret_store import (
-    ENV_FILE_BACKEND,
-    KEYRING_BACKEND,
-    SECRETS_BACKEND_ENV,
-    SECRETS_INDEX_FILENAME,
-    EnvFileSecretStore,
     KeyringSecretStore,
-    configured_secrets_backend,
     format_env_line,
     keyring_available,
+    keyring_status,
     read_env_values,
     resolve_secret_store,
     write_env_values,
 )
 
-PEM_VALUE = (
-    "-----BEGIN RSA PRIVATE KEY-----\n"
-    'MIIEow+abc/123 "quoted" back\\slash\n'
-    "-----END RSA PRIVATE KEY-----\n"
-)
+
+def test_keyring_store_writes_generation_index(fake_keyring, tmp_path, monkeypatch):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    config_dir = tmp_path / ".guildbotics" / "config"
+    store = KeyringSecretStore(config_dir)
+    store.set("OPENAI_API_KEY", "sk-test")
+
+    index = store.location.read_text(encoding="utf-8")
+    assert "backend:" not in index
+    assert "OPENAI_API_KEY:" in index
+    assert "generation: 1" in index
+    assert store.get("OPENAI_API_KEY") == "sk-test"
+    assert store.shared_generation("OPENAI_API_KEY") == 1
+    assert store.local_generation("OPENAI_API_KEY") == 1
 
 
-class TestEnvFileSecretStore:
-    def test_set_get_delete_roundtrip(self, tmp_path):
-        store = EnvFileSecretStore(tmp_path / ".env")
+def test_keyring_store_increments_generation_on_update(
+    fake_keyring, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("ANTHROPIC_API_KEY", "first")
+    store.set("ANTHROPIC_API_KEY", "second")
 
-        store.set("OPENAI_API_KEY", "sk-test")
-        store.set("ALICE_SLACK_BOT_TOKEN", "xoxb-1")
-
-        assert store.get("OPENAI_API_KEY") == "sk-test"
-        assert store.keys() == ["OPENAI_API_KEY", "ALICE_SLACK_BOT_TOKEN"]
-        assert store.values() == {
-            "OPENAI_API_KEY": "sk-test",
-            "ALICE_SLACK_BOT_TOKEN": "xoxb-1",
-        }
-
-        store.delete("OPENAI_API_KEY")
-        assert store.get("OPENAI_API_KEY") is None
-        assert store.keys() == ["ALICE_SLACK_BOT_TOKEN"]
-
-    def test_preserves_unrelated_env_entries(self, tmp_path):
-        env_file = tmp_path / ".env"
-        env_file.write_text("LOG_LEVEL=debug\n")
-        store = EnvFileSecretStore(env_file)
-
-        store.set("OPENAI_API_KEY", "sk-test")
-
-        assert read_env_values(env_file) == {
-            "LOG_LEVEL": "debug",
-            "OPENAI_API_KEY": "sk-test",
-        }
-
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
-    def test_written_env_file_is_owner_only(self, tmp_path):
-        env_file = tmp_path / ".env"
-        write_env_values(env_file, {"OPENAI_API_KEY": "sk-test"})
-
-        mode = stat.S_IMODE(os.stat(env_file).st_mode)
-        assert mode == 0o600
-
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
-    def test_write_tightens_world_readable_file_and_leaves_no_temp(self, tmp_path):
-        env_file = tmp_path / ".env"
-        env_file.write_text("OLD=1\n")
-        env_file.chmod(0o644)
-
-        write_env_values(env_file, {"OPENAI_API_KEY": "sk-test"})
-
-        assert stat.S_IMODE(os.stat(env_file).st_mode) == 0o600
-        assert [path.name for path in tmp_path.iterdir()] == [".env"]
-
-    def test_multiline_value_survives_write_read_roundtrip(self, tmp_path):
-        env_file = tmp_path / ".env"
-        write_env_values(env_file, {"PEM": PEM_VALUE, "PLAIN": "sk-test"})
-
-        assert read_env_values(env_file) == {"PEM": PEM_VALUE, "PLAIN": "sk-test"}
-
-    def test_store_roundtrips_multiline_value(self, tmp_path):
-        store = EnvFileSecretStore(tmp_path / ".env")
-        store.set("PLAIN", "sk-test")
-        store.set("PEM", PEM_VALUE)
-
-        assert store.get("PEM") == PEM_VALUE
-        assert store.get("PLAIN") == "sk-test"
-
-
-class TestFormatEnvLine:
-    def test_plain_value_stays_unquoted(self):
-        assert format_env_line("KEY", "sk-test_1.2/3+=") == "KEY=sk-test_1.2/3+="
-
-    @pytest.mark.parametrize(
-        "value",
-        ["two words", 'with "quote"', "with#hash", "back\\slash", "multi\nline\r"],
+    assert store.shared_generation("ANTHROPIC_API_KEY") == 2
+    assert store.get("ANTHROPIC_API_KEY") == "second"
+    local = json.loads(
+        (tmp_path / ".guildbotics" / "local" / "secrets.json").read_text(
+            encoding="utf-8"
+        )
     )
-    def test_special_values_are_quoted_and_roundtrip(self, tmp_path, value):
-        line = format_env_line("KEY", value)
-        assert line.startswith('KEY="')
-        env_file = tmp_path / ".env"
-        env_file.write_text(line + "\nOTHER=x\n")
-        values = read_env_values(env_file)
-        assert values == {"KEY": value, "OTHER": "x"}
+    assert local["keys"]["ANTHROPIC_API_KEY"]["generation"] == 2
+    assert local["keys"]["ANTHROPIC_API_KEY"]["pending_send"] is False
 
 
-class TestKeyringSecretStore:
-    def test_set_get_delete_roundtrip(self, fake_keyring, tmp_path):
-        store = KeyringSecretStore(tmp_path)
-
-        store.set("OPENAI_API_KEY", "sk-test")
-        assert store.get("OPENAI_API_KEY") == "sk-test"
-        assert store.keys() == ["OPENAI_API_KEY"]
-
-        store.delete("OPENAI_API_KEY")
-        assert store.get("OPENAI_API_KEY") is None
-        assert store.keys() == []
-
-    def test_index_file_names_keys_without_values(self, fake_keyring, tmp_path):
-        store = KeyringSecretStore(tmp_path)
-        store.set("B_KEY", "value-b")
-        store.set("A_KEY", "value-a")
-
-        index = load_yaml_dict(tmp_path / SECRETS_INDEX_FILENAME)
-        assert index["backend"] == KEYRING_BACKEND
-        assert index["keys"] == ["A_KEY", "B_KEY"]
-        content = (tmp_path / SECRETS_INDEX_FILENAME).read_text()
-        assert "value-a" not in content
-        assert "value-b" not in content
-
-    def test_store_id_is_stable_across_instances(self, fake_keyring, tmp_path):
-        KeyringSecretStore(tmp_path).set("A_KEY", "value-a")
-        store_id = load_yaml_dict(tmp_path / SECRETS_INDEX_FILENAME)["store_id"]
-
-        KeyringSecretStore(tmp_path).set("B_KEY", "value-b")
-        assert load_yaml_dict(tmp_path / SECRETS_INDEX_FILENAME)["store_id"] == store_id
-        assert KeyringSecretStore(tmp_path).get("A_KEY") == "value-a"
-
-    def test_delete_missing_key_is_noop(self, fake_keyring, tmp_path):
-        KeyringSecretStore(tmp_path).delete("MISSING")
-
-    def test_ensure_initialized_pins_backend(self, fake_keyring, tmp_path):
-        KeyringSecretStore(tmp_path).ensure_initialized()
-
-        assert configured_secrets_backend(tmp_path) == KEYRING_BACKEND
-        assert load_yaml_dict(tmp_path / SECRETS_INDEX_FILENAME)["keys"] == []
-
-    def test_set_many_indexes_values_written_before_a_failure(self, tmp_path):
-        class FailingKeychain:
-            def __init__(self):
-                self.values: dict[tuple[str, str], str] = {}
-
-            def validate_password(self, username: str, password: str) -> None:
-                del username, password
-
-            def get_password(self, service: str, username: str) -> str | None:
-                return self.values.get((service, username))
-
-            def set_password(self, service: str, username: str, password: str) -> None:
-                if username == "B_KEY":
-                    raise SecretStoreError("keychain write failed")
-                self.values[(service, username)] = password
-
-            def delete_password(self, service: str, username: str) -> None:
-                self.values.pop((service, username), None)
-
-        store = KeyringSecretStore(tmp_path, keychain=FailingKeychain())
-
-        with pytest.raises(SecretStoreError, match="keychain write failed"):
-            store.set_many({"A_KEY": "value-a", "B_KEY": "value-b"})
-
-        assert store.keys() == ["A_KEY"]
-        assert store.get("A_KEY") == "value-a"
-        assert store.get("B_KEY") is None
+def test_resolve_secret_store_uses_os_keychain(fake_keyring, tmp_path, monkeypatch):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = resolve_secret_store(
+        tmp_path / ".guildbotics" / "config", create_default=True
+    )
+    assert isinstance(store, KeyringSecretStore)
+    assert keyring_available() is True
+    status = keyring_status()
+    assert status["available"] is True
+    assert status["locked"] is False
 
 
-class TestBackendResolution:
-    def test_env_override_wins_over_index_file(
-        self, fake_keyring, tmp_path, monkeypatch
-    ):
-        KeyringSecretStore(tmp_path).ensure_initialized()
-        monkeypatch.setenv(SECRETS_BACKEND_ENV, ENV_FILE_BACKEND)
+def test_dotenv_serializer_roundtrip_is_exchange_only(tmp_path):
+    env_file = tmp_path / "export.env"
+    write_env_values(env_file, {"KEY": "value with space", "OTHER": "plain"})
+    assert read_env_values(env_file)["KEY"] == "value with space"
+    assert format_env_line("PLAIN", "abc") == "PLAIN=abc"
 
-        assert configured_secrets_backend(tmp_path) == ENV_FILE_BACKEND
-        store = resolve_secret_store(tmp_path, tmp_path / ".env")
-        assert isinstance(store, EnvFileSecretStore)
 
-    def test_unconfigured_workspace_defaults_to_env_file(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(SECRETS_BACKEND_ENV, raising=False)
+def test_keyring_status_reports_reachable_store(fake_keyring):
+    status = keyring_status()
 
-        assert configured_secrets_backend(tmp_path) is None
-        store = resolve_secret_store(tmp_path, tmp_path / ".env")
-        assert isinstance(store, EnvFileSecretStore)
+    assert status == {
+        "available": True,
+        "locked": False,
+        "backend": "os-keychain",
+    }
 
-    def test_create_default_prefers_keyring_when_available(
-        self, fake_keyring, tmp_path
-    ):
-        assert keyring_available()
-        store = resolve_secret_store(tmp_path, tmp_path / ".env", create_default=True)
-        assert isinstance(store, KeyringSecretStore)
 
-    def test_index_file_pins_keyring_backend(self, fake_keyring, tmp_path):
-        KeyringSecretStore(tmp_path).ensure_initialized()
+def test_keyring_status_detects_locked_store(fake_keyring, monkeypatch):
+    from keyring.errors import KeyringLocked
 
-        store = resolve_secret_store(tmp_path, tmp_path / ".env")
-        assert isinstance(store, KeyringSecretStore)
+    class LockedKeychain:
+        def get_password(self, service, username):
+            raise KeyringLocked("collection is locked")
+
+    monkeypatch.setattr(
+        "guildbotics.utils.secret_store.system_keychain", lambda: LockedKeychain()
+    )
+
+    status = keyring_status()
+
+    assert status["available"] is False
+    assert status["locked"] is True
+    assert status["backend"] == "os-keychain"
+
+
+def test_keyring_status_detects_unreachable_store(fake_keyring, monkeypatch):
+    class BrokenKeychain:
+        def get_password(self, service, username):
+            raise RuntimeError("no connection to the secret service")
+
+    monkeypatch.setattr(
+        "guildbotics.utils.secret_store.system_keychain", lambda: BrokenKeychain()
+    )
+
+    status = keyring_status()
+
+    assert status["available"] is False
+    assert status["locked"] is False
+
+
+def test_get_refuses_stale_generation(fake_keyring, tmp_path, monkeypatch):
+    """When another device advanced the shared generation, the local keychain
+    value is outdated and must not be served."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("OPENAI_API_KEY", "old-value")
+    assert store.get("OPENAI_API_KEY") == "old-value"
+
+    # Simulate a sync that raised the shared generation to 2.
+    index_file = tmp_path / ".guildbotics" / "config" / "secrets.yml"
+    data = load_yaml_dict(index_file)
+    data["keys"]["OPENAI_API_KEY"]["generation"] = 2
+    save_yaml_file(index_file, data)
+
+    assert store.get("OPENAI_API_KEY") is None
+    assert store.stale_keys() == ["OPENAI_API_KEY"]
+
+    # A fresh local set realigns the device and serves the new value again.
+    store.set("OPENAI_API_KEY", "new-value")
+    assert store.get("OPENAI_API_KEY") == "new-value"
+    assert store.stale_keys() == []
+
+
+def test_store_anchors_local_index_to_its_config_dir(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """A store built for workspace B keeps ALL of its files in workspace B,
+    even while workspace A is the selected one; switching to B later must
+    serve the secret that was just stored."""
+    workspace_a = tmp_path / "a"
+    workspace_b = tmp_path / "b"
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace_a))
+
+    KeyringSecretStore(workspace_b / ".guildbotics" / "config").set(
+        "OPENAI_API_KEY", "secret-b"
+    )
+
+    assert (workspace_b / ".guildbotics" / "local" / "secrets.json").is_file()
+    assert not (workspace_a / ".guildbotics" / "local" / "secrets.json").exists()
+
+    # Now select workspace B and rebuild the store the way the runtime does.
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace_b))
+    store = KeyringSecretStore(workspace_b / ".guildbotics" / "config")
+    assert store.get("OPENAI_API_KEY") == "secret-b"
+    assert store.stale_keys() == []
+
+
+def test_keyring_store_rename_moves_value_and_generations(
+    fake_keyring, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("ALICE_GITHUB_ACCESS_TOKEN", "ghp-secret")
+
+    store.rename("ALICE_GITHUB_ACCESS_TOKEN", "ALICE_2_GITHUB_ACCESS_TOKEN")
+
+    assert store.keys() == ["ALICE_2_GITHUB_ACCESS_TOKEN"]
+    assert store.get("ALICE_2_GITHUB_ACCESS_TOKEN") == "ghp-secret"
+    assert store.shared_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 1
+    assert store.local_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 1
+    assert store.local_generation("ALICE_GITHUB_ACCESS_TOKEN") is None
+
+
+def test_keyring_store_rename_moves_stale_metadata_and_keeps_it_stale(
+    fake_keyring, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("ALICE_GITHUB_ACCESS_TOKEN", "ghp-secret")
+    # Another device bumped the shared generation; this device is stale now.
+    index = load_yaml_dict(store.location)
+    index["keys"]["ALICE_GITHUB_ACCESS_TOKEN"]["generation"] = 2
+    save_yaml_file(store.location, index)
+    assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
+
+    store.rename("ALICE_GITHUB_ACCESS_TOKEN", "ALICE_2_GITHUB_ACCESS_TOKEN")
+
+    assert store.keys() == ["ALICE_2_GITHUB_ACCESS_TOKEN"]
+    assert store.shared_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 2
+    assert store.get("ALICE_2_GITHUB_ACCESS_TOKEN") is None
+    assert "ALICE_2_GITHUB_ACCESS_TOKEN" in store.stale_keys()

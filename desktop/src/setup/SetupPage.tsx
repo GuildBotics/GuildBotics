@@ -138,7 +138,6 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
   return z
     .object({
       workspaceDir: z.string().min(1, t("setup.validation.workspaceRequired")),
-      envFileOption: z.enum(["skip", "append", "overwrite"]),
       language: z.enum(["en", "ja"]),
       description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
       llmApiType: z.string(),
@@ -344,7 +343,7 @@ export function SetupPage() {
         }
         return updateProjectConfig(toProjectUpdateRequest(values, config.data, projectConfig.data));
       }
-      return initConfig(toInitialProjectSetupRequest(values, config.data));
+      return initConfig(toInitialProjectSetupRequest(values));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["config"] });
@@ -492,7 +491,7 @@ export function SetupPage() {
     }
     const creatingInitialSetup = !hasExistingProject;
     const initialSetupRequest = creatingInitialSetup
-      ? toInitialProjectSetupRequest(form.values, config.data)
+      ? toInitialProjectSetupRequest(form.values)
       : null;
     setSaveState("saving");
     try {
@@ -516,7 +515,6 @@ export function SetupPage() {
             <Text size="sm" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
               {t("setup.initialCreated.body", {
                 configDir: initialSetupRequest.config_dir,
-                envFilePath: initialSetupRequest.env_file_path,
               })}
             </Text>
           ),
@@ -584,7 +582,7 @@ export function SetupPage() {
   };
   const dismissPendingWorkspaceSwitch = () => {
     setPendingWorkspaceSwitch("");
-    const currentWorkspace = config.data?.cwd ?? "";
+    const currentWorkspace = config.data?.workspace ?? "";
     if (currentWorkspace) {
       form.setFieldValue("workspaceDir", currentWorkspace);
     }
@@ -2934,7 +2932,7 @@ function MembersSection({
     setGithubAccessToken("");
     setGithubInstallationId(member.github_installation_id?.toString() ?? "");
     setGithubAppId(member.github_app_id?.toString() ?? "");
-    setGithubPrivateKeyPath(member.github_private_key_path);
+    setGithubPrivateKeyPath("");
     setGithubAppsSetupMode(
       member.github_app_id != null || member.has_github_app_id ? "existing" : "create",
     );
@@ -2954,7 +2952,7 @@ function MembersSection({
     setStoredMemberSecrets({
       githubInstallationId: member.has_github_installation_id,
       githubAppId: member.has_github_app_id,
-      githubPrivateKeyPath: member.has_github_private_key_path || member.has_github_private_key,
+      githubPrivateKeyPath: member.has_github_private_key,
       githubAccessToken: member.has_github_access_token,
       slackBotToken: member.has_slack_bot_token,
       slackAppToken: member.has_slack_app_token,
@@ -3042,18 +3040,9 @@ function MembersSection({
     },
   });
   const deleteMemberMutation = useMutation({
-    mutationFn: ({
-      targetPersonId,
-      configDir,
-      envFilePath,
-    }: {
-      targetPersonId: string;
-      configDir: string;
-      envFilePath: string;
-    }) =>
+    mutationFn: ({ targetPersonId, configDir }: { targetPersonId: string; configDir: string }) =>
       deleteMemberConfig(targetPersonId, {
         config_dir: configDir,
-        env_file_path: envFilePath,
       }),
     onSuccess: (_, variables) => {
       const removed =
@@ -3079,7 +3068,7 @@ function MembersSection({
   const usesGitHubMember = githubAccountType !== "none";
   const shouldSeedDefaultRoutine = projectGithubEnabled || usesGitHubMember;
   const configDir = resolveConfigDir(workspaceDir);
-  const envFilePath = joinPath(workspaceDir, ".env");
+
   const requiresGitHubAuth =
     githubAccountType === "machine_user" || githubAccountType === "proxy_agent";
   const requiresGitHubAppsAuth = githubAccountType === "github_apps";
@@ -3318,8 +3307,6 @@ function MembersSection({
   const buildMemberRequest = (): MemberSetupRequest => {
     const request: MemberSetupRequest = {
       config_dir: configDir,
-      env_file_path: envFilePath,
-      append_env_file: Boolean(config?.env_file_exists),
       person_type: personType,
       github_account_type: githubAccountType === "none" ? "" : githubAccountType,
       person_id: personId.trim(),
@@ -3455,13 +3442,12 @@ function MembersSection({
   };
 
   const handleDeleteMember = async () => {
-    if (!editingPersonId || !configDir.trim() || !envFilePath.trim()) {
+    if (!editingPersonId || !configDir.trim()) {
       return;
     }
     await deleteMemberMutation.mutateAsync({
       targetPersonId: editingPersonId,
       configDir,
-      envFilePath,
     });
     setDeleteConfirmOpen(false);
   };
@@ -6112,19 +6098,8 @@ function isProviderKeyAvailable(
   );
 }
 
-function getInitialEnvFileOption(
-  config: ConfigStatus | undefined,
-): ProjectFormValues["envFileOption"] {
-  return config?.env_file_exists ? "append" : "overwrite";
-}
-
-function toInitialProjectSetupRequest(
-  values: ProjectFormValues,
-  config: ConfigStatus | undefined,
-): ProjectSetupRequest {
-  return toProjectSetupRequest(values, config, {
-    envFileOption: getInitialEnvFileOption(config),
-  });
+function toInitialProjectSetupRequest(values: ProjectFormValues): ProjectSetupRequest {
+  return toProjectSetupRequest(values);
 }
 
 export function initialProjectValues(
@@ -6135,8 +6110,7 @@ export function initialProjectValues(
 ): ProjectFormValues {
   if (projectConfig) {
     return {
-      workspaceDir: config?.cwd ?? "",
-      envFileOption: getInitialEnvFileOption(config),
+      workspaceDir: config?.workspace ?? "",
       language: projectConfig.language,
       description: projectConfig.description ?? "",
       llmApiType: projectConfig.llm_api_type,
@@ -6150,10 +6124,8 @@ export function initialProjectValues(
       laneDone: projectConfig.lane_map?.done ?? DEFAULT_LANE_DONE,
     };
   }
-  const cwd = config?.cwd ?? "";
   return {
-    workspaceDir: cwd,
-    envFileOption: getInitialEnvFileOption(config),
+    workspaceDir: config?.workspace ?? "",
     language: config?.project_file_exists ? (projectLanguage ?? appLanguage) : appLanguage,
     description: "",
     llmApiType: "openai",
@@ -6168,16 +6140,10 @@ export function initialProjectValues(
   };
 }
 
-export function toProjectSetupRequest(
-  values: ProjectFormValues,
-  _config: ConfigStatus | undefined,
-  options: { envFileOption?: ProjectFormValues["envFileOption"] } = {},
-): ProjectSetupRequest {
+export function toProjectSetupRequest(values: ProjectFormValues): ProjectSetupRequest {
   const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: resolveConfigDir(values.workspaceDir),
-    env_file_path: joinPath(values.workspaceDir, ".env"),
-    env_file_option: options.envFileOption ?? values.envFileOption,
     language: values.language,
     description: values.description,
     owner: github?.owner ?? "",
@@ -6206,7 +6172,6 @@ export function toProjectUpdateRequest(
   const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: snapshot.config_dir || config?.config_dir || resolveConfigDir(values.workspaceDir),
-    env_file_path: snapshot.env_file_path || joinPath(values.workspaceDir, ".env"),
     language: values.language,
     description: values.description,
     llm_api_type: values.llmApiType,
@@ -6217,7 +6182,7 @@ export function toProjectUpdateRequest(
     github_project_url: github?.projectUrl ?? "",
     lane_map: github ? toLaneMap(values) : undefined,
     // Only send providers the user actually typed a key for; empty = leave the
-    // existing .env value unchanged.
+    // existing OS secret-store value unchanged.
     provider_api_keys: Object.fromEntries(
       Object.entries(values.providerApiKeys).filter(([, value]) => value.trim().length > 0),
     ),
@@ -6565,10 +6530,8 @@ function memberRequestToConfig(
     character: request.character ?? {},
     github_installation_id: request.github_installation_id ?? null,
     github_app_id: request.github_app_id ?? null,
-    github_private_key_path: request.github_private_key_path ?? "",
     has_github_installation_id: Boolean(request.github_installation_id),
     has_github_app_id: Boolean(request.github_app_id),
-    has_github_private_key_path: Boolean(request.github_private_key_path),
     has_github_private_key: Boolean(request.github_private_key_path),
     has_github_access_token: Boolean(request.github_access_token),
     slack_user_id: request.slack_user_id ?? "",
@@ -6908,12 +6871,6 @@ function VerificationSection({
           <dd>
             <Badge color={hasProjectConfig ? "success" : "warning"} variant="light">
               {hasProjectConfig ? t("overview.ready") : t("overview.missing")}
-            </Badge>
-          </dd>
-          <dt>{t("overview.env")}</dt>
-          <dd>
-            <Badge color={config?.env_file_exists ? "success" : "neutral"} variant="light">
-              {config?.env_file_exists ? t("overview.found") : t("overview.notFound")}
             </Badge>
           </dd>
           <dt>{t("overview.activeMembers")}</dt>

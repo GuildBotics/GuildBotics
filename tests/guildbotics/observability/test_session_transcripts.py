@@ -101,18 +101,22 @@ def test_unscoped_records_do_not_implicitly_start_system_session(
     event_route = store.route(_record("github.push", trace_id=None))
 
     assert log_route.index_records == []
-    assert [item["type"] for item in event_route.index_records] == ["github.push"]
+    assert [item["type"] for item in event_route.index_records] == []
     assert list(store.sessions_dir.glob("*.jsonl")) == []
 
 
-def test_transcript_settings_and_standard_filters(monkeypatch) -> None:
-    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_DETAIL", "full")
-    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", "14")
+def test_transcript_settings_and_standard_filters(tmp_path, monkeypatch) -> None:
+    from guildbotics.observability.session_transcripts import (
+        write_transcript_settings,
+    )
+
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+    write_transcript_settings(detail="full", retention_days=14)
     assert transcript_detail() == "full"
     assert transcript_retention_days() == 14
     assert should_record_agent_event("stream", "thinking.delta") is True
 
-    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_DETAIL", "standard")
+    write_transcript_settings(detail="standard", retention_days=14)
     assert should_record_agent_event("stream", "thinking.delta") is False
     assert should_record_agent_event("tool", "completed") is True
 
@@ -133,7 +137,12 @@ def test_prune_expired_keeps_active_system_session(tmp_path: Path, monkeypatch) 
     old = (datetime.now(UTC) - timedelta(days=10)).timestamp()
     os.utime(old_trace, (old, old))
     os.utime(system_path, (old, old))
-    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", "5")
+    from guildbotics.observability.session_transcripts import (
+        write_transcript_settings,
+    )
+
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+    write_transcript_settings(detail="standard", retention_days=5)
 
     deleted = store.prune_expired()
 
