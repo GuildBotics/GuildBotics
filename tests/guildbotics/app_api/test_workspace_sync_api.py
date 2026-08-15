@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.sync import deactivate_workspace_sync
+from guildbotics.app_api import workspace_sync
+from guildbotics.sync import current_sync_manager, deactivate_workspace_sync
 
 HTTP_OK = 200
 HTTP_CONFLICT = 409
@@ -278,3 +279,88 @@ def test_a_workspace_identifier_that_is_not_one_is_refused(
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "sync_clone_failed"
+
+
+# -- The queue and the enrollment work never share the repository -------------
+
+
+def _enabled(client: TestClient) -> dict:
+    client.post("/hub", headers=AUTH_HEADERS)
+    return _json(
+        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    )
+
+
+def test_changing_the_hub_stops_the_queue_before_it_touches_the_repository(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enrolling commits, fetches, and resets the branch the running queue is
+    working in, so the two must never be in there together."""
+    enabled = _enabled(client)
+    running: list[bool] = []
+    real_enroll = workspace_sync.enroll
+    monkeypatch.setattr(
+        workspace_sync,
+        "enroll",
+        lambda *args, **kwargs: (
+            running.append(current_sync_manager() is not None),
+            real_enroll(*args, **kwargs),
+        )[1],
+    )
+
+    client.post(
+        "/workspace/sync/hub",
+        headers=AUTH_HEADERS,
+        json={"hub": {}, "workspace_id": enabled["workspace_id"]},
+    )
+
+    assert running == [False]
+
+
+def test_the_queue_is_running_again_after_a_failed_hub_change(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A failed attempt must not leave a workspace that has a hub quietly not
+    synchronizing."""
+    _enabled(client)
+
+    client.post(
+        "/workspace/sync/hub",
+        headers=AUTH_HEADERS,
+        json={"hub": {"endpoint": "hub.invalid"}, "workspace_id": "not-a-uuid"},
+    )
+
+    assert current_sync_manager() is not None
+    assert _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["enabled"] is True
+
+
+def test_a_queue_that_will_not_stop_blocks_the_hub_change(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    enabled = _enabled(client)
+    manager = current_sync_manager()
+    assert manager is not None
+    monkeypatch.setattr(manager, "stop", lambda timeout=5.0: False)
+
+    response = client.post(
+        "/workspace/sync/hub",
+        headers=AUTH_HEADERS,
+        json={"hub": {}, "workspace_id": enabled["workspace_id"]},
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "workspace_sync_busy"
+
+
+# -- Trusting a hub -----------------------------------------------------------
+
+
+def test_trusting_a_hub_requires_the_confirmed_fingerprint(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/hub/trust", headers=AUTH_HEADERS, json={"endpoint": "hub.local"}
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "host_key_not_confirmed"

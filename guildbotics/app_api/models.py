@@ -72,6 +72,17 @@ class HubTarget(BaseModel):
     endpoint: str = ""
 
 
+class HubTrustRequest(BaseModel):
+    """Trust a hub machine's host key, naming the one the user confirmed.
+
+    The fingerprint comes back from the caller so that what is stored is what
+    was shown, rather than whatever the machine answers when asked again.
+    """
+
+    endpoint: str = ""
+    fingerprint: str = ""
+
+
 class HubConnection(BaseModel):
     """What this device can see of a hub before connecting a workspace to it."""
 

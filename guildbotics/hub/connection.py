@@ -54,6 +54,14 @@ class HubUnreachableError(RuntimeError):
     """Raised when a hub could not be reached or refused a command."""
 
 
+class HostKeyChangedError(RuntimeError):
+    """Raised when a hub offers a host key other than the one confirmed.
+
+    Either the machine's key was replaced, or something else is answering for
+    it. Both need the user to look again, so neither is trusted here.
+    """
+
+
 @dataclass(frozen=True)
 class HubEndpoint:
     """Another machine hosting a hub, as OpenSSH addresses it.
@@ -199,13 +207,29 @@ def probe_host_key(endpoint: HubEndpoint) -> HubHostKey:
     )
 
 
-def trust_host_key(endpoint: HubEndpoint) -> HubHostKey:
-    """Record a hub machine's host key in ``known_hosts``.
+def trust_host_key(endpoint: HubEndpoint, fingerprint: str) -> HubHostKey:
+    """Record in ``known_hosts`` the host key the user confirmed.
 
-    Only call this once the user has confirmed the fingerprint from
-    :func:`probe_host_key`.
+    The key is read again here rather than carried over from
+    :func:`probe_host_key`, so the fingerprint the user actually looked at has
+    to be named: storing whatever the second read returns would make the
+    confirmation decorative, since a machine that answered honestly the first
+    time could answer differently the second.
+
+    Args:
+        endpoint (HubEndpoint): The hub machine.
+        fingerprint (str): The ``SHA256:`` fingerprint the user confirmed.
+
+    Raises:
+        HostKeyChangedError: When the machine no longer offers that key.
     """
     lines = _scan_host_keys(endpoint)
+    offered = _fingerprints(lines)
+    if fingerprint not in offered:
+        raise HostKeyChangedError(
+            f"{endpoint.host} no longer offers the host key that was confirmed. "
+            "Check the fingerprint again before trusting it."
+        )
     path = _known_hosts_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     existing = (
@@ -216,7 +240,7 @@ def trust_host_key(endpoint: HubEndpoint) -> HubHostKey:
         with path.open("a", encoding="utf-8") as handle:
             handle.write("\n".join(added) + "\n")
         path.chmod(0o600)
-    return HubHostKey(fingerprints=_fingerprints(lines), trusted=True)
+    return HubHostKey(fingerprints=offered, trusted=True)
 
 
 def read_ssh_key() -> HubSshKey | None:

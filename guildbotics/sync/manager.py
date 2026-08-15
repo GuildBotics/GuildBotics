@@ -34,11 +34,11 @@ from git import GitCommandError
 from guildbotics.sync.commits import (
     UnsendableChange,
     commit_shared_changes,
-    utc_now,
     validate_received,
 )
 from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
+from guildbotics.utils.timestamps import utc_now_iso
 from guildbotics.utils.workspace_sync_port import ChangeSet
 from guildbotics.workspace.identity import (
     WorkspaceIdentity,
@@ -337,7 +337,7 @@ class GitSyncManager:
             if self._synchronize_once():
                 self._state = "idle"
                 self._last_error_code = None
-                self._last_success_at = utc_now()
+                self._last_success_at = utc_now_iso()
                 self._resolve_shared()
                 return
         self._state = "idle"

@@ -17,6 +17,7 @@ commits belongs to :mod:`guildbotics.sync`.
 from __future__ import annotations
 
 from guildbotics.hub.connection import (
+    HostKeyChangedError,
     HubEndpoint,
     HubHostKey,
     HubLocation,
@@ -45,6 +46,7 @@ from guildbotics.hub.host import (
 )
 
 __all__ = [
+    "HostKeyChangedError",
     "HubEndpoint",
     "HubHostKey",
     "HubLocation",

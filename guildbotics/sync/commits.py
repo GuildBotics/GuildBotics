@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from guildbotics.sync.local_repository import LocalSyncRepository, WorkingTreeChange
+from guildbotics.utils.timestamps import utc_now_iso
 from guildbotics.workspace.validation import (
     SharedFileInvalidError,
     validate_shared_file,
@@ -98,10 +98,5 @@ def _commit_message(changes: Sequence[WorkingTreeChange], device_id: str) -> str
     deleted = sum(1 for change in changes if change.deleted)
     return (
         f"Sync shared state: {len(changes) - deleted} written, {deleted} deleted"
-        f"\n\nDevice: {device_id}\nRecorded-At: {utc_now()}\n"
+        f"\n\nDevice: {device_id}\nRecorded-At: {utc_now_iso()}\n"
     )
-
-
-def utc_now() -> str:
-    """Return the current time in the one format shared records are written in."""
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")

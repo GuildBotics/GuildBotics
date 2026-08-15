@@ -62,6 +62,7 @@ from guildbotics.app_api.models import (
     HubConnection,
     HubStatus,
     HubTarget,
+    HubTrustRequest,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     LlmProvidersResponse,
@@ -310,7 +311,7 @@ def create_app(
 
     @app.post("/hub/trust", response_model=HubConnection, responses=error_responses)
     def hub_trust(
-        request: HubTarget,
+        request: HubTrustRequest,
         _: None = Depends(require_token),
     ) -> HubConnection:
         return sync_service.trust_hub(request)

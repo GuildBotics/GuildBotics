@@ -146,3 +146,36 @@ def test_a_windows_login_name_is_still_an_address(text: str) -> None:
     """``DOMAIN\\user`` and a machine account's trailing ``$`` are ordinary
     there, and they never reach a shell: every command is a list."""
     assert connection.parse_hub_endpoint(text).host == "hub.local"
+
+
+def _scanning(monkeypatch: pytest.MonkeyPatch, lines: list[str], prints: str) -> None:
+    monkeypatch.setattr(connection, "_scan_host_keys", lambda endpoint: lines)
+    monkeypatch.setattr(connection, "_fingerprints", lambda scanned: tuple([prints]))
+
+
+def test_trusting_stores_the_key_the_user_confirmed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(connection, "_ssh_dir", lambda: tmp_path / ".ssh")
+    _scanning(monkeypatch, ["hub.local ssh-ed25519 AAAA"], "SHA256:confirmed")
+
+    result = connection.trust_host_key(
+        HubEndpoint(host="hub.local"), "SHA256:confirmed"
+    )
+
+    assert result.trusted is True
+    assert "ssh-ed25519 AAAA" in (tmp_path / ".ssh" / "known_hosts").read_text()
+
+
+def test_a_machine_offering_a_different_key_is_not_trusted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The confirmation is the only moment a machine-in-the-middle is caught, so
+    storing whatever the second read returns would make it decorative."""
+    monkeypatch.setattr(connection, "_ssh_dir", lambda: tmp_path / ".ssh")
+    _scanning(monkeypatch, ["hub.local ssh-ed25519 SOMETHINGELSE"], "SHA256:other")
+
+    with pytest.raises(connection.HostKeyChangedError):
+        connection.trust_host_key(HubEndpoint(host="hub.local"), "SHA256:confirmed")
+
+    assert not (tmp_path / ".ssh" / "known_hosts").exists()

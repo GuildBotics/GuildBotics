@@ -12,12 +12,12 @@ out of every API, because recovery is a manual, source-device-only procedure.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
 from pathlib import Path
 
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
 from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.timestamps import utc_now_iso
 
 #: Signature the sync manager depends on, so the recorder can be substituted.
 RejectionRecorder = Callable[..., None]
@@ -53,7 +53,7 @@ def record_update_rejected(
             "type": SYNC_UPDATE_REJECTED,
             "workspace_id": workspace_id,
             "device_id": device_id,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": utc_now_iso(),
             "subject": rejection_id,
             "payload": {
                 "rejection_id": rejection_id,

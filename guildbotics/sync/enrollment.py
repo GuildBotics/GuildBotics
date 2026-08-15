@@ -183,13 +183,13 @@ def enroll(
 
     Raises:
         EnrollmentError: When the hub cannot be reached, or holds a repository
-            this workspace cannot be reconciled with. A workspace that was not
-            connected before is left unconnected, so a refused hub never leaves
-            behind a workspace that later starts synchronizing with it.
+            this workspace cannot be reconciled with. The hub this workspace was
+            connected to beforehand -- none, or the previous one -- is restored,
+            so a refused hub never becomes the one the queue works against.
     """
     device_id = ensure_device_identity().device_id
     repository, outcome = _prepare(workspace_root)
-    was_connected = repository.has_remote()
+    previous_url = repository.remote_url()
     with _as_enrollment_error("The hub could not be reached"):
         repository.set_remote(remote_url)
         try:
@@ -200,8 +200,14 @@ def enroll(
                 record_rejection=record_rejection,
             )
         except Exception:
-            if not was_connected:
+            # Put back exactly what was there. Clearing unconditionally would
+            # disconnect a workspace whose current hub is fine, and leaving the
+            # new URL would point the queue at a hub that was just refused --
+            # which is the case when a hub is being changed rather than set.
+            if previous_url is None:
                 repository.clear_remote()
+            else:
+                repository.set_remote(previous_url)
             raise
     # Published last so the record carries the identity the join settled on,
     # and left for the sync queue to send with everything else.

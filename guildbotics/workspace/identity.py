@@ -15,7 +15,6 @@ import socket
 import sys
 import time
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -28,7 +27,7 @@ from guildbotics.utils.fileio import (
     get_workspace_local_path,
     get_workspace_state_path,
 )
-from guildbotics.utils.timestamps import parse_iso_datetime
+from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
 from guildbotics.utils.workspace_sync_port import dump_shared_json, write_shared_json
 
 #: Shared records move to a new schema together, without a compatibility path.
@@ -173,7 +172,7 @@ def ensure_workspace_identity(
         existing = read_workspace_identity(workspace_root)
         if existing is not None:
             return existing
-        identity = WorkspaceIdentity(workspace_id=new_uuid7(), created_at=_now())
+        identity = WorkspaceIdentity(workspace_id=new_uuid7(), created_at=utc_now_iso())
         write_shared_json(
             workspace_identity_path(workspace_root),
             identity.model_dump(),
@@ -269,7 +268,7 @@ def publish_device_record(
         device_id=identity.device_id,
         display_name=identity.display_name,
         os=identity.os,
-        joined_at=existing.joined_at if existing is not None else _now(),
+        joined_at=existing.joined_at if existing is not None else utc_now_iso(),
         status=existing.status if existing is not None else "active",
         ssh_public_key_fingerprint=(
             ssh_public_key_fingerprint
@@ -316,7 +315,3 @@ def _write_device_identity(identity: DeviceIdentity) -> None:
 
 def _default_display_name() -> str:
     return socket.gethostname().split(".")[0] or "GuildBotics device"
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")

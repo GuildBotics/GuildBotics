@@ -22,6 +22,7 @@ from guildbotics.app_api.models import (
     HubConnection,
     HubStatus,
     HubTarget,
+    HubTrustRequest,
     UnsendableChangeModel,
     WorkspaceSyncCloneRequest,
     WorkspaceSyncEnableRequest,
@@ -121,13 +122,20 @@ class WorkspaceSyncService:
             workspace_ids=(self._workspace_ids(location) if host_key.trusted else []),
         )
 
-    def trust_hub(self, target: HubTarget) -> HubConnection:
-        """Record a hub machine's host key after the user confirmed it."""
+    def trust_hub(self, request: HubTrustRequest) -> HubConnection:
+        """Record the host key the user confirmed for a hub machine."""
+        target = HubTarget(endpoint=request.endpoint)
         location = _location(target)
         if location.endpoint is None:
             return self.inspect_hub(target)
+        if not request.fingerprint:
+            raise AppApiError(
+                "host_key_not_confirmed",
+                "Name the fingerprint that was confirmed before trusting a hub.",
+                status_code=400,
+            )
         with _reporting("hub_unreachable", f"{location.label} could not be reached."):
-            connection.trust_host_key(location.endpoint)
+            connection.trust_host_key(location.endpoint, request.fingerprint)
         return self.inspect_hub(target)
 
     def get_ssh_key(self) -> DeviceSshKey:
@@ -160,9 +168,9 @@ class WorkspaceSyncService:
                     "synchronization would register it rather than join it.",
                     status_code=409,
                 )
-            preview = preview_enrollment(
-                connection.hub_remote_url(location, target), _workspace_root()
-            )
+            url = connection.hub_remote_url(location, target)
+            with self._paused():
+                preview = preview_enrollment(url, _workspace_root())
         return WorkspaceSyncPreview(
             hub_workspace_id=preview.hub_workspace_id,
             workspace_id=preview.workspace_id,
@@ -177,7 +185,10 @@ class WorkspaceSyncService:
         """Connect the selected workspace to a hub and start synchronizing it."""
         location = _location(request.hub)
         url = self._remote_url(location, request.workspace_id, create=True)
-        with _reporting("sync_enable_failed", "Synchronization could not be enabled."):
+        with (
+            _reporting("sync_enable_failed", "Synchronization could not be enabled."),
+            self._paused(),
+        ):
             enroll(url, _workspace_root())
         return self.activate()
 
@@ -261,11 +272,42 @@ class WorkspaceSyncService:
         """
         location = _location(request.hub)
         url = self._remote_url(location, request.workspace_id, create=True)
-        with _reporting("sync_enable_failed", "The hub could not be changed."):
+        with (
+            _reporting("sync_enable_failed", "The hub could not be changed."),
+            self._paused(),
+        ):
             enroll(url, _workspace_root())
         return self.activate()
 
     # -- Internals ----------------------------------------------------------
+
+    @contextmanager
+    def _paused(self) -> Iterator[None]:
+        """Hold the workspace's repository alone for the duration.
+
+        Enrolling and previewing both commit, fetch, reset the branch, and move
+        refs in the very repository a running queue is working in. Two threads
+        doing that interleave, so the queue stops first -- the same rule a
+        workspace switch follows, and the invariant the rest of this package is
+        built on.
+
+        Raises:
+            AppApiError: When the queue is still finishing and cannot be stopped.
+                Proceeding would put a second worker on the same repository.
+        """
+        if not deactivate_workspace_sync():
+            raise AppApiError(
+                "workspace_sync_busy",
+                "Synchronization is still finishing its last cycle. "
+                "Try again in a moment.",
+                status_code=409,
+            )
+        try:
+            yield
+        finally:
+            # Restored whether or not the work succeeded: a failed attempt must
+            # not leave a workspace that had a hub silently not synchronizing.
+            activate_workspace_sync(_workspace_root())
 
     def _remote_url(
         self, location: HubLocation, workspace_id: str, *, create: bool

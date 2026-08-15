@@ -549,3 +549,34 @@ def test_a_repeated_join_records_one_rejection(
 
     assert len(rejections) == 1
     assert again.rejection_id is None or again.rejection_id == first.rejection_id
+
+
+def test_a_failed_hub_change_keeps_the_hub_that_was_working(
+    tmp_path: Path, hub: Path
+) -> None:
+    """Leaving the refused URL would point the queue at a hub the user was told
+    they could not use, and clearing it would disconnect a working one."""
+    root = _workspace(tmp_path / "mac", **{CONFIG: "name: demo\n"})
+    enrollment.enroll(str(hub), root)
+
+    with pytest.raises(enrollment.EnrollmentError):
+        enrollment.enroll(str(tmp_path / "no-such-hub.git"), root)
+
+    assert LocalSyncRepository(root).remote_url() == str(hub)
+
+
+def test_a_workspace_still_synchronizes_after_a_failed_hub_change(
+    tmp_path: Path, hub: Path
+) -> None:
+    root = _workspace(tmp_path / "mac", **{CONFIG: "name: demo\n"})
+    registered = enrollment.enroll(str(hub), root)
+    with pytest.raises(enrollment.EnrollmentError):
+        enrollment.enroll(str(tmp_path / "no-such-hub.git"), root)
+    device = make_device(
+        root, hub, device_id="device-mac", workspace_id=registered.workspace_id
+    )
+
+    device.write(HOTKEYS, "a: b\n")
+    device.manager.synchronize()
+
+    assert _hub_file(hub, HOTKEYS) == "a: b\n"
