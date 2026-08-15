@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import errno
 import os
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any
 
@@ -42,6 +45,52 @@ def lock_file_nonblocking(handle: IO[str]) -> None:
         if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
             raise BlockingIOError(exc.errno, exc.strerror) from exc
         raise
+
+
+class LockTimeoutError(TimeoutError):
+    """Raised when an advisory lock stays held past the caller's deadline."""
+
+
+@contextmanager
+def held_lock(
+    path: Path, timeout: float = 5.0, poll_interval: float = 0.01
+) -> Iterator[IO[str]]:
+    """Hold the advisory lock at ``path`` for the duration of the block.
+
+    The lock guards a short critical section, not a user-visible edit session,
+    so it carries no owner metadata and no TTL: the OS releases it when the
+    holding process exits.
+
+    Args:
+        path (Path): The lock file. Parent directories are created.
+        timeout (float): Seconds to keep retrying before giving up.
+        poll_interval (float): Seconds between retries.
+
+    Yields:
+        IO[str]: The open lock file handle.
+
+    Raises:
+        LockTimeoutError: When the lock stays held for longer than ``timeout``.
+    """
+    handle = open_lock_file(path)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                lock_file_nonblocking(handle)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise LockTimeoutError(
+                        f"Timed out waiting for the advisory lock at {path}."
+                    ) from None
+                time.sleep(poll_interval)
+        try:
+            yield handle
+        finally:
+            unlock_file(handle)
+    finally:
+        handle.close()
 
 
 def unlock_file(handle: IO[str]) -> None:

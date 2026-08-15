@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from guildbotics.runtime import advisory_lock as advisory_lock_module
+from guildbotics.utils import advisory_lock as advisory_lock_module
 from guildbotics.runtime import service_lock as service_lock_module
 from guildbotics.runtime.service_lock import (
     ServiceLock,

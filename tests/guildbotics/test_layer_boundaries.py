@@ -8,6 +8,10 @@ converting it into API response models.
 
 ``guildbotics.observability`` is a recording foundation and may only depend on
 ``guildbotics.utils``.
+
+``guildbotics.workspace`` owns workspace storage -- identity, shared-record
+schemas, and config revisions -- and sits below the capability, driver, and API
+layers, so it may depend only on ``guildbotics.utils`` and ``guildbotics.entities``.
 """
 
 from __future__ import annotations
@@ -64,6 +68,21 @@ def test_observability_depends_only_on_utils() -> None:
         for relative, modules in _imports_by_module(
             "observability", inside=True
         ).items()
+        for module in sorted(modules)
+        if not _matches(module, allowed)
+    ]
+    assert offenders == []
+
+
+def test_workspace_storage_depends_only_on_utils_and_entities() -> None:
+    allowed = (
+        "guildbotics.workspace",
+        "guildbotics.utils",
+        "guildbotics.entities",
+    )
+    offenders = [
+        f"{relative}: {module}"
+        for relative, modules in _imports_by_module("workspace", inside=True).items()
         for module in sorted(modules)
         if not _matches(module, allowed)
     ]

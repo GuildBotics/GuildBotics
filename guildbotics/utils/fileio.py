@@ -1,4 +1,6 @@
 import os
+import tempfile
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,40 @@ def get_machine_state_root() -> Path:
 def get_machine_state_path(*parts: str) -> Path:
     """Return a path under the machine-local GuildBotics state root."""
     return get_machine_state_root().joinpath(*parts)
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Replace ``path`` with ``data`` so readers never observe a partial file.
+
+    Args:
+        path (Path): The destination file. Parent directories are created.
+        data (bytes): The complete new file content.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+            tmp_path = Path(handle.name)
+        tmp_path.replace(path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            with suppress(OSError):
+                tmp_path.unlink()
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Replace ``path`` with UTF-8 encoded ``text`` atomically."""
+    atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def _resolve_path(path: Path) -> Path:

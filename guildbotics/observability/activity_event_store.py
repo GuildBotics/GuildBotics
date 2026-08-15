@@ -14,6 +14,7 @@ from guildbotics.utils.fileio import (
     get_workspace_config_dir,
     get_workspace_state_path,
 )
+from guildbotics.utils.workspace_sync_port import write_shared_json
 
 ACTIVITY_EVENT_SCHEMA_VERSION = 1
 _MAX_SAFE_SUMMARY_CHARS = 500
@@ -70,11 +71,7 @@ class ActivityEventStore:
         occurred = str(event["occurred_at"])
         year, month = _year_month(occurred)
         path = self.root / year / month / f"{event['event_id']}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(event, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_shared_json(path, event)
         return path
 
     def list_between(

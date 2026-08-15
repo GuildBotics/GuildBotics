@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 import threading
 from contextlib import suppress
 from dataclasses import asdict
@@ -25,6 +23,7 @@ from guildbotics.integrations.chat_workflow_status import (
 )
 from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
+from guildbotics.utils.workspace_sync_port import delete_shared_path, write_shared_json
 
 
 class FileConversationStateStore(ConversationStateStore):
@@ -456,7 +455,7 @@ class FileConversationStateStore(ConversationStateStore):
                 self._write_json(path, data)
             elif path.exists():
                 try:
-                    path.unlink()
+                    self._remove(path)
                 except Exception:
                     data["events"] = []
                     self._write_json(path, data)
@@ -517,7 +516,7 @@ class FileConversationStateStore(ConversationStateStore):
             pending_file = self._pending_events_file(service, person_id, channel_id)
             if pending_file.exists():
                 try:
-                    pending_file.unlink()
+                    self._remove(pending_file)
                 except OSError:
                     self._write_json(pending_file, {"events": []})
             # Drop tracked threads as cleanup. Correctness does not depend on this
@@ -525,21 +524,17 @@ class FileConversationStateStore(ConversationStateStore):
             # cutoff filter in EventListenerRunner, so pre-cutoff replies are never
             # re-queued even if a file cannot be removed here.
             thread_dir = self._thread_file(service, person_id, channel_id, "_").parent
-            if thread_dir.is_dir():
-                for path in thread_dir.glob("*.json"):
-                    with suppress(Exception):
-                        path.unlink()
-                with suppress(Exception):
-                    thread_dir.rmdir()
             cache_dir = self._thread_cache_file(
                 service, person_id, channel_id, "_"
             ).parent
-            if cache_dir.is_dir():
-                for path in cache_dir.glob("*.json"):
+            for directory in (thread_dir, cache_dir):
+                if not directory.is_dir():
+                    continue
+                for path in directory.glob("*.json"):
                     with suppress(Exception):
-                        path.unlink()
+                        self._remove(path)
                 with suppress(Exception):
-                    cache_dir.rmdir()
+                    directory.rmdir()
 
     def _root(self, service: str, person_id: str) -> Path:
         return self._base_dir / _safe_segment(service) / _safe_segment(person_id)
@@ -614,27 +609,14 @@ class FileConversationStateStore(ConversationStateStore):
                 return {}
 
     def _write_json(self, path: Path, payload: dict) -> None:
+        # Conversation control state lives in the shared ``state/`` tree while the
+        # thread message cache stays device-local; the shared write helpers
+        # announce only the former, so both go through one write path.
         with self._lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    encoding="utf-8",
-                    dir=path.parent,
-                    prefix=f"{path.name}.",
-                    suffix=".tmp",
-                    delete=False,
-                ) as f:
-                    json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
-                    f.flush()
-                    os.fsync(f.fileno())
-                    tmp_path = Path(f.name)
-                tmp_path.replace(path)
-            finally:
-                if tmp_path is not None and tmp_path.exists():
-                    with suppress(Exception):
-                        tmp_path.unlink()
+            write_shared_json(path, payload)
+
+    def _remove(self, path: Path) -> None:
+        delete_shared_path(path)
 
 
 def _safe_segment(value: str) -> str:

@@ -22,6 +22,10 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
     save_yaml_file,
 )
+from guildbotics.utils.workspace_sync_port import (
+    notify_shared_state_changed,
+    write_shared_text,
+)
 
 Scope = Literal["personal", "team"]
 DEFAULT_DIGEST_N = 20
@@ -346,6 +350,7 @@ class MemberMemoryService:
         if target.exists():
             raise MemberMemoryError(f"Archived memory already exists: {doc.doc_id}")
         doc.path.rename(target)
+        notify_shared_state_changed("update", [doc.path, target])
         self._remove_recent(doc.doc_id)
         self._record_audit(
             "archive",
@@ -367,6 +372,7 @@ class MemberMemoryService:
         if target.exists():
             raise MemberMemoryError(f"Team memory already exists: {doc.doc_id}")
         doc.path.rename(target)
+        notify_shared_state_changed("update", [doc.path, target])
         self._touch_recent(doc.doc_id)
         self._record_audit(
             "promote",
@@ -539,8 +545,9 @@ class MemberMemoryService:
     def _write_doc(self, doc_dir: Path, meta: dict[str, Any], body: str) -> None:
         doc_dir.mkdir(parents=True, exist_ok=True)
         save_yaml_file(doc_dir / META_FILE, _redact_meta(meta))
-        (doc_dir / BODY_FILE).write_text(_redact_secrets(body), encoding="utf-8")
+        write_shared_text(doc_dir / BODY_FILE, _redact_secrets(body))
         (doc_dir / "assets").mkdir(exist_ok=True)
+        notify_shared_state_changed("update", [doc_dir / META_FILE])
 
     def _scope_dir(self, scope: Scope) -> Path:
         if scope == "team":
@@ -561,11 +568,8 @@ class MemberMemoryService:
         ]
 
     def _write_recent(self, doc_ids: list[str]) -> None:
-        path = self._recent_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "\n".join(doc_ids) + ("\n" if doc_ids else ""),
-            encoding="utf-8",
+        write_shared_text(
+            self._recent_path(), "\n".join(doc_ids) + ("\n" if doc_ids else "")
         )
 
     def _touch_recent(self, doc_id: str) -> None:
