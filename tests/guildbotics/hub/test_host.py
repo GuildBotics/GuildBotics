@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -91,13 +92,19 @@ def test_a_machine_that_is_not_a_hub_refuses_to_hold_a_workspace(
         host.create_workspace_repository(WORKSPACE_ID)
 
 
-def test_a_workspace_identifier_that_is_not_a_uuid_is_refused(
-    machine_root: Path,
+@pytest.mark.parametrize(
+    "workspace_id",
+    ["../../escape", "not-a-uuid", "urn:uuid:" + WORKSPACE_ID, WORKSPACE_ID.upper()],
+)
+def test_a_workspace_identifier_that_is_not_canonical_is_refused(
+    machine_root: Path, workspace_id: str
 ) -> None:
+    """It becomes a directory name here and a remote argument elsewhere, and
+    several spellings of one UUID would split one workspace across several."""
     host.create_hub()
 
-    with pytest.raises(ValueError):
-        host.create_workspace_repository("../../escape")
+    with pytest.raises(host.InvalidWorkspaceIdError):
+        host.create_workspace_repository(workspace_id)
 
 
 def test_listing_reports_every_hosted_workspace(machine_root: Path) -> None:
@@ -117,3 +124,41 @@ def _device_pushing_to(path: Path, hub_path: Path) -> Repo:
     repository.git.commit("--allow-empty", "-m", "first")
     repository.git.push("origin", "main:main")
     return repository
+
+
+def test_a_hub_identifier_survives_a_concurrent_first_creation(
+    machine_root: Path,
+) -> None:
+    """Two starts must not each write an identifier and hand one caller back
+    the one that no longer exists on disk."""
+    results: list[str] = []
+    barrier = threading.Barrier(4)
+
+    def create() -> None:
+        barrier.wait()
+        results.append(host.create_hub().hub_id)
+
+    threads = [threading.Thread(target=create) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    settings = host.read_hub()
+    assert settings is not None
+    assert set(results) == {settings.hub_id}
+
+
+def test_a_repository_that_cannot_be_created_is_reported_as_a_hub_failure(
+    machine_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user is told the hub refused it, not handed a Git traceback."""
+    host.create_hub()
+    monkeypatch.setattr(
+        host.Repo,
+        "init",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("full")),
+    )
+
+    with pytest.raises(host.HubError):
+        host.create_workspace_repository(WORKSPACE_ID)

@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,8 +38,12 @@ COMMAND_TIMEOUT_SECONDS = 30.0
 #: The key type generated for a device that has none.
 SSH_KEY_TYPE = "ed25519"
 
-_HOST = re.compile(r"^[A-Za-z0-9._\-]+$")
-_USER = re.compile(r"^[A-Za-z0-9._\-\\$]+$")
+#: A leading ``-`` would reach ``ssh`` and ``ssh-keyscan`` as an option rather
+#: than as the machine to contact, so neither part may start with one.
+_HOST = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._\-]*$")
+#: Backslash and ``$`` are here for Windows: ``DOMAIN\user`` and the trailing
+#: ``$`` of a machine account are ordinary login names there.
+_USER = re.compile(r"^[A-Za-z0-9._\\$][A-Za-z0-9._\-\\$]*$")
 
 
 class InvalidHubEndpointError(ValueError):
@@ -150,7 +153,7 @@ def hub_remote_url(location: HubLocation, workspace_id: str) -> str:
     """Return the Git remote one workspace uses to reach its hub."""
     if location.endpoint is None:
         return str(host.workspace_repository_path(workspace_id))
-    _require_uuid(workspace_id)
+    host.require_workspace_id(workspace_id)
     return (
         f"{location.endpoint.target}:"
         f"{HUB_WORKSPACES_RELATIVE}/{workspace_id}/repository.git"
@@ -177,7 +180,7 @@ def list_hub_workspaces(location: HubLocation) -> list[str]:
 
 def create_hub_workspace(location: HubLocation, workspace_id: str) -> None:
     """Register a workspace on a hub, creating the repository devices push to."""
-    _require_uuid(workspace_id)
+    host.require_workspace_id(workspace_id)
     if location.endpoint is None:
         host.create_workspace_repository(workspace_id)
         return
@@ -358,17 +361,3 @@ def _ssh_dir() -> Path:
 
 def _known_hosts_path() -> Path:
     return _ssh_dir() / "known_hosts"
-
-
-def _require_uuid(workspace_id: str) -> None:
-    """Refuse an identifier that could name something other than a workspace.
-
-    It travels to a remote shell as a command argument and to a directory name,
-    so it is checked before it can become either.
-    """
-    try:
-        uuid.UUID(workspace_id)
-    except ValueError as exc:
-        raise InvalidHubEndpointError(
-            f"{workspace_id!r} is not a workspace identifier."
-        ) from exc

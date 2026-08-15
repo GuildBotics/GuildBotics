@@ -34,6 +34,10 @@ def current_sync_manager() -> GitSyncManager | None:
     return _manager
 
 
+class SyncStillStoppingError(RuntimeError):
+    """Raised when the previous workspace's queue has not finished stopping."""
+
+
 def activate_workspace_sync(
     workspace_root: Path | None = None,
 ) -> GitSyncManager | None:
@@ -45,6 +49,11 @@ def activate_workspace_sync(
     Returns:
         GitSyncManager | None: The running queue, or None when this workspace
             is not connected to a hub and nothing was started.
+
+    Raises:
+        SyncStillStoppingError: When a previous queue is still finishing. It is
+            holding a repository, so starting another one now would put two
+            threads on it.
     """
     global _manager, _workspace
     with _lock:
@@ -54,7 +63,11 @@ def activate_workspace_sync(
             return None
         if _manager is not None and _workspace == repository.workspace_root:
             return _manager
-        _stop_locked()
+        if not _stop_locked():
+            raise SyncStillStoppingError(
+                "The previous workspace's synchronization queue has not finished "
+                "stopping. Try again in a moment."
+            )
         manager = build_git_sync_manager(repository.workspace_root)
         set_workspace_sync_port(manager)
         manager.start()
@@ -63,31 +76,42 @@ def activate_workspace_sync(
         return manager
 
 
-def deactivate_workspace_sync() -> None:
+def deactivate_workspace_sync() -> bool:
     """Stop the queue and restore the no-op port.
 
     Called before a workspace switch so the queue of the workspace being left
     cannot commit into the one being entered.
+
+    Returns:
+        bool: Whether the queue actually stopped. False means the switch it was
+            making room for must not go ahead.
+    """
+    with _lock:
+        return _stop_locked()
+
+
+def _stop_locked() -> bool:
+    """Stop whatever is running. The caller holds the activation lock.
+
+    A worker that outlasts its stop keeps its repository: a fetch or a push can
+    block far longer than the timeout, and the thread is still committing and
+    resetting in there. Forgetting it would let the next activation build a
+    second queue on the same repository -- two threads interleaving ``reset``,
+    ``checkout``, and ``commit``, which manufactures rejections and anomalies
+    out of nothing. So it stays, and the port stays attached to it, until it is
+    really gone.
     """
     global _manager, _workspace
-    with _lock:
-        _stop_locked()
-
-
-def _stop_locked() -> None:
-    """Stop whatever is running. The caller holds the activation lock."""
-    global _manager, _workspace
-    set_workspace_sync_port(None)
     if _manager is None:
-        return
+        set_workspace_sync_port(None)
+        return True
     if not _manager.stop():
-        # A fetch or push can outlast the stop. The port is already detached,
-        # so the thread finishes its cycle against the workspace it started in
-        # and then exits; what must not happen is a second queue beside it,
-        # which the manager's own start refuses while this one is alive.
         LOGGER.warning("The synchronization queue is still finishing its last cycle.")
+        return False
+    set_workspace_sync_port(None)
     _manager = None
     _workspace = None
+    return True
 
 
 def _connected_repository(workspace_root: Path | None) -> LocalSyncRepository | None:

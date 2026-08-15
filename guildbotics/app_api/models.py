@@ -131,7 +131,7 @@ class WorkspaceSyncPreview(BaseModel):
 
     hub_workspace_id: str | None = None
     workspace_id: str
-    mode: Literal["register", "join"]
+    mode: Literal["register", "join", "reconnect"]
     hub_only: list[str] = Field(default_factory=list)
     device_only: list[str] = Field(default_factory=list)
     differing: list[str] = Field(default_factory=list)

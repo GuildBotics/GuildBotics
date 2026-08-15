@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +43,28 @@ def _workspace(root: Path, **files: str) -> Path:
     return root
 
 
+@contextmanager
+def _as_machine(tmp_path: Path, name: str) -> Iterator[None]:
+    """Run a block as a different machine, with its own device identity.
+
+    Device identity is machine-wide rather than per workspace, so two
+    workspaces in one test would otherwise publish the same device record and
+    collide over it -- a conflict no pair of real machines can have.
+    """
+    home = tmp_path / f"machine-{name}"
+    home.mkdir(exist_ok=True)
+    previous = {name: os.environ.get(name) for name in ("HOME", "USERPROFILE")}
+    os.environ["HOME"] = os.environ["USERPROFILE"] = str(home)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _hub_file(hub: Path, path: str) -> str | None:
     """Read a file from the hub verbatim, trailing newline included."""
     try:
@@ -64,7 +89,7 @@ def test_an_empty_hub_receives_this_workspace_as_its_first_content(
 
     result = enrollment.enroll(str(hub), root)
 
-    assert result.mode == "registered"
+    assert result.mode == "register"
     assert result.rejection_id is None
     assert _hub_file(hub, CONFIG) == "name: demo\n"
     assert _hub_file(hub, "state/workspace.json") is not None
@@ -142,7 +167,7 @@ def test_joining_adopts_the_hub_version_of_a_file_both_sides_have(
 
     result = enrollment.enroll(str(hub), joining, record_rejection=recorder)
 
-    assert result.mode == "joined"
+    assert result.mode == "join"
     assert (joining / ".guildbotics" / CONFIG).read_text() == "name: hub\n"
     assert CONFIG in result.adopted
 
@@ -354,3 +379,173 @@ def test_the_device_that_reconnects_keeps_synchronizing_afterwards(
     device.manager.synchronize()
 
     assert _hub_file(hub, HOTKEYS) == "a: b\n"
+
+
+# -- What a join must not destroy ---------------------------------------------
+
+
+def test_a_file_that_cannot_be_shared_yet_survives_the_join(
+    tmp_path: Path, hub: Path, recorder: enrollment.RejectionRecorder
+) -> None:
+    """It is the user's unfinished work, not a losing side of a race: the hub
+    has no version of it that supersedes anything, and it is not committed, so
+    replacing it would lose the edit outright."""
+    broken = "state/chat_state/pending.json"
+    enrollment.enroll(
+        str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n", broken: "{}"})
+    )
+    joining = _workspace(
+        tmp_path / "windows", **{CONFIG: "name: mine\n", broken: "{not json"}
+    )
+
+    result = enrollment.enroll(str(hub), joining, record_rejection=recorder)
+
+    assert (joining / ".guildbotics" / broken).read_text() == "{not json"
+    assert broken not in result.adopted
+    assert [change.path for change in result.unsendable] == [broken]
+
+
+# -- Reconnecting to a hub this workspace shares history with -----------------
+
+
+def _rebuilt_hub(tmp_path: Path, origin: Path) -> Path:
+    """A new hub carrying the same history, as a planned hub move produces."""
+    new_hub = tmp_path / "new-hub.git"
+    Repo.init(new_hub, bare=True, initial_branch="main")
+    enrollment.enroll(str(new_hub), origin)
+    return new_hub
+
+
+def test_a_reconnecting_device_keeps_changes_the_hub_never_saw(
+    tmp_path: Path, hub: Path, recorder: enrollment.RejectionRecorder
+) -> None:
+    """Both sides holding a file is not a conflict when only one of them
+    changed it since the commit they last agreed on."""
+    origin = _workspace(tmp_path / "mac", **{CONFIG: "name: shared\n"})
+    with _as_machine(tmp_path, "mac"):
+        enrollment.enroll(str(hub), origin)
+    other = tmp_path / "windows"
+    with _as_machine(tmp_path, "windows"):
+        enrollment.clone_workspace(str(hub), other)
+        (other / ".guildbotics" / CONFIG).write_text("name: edited\n", encoding="utf-8")
+    with _as_machine(tmp_path, "mac"):
+        rebuilt = _rebuilt_hub(tmp_path, origin)
+
+    with _as_machine(tmp_path, "windows"):
+        result = enrollment.enroll(str(rebuilt), other, record_rejection=recorder)
+
+    assert result.mode == "reconnect"
+    assert result.rejection_id is None
+    assert (other / ".guildbotics" / CONFIG).read_text() == "name: edited\n"
+
+
+def test_a_reconnecting_device_still_yields_where_both_sides_changed(
+    tmp_path: Path,
+    hub: Path,
+    recorder: enrollment.RejectionRecorder,
+    rejections: list[dict[str, Any]],
+) -> None:
+    origin = _workspace(tmp_path / "mac", **{CONFIG: "name: shared\n"})
+    with _as_machine(tmp_path, "mac"):
+        enrollment.enroll(str(hub), origin)
+    other = tmp_path / "windows"
+    with _as_machine(tmp_path, "windows"):
+        enrollment.clone_workspace(str(hub), other)
+        (other / ".guildbotics" / CONFIG).write_text("name: mine\n", encoding="utf-8")
+    (origin / ".guildbotics" / CONFIG).write_text("name: theirs\n", encoding="utf-8")
+    with _as_machine(tmp_path, "mac"):
+        rebuilt = _rebuilt_hub(tmp_path, origin)
+
+    with _as_machine(tmp_path, "windows"):
+        result = enrollment.enroll(str(rebuilt), other, record_rejection=recorder)
+
+    assert result.mode == "reconnect"
+    assert result.rejection_id is not None
+    assert (other / ".guildbotics" / CONFIG).read_text() == "name: theirs\n"
+    assert CONFIG in rejections[0]["paths"]
+
+
+def test_a_first_meeting_is_still_a_join(
+    tmp_path: Path, hub: Path, recorder: enrollment.RejectionRecorder
+) -> None:
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
+    joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
+
+    assert (
+        enrollment.enroll(str(hub), joining, record_rejection=recorder).mode == "join"
+    )
+
+
+# -- A hub that was refused leaves nothing behind -----------------------------
+
+
+def test_a_refused_hub_leaves_the_workspace_unconnected(
+    tmp_path: Path, hub: Path
+) -> None:
+    """Otherwise the next start finds a connected workspace and runs a queue
+    against a hub the user was told they could not use."""
+    stranger = Repo.init(tmp_path / "stranger", initial_branch="main")
+    stranger.git.config("user.name", "someone")
+    stranger.git.config("user.email", "someone@example.invalid")
+    (tmp_path / "stranger" / "README.md").write_text("not a workspace\n")
+    stranger.git.add("--", "README.md")
+    stranger.git.commit("-m", "unrelated")
+    stranger.create_remote("origin", str(hub))
+    stranger.git.push("origin", "main:main")
+    root = _workspace(tmp_path / "mac", **{CONFIG: "a: b\n"})
+
+    with pytest.raises(enrollment.EnrollmentError):
+        enrollment.enroll(str(hub), root)
+
+    assert not LocalSyncRepository(root).has_remote()
+
+
+def test_an_unreachable_hub_is_reported_rather_than_raised_as_a_git_error(
+    tmp_path: Path,
+) -> None:
+    """ "The hub is off" and "your key is not registered" arrive here, so they
+    have to be something the layer above can put in front of the user."""
+    root = _workspace(tmp_path / "mac", **{CONFIG: "a: b\n"})
+
+    with pytest.raises(enrollment.EnrollmentError):
+        enrollment.enroll(str(tmp_path / "no-such-hub.git"), root)
+
+    assert not LocalSyncRepository(root).has_remote()
+
+
+def test_a_preview_tells_an_unreachable_hub_from_an_empty_one(tmp_path: Path) -> None:
+    """Both look like "nothing to fetch"; only one of them means the user is
+    about to register with an empty hub."""
+    root = _workspace(tmp_path / "mac", **{CONFIG: "a: b\n"})
+
+    with pytest.raises(enrollment.EnrollmentError):
+        enrollment.preview_enrollment(str(tmp_path / "no-such-hub.git"), root)
+
+
+def test_a_preview_keeps_no_content_from_a_hub_that_was_not_joined(
+    tmp_path: Path, hub: Path
+) -> None:
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
+    joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
+
+    enrollment.preview_enrollment(str(hub), joining)
+
+    refs = Repo(joining / ".guildbotics").git.for_each_ref("--format=%(refname)")
+    assert "hub-preview" not in refs
+
+
+def test_a_repeated_join_records_one_rejection(
+    tmp_path: Path,
+    hub: Path,
+    recorder: enrollment.RejectionRecorder,
+    rejections: list[dict[str, Any]],
+) -> None:
+    """A retry after a lost push must not tell the user twice about one thing."""
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
+    joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
+    first = enrollment.enroll(str(hub), joining, record_rejection=recorder)
+
+    again = enrollment.enroll(str(hub), joining, record_rejection=recorder)
+
+    assert len(rejections) == 1
+    assert again.rejection_id is None or again.rejection_id == first.rejection_id

@@ -50,7 +50,11 @@ def _imports_by_module(subpackage: str, inside: bool) -> dict[Path, set[str]]:
             if isinstance(node, ast.Import):
                 modules.update(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
+                # ``from guildbotics import sync`` names the subpackage in the
+                # alias rather than in the module, so both are recorded; a rule
+                # that only read the module would let that form through.
                 modules.add(node.module)
+                modules.update(f"{node.module}.{alias.name}" for alias in node.names)
         imports[relative] = {
             module for module in modules if module.startswith("guildbotics")
         }

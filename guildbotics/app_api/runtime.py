@@ -335,8 +335,16 @@ class AppRuntime:
         if self._diagnostics_store is not None:
             self._diagnostics_store.finish_system_session()
         # Stopped before the switch so the queue of the workspace being left
-        # cannot commit into the one being entered.
-        self._workspace_sync.deactivate()
+        # cannot commit into the one being entered. A queue still finishing a
+        # fetch or push holds that workspace's repository, so the switch waits
+        # rather than leaving two of them running side by side.
+        if not self._workspace_sync.deactivate():
+            raise AppApiError(
+                "workspace_switch_blocked",
+                "Synchronization for the current workspace is still stopping. "
+                "Try again in a moment.",
+                status_code=409,
+            )
         os.chdir(workspace)
         write_active_workspace(workspace)
         apply_workspace_root(workspace)

@@ -302,16 +302,6 @@ class GitSyncManager:
                 self._last_error_code = None
             return self.synchronize()
 
-    def change_remote(self, url: str) -> GitSyncStatus:
-        """Point this workspace at a different hub and synchronize with it."""
-        with self._sync_lock:
-            self._repository.verify_boundary()
-            self._repository.set_remote(url)
-            if self._halted():
-                self._state = "idle"
-                self._last_error_code = None
-        return self.synchronize()
-
     def status(self) -> GitSyncStatus:
         """Report the current queue state, recomputed from the repository."""
         local = remote = None

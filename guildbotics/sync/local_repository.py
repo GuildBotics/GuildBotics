@@ -271,6 +271,17 @@ class LocalSyncRepository:
         else:
             repository.create_remote(SYNC_REMOTE, url)
 
+    def clear_remote(self) -> None:
+        """Forget the hub, returning the workspace to not being synchronized.
+
+        A connection attempt that fails partway must not leave a remote behind:
+        the next start would see a workspace that looks connected and would run
+        a queue against a hub that was never accepted.
+        """
+        if self.has_remote():
+            repository = self._repo()
+            repository.delete_remote(repository.remote(SYNC_REMOTE))
+
     def fetch(self) -> None:
         """Update the local view of the hub.
 
@@ -285,16 +296,32 @@ class LocalSyncRepository:
         Showing the user what joining would do must not leave the workspace
         looking joined, so the URL is used directly and no remote is recorded.
 
+        The hub is asked what it has before anything is fetched. A hub that is
+        empty and a hub that cannot be reached would otherwise both look like
+        "nothing to fetch", and the user would be shown an empty hub they are
+        about to register with when the real answer is that their key is not
+        registered yet.
+
         Returns:
             str | None: The hub's commit, or None when the hub is still empty.
+
+        Raises:
+            GitCommandError: When the hub cannot be reached.
         """
-        try:
-            self._repo().git.fetch(url, f"+{SYNC_BRANCH}:{PREVIEW_REF}")
-        except GitCommandError:
-            # An empty hub has no branch to fetch. A hub that cannot be reached
-            # at all fails later, when the workspace is actually connected.
+        listing = str(self._repo().git.ls_remote(url, f"refs/heads/{SYNC_BRANCH}"))
+        if not listing.strip():
             return None
+        self._repo().git.fetch(url, f"+{SYNC_BRANCH}:{PREVIEW_REF}")
         return self._repo().git.rev_parse(PREVIEW_REF)
+
+    def forget_preview(self) -> None:
+        """Drop the ref a preview fetched, along with its claim on the objects.
+
+        A hub the user decided not to join has no business keeping content in
+        this repository.
+        """
+        with suppress(GitCommandError):
+            self._repo().git.update_ref("-d", PREVIEW_REF)
 
     def push(self) -> None:
         """Send the sync branch to the hub, which accepts fast-forwards only."""

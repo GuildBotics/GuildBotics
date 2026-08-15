@@ -135,8 +135,13 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 参加フローの規約:
 
 - 参加は上書きではない。**このマシンの内容を先に commit してから** Hub の内容を採用し、押し出された commit は rejected ref と Activity に残す
-- preview と実行は同じ前半（`initialize` → identity → commit）を共有する。preview が実行と違う起点を語らないようにするため
+- preview と実行は同じ前半（`initialize` → identity → commit）と同じ分類関数を共有する。preview が実行と違う起点や違う結論を語らないようにするため
 - 同じ path は Hub 側を採用、Hub に無い path は保持して送信、Workspace ID は Hub 側を採用する
+- **tree の直接比較でよいのは履歴を共有していない相手だけ。** 共通の commit がある相手（Hub 再構築後の再接続など）では「両方が持っている」は何も意味しない。`merge_base` があれば通常の収束（manager）へ委譲し、参加側で別の規則を作らない
+- **検証を通らないファイルを Hub の内容で上書きしない。** これは競争に負けた側ではなく、まだ送れていない利用者の編集であり、commit されていないので rejected ref にも残らない。`restore_from_index` の対象から必ず引く（manager 側と同じ）
+- **接続に失敗したら remote を残さない。** 残すと次の起動が「同期有効」と判定して、利用者が使えないと言われた Hub に対して queue が回りはじめる
+- **Git の例外を境界の外へ出さない。** Hub が落ちている・鍵が未登録・アドレスが違うは最も普通の異常系なので、`EnrollmentError` などへ変換して API が利用者に見せられる形にする。`_HUB_FAILURES` のような一覧は「利用者に見せられるもの」の宣言であって、下位の例外を捕まえる網ではない
+- **停止しなかった queue を手放さない。** timeout した worker は repository を掴んだままなので、忘れると次の activate が同じ repository に2本目を作る。`stop()` の戻り値を呼び出し側まで返し、Workspace 切替はそれで中止する
 
 #### Hub (`guildbotics/hub/*`)
 
@@ -153,6 +158,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - Workspace root の path を保存すること（Hub は Workspace ID だけで対応づける）
 - 接続先文字列から port や path を受け取ること（Hub 内の配置は GuildBotics が決める）
 - 生の Git command を Hub へ ssh で送り込むこと（Hub 側の CLI を呼ぶ）
+- 接続先や Workspace ID を検証せずに path / コマンド引数へ渡すこと。Workspace ID は**正規形の UUID だけ**を受け付ける（`urn:uuid:` や大文字は同じ UUID の別表記で、1つの Workspace が複数 directory へ割れる）。接続先は先頭 `-` を拒否する（`ssh` の option として解釈される）
 
 #### App API (`guildbotics/app_api/*`)
 

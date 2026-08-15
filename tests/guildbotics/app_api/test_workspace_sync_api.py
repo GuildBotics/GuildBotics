@@ -222,3 +222,44 @@ def test_this_device_reports_no_key_before_one_is_made(client: TestClient) -> No
 
     assert payload["exists"] is False
     assert payload["public_key"] == ""
+
+
+def test_a_hub_that_cannot_be_reached_is_an_answer_not_a_crash(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A key not registered yet, a hub that is off, a wrong address: these are
+    the normal way this fails, so the Desktop has to be able to show them."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    enabled = _json(
+        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    )
+
+    response = client.post(
+        "/workspace/sync/clone",
+        headers=AUTH_HEADERS,
+        json={
+            "hub": {"endpoint": "hub.invalid"},
+            "workspace_id": enabled["workspace_id"],
+            "workspace_dir": str(tmp_path / "second"),
+        },
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "sync_clone_failed"
+
+
+def test_a_workspace_identifier_that_is_not_one_is_refused(
+    client: TestClient, tmp_path: Path
+) -> None:
+    response = client.post(
+        "/workspace/sync/clone",
+        headers=AUTH_HEADERS,
+        json={
+            "hub": {},
+            "workspace_id": "../../etc",
+            "workspace_dir": str(tmp_path / "second"),
+        },
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "sync_clone_failed"

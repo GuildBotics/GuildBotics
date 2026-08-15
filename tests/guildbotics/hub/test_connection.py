@@ -67,11 +67,27 @@ def test_a_local_hub_is_reached_by_filesystem_path(machine_root: Path) -> None:
     assert Path(url) == host.workspace_repository_path(WORKSPACE_ID)
 
 
-def test_a_workspace_identifier_never_becomes_part_of_a_remote_command() -> None:
+@pytest.mark.parametrize(
+    "workspace_id",
+    [
+        "../../etc",
+        "not-a-uuid",
+        # Same UUID, non-canonical spellings: accepting them would spread one
+        # workspace over several directories, and ``:`` is not a legal
+        # directory name on a Windows hub.
+        "urn:uuid:0198ab00-0000-7000-8000-000000000001",
+        "{0198ab00-0000-7000-8000-000000000001}",
+        "0198ab0000007000800000000000000001",
+        "0198AB00-0000-7000-8000-000000000001",
+    ],
+)
+def test_a_workspace_identifier_never_becomes_part_of_a_remote_command(
+    workspace_id: str,
+) -> None:
     location = HubLocation(endpoint=HubEndpoint(host="hub.local"))
 
-    with pytest.raises(InvalidHubEndpointError):
-        connection.hub_remote_url(location, "../../etc")
+    with pytest.raises(host.InvalidWorkspaceIdError):
+        connection.hub_remote_url(location, workspace_id)
 
 
 def test_a_local_hub_lists_the_workspaces_it_holds(machine_root: Path) -> None:
@@ -117,3 +133,16 @@ def test_a_local_hub_registers_a_workspace_without_any_connection(
     connection.create_hub_workspace(HubLocation(), WORKSPACE_ID)
 
     assert host.list_workspace_ids() == [WORKSPACE_ID]
+
+
+@pytest.mark.parametrize("text", ["-oProxyCommand=x", "-hub.local", "me@-hub.local"])
+def test_an_address_that_would_reach_ssh_as_an_option_is_refused(text: str) -> None:
+    with pytest.raises(InvalidHubEndpointError):
+        connection.parse_hub_endpoint(text)
+
+
+@pytest.mark.parametrize("text", ["DOMAIN\\me@hub.local", "machine$@hub.local"])
+def test_a_windows_login_name_is_still_an_address(text: str) -> None:
+    """``DOMAIN\\user`` and a machine account's trailing ``$`` are ordinary
+    there, and they never reach a shell: every command is a list."""
+    assert connection.parse_hub_endpoint(text).host == "hub.local"

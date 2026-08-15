@@ -12,6 +12,7 @@ from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.workspace_sync_port import (
     NoOpWorkspaceSyncPort,
     get_workspace_sync_port,
+    set_workspace_sync_port,
     write_shared_text,
 )
 
@@ -23,6 +24,10 @@ def _stop_after_each_test() -> None:
     """No test may leave a queue running against its temporary directory."""
     yield
     activation.deactivate_workspace_sync()
+    # A test that made a manager refuse to stop still has to release the slot.
+    activation._manager = None
+    activation._workspace = None
+    set_workspace_sync_port(None)
 
 
 def _workspace(root: Path) -> Path:
@@ -111,3 +116,52 @@ def test_a_shared_write_reaches_the_running_queue(tmp_path: Path, hub: Path) -> 
     assert change is not None
     assert manager.await_pushed(change.change_id) is True
     assert Repo(hub).git.cat_file("blob", "main:config/hotkeys.yml") == "a: b"
+
+
+def test_a_queue_that_will_not_stop_blocks_the_next_workspace(
+    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two threads on one repository interleave reset, checkout, and commit,
+    and a switch that went ahead anyway would leave the old one running."""
+    first_root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), first_root)
+    other_hub = tmp_path / "other-hub.git"
+    Repo.init(other_hub, bare=True, initial_branch="main")
+    second_root = _workspace(tmp_path / "windows")
+    enrollment.enroll(str(other_hub), second_root)
+    stuck = activation.activate_workspace_sync(first_root)
+    assert stuck is not None
+    monkeypatch.setattr(stuck, "stop", lambda timeout=5.0: False)
+
+    with pytest.raises(activation.SyncStillStoppingError):
+        activation.activate_workspace_sync(second_root)
+
+    assert activation.current_sync_manager() is stuck
+
+
+def test_a_queue_that_will_not_stop_keeps_receiving_writes(
+    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Detaching the port from a worker that is still committing would leave
+    its own workspace's saves announced to nobody."""
+    root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), root)
+    manager = activation.activate_workspace_sync(root)
+    assert manager is not None
+    monkeypatch.setattr(manager, "stop", lambda timeout=5.0: False)
+
+    assert activation.deactivate_workspace_sync() is False
+    assert get_workspace_sync_port() is manager
+
+
+def test_reactivating_the_same_workspace_reuses_its_queue(
+    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It is that workspace's own queue, so there is nothing to make room for."""
+    root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), root)
+    manager = activation.activate_workspace_sync(root)
+    assert manager is not None
+    monkeypatch.setattr(manager, "stop", lambda timeout=5.0: False)
+
+    assert activation.activate_workspace_sync(root) is manager

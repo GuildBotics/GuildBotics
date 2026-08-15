@@ -40,6 +40,7 @@ from guildbotics.sync import (
     GitSyncStatus,
     LocalSyncRepository,
     SyncRepositoryError,
+    SyncStillStoppingError,
     UnsendableChange,
     activate_workspace_sync,
     clone_workspace,
@@ -47,6 +48,7 @@ from guildbotics.sync import (
     deactivate_workspace_sync,
     enroll,
     preview_enrollment,
+    preview_registration,
 )
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_workspace_root
 from guildbotics.utils.openssh import OpenSshNotFoundError
@@ -56,15 +58,19 @@ from guildbotics.workspace.identity import (
     read_workspace_identity,
 )
 
-#: The failures a hub operation reports back to the user rather than crashing on.
+#: The failures a hub operation reports back to the user rather than crashing
+#: on. They are all the boundary's own exception types: Git and OpenSSH
+#: failures are converted before they get here, so this list stays a statement
+#: about what the user can be told rather than a net for anything that goes
+#: wrong underneath.
 _HUB_FAILURES = (
     HubUnreachableError,
     InvalidHubEndpointError,
     OpenSshNotFoundError,
-    host.HubNotHostedError,
+    host.HubError,
     EnrollmentError,
     SyncRepositoryError,
-    OSError,
+    SyncStillStoppingError,
 )
 
 
@@ -139,15 +145,26 @@ class WorkspaceSyncService:
     # -- Enrolling a workspace ----------------------------------------------
 
     def preview(self, request: WorkspaceSyncEnableRequest) -> WorkspaceSyncPreview:
-        """Report what enabling synchronization would do, changing nothing shared."""
+        """Report what enabling synchronization would do, changing nothing shared.
+
+        The hub is asked what it holds before anything is compared. A workspace
+        it does not hold yet has nothing to compare against, and no repository
+        to read either -- creating one would be a change, and a preview makes
+        none.
+        """
         location = _location(request.hub)
-        url = self._remote_url(location, request.workspace_id, create=False)
+        target = request.workspace_id or _own_workspace_id()
         with _reporting("sync_preview_failed", "The hub could not be compared."):
-            preview = preview_enrollment(url, _workspace_root())
+            if target not in self._workspace_ids(location):
+                preview = preview_registration(_workspace_root())
+            else:
+                preview = preview_enrollment(
+                    connection.hub_remote_url(location, target), _workspace_root()
+                )
         return WorkspaceSyncPreview(
             hub_workspace_id=preview.hub_workspace_id,
             workspace_id=preview.workspace_id,
-            mode="join" if preview.hub_workspace_id else "register",
+            mode=preview.mode,
             hub_only=list(preview.hub_only),
             device_only=list(preview.device_only),
             differing=list(preview.differing),
@@ -180,8 +197,8 @@ class WorkspaceSyncService:
                 context={"workspace_dir": str(destination)},
                 status_code=409,
             )
-        url = connection.hub_remote_url(location, request.workspace_id)
         with _reporting("sync_clone_failed", "The workspace could not be taken."):
+            url = connection.hub_remote_url(location, request.workspace_id)
             clone_workspace(url, destination)
         return destination
 
@@ -214,9 +231,15 @@ class WorkspaceSyncService:
         activate_workspace_sync(_workspace_root())
         return self.get_status()
 
-    def deactivate(self) -> None:
-        """Stop the queue, which a workspace switch does before it switches."""
-        deactivate_workspace_sync()
+    def deactivate(self) -> bool:
+        """Stop the queue, which a workspace switch does before it switches.
+
+        Returns:
+            bool: Whether it stopped. A caller that was making room for another
+                workspace must not proceed on False -- the old queue still
+                holds its repository.
+        """
+        return deactivate_workspace_sync()
 
     def retry(self) -> WorkspaceSyncStatus:
         """Try again after an unreachable hub or repaired shared data."""

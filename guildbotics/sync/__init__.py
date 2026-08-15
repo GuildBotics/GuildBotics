@@ -16,6 +16,7 @@ reaches synchronization through the port.
 from __future__ import annotations
 
 from guildbotics.sync.activation import (
+    SyncStillStoppingError,
     activate_workspace_sync,
     current_sync_manager,
     deactivate_workspace_sync,
@@ -29,6 +30,7 @@ from guildbotics.sync.enrollment import (
     clone_workspace,
     enroll,
     preview_enrollment,
+    preview_registration,
 )
 from guildbotics.sync.local_repository import (
     LocalSyncRepository,
@@ -55,6 +57,7 @@ __all__ = [
     "SharedDataAnomaly",
     "SyncRepositoryError",
     "SyncState",
+    "SyncStillStoppingError",
     "UnsendableChange",
     "WorkingTreeChange",
     "activate_workspace_sync",
@@ -64,5 +67,6 @@ __all__ = [
     "deactivate_workspace_sync",
     "enroll",
     "preview_enrollment",
+    "preview_registration",
     "record_update_rejected",
 ]

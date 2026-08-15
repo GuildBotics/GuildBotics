@@ -15,15 +15,26 @@ update would settle, and the losing commit is kept under a rejected ref on this
 device with one activity event pointing at it. Files only this machine has are
 kept and shared. Nothing asks the user to merge anything by hand.
 
-The preview a user sees before joining runs this same first half, so what it
-shows is what will actually happen rather than a separate estimate of it.
+Joining compares two whole trees, which is only the right question when the two
+sides share no history. A workspace reconnecting to a rebuilt hub does share
+history with it, and there "both sides have this file" says nothing -- what
+matters is who changed it since the commit they last agreed on. That case is
+handed to the ordinary synchronization rules instead of being decided here.
+
+The preview a user sees runs the same first half and the same classification,
+so what it shows is what will actually happen rather than a separate estimate
+of it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from git import GitCommandError
 
 from guildbotics.sync.commits import (
     CommitOutcome,
@@ -31,7 +42,8 @@ from guildbotics.sync.commits import (
     commit_shared_changes,
     validate_received,
 )
-from guildbotics.sync.local_repository import LocalSyncRepository
+from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
+from guildbotics.sync.manager import GitSyncManager
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
 from guildbotics.workspace.identity import (
     WorkspaceIdentity,
@@ -44,7 +56,10 @@ from guildbotics.workspace.validation import SharedFileInvalidError
 
 _WORKSPACE_IDENTITY_PATH = "state/workspace.json"
 
-EnrollmentMode = Literal["registered", "joined"]
+#: What connecting this workspace to a hub turns out to be. ``register`` gives
+#: the hub its first content, ``join`` merges two histories that never met, and
+#: ``reconnect`` settles a hub this workspace already shares history with.
+EnrollmentMode = Literal["register", "join", "reconnect"]
 
 
 class EnrollmentError(RuntimeError):
@@ -59,6 +74,7 @@ class EnrollmentPreview:
         hub_workspace_id (str | None): The workspace the hub holds, or None
             when the hub repository is still empty and this workspace would
             become its first content.
+        mode (EnrollmentMode): What connecting would turn out to be.
         workspace_id (str): This workspace's current identifier. It is replaced
             by ``hub_workspace_id`` when the two differ and the join proceeds.
         hub_only (tuple[str, ...]): Files only the hub has. They are added here.
@@ -71,6 +87,7 @@ class EnrollmentPreview:
     """
 
     hub_workspace_id: str | None
+    mode: EnrollmentMode
     workspace_id: str
     hub_only: tuple[str, ...]
     device_only: tuple[str, ...]
@@ -109,13 +126,39 @@ def preview_enrollment(
     Nothing about this workspace's connection changes: the hub is read through
     its URL, so a preview the user does not act on leaves a workspace that is
     still not synchronized.
+
+    Raises:
+        EnrollmentError: When the hub cannot be reached or cannot be read.
     """
     repository, outcome = _prepare(workspace_root)
-    remote = repository.fetch_preview(remote_url)
+    with _as_enrollment_error("The hub could not be read"):
+        remote = repository.fetch_preview(remote_url)
+        try:
+            return _preview(repository, outcome, remote)
+        finally:
+            # A hub the user decided not to join keeps no content here.
+            repository.forget_preview()
+
+
+def preview_registration(workspace_root: Path | None = None) -> EnrollmentPreview:
+    """Report what registering with a hub that does not hold this workspace does.
+
+    The hub has no repository for it yet, so there is nothing to fetch and
+    nothing to compare -- but the user still needs to be told which of their
+    files cannot be shared until they are repaired.
+    """
+    repository, outcome = _prepare(workspace_root)
+    return _preview(repository, outcome, None)
+
+
+def _preview(
+    repository: LocalSyncRepository, outcome: CommitOutcome, remote: str | None
+) -> EnrollmentPreview:
     local = outcome.head
     if remote is None or local is None:
         return EnrollmentPreview(
             hub_workspace_id=None,
+            mode="register",
             workspace_id=_local_identity(repository).workspace_id,
             hub_only=(),
             device_only=(),
@@ -125,6 +168,7 @@ def preview_enrollment(
     hub_only, device_only, differing = _classify(repository, local, remote)
     return EnrollmentPreview(
         hub_workspace_id=_hub_identity(repository, remote).workspace_id,
+        mode=_mode(repository, local, remote),
         workspace_id=_local_identity(repository).workspace_id,
         hub_only=hub_only,
         device_only=device_only,
@@ -147,37 +191,104 @@ def enroll(
         record_rejection (RejectionRecorder): Records displaced local content.
 
     Raises:
-        EnrollmentError: When the hub holds a repository this workspace cannot
-            be reconciled with.
+        EnrollmentError: When the hub cannot be reached, or holds a repository
+            this workspace cannot be reconciled with. A workspace that was not
+            connected before is left unconnected, so a refused hub never leaves
+            behind a workspace that later starts synchronizing with it.
     """
     device_id = ensure_device_identity().device_id
     repository, outcome = _prepare(workspace_root)
-    repository.set_remote(remote_url)
+    was_connected = repository.has_remote()
+    with _as_enrollment_error("The hub could not be reached"):
+        repository.set_remote(remote_url)
+        try:
+            result = _connect(
+                repository,
+                outcome,
+                device_id=device_id,
+                record_rejection=record_rejection,
+            )
+        except Exception:
+            if not was_connected:
+                repository.clear_remote()
+            raise
+    # Published last so the record carries the identity the join settled on,
+    # and left for the sync queue to send with everything else.
+    publish_device_record(repository.workspace_root)
+    return result
+
+
+def _connect(
+    repository: LocalSyncRepository,
+    outcome: CommitOutcome,
+    *,
+    device_id: str,
+    record_rejection: RejectionRecorder,
+) -> EnrollmentResult:
+    """Decide which of the three things this connection is, and do it."""
     repository.fetch()
     remote = repository.remote_head()
     local = outcome.head
     if remote is None or local is None:
         repository.push()
-        result = EnrollmentResult(
+        return EnrollmentResult(
             workspace_id=_local_identity(repository).workspace_id,
-            mode="registered",
+            mode="register",
             adopted=(),
             rejection_id=None,
             unsendable=outcome.unsendable,
         )
-    else:
-        result = _join(
-            repository,
-            local=local,
-            remote=remote,
-            device_id=device_id,
-            record_rejection=record_rejection,
-            unsendable=outcome.unsendable,
+    if _mode(repository, local, remote) == "reconnect":
+        return _reconnect(
+            repository, device_id=device_id, record_rejection=record_rejection
         )
-    # Published last so the record carries the identity the join settled on,
-    # and left for the sync queue to send with everything else.
-    publish_device_record(repository.workspace_root)
-    return result
+    return _join(
+        repository,
+        local=local,
+        remote=remote,
+        device_id=device_id,
+        record_rejection=record_rejection,
+        unsendable=outcome.unsendable,
+    )
+
+
+def _reconnect(
+    repository: LocalSyncRepository,
+    *,
+    device_id: str,
+    record_rejection: RejectionRecorder,
+) -> EnrollmentResult:
+    """Settle a hub this workspace already shares history with.
+
+    Comparing the two trees would be the wrong question here: a file both sides
+    have is not a conflict unless both changed it since the commit they last
+    agreed on. That is exactly what ordinary synchronization decides, so this
+    runs one cycle of it rather than deciding again with a different rule.
+    """
+    identity = _local_identity(repository)
+    rejected: list[str] = []
+
+    def capture(**fields: object) -> None:
+        rejected.append(str(fields["rejection_id"]))
+        record_rejection(**fields)
+
+    status = GitSyncManager(
+        repository,
+        workspace_id=identity.workspace_id,
+        device_id=device_id,
+        record_rejection=capture,
+    ).synchronize()
+    if status.state != "idle" or status.last_error_code is not None:
+        raise EnrollmentError(
+            f"The hub was reached but not settled with: {status.last_error_code}"
+        )
+    return EnrollmentResult(
+        workspace_id=identity.workspace_id,
+        mode="reconnect",
+        adopted=(),
+        rejection_id=rejected[0] if rejected else None,
+        unsendable=status.invalid_paths,
+    )
 
 
 def clone_workspace(remote_url: str, workspace_root: Path) -> str:
@@ -192,11 +303,13 @@ def clone_workspace(remote_url: str, workspace_root: Path) -> str:
         str: The identifier of the workspace this machine has now joined.
 
     Raises:
-        EnrollmentError: When the copy does not contain a workspace identity.
+        EnrollmentError: When the hub cannot be reached, or the copy does not
+            contain a workspace identity.
     """
     repository = LocalSyncRepository(workspace_root)
-    repository.clone(remote_url)
-    repository.initialize()
+    with _as_enrollment_error("The workspace could not be taken from the hub"):
+        repository.clone(remote_url)
+        repository.initialize()
     identity = _local_identity(repository)
     publish_device_record(repository.workspace_root)
     return identity.workspace_id
@@ -233,9 +346,9 @@ def _join(
     hub_only, _device_only, differing = _classify(repository, local, remote)
     _validate_received(repository, remote, [*hub_only, *differing])
     workspace_id = _hub_identity(repository, remote).workspace_id
-    rejection_id = None
-    if differing:
-        rejection_id = repository.rejected_id_for(local) or new_uuid7()
+    rejection_id = repository.rejected_id_for(local)
+    if differing and rejection_id is None:
+        rejection_id = new_uuid7()
         repository.save_rejected(rejection_id, local)
         record_rejection(
             rejection_id=rejection_id,
@@ -245,7 +358,12 @@ def _join(
             workspace_root=repository.workspace_root,
         )
     repository.move_to(remote)
-    repository.restore_from_index(sorted([*hub_only, *differing]))
+    # A change held back by validation was never shareable, so the hub has no
+    # version of it that supersedes anything -- and overwriting it would throw
+    # away the edit the user was told to go and repair.
+    held = {change.path for change in unsendable}
+    adopted = tuple(sorted((set(hub_only) | set(differing)) - held))
+    repository.restore_from_index(list(adopted))
     # What only this machine had is still on disk and no longer tracked, so the
     # commit boundary picks it up again and it travels to the hub next.
     commit_shared_changes(repository, device_id=device_id)
@@ -253,28 +371,47 @@ def _join(
         repository.push()
     return EnrollmentResult(
         workspace_id=workspace_id,
-        mode="joined",
-        adopted=tuple(sorted([*hub_only, *differing])),
+        mode="join",
+        adopted=adopted,
         rejection_id=rejection_id,
         unsendable=unsendable,
     )
 
 
+def _mode(repository: LocalSyncRepository, local: str, remote: str) -> EnrollmentMode:
+    """Tell a first meeting apart from a reunion."""
+    return "reconnect" if repository.merge_base(local, remote) is not None else "join"
+
+
 def _classify(
     repository: LocalSyncRepository, local: str, remote: str
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """Split the difference between two trees into what each side alone holds.
+    """Split the difference between the two sides into what each alone holds.
 
-    The two histories are usually unrelated, which a plain comparison of the
-    two trees handles: a file added on the way from this machine's tree to the
-    hub's exists only on the hub, one deleted exists only here, and a modified
-    one exists on both with different content.
+    Which comparison answers that depends on whether the two share history.
+    Without a common commit, the trees themselves are the whole story: a file
+    added on the way from this machine's tree to the hub's exists only there,
+    a deleted one exists only here, and a modified one exists on both with
+    different content.
+
+    With a common commit, having the same file means nothing -- both sides
+    inherited it. What separates them is who changed it since, which is the
+    same question ordinary synchronization asks.
     """
-    changes = repository.changed_paths(local, remote)
+    base = repository.merge_base(local, remote)
+    if base is None:
+        changes = repository.changed_paths(local, remote)
+        return (
+            tuple(sorted(path for path, status in changes.items() if status == "A")),
+            tuple(sorted(path for path, status in changes.items() if status == "D")),
+            tuple(sorted(path for path, status in changes.items() if status == "M")),
+        )
+    here = set(repository.changed_paths(base, local))
+    there = set(repository.changed_paths(base, remote))
     return (
-        tuple(sorted(path for path, status in changes.items() if status == "A")),
-        tuple(sorted(path for path, status in changes.items() if status == "D")),
-        tuple(sorted(path for path, status in changes.items() if status == "M")),
+        tuple(sorted(there - here)),
+        tuple(sorted(here - there)),
+        tuple(sorted(here & there)),
     )
 
 
@@ -292,6 +429,21 @@ def _validate_received(
         raise EnrollmentError(
             f"The hub holds shared data this build cannot use: {exc}"
         ) from exc
+
+
+@contextmanager
+def _as_enrollment_error(action: str) -> Iterator[None]:
+    """Report a Git failure as an enrollment failure.
+
+    Reaching a hub fails for ordinary reasons -- it is off, this device's key
+    is not registered there yet, the address is wrong -- and the layers above
+    have to be able to say so. Letting Git's own exception through would make
+    every one of those an unhandled error instead of an answer.
+    """
+    try:
+        yield
+    except (GitCommandError, SyncRepositoryError, OSError) as exc:
+        raise EnrollmentError(f"{action}: {exc}") from exc
 
 
 def _hub_identity(repository: LocalSyncRepository, remote: str) -> WorkspaceIdentity:
