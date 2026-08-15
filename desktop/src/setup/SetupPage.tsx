@@ -132,6 +132,7 @@ import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
+import { CloneFromHubButton } from "../sync/CloneFromHub";
 import { SyncSettings } from "../sync/SyncSettings";
 import { isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
@@ -920,7 +921,15 @@ function ProjectSection({
             form.setFieldValue("language", value as ProjectFormValues["language"])
           }
         />
-        <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
+        <Stack gap="xs">
+          <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
+          <Group>
+            <CloneFromHubButton
+              destination={form.values.workspaceDir}
+              onCloned={(status) => onWorkspaceChange(status.workspace ?? "")}
+            />
+          </Group>
+        </Stack>
         <Textarea
           label={<RequiredLabel text={t("setup.project.description")} />}
           aria-label={t("setup.project.description")}

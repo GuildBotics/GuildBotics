@@ -55,6 +55,16 @@ const resources = {
           title: "Sync and devices",
           subtitle: "Share this workspace with your other machines through a hub you run yourself.",
         },
+        clone: {
+          action: "Take a copy from a hub",
+          title: "Take a copy from a hub",
+          body: "Create a workspace here from one the hub already holds. Use this on a machine that has no workspace yet; a machine that already has one connects it instead.",
+          destination: "Created in:",
+          chooseTitle: "Which workspace to take",
+          take: "Take",
+          empty: "This hub holds no workspace yet.",
+          failed: "Could not take a copy",
+        },
         connect: {
           title: "Connect to a hub",
           changeTitle: "Connect to a different hub",
@@ -1737,6 +1747,16 @@ const resources = {
         settings: {
           title: "同期・device 設定",
           subtitle: "自分で用意した Hub を経由して、このワークスペースを他のマシンと共有します。",
+        },
+        clone: {
+          action: "Hub から取得して作成",
+          title: "Hub から取得して作成",
+          body: "Hub にあるワークスペースから、このマシンにワークスペースを作ります。まだワークスペースが無いマシンで使う操作です。すでにある場合は、そのワークスペースを接続してください。",
+          destination: "作成先:",
+          chooseTitle: "取得するワークスペース",
+          take: "取得する",
+          empty: "この Hub にはまだワークスペースがありません。",
+          failed: "取得できませんでした",
         },
         connect: {
           title: "Hub へ接続する",

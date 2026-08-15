@@ -17,7 +17,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleAlert, Server, TriangleAlert } from "lucide-react";
+import { CircleAlert, Server } from "lucide-react";
 
 import {
   ApiRequestError,
@@ -29,13 +29,12 @@ import {
   getHubStatus,
   getWorkspaceDevices,
   getWorkspaceSyncStatus,
-  inspectHub,
   previewWorkspaceSync,
   renameThisDevice,
-  trustHub,
   type HubConnection,
   type WorkspaceSyncPreview,
 } from "../api/client";
+import { HubConnector } from "./HubConnector";
 
 /**
  * Everything about sharing this workspace with the user's other machines:
@@ -83,173 +82,72 @@ export function SyncSettings() {
 function ConnectCard({ change = false }: { change?: boolean }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [endpoint, setEndpoint] = useState("");
-  const [connection, setConnection] = useState<HubConnection | null>(null);
   const [preview, setPreview] = useState<WorkspaceSyncPreview | null>(null);
-  const [pendingWorkspaceId, setPendingWorkspaceId] = useState("");
+  const [pending, setPending] = useState({ endpoint: "", workspaceId: "" });
   const [error, setError] = useState("");
 
-  const reset = () => {
-    setConnection(null);
-    setPreview(null);
-    setPendingWorkspaceId("");
-    setError("");
-  };
   const report = (cause: unknown) => {
     setError(cause instanceof ApiRequestError ? cause.message : String(cause));
   };
-
-  const inspect = useMutation({
-    mutationFn: () => inspectHub({ endpoint: endpoint.trim() }),
-    onSuccess: (found) => {
-      setError("");
-      setConnection(found);
-    },
-    onError: report,
-  });
-  const trust = useMutation({
-    mutationFn: (fingerprint: string) => trustHub({ endpoint: endpoint.trim(), fingerprint }),
-    onSuccess: (found) => {
-      setError("");
-      setConnection(found);
-    },
-    onError: report,
-  });
   const connect = useMutation({
-    mutationFn: (workspaceId: string) => {
-      const body = { hub: { endpoint: endpoint.trim() }, workspace_id: workspaceId };
+    mutationFn: ({ endpoint, workspaceId }: { endpoint: string; workspaceId: string }) => {
+      const body = { hub: { endpoint }, workspace_id: workspaceId };
       return change ? changeWorkspaceSyncHub(body) : enableWorkspaceSync(body);
     },
     onSuccess: async (next) => {
-      reset();
+      setPreview(null);
+      setError("");
       queryClient.setQueryData(["workspace-sync"], next);
       await queryClient.invalidateQueries({ queryKey: ["workspace-devices"] });
     },
     onError: report,
   });
+  // Registering has nothing on the other side to compare against, so only
+  // joining is previewed; asking anyway answers 409.
   const startConnect = useMutation({
-    // Registering has nothing on the other side to compare against, so only
-    // joining is previewed; asking anyway answers 409.
-    mutationFn: async (workspaceId: string) => {
-      if (!workspaceId) {
-        return null;
-      }
-      return previewWorkspaceSync({
-        hub: { endpoint: endpoint.trim() },
-        workspace_id: workspaceId,
-      });
-    },
-    onSuccess: (found, workspaceId) => {
+    mutationFn: async ({ endpoint, workspaceId }: { endpoint: string; workspaceId: string }) =>
+      workspaceId ? previewWorkspaceSync({ hub: { endpoint }, workspace_id: workspaceId }) : null,
+    onSuccess: (found, variables) => {
       setError("");
       if (found === null) {
-        connect.mutate(workspaceId);
+        connect.mutate(variables);
         return;
       }
-      setPendingWorkspaceId(workspaceId);
+      setPending(variables);
       setPreview(found);
     },
     onError: report,
   });
 
-  const untrusted = connection !== null && !connection.host_key_trusted;
   return (
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
         <Title order={4}>{t(change ? "sync.connect.changeTitle" : "sync.connect.title")}</Title>
-        <Text c="dimmed" size="sm">
-          {t("sync.connect.endpointHint")}
-        </Text>
-        <Group align="flex-end" gap="sm">
-          <TextInput
-            label={t("sync.connect.endpoint")}
-            onChange={(event) => {
-              setEndpoint(event.currentTarget.value);
-              reset();
-            }}
-            placeholder="user@hub.local"
-            style={{ flex: 1 }}
-            value={endpoint}
-          />
-          <Button loading={inspect.isPending} onClick={() => inspect.mutate()}>
-            {t("sync.connect.inspect")}
-          </Button>
-        </Group>
+        <HubConnector onEndpointChange={() => setError("")}>
+          {(connection, endpoint) => (
+            <WorkspaceChoice
+              connection={connection}
+              onChoose={(workspaceId) => startConnect.mutate({ endpoint, workspaceId })}
+              pending={startConnect.isPending || connect.isPending}
+            />
+          )}
+        </HubConnector>
         {error ? (
           <Alert color="danger" icon={<CircleAlert size={18} />} title={t("sync.connect.failed")}>
             {error}
           </Alert>
         ) : null}
-        {untrusted ? (
-          <HostKeyConfirmation
-            fingerprints={connection.host_key_fingerprints}
-            onConfirm={(fingerprint) => trust.mutate(fingerprint)}
-            pending={trust.isPending}
-          />
-        ) : null}
-        {connection !== null && connection.host_key_trusted ? (
-          <WorkspaceChoice
-            connection={connection}
-            onChoose={(workspaceId) => startConnect.mutate(workspaceId)}
-            pending={startConnect.isPending || connect.isPending}
-          />
-        ) : null}
         <JoinPreviewModal
           onCancel={() => setPreview(null)}
           onConfirm={() => {
             setPreview(null);
-            connect.mutate(pendingWorkspaceId);
+            connect.mutate(pending);
           }}
           pending={connect.isPending}
           preview={preview}
         />
       </Stack>
     </Card>
-  );
-}
-
-/**
- * The host key round trip.
- *
- * Synchronization runs OpenSSH with `BatchMode=yes`, so its own first-contact
- * prompt never appears. This is the only moment a person can compare the key,
- * which is why the fingerprint the user selected is what gets sent back rather
- * than a bare "I confirmed" flag: the machine must not be able to answer with a
- * different key than the one that was read.
- */
-function HostKeyConfirmation({
-  fingerprints,
-  onConfirm,
-  pending,
-}: {
-  fingerprints: string[];
-  onConfirm: (fingerprint: string) => void;
-  pending: boolean;
-}) {
-  const { t } = useTranslation();
-  return (
-    <Alert color="warning" icon={<TriangleAlert size={18} />} title={t("sync.hostKey.title")}>
-      <Stack gap="xs">
-        <Text size="sm">{t("sync.hostKey.body")}</Text>
-        <Stack gap="xs">
-          {fingerprints.map((fingerprint) => (
-            <Group gap="sm" key={fingerprint} wrap="nowrap">
-              <Code style={{ overflowWrap: "anywhere" }}>{fingerprint}</Code>
-              <Button
-                disabled={pending}
-                onClick={() => onConfirm(fingerprint)}
-                size="xs"
-                variant="light"
-              >
-                {t("sync.hostKey.confirm")}
-              </Button>
-            </Group>
-          ))}
-        </Stack>
-        <Text c="dimmed" size="xs">
-          {t("sync.hostKey.compareHint")}
-        </Text>
-      </Stack>
-    </Alert>
   );
 }
 
