@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import IO, Literal
 from uuid import uuid4
 
-from guildbotics.runtime.advisory_lock import (
+from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
     open_lock_file,
     unlock_file,

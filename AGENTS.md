@@ -46,12 +46,14 @@
 - `guildbotics/intelligences/*` … brains（`agno_agent` / `cli_agent`）、LLM 判定関数（`functions.py`）、LLM provider / AI CLIツールカタログ（`llm_providers.py` / `cli_agents.py`）
 - `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、interactive session
 - `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
+- `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）
 - `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤
 
 依存方向のハードルール（`tests/guildbotics/test_layer_boundaries.py` で担保）:
 
 - `guildbotics/app_api/*` は最上位層であり、他の guildbotics package から import してはならない。app_api と core の両方が必要とする知識（provider / AI CLIツールカタログなど）は core 側（例: `guildbotics/intelligences/*`）に置き、app_api は API model への変換だけを持つ
 - `guildbotics/observability/*` は `utils` 以外に依存しない記録基盤であり、app_api や capability の都合を知らない
+- `guildbotics/workspace/*` は `utils` と `entities` 以外に依存しない storage 層であり、capability / driver / app_api の都合を知らない
 
 リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 
@@ -208,6 +210,20 @@ help / docstring が正であり、member コマンドの一行説明は
 - ローカライズ対応ファイルは `.<lang>` → `.en` → 素のファイル名の順で探索
 - メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
 - シークレット（API キー / トークン）は `guildbotics/utils/secret_store.py` の SecretStore 経由で扱う。新規ワークスペースの既定は OS キーチェーン（`.guildbotics/config/secrets.yml` はキー名インデックスのみで値を持たない）、キーチェーンが使えない環境で作成したワークスペースは `.env`。解決優先順位は実環境変数 > キーチェーン > `.env`（詳細: `docs/ARCHITECTURE.md` の「Secret Storage (SecretStore)」）。テストでは autouse fixture が `GUILDBOTICS_SECRETS_BACKEND=env-file` を強制するため、keyring 経路の検証には `fake_keyring` fixture を使う
+
+### 4.1 共有 state の書き込み（Workspace Sync Port）
+
+`<workspace>/.guildbotics/config` と `state` はマシン間で共有する領域、`local` はこの device 限定。共有領域への書き込みは
+`guildbotics/utils/workspace_sync_port.py` の `write_shared_*` / `delete_shared_path` / `notify_shared_state_changed` を通し、
+完了後に `ChangeSet` を Workspace Sync Port へ通知する。
+
+- 保存側（capability / observability / integration）は Git を知らない。port の購読者は同期実装だけとし、個別機能から同期を直接呼ばない
+- `local/` 配下の path は port が自動的に落とすため、呼び出し側で共有・非共有を判定しない
+- 共有 JSON は `dump_shared_json`（sort_keys + 末尾改行）で統一する。device ごとにバイト列がぶれると不要な並行更新になる
+- device 固有 field を共有 record へ入れない境界は、field 名のブロックリストではなく pydantic の `extra="forbid"`（`SharedRecord`）とサイズ上限で構造的に守る
+- 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
+- 共有ファイルの種別ごとの検証は、所有 module が `guildbotics/utils/shared_file_validators.py` の `register_shared_validator()` へ登録する。`guildbotics/workspace/validation.py` が種別を知りに行く形にはしない（`observability` などは storage 層から import できないため）。新しい共有 record を追加したら、その所有 module で validator を登録する
+- 共有 record は `schema_version` を現在値へ固定し、ID と日時も型として検証する。旧 schema の fallback 読み込みは作らない
 
 ### 5. スケジューラ
 

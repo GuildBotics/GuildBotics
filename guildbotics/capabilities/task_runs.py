@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
@@ -99,6 +100,7 @@ class RunStore:
         }
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+        notify_shared_state_changed("update", [path])
 
     def append_evidence(
         self, run_id: str | None, evidence_type: str, payload: dict[str, Any]

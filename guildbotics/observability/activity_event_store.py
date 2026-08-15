@@ -14,6 +14,11 @@ from guildbotics.utils.fileio import (
     get_workspace_config_dir,
     get_workspace_state_path,
 )
+from guildbotics.utils.shared_file_validators import (
+    SharedFileInvalidError,
+    register_shared_validator,
+)
+from guildbotics.utils.workspace_sync_port import write_shared_json
 
 ACTIVITY_EVENT_SCHEMA_VERSION = 1
 _MAX_SAFE_SUMMARY_CHARS = 500
@@ -55,6 +60,43 @@ def is_domain_activity_event(event_type: str) -> bool:
     return event_type in _DOMAIN_EVENT_TYPES
 
 
+def validate_shared_activity_event(relative_path: str, data: bytes) -> None:
+    """Validate one ``state/events/`` file for the shared-state boundary.
+
+    A device that receives an activity event it cannot read must stop rather
+    than display a broken timeline, so the fields Activity history sorts and
+    renders by are required here, not merely expected.
+
+    Raises:
+        SharedFileInvalidError: When the file is not an activity event of the
+            current schema version.
+    """
+    try:
+        event = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SharedFileInvalidError(
+            relative_path, f"is not a readable activity event: {exc}"
+        ) from exc
+    if not isinstance(event, dict):
+        raise SharedFileInvalidError(relative_path, "is not a JSON object")
+    if event.get("schema_version") != ACTIVITY_EVENT_SCHEMA_VERSION:
+        raise SharedFileInvalidError(
+            relative_path,
+            f"has schema_version {event.get('schema_version')!r}, "
+            f"not {ACTIVITY_EVENT_SCHEMA_VERSION}",
+        )
+    for field in ("event_id", "occurred_at", "kind"):
+        if not str(event.get(field) or "").strip():
+            raise SharedFileInvalidError(relative_path, f"has no {field}")
+    if _parse_occurred(event.get("occurred_at")) is None:
+        raise SharedFileInvalidError(
+            relative_path, f"has an unparsable occurred_at {event.get('occurred_at')!r}"
+        )
+
+
+register_shared_validator("state/events", validate_shared_activity_event)
+
+
 def default_events_root() -> Path:
     return get_workspace_state_path("events")
 
@@ -70,11 +112,7 @@ class ActivityEventStore:
         occurred = str(event["occurred_at"])
         year, month = _year_month(occurred)
         path = self.root / year / month / f"{event['event_id']}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(event, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_shared_json(path, event)
         return path
 
     def list_between(
