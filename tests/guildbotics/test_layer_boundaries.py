@@ -133,14 +133,10 @@ def test_sync_depends_only_on_storage_and_recording() -> None:
     assert offenders == []
 
 
-#: The only modules that may import ``guildbotics.sync``: one per long-lived
-#: process, each installing the queue for the workspace that process works in.
-SYNC_COMPOSITION_ROOTS = frozenset(
-    {
-        Path("app_api/workspace_sync.py"),
-        Path("cli/__init__.py"),
-    }
-)
+#: The only modules that may import ``guildbotics.sync``. Nothing stops two
+#: processes on one machine from each running a queue against the same
+#: repository, so this stays at one entry until something does.
+SYNC_COMPOSITION_ROOTS = frozenset({Path("app_api/workspace_sync.py")})
 
 
 def test_nothing_reaches_around_the_workspace_sync_port() -> None:

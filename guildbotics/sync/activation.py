@@ -9,6 +9,15 @@ A process calls :func:`activate_workspace_sync` once it knows which workspace
 it is working in, and again after that changes -- a workspace switch, or a
 workspace that has just been connected to a hub. Activation is therefore
 idempotent and safe to call when nothing is enabled.
+
+**One process per machine may do so.** The guards here are module state, so
+they hold within a process and not between two: a second process activating the
+same workspace would put another thread on the same repository, interleaving its
+resets, checkouts, and commits with the first. Nothing detects that, and the
+machine-wide service lock does not cover it -- the desktop backend takes that
+lock only when its scheduler starts, while the queue runs for as long as the
+backend is up. Until a machine-wide owner exists (the device agent of §14.4),
+the desktop backend is that one process.
 """
 
 from __future__ import annotations
