@@ -5,14 +5,12 @@ import json
 import pytest
 import yaml  # type: ignore
 
-from guildbotics.observability.activity_event_store import (
-    ACTIVITY_EVENT_SCHEMA_VERSION,
-)
 from guildbotics.workspace.validation import (
     MAX_SHARED_AVATAR_BYTES,
     MAX_SHARED_FILE_BYTES,
     MAX_SHARED_JOURNAL_BYTES,
     SharedFileInvalidError,
+    SharedSchemaAheadError,
     validate_shared_file,
 )
 
@@ -35,13 +33,17 @@ DEVICE_JSON = json.dumps(
         "status": "active",
     }
 ).encode()
-ACTIVITY_EVENT = {
-    "schema_version": ACTIVITY_EVENT_SCHEMA_VERSION,
-    "event_id": "e1",
-    "occurred_at": "2026-08-15T00:00:00Z",
-    "kind": "github.push",
-}
-ACTIVITY_EVENT_JSON = json.dumps(ACTIVITY_EVENT).encode()
+ACTIVITY_EVENT_JSON = json.dumps(
+    {
+        "schema_version": 1,
+        "event_id": "e1",
+        "occurred_at": "2026-08-15T00:00:00Z",
+        "kind": "github.push",
+    }
+).encode()
+SECRETS_INDEX = yaml.safe_dump(
+    {"store_id": "abc", "keys": {"GITHUB_TOKEN": {"generation": 2}}}
+).encode()
 
 
 @pytest.mark.parametrize(
@@ -74,31 +76,31 @@ def test_a_path_outside_the_shared_roots_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
-    ("relative_path", "data", "fragment"),
+    ("relative_path", "data"),
     [
+        ("config/team/project.yml", yaml.safe_dump({"unknown": True}).encode()),
         (
             "config/team/members/yuki/person.yml",
             yaml.safe_dump({"name": "no id"}).encode(),
-            "does not match Person",
         ),
-        (
-            "state/workspace.json",
-            json.dumps({"schema_version": 1}).encode(),
-            "does not match WorkspaceIdentity",
-        ),
-        (
-            "state/devices/one.json",
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "device_id": "one",
-                    "display_name": "Hub",
-                    "os": "plan9",
-                    "joined_at": "2026-08-15T00:00:00Z",
-                }
-            ).encode(),
-            "does not match DeviceRecord",
-        ),
+        ("config/intelligences/model_mapping.yml", b"default: models/openai.yml\n"),
+        ("config/commands/build.md", b"---\nname: [unclosed\n---\n"),
+        ("config/commands/build.py", b"def main(  # unfinished\n"),
+    ],
+)
+def test_files_a_person_authors_travel_as_written(
+    relative_path: str, data: bytes
+) -> None:
+    """The boundary is a damage detector, not a quality gate. A half-finished
+    edit fails loudly through the product's own paths on every device, and
+    refusing to carry it would only stop the user continuing on another
+    machine."""
+    validate_shared_file(relative_path, data)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "data", "fragment"),
+    [
         ("config/team/project.yml", b"name: [unclosed", "is not valid YAML"),
         ("state/chat_state/pending/e1.json", b"{not json}", "is not valid JSON"),
         ("state/documents/memory_events.jsonl", b"{}\nnope\n", "line 2"),
@@ -116,70 +118,66 @@ def test_invalid_shared_files_are_rejected(
 
 
 @pytest.mark.parametrize(
-    ("payload", "fragment"),
+    "relative_path",
     [
-        ({}, "schema_version"),
-        (ACTIVITY_EVENT | {"schema_version": 999}, "schema_version"),
-        (ACTIVITY_EVENT | {"event_id": ""}, "has no event_id"),
-        (ACTIVITY_EVENT | {"kind": ""}, "has no kind"),
-        (ACTIVITY_EVENT | {"occurred_at": "not a time"}, "unparsable occurred_at"),
+        "state/workspace.json",
+        "state/events/2026/08/e1.json",
+        "state/documents/team/abc/meta.yml",
     ],
 )
-def test_an_activity_event_is_validated_by_its_owner(
-    payload: dict, fragment: str
-) -> None:
-    with pytest.raises(SharedFileInvalidError) as error:
+def test_a_record_from_a_newer_build_stops_the_boundary(relative_path: str) -> None:
+    """The one thing no writer and no local test can catch: a device running an
+    older build cannot read a record a newer one wrote."""
+    payload = json.dumps({"schema_version": 2, "anything": "else"}).encode()
+    if relative_path.endswith(".yml"):
+        payload = yaml.safe_dump({"schema_version": 2}).encode()
+
+    with pytest.raises(SharedSchemaAheadError) as error:
+        validate_shared_file(relative_path, payload)
+
+    assert error.value.version == 2
+
+
+def test_a_newer_record_inside_a_journal_stops_the_boundary() -> None:
+    with pytest.raises(SharedSchemaAheadError):
         validate_shared_file(
-            "state/events/2026/08/e1.json", json.dumps(payload).encode()
+            "state/task-runs/run-1.jsonl",
+            b'{"kind": "evidence"}\n{"schema_version": 2}\n',
         )
 
-    assert fragment in error.value.reason
+
+def test_the_current_schema_version_is_carried_normally() -> None:
+    validate_shared_file("state/events/2026/08/e1.json", ACTIVITY_EVENT_JSON)
+
+
+def test_the_secret_index_may_name_keys_but_hold_no_value() -> None:
+    validate_shared_file("config/secrets.yml", SECRETS_INDEX)
 
 
 @pytest.mark.parametrize(
-    ("relative_path", "payload", "fragment"),
+    ("payload", "fragment"),
     [
+        ({"store_id": "a", "keys": {"GITHUB_TOKEN": "ghp-x"}}, "stores a value"),
         (
-            "state/workspace.json",
-            json.loads(WORKSPACE_JSON) | {"schema_version": 999},
-            "WorkspaceIdentity",
+            {
+                "store_id": "a",
+                "keys": {"GITHUB_TOKEN": {"generation": 1, "value": "x"}},
+            },
+            "records value",
         ),
-        (
-            "state/workspace.json",
-            json.loads(WORKSPACE_JSON) | {"workspace_id": "not-a-uuid"},
-            "WorkspaceIdentity",
-        ),
-        (
-            "state/workspace.json",
-            json.loads(WORKSPACE_JSON) | {"created_at": "yesterday"},
-            "WorkspaceIdentity",
-        ),
-        (
-            "state/devices/one.json",
-            json.loads(DEVICE_JSON) | {"joined_at": ""},
-            "DeviceRecord",
-        ),
-        (
-            "state/devices/one.json",
-            json.loads(DEVICE_JSON) | {"display_name": ""},
-            "DeviceRecord",
-        ),
+        ({"store_id": "a", "keys": {}, "values": {}}, "carries values"),
+        ({"store_id": "a", "keys": {"T": {"generation": "one"}}}, "non-numeric"),
     ],
 )
-def test_identity_records_pin_version_identifier_and_time(
-    relative_path: str, payload: dict, fragment: str
+def test_the_secret_index_refuses_anywhere_a_value_could_sit(
+    payload: dict, fragment: str
 ) -> None:
+    """Secrets stay out of the shared history because the index has nowhere to
+    put one, not because values are recognized and stripped."""
     with pytest.raises(SharedFileInvalidError) as error:
-        validate_shared_file(relative_path, json.dumps(payload).encode())
+        validate_shared_file("config/secrets.yml", yaml.safe_dump(payload).encode())
 
     assert fragment in error.value.reason
-
-
-def test_a_shared_record_rejects_device_local_fields() -> None:
-    payload = json.loads(DEVICE_JSON) | {"pid": 4321, "cache_dir": "/tmp/cache"}
-
-    with pytest.raises(SharedFileInvalidError):
-        validate_shared_file("state/devices/one.json", json.dumps(payload).encode())
 
 
 def test_an_oversized_record_is_rejected() -> None:

@@ -34,6 +34,7 @@ from guildbotics.utils.keychain import (
     SecretStoreError,
     system_keychain,
 )
+from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 SECRETS_INDEX_FILENAME = "secrets.yml"
 LOCAL_SECRETS_FILENAME = "secrets.json"
@@ -307,6 +308,7 @@ class KeyringSecretStore(SecretStore):
         }
         self.location.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(self.location, payload)
+        notify_shared_state_changed("update", [self.location])
 
     def _read_local(self) -> dict[str, Any]:
         if not self._local_index.exists():

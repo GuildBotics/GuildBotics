@@ -27,9 +27,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
-from guildbotics.utils.shared_file_validators import SharedFileInvalidError
 from guildbotics.utils.workspace_sync_port import write_shared_text
-from guildbotics.workspace.validation import validate_shared_file
+from guildbotics.workspace.validation import (
+    SharedFileInvalidError,
+    validate_shared_file,
+)
 
 
 def blob_id(data: bytes) -> str:

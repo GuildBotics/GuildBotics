@@ -47,6 +47,7 @@
 - `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、interactive session
 - `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
 - `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）
+- `guildbotics/sync/*` … Workspace Sync Port の唯一の購読者。ローカル同期 repository（`local_repository.py`）、同期 queue / 自動収束 / rejected ref（`manager.py`）、更新不採用の Activity 記録（`rejections.py`）
 - `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤
 
 依存方向のハードルール（`tests/guildbotics/test_layer_boundaries.py` で担保）:
@@ -54,6 +55,7 @@
 - `guildbotics/app_api/*` は最上位層であり、他の guildbotics package から import してはならない。app_api と core の両方が必要とする知識（provider / AI CLIツールカタログなど）は core 側（例: `guildbotics/intelligences/*`）に置き、app_api は API model への変換だけを持つ
 - `guildbotics/observability/*` は `utils` 以外に依存しない記録基盤であり、app_api や capability の都合を知らない
 - `guildbotics/workspace/*` は `utils` と `entities` 以外に依存しない storage 層であり、capability / driver / app_api の都合を知らない
+- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に **他のどの package からも import してはならない**。capability / driver / integration / app_api は Workspace Sync Port 越しにだけ同期へ届く
 
 リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 
@@ -107,6 +109,24 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - `guildbotics.utils` 以外の guildbotics package への依存
 - 表示用の title / label / link kind の決定（それは app_api の normalizer の仕事）
 - provider 固有 payload の解釈
+
+#### Git Sync Manager (`guildbotics/sync/*`)
+
+責務:
+
+- ローカル同期 repository（`<workspace>/.guildbotics` 自体を独立 Git repo にする）の初期化と境界検証
+- Workspace Sync Port の唯一の購読者として、device ごとに1本の同期 queue を回す
+- commit / fetch / 自動収束 / push、first-committer-wins、後着 commit の `refs/guildbotics/rejected/<rejection_id>` への退避
+- 送信前と受信時に同じ `validate_shared_file()` を通し、通らないローカル変更は「送信できない変更」として保留、受信側で通らなければ共有データ異常として停止（検証の中身は「4.1 共有 state の書き込み」を参照）
+- `await_pushed(change_id)` の同期 barrier と `GitSyncStatus` の算出
+
+禁止:
+
+- 他の package から import されること（同期へは Workspace Sync Port 越しにだけ届く）
+- 呼び出し元から repository path を受け取ること（検証済み Workspace root から毎回導出する）
+- ファイル内容の domain 知識を持つこと
+- 退避内容を Activity / API へ載せること（`rejection_id` と対象 path だけを記録し、回復は変更元 device 上の手動手順）
+- ambient に選択中の Workspace を解決すること。manager が扱う Workspace root を、Activity の保存先と write 通知の path 解決まで引き回す（別 root の初期参加・切替と競合するため）
 
 #### App API (`guildbotics/app_api/*`)
 
@@ -222,8 +242,13 @@ help / docstring が正であり、member コマンドの一行説明は
 - 共有 JSON は `dump_shared_json`（sort_keys + 末尾改行）で統一する。device ごとにバイト列がぶれると不要な並行更新になる
 - device 固有 field を共有 record へ入れない境界は、field 名のブロックリストではなく pydantic の `extra="forbid"`（`SharedRecord`）とサイズ上限で構造的に守る
 - 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
-- 共有ファイルの種別ごとの検証は、所有 module が `guildbotics/utils/shared_file_validators.py` の `register_shared_validator()` へ登録する。`guildbotics/workspace/validation.py` が種別を知りに行く形にはしない（`observability` などは storage 層から import できないため）。新しい共有 record を追加したら、その所有 module で validator を登録する
-- 共有 record は `schema_version` を現在値へ固定し、ID と日時も型として検証する。旧 schema の fallback 読み込みは作らない
+- **同期境界の検証（`guildbotics/workspace/validation.py`）に、種別ごとの意味検証を足さない。** 共有 record はすべて GuildBotics 自身がコードで形を決めて書くため、境界で field を再確認しても writer が既に保証していることの繰り返しにしかならない（それは writer の test の仕事）。利用者が書くファイル（commands、手で編集する設定）は壊れていても製品の通常経路でどの device でも同じように失敗するので、書きかけを「送信できない変更」にすると同期を下手にするだけ
+- 境界が見るのは3つだけ。**(1) 共有 root 内・サイズ上限・decode・構文**（サイズは同期が負う2つの保証の一方＝履歴を肥大させない）、**(2) `schema_version` が現在値より新しい record**（新しい build が書いたものは古い build には読めない。writer もローカルの test も捕まえられず、受け取った device にしか分からない）、**(3) `config/secrets.yml` の構造**（もう一方の保証＝Secret 値を共有履歴へ入れない）
+- 新しい共有 record を追加しても、原則として validation.py に手を入れる必要はない。`schema_version` を現在値で持たせれば世代差は自動的に検知される
+- 読み手が壊れた入力を黙って skip する形（例: ID / timestamp 欠落の pending event）を見つけたら、**同期境界ではなく読み手を直す**。境界にチェックを足すと読み手の沈黙が温存され、同じ device 内の同じ欠陥は残る
+- 共有 record は `schema_version` を現在値へ固定する。旧 schema の fallback 読み込みは作らない
+- 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
+- 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` は key 名と generation 以外の field を拒否するため、Secret 値の混入を内容検査なしに防げる
 
 ### 5. スケジューラ
 

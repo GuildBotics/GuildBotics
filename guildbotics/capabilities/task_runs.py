@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
@@ -94,10 +95,14 @@ class RunStore:
     def append(self, run_id: str, record: dict[str, Any]) -> None:
         path = self._path(run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "recorded_at": datetime.now(UTC).isoformat(),
-            **record,
-        }
+        # Run journals are shared state, so one uniform pass masks secret
+        # values and bounds every string, whatever shape the record has.
+        payload = redact_for_sharing(
+            {
+                "recorded_at": datetime.now(UTC).isoformat(),
+                **record,
+            }
+        )
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
         notify_shared_state_changed("update", [path])
@@ -109,11 +114,7 @@ class RunStore:
             return
         self.append(
             run_id,
-            {
-                "kind": "evidence",
-                "evidence_type": evidence_type,
-                "payload": _without_secrets(payload),
-            },
+            {"kind": "evidence", "evidence_type": evidence_type, "payload": payload},
         )
 
     def complete(
@@ -337,19 +338,6 @@ def _evidence_types(records: list[dict[str, Any]]) -> list[str]:
         if record.get("kind") == "evidence" and record.get("evidence_type")
     }
     return sorted(evidence)
-
-
-def _without_secrets(payload: dict[str, Any]) -> dict[str, Any]:
-    redacted: dict[str, Any] = {}
-    for key, value in payload.items():
-        upper = key.upper()
-        if any(
-            part in upper for part in ("TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY")
-        ):
-            redacted[key] = "***"
-        else:
-            redacted[key] = value
-    return redacted
 
 
 def _has_code_publish(records: list[dict[str, Any]]) -> bool:
