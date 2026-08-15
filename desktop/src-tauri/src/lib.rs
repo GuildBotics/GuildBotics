@@ -30,12 +30,47 @@ const BOOT_LOG_COMPACT_BYTES: usize = BOOT_LOG_MAX_BYTES / 2;
 const BOOT_LOG_TAIL_BYTES: usize = 64 * 1024;
 const BOOT_LOG_TAIL_LINES: usize = 100;
 
-const CLI_AGENT_HOMES: [(&str, &str, &str); 5] = [
-    ("codex", "CODEX_HOME", ".codex"),
-    ("claude", "CLAUDE_HOME", ".claude"),
-    ("grok", "GROK_HOME", ".grok"),
-    ("antigravity", "ANTIGRAVITY_HOME", ".gemini/config"),
-    ("copilot", "COPILOT_HOME", ".copilot"),
+/// An AI CLI tool the desktop app installs the GuildBotics skill for.
+struct CliAgent {
+    name: &'static str,
+    home_env: &'static str,
+    home_dir: &'static str,
+    /// Skills root relative to the user home directory, for tools that read user
+    /// skills from a shared location instead of their own home directory.
+    user_skills_dir: Option<&'static str>,
+}
+
+const CLI_AGENTS: [CliAgent; 5] = [
+    CliAgent {
+        name: "codex",
+        home_env: "CODEX_HOME",
+        home_dir: ".codex",
+        user_skills_dir: Some(".agents/skills"),
+    },
+    CliAgent {
+        name: "claude",
+        home_env: "CLAUDE_HOME",
+        home_dir: ".claude",
+        user_skills_dir: None,
+    },
+    CliAgent {
+        name: "grok",
+        home_env: "GROK_HOME",
+        home_dir: ".grok",
+        user_skills_dir: None,
+    },
+    CliAgent {
+        name: "antigravity",
+        home_env: "ANTIGRAVITY_HOME",
+        home_dir: ".gemini/config",
+        user_skills_dir: None,
+    },
+    CliAgent {
+        name: "copilot",
+        home_env: "COPILOT_HOME",
+        home_dir: ".copilot",
+        user_skills_dir: None,
+    },
 ];
 const GUILDBOTICS_SKILL: &str = include_str!("../../../skills/guildbotics/SKILL.md");
 const MANAGED_SKILL_METADATA: &str = ".guildbotics-managed.json";
@@ -91,9 +126,9 @@ fn read_boot_log_tail(path: &Path) -> io::Result<String> {
 fn cli_agent_skill_statuses() -> serde_json::Value {
     match home_dir() {
         Ok(home) => serde_json::json!({
-            "agents": CLI_AGENT_HOMES
+            "agents": CLI_AGENTS
                 .iter()
-                .map(|(agent, env_name, default_dir)| cli_agent_skill_status(&home, agent, env_name, default_dir))
+                .map(|agent| cli_agent_skill_status(&home, agent))
                 .collect::<Vec<_>>()
         }),
         Err(error) => serde_json::json!({
@@ -106,23 +141,16 @@ fn cli_agent_skill_statuses() -> serde_json::Value {
 #[tauri::command]
 fn force_update_cli_agent_skill(agent: String) -> Result<serde_json::Value, String> {
     let home = home_dir().map_err(|error| error.to_string())?;
-    let Some((agent_name, env_name, default_dir)) = CLI_AGENT_HOMES
-        .iter()
-        .find(|(candidate, _, _)| *candidate == agent)
-    else {
+    let Some(agent) = CLI_AGENTS.iter().find(|candidate| candidate.name == agent) else {
         return Err(format!("unsupported AI CLI tool: {agent}"));
     };
-    let Some(agent_home) = configured_agent_home(&home, env_name, default_dir) else {
-        return Err(format!("skill home for {agent_name} was not detected"));
+    let Some(agent_home) = configured_agent_home(&home, agent.home_env, agent.home_dir) else {
+        return Err(format!("skill home for {} was not detected", agent.name));
     };
 
-    force_install_skill_file(&agent_home, GUILDBOTICS_SKILL).map_err(|error| error.to_string())?;
-    Ok(cli_agent_skill_status(
-        &home,
-        agent_name,
-        env_name,
-        default_dir,
-    ))
+    force_install_skill_file(&skill_dir(&home, agent, &agent_home), GUILDBOTICS_SKILL)
+        .map_err(|error| error.to_string())?;
+    Ok(cli_agent_skill_status(&home, agent))
 }
 
 /// Reserve a free loopback TCP port by binding to port 0 and reading back the
@@ -278,11 +306,7 @@ fn read_managed_skill_hash(path: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn should_write_managed_skill(skill_path: &Path, metadata_path: &Path) -> io::Result<bool> {
-    if !skill_path.exists() {
-        return Ok(true);
-    }
-
+fn is_unedited_managed_skill(skill_path: &Path, metadata_path: &Path) -> io::Result<bool> {
     let Some(previous_hash) = read_managed_skill_hash(metadata_path) else {
         return Ok(false);
     };
@@ -291,8 +315,15 @@ fn should_write_managed_skill(skill_path: &Path, metadata_path: &Path) -> io::Re
     Ok(content_hash(&current_content) == previous_hash)
 }
 
-fn install_skill_file(root: &Path, skill_content: &str) -> io::Result<()> {
-    let skill_dir = root.join("skills").join("guildbotics");
+fn should_write_managed_skill(skill_path: &Path, metadata_path: &Path) -> io::Result<bool> {
+    if !skill_path.exists() {
+        return Ok(true);
+    }
+
+    is_unedited_managed_skill(skill_path, metadata_path)
+}
+
+fn install_skill_file(skill_dir: &Path, skill_content: &str) -> io::Result<()> {
     let skill_path = skill_dir.join("SKILL.md");
     let metadata_path = skill_dir.join(MANAGED_SKILL_METADATA);
 
@@ -300,15 +331,31 @@ fn install_skill_file(root: &Path, skill_content: &str) -> io::Result<()> {
         return Ok(());
     }
 
-    write_managed_skill(&skill_dir, &skill_path, &metadata_path, skill_content)
+    write_managed_skill(skill_dir, &skill_path, &metadata_path, skill_content)
 }
 
-fn force_install_skill_file(root: &Path, skill_content: &str) -> io::Result<()> {
-    let skill_dir = root.join("skills").join("guildbotics");
+fn force_install_skill_file(skill_dir: &Path, skill_content: &str) -> io::Result<()> {
     let skill_path = skill_dir.join("SKILL.md");
     let metadata_path = skill_dir.join(MANAGED_SKILL_METADATA);
 
-    write_managed_skill(&skill_dir, &skill_path, &metadata_path, skill_content)
+    write_managed_skill(skill_dir, &skill_path, &metadata_path, skill_content)
+}
+
+/// Drop a skill copy this app wrote at a location the tool no longer reads user
+/// skills from, so the same skill is not registered twice. Skills the user
+/// created or edited stay untouched.
+fn remove_managed_skill(skill_dir: &Path) -> io::Result<()> {
+    let skill_path = skill_dir.join("SKILL.md");
+    let metadata_path = skill_dir.join(MANAGED_SKILL_METADATA);
+
+    if !skill_path.exists() || !is_unedited_managed_skill(&skill_path, &metadata_path)? {
+        return Ok(());
+    }
+
+    fs::remove_file(&skill_path)?;
+    fs::remove_file(&metadata_path)?;
+    let _ = fs::remove_dir(skill_dir);
+    Ok(())
 }
 
 fn write_managed_skill(
@@ -341,15 +388,19 @@ fn configured_agent_home(home: &Path, env_name: &str, default_dir: &str) -> Opti
     default_path.exists().then_some(default_path)
 }
 
-fn cli_agent_skill_status(
-    home: &Path,
-    agent: &str,
-    env_name: &str,
-    default_dir: &str,
-) -> serde_json::Value {
-    let Some(agent_home) = configured_agent_home(home, env_name, default_dir) else {
+/// Resolve the directory the GuildBotics skill is installed in for one tool.
+fn skill_dir(home: &Path, agent: &CliAgent, agent_home: &Path) -> PathBuf {
+    match agent.user_skills_dir {
+        Some(relative) => home.join(relative),
+        None => agent_home.join("skills"),
+    }
+    .join("guildbotics")
+}
+
+fn cli_agent_skill_status(home: &Path, agent: &CliAgent) -> serde_json::Value {
+    let Some(agent_home) = configured_agent_home(home, agent.home_env, agent.home_dir) else {
         return serde_json::json!({
-            "agent": agent,
+            "agent": agent.name,
             "agent_home": null,
             "skill_path": null,
             "status": "agent_home_missing",
@@ -357,18 +408,13 @@ fn cli_agent_skill_status(
         });
     };
 
-    let skill_path = agent_home
-        .join("skills")
-        .join("guildbotics")
-        .join("SKILL.md");
-    let metadata_path = skill_path
-        .parent()
-        .expect("skill path has a parent")
-        .join(MANAGED_SKILL_METADATA);
+    let skill_dir = skill_dir(home, agent, &agent_home);
+    let skill_path = skill_dir.join("SKILL.md");
+    let metadata_path = skill_dir.join(MANAGED_SKILL_METADATA);
 
     if !skill_path.exists() {
         return serde_json::json!({
-            "agent": agent,
+            "agent": agent.name,
             "agent_home": agent_home,
             "skill_path": skill_path,
             "status": "missing",
@@ -378,7 +424,7 @@ fn cli_agent_skill_status(
 
     let Some(previous_hash) = read_managed_skill_hash(&metadata_path) else {
         return serde_json::json!({
-            "agent": agent,
+            "agent": agent.name,
             "agent_home": agent_home,
             "skill_path": skill_path,
             "status": "unmanaged",
@@ -398,7 +444,7 @@ fn cli_agent_skill_status(
                 "up_to_date"
             };
             serde_json::json!({
-                "agent": agent,
+                "agent": agent.name,
                 "agent_home": agent_home,
                 "skill_path": skill_path,
                 "status": status,
@@ -406,7 +452,7 @@ fn cli_agent_skill_status(
             })
         }
         Err(error) => serde_json::json!({
-            "agent": agent,
+            "agent": agent.name,
             "agent_home": agent_home,
             "skill_path": skill_path,
             "status": "error",
@@ -420,9 +466,13 @@ fn install_cli_agent_assets() -> io::Result<()> {
     let home = home_dir()?;
     install_member_cli(&home)?;
 
-    for (_, env_name, default_dir) in CLI_AGENT_HOMES {
-        if let Some(agent_home) = configured_agent_home(&home, env_name, default_dir) {
-            install_skill_file(&agent_home, GUILDBOTICS_SKILL)?;
+    for agent in &CLI_AGENTS {
+        let Some(agent_home) = configured_agent_home(&home, agent.home_env, agent.home_dir) else {
+            continue;
+        };
+        install_skill_file(&skill_dir(&home, agent, &agent_home), GUILDBOTICS_SKILL)?;
+        if agent.user_skills_dir.is_some() {
+            remove_managed_skill(&agent_home.join("skills").join("guildbotics"))?;
         }
     }
 
@@ -456,8 +506,11 @@ mod tests {
         }
     }
 
-    fn installed_skill_path(root: &Path) -> PathBuf {
-        root.join("skills").join("guildbotics").join("SKILL.md")
+    fn agent(name: &'static str) -> &'static CliAgent {
+        CLI_AGENTS
+            .iter()
+            .find(|candidate| candidate.name == name)
+            .expect("known AI CLI tool")
     }
 
     #[test]
@@ -496,14 +549,12 @@ mod tests {
 
         install_skill_file(temp_dir.path(), "first")?;
 
-        let skill_path = installed_skill_path(temp_dir.path());
-        let metadata_path = skill_path
-            .parent()
-            .expect("skill directory")
-            .join(MANAGED_SKILL_METADATA);
-        assert_eq!(fs::read_to_string(skill_path)?, "first");
         assert_eq!(
-            read_managed_skill_hash(&metadata_path),
+            fs::read_to_string(temp_dir.path().join("SKILL.md"))?,
+            "first"
+        );
+        assert_eq!(
+            read_managed_skill_hash(&temp_dir.path().join(MANAGED_SKILL_METADATA)),
             Some(content_hash("first"))
         );
         Ok(())
@@ -517,7 +568,7 @@ mod tests {
         install_skill_file(temp_dir.path(), "second")?;
 
         assert_eq!(
-            fs::read_to_string(installed_skill_path(temp_dir.path()))?,
+            fs::read_to_string(temp_dir.path().join("SKILL.md"))?,
             "second"
         );
         Ok(())
@@ -526,7 +577,7 @@ mod tests {
     #[test]
     fn install_skill_file_does_not_update_edited_managed_skill() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
-        let skill_path = installed_skill_path(temp_dir.path());
+        let skill_path = temp_dir.path().join("SKILL.md");
 
         install_skill_file(temp_dir.path(), "first")?;
         fs::write(&skill_path, "user edit")?;
@@ -539,8 +590,7 @@ mod tests {
     #[test]
     fn install_skill_file_does_not_update_unmanaged_skill() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
-        let skill_path = installed_skill_path(temp_dir.path());
-        fs::create_dir_all(skill_path.parent().expect("skill directory"))?;
+        let skill_path = temp_dir.path().join("SKILL.md");
         fs::write(&skill_path, "user skill")?;
 
         install_skill_file(temp_dir.path(), "bundled")?;
@@ -552,7 +602,7 @@ mod tests {
     #[test]
     fn force_install_skill_file_overwrites_edited_skill() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
-        let skill_path = installed_skill_path(temp_dir.path());
+        let skill_path = temp_dir.path().join("SKILL.md");
 
         install_skill_file(temp_dir.path(), "first")?;
         fs::write(&skill_path, "user edit")?;
@@ -560,13 +610,63 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&skill_path)?, "second");
         assert_eq!(
-            read_managed_skill_hash(
-                &skill_path
-                    .parent()
-                    .expect("skill directory")
-                    .join(MANAGED_SKILL_METADATA)
-            ),
+            read_managed_skill_hash(&temp_dir.path().join(MANAGED_SKILL_METADATA)),
             Some(content_hash("second"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn codex_skill_dir_is_the_shared_user_skills_directory() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let home = temp_dir.path();
+
+        assert_eq!(
+            skill_dir(home, agent("codex"), &home.join(".codex")),
+            home.join(".agents").join("skills").join("guildbotics")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn other_agents_keep_skills_under_their_own_home() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let home = temp_dir.path();
+
+        for name in ["claude", "grok", "antigravity", "copilot"] {
+            let agent_home = home.join("custom-home");
+            assert_eq!(
+                skill_dir(home, agent(name), &agent_home),
+                agent_home.join("skills").join("guildbotics"),
+                "{name} must keep its skill under its own home"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn remove_managed_skill_deletes_only_unedited_managed_copies() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let managed = temp_dir.path().join("managed");
+        let edited = temp_dir.path().join("edited");
+        let unmanaged = temp_dir.path().join("unmanaged");
+
+        install_skill_file(&managed, "bundled")?;
+        install_skill_file(&edited, "bundled")?;
+        fs::write(edited.join("SKILL.md"), "user edit")?;
+        fs::create_dir_all(&unmanaged)?;
+        fs::write(unmanaged.join("SKILL.md"), "user skill")?;
+
+        remove_managed_skill(&managed)?;
+        remove_managed_skill(&edited)?;
+        remove_managed_skill(&unmanaged)?;
+        remove_managed_skill(&temp_dir.path().join("absent"))?;
+
+        assert!(!managed.exists());
+        assert_eq!(fs::read_to_string(edited.join("SKILL.md"))?, "user edit");
+        assert_eq!(
+            fs::read_to_string(unmanaged.join("SKILL.md"))?,
+            "user skill"
         );
         Ok(())
     }

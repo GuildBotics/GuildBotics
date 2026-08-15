@@ -200,7 +200,7 @@ describe("AI CLI tool skill commands", () => {
         {
           agent: "codex",
           agent_home: "/home/.codex",
-          skill_path: "/home/.codex/skills/guildbotics/SKILL.md",
+          skill_path: "/home/.agents/skills/guildbotics/SKILL.md",
           status: "up_to_date",
           can_force_update: false,
         },
@@ -219,7 +219,7 @@ describe("AI CLI tool skill commands", () => {
     invoke.mockResolvedValue({
       agent: "codex",
       agent_home: "/home/.codex",
-      skill_path: "/home/.codex/skills/guildbotics/SKILL.md",
+      skill_path: "/home/.agents/skills/guildbotics/SKILL.md",
       status: "up_to_date",
       can_force_update: false,
     });

@@ -296,7 +296,7 @@ chmod +x GuildBotics_<version>_amd64.AppImage
 - 初回起動時または setup 画面表示時に、同梱 CLI と GuildBotics skill を AI CLIツールから参照できる場所へ配置します。
   - `~/.guildbotics/bin/guildbotics`: managed CLI
   - `~/.local/bin/guildbotics`: 未作成または既存の managed shim の場合だけ更新
-  - `$CODEX_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.codex/skills/guildbotics/SKILL.md`
+  - `~/.agents/skills/guildbotics/SKILL.md`（Codex を `$CODEX_HOME` または `~/.codex` で検出した場合）。Codex のユーザースキルは `$CODEX_HOME/skills` から `$HOME/.agents/skills` へ移行し、前者は非推奨になったため、配置先は Codex home ではなくユーザー共通のスキルディレクトリです。Codex home 側に GuildBotics desktop が配置した未編集の skill が残っている場合は、同じ skill が二重に登録されないよう削除します
   - `$CLAUDE_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.claude/skills/guildbotics/SKILL.md`
   - `$GROK_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.grok/skills/guildbotics/SKILL.md`
   - `$ANTIGRAVITY_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.gemini/config/skills/guildbotics/SKILL.md`

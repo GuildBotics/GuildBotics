@@ -626,7 +626,7 @@ describe("SetupPage", () => {
         {
           agent: "codex",
           agent_home: "/home/.codex",
-          skill_path: "/home/.codex/skills/guildbotics/SKILL.md",
+          skill_path: "/home/.agents/skills/guildbotics/SKILL.md",
           status: "user_modified",
           can_force_update: true,
         },
